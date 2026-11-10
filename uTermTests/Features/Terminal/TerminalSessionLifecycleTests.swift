@@ -40,7 +40,7 @@ final class TerminalSessionLifecycleTests: XCTestCase {
     /// 持有 PTY 的后端：回放一大段历史（每片之间让出主线程），回放途中用户的按键要照常发出。原来回放期间整个会话
     /// 关着「发给后端」，这期间的按键直接丢了。
     private actor HeldReplayBackend: HeldTerminalBackend {
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         nonisolated let holderLink = HolderLink()
         private let replay: HolderReplay
@@ -48,7 +48,7 @@ final class TerminalSessionLifecycleTests: XCTestCase {
 
         init(replay: HolderReplay) {
             self.replay = replay
-            outputStream = AsyncStream { _ in }
+            outputItems = AsyncStream { _ in }
             exitStream = AsyncStream { _ in }
         }
 

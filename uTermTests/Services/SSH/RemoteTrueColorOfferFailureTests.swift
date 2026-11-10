@@ -10,7 +10,7 @@ final class RemoteTrueColorOfferFailureTests: XCTestCase {
     }
 
     private actor Backend: TerminalBackend, TerminalTrueColorConfiguring {
-        nonisolated let outputStream = AsyncStream<Data> { _ in }
+        nonisolated let outputItems = AsyncStream<TerminalOutputItem> { _ in }
         nonisolated let exitStream = AsyncStream<Void> { _ in }
         nonisolated let trueColorHostKey = "failure-\(UUID().uuidString):22"
         private let probeFails: Bool

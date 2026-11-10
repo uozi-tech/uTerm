@@ -1,5 +1,6 @@
 import Foundation
 import GhosttyTerminal
+import os
 
 /// 后端输出里的一项：原样字节，或者一张整屏的二进制快照（远控镜像：被控的 Mac 在接入、改尺寸、积压过多时发）。
 nonisolated enum TerminalOutputItem: Sendable {
@@ -152,14 +153,14 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     private var ingressTask: Task<Void, Never>?
     private var fedHandler: (@Sendable (Data) -> Void)?
     private var replayedHandler: (@Sendable () -> Void)?
-    /// 见 `followsSnapshotGrid`。
-    private var followsSnapshotGridValue = false
+    /// 见 `followsSnapshotGrid`。单独一把锁：surface 的 IO 线程要读它，不能等 `stateLock`（回放拿着它往 IO 队列里塞东西）。
+    private let followsSnapshotGridFlag = OSAllocatedUnfairLock(initialState: false)
     /// 画面停着等网格对齐（影子是被控端的网格、surface 是本地的网格）。
     private var heldForGrid = false
     private var heldSince: UInt64 = 0
     private var holdToken = 0
     /// 超时放行过的那一对网格（影子、surface）：同样的错位不再停第二次，等网格变了再说。
-    private var waivedMismatch: [Int]?
+    private var waivedMismatch: (shadowCols: Int, shadowRows: Int, surfaceCols: Int, surfaceRows: Int)?
     /// surface 落后于影子的正好是这串字节（停喂时它队列里没解析的 + 停喂期间来的），网格是 `tailGrid`。nil = 补不了。
     private var tail: Data?
     private var tailGrid: (cols: Int, rows: Int)?
@@ -239,11 +240,13 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     /// 两边网格不一样时——刚接入、本地刚改了尺寸，被控端还没按本地尺寸钉好再发快照——按被控端网格排好的内容灌进本地
     /// 网格的 surface 只会错位，所以画面先停在上一帧（字节照样进影子），等来同网格的快照再回放，最多等
     /// `gridAlignmentTimeout`。默认关：本机会话的影子本来就跟着 surface 走。
+    ///
+    /// 由 `start(_ backend:)` 按后端的能力（`mirrorsRemoteGrid`）设；surface 的 IO 线程据此决定影子跟不跟本地网格（任意线程可读）。
     var followsSnapshotGrid: Bool {
-        get { stateLock.withLock { followsSnapshotGridValue } }
+        get { followsSnapshotGridFlag.withLock { $0 } }
         set {
             stateLock.withLock {
-                followsSnapshotGridValue = newValue
+                followsSnapshotGridFlag.withLock { $0 = newValue }
                 if !newValue, heldForGrid {
                     heldForGrid = false
                     if feedsSurface, surfaceIsStale { replayLocked() }
@@ -268,6 +271,12 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         setClosed(true)
     }
 
+    /// 按当前代次开始泵这条后端的输出，网格跟谁走按它的能力定（`followsSnapshotGrid`）。调用方先 `reset()`。
+    func start(_ backend: any TerminalBackend) {
+        followsSnapshotGrid = backend.mirrorsRemoteGrid
+        start(backend.outputItems)
+    }
+
     /// 按当前代次开始泵 `output`。调用方先 `reset()`。
     func start(_ output: AsyncStream<TerminalOutputItem>) {
         setClosed(false)
@@ -282,16 +291,6 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
             }
         }
         stateLock.unlock()
-    }
-
-    func start(_ output: AsyncStream<Data>) {
-        start(AsyncStream<TerminalOutputItem> { continuation in
-            let task = Task.detached(priority: .userInitiated) {
-                for await chunk in output { continuation.yield(.bytes(chunk)) }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        })
     }
 
     /// 一项后端输出。surface 积压时在这里挂起（不取下一块 = 往后端施背压）；只喂影子时不等。
@@ -397,18 +396,18 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     /// 调用方持 `stateLock`，且 surface 在吃字节。该停画就停（返回 true，surface 队列里排着的丢掉、记为落后）；
     /// 网格对齐了或者等超时了就放行（返回 false，由调用方回放）。
     private func holdIfGridMismatchedLocked() -> Bool {
-        guard followsSnapshotGridValue, let grid = surface.surfaceGridSize else {
+        guard followsSnapshotGrid, let grid = surface.surfaceGridSize else {
             heldForGrid = false
             return false
         }
         let current = shadow.size
-        let pair = [current.cols, current.rows, grid.cols, grid.rows]
         if current.cols == grid.cols, current.rows == grid.rows {
             waivedMismatch = nil
             heldForGrid = false
             return false
         }
-        if pair == waivedMismatch { return false }
+        let pair = (shadowCols: current.cols, shadowRows: current.rows, surfaceCols: grid.cols, surfaceRows: grid.rows)
+        if let waivedMismatch, waivedMismatch == pair { return false }
         if heldForGrid {
             let waited = Double(DispatchTime.now().uptimeNanoseconds - heldSince) / 1e9
             guard waited >= Self.gridAlignmentTimeout else { return true }

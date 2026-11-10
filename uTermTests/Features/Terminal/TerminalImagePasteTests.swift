@@ -9,10 +9,10 @@ final class TerminalImagePasteTests: XCTestCase {
 
     /// 记录写入的后端，贴图结果可控。
     private actor ImageBackend: TerminalImageReceiving {
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         nonisolated let programsCanReadMacClipboard: Bool
-        private let outputContinuation: AsyncStream<Data>.Continuation
+        private let outputContinuation: AsyncStream<TerminalOutputItem>.Continuation
         private let exitContinuation: AsyncStream<Void>.Continuation
         private(set) var written: [Data] = []
         private(set) var delivered: [uTerm.TerminalImage] = []
@@ -21,7 +21,7 @@ final class TerminalImagePasteTests: XCTestCase {
         init(canReadClipboard: Bool = false, failure: TerminalImageError? = nil) {
             programsCanReadMacClipboard = canReadClipboard
             self.failure = failure
-            (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
+            (outputItems, outputContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
             (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         }
 

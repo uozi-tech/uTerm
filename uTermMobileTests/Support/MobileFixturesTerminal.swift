@@ -152,10 +152,10 @@ actor MobileFakeTerminalTransport: TerminalBackend {
 
     // MARK: TerminalBackend
 
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
 
-    private let outputContinuation: AsyncStream<Data>.Continuation
+    private let outputContinuation: AsyncStream<TerminalOutputItem>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
 
     // MARK: 配置与账本
@@ -184,8 +184,8 @@ actor MobileFakeTerminalTransport: TerminalBackend {
     init(script: MobileFakeTerminalScript, generation: Int = 0) {
         self.script = script
         self.generation = generation
-        var out: AsyncStream<Data>.Continuation!
-        self.outputStream = AsyncStream { out = $0 }
+        var out: AsyncStream<TerminalOutputItem>.Continuation!
+        self.outputItems = AsyncStream { out = $0 }
         self.outputContinuation = out
         var exit: AsyncStream<Void>.Continuation!
         self.exitStream = AsyncStream { exit = $0 }
@@ -208,7 +208,7 @@ actor MobileFakeTerminalTransport: TerminalBackend {
         writes.append(data)
         // 回显：真 shell 的字符回显走远端，这里直接把上行原样回吐。
         if script.echoesInput {
-            outputContinuation.yield(data)
+            outputContinuation.yield(.bytes(data))
             bytesEmitted += data.count
         }
     }
@@ -253,7 +253,7 @@ actor MobileFakeTerminalTransport: TerminalBackend {
             linesEmitted += 1
         }
         bytesEmitted += blob.count
-        outputContinuation.yield(blob)
+        outputContinuation.yield(.bytes(blob))
         return blob.count
     }
 
@@ -313,7 +313,7 @@ actor MobileFakeTerminalTransport: TerminalBackend {
                     linesEmitted += 1
                 }
                 bytesEmitted += blob.count
-                outputContinuation.yield(blob)
+                outputContinuation.yield(.bytes(blob))
             }
             try? await Task.sleep(for: .milliseconds(tickMS))
             tick += 1

@@ -395,22 +395,22 @@ private nonisolated final class PendingSampler: @unchecked Sendable {
 
 /// 输出可控、记下所有写入的后端。
 private actor RecordingBackend: TerminalBackend {
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
-    private nonisolated let output: AsyncStream<Data>.Continuation
+    private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
     private let exit: AsyncStream<Void>.Continuation
     private(set) var written = Data()
 
     init() {
-        var out: AsyncStream<Data>.Continuation!
-        outputStream = AsyncStream(bufferingPolicy: .unbounded) { out = $0 }
+        var out: AsyncStream<TerminalOutputItem>.Continuation!
+        outputItems = AsyncStream(bufferingPolicy: .unbounded) { out = $0 }
         output = out
         var ex: AsyncStream<Void>.Continuation!
         exitStream = AsyncStream { ex = $0 }
         exit = ex
     }
 
-    nonisolated func yield(_ data: Data) { output.yield(data) }
+    nonisolated func yield(_ data: Data) { output.yield(.bytes(data)) }
     func connect() async throws {}
     func write(_ data: Data) async { written.append(data) }
     func resize(cols: UInt16, rows: UInt16) async {}

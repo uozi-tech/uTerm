@@ -8,7 +8,7 @@ import NIOSSH
 /// `TerminalBackend` 的 SSH 实现 —— 基于 Citadel 0.12.1。
 ///
 /// 直连路径（本任务）：连接 `profile.host:profile.port`，开启交互式 PTY shell，
-/// 把 stdout/stderr 泵入 `outputStream`，shell 结束时在 `exitStream` 产出一个元素。
+/// 把 stdout/stderr 泵入 `outputItems`，shell 结束时在 `exitStream` 产出一个元素。
 ///
 /// 跳板机路径（Task 9）：`profile.jumpHost != nil` 时先连跳板机，再用 Citadel 原生
 /// `jump(to:)` 在跳板机连接上开 `direct-tcpip` 通道并完成第二次握手得到目标客户端，
@@ -55,10 +55,10 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
 
     // MARK: - TerminalBackend
 
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated var outputItems: AsyncStream<TerminalOutputItem> { output.items }
     nonisolated let exitStream: AsyncStream<Void>
 
-    private let outputContinuation: AsyncStream<Data>.Continuation
+    private nonisolated let output = TerminalByteOutput()
     private let exitContinuation: AsyncStream<Void>.Continuation
 
     // MARK: - 配置
@@ -164,7 +164,6 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
         self.jumpHostAuth = jumpHostAuth
         self.hostKeyVerifier = hostKeyVerifier
         self.hostKeyApprover = hostKeyApprover
-        (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
     }
 
@@ -175,7 +174,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
     deinit {
         sessionTask?.cancel()
         state.signalClose()
-        outputContinuation.finish()
+        output.finish()
         exitContinuation.finish()
     }
 
@@ -225,9 +224,8 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
         // TerminalSession 翻到 .disconnected。不等 inbound 流自己察觉。
         // 正常 close() 路径会再触发一次 —— signalClose 幂等，无害。
         await connected.onDisconnect { state.signalClose() }
-        // M1：输出泵直接捕获 Sendable 的 outputContinuation，逐块 yield，
-        // 不再每块都 hop 回 actor。
-        let outputContinuation = self.outputContinuation
+        // M1：输出泵直接捕获 Sendable 的输出口，逐块送出，不再每块都 hop 回 actor。
+        let output = self.output
 
         // 在独立 Task 里把 withPTY 闭包挂起整个会话生命周期。
         sessionTask = Task { [weak self] in
@@ -264,7 +262,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
                                     case .stdout(let buffer), .stderr(let buffer):
                                         let data = Data(buffer.readableBytesView)
                                         state.scanForTTYMarker(data)
-                                        outputContinuation.yield(data)
+                                        output.send(data)
                                     }
                                 }
                             } catch {
@@ -490,7 +488,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
     private func finishStreams() {
         exitContinuation.yield(())
         exitContinuation.finish()
-        outputContinuation.finish()
+        output.finish()
     }
 }
 

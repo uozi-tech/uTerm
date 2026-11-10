@@ -353,22 +353,37 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 引擎按页裁，留下的行数比上限少几十到上百行（3000 行逐字换色的历史、上限 1000：剩 873 行、808 KB、约 2 ms）。
     /// 屏幕、光标、模式、半个序列都不受影响，只少了上面那段历史。holder 检查点不要用它（要带全量）。
     func snapshot(scrollbackLines limit: Int) throws -> Data {
+        try untrimmedSnapshot(scrollbackLines: limit).trimmed()
+    }
+
+    /// `snapshot(scrollbackLines:)` 拆成两步：这里只在影子的锁里拍整份（约 1.5 ms），裁剪（还原 + 重拍，回滚长时几 ms）
+    /// 留给拿到结果的一方在别的线程上做（`UntrimmedSnapshot.trimmed()`）。远控镜像在泵的锁里拍，裁剪挪到连接队列上。
+    func untrimmedSnapshot(scrollbackLines limit: Int) throws -> UntrimmedSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
         // 备用屏上读到的总行数是备用屏的（没有回滚），主屏的回滚可能很长：一律重拍。
-        let (full, short) = try { () throws -> (Data, Bool) in
-            lock.lock()
-            defer { lock.unlock() }
-            var total = 0
-            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
-            let short = !Self.isAlternate(handle) && total - Int(Self.rows(handle)) <= limit
-            return (try Self.encode(handle), short)
-        }()
-        guard !short else { return full }
+        var total = 0
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
+        let short = !Self.isAlternate(handle) && total - Int(Self.rows(handle)) <= limit
         var trimmedOptions = options
         trimmedOptions.scrollbackLines = min(limit, options.scrollbackLines ?? limit)
-        let trimmed = try Self.decode(full, continuationBytes: options.continuationBytes)
-        defer { ghostty_terminal_free(trimmed) }
-        Self.applyLimits(to: trimmed, options: trimmedOptions)
-        return try Self.encode(trimmed)
+        return UntrimmedSnapshot(full: try Self.encode(handle), trimTo: short ? nil : trimmedOptions)
+    }
+
+    /// 一张还没裁回滚的快照（`untrimmedSnapshot(scrollbackLines:)`）。
+    nonisolated struct UntrimmedSnapshot: Sendable {
+        let full: Data
+        /// 要裁成这个上限；nil = 回滚本来就不超过上限，`full` 就是结果。
+        fileprivate let trimTo: Options?
+
+        /// 裁好的快照（与一步到位的 `snapshot(scrollbackLines:)` 字节相同）。任何线程可调。
+        func trimmed() throws -> Data {
+            guard let trimTo else { return full }
+            let trimmed = try ShadowTerminal.decode(full, continuationBytes: trimTo.continuationBytes)
+            defer { ghostty_terminal_free(trimmed) }
+            ShadowTerminal.applyLimits(to: trimmed, options: trimTo)
+            return try ShadowTerminal.encode(trimmed)
+        }
     }
 
     private static func encode(_ handle: OpaquePointer) throws -> Data {

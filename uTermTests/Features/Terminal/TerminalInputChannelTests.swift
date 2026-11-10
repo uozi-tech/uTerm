@@ -11,18 +11,25 @@ final class TerminalInputChannelTests: XCTestCase {
         enum Event: Equatable {
             case write(String)
             case resize(UInt16, UInt16)
+            case connect
+            case connected
         }
 
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         private(set) var events: [Event] = []
 
         init() {
-            outputStream = AsyncStream { $0.finish() }
+            outputItems = AsyncStream { $0.finish() }
             exitStream = AsyncStream { $0.finish() }
         }
 
-        func connect() async throws {}
+        func connect() async throws {
+            events.append(.connect)
+            // 建连要一会儿（actor 可重入）：这期间有人写进来的话，日志里会插在 `.connected` 之前。
+            try await Task.sleep(for: .milliseconds(30))
+            events.append(.connected)
+        }
         func write(_ data: Data) async { events.append(.write(String(decoding: data, as: UTF8.self))) }
         func resize(cols: UInt16, rows: UInt16) async { events.append(.resize(cols, rows)) }
         func close() async {}
@@ -42,6 +49,33 @@ final class TerminalInputChannelTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(2))
         }
         return await backend.events
+    }
+
+    /// 建连也走这条队列：绑定时补发的尺寸一定先到后端（SSH 拿它当 PTY 初始尺寸，远控的接入请求带上它）；建连期间的
+    /// 键入排在建连后面。原来补发尺寸是另起的任务，赶不上建连，两端各在调用点先手动发一次尺寸。
+    func testSizeQueuedAtBindReachesTheBackendBeforeConnect() async throws {
+        let channel = TerminalInputChannel()
+        channel.reportSize(cols: 100, rows: 40)
+        let backend = RecordingBackend()
+        channel.bind(to: backend, sendingLatestSize: true)
+        let connecting = Task { try await channel.connect(backend) }
+        // 建连开始了再打字。
+        _ = await waitForEvents(backend, count: 2)
+        channel.write(Data("typed".utf8))
+        try await connecting.value
+        let events = await waitForEvents(backend, count: 4)
+        XCTAssertEqual(events, [.resize(100, 40), .connect, .connected, .write("typed")])
+    }
+
+    /// 解了绑（或换了后端）之后再建连：直接连，不经队列，也不卡住。
+    func testConnectAfterUnbindConnectsDirectly() async throws {
+        let channel = TerminalInputChannel()
+        let backend = RecordingBackend()
+        channel.bind(to: backend, sendingLatestSize: false)
+        channel.unbind()
+        try await channel.connect(backend)
+        let events = await backend.events
+        XCTAssertEqual(events, [.connect, .connected])
     }
 
     func testWritesAndResizesKeepTheOrderTheyWereProduced() async {

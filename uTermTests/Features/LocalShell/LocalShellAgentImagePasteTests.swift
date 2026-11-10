@@ -224,7 +224,7 @@ final class LocalShellAgentImagePasteTests: XCTestCase {
 final class TerminalReattachImagePasteTests: XCTestCase {
 
     private actor HeldImageBackend: HeldTerminalBackend, TerminalImageReceiving {
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         nonisolated let holderLink = HolderLink()
         nonisolated let programsCanReadMacClipboard: Bool
@@ -238,7 +238,7 @@ final class TerminalReattachImagePasteTests: XCTestCase {
             programsCanReadMacClipboard = canReadClipboard
             self.replay = replay
             self.activity = activity
-            outputStream = AsyncStream { _ in }
+            outputItems = AsyncStream { _ in }
             exitStream = AsyncStream { _ in }
         }
 

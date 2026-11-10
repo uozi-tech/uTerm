@@ -10,14 +10,14 @@ final class RemoteTerminalImageTests: XCTestCase {
     /// 能收图片的假后端：记下收到的图片，按 `reply` 回结果。
     private actor ImageBackend: TerminalImageReceiving {
         nonisolated var programsCanReadMacClipboard: Bool { false }
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         private(set) var received: [TerminalImage] = []
         let reply: Result<TerminalImageDelivery, TerminalImageError>
 
         init(reply: Result<TerminalImageDelivery, TerminalImageError>) {
             self.reply = reply
-            outputStream = AsyncStream { _ in }
+            outputItems = AsyncStream { _ in }
             exitStream = AsyncStream { _ in }
         }
 

@@ -6,14 +6,14 @@ import XCTest
 final class TerminalPasteTests: XCTestCase {
 
     private actor FakeReceiver: TerminalImageReceiving {
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         nonisolated let programsCanReadMacClipboard = false
         private let result: Result<TerminalImageDelivery, TerminalImageError>
 
         init(_ result: Result<TerminalImageDelivery, TerminalImageError>) {
             self.result = result
-            outputStream = AsyncStream { $0.finish() }
+            outputItems = AsyncStream { $0.finish() }
             exitStream = AsyncStream { $0.finish() }
         }
 

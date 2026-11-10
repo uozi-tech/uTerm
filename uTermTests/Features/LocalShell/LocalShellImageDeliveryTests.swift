@@ -50,7 +50,7 @@ final class LocalShellImageDeliveryTests: XCTestCase {
         try await backend.connect()
         var output = ""
         let pump = Task { @MainActor in
-            for await chunk in backend.outputStream { output += String(decoding: chunk, as: UTF8.self) }
+            for await case .bytes(let chunk) in backend.outputItems { output += String(decoding: chunk, as: UTF8.self) }
         }
         defer { pump.cancel() }
 

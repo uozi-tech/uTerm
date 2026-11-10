@@ -4,9 +4,9 @@ import Foundation
 /// 可控的 `TerminalBackend` 测试替身。测试可注入输出、触发退出，
 /// 并检查收到的写入与 resize。
 actor MockBackend: TerminalBackend {
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
-    private let outputContinuation: AsyncStream<Data>.Continuation
+    private let outputContinuation: AsyncStream<TerminalOutputItem>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
 
     private(set) var didConnect = false
@@ -21,7 +21,7 @@ actor MockBackend: TerminalBackend {
     private var connectGateArmed = false
 
     init() {
-        (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
+        (outputItems, outputContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
     }
 
@@ -49,7 +49,7 @@ actor MockBackend: TerminalBackend {
     func close() async { didClose = true; outputContinuation.finish() }
 
     // 测试驱动入口
-    func emitOutput(_ data: Data) { outputContinuation.yield(data) }
+    func emitOutput(_ data: Data) { outputContinuation.yield(.bytes(data)) }
     func emitExit() { exitContinuation.yield(()); exitContinuation.finish() }
     func setConnectError(_ error: Error) { connectError = error }
 

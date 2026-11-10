@@ -103,7 +103,7 @@ final class TerminalSession: NSObject {
         self.shadow = shadow
         surfaceIO = link.io
         outputPump = pump
-        mirrorTap = TerminalMirrorTap(snapshot: { try? shadow.snapshot(scrollbackLines: RemoteConstants.snapshotScrollback) },
+        mirrorTap = TerminalMirrorTap(snapshot: { try? shadow.untrimmedSnapshot(scrollbackLines: RemoteConstants.snapshotScrollback) },
                                       exclusively: { pump.performWhileFeedingPaused($0) })
         super.init()
         // tap：影子刚解析完这一片、泵的锁还在手上。镜像与检查点拿到的字节顺序与终端实际解析的顺序完全一致。
@@ -191,27 +191,20 @@ final class TerminalSession: NSObject {
     /// 失败置 failed，远端结束置 disconnected。
     func connect(using backend: any TerminalBackend) async {
         resetFeedAndResizeState()
-        // 重连先复位光标形状、远控主控端的网格跟着对端走（两端共用，见 `TerminalSurfaceLink.prepare`）。
-        link.prepare(for: backend)
+        // 重连先复位光标形状（两端共用，见 `TerminalSurfaceLink.prepareForNewConnection`）。
+        link.prepareForNewConnection()
         // `resetFeedAndResizeState()` just bumped `feedGeneration`; snapshot it
-        // as this call's identity token. `backend.connect()` below suspends and
+        // as this call's identity token. The connect below suspends and
         // frees the MainActor — a second `connect(using:)`, `dispose()`, or
         // `detach()` can run during that gap and bump `feedGeneration` again.
         // When this call resumes it must not clobber the newer binding's state.
         let myGen = feedGeneration
         self.backend = backend
-        // 远控主控端：影子的网格由对端的快照定，画面等网格对齐再跟（见 `TerminalBackend.mirrorsRemoteGrid`）。
-        let mirrorsRemote = backend.mirrorsRemoteGrid
-        if mirrorsRemote, let size = inputChannel.latestSize {
-            // 接入请求就带上本地尺寸：对端钉好这个尺寸再拍第一张快照，不必先按默认的 80×24 接入再改一次。
-            await backend.resize(cols: size.cols, rows: size.rows)
-            guard feedGeneration == myGen, self.backend === backend else { return }
-        }
-        // 建连期间的键入照样排进这条后端（与改前一样）；尺寸等连上之后再补发。
-        inputChannel.bind(to: backend, sendingLatestSize: false)
+        // 尺寸排在建连前面（SSH 当 PTY 初始尺寸，远控主控端的接入请求带上本地网格）；建连期间的键入排在建连后面。
+        inputChannel.bind(to: backend, sendingLatestSize: true)
         connectionState = .connecting
         do {
-            try await backend.connect()
+            try await inputChannel.connect(backend)
         } catch {
             // Superseded while suspended — a newer connect/dispose owns the
             // session now; don't overwrite its state or clear its backend.
@@ -235,7 +228,7 @@ final class TerminalSession: NSObject {
         // 「已连接」徽标静默挂着。弱引用注册，幂等。
         ConnectionWatchdog.shared.register(self)
         inputChannel.sendLatestSizeNow()
-        outputPump.start(backend.outputItems)
+        outputPump.start(backend)
         observeExit(of: backend, generation: myGen)
         injectPendingTrackedRun()
     }

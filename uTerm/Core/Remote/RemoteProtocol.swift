@@ -523,7 +523,8 @@ nonisolated enum RemoteTerminalSnapshotPiece {
 
     static func decode(_ payload: Data) -> (data: Data, isFirst: Bool, isLast: Bool)? {
         guard let flags = payload.first else { return nil }
-        return (Data(payload.dropFirst()), flags & first != 0, flags & last != 0)
+        // 切片，不拷贝（快照一段可达几百 KB）。
+        return (payload.dropFirst(), flags & first != 0, flags & last != 0)
     }
 }
 

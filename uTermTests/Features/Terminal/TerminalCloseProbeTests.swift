@@ -6,7 +6,7 @@ import XCTest
 final class TerminalCloseProbeTests: XCTestCase {
 
     private actor ActivityBackend: TerminalBackend {
-        nonisolated let outputStream = AsyncStream<Data> { $0.finish() }
+        nonisolated let outputItems = AsyncStream<TerminalOutputItem> { $0.finish() }
         nonisolated let exitStream = AsyncStream<Void> { $0.finish() }
         let activity: TerminalActivity
         private(set) var asked = 0

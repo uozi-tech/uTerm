@@ -317,39 +317,39 @@ nonisolated final class GhosttyFrameWatch: @unchecked Sendable {
 
 /// 收到什么就原样回什么（本地回环 echo）。
 actor EchoBackend: TerminalBackend {
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
-    private nonisolated let output: AsyncStream<Data>.Continuation
+    private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
     private nonisolated let exit: AsyncStream<Void>.Continuation
     nonisolated(unsafe) var onWrite: (@Sendable (Data) -> Void)?
 
     init() {
-        (outputStream, output) = AsyncStream<Data>.makeStream()
+        (outputItems, output) = AsyncStream<TerminalOutputItem>.makeStream()
         (exitStream, exit) = AsyncStream<Void>.makeStream()
     }
 
     func connect() async throws {}
     func write(_ data: Data) async {
         onWrite?(data)
-        output.yield(data)
+        output.yield(.bytes(data))
     }
     func resize(cols: UInt16, rows: UInt16) async {}
     func close() async { output.finish(); exit.finish() }
-    nonisolated func emit(_ data: Data) { output.yield(data) }
+    nonisolated func emit(_ data: Data) { output.yield(.bytes(data)) }
 }
 
 /// 记录写入、能收图的后端（M14）。
 actor CaptureBackend: TerminalImageReceiving {
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
     nonisolated let programsCanReadMacClipboard = false
-    private nonisolated let output: AsyncStream<Data>.Continuation
+    private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
     private nonisolated let exit: AsyncStream<Void>.Continuation
     private(set) var written = Data()
     private(set) var delivered = 0
 
     init() {
-        (outputStream, output) = AsyncStream<Data>.makeStream()
+        (outputItems, output) = AsyncStream<TerminalOutputItem>.makeStream()
         (exitStream, exit) = AsyncStream<Void>.makeStream()
     }
 
@@ -362,7 +362,7 @@ actor CaptureBackend: TerminalImageReceiving {
         return .file(path: "/tmp/shot.png")
     }
     func clear() { written = Data() }
-    nonisolated func emit(_ data: Data) { output.yield(data) }
+    nonisolated func emit(_ data: Data) { output.yield(.bytes(data)) }
 }
 
 // MARK: - 窗格

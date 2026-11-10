@@ -151,7 +151,7 @@ final class RemoteTrueColorTests: XCTestCase {
     // MARK: 会话
 
     private actor ColorBackend: TerminalBackend, TerminalTrueColorConfiguring {
-        nonisolated let outputStream = AsyncStream<Data> { _ in }
+        nonisolated let outputItems = AsyncStream<TerminalOutputItem> { _ in }
         nonisolated let exitStream = AsyncStream<Void> { _ in }
         nonisolated let trueColorHostKey: String
         let status: RemoteTrueColor.Status
@@ -300,7 +300,7 @@ final class RemoteTrueColorTests: XCTestCase {
         let second = try await openConnection(port: port, user: user, auth: auth)
         let collected = Task { () -> String in
             var output = Data()
-            for await chunk in second.outputStream {
+            for await case .bytes(let chunk) in second.outputItems {
                 output.append(chunk)
                 if String(decoding: output, as: UTF8.self).contains("CT=truecolor") { break }
             }

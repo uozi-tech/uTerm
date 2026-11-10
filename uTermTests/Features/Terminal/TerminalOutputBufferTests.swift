@@ -30,9 +30,9 @@ final class TerminalOutputBufferTests: XCTestCase {
     /// 进去什么、出来什么。
     func testAppendThenDrainReturnsData() async {
         let (pump, shadow, surface) = makePump()
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(stream)
-        continuation.yield(Data("hello".utf8))
+        continuation.yield(.bytes(Data("hello".utf8)))
         let arrived = await waitUntil { surface.liveBytes.count == 5 }
         XCTAssertTrue(arrived)
         XCTAssertEqual(String(decoding: surface.liveBytes, as: UTF8.self), "hello")
@@ -43,10 +43,10 @@ final class TerminalOutputBufferTests: XCTestCase {
     /// 原来：`drain(maxBytes:)` 一次最多取这么多。现在：大块按 `sliceBytes` 切，每片不超过它，拼起来还是原样。
     func testDrainRespectsMaxBytes() async {
         let (pump, _, surface) = makePump()
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(stream)
         let big = Data((0..<(TerminalOutputPump.sliceBytes * 3 + 10)).map { UInt8(ascii: "0") + UInt8($0 % 10) })
-        continuation.yield(big)
+        continuation.yield(.bytes(big))
         let arrived = await waitUntil { surface.liveBytes.count == big.count }
         XCTAssertTrue(arrived)
         XCTAssertEqual(surface.pieces.map(\.count),
@@ -58,13 +58,13 @@ final class TerminalOutputBufferTests: XCTestCase {
     /// 高频的小块（一次一个字节，5 万次）：一个不少、顺序不变。
     func testHighFrequencySmallChunksCoalesceIntoBoundedFlushes() async {
         let (pump, shadow, surface) = makePump()
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(stream)
         var expected = Data()
         for index in 0..<50_000 {
             let byte = UInt8(ascii: "A") + UInt8(index % 26)
             expected.append(byte)
-            continuation.yield(Data([byte]))
+            continuation.yield(.bytes(Data([byte])))
         }
         let arrived = await waitUntil(20) { shadow.totalFedBytes == 50_000 }
         XCTAssertTrue(arrived)
@@ -76,13 +76,13 @@ final class TerminalOutputBufferTests: XCTestCase {
     /// 上一条连接的输出作废。
     func testStaleGenerationChunksAreDropped() async {
         let (pump, shadow, surface) = makePump()
-        let (old, oldContinuation) = AsyncStream<Data>.makeStream()
+        let (old, oldContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(old)
         pump.reset()
-        oldContinuation.yield(Data("old".utf8))
-        let (new, newContinuation) = AsyncStream<Data>.makeStream()
+        oldContinuation.yield(.bytes(Data("old".utf8)))
+        let (new, newContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(new)
-        newContinuation.yield(Data("new".utf8))
+        newContinuation.yield(.bytes(Data("new".utf8)))
         let arrived = await waitUntil { shadow.totalFedBytes >= 3 }
         XCTAssertTrue(arrived)
         try? await Task.sleep(for: .milliseconds(50))
@@ -94,14 +94,14 @@ final class TerminalOutputBufferTests: XCTestCase {
     /// 这期间到的每一块之后都按原来的顺序进终端。
     func testOverflowDropsOldestChunks() async {
         let (pump, shadow, surface) = makePump()
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(stream)
         surface.setBacklogged(true)
         var expected = Data()
         for value in [UInt8(0x41), 0x42, 0x43] {
             let chunk = Data(repeating: value, count: 1024)
             expected.append(chunk)
-            continuation.yield(chunk)
+            continuation.yield(.bytes(chunk))
         }
         try? await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(shadow.totalFedBytes, 0, "积压期间不取输出")

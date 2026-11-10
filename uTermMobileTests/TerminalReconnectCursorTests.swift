@@ -8,19 +8,19 @@ final class TerminalReconnectCursorTests: XCTestCase {
 
     /// 只吐给定字节的后端。
     actor ScriptedBackend: TerminalBackend {
-        nonisolated let outputStream: AsyncStream<Data>
-        private nonisolated let output: AsyncStream<Data>.Continuation
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
+        private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
         nonisolated let exitStream = AsyncStream<Void> { _ in }
 
         init() {
-            (outputStream, output) = AsyncStream<Data>.makeStream()
+            (outputItems, output) = AsyncStream<TerminalOutputItem>.makeStream()
         }
 
         func connect() async throws {}
         func write(_ data: Data) async {}
         func resize(cols: UInt16, rows: UInt16) async {}
         func close() async { output.finish() }
-        nonisolated func emit(_ text: String) { output.yield(Data(text.utf8)) }
+        nonisolated func emit(_ text: String) { output.yield(.bytes(Data(text.utf8))) }
     }
 
     /// 泵的 tap 看到的全部字节（影子刚解析完、交给画面之前）。

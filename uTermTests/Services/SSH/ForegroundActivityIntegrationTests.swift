@@ -70,7 +70,7 @@ final class ForegroundActivityIntegrationTests: XCTestCase {
         let second = try await connect(port: port)
         let collected = Task { () -> Data in
             var all = Data()
-            for await chunk in second.outputStream { all.append(chunk) }
+            for await case .bytes(let chunk) in second.outputItems { all.append(chunk) }
             return all
         }
         try await Task.sleep(for: .seconds(1))

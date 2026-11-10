@@ -316,7 +316,7 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         let replay = try XCTUnwrap(taken)
         XCTAssertNotNil(replay.hello.exitStatus)
         XCTAssertTrue(String(decoding: replay.output, as: UTF8.self).contains("FINAL_45"))
-        let drain = Task { for await _ in second.outputStream {} }
+        let drain = Task { for await _ in second.outputItems {} }
         defer { drain.cancel() }
         let removed = try await waitForSessionRemoved(id)
         XCTAssertTrue(removed, "交出最后一屏之后会话应该消失")
@@ -410,7 +410,7 @@ final class LocalShellNetworkPolicyTests: XCTestCase {
 @MainActor
 final class TerminalHeldReplayTests: XCTestCase {
     private actor MockHeldBackend: HeldTerminalBackend {
-        nonisolated let outputStream: AsyncStream<Data>
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
         nonisolated let exitStream: AsyncStream<Void>
         nonisolated let holderLink = HolderLink()
         private let replay: HolderReplay
@@ -418,7 +418,7 @@ final class TerminalHeldReplayTests: XCTestCase {
 
         init(replay: HolderReplay) {
             self.replay = replay
-            outputStream = AsyncStream { _ in }
+            outputItems = AsyncStream { _ in }
             exitStream = AsyncStream { _ in }
         }
 

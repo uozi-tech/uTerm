@@ -192,9 +192,10 @@ final class GhosttyTerminalBridge {
     func bind(_ backend: any TerminalBackend) {
         input.bind(to: backend, sendingLatestSize: true)
         outputPump.reset()
-        // 重连先复位光标形状、远控标签的网格跟着 Mac 走（两端共用，见 `TerminalSurfaceLink.prepare`）。
-        link.prepare(for: backend)
-        outputPump.start(backend.outputItems)
+        // 重连先复位光标形状（两端共用，见 `TerminalSurfaceLink.prepareForNewConnection`）；远控标签的网格跟着 Mac 走，
+        // 由泵按后端的能力定。
+        link.prepareForNewConnection()
+        outputPump.start(backend)
     }
 
     func unbind() {
@@ -260,7 +261,7 @@ final class GhosttyTerminalBridge {
         guard cellWidth > 0, cellHeight > 0 else { return }
         let cols = UInt16(clamping: max(2, Int(size.width / cellWidth)))
         let rows = UInt16(clamping: max(1, Int(size.height / cellHeight)))
-        if !link.followsRemoteGrid.withLock({ $0 }) { shadow.resize(cols: cols, rows: rows) }
+        if !outputPump.followsSnapshotGrid { shadow.resize(cols: cols, rows: rows) }
         input.reportSize(cols: cols, rows: rows)
     }
 

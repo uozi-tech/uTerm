@@ -4,7 +4,7 @@ import Foundation
 /// 连接由 XPC 服务建好交过来（见 `LocalShellAgentClient`）。
 actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     private let core = HeldSessionCore()
-    nonisolated var outputStream: AsyncStream<Data> { core.outputStream }
+    nonisolated var outputItems: AsyncStream<TerminalOutputItem> { core.output.items }
     nonisolated var exitStream: AsyncStream<Void> { core.exitStream }
     nonisolated var holderLink: HolderLink { core.holderLink }
 

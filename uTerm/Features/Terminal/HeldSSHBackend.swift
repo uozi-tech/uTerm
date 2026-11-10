@@ -39,7 +39,7 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
     private static let setupCommandTimeout = Duration.seconds(10)
 
     private let core = HeldSessionCore()
-    nonisolated var outputStream: AsyncStream<Data> { core.outputStream }
+    nonisolated var outputItems: AsyncStream<TerminalOutputItem> { core.output.items }
     nonisolated var exitStream: AsyncStream<Void> { core.exitStream }
     nonisolated var holderLink: HolderLink { core.holderLink }
 

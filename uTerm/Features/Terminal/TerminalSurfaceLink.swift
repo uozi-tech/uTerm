@@ -16,7 +16,7 @@ typealias TerminalHostedView = UITerminalView
 /// 管这几样：
 /// - **建立**：影子终端、Ghostty 的 host-managed IO（`InMemoryTerminalSession`）、输出泵。IO 的 resize 回调里影子当场跟上
 ///   surface 的终端报来的网格（M4 的前提：不按视图尺寸算、不绕主线程），新 surface 出生时的默认网格那一次不认
-///   （`TerminalSurfaceGridGate`）；远控主控端的影子跟着对端的快照走（`followsRemoteGrid`）。
+///   （`TerminalSurfaceGridGate`）；远控主控端的影子跟着对端的快照走（泵的 `followsSnapshotGrid`）。
 /// - **回主线程**：surface 的写出（击键、应答）与网格报告、影子的应答 / 剪贴板 / 事件都从任意线程回到主线程，一律走主队列
 ///   （`TerminalMainHop`：FIFO，击键和应答的先后不乱）。
 /// - **surface 就绪**：surface 建好之后，等它的终端报来的网格和视图算出来的对上（兜底 0.25 s）才让泵开始喂它；拆掉时
@@ -33,9 +33,6 @@ final class TerminalSurfaceLink {
     let gridGate: TerminalSurfaceGridGate
     /// 影子终端事件的处理（程序状态、查询应答、历史、远控镜像）。平台接它的出口。
     let events = TerminalEventRouter()
-    /// 远控主控端（后端 `mirrorsRemoteGrid`）：影子的网格跟着对端的快照走，surface 报来的网格只发给对端、不改影子。
-    /// IO 线程的 resize 回调读它。
-    let followsRemoteGrid: OSAllocatedUnfairLock<Bool>
     /// 擦屏后清选区、整屏回放后找回视口。
     private(set) var keeper: TerminalSurfaceKeeper!
     private weak var view: TerminalHostedView?
@@ -72,16 +69,15 @@ final class TerminalSurfaceLink {
         let relay = Relay()
         let gridGate = TerminalSurfaceGridGate()
         self.gridGate = gridGate
-        let follows = OSAllocatedUnfairLock(initialState: false)
         self.shadow = shadow
-        followsRemoteGrid = follows
         io = InMemoryTerminalSession(
             write: { relay.surfaceWrote($0) },
             resize: { viewport in
                 // 新 surface 先按出生时的默认网格报一次，再报真实的：那一次不认（见 `TerminalSurfaceGridGate`）。
                 guard gridGate.admits(viewport) else { return }
-                // 影子只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。
-                if !follows.withLock({ $0 }) {
+                // 影子只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。远控主控端
+                // （泵的 `followsSnapshotGrid`）的影子跟着对端的快照走，surface 报来的网格只发给对端、不改影子。
+                if !relay.followsSnapshotGrid {
                     shadow.resize(cols: viewport.columns, rows: viewport.rows,
                                   cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
                 }
@@ -90,6 +86,7 @@ final class TerminalSurfaceLink {
             // 只有行列数要发给远端（SIGWINCH）；像素级变化（拖分隔条时绝大多数）不用。
             suppressesPixelOnlyResizes: true)
         pump = TerminalOutputPump(shadow: shadow, surface: io)
+        relay.pump = pump
         relay.link = self
         shadow.setReplyHandler { data in
             TerminalMainHop.run { relay.link?.onShadowReply(data) }
@@ -119,11 +116,20 @@ final class TerminalSurfaceLink {
     private nonisolated final class Relay: @unchecked Sendable {
         private let lock = NSLock()
         private weak var target: TerminalSurfaceLink?
+        private weak var targetPump: TerminalOutputPump?
 
         var link: TerminalSurfaceLink? {
             get { lock.withLock { target } }
             set { lock.withLock { target = newValue } }
         }
+
+        var pump: TerminalOutputPump? {
+            get { lock.withLock { targetPump } }
+            set { lock.withLock { targetPump = newValue } }
+        }
+
+        /// IO 线程上读：泵还没建好、已经放掉时按本机会话算。
+        var followsSnapshotGrid: Bool { pump?.followsSnapshotGrid ?? false }
 
         func surfaceWrote(_ data: Data) {
             TerminalMainHop.run { self.link?.onSurfaceInput(data) }
@@ -142,13 +148,10 @@ final class TerminalSurfaceLink {
         view.uTermSetGridExpectedHandler { [weak self] cols, rows in self?.gridExpected(cols: cols, rows: rows) }
     }
 
-    /// 接一条新后端之前（两端共用的准备）：重连先复位光标形状（`CSI 0 q`，影子没内容时不送）；远控主控端的影子跟着对端
-    /// 的快照走、画面等网格对齐再跟。调用方先 `pump.reset()`（换绑定的代次）。
-    func prepare(for backend: any TerminalBackend) {
-        let mirrors = backend.mirrorsRemoteGrid
-        followsRemoteGrid.withLock { $0 = mirrors }
+    /// 接一条新后端之前（两端共用的准备）：重连先复位光标形状（`CSI 0 q`，影子没内容时不送）。网格跟谁走由泵开始泵这条
+    /// 后端时按它的能力定（`TerminalOutputPump.start(_ backend:)`）。调用方先 `pump.reset()`（换绑定的代次）。
+    func prepareForNewConnection() {
         pump.resetCursorShapeForNewConnection()
-        pump.followsSnapshotGrid = mirrors
     }
 
     // MARK: surface 的生与灭
@@ -197,7 +200,7 @@ final class TerminalSurfaceLink {
 
     /// 认下一次被拦过的网格报告（和 resize 回调里放行的那条路做同样的事）。
     private func adopt(_ viewport: InMemoryTerminalViewport) {
-        if !followsRemoteGrid.withLock({ $0 }) {
+        if !pump.followsSnapshotGrid {
             shadow.resize(cols: viewport.columns, rows: viewport.rows,
                           cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
         }

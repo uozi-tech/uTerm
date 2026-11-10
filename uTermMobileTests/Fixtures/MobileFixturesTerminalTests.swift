@@ -71,7 +71,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
             script: MobileFakeTerminalScript(linesPerSecond: 600, seconds: 1, corpus: .plain))
         var received = 0
         let collector = Task {
-            for await chunk in transport.outputStream {
+            for await case .bytes(let chunk) in transport.outputItems {
                 received += chunk.count
                 if received > 0, await transport.ledger.scriptFinished { break }
             }

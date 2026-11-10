@@ -286,14 +286,14 @@ final class TerminalOutputPumpTests: XCTestCase {
         let (pump, shadow, surface) = makePump()
         pump.setSurfaceFeeding(true)
         pump.waitForCatchUp()
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         var expected = Data()
         let big = Data((0..<(TerminalOutputPump.sliceBytes * 2 + 100)).map { UInt8(ascii: "a") + UInt8($0 % 26) })
 
         pump.start(stream)
         for chunk in [Data("x1\r\n".utf8), big, Data("\r\nend".utf8)] {
             expected.append(chunk)
-            continuation.yield(chunk)
+            continuation.yield(.bytes(chunk))
         }
 
         let done = await waitUntil { surface.liveBytes.count == expected.count }
@@ -307,9 +307,9 @@ final class TerminalOutputPumpTests: XCTestCase {
     /// `reset()` 之后，上一条连接的流里再来字节也不进终端。
     func testResetDiscardsThePreviousConnectionsOutput() async {
         let (pump, shadow, _) = makePump()
-        let (old, oldContinuation) = AsyncStream<Data>.makeStream()
+        let (old, oldContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(old)
-        oldContinuation.yield(Data("old".utf8))
+        oldContinuation.yield(.bytes(Data("old".utf8)))
         let fed = await waitUntil { shadow.totalFedBytes == 3 }
         XCTAssertTrue(fed)
 
@@ -317,11 +317,11 @@ final class TerminalOutputPumpTests: XCTestCase {
         pump.reset()
         XCTAssertEqual(pump.generation, generation + 1)
         XCTAssertFalse(pump.isRunning)
-        oldContinuation.yield(Data("stale".utf8))
+        oldContinuation.yield(.bytes(Data("stale".utf8)))
 
-        let (new, newContinuation) = AsyncStream<Data>.makeStream()
+        let (new, newContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(new)
-        newContinuation.yield(Data("!".utf8))
+        newContinuation.yield(.bytes(Data("!".utf8)))
         let arrived = await waitUntil { shadow.totalFedBytes >= 4 }
         XCTAssertTrue(arrived)
         try? await Task.sleep(for: .milliseconds(50))
@@ -335,11 +335,11 @@ final class TerminalOutputPumpTests: XCTestCase {
         let (pump, shadow, surface) = makePump()
         pump.setSurfaceFeeding(true)
         pump.waitForCatchUp()
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(stream)
 
         surface.setBacklogged(true)
-        continuation.yield(Data("held".utf8))
+        continuation.yield(.bytes(Data("held".utf8)))
         try? await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(shadow.totalFedBytes, 0, "积压期间不取输出")
         XCTAssertEqual(pump.currentStats.backpressureWaits, 1)
@@ -358,9 +358,9 @@ final class TerminalOutputPumpTests: XCTestCase {
         pump.waitForCatchUp()
         surface.setBacklogged(true)
         pump.setSurfaceFeeding(false)
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         pump.start(stream)
-        continuation.yield(Data("background".utf8))
+        continuation.yield(.bytes(Data("background".utf8)))
         let fed = await waitUntil { shadow.totalFedBytes == 10 }
         XCTAssertTrue(fed)
         pump.reset()
@@ -372,11 +372,11 @@ final class TerminalOutputPumpTests: XCTestCase {
         pump.setSurfaceFeeding(true)
         pump.waitForCatchUp()
         let finished = LockedBox(false)
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let (stream, continuation) = AsyncStream<TerminalOutputItem>.makeStream()
         continuation.onTermination = { _ in finished.mutate { $0 = true } }
         pump.start(stream)
         surface.setBacklogged(true)
-        continuation.yield(Data("parked".utf8))
+        continuation.yield(.bytes(Data("parked".utf8)))
         try? await Task.sleep(for: .milliseconds(50))
 
         pump.reset()

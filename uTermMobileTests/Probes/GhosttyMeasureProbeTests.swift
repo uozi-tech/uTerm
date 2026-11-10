@@ -741,23 +741,23 @@ final class GhosttyMeasureProbeTests: XCTestCase {
     }
 }
 
-/// 输出完全由测试驱动的后端：`yield` 直接进 `outputStream`；写入丢弃。
+/// 输出完全由测试驱动的后端：`yield` 直接进 `outputItems`；写入丢弃。
 actor ScriptedBackend: TerminalBackend {
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
-    private nonisolated let output: AsyncStream<Data>.Continuation
+    private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
     private let exit: AsyncStream<Void>.Continuation
 
     init() {
-        var out: AsyncStream<Data>.Continuation!
-        outputStream = AsyncStream(bufferingPolicy: .unbounded) { out = $0 }
+        var out: AsyncStream<TerminalOutputItem>.Continuation!
+        outputItems = AsyncStream(bufferingPolicy: .unbounded) { out = $0 }
         output = out
         var ex: AsyncStream<Void>.Continuation!
         exitStream = AsyncStream { ex = $0 }
         exit = ex
     }
 
-    nonisolated func yield(_ data: Data) { output.yield(data) }
+    nonisolated func yield(_ data: Data) { output.yield(.bytes(data)) }
     func connect() async throws {}
     func write(_ data: Data) async {}
     func resize(cols: UInt16, rows: UInt16) async {}

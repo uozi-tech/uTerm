@@ -26,7 +26,7 @@ final class LocalShellIntegrationTests: XCTestCase {
         try await backend.connect()
         var output = ""
         let pump = Task { @MainActor in
-            for await chunk in backend.outputStream { output += String(decoding: chunk, as: UTF8.self) }
+            for await case .bytes(let chunk) in backend.outputItems { output += String(decoding: chunk, as: UTF8.self) }
         }
         defer { pump.cancel() }
 
@@ -75,7 +75,7 @@ final class LocalShellIntegrationTests: XCTestCase {
 
         let backend = LocalShellBackend(client: client, namespace: "integration-test", directory: "/usr/bin", columns: 80, rows: 24)
         try await backend.connect()
-        let drain = Task { for await _ in backend.outputStream {} }
+        let drain = Task { for await _ in backend.outputItems {} }
         defer { drain.cancel() }
         let started = await waitForDirectory(backend, "/usr/bin")
         XCTAssertEqual(started, "/usr/bin")
@@ -88,7 +88,7 @@ final class LocalShellIntegrationTests: XCTestCase {
         let missing = LocalShellBackend(client: client, namespace: "integration-test", directory: "/no/such/directory",
                                         columns: 80, rows: 24)
         try await missing.connect()
-        let drainMissing = Task { for await _ in missing.outputStream {} }
+        let drainMissing = Task { for await _ in missing.outputItems {} }
         defer { drainMissing.cancel() }
         let fallback = await waitForDirectory(missing, LocalShellWorkspaces.home)
         XCTAssertEqual(fallback, LocalShellWorkspaces.home)
@@ -101,7 +101,7 @@ final class LocalShellIntegrationTests: XCTestCase {
         defer { client.invalidate() }
         let backend = LocalShellBackend(client: client, namespace: "integration-test", columns: 80, rows: 24)
         try await backend.connect()
-        let drain = Task { for await _ in backend.outputStream {} }
+        let drain = Task { for await _ in backend.outputItems {} }
         defer { drain.cancel() }
         let exited = Task { () -> Bool in
             for await _ in backend.exitStream { return true }

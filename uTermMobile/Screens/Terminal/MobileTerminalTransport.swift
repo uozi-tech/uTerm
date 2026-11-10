@@ -6,7 +6,7 @@ import SwiftData
 /// ## 为什么不新造一个 `TerminalTransport` 协议
 ///
 /// 桌面侧早就有 `TerminalBackend`（`uTerm/Services/SSH/TerminalBackend.swift`），
-/// 面正好是终端要的那五件事：`outputStream`（入站字节）、`exitStream`（会话结束）、
+/// 面正好是终端要的那五件事：`outputItems`（入站字节）、`exitStream`（会话结束）、
 /// `connect()`、`write(_:)`、`resize(cols:rows:)`、`close()`，`SSHConnection` 是它
 /// 的唯一实现，桌面 `TerminalSession` 已经依赖 `any TerminalBackend`。
 /// 移动端 `MobileTerminalController` 是**唯一**直接 `new SSHConnection` 的地方——

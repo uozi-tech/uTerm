@@ -9,9 +9,6 @@ import XCTest
 /// 这里的「Mac」是一个假后端：自己一个影子终端，按主控端报来的尺寸钉好再拍快照，之后的输出原样转发）。
 ///
 /// 走生产路径：`MobileTerminalController` 的建连任务 → `GhosttyTerminalBridge.bind(any TerminalBackend)` → 输出泵。
-/// 后端只实现 `outputItems`（读 `outputStream` 记一次），所以也核了「经 `any TerminalBackend` 调到的是后端自己的
-/// `outputItems`」——以前它只写在协议扩展里，远控标签一个字节都收不到。
-///
 /// 要的结果：本地画面、本地影子、「Mac」三者同一个网格、同一屏内容；先建视图的话第一张快照就是本地网格，画面不必停下来等；
 /// 回放进画面时影子与画面的网格一致。
 @MainActor
@@ -24,12 +21,6 @@ final class RemoteTerminalGridTests: XCTestCase {
         private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
         nonisolated let exitStream: AsyncStream<Void>
         nonisolated var mirrorsRemoteGrid: Bool { true }
-        /// 有人读了 `outputStream`（远控后端没有纯字节流可给，读它就是走错了路）。
-        nonisolated let outputStreamReads = OSAllocatedUnfairLock(initialState: 0)
-        nonisolated var outputStream: AsyncStream<Data> {
-            outputStreamReads.withLock { $0 += 1 }
-            return AsyncStream { $0.finish() }
-        }
         private var attached = false
         /// 每张快照拍下时的网格。
         private(set) var snapshotGrids: [String] = []
@@ -207,7 +198,6 @@ final class RemoteTerminalGridTests: XCTestCase {
         XCTAssertEqual(bridge.outputPump.currentStats.gridHolds, 0, "第一张快照就是本地网格，不必停画面等")
         let snapshots = await fake.snapshotGrids
         XCTAssertEqual(snapshots, ["\(grid.cols)x\(grid.rows)"], "只发一张、按本地网格拍")
-        XCTAssertEqual(fake.outputStreamReads.withLock { $0 }, 0, "读的应当是后端自己的 outputItems")
 
         await fake.feed("echo after\r\nafter")
         await assertMirrored(bridge, fake, replays: replays)
@@ -249,6 +239,5 @@ final class RemoteTerminalGridTests: XCTestCase {
         XCTAssertTrue(resized, "本地网格应当变了")
         try await assertHeldUntilPinned(bridge, fake, replays: replays)
         XCTAssertEqual(bridge.outputPump.currentStats.gridHoldTimeouts, 0)
-        XCTAssertEqual(fake.outputStreamReads.withLock { $0 }, 0)
     }
 }

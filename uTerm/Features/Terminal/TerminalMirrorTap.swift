@@ -23,11 +23,41 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         case output(Data)
     }
 
+    /// 在泵的锁里拍下、还没裁回滚的一张快照（`ShadowTerminal.untrimmedSnapshot`）。第一个要发它的订阅者在连接队列上裁，
+    /// 同一刻拍给几个订阅者的共用这一份结果。
+    fileprivate nonisolated final class PendingSnapshot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var source: ShadowTerminal.UntrimmedSnapshot?
+        private var result = Data()
+
+        init(_ source: ShadowTerminal.UntrimmedSnapshot) {
+            self.source = source
+        }
+
+        /// 裁好的快照；裁失败时退回整份（多带些回滚，画面一样）。
+        var data: Data {
+            lock.withLock {
+                if let source {
+                    result = (try? source.trimmed()) ?? source.full
+                    self.source = nil
+                }
+                return result
+            }
+        }
+
+        /// 还没裁时按整份算。
+        var estimatedCount: Int {
+            lock.withLock { source?.full.count ?? result.count }
+        }
+    }
+
     /// 一个镜像订阅者：Mac 端替它攒着还没发出去的数据。`take` 由连接队列调用。
     nonisolated final class Subscriber: @unchecked Sendable {
         let id: UUID
         private let lock = NSLock()
-        private var snapshot: Data?
+        private var snapshot: PendingSnapshot?
+        /// `snapshot` 裁好之后的字节（开始发它的时候才裁）。
+        private var snapshotBytes: Data?
         private var snapshotOffset = 0
         private var pending = Data()
         private var snapshotWanted = true
@@ -68,15 +98,24 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
 
         /// 取走最多 `maxBytes` 字节；没有则 nil。快照没发完之前先发快照。
         func take(maxBytes: Int) -> Chunk? {
+            // 快照第一次发之前先裁回滚：不拿着订阅者的锁裁（泵那头追加字节要拿这把锁）。
+            if let unresolved = lock.withLock({ snapshotBytes == nil ? snapshot : nil }) {
+                let bytes = unresolved.data
+                lock.withLock { if snapshot === unresolved, snapshotBytes == nil { snapshotBytes = bytes } }
+            }
             lock.lock()
             defer { lock.unlock() }
-            if let snapshot {
+            if let bytes = snapshotBytes {
                 let start = snapshotOffset
-                let end = min(snapshot.count, start + max(1, maxBytes))
+                let end = min(bytes.count, start + max(1, maxBytes))
                 snapshotOffset = end
-                let piece = snapshot.subdata(in: start..<end)
-                let isLast = end == snapshot.count
-                if isLast { self.snapshot = nil }
+                // 切片，不拷贝。
+                let piece = bytes[(bytes.startIndex + start)..<(bytes.startIndex + end)]
+                let isLast = end == bytes.count
+                if isLast {
+                    snapshot = nil
+                    snapshotBytes = nil
+                }
                 return .snapshot(piece, isFirst: start == 0, isLast: isLast)
             }
             guard !pending.isEmpty else { return nil }
@@ -94,7 +133,8 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         var pendingBytes: Int {
             lock.lock()
             defer { lock.unlock() }
-            return (snapshot.map { $0.count - snapshotOffset } ?? 0) + pending.count
+            let snapshotLeft = snapshotBytes.map { $0.count - snapshotOffset } ?? snapshot?.estimatedCount ?? 0
+            return snapshotLeft + pending.count
         }
 
         fileprivate var needsSnapshot: Bool {
@@ -107,6 +147,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
             lock.lock()
             snapshotWanted = true
             snapshot = nil
+            snapshotBytes = nil
             pending = Data()
             lock.unlock()
         }
@@ -118,6 +159,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
             guard pending.count + bytes.count <= limit else {
                 pending = Data()
                 snapshot = nil
+                snapshotBytes = nil
                 snapshotWanted = true
                 return false
             }
@@ -126,9 +168,10 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         }
 
         /// 换成一张新快照：它之前还没发出的字节、没发完的旧快照都不必再发。
-        fileprivate func replace(with snapshot: Data) {
+        fileprivate func replace(with snapshot: PendingSnapshot) {
             lock.lock()
             self.snapshot = snapshot
+            snapshotBytes = nil
             snapshotOffset = 0
             pending = Data()
             snapshotWanted = false
@@ -140,14 +183,15 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         }
     }
 
-    private let makeSnapshot: @Sendable () -> Data?
+    private let makeSnapshot: @Sendable () -> ShadowTerminal.UntrimmedSnapshot?
     private let exclusively: @Sendable (() -> Void) -> Void
     private let lock = NSLock()
     private var subscribers: [UUID: Subscriber] = [:]
 
-    /// - `snapshot`：拍一张当前画面的二进制快照。
+    /// - `snapshot`：拍一张当前画面的二进制快照（在泵的锁里调，只拍整份；裁回滚在连接队列上，见 `PendingSnapshot`）。
     /// - `exclusively`：在「没有字节正在喂」的状态下跑一段代码（`TerminalOutputPump.performWhileFeedingPaused`）。
-    init(snapshot: @escaping @Sendable () -> Data?, exclusively: @escaping @Sendable (() -> Void) -> Void) {
+    init(snapshot: @escaping @Sendable () -> ShadowTerminal.UntrimmedSnapshot?,
+         exclusively: @escaping @Sendable (() -> Void) -> Void) {
         makeSnapshot = snapshot
         self.exclusively = exclusively
     }
@@ -196,7 +240,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
     func didFeed(_ bytes: Data) {
         let subscribers = currentSubscribers
         guard !subscribers.isEmpty else { return }
-        var snapshot: Data?
+        var snapshot: PendingSnapshot?
         for subscriber in subscribers {
             if !subscriber.needsSnapshot, subscriber.append(bytes) {
                 subscriber.notify()
@@ -204,7 +248,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
             }
             // 等快照的订阅者：这批字节的效果已经在（之后拍的）快照里了。
             guard subscriber.canTakeSnapshot else { continue }
-            if snapshot == nil { snapshot = makeSnapshot() }
+            if snapshot == nil { snapshot = makeSnapshot().map(PendingSnapshot.init) }
             guard let snapshot else { continue }
             subscriber.replace(with: snapshot)
             subscriber.notify()
@@ -216,7 +260,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
     /// 调用方已经借到泵的锁。
     private func serviceSnapshots() {
         let waiting = currentSubscribers.filter { $0.needsSnapshot && $0.canTakeSnapshot }
-        guard !waiting.isEmpty, let snapshot = makeSnapshot() else { return }
+        guard !waiting.isEmpty, let snapshot = makeSnapshot().map(PendingSnapshot.init) else { return }
         for subscriber in waiting {
             subscriber.replace(with: snapshot)
             subscriber.notify()

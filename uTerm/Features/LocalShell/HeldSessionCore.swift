@@ -6,10 +6,9 @@ import UPaneGroups
 /// `close()` 结束会话，`detach()` 只断开。退出原因分得开：holder 明说子进程退出了（`exited`）、
 /// 被别的客户端接走（`replaced`）、连接断了（holder 没了）。这三种对终端来说都是这条会话到头了。
 actor HeldSessionCore {
-    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let output = TerminalByteOutput()
     nonisolated let exitStream: AsyncStream<Void>
     nonisolated let holderLink = HolderLink()
-    private let outputContinuation: AsyncStream<Data>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
 
     private var connection: HolderConnection?
@@ -23,7 +22,6 @@ actor HeldSessionCore {
     private var pendingExecs: [Int: CheckedContinuation<String, Error>] = [:]
 
     init() {
-        (outputStream, outputContinuation) = AsyncStream.makeStream(of: Data.self)
         (exitStream, exitContinuation) = AsyncStream.makeStream(of: Void.self)
     }
 
@@ -50,7 +48,7 @@ actor HeldSessionCore {
 
     private func openAttachment(_ handle: FileHandle) async throws -> (HolderConnection, HolderReplay) {
         let connection = HolderConnection(handle)
-        let receiver = HolderSessionReceiver(output: outputContinuation) { [weak self] in
+        let receiver = HolderSessionReceiver(output: output) { [weak self] in
             Task { await self?.ended() }
         } onChildReply: { [weak self] payload in
             Task { await self?.receiveChildReply(payload) }
@@ -152,7 +150,7 @@ actor HeldSessionCore {
         connection?.close()
         connection = nil
         childPID = nil
-        outputContinuation.finish()
+        output.finish()
         exitContinuation.finish()
     }
 
@@ -184,7 +182,7 @@ nonisolated enum HolderSessionFailure: LocalizedError {
 
 /// 收 holder 的帧：先攒回放，`replayEnd` 之后转成输出流。只在连接的队列上用。
 nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
-    private let output: AsyncStream<Data>.Continuation
+    private let output: TerminalByteOutput
     private let onEnded: @Sendable () -> Void
     private let onChildReply: @Sendable ([UInt8]) -> Void
     var onReplayFinished: (@Sendable (Result<HolderReplay, Error>) -> Void)?
@@ -203,7 +201,7 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
         return pending
     }
 
-    init(output: AsyncStream<Data>.Continuation, onEnded: @escaping @Sendable () -> Void,
+    init(output: TerminalByteOutput, onEnded: @escaping @Sendable () -> Void,
          onChildReply: @escaping @Sendable ([UInt8]) -> Void) {
         self.output = output
         self.onEnded = onEnded
@@ -220,7 +218,7 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
             checkpoint = HolderCheckpoint(decoding: frame.payload)
         case .output:
             if isLive {
-                output.yield(Data(frame.payload))
+                output.send(Data(frame.payload))
             } else {
                 collected.append(contentsOf: frame.payload)
             }

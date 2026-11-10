@@ -3,11 +3,8 @@ import Foundation
 /// 终端层（`TerminalSession`）所依赖的抽象后端。形态对齐 uService 的
 /// `ProcessRunning`，去掉本地进程语义，改为连接语义。SSH 是 M1 唯一实现。
 protocol TerminalBackend: Actor {
-    /// 入站字节（远端 stdout/stderr）。会话不读它，读 `outputItems`；一般的后端只实现这一条，`outputItems` 有默认实现。
-    nonisolated var outputStream: AsyncStream<Data> { get }
-    /// 会话读的输出流（字节，或远控镜像夹在字节之间的整屏快照，见 `TerminalOutputItem`）。默认 = `outputStream` 逐块包一层；
-    /// 远控镜像（`RemoteTerminalBackend`）自己实现。**必须是协议要求**：只写在扩展里的话，经 `any TerminalBackend`
-    /// 调到的永远是默认实现，远控后端的快照和字节一个都到不了会话。
+    /// 入站输出（远端 stdout/stderr 的字节，远控镜像还夹着整屏快照，见 `TerminalOutputItem`）。输出泵直接迭代它；
+    /// 只出字节的后端用 `TerminalByteOutput` 造。
     nonisolated var outputItems: AsyncStream<TerminalOutputItem> { get }
     /// 画面的网格由对端定（远控镜像的主控端）：影子终端跟着对端发来的快照走、不跟本地 surface，网格对齐之前画面不跟
     /// （`TerminalOutputPump.followsSnapshotGrid`）。默认 false。
@@ -34,22 +31,29 @@ protocol TerminalBackend: Actor {
 extension TerminalBackend {
     nonisolated var mirrorsRemoteGrid: Bool { false }
 
-    /// `outputItems` 的默认实现：`outputStream` 逐块包成 `.bytes`。
-    nonisolated var outputItems: AsyncStream<TerminalOutputItem> {
-        let output = outputStream
-        return AsyncStream { continuation in
-            let task = Task.detached(priority: .userInitiated) {
-                for await chunk in output { continuation.yield(.bytes(chunk)) }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
     /// 默认恒真 —— 非网络后端（测试 mock）没有「静默断死」的概念。
     func verifyConnectionAlive() async -> Bool { true }
     /// 默认判断不了：关闭前宁可多问一句。
     func foregroundActivity() async -> TerminalActivity { .unknown }
+}
+
+/// 只出字节的后端（SSH、本机 shell、holder，以及测试里的假后端）的输出流：收到的字节直接以 `.bytes` 进 `items`，
+/// 会话那头直接迭代，不再经一层转发任务。
+nonisolated struct TerminalByteOutput: Sendable {
+    let items: AsyncStream<TerminalOutputItem>
+    private let continuation: AsyncStream<TerminalOutputItem>.Continuation
+
+    init() {
+        (items, continuation) = AsyncStream.makeStream(of: TerminalOutputItem.self)
+    }
+
+    func send(_ data: Data) {
+        continuation.yield(.bytes(data))
+    }
+
+    func finish() {
+        continuation.finish()
+    }
 }
 
 /// 要交给终端里正在跑的程序的一张图片（手机相册 / 剪贴板来的）。

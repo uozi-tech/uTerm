@@ -35,7 +35,7 @@ final class SSHConnectionIntegrationTests: XCTestCase {
 
         let collected = Task { () -> String in
             var acc = Data()
-            for await chunk in conn.outputStream {
+            for await case .bytes(let chunk) in conn.outputItems {
                 acc.append(chunk)
                 if String(decoding: acc, as: UTF8.self).contains("UTERM_OK") { break }
             }
@@ -75,7 +75,7 @@ final class SSHConnectionIntegrationTests: XCTestCase {
         try await conn.connect()
         let collected = Task { () -> String in
             var acc = Data()
-            for await chunk in conn.outputStream {
+            for await case .bytes(let chunk) in conn.outputItems {
                 acc.append(chunk)
                 if String(decoding: acc, as: UTF8.self).contains("VIA_JUMP") { break }
             }
@@ -119,7 +119,7 @@ final class SSHConnectionIntegrationTests: XCTestCase {
 
         let collected = Task { () -> String in
             var acc = Data()
-            for await chunk in conn.outputStream {
+            for await case .bytes(let chunk) in conn.outputItems {
                 acc.append(chunk)
                 // 只认 shell 算出来的那一行（回显的命令行里是 `$(wc …)`，不是数字）。
                 if String(decoding: acc, as: UTF8.self).contains(/SIZE_\d+_\d+_END/) { break }

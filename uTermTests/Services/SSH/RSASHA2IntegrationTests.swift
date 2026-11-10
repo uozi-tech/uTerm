@@ -64,7 +64,7 @@ final class RSASHA2IntegrationTests: XCTestCase {
 
         let collected = Task { () -> String in
             var acc = Data()
-            for await chunk in conn.outputStream {
+            for await case .bytes(let chunk) in conn.outputItems {
                 acc.append(chunk)
                 if String(decoding: acc, as: UTF8.self).contains("RSA_OK") { break }
             }
