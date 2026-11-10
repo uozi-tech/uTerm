@@ -1,11 +1,6 @@
-// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
-// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
-// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 import CryptoKit
 import Observation
 import XCTest
-import SwiftTerm
 @preconcurrency import Network
 @testable import uTerm
 
@@ -13,10 +8,6 @@ import SwiftTerm
 /// 一个「手机」客户端直接用 `RemoteLink` 走完配对 → 会话列表 → 接入 → 输入输出 → 断开。
 @MainActor
 final class RemoteHostServerTests: XCTestCase {
-
-    private final class SilentDelegate: TerminalDelegate {
-        func send(source: Terminal, data: ArraySlice<UInt8>) {}
-    }
 
     /// 客户端收到的消息（连接队列上写入，测试线程读）。
     private final class Inbox: @unchecked Sendable {
@@ -29,6 +20,10 @@ final class RemoteHostServerTests: XCTestCase {
         var all: [RemoteMessage] { lock.lock(); defer { lock.unlock() }; return messages }
         func first(_ kind: RemoteMessage.Kind) -> RemoteMessage? { all.first { $0.kind == kind } }
         func of(_ kind: RemoteMessage.Kind) -> [RemoteMessage] { all.filter { $0.kind == kind } }
+        /// 一个终端通道上的画面数据（快照段与原样字节），按到达顺序。
+        func screenData(channel: UInt32) -> [RemoteMessage] {
+            all.filter { $0.channel == channel && ($0.kind == .terminalSnapshot || $0.kind == .output) }
+        }
         func arrival(where match: (RemoteMessage) -> Bool) -> Date? {
             lock.lock(); defer { lock.unlock() }
             return zip(messages, arrivals).first { match($0.0) }?.1
@@ -41,8 +36,6 @@ final class RemoteHostServerTests: XCTestCase {
         let name = "测试 iPhone"
     }
 
-    private let phoneDelegate = SilentDelegate()
-
     private func waitUntil(_ timeout: TimeInterval = 5, _ condition: () async -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !(await condition()) {
@@ -50,11 +43,6 @@ final class RemoteHostServerTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(2))
         }
         return true
-    }
-
-    private func corpus(_ name: String) throws -> [UInt8] {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "terminal-corpus-\(name)", withExtension: "bin"))
-        return [UInt8](try Data(contentsOf: url))
     }
 
     /// 一台连上 MockBackend 并登记到注册表的 Mac 会话，以及在 127.0.0.1 上监听的服务端。
@@ -76,7 +64,9 @@ final class RemoteHostServerTests: XCTestCase {
         return (server, session, backend, sessionID, try XCTUnwrap(server.port))
     }
 
-    private func connect(_ phone: Phone, port: UInt16) async throws -> (RemoteLink, Inbox, String) {
+    /// `terminalEngine`：握手里报的终端引擎版本；真手机报 `TerminalEngineVersion.current`，报别的（或不报）接不了终端。
+    private func connect(_ phone: Phone, port: UInt16,
+                         terminalEngine: String? = TerminalEngineVersion.current) async throws -> (RemoteLink, Inbox, String) {
         let inbox = Inbox()
         let link = RemoteLink(connection: NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!,
                                                        using: RemoteLink.parameters()))
@@ -85,12 +75,13 @@ final class RemoteHostServerTests: XCTestCase {
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: phone.name,
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                 staticKey: phone.staticKey.publicKey.rawRepresentation,
-                                features: [RemoteFeature.keyConfirmation])
+                                features: [RemoteFeature.keyConfirmation], terminalEngine: terminalEngine)
         let established = try await link.establish(role: .initiator, hello: hello, staticKey: phone.staticKey,
                                                    ephemeralKey: ephemeral)
         // 与真手机一样握手后先证明持有私钥：Mac 不接受不做这一步的连接。
         link.send(RemoteMessage(.keyConfirm))
         XCTAssertEqual(established.peer.deviceName, "测试 Mac")
+        XCTAssertEqual(established.peer.terminalEngine, TerminalEngineVersion.current, "Mac 在握手里报自己的引擎版本")
         return (link, inbox, established.verificationCode)
     }
 
@@ -306,29 +297,46 @@ final class RemoteHostServerTests: XCTestCase {
         XCTAssertEqual(sessions.map(\.id), [sessionID])
 
         // 3. 接入：Mac 终端钉成手机的尺寸，快照 + 后续输出在手机端还原出一致的状态。
-        let phoneTerminal = Terminal(delegate: phoneDelegate, options: TerminalOptions(cols: 71, rows: 22, scrollback: 2000))
+        let phoneTerminal = MirrorPhone(cols: 71, rows: 22)
+        let assembly = SnapshotAssembly()
         link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(RemoteAttachRequest(sessionID: sessionID, cols: 71, rows: 22))))
         let attached = await waitUntil { inbox.first(.attached) != nil }
         XCTAssertTrue(attached)
         let attachMessage = try XCTUnwrap(inbox.first(.attached))
         XCTAssertNil(try RemoteJSON.decode(RemoteAttachResult.self, from: attachMessage.payload).error)
         let channel = attachMessage.channel
-        XCTAssertEqual(session.terminalView.getTerminal().cols, 71)
+        XCTAssertEqual(session.shadow.size.cols, 71)
+        XCTAssertEqual(session.shadow.size.rows, 22)
         XCTAssertEqual(session.remoteController, phone.name)
 
-        let vim = try corpus("vim")
+        let vim = try TerminalCorpus.bytes("vim")
         for chunk in stride(from: 0, to: vim.count, by: 433) {
-            await backend.emitOutput(Data(vim[chunk..<min(vim.count, chunk + 433)]))
+            await backend.emitOutput(vim.subdata(in: chunk..<min(vim.count, chunk + 433)))
         }
         var fed = 0
+        var snapshots = 0
         let consistent = await waitUntil(5) {
-            let outputs = inbox.of(.output).filter { $0.channel == channel }
-            for message in outputs.dropFirst(fed) { phoneTerminal.feed(byteArray: [UInt8](message.payload)) }
-            fed = outputs.count
-            return session.terminalView.getTerminal().snapshotFingerprint()
-                .differences(from: phoneTerminal.snapshotFingerprint()).isEmpty
+            // 线上到的是快照段（47 号消息）和之后的原样字节，按到达顺序交给手机端的泵。
+            let messages = inbox.screenData(channel: channel)
+            for message in messages.dropFirst(fed) {
+                if message.kind == .terminalSnapshot {
+                    guard let piece = RemoteTerminalSnapshotPiece.decode(message.payload) else { continue }
+                    if let snapshot = assembly.append(piece.data, isFirst: piece.isFirst, isLast: piece.isLast) {
+                        snapshots += 1
+                        phoneTerminal.pump.applySnapshot(snapshot)
+                    }
+                } else {
+                    phoneTerminal.pump.route(message.payload)
+                }
+            }
+            fed = messages.count
+            return session.shadow.totalFedBytes >= vim.count
+                && session.shadow.mirrorDifferences(from: phoneTerminal.shadow).isEmpty
         }
-        XCTAssertTrue(consistent, "\(session.terminalView.getTerminal().snapshotFingerprint().differences(from: phoneTerminal.snapshotFingerprint()))")
+        XCTAssertTrue(consistent, "\(session.shadow.mirrorDifferences(from: phoneTerminal.shadow))")
+        XCTAssertGreaterThanOrEqual(snapshots, 1, "接入后的第一帧是快照")
+        XCTAssertEqual(inbox.screenData(channel: channel).first?.kind, .terminalSnapshot)
+        XCTAssertEqual(phoneTerminal.pump.currentStats.rejectedSnapshots, 0, "手机端解得开 Mac 发来的每一张快照")
 
         // 4. 输入原样写进后端。
         link.send(RemoteMessage(.input, channel: channel, payload: Data("ls -la\r".utf8)))
@@ -339,6 +347,7 @@ final class RemoteHostServerTests: XCTestCase {
         link.send(RemoteMessage(.detach, channel: channel))
         let released = await waitUntil { session.remoteController == nil }
         XCTAssertTrue(released)
+        XCTAssertEqual(session.shadow.size.cols, 120, "断开后回到接管之前的尺寸")
         link.close()
         _ = await waitUntil { server.connectedDevices.isEmpty }
 
@@ -360,6 +369,37 @@ final class RemoteHostServerTests: XCTestCase {
         XCTAssertTrue(closed)
         XCTAssertEqual(pairingStates(revokedInbox), [.awaitingApproval, .rejected])
         revoked.close()
+    }
+
+    /// 终端镜像的快照是引擎的二进制格式：对端握手里报的引擎版本和本机不同（或老版本根本不报）就不接入终端，
+    /// 回一条说得清原因的失败；终端不被接管、尺寸不动。配对、会话列表不受影响。
+    func test_attach_is_refused_when_the_terminal_engine_differs() async throws {
+        let (server, session, _, sessionID, port) = try await makeServer()
+        defer { server.stop(); session.dispose() }
+        for engine in [nil, "ghostty-ffffffff+p0000/snapshot-9"] as [String?] {
+            let phone = Phone()
+            try server.trust(RemotePeer(id: phone.id, name: phone.name,
+                                        publicKey: phone.staticKey.publicKey.rawRepresentation, pairedAt: Date()))
+            let (link, inbox, _) = try await connect(phone, port: port, terminalEngine: engine)
+            let trusted = await waitUntil { self.pairingStates(inbox).contains(.trusted) }
+            XCTAssertTrue(trusted)
+            link.send(RemoteMessage(.subscribeSessions))
+            let listed = await waitUntil { inbox.first(.sessions) != nil }
+            XCTAssertTrue(listed, "会话列表照常能看")
+
+            link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(RemoteAttachRequest(sessionID: sessionID, cols: 71, rows: 22))))
+            let answered = await waitUntil { inbox.first(.attached) != nil }
+            XCTAssertTrue(answered)
+            let result = try RemoteJSON.decode(RemoteAttachResult.self, from: try XCTUnwrap(inbox.first(.attached)).payload)
+            XCTAssertEqual(result.error, RemoteTerminalEngine.mismatchMessage, "引擎版本 \(engine ?? "没报")")
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertNil(session.remoteController, "没接入就不该接管")
+            XCTAssertEqual(session.shadow.size.cols, 120, "尺寸不动")
+            XCTAssertTrue(inbox.of(.terminalSnapshot).isEmpty, "解不开的快照一段也不发")
+            XCTAssertFalse(session.mirrorTap.hasSubscribers)
+            link.close()
+            _ = await waitUntil { server.connectedDevices.isEmpty }
+        }
     }
 
     /// 同一台设备换了长期密钥（冒充或重装）：不能直接放行，必须重新审批。
@@ -388,15 +428,14 @@ final class RemoteHostServerTests: XCTestCase {
         // 密钥确认之后才授权：没授权前发的请求 Mac 不理。
         _ = await waitUntil { self.pairingStates(inbox).contains(.trusted) }
         link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(RemoteAttachRequest(sessionID: sessionID, cols: 80, rows: 24))))
-        _ = await waitUntil { !inbox.of(.output).isEmpty }
+        _ = await waitUntil { inbox.of(.terminalSnapshot).contains { RemoteTerminalSnapshotPiece.decode($0.payload)?.isLast == true } }
         let attachMs = Date().timeIntervalSince(attachStart) * 1000
         let channel = try XCTUnwrap(inbox.first(.attached)).channel
 
         var inputMs: [Double] = []
         var outputMs: [Double] = []
         for i in 0..<50 {
-            // 每轮隔开 30 ms：让 Mac 的输出循环回到空闲态，量的是打字回显那条路径。连续输出时
-            // 它按 16 ms 一帧合批，那段延迟 Mac 本地显示同样有，不是远控引入的。
+            // 每轮隔开 30 ms：让 Mac 的输出循环回到空闲态，量的是打字回显那条路径。
             try? await Task.sleep(for: .milliseconds(30))
             let key = Data("k\(i)".utf8)
             let sent = Date()
@@ -449,4 +488,3 @@ final class RemoteHostServerTests: XCTestCase {
         XCTAssertEqual(info.displayTitle, "zsh 2")
     }
 }
-#endif
