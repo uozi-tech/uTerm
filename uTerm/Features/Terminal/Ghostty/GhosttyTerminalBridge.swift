@@ -89,6 +89,10 @@ final class GhosttyTerminalBridge {
     /// 泵会先把影子的状态回放进去（影子为空、surface 没落下过内容就不回放），然后接实时字节。
     fileprivate func surfaceDidAttach() {
         guard let owner else { return }
+        hasSurface = true
+        // 从这一刻起尺寸归 surface 管：没有 surface 时钉的尺寸不用再还原（钉着的目标还在 `pendingPin` 里，
+        // surface 报来格子尺寸后照常钉到视图上）。
+        gridBeforeSurfacelessPin = nil
         if let grid = io.surfaceGrid {
             owner.shadow.resize(cols: grid.columns, rows: grid.rows,
                                 cellWidth: grid.cellWidthPixels, cellHeight: grid.cellHeightPixels)
@@ -98,6 +102,7 @@ final class GhosttyTerminalBridge {
 
     /// surface 没了（视图被销毁、换了 controller 重建）：输出只进影子，下一个 surface 建好时再回放。
     fileprivate func surfaceDidDetach() {
+        hasSurface = false
         owner?.outputPump.setSurfaceFeeding(false)
     }
 
@@ -108,7 +113,19 @@ final class GhosttyTerminalBridge {
         owner?.sendHostBytes(data)
     }
 
-    fileprivate func ghosttyDidResize(cols: Int, rows: Int) {
+    fileprivate func ghosttyDidResize(cols reportedCols: Int, rows reportedRows: Int) {
+        // 报来的网格是 Ghostty 的 IO 线程在某一刻量的，转到主线程时可能已经过时。最常见的一次：surface 刚建好时先按
+        // 引擎默认的 800×600 px 报一个约 53×21，紧接着才是视图的真实尺寸；把过时的那个发给 PTY，正在跑的全屏程序
+        // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以一律以 surface 此刻的网格为准：之后那次报告到达时
+        // 值相同，不会重复发。影子终端在回调里是按报来的值改的，过时的话一并拉回来。
+        var cols = reportedCols, rows = reportedRows
+        if let current = io.surfaceGrid, current.columns > 0, current.rows > 0,
+           Int(current.columns) != cols || Int(current.rows) != rows {
+            cols = Int(current.columns)
+            rows = Int(current.rows)
+            owner?.shadow.resize(cols: current.columns, rows: current.rows,
+                                 cellWidth: current.cellWidthPixels, cellHeight: current.cellHeightPixels)
+        }
         guard cols > 0, rows > 0 else { return }
         let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
@@ -122,13 +139,22 @@ final class GhosttyTerminalBridge {
 
     /// 还没法钉（surface 没建好、量不到格子尺寸）时记下的目标。
     private var pendingPin: (cols: Int, rows: Int)?
+    /// surface 建着没有（视图进过窗口）。没建时没有视图尺寸可钉，接管尺寸直接作用在影子终端和 PTY 上。
+    private var hasSurface = false
+    /// 没有 surface 时被接管之前的行列数：解除接管时还原。
+    private var gridBeforeSurfacelessPin: (cols: Int, rows: Int)?
 
     /// 把 Ghostty 视图钉成 `cols × rows`：Ghostty 没有内留白（配置里 padding 是 0），网格 = ⌊视图像素 ÷ 格子像素⌋，
     /// 所以视图取「行列数 × 格子像素 ÷ 屏幕倍率」正好是那个行列数，不用像 SwiftTerm 那样试探。
     /// 之后 Ghostty 报来新网格（`ghosttyDidResize`），影子终端、PTY、镜像都跟着走。
     func pinGrid(cols: Int, rows: Int) {
         pendingPin = (cols, rows)
-        guard let cell = view.uTermCellPixels else { return }
+        guard let cell = view.uTermCellPixels else {
+            // 标签从没露出过（重启后接回、还没点开的标签）：surface 没建，量不到格子。手机照样要能接管它——
+            // 这时终端的尺寸只有影子终端和 PTY 两处，直接改；surface 建好之后由上面的 `pendingPin` 钉到视图上。
+            if !hasSurface { resizeWithoutSurface(cols: cols, rows: rows, rememberingCurrent: true) }
+            return
+        }
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         view.pinnedFrameSize = NSSize(width: CGFloat(cols) * cell.width / scale, height: CGFloat(rows) * cell.height / scale)
         view.pinnedCursorRow = cursorRow
@@ -139,6 +165,10 @@ final class GhosttyTerminalBridge {
     func unpinGrid() {
         pendingPin = nil
         owner?.tracksCursorForPinnedGrid = false
+        if !hasSurface, let before = gridBeforeSurfacelessPin {
+            resizeWithoutSurface(cols: before.cols, rows: before.rows, rememberingCurrent: false)
+        }
+        gridBeforeSurfacelessPin = nil
         guard view.pinnedFrameSize != nil else { return }
         view.pinnedFrameSize = nil
         view.pinnedCursorRow = nil
@@ -146,6 +176,18 @@ final class GhosttyTerminalBridge {
             container.needsLayout = true
             container.layoutSubtreeIfNeeded()
         }
+    }
+
+    /// 没有 surface 时改终端的行列数：影子终端当场改，镜像端重发快照，PTY 收到新尺寸——和 surface 报来新网格时
+    /// （`ghosttyDidResize`）走的是同一串后续动作。
+    private func resizeWithoutSurface(cols: Int, rows: Int, rememberingCurrent: Bool) {
+        guard let owner, cols > 0, rows > 0 else { return }
+        let current = owner.shadow.size
+        if rememberingCurrent, gridBeforeSurfacelessPin == nil { gridBeforeSurfacelessPin = current }
+        guard current.cols != cols || current.rows != rows else { return }
+        owner.shadow.resize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+        owner.shadowGridDidChange()
+        owner.ghosttyGridDidChange(cols: cols, rows: rows)
     }
 
     /// 光标在屏幕第几行（看影子终端：吃的是同一份字节）。
