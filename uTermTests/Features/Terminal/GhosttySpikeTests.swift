@@ -1,22 +1,20 @@
-// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
-// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
-// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 import AppKit
 import CoreImage
 import IOSurface
 import XCTest
 import GhosttyTerminal
-import SwiftTerm
 @testable import uTerm
 
 /// GhosttyKit 接入验证（spike，见 `docs/ghostty-eval/macos-spike.md`）。
 ///
-/// 1. `testSessionPathRendersCorpus`：真 `TerminalSession` + 假后端，开 Ghostty 渲染，挂进真窗口，
-///    把录制语料与一段大输出走真实的输出泵喂进去，逐行比对 Ghostty 可见区与影子 SwiftTerm 可见区，
-///    并核对应答只来自 Ghostty、尺寸同步到后端、截图非空。
-/// 2. `testThroughputSwiftTermVsGhostty`：同一份字节分别喂 SwiftTerm 视图与 Ghostty 视图，量吞吐、
-///    峰值内存、主线程 CPU 与进程 CPU。读数打到标准输出（`[GhosttySpike]` 开头）。
+/// 1. `testSessionPathRendersCorpus`：真 `TerminalSession` + 假后端，挂进真窗口，把录制语料与一段大输出走真实的
+///    输出泵喂进去，逐行比对 Ghostty surface 的可见区与影子终端（libghostty-vt，吃同一份字节）的可见区，
+///    并核对应答只来自 surface、尺寸同步到后端、截图非空。
+/// 2. `testThroughputGhostty` / `testFootprintSixPanes`：量 Ghostty 视图的吞吐、峰值内存、主线程 CPU 与进程 CPU。
+///    读数打到标准输出（`[GhosttySpike]` 开头）。
+///
+/// 评估阶段这里每一项都拿 SwiftTerm 当对照（同一份字节两边各跑一遍）；SwiftTerm 移除后对照那一半去掉了，
+/// 当时的对照读数留在 `docs/ghostty-eval/macos-spike.md`。
 @MainActor
 final class GhosttySpikeTests: XCTestCase {
 
@@ -35,13 +33,9 @@ final class GhosttySpikeTests: XCTestCase {
         }
     }
 
-    /// 可见区逐行（SwiftTerm）。宽字符后的占位格跳过，与 Ghostty 读出来的文字同形。
-    private func swiftTermVisible(_ terminal: SwiftTerm.Terminal) -> [String] {
-        (0..<terminal.rows).map {
-            // 光标跳过、从没写过的格子 SwiftTerm 译成 \0，Ghostty 译成空格：统一成空格再去尾。
-            trimRight(Substring((terminal.getLine(row: $0)?.translateToString(trimRight: true, skipNullCellsFollowingWide: true) ?? "")
-                .replacingOccurrences(of: "\u{0}", with: " ")))
-        }
+    /// 可见区逐行（影子终端）。和 surface 的 `readViewportText` 同一种读法。
+    private func shadowVisible(_ terminal: ShadowTerminal) -> [String] {
+        terminal.viewportText().split(separator: "\n", omittingEmptySubsequences: false).map(trimRight)
     }
 
     private func trimRight(_ s: Substring) -> String {
@@ -58,9 +52,9 @@ final class GhosttySpikeTests: XCTestCase {
         strictDiff = nil
         var first: String?
         for i in 0..<min(a.count, b.count) {
-            if a[i] == b[i] { strict += 1 } else if strictDiff == nil { strictDiff = "row \(i) swiftterm=\(a[i].debugDescription) ghostty=\(b[i].debugDescription)" }
+            if a[i] == b[i] { strict += 1 } else if strictDiff == nil { strictDiff = "row \(i) shadow=\(a[i].debugDescription) ghostty=\(b[i].debugDescription)" }
             let la = a[i].filter { !$0.isWhitespace }, lb = b[i].filter { !$0.isWhitespace }
-            if la == lb { loose += 1 } else if first == nil { first = "row \(i) swiftterm=\(a[i].debugDescription) ghostty=\(b[i].debugDescription)" }
+            if la == lb { loose += 1 } else if first == nil { first = "row \(i) shadow=\(a[i].debugDescription) ghostty=\(b[i].debugDescription)" }
         }
         return (strict, loose, first)
     }
@@ -148,8 +142,7 @@ final class GhosttySpikeTests: XCTestCase {
             if g != lastGrid { lastGrid = g; gridSince = Date() }
             return Date().timeIntervalSince(gridSince) > 0.5
         }
-        // 语料是在 100×30 里录的。程序按 30 行设的滚动区（vim 的 `1;30r`）在别的行数下语义会变：
-        // xterm / Ghostty 的 DECSTBM 是整个终端一份，SwiftTerm 是每块缓冲区一份，退出备用屏后两边不同。
+        // 语料是在 100×30 里录的。程序按 30 行设的滚动区（vim 的 `1;30r`）在别的行数下语义会变，
         // 所以把窗口调到恰好 100×30 再比，比的是同一份录制在原尺寸下的结果。
         let first = try XCTUnwrap(bridge.grid)
         // Ghostty 的格子是整像素（2x 屏上即 0.5pt 的整数倍），除出来的余数是排不下一格的边角。
@@ -168,10 +161,10 @@ final class GhosttySpikeTests: XCTestCase {
         await session.connect(using: backend)
         XCTAssertEqual(session.connectionState, .connected)
 
-        // 尺寸：影子 SwiftTerm 跟到 Ghostty 的网格，后端收到同一个尺寸。
-        let shadow = session.terminalView.getTerminal()
-        XCTAssertEqual(shadow.cols, grid.cols)
-        XCTAssertEqual(shadow.rows, grid.rows)
+        // 尺寸：影子终端跟到 Ghostty 的网格，后端收到同一个尺寸。
+        let shadow = session.shadow
+        XCTAssertEqual(shadow.size.cols, grid.cols)
+        XCTAssertEqual(shadow.size.rows, grid.rows)
         var resizes: [(cols: UInt16, rows: UInt16)] = []
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
@@ -194,12 +187,15 @@ final class GhosttySpikeTests: XCTestCase {
                 return ("\(name)@60%", Array(c[0..<cut]))
             }
             + [("load4MB", load)]
+        var fedTarget = shadow.totalFedBytes
         for (name, bytes) in inputs {
-            // 每段之前清屏复位，让各段互不影响（RIS 两边都认）。
+            // 每段之前清屏复位，让各段互不影响。
             await backend.emitOutput(Data("\u{1B}c".utf8))
             await backend.emitOutput(Data(bytes))
+            fedTarget += 2 + bytes.count
+            let target = fedTarget
             try await waitUntil(60, "\(name) 喂完") {
-                !session.outputBuffer.hasBufferedBytes && bridge.io.pendingOutputByteCount == 0
+                shadow.totalFedBytes >= target && bridge.io.pendingOutputByteCount == 0
             }
             // 输出泵最后一拍喂完后 Ghostty 还要解析：等两边的可见区稳定。
             var last = ""
@@ -209,7 +205,7 @@ final class GhosttySpikeTests: XCTestCase {
                 if now != last { last = now; stableSince = Date() }
                 return Date().timeIntervalSince(stableSince) > 0.3
             }
-            let swift = swiftTermVisible(shadow)
+            let swift = shadowVisible(shadow)
             // 先按 Ghostty 当前视口读，再 scroll_to_bottom 后读一次：区分「内容不同」与「视口没跟到底」。
             let asIs = (bridge.viewportText() ?? "").split(separator: "\n", omittingEmptySubsequences: false).map(trimRight)
             let asIsResult = compare(swift, asIs)
@@ -223,11 +219,12 @@ final class GhosttySpikeTests: XCTestCase {
             if let diff = strictDiff { print("[GhosttySpike]   first strict diff \(diff)") }
             report.append(line)
             XCTAssertGreaterThan(ghostty.joined().count, 0, "\(name)：Ghostty 可见区是空的")
+            // 两边是同一个引擎、同一份字节：除了行尾落宽字符的行 surface 会多带下一行首字，应当逐行相同。
             XCTAssertGreaterThanOrEqual(Double(result.loose), Double(swift.count) * 0.9,
-                                        "\(name)：Ghostty 与 SwiftTerm 可见区差得太多")
+                                        "\(name)：surface 与影子终端的可见区差得太多")
         }
 
-        // 应答：DA1 只由 Ghostty 回答（影子 SwiftTerm 的被丢掉），并到达后端。
+        // 应答：DA1 只由 surface 回答（surface 吃字节时影子终端不答），并到达后端。
         var ghosttyWrites = Data()
         bridge.onWriteForTesting = { ghosttyWrites.append($0) }
         await backend.emitOutput(Data("\u{1B}[c".utf8))
@@ -238,7 +235,7 @@ final class GhosttySpikeTests: XCTestCase {
         let written = await backend.writtenData.reduce(Data(), +)
         let replies = written.split(separator: UInt8(ascii: "c")).filter { $0.starts(with: Data("\u{1B}[?".utf8)) }
         print("[GhosttySpike] DA1 replies at backend=\(replies.map { String(decoding: $0, as: UTF8.self).debugDescription })")
-        XCTAssertEqual(replies.count, 1, "DA1 只能有一个应答（Ghostty），影子 SwiftTerm 的必须丢掉")
+        XCTAssertEqual(replies.count, 1, "DA1 只能有一个应答（surface），影子终端不能再答一遍")
 
         // 截图：AppKit 的 cacheDisplay 对 CAMetalLayer 是否有效。
         let image = bridge.view.snapshotImage()
@@ -284,15 +281,18 @@ final class GhosttySpikeTests: XCTestCase {
         return (n, n > 0 ? sat / Double(n) : 0, minLuma, n > 0 ? hue / Double(n) : 0)
     }
 
-    /// 浅色底上的亮黄字（#FFD600 对白底约 1.4:1）在最低对比度 3.0 下被改成什么颜色：
-    /// SwiftTerm 补丁 #1 保色相（压暗成橄榄 / 棕，仍有饱和度），Ghostty 换成黑 / 白（饱和度≈0）。
-    func testMinimumContrastAlgorithmDiffers() async throws {
+    /// 浅色底上的亮黄字（#FFD600 对白底约 1.4:1）在最低对比度 3.0 下被改成什么颜色。评估时这里拿 SwiftTerm 的补丁 #1
+    /// （保色相：压暗成橄榄 / 棕，仍有饱和度）和官方 Ghostty（换成黑 / 白，饱和度≈0）对照；现在引擎带补丁 0022，
+    /// 也是保色相。这里留 Ghostty 的读数；逐格的断言在 `TerminalContrastTests`。
+    func testMinimumContrastClampsBrightYellowOnLight() async throws {
         let text = "\u{1B}[2J\u{1B}[H\u{1B}[38;2;255;214;0mWWWWWWWWWWWWWWWW\u{1B}[0m\r\n"
             + "\u{1B}[38;2;255;214;0m\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{1B}[0m\r\n"
-        GhosttyTerminalBridge.applyAppearance(dark: false)
-        defer { GhosttyTerminalBridge.applyAppearance(dark: true) }
+        GhosttyTerminalConfig.controller.setColorScheme(.light)
+        defer {
+            let dark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            GhosttyTerminalConfig.controller.setColorScheme(dark ? .dark : .light)
+        }
 
-        // Ghostty
         let io = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
         let view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 400, height: 120))
         view.controller = GhosttyTerminalConfig.controller
@@ -309,32 +309,18 @@ final class GhosttySpikeTests: XCTestCase {
             let cg = rep.cgImage!.cropping(to: CGRect(x: 0, y: row * rowPx, width: rep.pixelsWide, height: rowPx))!
             return NSBitmapImageRep(cgImage: cg)
         }
-
-        // SwiftTerm（同一配色、同一最低对比度）
-        let st = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 120))
-        TerminalTheme.apply(to: st, settings: TerminalSettings.read(), dark: false)
-        let stWindow = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 400, height: 120), contentView: st)
-        defer { stWindow.orderOut(nil) }
-        st.feed(text: text)
-        st.flushPendingDisplay()
-        st.displayIfNeeded()
-        let stRep = try XCTUnwrap(st.bitmapImageRepForCachingDisplay(in: st.bounds))
-        st.cacheDisplay(in: st.bounds, to: stRep)
-
-        // 行高：两边都按「第一行 / 第二行」切带。Ghostty 的位图是像素、原点在上。
+        // Ghostty 的位图是像素、原点在上。
         let gCellH = Int((Double(ghosttyRep.pixelsHigh) / (120.0 / 15.0)).rounded())
-        let sCellH = Int((Double(stRep.pixelsHigh) / (120.0 / 15.0)).rounded())
         let g1 = Self.inkStats(band(ghosttyRep, row: 0, rowPx: gCellH))
         let g2 = Self.inkStats(band(ghosttyRep, row: 1, rowPx: gCellH))
-        let s1 = Self.inkStats(band(stRep, row: 0, rowPx: sCellH))
-        let s2 = Self.inkStats(band(stRep, row: 1, rowPx: sCellH))
-        print(String(format: "[GhosttySpike] min-contrast text   ghostty n=%d sat=%.2f hue=%.2f minLuma=%.2f | swiftterm n=%d sat=%.2f hue=%.2f minLuma=%.2f",
-                     g1.count, g1.meanSaturation, g1.meanHue, g1.minLuma, s1.count, s1.meanSaturation, s1.meanHue, s1.minLuma))
-        print(String(format: "[GhosttySpike] min-contrast blocks ghostty n=%d sat=%.2f hue=%.2f minLuma=%.2f | swiftterm n=%d sat=%.2f hue=%.2f minLuma=%.2f",
-                     g2.count, g2.meanSaturation, g2.meanHue, g2.minLuma, s2.count, s2.meanSaturation, s2.meanHue, s2.minLuma))
-        // 两边都确实把亮黄字钳暗了（不钳的话亮度 > 0.75，一个像素都数不到）。
+        print(String(format: "[GhosttySpike] min-contrast text   ghostty n=%d sat=%.2f hue=%.2f minLuma=%.2f",
+                     g1.count, g1.meanSaturation, g1.meanHue, g1.minLuma))
+        print(String(format: "[GhosttySpike] min-contrast blocks ghostty n=%d sat=%.2f hue=%.2f minLuma=%.2f",
+                     g2.count, g2.meanSaturation, g2.meanHue, g2.minLuma))
+        // 确实把亮黄字钳暗了（不钳的话亮度 > 0.75，一个像素都数不到）；块字符那一行同样被钳（补丁 0022 不豁免）。
         XCTAssertGreaterThan(g1.count, 0, "Ghostty 没有执行 minimum-contrast")
-        XCTAssertGreaterThan(s1.count, 0, "SwiftTerm 补丁 #1 没生效")
+        XCTAssertGreaterThan(g2.count, 0, "块字符没有被钳制")
+        XCTAssertGreaterThan(g2.meanSaturation, 0.2, "钳制后应当保色相，不是换成黑白")
     }
 
     // MARK: - 2. 吞吐
@@ -362,45 +348,6 @@ final class GhosttySpikeTests: XCTestCase {
 
     nonisolated static let loadBytes = 32 * 1024 * 1024
     nonisolated static let chunk = 64 * 1024
-
-    private func measureSwiftTerm(_ load: [UInt8], headless: Bool) async throws -> Reading {
-        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 900, height: 620))
-        TerminalTheme.apply(to: view, settings: TerminalSettings.read(), dark: true)
-        let window: NSWindow? = headless ? nil
-            : ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), contentView: view,
-                               placement: .transparentOnScreen)
-        defer { window?.orderOut(nil) }
-        try await Task.sleep(for: .milliseconds(200))
-        let base = ProbeMetrics.footprintMB()
-        var peak = base
-        let main0 = ProbeMetrics.threadCPUSeconds(), proc0 = Self.processCPUSeconds()
-        let t0 = CFAbsoluteTimeGetCurrent()
-        var offset = 0
-        var draws = 0
-        defer { if !headless { print("[GhosttySpike] swiftterm-view draws=\(draws)") } }
-        while offset < load.count {
-            let end = min(offset + Self.chunk, load.count)
-            view.feed(byteArray: load[offset..<end])
-            offset = end
-            // 让 AppKit 有机会画（SwiftTerm 的绘制节流在主线程 run loop 上）。
-            // 每 512 KiB（Mac 输出泵一拍的上限）同步画一帧，近似积压时 SwiftTerm 的绘制节奏。
-            if !headless, offset % (512 * 1024) == 0 {
-                view.flushPendingDisplay()
-                view.displayIfNeeded()
-                draws += 1
-                Self.spinRunLoopOnce()
-            }
-            peak = max(peak, ProbeMetrics.footprintMB())
-        }
-        if !headless { view.flushPendingDisplay(); view.displayIfNeeded() }
-        let t1 = CFAbsoluteTimeGetCurrent()
-        let reading = Reading(engine: headless ? "swiftterm-headless" : "swiftterm-view",
-                              seconds: t1 - t0, mainCPU: ProbeMetrics.threadCPUSeconds() - main0,
-                              procCPU: Self.processCPUSeconds() - proc0,
-                              peakDeltaMB: peak - base, endDeltaMB: ProbeMetrics.footprintMB() - base)
-        XCTAssertNotNil(view.getTerminal().getLine(row: 0))
-        return reading
-    }
 
     private func measureGhostty(_ load: [UInt8]) async throws -> (Reading, String?, InMemoryTerminalViewport?) {
         let base0 = ProbeMetrics.footprintMB()
@@ -442,27 +389,10 @@ final class GhosttySpikeTests: XCTestCase {
         return (reading, io.readViewportText(), box.value)
     }
 
-    /// 六个窗格的内存账：各开 6 个 600×400 的视图、各喂 1 MiB 大输出，量进程足迹的增量。
-    /// SwiftTerm 先量（Ghostty 的 Metal 工作集拆掉后不一定马上还）。
+    /// 六个窗格的内存账：开 6 个 600×400 的 Ghostty 视图、各喂 1 MiB 大输出，量进程足迹的增量。
     func testFootprintSixPanes() async throws {
         let load = Self.makeLoad(bytes: 1024 * 1024)
         let size = NSRect(x: 0, y: 0, width: 600, height: 400)
-
-        let base0 = ProbeMetrics.footprintMB()
-        var stWindows: [NSWindow] = []
-        for _ in 0..<6 {
-            let view = CopyableTerminalView(frame: size)
-            TerminalTheme.apply(to: view, settings: TerminalSettings.read(), dark: true)
-            stWindows.append(ProbeWindow.make(contentRect: size, contentView: view, placement: .transparentOnScreen))
-            view.feed(byteArray: load[...])
-            view.flushPendingDisplay()
-            view.displayIfNeeded()
-        }
-        try await Task.sleep(for: .milliseconds(500))
-        let st = ProbeMetrics.footprintMB() - base0
-        stWindows.forEach { $0.orderOut(nil) }
-        stWindows.removeAll()
-        try await Task.sleep(for: .milliseconds(500))
 
         let base1 = ProbeMetrics.footprintMB()
         var ghWindows: [NSWindow] = []
@@ -482,48 +412,32 @@ final class GhosttySpikeTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(500))
         let gh = ProbeMetrics.footprintMB() - base1
-        print(String(format: "[GhosttySpike] footprint 6 panes: swiftterm Δ=%.0fMB ghostty Δ=%.0fMB (cumulative per pane: %@)",
-                     st, gh, perPane.map { String(format: "%.0f", $0) }.joined(separator: ",")))
+        print(String(format: "[GhosttySpike] footprint 6 panes: ghostty Δ=%.0fMB (cumulative per pane: %@)",
+                     gh, perPane.map { String(format: "%.0f", $0) }.joined(separator: ",")))
         ghWindows.forEach { $0.orderOut(nil) }
         XCTAssertEqual(sessions.count, 6)
     }
 
-    func testThroughputSwiftTermVsGhostty() async throws {
+    /// 同一份 32 MiB 大输出喂 Ghostty 视图三轮，量吞吐、CPU、内存。
+    func testThroughputGhostty() async throws {
         let load = Self.makeLoad(bytes: Self.loadBytes)
-        var readings: [String: [Reading]] = [:]
+        var readings: [Reading] = []
         var lastGhosttyText: String?
         var cell: InMemoryTerminalViewport?
-        // 交替顺序跑三轮，只比同一进程内的相对值。
         for round in 0..<3 {
-            let order = round % 2 == 0 ? ["swiftterm-view", "ghostty-view", "swiftterm-headless"]
-                                       : ["swiftterm-headless", "ghostty-view", "swiftterm-view"]
-            for engine in order {
-                let r: Reading
-                switch engine {
-                case "ghostty-view":
-                    let (reading, text, viewport) = try await measureGhostty(load)
-                    r = reading; lastGhosttyText = text; cell = viewport
-                case "swiftterm-headless": r = try await measureSwiftTerm(load, headless: true)
-                default: r = try await measureSwiftTerm(load, headless: false)
-                }
-                print(r.line + " round=\(round)")
-                readings[engine, default: []].append(r)
-                try await Task.sleep(for: .milliseconds(300))
-            }
+            let (reading, text, viewport) = try await measureGhostty(load)
+            lastGhosttyText = text
+            cell = viewport
+            print(reading.line + " round=\(round)")
+            readings.append(reading)
+            try await Task.sleep(for: .milliseconds(300))
         }
-        for (engine, rs) in readings.sorted(by: { $0.key < $1.key }) {
-            let med = { (f: (Reading) -> Double) in ProbeMetrics.percentile(rs.map(f), 0.5) }
-            print(String(format: "[GhosttySpike] MEDIAN engine=%@ MB/s=%.1f wall=%.3fs mainCPU=%.3fs procCPU=%.3fs peakΔ=%.0fMB endΔ=%.0fMB",
-                         engine, med(\.mbps), med(\.seconds), med(\.mainCPU), med(\.procCPU), med(\.peakDeltaMB), med(\.endDeltaMB)))
-        }
+        let med = { (f: (Reading) -> Double) in ProbeMetrics.percentile(readings.map(f), 0.5) }
+        print(String(format: "[GhosttySpike] MEDIAN engine=ghostty-view MB/s=%.1f wall=%.3fs mainCPU=%.3fs procCPU=%.3fs peakΔ=%.0fMB endΔ=%.0fMB",
+                     med(\.mbps), med(\.seconds), med(\.mainCPU), med(\.procCPU), med(\.peakDeltaMB), med(\.endDeltaMB)))
         if let cell {
-            let font = TerminalSettings.textFont()
-            let swiftCell = NSAttributedString(string: "W", attributes: [.font: font]).size()
-            print("[GhosttySpike] ghostty grid=\(cell.columns)x\(cell.rows) cellPx=\(cell.cellWidthPixels)x\(cell.cellHeightPixels) "
-                  + String(format: "swiftterm-advance(pt)=%.2f lineHeight(pt)=%.2f", swiftCell.width,
-                           font.ascender - font.descender + font.leading))
+            print("[GhosttySpike] ghostty grid=\(cell.columns)x\(cell.rows) cellPx=\(cell.cellWidthPixels)x\(cell.cellHeightPixels)")
         }
         XCTAssertFalse((lastGhosttyText ?? "").isEmpty, "Ghostty 解析完大输出后可见区是空的")
     }
 }
-#endif
