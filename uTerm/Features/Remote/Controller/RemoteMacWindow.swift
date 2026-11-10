@@ -46,7 +46,7 @@ struct RemoteMacWindowView: View {
     private var titleBar: some View {
         Text(title)
             .font(UD.mono(13))
-            .foregroundStyle(UD.text3)
+            .windowTitleForeground()
             .allowsHitTesting(false)
             .frame(height: 38)
             .frame(maxWidth: .infinity)

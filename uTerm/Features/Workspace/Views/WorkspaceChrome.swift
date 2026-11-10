@@ -36,6 +36,20 @@ enum ServerChromeTitle {
     }
 }
 
+/// 自绘标题栏里标题文字的颜色，跟系统标题一致：窗口在前台（key 或 main）用主文字色，退到后台变灰。
+/// 不用强调色：强调色只给选中态和可点的控件。
+private struct WindowTitleForeground: ViewModifier {
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(controlActiveState == .inactive ? UD.text3 : UD.text)
+    }
+}
+
+extension View {
+    func windowTitleForeground() -> some View { modifier(WindowTitleForeground()) }
+}
+
 /// 只写窗口标题，给会随内容变化的标题用。不走 `WorkspaceWindowChrome`：它每次更新都要
 /// 重排红绿灯、遍历视图树去玻璃，跟不上 shell 标题的变化频率。
 struct WindowTitleBinding: NSViewRepresentable {
@@ -86,7 +100,7 @@ struct WorkspaceTitleBar: View {
             HStack(spacing: 10) {
                 Text(serverName)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(UD.text)
+                    .windowTitleForeground()
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let session {
