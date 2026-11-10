@@ -67,6 +67,10 @@
         /// 最近一次手指拖动发出位移的时刻，和那一刻 Ghostty 画面层上挂着的 IOSurface（用来判断拖动那一步画出来没有）。
         var lastDragTime: CFTimeInterval = 0
         var contentsAtLastDrag: ObjectIdentifier?
+        // uTerm 本地补丁（抓鼠标的程序松手后的惯性）：这段按速度衰减的惯性，位移是不是按行报给程序的（起惯性那一刻定），
+        // 以及它慢到多少 pt/s 就停（见 startMomentumScrolling）。
+        var reportsToProgram = false
+        var stopSpeed: CGFloat = 50
     }
 
     extension UITerminalView {
@@ -184,9 +188,10 @@
                     "touch scroll ended velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))",
                 )
                 if releaseOverscroll() { return }
-                if !usesInlineTextSelection || momentumScroll.scrollsLocally || surface?.isMouseCaptured != true {
-                    startMomentumScrolling(velocity: velocity)
-                }
+                // uTerm 本地补丁：程序抓着鼠标（Claude 的全屏界面、tmux / vim 开 mouse）时松手也起惯性。上游加内联选区那次
+                //（a667344）把「内联选区开着、程序抓着鼠标、单指」拦在了外面，没写原因；拦掉之后手指一离开屏幕就停。
+                // 惯性途中手指落下由点按识别器那条路停（`gestureRecognizer(_:shouldReceive:)`），那一下不算点击。
+                startMomentumScrolling(velocity: velocity)
                 // 没起惯性（抬手时几乎不动）就当场吸附；起了惯性的等惯性停下再吸附。
                 if momentumScroll.displayLink == nil, surface?.isMouseCaptured != true { snapScrollToRow() }
 
@@ -521,8 +526,29 @@
             if resetting { applyOverscroll(0) }
         }
 
+        /// 现在的位移是不是按行报给程序（程序抓着鼠标，且不是双指的本地整行滚动）。
+        private var scrollReportsToProgram: Bool {
+            !(usesInlineTextSelection && momentumScroll.scrollsLocally) && surface?.isMouseCaptured == true
+        }
+
         func startMomentumScrolling(velocity: CGPoint) {
-            guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else { return }
+            var velocity = velocity
+            var stopSpeed: CGFloat = 50
+            // uTerm 本地补丁（抓鼠标的程序松手后的惯性）：位移交给引擎，引擎每攒够一格就给程序报一次滚轮，画面由程序自己
+            // 一行一行地重画，和 Mac 触控板的惯性滚动是一回事。减速照 UIScrollView `.normal`，甩多快滑多远和普通滚动一样；两处不同：
+            // - 只留主方向：横向那点速度攒够一格会被报成横向滚轮；
+            // - 慢到两行相隔 0.15 s 以上就停：一行一跳的画面，收尾那几下零星的跳比早点停难看
+            //  （按 50 pt/s 那条线，13 pt 的行高最后几行要隔 0.26 s 才跳一下）。抬手速度不到这条线的不起惯性。
+            let reports = scrollReportsToProgram
+            if reports {
+                let vertical = abs(velocity.y) >= abs(velocity.x)
+                if vertical { velocity.x = 0 } else { velocity.y = 0 }
+                if let metrics = surface?.size() {
+                    let cell = CGFloat(vertical ? metrics.cellHeightPixels : metrics.cellWidthPixels) / resolvedDisplayScale()
+                    stopSpeed = max(stopSpeed, cell / 0.15)
+                }
+            }
+            guard abs(velocity.x) > stopSpeed || abs(velocity.y) > stopSpeed else { return }
             // uTerm 本地补丁：普通滚动（程序没抓鼠标、不是双指本地滚动）改成「先算落点再滑」，照 UIScrollView 的
             // targetContentOffset：按 `.normal` 减速率算出能滑多远，取整到最近的整行，再用一条指数曲线正好停在那一行上，
             // 速度一路连续降到 0，不再惯性停下后另起一段吸附。
@@ -544,6 +570,8 @@
             }
 
             momentumScroll.velocity = velocity
+            momentumScroll.reportsToProgram = reports
+            momentumScroll.stopSpeed = stopSpeed
             TerminalDebugLog.log(
                 .input,
                 "momentum start velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))",
@@ -656,6 +684,13 @@
         }
 
         @objc func momentumScrollFrame(_ link: CADisplayLink) {
+            // uTerm 本地补丁：位移的去向途中变了（起的时候程序抓着鼠标，现在它放开了，比如退出了全屏界面；或者反过来），
+            // 惯性到此为止。接着走的话，本来报给程序的速度会拿去滚视口（系统滚动打开时视口归 UIScrollView 管，
+            // 这里再动它两边就对不上了），或者本来滚视口的速度变成一串滚轮报给刚起来的程序。
+            if momentumScroll.reportsToProgram != scrollReportsToProgram {
+                stopMomentumScrolling()
+                return
+            }
             let dt = link.targetTimestamp - link.timestamp
             // uTerm 本地补丁：减速按 UIScrollView 的 `.normal`（每毫秒 0.998），和 SwiftTerm 标签（UIScrollView）
             // 甩出去的距离、收尾一致。上游是每 1/60 s 0.92，摩擦大得多，甩一下就停。按帧时长缩放，60 / 120 Hz 一样远。
@@ -667,7 +702,8 @@
             let deltaX = momentumScroll.velocity.x * dt
             let deltaY = momentumScroll.velocity.y * dt
 
-            if abs(momentumScroll.velocity.x) < 50, abs(momentumScroll.velocity.y) < 50 {
+            let stopSpeed = momentumScroll.stopSpeed
+            if abs(momentumScroll.velocity.x) < stopSpeed, abs(momentumScroll.velocity.y) < stopSpeed {
                 stopMomentumScrolling()
                 if surface?.isMouseCaptured != true { snapScrollToRow() }
                 return
