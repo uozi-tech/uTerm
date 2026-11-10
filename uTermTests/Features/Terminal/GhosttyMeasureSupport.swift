@@ -7,9 +7,6 @@ import ObjectiveC
 import QuartzCore
 import XCTest
 import GhosttyTerminal
-#if UTERM_LEGACY_SWIFTTERM_TESTS
-import SwiftTerm
-#endif
 @testable import uTerm
 
 // 测量门（`docs/ghostty-eval/measure-macos.md`）用的夹具。测试本身在 `GhosttyMeasureTests.swift`。
@@ -316,44 +313,6 @@ nonisolated final class GhosttyFrameWatch: @unchecked Sendable {
     }
 }
 
-// 【迁移中，暂未编译】SwiftTerm 的出帧探针（拿 SwiftTerm 当对照的那一半），随对照用例一起去掉。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
-/// SwiftTerm 的「出帧」：把 `SwiftTerm.TerminalView.draw(_:)` 换成「原实现 + 回调」，以 draw 返回为准。
-@MainActor
-enum SwiftTermDrawProbe {
-    private static var installed = false
-    private static var hooks: [ObjectIdentifier: (SwiftTerm.TerminalView) -> Void] = [:]
-
-    static func install() {
-        guard !installed else { return }
-        installed = true
-        let cls: AnyClass = SwiftTerm.TerminalView.self
-        let sel = #selector(NSView.draw(_:))
-        guard let method = class_getInstanceMethod(cls, sel),
-              method != class_getInstanceMethod(NSView.self, sel) else {
-            XCTFail("SwiftTerm.TerminalView 没有自己的 draw(_:)，换不了")
-            return
-        }
-        typealias DrawFn = @convention(c) (AnyObject, Selector, NSRect) -> Void
-        let original = unsafeBitCast(method_getImplementation(method), to: DrawFn.self)
-        let block: @convention(block) (AnyObject, NSRect) -> Void = { object, rect in
-            original(object, sel, rect)
-            guard let view = object as? SwiftTerm.TerminalView else { return }
-            MainActor.assumeIsolated { hooks[ObjectIdentifier(view)]?(view) }
-        }
-        method_setImplementation(method, imp_implementationWithBlock(block))
-    }
-
-    static func hook(_ view: SwiftTerm.TerminalView, _ body: @escaping (SwiftTerm.TerminalView) -> Void) {
-        install()
-        hooks[ObjectIdentifier(view)] = body
-    }
-
-    static func unhook(_ view: SwiftTerm.TerminalView) { hooks[ObjectIdentifier(view)] = nil }
-}
-
-#endif
-
 // MARK: - 后端
 
 /// 收到什么就原样回什么（本地回环 echo）。
@@ -406,15 +365,13 @@ actor CaptureBackend: TerminalImageReceiving {
     nonisolated func emit(_ data: Data) { output.yield(data) }
 }
 
-// 【迁移中，暂未编译】测量窗格还带着 SwiftTerm 那一半；`GhosttyMeasureTests` 改写时把它改成只有 Ghostty。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 // MARK: - 窗格
 
-/// 一个测量用窗格：SwiftTerm 视图、Ghostty 视图，或 Ghostty + 不上屏的 SwiftTerm 影子（spike 的形态）。
+/// 一个测量用窗格：Ghostty 视图，或 Ghostty + 影子终端（uTerm 实际的形态：同一份字节先进影子终端、再进 surface）。
+/// 评估阶段还有一种 SwiftTerm 视图当对照，SwiftTerm 移除后去掉了。
 @MainActor
 final class MeasurePane {
     enum Engine: String, CaseIterable {
-        case swiftterm
         case ghostty
         case ghosttyShadow = "ghostty+shadow"
     }
@@ -439,14 +396,14 @@ final class MeasurePane {
 
     let engine: Engine
     let view: NSView
-    private(set) var swiftTerm: CopyableTerminalView?
-    private(set) var ghostty: GhosttySurfaceView?
-    private(set) var io: InMemoryTerminalSession?
+    let ghostty: GhosttySurfaceView
+    let io: InMemoryTerminalSession
+    /// `ghosttyShadow` 才有：不上屏，只解析。
+    private(set) var shadow: ShadowTerminal?
     let viewport: ViewportBox
     let ioBox: IOBox
     let scrollbar: ScrollbarProxy
     private(set) var watch: GhosttyFrameWatch?
-    private(set) var draws = 0
     var window: NSWindow?
 
     init(engine: Engine, frame: NSRect, controller: GhosttyTerminal.TerminalController?, scrollbackLines: Int) {
@@ -455,73 +412,52 @@ final class MeasurePane {
         viewport = box
         self.ioBox = ioBox
         scrollbar = proxy
-        var settings = TerminalSettings.read()
-        settings.scrollback = scrollbackLines
-        switch engine {
-        case .swiftterm:
-            let st = CopyableTerminalView(frame: frame)
-            TerminalTheme.apply(to: st, settings: settings, dark: true)
-            swiftTerm = st
-            view = st
-        case .ghostty, .ghosttyShadow:
-            let session = InMemoryTerminalSession(
-                write: { data in ioBox.onWrite?(data) },
-                resize: { box.set($0) })
-            ioBox.io = session
-            io = session
-            let gh = GhosttySurfaceView(frame: frame)
-            gh.controller = controller ?? GhosttyTerminalConfig.controller
-            gh.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
-            gh.delegate = proxy
-            ghostty = gh
-            view = gh
-            if engine == .ghosttyShadow {
-                // 影子：不进窗口、不上屏，只解析（spike 的「Ghostty 渲染 + 影子 SwiftTerm」）。
-                let st = CopyableTerminalView(frame: frame)
-                TerminalTheme.apply(to: st, settings: settings, dark: true)
-                swiftTerm = st
-            }
-        }
-        if engine == .swiftterm, let st = swiftTerm {
-            SwiftTermDrawProbe.hook(st) { [weak self] _ in self?.draws += 1 }
-        }
+        let shadow = engine == .ghosttyShadow
+            ? ShadowTerminal(cols: 120, rows: 30, options: TerminalScrollbackLimits(lines: scrollbackLines).shadowOptions)
+            : nil
+        self.shadow = shadow
+        let session = InMemoryTerminalSession(
+            write: { data in ioBox.onWrite?(data) },
+            resize: { viewport in
+                box.set(viewport)
+                shadow?.resize(cols: viewport.columns, rows: viewport.rows)
+            })
+        ioBox.io = session
+        io = session
+        let gh = GhosttySurfaceView(frame: frame)
+        gh.controller = controller ?? GhosttyTerminalConfig.controller
+        gh.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        gh.delegate = proxy
+        ghostty = gh
+        view = gh
     }
 
     /// 视图进了窗口之后调：Ghostty 建好 surface、开始 KVO 出帧。
     func attachWatchIfNeeded() {
-        guard watch == nil, let gh = ghostty, let layer = GhosttyFrameWatch.contentLayer(of: gh) else { return }
+        guard watch == nil, let layer = GhosttyFrameWatch.contentLayer(of: ghostty) else { return }
         watch = GhosttyFrameWatch(layer: layer)
     }
 
-    var isReady: Bool {
-        switch engine {
-        case .swiftterm: return view.window != nil
-        case .ghostty, .ghosttyShadow: return viewport.value != nil
-        }
-    }
+    var isReady: Bool { viewport.value != nil }
 
     func feed(_ bytes: ArraySlice<UInt8>) {
-        if let io { io.receive(Data(bytes)) }
-        swiftTerm?.feed(byteArray: bytes)
+        let data = Data(bytes)
+        shadow?.feed(data)
+        io.receive(data)
     }
 
-    var pending: Int { io?.pendingOutputByteCount ?? 0 }
+    var pending: Int { io.pendingOutputByteCount }
 
-    /// 已出帧数：Ghostty 数 contents 变化，SwiftTerm 数 draw。
-    var frames: Int { engine == .swiftterm ? draws : (watch?.count ?? 0) }
+    /// 已出帧数：数图层 contents 的变化。
+    var frames: Int { watch?.count ?? 0 }
 
     /// 回滚里实际留下的行数（不含屏幕本身）。
     var scrollbackRows: Int? {
-        switch engine {
-        case .swiftterm:
-            return swiftTerm.map { $0.getTerminal().getTopVisibleRow() }
-        case .ghostty, .ghosttyShadow:
-            guard let s = scrollbar.last else { return nil }
-            return Int(s.total) - Int(s.len)
-        }
+        guard let s = scrollbar.last else { return nil }
+        return Int(s.total) - Int(s.len)
     }
 
-    func setVisible(_ visible: Bool) { ghostty?.setSurfaceVisible(visible) }
+    func setVisible(_ visible: Bool) { ghostty.setSurfaceVisible(visible) }
 
     /// 视图移出窗口，但对象（以及 Ghostty 的 surface、回滚）留着。
     func detachFromWindow() {
@@ -529,16 +465,13 @@ final class MeasurePane {
     }
 
     func dispose() {
-        if let st = swiftTerm { SwiftTermDrawProbe.unhook(st) }
         watch = nil
-        ghostty?.delegate = nil
+        ghostty.delegate = nil
         detachFromWindow()
         window?.orderOut(nil)
         window = nil
     }
 }
-
-#endif
 
 // MARK: - 负载
 
@@ -598,7 +531,6 @@ nonisolated enum MeasureLoad {
         return out
     }
 
-    #if UTERM_LEGACY_SWIFTTERM_TESTS
     /// 「重」内容：GhosttySpikeTests.makeLoad 的分布（每行最多 60 个不同真彩样式），按行数截取。
     static func heavyLines(count: Int) -> [UInt8] {
         let load = GhosttySpikeTests.makeLoad(bytes: count * 400)
@@ -610,7 +542,6 @@ nonisolated enum MeasureLoad {
         }
         return Array(load[0..<end])
     }
-    #endif
 
     /// Claude Code 式的一帧：同步更新（DEC 2026）里重画底部 12 行的活动区（转圈、计数、输入框、状态行），
     /// 每 4 帧先提交 2 行新内容（活动区随之下移，触发滚动）。

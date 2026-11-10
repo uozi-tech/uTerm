@@ -57,6 +57,8 @@ final class TerminalSession: NSObject {
     /// 含 `idle` 的那条（远控把它推给接入的设备：程序空闲也说明前台是 Agent 而不是 shell）。
     var programReport: ProgramStatusRecord?
     @ObservationIgnored var programStatusTracker = ProgramStatusTracker()
+    /// 程序状态的记账副本，和字节位置严格对应，存进 holder 检查点（见 `ProgramStatusJournal`）。
+    @ObservationIgnored let statusJournal = ProgramStatusJournal()
     /// 单测替换「用户此刻在不在看」：测试宿主不一定是前台 app，`NSApp.isActive` 由不得测试。
     @ObservationIgnored var userLookingOverride: (@MainActor () -> Bool)?
     /// 窗格上的真彩提示，见 `TerminalSession+TrueColor`。

@@ -1,11 +1,6 @@
-// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
-// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
-// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 import AppKit
 import Carbon.HIToolbox
 import SwiftData
-import SwiftTerm
 import XCTest
 @testable import uTerm
 
@@ -16,6 +11,9 @@ import XCTest
 /// - `UTERM_E2E_SSH_PORT`、`UTERM_E2E_SSH_USER`：127.0.0.1 上的 sshd
 /// - `UTERM_E2E_SSH_KEY_B64`：base64 编码的私钥（测试宿主有沙盒，读不了任意路径）
 /// - `UTERM_E2E_WORKDIR`：Agent 的工作目录，要已被它们信任
+///
+/// 终端挂在真窗口里（Ghostty 的 surface 要答 Agent 启动时发的各种查询）；读屏、状态、通知读的是影子终端那一侧
+/// （`snapshotScreen` / `programStatus`），键入走会话的输入通道，和 App 里一样。
 @MainActor
 final class AgentE2ETests: XCTestCase {
 
@@ -29,8 +27,9 @@ final class AgentE2ETests: XCTestCase {
     private var server: Server!
     private var session: TerminalSession!
     private var connection: SSHConnection!
-    private var view: CopyableTerminalView!
+    private var view: GhosttySurfaceView!
     private var window: NSWindow!
+    private var extraWindows: [NSWindow] = []
     private var attentions: [TerminalAttention] = []
     /// 状态变化序列，失败时用来看 Agent 实际走过哪些状态。
     private var statusLog: [String] = []
@@ -47,19 +46,36 @@ final class AgentE2ETests: XCTestCase {
         attentions = []
         (session, connection) = try await openSession()
         session.attentionSink = { [unowned self] in self.attentions.append($0) }
-        view = try XCTUnwrap(session.terminalView as? CopyableTerminalView)
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
-                          styleMask: [.titled], backing: .buffered, defer: true)
-        window.isReleasedWhenClosed = false
-        view.frame = try XCTUnwrap(window.contentView).bounds
-        window.contentView?.addSubview(view)
+        view = session.ghostty.view
+        // 真的主菜单会把 ⌘ 组合执行掉；这里只按 ⌃V，保险起见仍然不问它。
+        view.performMenuKeyEquivalent = { _ in false }
+        window = try await mount(session, size: NSSize(width: 1100, height: 700))
         // 焦点不在终端上 = 用户没在看：状态变化该发通知。
         window.makeFirstResponder(nil)
     }
 
     override func tearDown() async throws {
         await connection?.close()
-        window?.close()
+        session?.dispose()
+        window?.orderOut(nil)
+        extraWindows.forEach { $0.orderOut(nil) }
+        extraWindows = []
+    }
+
+    /// 把会话的终端挂进一个透明、在屏上的窗口（引擎要有显示节拍），等 surface 建好、开始吃实时字节。
+    private func mount(_ session: TerminalSession, size: NSSize) async throws -> NSWindow {
+        let rect = NSRect(origin: .zero, size: size)
+        let container = GhosttyContainerView(surface: session.ghostty.view)
+        let window = ProbeWindow.make(contentRect: rect, styleMask: [.titled], contentView: container,
+                                      placement: .transparentOnScreen)
+        container.frame = window.contentView?.bounds ?? rect
+        container.layoutSubtreeIfNeeded()
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !session.ghostty.isLive, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(session.ghostty.isLive, "Ghostty surface 没就绪")
+        return window
     }
 
     private func openSession() async throws -> (TerminalSession, SSHConnection) {
@@ -92,14 +108,14 @@ final class AgentE2ETests: XCTestCase {
 
     private func type(_ text: String, to target: TerminalSession? = nil) {
         let target = target ?? session!
-        target.send(source: target.terminalView, data: Array(text.utf8)[...])
+        // 和键盘输入同一条有序通道。
+        target.sendHostBytes(Data(text.utf8))
     }
 
+    /// 最近 400 行（含回滚），读的是影子终端。
     private func screen(of target: TerminalSession? = nil) -> String {
         let target = target ?? session!
-        // 程序用光标移动跳过的格子读出来是 NUL，不是空格。
-        return String(decoding: target.terminalView.getTerminal().getBufferAsData(), as: UTF8.self)
-            .replacingOccurrences(of: "\0", with: " ")
+        return target.snapshotScreen(lines: 400, maxBytes: 1 << 20).lines.joined(separator: "\n")
     }
 
     private func waitUntil(_ what: String,
@@ -186,17 +202,13 @@ final class AgentE2ETests: XCTestCase {
 
         // 上传的文件只有本人可读。
         let (shell, shellConnection) = try await openSession()
-        let shellWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 400),
-                                   styleMask: [.titled], backing: .buffered, defer: true)
-        shellWindow.isReleasedWhenClosed = false
-        shell.terminalView.frame = try XCTUnwrap(shellWindow.contentView).bounds
-        shellWindow.contentView?.addSubview(shell.terminalView)
+        extraWindows.append(try await mount(shell, size: NSSize(width: 900, height: 400)))
         try await waitUntil("shell 提示符") { screen(of: shell).contains("%") || screen(of: shell).contains("$") }
         type("ls -t /tmp/uterm-image-* | head -1 | xargs stat -f MODE=%Lp; rm -f /tmp/uterm-image-* /tmp/uterm-e2e-marker\r",
              to: shell)
         try await waitUntil("文件权限") { screen(of: shell).contains("MODE=600") }
         await shellConnection.close()
-        shellWindow.close()
+        shell.dispose()
     }
 
     // MARK: Codex
@@ -220,4 +232,3 @@ final class AgentE2ETests: XCTestCase {
         XCTAssertTrue(statusLog.contains("working/codex"), "\(statusLog)")
     }
 }
-#endif

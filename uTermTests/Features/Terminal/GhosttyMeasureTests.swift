@@ -1,7 +1,3 @@
-// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
-// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
-// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 import AppKit
 import Carbon.HIToolbox
 import CoreText
@@ -9,13 +5,15 @@ import IOSurface
 import QuartzCore
 import XCTest
 import GhosttyTerminal
-import SwiftTerm
 @testable import uTerm
 
 /// GhosttyKit 迁移的「测量门」（`docs/ghostty-migration-plan.md` §3，报告 `docs/ghostty-eval/measure-macos.md`）。
 ///
 /// 默认全部跳过：要 `TEST_RUNNER_GHOSTTY_MEASURE=1` 才跑。M14 会临时切系统输入法、动系统剪贴板（跑完还原），
 /// M1 / M7 会一次开 20 个窗口，都不适合进日常全量。读数一律打到标准输出，行首 `[GhosttyMeasure]`。
+///
+/// 评估阶段每一项都拿 SwiftTerm 当对照（`*_ENGINE=swiftterm`、`swiftterm-bare` 这些配置）。SwiftTerm 移除后对照那一半
+/// 去掉了，只留 Ghostty 的读数；当时的对照读数在报告里。`ghostty+shadow` 现在指「Ghostty + 影子终端」。
 @MainActor
 final class GhosttyMeasureTests: XCTestCase {
 
@@ -97,7 +95,7 @@ final class GhosttyMeasureTests: XCTestCase {
         let variants = MeasureEnv.string("M1_VARIANTS", "1") == "1"
         let label = "\(engine.rawValue)-\(paneCount)x\(lines)-\(content)-\(limitMode)-cmp\(compression)"
         let size = NSRect(x: 0, y: 0, width: 800, height: 500)
-        let isGhostty = engine != .swiftterm
+        let isGhostty = true
         log("M1 start label=\(label) loadavg=\(loadavg()) screenScale=\(NSScreen.main?.backingScaleFactor ?? 0)")
         await sleep(1.0)
 
@@ -121,7 +119,6 @@ final class GhosttyMeasureTests: XCTestCase {
             XCTAssertTrue(ready, "窗格 \(i) 没建好")
             pane.attachWatchIfNeeded()
             pane.feed(ArraySlice(Array("user@host ~ % ".utf8)))
-            if let st = pane.swiftTerm, engine == .swiftterm { st.flushPendingDisplay(); st.displayIfNeeded() }
             _ = await waitUntil(5) { pane.frames > 0 }
             panes.append(pane)
             if i == 0 {
@@ -139,9 +136,7 @@ final class GhosttyMeasureTests: XCTestCase {
         }
 
         // 填满回滚：每格不折行，行数 = 回滚 + 屏 + 余量。
-        let grid = panes[0].engine == .swiftterm
-            ? (cols: panes[0].swiftTerm!.getTerminal().cols, rows: panes[0].swiftTerm!.getTerminal().rows)
-            : (cols: Int(panes[0].viewport.value?.columns ?? 100), rows: Int(panes[0].viewport.value?.rows ?? 30))
+        let grid = (cols: Int(panes[0].viewport.value?.columns ?? 100), rows: Int(panes[0].viewport.value?.rows ?? 30))
         let total = lines + grid.rows + 10
         let t0 = CACurrentMediaTime()
         let payload = content == "heavy"
@@ -161,7 +156,6 @@ final class GhosttyMeasureTests: XCTestCase {
             }
         }
         _ = await waitUntil(300) { panes.allSatisfy { $0.pending == 0 } }
-        for pane in panes where engine == .swiftterm { pane.swiftTerm?.flushPendingDisplay(); pane.swiftTerm?.displayIfNeeded() }
         let fillSeconds = CACurrentMediaTime() - fillStart
         await sleep(2.0)
         let s4early = MemSnapshot.take(includeMetal: isGhostty)
@@ -230,16 +224,15 @@ final class GhosttyMeasureTests: XCTestCase {
 
     /// 真键盘事件（`NSEvent.keyEvent` → 窗口 `sendEvent`）→ 后端本地回环原样 echo → 出帧。
     ///
-    /// - bare：没有 `TerminalSession`。SwiftTerm 的 `send` 回调里直接 `feed`；Ghostty 的 write 回调里直接 `receive`。
+    /// - bare：没有 `TerminalSession`。Ghostty 的 write 回调里直接 `receive`。
     /// - session：真 `TerminalSession` + `EchoBackend`：输入走 `TerminalInputChannel`，回显走输出泵
-    ///   （Ghostty 是 spike 的形态：先喂影子 SwiftTerm，再转给 Ghostty）。
+    ///   （先喂影子终端，再转给 surface）。
     ///
-    /// 出帧：Ghostty 以 IOSurface 设成图层 contents、且光标已经移到下一格为准；SwiftTerm 以 `draw(_:)` 返回、
-    /// 且缓冲区光标已经过了这一格为准。
+    /// 出帧：以 IOSurface 设成图层 contents、且光标已经移到下一格为准。
     func testM6EchoLatency() async throws {
         let samples = MeasureEnv.int("M6_SAMPLES", 60)
         let rounds = MeasureEnv.int("M6_ROUNDS", 3)
-        let configs = MeasureEnv.string("M6_CONFIGS", "swiftterm-bare,ghostty-bare,ghostty-bare-novsync,swiftterm-session,ghostty-session")
+        let configs = MeasureEnv.string("M6_CONFIGS", "ghostty-bare,ghostty-bare-novsync,ghostty-session")
             .split(separator: ",").map(String.init)
         log("M6 start loadavg=\(loadavg()) samples=\(samples)x\(rounds) screenMaxFPS=\(ProbeWindow.fastestScreen?.maximumFramesPerSecond ?? 0)")
         let cell = try await ghosttyCellPixels()
@@ -271,7 +264,7 @@ final class GhosttyMeasureTests: XCTestCase {
         defer { pane.dispose() }
         _ = await waitUntil(10) { pane.viewport.value != nil }
         let v = try XCTUnwrap(pane.viewport.value)
-        let pt = try XCTUnwrap(GhosttyGeometry.cellPoints(try XCTUnwrap(pane.ghostty)))
+        let pt = try XCTUnwrap(GhosttyGeometry.cellPoints(pane.ghostty))
         let scale = pane.window!.backingScaleFactor
         log("ghostty viewport=\(v) cellPt=\(pt) scale=\(scale)")
         return (Int((pt.width * scale).rounded()), Int((pt.height * scale).rounded()))
@@ -288,7 +281,9 @@ final class GhosttyMeasureTests: XCTestCase {
     private func runEcho(_ config: String, samples: Int, cell: (w: Int, h: Int)) async throws
         -> (latencies: [Double], parts: [String: [Double]], misses: Int) {
         let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
-        let isGhostty = config.hasPrefix("ghostty")
+        guard config.hasPrefix("ghostty") else {
+            throw XCTSkip("配置 \(config) 是 SwiftTerm 对照，已随 SwiftTerm 移除")
+        }
         let isSession = config.hasSuffix("session")
         defer {
             if config.hasSuffix("novsync") {
@@ -296,17 +291,12 @@ final class GhosttyMeasureTests: XCTestCase {
             }
         }
         var window: NSWindow!
-        var keyTarget: NSView!
         var session: TerminalSession?
         var backend: EchoBackend?
-        var stView: SwiftTerm.TerminalView?
-        var ghView: GhosttySurfaceView?
+        let ghView: GhosttySurfaceView
         var bareIO: InMemoryTerminalSession?
         var barePane: MeasurePane?
-        let echoDelegate = ProbeTerminalDelegate()
         let writeTime = TimeBox(), backendTime = TimeBox()
-        var drawHit: CFTimeInterval?
-        var pendingCol: Int?
 
         if isSession {
             let s = TerminalSession()
@@ -314,22 +304,17 @@ final class GhosttyMeasureTests: XCTestCase {
             let b = EchoBackend()
             b.onWrite = { _ in backendTime.setIfEmpty(CACurrentMediaTime()) }
             backend = b
-            if isGhostty {
-                let bridge = s.ghostty
-                let container = GhosttyContainerView(surface: bridge.view)
-                container.isActive = true
-                window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
-                container.frame = window.contentView?.bounds ?? rect
-                container.layoutSubtreeIfNeeded()
-                _ = await waitUntil(10) { bridge.isLive && bridge.grid != nil }
-                bridge.onWriteForTesting = { _ in writeTime.setIfEmpty(CACurrentMediaTime()) }
-                ghView = bridge.view
-            } else {
-                window = ProbeWindow.make(contentRect: rect, contentView: s.terminalView, placement: .transparentOnScreen)
-                stView = s.terminalView
-            }
+            let bridge = s.ghostty
+            let container = GhosttyContainerView(surface: bridge.view)
+            container.isActive = true
+            window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+            container.frame = window.contentView?.bounds ?? rect
+            container.layoutSubtreeIfNeeded()
+            _ = await waitUntil(10) { bridge.isLive && bridge.grid != nil }
+            bridge.onWriteForTesting = { _ in writeTime.setIfEmpty(CACurrentMediaTime()) }
+            ghView = bridge.view
             await s.connect(using: b)
-        } else if isGhostty {
+        } else {
             // ghostty-bare-novsync：window-vsync = false（Ghostty 文档：降低输入延迟、代价是可能撕裂；只影响新 surface）。
             let controller = GhosttyTerminalConfig.controller
             if config.hasSuffix("novsync") {
@@ -347,41 +332,20 @@ final class GhosttyMeasureTests: XCTestCase {
             ghView = pane.ghostty
             bareIO = pane.io
             barePane = pane
-        } else {
-            let st = CopyableTerminalView(frame: rect)
-            TerminalTheme.apply(to: st, settings: TerminalSettings.read(), dark: true)
-            echoDelegate.onSend = { [weak st] data in st?.feed(byteArray: data) }
-            st.terminalDelegate = echoDelegate
-            window = ProbeWindow.make(contentRect: rect, contentView: st, placement: .transparentOnScreen)
-            stView = st
         }
-        keyTarget = ghView ?? stView
-        window.makeFirstResponder(keyTarget)
+        window.makeFirstResponder(ghView)
         defer {
-            if let stView { SwiftTermDrawProbe.unhook(stView) }
             session?.dispose()
             barePane?.dispose()
             window.orderOut(nil)
         }
 
-        var watch: GhosttyFrameWatch?
-        if let ghView {
-            _ = await waitUntil(5) { GhosttyFrameWatch.contentLayer(of: ghView) != nil }
-            watch = GhosttyFrameWatch(layer: try XCTUnwrap(GhosttyFrameWatch.contentLayer(of: ghView)))
-        }
-        if let stView {
-            SwiftTermDrawProbe.hook(stView) { v in
-                guard drawHit == nil, let col = pendingCol else { return }
-                let cursor = v.getTerminal().getCursorLocation()
-                if cursor.y == 0, cursor.x > col { drawHit = CACurrentMediaTime() }
-            }
-        }
+        _ = await waitUntil(5) { GhosttyFrameWatch.contentLayer(of: ghView) != nil }
+        let watch = GhosttyFrameWatch(layer: try XCTUnwrap(GhosttyFrameWatch.contentLayer(of: ghView)))
 
         func emit(_ s: String) {
             let bytes = Array(s.utf8)
-            if let backend { backend.emit(Data(bytes)) }
-            else if let bareIO { bareIO.receive(Data(bytes)) }
-            else { stView?.feed(byteArray: bytes[...]) }
+            if let backend { backend.emit(Data(bytes)) } else { bareIO?.receive(Data(bytes)) }
         }
 
         let letters: [Character] = Array("asdfghjkl")
@@ -398,18 +362,14 @@ final class GhosttyMeasureTests: XCTestCase {
             let col = 2 + i % perLine
             let ch = letters[i % letters.count]
             i += 1
-            writeTime.reset(); backendTime.reset(); drawHit = nil
-            pendingCol = col
-            if let watch {
-                let x = (col + 1) * cell.w, w = cell.w, h = cell.h
-                watch.arm { surface in SurfacePixels.inkFraction(surface, x: x, y: 0, width: w, height: h) > 0.03 }
-            }
+            writeTime.reset(); backendTime.reset()
+            let x = (col + 1) * cell.w, w = cell.w, h = cell.h
+            watch.arm { surface in SurfacePixels.inkFraction(surface, x: x, y: 0, width: w, height: h) > 0.03 }
             let t0 = CACurrentMediaTime()
             RealEvents.press(window: window, characters: String(ch), keyCode: RealEvents.keyCode(for: ch))
-            let hit = await waitUntil(1.0) { (watch?.hitTime ?? drawHit) != nil }
-            pendingCol = nil
-            watch?.disarm()
-            if hit, let t1 = watch?.hitTime ?? drawHit {
+            let hit = await waitUntil(1.0) { watch.hitTime != nil }
+            watch.disarm()
+            if hit, let t1 = watch.hitTime {
                 latencies.append((t1 - t0) * 1000)
                 if let w = writeTime.value { parts["event→ghosttyWrite", default: []].append((w - t0) * 1000) }
                 if let b = backendTime.value { parts["event→backendWrite", default: []].append((b - t0) * 1000) }
@@ -448,10 +408,6 @@ final class GhosttyMeasureTests: XCTestCase {
             var tSurface: CFTimeInterval?
             var tFrame: CFTimeInterval?
             _ = await waitUntil(10) {
-                if engine == .swiftterm {
-                    if pane.draws > 0 { tFrame = CACurrentMediaTime() }
-                    return tFrame != nil
-                }
                 if tSurface == nil, pane.viewport.value != nil { tSurface = CACurrentMediaTime() }
                 pane.attachWatchIfNeeded()
                 if let s = GhosttyFrameWatch.currentSurface(of: pane.view),
@@ -498,13 +454,13 @@ final class GhosttyMeasureTests: XCTestCase {
         _ = await waitUntil(30) { panes.allSatisfy(\.isReady) }
         let tCreated = CACurrentMediaTime()
         panes.forEach { $0.attachWatchIfNeeded() }
-        // 轮转喂：每个窗格每轮 64 KiB，SwiftTerm 每轮让主 run loop 画一次（近似输出泵的节奏）。
+        // 轮转喂：每个窗格每轮 64 KiB。
         let chunk = 64 * 1024
         var offset = 0
         while offset < history.count {
             let end = min(offset + chunk, history.count)
             for pane in panes {
-                if engine != .swiftterm { _ = await waitUntil(60) { pane.pending < 4 << 20 } }
+                _ = await waitUntil(60) { pane.pending < 4 << 20 }
                 pane.feed(history[offset..<end])
             }
             offset = end
@@ -513,12 +469,11 @@ final class GhosttyMeasureTests: XCTestCase {
         let tFed = CACurrentMediaTime()
         _ = await waitUntil(120) { panes.allSatisfy { $0.pending == 0 } }
         let framesAtDone = panes.map(\.frames)
-        if engine == .swiftterm { panes.forEach { $0.swiftTerm?.needsDisplay = true } }
         _ = await waitUntil(10) { zip(panes, framesAtDone).allSatisfy { $0.frames > $1 } }
         let t1 = CACurrentMediaTime()
         let main1 = ProbeMetrics.threadCPUSeconds(), proc1 = Self.processCPUSeconds()
         let peak = sampler.stop()
-        let end = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let end = MemSnapshot.take(includeMetal: true)
         log(String(format: "M7 restore RESULT engine=%@ panes=%d total=%.2fs create=%.2fs feedLoop=%.2fs drain+frame=%.2fs mainCPU=%.2fs procCPU=%.2fs peakΔfp=%.0fMB endΔfp=%.0fMB | %@",
                    engine.rawValue, count, t1 - t0, tCreated - t0, tFed - tCreated, t1 - tFed, main1 - main0, proc1 - proc0,
                    peak - base.footprint, end.footprint - base.footprint, end.delta(from: base)))
@@ -549,9 +504,7 @@ final class GhosttyMeasureTests: XCTestCase {
         // 第一次 resize 回调是视图还没排好时的尺寸（spike 坑 1），等网格停稳。
         await sleep(1.0)
         panes.forEach { $0.attachWatchIfNeeded() }
-        let grid = engine == .swiftterm
-            ? (panes[0].swiftTerm!.getTerminal().cols, panes[0].swiftTerm!.getTerminal().rows)
-            : (Int(panes[0].viewport.value!.columns), Int(panes[0].viewport.value!.rows))
+        let grid = (Int(panes[0].viewport.value!.columns), Int(panes[0].viewport.value!.rows))
         log("M8 start engine=\(engine.rawValue) grid=\(grid.0)x\(grid.1) loadavg=\(loadavg())")
         // 先铺满一屏，给活动区留位置。
         let prefill = MeasureLoad.typicalLines(count: grid.1 + 20, cols: grid.0 - 2)
@@ -692,10 +645,10 @@ final class GhosttyMeasureTests: XCTestCase {
         let families = (CTFontManagerCopyAvailableFontFamilyNames() as? [String]) ?? []
         log("M12 families containing SF/Mono: \(families.filter { $0.hasPrefix("SF") || $0.contains("Mono") || $0 == "Menlo" })")
         let systemMono = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        log("M12 SwiftTerm font=\(systemMono.fontName) family=\(systemMono.familyName ?? "-") advance=\(systemMono.maximumAdvancement.width)")
+        log("M12 system-mono font=\(systemMono.fontName) family=\(systemMono.familyName ?? "-") advance=\(systemMono.maximumAdvancement.width)")
 
         func references() -> [(String, NSFont)] {
-            var refs: [(String, NSFont)] = [("system-mono-medium(SwiftTerm)", systemMono)]
+            var refs: [(String, NSFont)] = [("system-mono-medium", systemMono)]
             if let f = NSFontManager.shared.font(withFamily: "JetBrains Mono", traits: [], weight: 6, size: 12) { refs.append(("JetBrains Mono", f)) }
             if let f = NSFont(name: "Menlo-Regular", size: 12) { refs.append(("Menlo", f)) }
             if let f = NSFont(name: "SFMono-Medium", size: 12) { refs.append(("SF Mono Medium(registered)", f)) }
@@ -765,28 +718,13 @@ final class GhosttyMeasureTests: XCTestCase {
                 cases += [("SF Mono(registered)", ["SF Mono"]), ("SFMono-Medium(registered)", ["SFMono-Medium"])]
             }
         }
-
-        // SwiftTerm 现状截图（同一行），附件里与 Ghostty 并排看。
-        let st = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 120))
-        TerminalTheme.apply(to: st, settings: TerminalSettings.read(), dark: true)
-        let stWindow = ProbeWindow.make(contentRect: st.frame, contentView: st, placement: .transparentOnScreen)
-        defer { stWindow.orderOut(nil) }
-        st.feed(text: "\u{1B}[2J\u{1B}[H\u{1B}[97m" + String(text) + "\u{1B}[0m")
-        st.flushPendingDisplay()
-        st.displayIfNeeded()
-        let rep = try XCTUnwrap(st.bitmapImageRepForCachingDisplay(in: st.bounds))
-        st.cacheDisplay(in: st.bounds, to: rep)
-        let attachment = XCTAttachment(image: NSImage(cgImage: rep.cgImage!, size: .zero))
-        attachment.name = "M12-swiftterm-current"
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 
     // MARK: - M14 Mac 真事件输入
 
     private struct InputResult { var engine: String; var item: String; var verdict: String; var detail: String }
 
-    /// 两个引擎各走一遍真 `TerminalSession`（SwiftTerm 视图 / Ghostty 桥），全部用真 NSEvent。
+    /// 真 `TerminalSession`（Ghostty 桥）走一遍，全部用真 NSEvent。
     /// 动了系统剪贴板与当前输入法，结束时还原。
     func testM14Input() async throws {
         let general = NSPasteboard.general
@@ -807,9 +745,7 @@ final class GhosttyMeasureTests: XCTestCase {
         }
         let cell = try await ghosttyCellPixels()
         var results: [InputResult] = []
-        for engine in ["swiftterm", "ghostty"] {
-            results += try await runInput(engine: engine, ghosttyCell: cell)
-        }
+        results += try await runInput(engine: "ghostty", ghosttyCell: cell)
         for r in results {
             log("M14 RESULT engine=\(r.engine) item=\(r.item) verdict=\(r.verdict) detail=\(r.detail)")
         }
@@ -830,43 +766,31 @@ final class GhosttyMeasureTests: XCTestCase {
         let backend = CaptureBackend()
         let privateBoard = NSPasteboard(name: NSPasteboard.Name("uterm-measure-\(UUID().uuidString)"))
         defer { privateBoard.releaseGlobally() }
-        let window: NSWindow
-        let view: NSView
-        var bridge: GhosttyTerminalBridge?
-        let isGhostty = engine == "ghostty"
         var settings = TerminalSettings.read()
         settings.copyOnSelect = false
-        if isGhostty {
-            GhosttyTerminalBridge.apply(settings: settings)
-            let b = session.ghostty
-            bridge = b
-            let container = GhosttyContainerView(surface: b.view)
-            container.isActive = true
-            window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
-            container.frame = window.contentView?.bounds ?? rect
-            container.layoutSubtreeIfNeeded()
-            _ = await waitUntil(10) { b.isLive && b.grid != nil }
-            b.view.pasteboard = privateBoard
-            view = b.view
-        } else {
-            let st = try XCTUnwrap(session.terminalView as? CopyableTerminalView)
-            st.pasteboard = privateBoard
-            window = ProbeWindow.make(contentRect: rect, contentView: st, placement: .transparentOnScreen)
-            view = st
-        }
+        GhosttyTerminalBridge.apply(settings: settings)
+        let bridge = session.ghostty
+        // 真的主菜单会把 ⌘ 组合执行掉（⌘Q、⌘W）：这里量的是视图自己的路径，不问菜单。
+        bridge.view.performMenuKeyEquivalent = { _ in false }
+        let container = GhosttyContainerView(surface: bridge.view)
+        container.isActive = true
+        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+        container.frame = window.contentView?.bounds ?? rect
+        container.layoutSubtreeIfNeeded()
+        _ = await waitUntil(10) { bridge.isLive && bridge.grid != nil }
+        bridge.view.pasteboard = privateBoard
+        let view: NSView = bridge.view
         defer {
             session.dispose()
             window.orderOut(nil)
-            if isGhostty { GhosttyTerminalBridge.apply(settings: TerminalSettings.read()) }
+            GhosttyTerminalBridge.apply(settings: TerminalSettings.read())
         }
         await session.connect(using: backend)
         window.makeFirstResponder(view)
         log("M14 engine=\(engine) window isKey=\(window.isKeyWindow) firstResponder=\(window.firstResponder === view) appActive=\(NSApp.isActive)")
 
         func screenText() -> [String] {
-            if let bridge { return (bridge.viewportText() ?? "").components(separatedBy: "\n") }
-            let t = session.terminalView.getTerminal()
-            return (0..<t.rows).map { t.getLine(row: $0)?.translateToString(trimRight: true) ?? "" }
+            (bridge.viewportText() ?? "").components(separatedBy: "\n")
         }
         func show(_ s: String) async {
             backend.emit(Data(s.utf8))
@@ -890,37 +814,25 @@ final class GhosttyMeasureTests: XCTestCase {
             window.sendEvent(RealEvents.key(.keyUp, window: window, characters: chars, ignoring: ignoring, keyCode: code, modifiers: mods))
             return path
         }
-        let ghosttyPt = bridge.flatMap { GhosttyGeometry.cellPoints($0.view) }
+        let ghosttyPt = GhosttyGeometry.cellPoints(bridge.view)
         log("M14 engine=\(engine) ghosttyCellPt=\(String(describing: ghosttyPt))")
         func cellPoint(_ col: Int, _ row: Int, fraction: CGFloat = 0.5) -> NSPoint {
-            let p: NSPoint
-            if isGhostty, let ghosttyPt {
-                let x = (CGFloat(col) + fraction) * ghosttyPt.width
-                let yTop = (CGFloat(row) + 0.5) * ghosttyPt.height
-                p = NSPoint(x: x, y: view.bounds.height - yTop)
-            } else {
-                let font = TerminalSettings.textFont()
-                let cw = NSAttributedString(string: "W", attributes: [.font: font]).size().width
-                let ch = font.ascender - font.descender + font.leading
-                let yTop = (CGFloat(row) + 0.5) * ch
-                p = NSPoint(x: (CGFloat(col) + fraction) * cw, y: view.isFlipped ? yTop : view.bounds.height - yTop)
-            }
-            return view.convert(p, to: nil)
+            let cell = ghosttyPt ?? CGSize(width: 7.5, height: 14)
+            let x = (CGFloat(col) + fraction) * cell.width
+            let yTop = (CGFloat(row) + 0.5) * cell.height
+            return view.convert(NSPoint(x: x, y: view.bounds.height - yTop), to: nil)
         }
         func selectionText() -> String? {
-            if let bridge {
-                guard let region = bridge.view.selectionRegion else { return nil }
-                let lines = screenText()
-                var parts: [String] = []
-                for r in region.topLeft.row...region.bottomRight.row where r < lines.count {
-                    let chars = Array(lines[r])
-                    let from = r == region.topLeft.row ? region.topLeft.column : 0
-                    let to = r == region.bottomRight.row ? region.bottomRight.column : chars.count - 1
-                    if from < chars.count { parts.append(String(chars[from...min(to, chars.count - 1)])) }
-                }
-                return parts.joined(separator: "\n")
+            guard let region = bridge.view.selectionRegion else { return nil }
+            let lines = screenText()
+            var parts: [String] = []
+            for r in region.topLeft.row...region.bottomRight.row where r < lines.count {
+                let chars = Array(lines[r])
+                let from = r == region.topLeft.row ? region.topLeft.column : 0
+                let to = r == region.bottomRight.row ? region.bottomRight.column : chars.count - 1
+                if from < chars.count { parts.append(String(chars[from...min(to, chars.count - 1)])) }
             }
-            return session.terminalView.getSelection()
+            return parts.joined(separator: "\n")
         }
         func click(_ col: Int, _ row: Int, count: Int) async {
             for k in 1...count {
@@ -1004,14 +916,11 @@ final class GhosttyMeasureTests: XCTestCase {
         record("⌘V 文字", String(decoding: w, as: UTF8.self).contains("pasted-text"), "\(dataDesc(w)) path=\(pastePath)")
 
         // 7. 选中即复制
-        if let bridge {
+        do {
             var s = TerminalSettings.read()
             s.copyOnSelect = true
             GhosttyTerminalBridge.apply(settings: s)
             await sleep(0.3)
-            _ = bridge
-        } else {
-            (view as? CopyableTerminalView)?.copyOnSelect = true
         }
         NSPasteboard.general.clearContents()
         await click(0, 1, count: 1)
@@ -1162,11 +1071,9 @@ final class GhosttyMeasureTests: XCTestCase {
     private static let diacritics: [Character] = ["\u{0305}", "\u{030D}", "\u{030E}", "\u{0310}", "\u{0312}", "\u{033D}", "\u{033E}", "\u{033F}"]
 
     /// 经 host-managed IO 喂 Kitty 图形序列：查询应答、PNG 直传、小图分块、原始 RGB 大图 256 块、
-    /// Unicode 占位符；随后滚出屏 / 滚回来 / 清屏 / 删除，读像素与内存。SwiftTerm 同一串字节对照。
+    /// Unicode 占位符；随后滚出屏 / 滚回来 / 清屏 / 删除，读像素与内存。
     func testM15Kitty() async throws {
-        for engine in [MeasurePane.Engine.ghostty, .swiftterm] {
-            try await runKitty(engine)
-        }
+        try await runKitty(.ghostty)
     }
 
     private func runKitty(_ engine: MeasurePane.Engine) async throws {
@@ -1174,10 +1081,6 @@ final class GhosttyMeasureTests: XCTestCase {
         let pane = MeasurePane(engine: engine, frame: rect, controller: nil, scrollbackLines: 3000)
         let replies = TimeBoxData()
         pane.ioBox.onWrite = { replies.append($0) }
-        var stReplies = Data()
-        let replyDelegate = ProbeTerminalDelegate()
-        replyDelegate.onSend = { stReplies.append(contentsOf: $0) }
-        pane.swiftTerm?.terminalDelegate = replyDelegate
         pane.window = ProbeWindow.make(contentRect: rect, contentView: pane.view, placement: .transparentOnScreen)
         defer { pane.dispose() }
         _ = await waitUntil(10) { pane.isReady }
@@ -1190,7 +1093,7 @@ final class GhosttyMeasureTests: XCTestCase {
                 let end = min(offset + (1 << 20), bytes.count)
                 pane.feed(bytes[offset..<end])
                 offset = end
-                if pane.io != nil { _ = await waitUntil(30) { pane.pending < 8 << 20 } }
+                _ = await waitUntil(30) { pane.pending < 8 << 20 }
             }
             _ = await waitUntil(60) { pane.pending == 0 }
             await sleep(0.4)
@@ -1199,12 +1102,6 @@ final class GhosttyMeasureTests: XCTestCase {
         func counts() -> [String: Int] {
             let colors: [(String, (Int, Int, Int))] = [("magenta", (255, 0, 255)), ("cyan", (0, 255, 255)),
                                                          ("yellow", (255, 255, 0)), ("green", (0, 255, 0))]
-            if engine == .swiftterm, let st = pane.swiftTerm {
-                st.flushPendingDisplay(); st.displayIfNeeded()
-                guard let rep = st.bitmapImageRepForCachingDisplay(in: st.bounds) else { return [:] }
-                st.cacheDisplay(in: st.bounds, to: rep)
-                return Dictionary(uniqueKeysWithValues: colors.map { ($0.0, BitmapPixels.colorCount(rep, rgb: $0.1, tolerance: 30)) })
-            }
             guard let s = GhosttyFrameWatch.currentSurface(of: pane.view) else { return [:] }
             return Dictionary(uniqueKeysWithValues: colors.map { ($0.0, SurfacePixels.colorCount(s, rgb: $0.1, tolerance: 30).count) })
         }
@@ -1213,7 +1110,7 @@ final class GhosttyMeasureTests: XCTestCase {
         log("M15 start engine=\(name) loadavg=\(loadavg())")
         // 1. 查询
         await send(Self.kitty("i=31,s=1,v=1,a=q,t=d,f=24", payload: Data([0, 0, 0])))
-        let reply = engine == .swiftterm ? stReplies : replies.value
+        let reply = replies.value
         log("M15 RESULT engine=\(name) item=query reply=\(String(decoding: reply, as: UTF8.self).debugDescription)")
 
         // 2. PNG 直传（洋红 96×96，在 1;1）
@@ -1242,45 +1139,38 @@ final class GhosttyMeasureTests: XCTestCase {
         await send(Array((0..<300).map { "scroll line \($0)\r\n" }.joined().utf8))
         let scrolled = counts()
         log("M15 RESULT engine=\(name) item=after-300-lines \(desc(scrolled))")
-        if let gh = pane.ghostty {
-            gh.performBindingAction("scroll_to_top")
-            await sleep(0.5)
-            log("M15 RESULT engine=\(name) item=scroll_to_top \(desc(counts()))")
-            gh.performBindingAction("scroll_to_bottom")
-            await sleep(0.3)
-        } else if let st = pane.swiftTerm {
-            st.scroll(toPosition: 0)
-            await sleep(0.3)
-            log("M15 RESULT engine=\(name) item=scroll_to_top \(desc(counts()))")
-            st.scroll(toPosition: 1)
-        }
+        pane.ghostty.performBindingAction("scroll_to_top")
+        await sleep(0.5)
+        log("M15 RESULT engine=\(name) item=scroll_to_top \(desc(counts()))")
+        pane.ghostty.performBindingAction("scroll_to_bottom")
+        await sleep(0.3)
 
         // 7. 内存：6 张 1024×1024 RGBA 噪声（每张解码后 4 MB），然后滚出屏 / ED2 / 删除全部 / RIS
         await send("\u{1B}c")
         await sleep(1.0)
-        let m0 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m0 = MemSnapshot.take(includeMetal: true)
         for k in 0..<6 {
             await send("\u{1B}[\(1 + (k % 2) * 4);\(1 + (k / 2) * 20)H")
             await send(Self.kitty("a=T,f=32,s=1024,v=1024,t=d,i=\(100 + k),q=2", payload: Self.raw(width: 1024, height: 1024, rgb: (k % 2 == 0 ? 200 : 40, 90, 160), alpha: true, noise: true)))
         }
         await sleep(1.0)
-        let m1 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m1 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-6-images \(m1.delta(from: m0))")
         await send(Array((0..<300).map { "line \($0)\r\n" }.joined().utf8))
         await sleep(1.0)
-        let m2 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m2 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-scrolled-off \(m2.delta(from: m0))")
         await send("\u{1B}[2J")
         await sleep(1.0)
-        let m3 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m3 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-after-ED2 \(m3.delta(from: m0))")
         await send("\u{1B}_Ga=d,d=A,q=2\u{1B}\\")
         await sleep(1.0)
-        let m4 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m4 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-after-delete-all \(m4.delta(from: m0))")
         await send("\u{1B}c")
         await sleep(1.5)
-        let m5 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m5 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-after-RIS \(m5.delta(from: m0))")
         // 第二轮同样 6 张：看是复用（不再涨）还是泄漏（再涨一份）。
         for k in 0..<6 {
@@ -1288,11 +1178,11 @@ final class GhosttyMeasureTests: XCTestCase {
             await send(Self.kitty("a=T,f=32,s=1024,v=1024,t=d,i=\(200 + k),q=2", payload: Self.raw(width: 1024, height: 1024, rgb: (k % 2 == 0 ? 200 : 40, 90, 160), alpha: true, noise: true)))
         }
         await sleep(1.0)
-        let m6 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m6 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-second-6-images \(m6.delta(from: m0))")
         await send("\u{1B}c")
         await sleep(1.5)
-        let m7 = MemSnapshot.take(includeMetal: engine != .swiftterm)
+        let m7 = MemSnapshot.take(includeMetal: true)
         log("M15 RESULT engine=\(name) item=mem-second-RIS \(m7.delta(from: m0))")
         await holdForExternalTools("m15-\(name)", seconds: MeasureEnv.double("M15_HOLD", 0))
     }
@@ -1306,26 +1196,8 @@ final class GhosttyMeasureTests: XCTestCase {
 }
 
 
-/// 记录 SwiftTerm 视图发往「后端」的字节（M6 的 bare 回环、M15 的应答）。
-@MainActor
-private final class ProbeTerminalDelegate: @preconcurrency TerminalViewDelegate {
-    var onSend: ((ArraySlice<UInt8>) -> Void)?
-    func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) { onSend?(data) }
-    func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
-    func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
-    func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String: String]) {}
-    func bell(source: SwiftTerm.TerminalView) {}
-    func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {}
-    func clipboardRead(source: SwiftTerm.TerminalView) -> Data? { nil }
-    func iTermContent(source: SwiftTerm.TerminalView, content: ArraySlice<UInt8>) {}
-    func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
-}
-
 @MainActor
 private final class TickCounter {
     var ticks = [Int](repeating: 0, count: 4)
     var bytes = 0
 }
-#endif

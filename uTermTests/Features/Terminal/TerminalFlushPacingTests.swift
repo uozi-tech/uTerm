@@ -1,85 +1,41 @@
-// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
-// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
-// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 import XCTest
 @testable import uTerm
 
+/// 原来核的是 `TerminalFlushPacing` / `TerminalFlushPacer` 的算法：SwiftTerm 路径上，输出在主线程按拍喂进视图，
+/// 每拍喂多少（预算 32 KiB 起、有积压且解析得快就翻倍到 512 KiB、解析慢就减半）、拍与拍之间隔多久（有积压时
+/// 短间隔追赶、追久了退回正常节拍、后台不追赶）由它算。
+///
+/// 这两个类型随 SwiftTerm 一起删了，节拍和预算的概念不存在了：解析不在主线程上（输出泵的入站任务 + Ghostty 自己的
+/// IO 线程），不需要「每拍只喂一点、别把主线程占满」；出帧由 Ghostty 的渲染线程按显示节拍做。对应的东西只有一样——
+/// 画面解析不过来时不无限堆积：输出泵的闸门（高 / 低水位），核在 `TerminalOutputPumpTests`
+/// （`testBacklogPausesIngressUntilTheSurfaceCatchesUp`、`testBacklogIsIgnoredWhileOnlyTheShadowIsFed`、
+/// `testResetReleasesAnIngressParkedAtTheGate`）。
+///
+/// 下面逐条保留原来的用例名、标跳过；另加一条核闸门的常数。
 final class TerminalFlushPacingTests: XCTestCase {
-    private let pacing = TerminalFlushPacing.desktop
-
-    func testDoublesWhileBacklogFeedsWellUnderTarget() {
-        XCTAssertEqual(pacing.nextBudget(after: 32 * 1024, elapsedMs: 1, filled: true), 64 * 1024)
+    private func skipPacing(_ what: String) throws {
+        throw XCTSkip("TerminalFlushPacing 随 SwiftTerm 删除，没有「\(what)」这个概念了；对应物是输出泵的背压，见 TerminalOutputPumpTests")
     }
 
-    func testHalvesWhenFeedExceedsTarget() {
-        XCTAssertEqual(pacing.nextBudget(after: 256 * 1024, elapsedMs: 20, filled: true), 128 * 1024)
-    }
+    func testDoublesWhileBacklogFeedsWellUnderTarget() throws { try skipPacing("有积压时预算翻倍") }
+    func testHalvesWhenFeedExceedsTarget() throws { try skipPacing("解析慢时预算减半") }
+    func testStaysPutWithoutBacklog() throws { try skipPacing("没有积压时预算不变") }
+    func testStaysPutBetweenHalfTargetAndTarget() throws { try skipPacing("预算的保持区间") }
+    func testBudgetIsClampedToBaseAndMax() throws { try skipPacing("预算的上下限") }
+    func testTrickleIsNotBacklog() throws { try skipPacing("小流量不算积压") }
+    func testBacklogUsesShortDelayAndIdleUsesInterval() throws { try skipPacing("积压时的短间隔") }
+    func testLongBacklogFallsBackToInterval() throws { try skipPacing("追赶窗口") }
+    func testNewBacklogRestartsCatchUpWindow() throws { try skipPacing("追赶窗口重新计时") }
+    func testSlowFeedDoesNotCatchUp() throws { try skipPacing("解析慢时不追赶") }
+    func testBackgroundNeverCatchesUp() throws { try skipPacing("后台节拍") }
+    func testSwitchingPacingResetsBudget() throws { try skipPacing("换节拍重置预算") }
 
-    func testStaysPutWithoutBacklog() {
-        XCTAssertEqual(pacing.nextBudget(after: 64 * 1024, elapsedMs: 0.1, filled: false), 64 * 1024)
-    }
-
-    func testStaysPutBetweenHalfTargetAndTarget() {
-        XCTAssertEqual(pacing.nextBudget(after: 64 * 1024, elapsedMs: 6, filled: true), 64 * 1024)
-    }
-
-    func testBudgetIsClampedToBaseAndMax() {
-        XCTAssertEqual(pacing.nextBudget(after: pacing.baseBytes, elapsedMs: 50, filled: true), pacing.baseBytes)
-        XCTAssertEqual(pacing.nextBudget(after: pacing.maxBytes, elapsedMs: 0.1, filled: true), pacing.maxBytes)
-    }
-
-    // MARK: 积压追赶
-
-    private func feed(_ pacer: inout TerminalFlushPacer, elapsedMs: Double = 1, backlogged: Bool, atMs: Double) -> Int {
-        pacer.didFeed(bytes: pacer.budget, elapsedMs: elapsedMs, backlogged: backlogged, nowMs: atMs)
-    }
-
-    /// 小流量喂的时候也常有新字节到达，那不是积压。
-    func testTrickleIsNotBacklog() {
-        let pacer = TerminalFlushPacer(pacing: pacing)
-        XCTAssertFalse(pacer.isBacklogged(fed: pacer.budget / 4, hasMore: true))
-        XCTAssertFalse(pacer.isBacklogged(fed: pacer.budget, hasMore: false))
-        XCTAssertTrue(pacer.isBacklogged(fed: pacer.budget, hasMore: true))
-    }
-
-    func testBacklogUsesShortDelayAndIdleUsesInterval() {
-        var pacer = TerminalFlushPacer(pacing: pacing)
-        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 0), pacing.catchUpDelayMs)
-        XCTAssertEqual(feed(&pacer, backlogged: false, atMs: 5), pacing.intervalMs)
-    }
-
-    /// 一直刷屏时不能一直占着主线程。
-    func testLongBacklogFallsBackToInterval() {
-        var pacer = TerminalFlushPacer(pacing: pacing)
-        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 1_000), pacing.catchUpDelayMs)
-        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 1_000 + pacing.catchUpWindowMs), pacing.intervalMs)
-    }
-
-    func testNewBacklogRestartsCatchUpWindow() {
-        var pacer = TerminalFlushPacer(pacing: pacing)
-        _ = feed(&pacer, backlogged: true, atMs: 0)
-        _ = feed(&pacer, backlogged: false, atMs: 10)
-        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 10_000), pacing.catchUpDelayMs)
-    }
-
-    /// 解析跟不上说明机器忙，这时不追赶。
-    func testSlowFeedDoesNotCatchUp() {
-        var pacer = TerminalFlushPacer(pacing: pacing)
-        XCTAssertEqual(feed(&pacer, elapsedMs: pacing.targetMs + 1, backlogged: true, atMs: 0), pacing.intervalMs)
-    }
-
-    func testBackgroundNeverCatchesUp() {
-        var pacer = TerminalFlushPacer(pacing: .background)
-        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 0), TerminalFlushPacing.background.intervalMs)
-    }
-
-    func testSwitchingPacingResetsBudget() {
-        var pacer = TerminalFlushPacer(pacing: .desktop)
-        _ = feed(&pacer, backlogged: true, atMs: 0)
-        XCTAssertGreaterThan(pacer.budget, TerminalFlushPacing.desktop.baseBytes)
-        pacer.use(.background)
-        XCTAssertEqual(pacer.budget, TerminalFlushPacing.background.baseBytes)
+    /// 闸门的常数要自洽：低水位在高水位之下（否则一放行又立刻停）；切片不比低水位大（否则落回低水位后喂一片就又到
+    /// 高水位）；高水位不大于 surface 自己「没建好时最多缓 1 MiB」的上限。
+    func testBackpressureWaterMarksAreConsistent() {
+        XCTAssertLessThan(TerminalOutputPump.lowWater, TerminalOutputPump.highWater)
+        XCTAssertLessThanOrEqual(TerminalOutputPump.sliceBytes, TerminalOutputPump.lowWater)
+        XCTAssertLessThanOrEqual(TerminalOutputPump.highWater, 1 << 20)
+        XCTAssertGreaterThanOrEqual(TerminalOutputPump.sliceBytes, 16 << 10, "切得太碎每片的锁开销就显出来了")
     }
 }
-#endif

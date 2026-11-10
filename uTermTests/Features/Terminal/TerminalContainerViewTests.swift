@@ -332,11 +332,10 @@ final class TerminalContainerViewTests: XCTestCase {
         "Ghostty 路径没接「停稳再提交」（TerminalResizeSettler）：窄尺寸停留超过引擎合并 resize 的 25 ms 就会发给 PTY"
 
     /// 同一个回归点，窄尺寸停了 20 ms 才变成真实尺寸（真机上布局隔一两帧才定下来就是这样）。SwiftTerm 路径靠
-    /// 「停稳 80 ms 才提交」挡住；Ghostty 没有这层判定，引擎只合并 25 ms 内的连续变化——窄尺寸照样到了 PTY
-    /// （实测 `[[23, 21], [106, 42]]`）。「只发最终尺寸」仍然是要的行为（重启接回的 Claude Code 会按窄尺寸重排一段
-    /// 输出），所以断言不改、标成预期失败，等主会话定要不要把停稳判定接回来。
+    /// 「停稳 80 ms 才提交」挡住。Ghostty 的容器接回了同一套判定（`GhosttyContainerView.syncSurfaceFrame`）：等待期间
+    /// 视图保持旧尺寸，surface 自己报来的中间态网格也不发给 PTY，后端只收到最终那一次
+    /// （没接之前实测是 `[[23, 21], [106, 42]]`，重启接回的 Claude Code 会按窄尺寸重排一段输出）。
     func testReattachedTerminalSendsOnlyTheFinalSizeWhenTheNarrowLayoutLastsAFewFrames() async {
-        XCTExpectFailure(Self.noSettleReason, options: .nonStrict())
         let session = makeSession()
         let backend = MockBackend()
         session.shadow.resize(cols: 168, rows: 53)
@@ -437,9 +436,8 @@ final class TerminalContainerViewTests: XCTestCase {
     }
 
     /// 同一个回归点，走真实的 SwiftUI 挂载路径：挂上时那一格还很窄，30 ms 后的下一轮布局才拉到真实宽度。
-    /// 同上，标成预期失败（实测 `[[23, 35], [144, 35]]`）。
+    /// 同上：后端只收到最终尺寸（没接停稳判定之前实测 `[[23, 35], [144, 35]]`）。
     func testSwiftUIMountDuringTransientNarrowLayoutSendsOnlyFinalSize() async throws {
-        XCTExpectFailure(Self.noSettleReason, options: .nonStrict())
         let session = makeSession()
         let backend = MockBackend()
         session.shadow.resize(cols: 168, rows: 53)

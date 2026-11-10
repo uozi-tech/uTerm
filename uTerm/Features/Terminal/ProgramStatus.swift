@@ -3,7 +3,7 @@ import Foundation
 /// OSC 7501（程序状态协议）：程序经 pty 报告自己在干什么，所以 SSH 下同样可用。
 /// Claude Code 收到查询应答后才开始报告，Codex 一直在报告。
 /// 规格：https://superlogical.com/rex/docs/build/program-status
-nonisolated enum ProgramState: String, Equatable, Sendable {
+nonisolated enum ProgramState: String, Equatable, Sendable, Codable {
     case idle, working, done, blocked, error
 
     /// 一条会话有多条记录时，标签显示最需要人处理的那条。
@@ -18,11 +18,11 @@ nonisolated enum ProgramState: String, Equatable, Sendable {
     }
 }
 
-nonisolated enum ProgramBlockKind: String, Equatable, Sendable {
+nonisolated enum ProgramBlockKind: String, Equatable, Sendable, Codable {
     case permission, question, auth
 }
 
-nonisolated struct ProgramStatusRecord: Equatable, Sendable {
+nonisolated struct ProgramStatusRecord: Equatable, Sendable, Codable {
     var state: ProgramState
     var kind: ProgramBlockKind?
     var progress: Int?
@@ -102,7 +102,7 @@ nonisolated enum ProgramStatusMessage: Equatable, Sendable {
 }
 
 /// 一条终端会话当前的全部程序状态记录。
-nonisolated struct ProgramStatusBoard: Equatable, Sendable {
+nonisolated struct ProgramStatusBoard: Equatable, Sendable, Codable {
     private static let maxRecords = 256
 
     private var records: [String: ProgramStatusRecord] = [:]

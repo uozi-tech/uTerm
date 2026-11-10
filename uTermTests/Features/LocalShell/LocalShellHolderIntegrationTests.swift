@@ -440,6 +440,111 @@ final class TerminalHeldReplayTests: XCTestCase {
     private let head = "\u{1b}]0;build\u{07}\u{1b}[31mred line\u{1b}[0m\r\n第二行 中文\r\n\u{1b}[?1049h\u{1b}[2;3Halt screen"
     private let tail = "\u{1b}[?1049l\r\nback on main\r\n\u{1b}[1mbold"
 
+    // MARK: 程序状态跟着检查点走
+
+    private func status(_ payload: String) -> String { "\u{1b}]7501;\(payload)\u{1b}\\" }
+
+    /// 模拟重启：`original` 此刻存一次检查点，之后又输出了 `tail`；新会话接回。
+    private func reattach(from original: TerminalSession, tail: String = "") async throws -> (TerminalSession, MockHeldBackend) {
+        let blob = try original.makeHeldCheckpointBlob()
+        let size = original.shadow.size
+        let backend = MockHeldBackend(replay: replay(blob: blob, cols: UInt16(size.cols), rows: UInt16(size.rows),
+                                                     output: Array(tail.utf8)))
+        let restored = TerminalSession()
+        var attentions: [TerminalAttention] = []
+        restored.attentionSink = { attentions.append($0) }
+        restored.userLookingOverride = { false }
+        await restored.connect(using: backend)
+        XCTAssertEqual(restored.connectionState, .connected)
+        XCTAssertTrue(attentions.isEmpty, "接回不该发通知：\(attentions)")
+        return (restored, backend)
+    }
+
+    /// 程序一直在 working：跨重启它不会再报一次，接回后标签上的状态来自检查点。
+    func test_working_status_survives_reattach() async throws {
+        let original = TerminalSession()
+        original.attentionSink = { _ in }
+        original.userLookingOverride = { false }
+        original.feedOutput(text: "$ claude\r\n" + status("state=working:app=claude-code"))
+        XCTAssertEqual(original.programStatus?.state, .working)
+
+        let (restored, backend) = try await reattach(from: original)
+        XCTAssertEqual(restored.programStatus?.state, .working, "接回的那一刻就该是运行中，不等程序下一次上报")
+        XCTAssertEqual(restored.programStatus?.app, "claude-code")
+        XCTAssertEqual(restored.programReport?.state, .working)
+        let written = await backend.written
+        XCTAssertTrue(written.isEmpty, "接回不该往 shell 里写东西：\(written)")
+        original.dispose()
+        restored.dispose()
+    }
+
+    /// 检查点之后、重启之前程序做完了：这次变化在 holder 留着的那段字节里，回放时要算上；查询不答、通知不发。
+    func test_status_change_after_the_checkpoint_is_replayed() async throws {
+        let original = TerminalSession()
+        original.attentionSink = { _ in }
+        original.userLookingOverride = { false }
+        original.feedOutput(text: status("state=working:app=claude-code"))
+
+        let tail = "output…\r\n" + status("?") + status("state=done:app=claude-code") + "\u{1b}]9;all done\u{07}"
+        let (restored, backend) = try await reattach(from: original, tail: tail)
+        XCTAssertEqual(restored.programStatus?.state, .done)
+        let written = await backend.written
+        XCTAssertTrue(written.isEmpty, "回放里的查询当年已经答过：\(written)")
+
+        // 再重启一次（这回状态已经在新会话的记账副本里）：还是 done。
+        let (again, _) = try await reattach(from: restored)
+        XCTAssertEqual(again.programStatus?.state, .done)
+        original.dispose()
+        restored.dispose()
+        again.dispose()
+    }
+
+    /// 检查点之后回到了 shell 提示符：程序已经结束，运行中的状态不该留着。
+    func test_prompt_after_the_checkpoint_clears_running_status() async throws {
+        let original = TerminalSession()
+        original.attentionSink = { _ in }
+        original.userLookingOverride = { false }
+        original.feedOutput(text: status("state=working:app=codex"))
+
+        let (restored, _) = try await reattach(from: original, tail: "\r\n\u{1b}]133;A\u{07}$ ")
+        XCTAssertNil(restored.programStatus)
+        original.dispose()
+        restored.dispose()
+    }
+
+    /// 用户看过的结果不会在接回后又冒出来。
+    func test_acknowledged_result_stays_acknowledged_after_reattach() async throws {
+        let original = TerminalSession()
+        original.attentionSink = { _ in }
+        original.userLookingOverride = { false }
+        original.feedOutput(text: status("state=done:app=codex"))
+        XCTAssertEqual(original.programStatus?.state, .done)
+        original.acknowledgeProgramStatus()
+
+        let (restored, _) = try await reattach(from: original)
+        XCTAssertNil(restored.programStatus)
+        original.dispose()
+        restored.dispose()
+    }
+
+    /// 检查点里带不带程序状态都解得开；状态和快照各归各的。
+    func test_checkpoint_blob_carries_program_status_next_to_the_snapshot() throws {
+        let terminal = ShadowTerminal(cols: 20, rows: 4, options: TerminalScrollbackLimits(lines: 100).shadowOptions)
+        terminal.feed(Data("x".utf8))
+        let snapshot = try terminal.snapshot()
+        let journal = ProgramStatusJournal()
+        journal.receive(.programStatus(.report(id: "", record: ProgramStatusRecord(state: .working, app: "codex"))))
+
+        let with = try XCTUnwrap(TerminalCheckpointBlob.decodeContents(
+            TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: journal.encoded)))
+        XCTAssertEqual(with.snapshot, snapshot)
+        XCTAssertEqual(with.programStatus.flatMap(ProgramStatusJournal.decode), journal.current)
+
+        let without = try XCTUnwrap(TerminalCheckpointBlob.decodeContents(TerminalCheckpointBlob.encode(snapshot: snapshot)))
+        XCTAssertEqual(without.snapshot, snapshot)
+        XCTAssertNil(without.programStatus)
+    }
+
     /// 喂「检查点 + 之后的字节」应该和一直连着喂到底得到一模一样的终端。检查点是影子终端的二进制快照
     /// （`TerminalCheckpointBlob`），还原只动影子终端；画面等标签露出、surface 建好时由输出泵回放。
     func test_checkpoint_plus_tail_matches_uninterrupted_terminal() async throws {

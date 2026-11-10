@@ -10,7 +10,8 @@ import Foundation
 /// 历史从 holder 还留着的那段字节开始。
 ///
 /// 回放的字节全是历史。里面的终端查询、命令跟踪标记、状态上报、通知，当时要么已经处理过，要么过时了，
-/// 所以回放期间关掉影子终端的事件、不发应答（`isReplayingHeldOutput`），否则历史查询的回答会打进 shell 的输入。
+/// 所以回放期间不发应答、不发通知、不认标记（`isReplayingHeldOutput`），否则历史查询的回答会打进 shell 的输入。
+/// 只有程序状态例外：它跟检查点存在一起，回放的那段字节里的状态变化也照收——一直在 working 的程序跨重启不会再报一次。
 extension TerminalSession {
     private static let replayChunkBytes = 256 * 1024
 
@@ -20,17 +21,19 @@ extension TerminalSession {
         guard let replay = await backend.takeReplay() else { return true }
         guard feedGeneration == generation else { return false }
 
+        // 回放期间影子终端的事件照发：程序状态要跟着这段字节走（`handleShadowEvent` 里只放行状态，其余都挡掉）。
         isReplayingHeldOutput = true
-        shadow.setEventsSuppressed(true)
-        defer {
-            isReplayingHeldOutput = false
-            shadow.setEventsSuppressed(false)
-        }
+        defer { isReplayingHeldOutput = false }
 
         let checkpoint = replay.checkpoint
         var restored = false
-        if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
-            restored = (try? shadow.restore(snapshot: snapshot)) != nil
+        if let contents = TerminalCheckpointBlob.decodeContents(checkpoint.blob) {
+            restored = (try? shadow.restore(snapshot: contents.snapshot)) != nil
+            // 程序状态跟检查点存在一起：一直在 working 的程序接回后不会再报一次，标签上的圆点只能从这里来。
+            if restored, let status = contents.programStatus.flatMap(ProgramStatusJournal.decode) {
+                programStatusTracker = status
+                statusJournal.current = status
+            }
         }
         // 检查点没法用（空的、别的引擎版本存的）：之后的字节仍然是按当时的尺寸产生的，先回到那个尺寸。
         if !restored, checkpoint.cols > 0, checkpoint.rows > 0 {
@@ -49,8 +52,11 @@ extension TerminalSession {
         // 影子是绕过输出泵改的：画面、镜像都要重新对齐。
         outputPump.markSurfaceStale()
         mirrorTap.invalidateAll()
+        // 检查点里的状态 + 回放那段字节里的状态变化：接回的那一刻标签上就是对的，不等程序下一次上报。
+        publishProgramStatus()
 
-        heldCheckpoints = TerminalHeldCheckpoints(link: backend.holderLink, pump: outputPump, baseOffset: replay.endOffset)
+        heldCheckpoints = TerminalHeldCheckpoints(link: backend.holderLink, pump: outputPump, baseOffset: replay.endOffset,
+                                                  programStatus: { [statusJournal] in statusJournal.encoded })
 
         if replay.isReattach {
             // 尺寸没变时 TIOCSWINSZ 不发信号，TUI 不知道要重画。等视图布局一轮（尺寸变了的话已经发过了）再补一个。
@@ -75,6 +81,13 @@ extension TerminalSession {
             guard feedGeneration == generation else { return false }
         }
         return true
+    }
+
+    /// 此刻存检查点的话会存下的那份数据（快照 + 程序状态）。测试用它模拟「重启前最后一次检查点」。
+    func makeHeldCheckpointBlob() throws -> [UInt8] {
+        try outputPump.performWhileFeedingPaused {
+            TerminalCheckpointBlob.encode(snapshot: try shadow.snapshot(), programStatus: statusJournal.encoded)
+        }
     }
 
     /// 退出流程里最后存一次。
@@ -123,22 +136,37 @@ enum HeldTerminalSessions {
     static var all: [TerminalSession] { entries.compactMap(\.session) }
 }
 
-/// 检查点的数据：一个版本头 + 影子终端的二进制快照。版本头认不出来或者和现在的引擎不是同一个版本，就当没有检查点。
+/// 检查点的数据：版本头 + 程序状态 + 影子终端的二进制快照。版本头认不出来或者和现在的引擎不是同一个版本，就当没有检查点。
 nonisolated enum TerminalCheckpointBlob {
-    private static let magic = Array("uTermCP\u{1}".utf8)
+    private static let magic = Array("uTermCP\u{2}".utf8)
 
-    static func encode(snapshot: Data, engine: String = TerminalEngineVersion.current) -> [UInt8] {
+    /// `programStatus`：`ProgramStatusJournal.encoded`（引擎的快照里不带程序状态，那是宿主记的）。
+    static func encode(snapshot: Data, programStatus: Data? = nil, engine: String = TerminalEngineVersion.current) -> [UInt8] {
         let version = Array(engine.utf8.prefix(255))
-        return magic + [UInt8(version.count)] + version + snapshot
+        let status = programStatus ?? Data()
+        let length = UInt32(status.count)
+        let lengthBytes = [UInt8(length >> 24 & 0xFF), UInt8(length >> 16 & 0xFF), UInt8(length >> 8 & 0xFF), UInt8(length & 0xFF)]
+        return magic + [UInt8(version.count)] + version + lengthBytes + status + snapshot
     }
 
     /// 快照部分；不是这个引擎版本存的返回 nil。
     static func decode(_ blob: [UInt8], engine: String = TerminalEngineVersion.current) -> Data? {
+        decodeContents(blob, engine: engine)?.snapshot
+    }
+
+    static func decodeContents(_ blob: [UInt8], engine: String = TerminalEngineVersion.current)
+        -> (snapshot: Data, programStatus: Data?)? {
         guard blob.count > magic.count, Array(blob.prefix(magic.count)) == magic else { return nil }
-        let length = Int(blob[magic.count])
-        let start = magic.count + 1
-        guard blob.count > start + length, Array(blob[start..<(start + length)]) == Array(engine.utf8.prefix(255)) else { return nil }
-        return Data(blob[(start + length)...])
+        let versionLength = Int(blob[magic.count])
+        var cursor = magic.count + 1
+        guard blob.count >= cursor + versionLength + 4,
+              Array(blob[cursor..<(cursor + versionLength)]) == Array(engine.utf8.prefix(255)) else { return nil }
+        cursor += versionLength
+        let statusLength = blob[cursor..<(cursor + 4)].reduce(0) { $0 << 8 | Int($1) }
+        cursor += 4
+        guard blob.count > cursor + statusLength else { return nil }
+        let status = statusLength > 0 ? Data(blob[cursor..<(cursor + statusLength)]) : nil
+        return (Data(blob[(cursor + statusLength)...]), status)
     }
 }
 
@@ -158,6 +186,7 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
     private let link: HolderLink
     private let pump: TerminalOutputPump
     private let baseOffset: UInt64
+    private let programStatus: @Sendable () -> Data?
     private let lock = NSLock()
     private var fedBytes: UInt64 = 0
     private var bytesSinceCapture = 0
@@ -165,10 +194,13 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
     private var isDirty = false
     private var scheduleToken = 0
 
-    init(link: HolderLink, pump: TerminalOutputPump, baseOffset: UInt64) {
+    /// `programStatus`：此刻的程序状态（`ProgramStatusJournal.encoded`），和快照存在一起。
+    init(link: HolderLink, pump: TerminalOutputPump, baseOffset: UInt64,
+         programStatus: @escaping @Sendable () -> Data? = { nil }) {
         self.link = link
         self.pump = pump
         self.baseOffset = baseOffset
+        self.programStatus = programStatus
     }
 
     /// 影子终端又吃进去 `count` 字节（泵的 tap）。
@@ -210,7 +242,7 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
             lock.unlock()
             guard let snapshot = try? pump.shadow.snapshot() else { return }
             let size = pump.shadow.size
-            let blob = TerminalCheckpointBlob.encode(snapshot: snapshot)
+            let blob = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: programStatus())
             lock.lock()
             isDirty = false
             bytesSinceCapture = 0

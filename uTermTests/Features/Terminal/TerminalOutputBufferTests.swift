@@ -1,102 +1,131 @@
-// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
-// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
-// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
-#if UTERM_LEGACY_SWIFTTERM_TESTS
 import XCTest
 @testable import uTerm
 
+/// 原来核的是 `TerminalOutputBuffer`：SwiftTerm 路径上，后端输出先进一个有上限的缓冲（满了丢最旧的），主线程的
+/// flush 循环按拍从里面取。这个类型随 SwiftTerm 一起删了。现在后端输出由共享的 `TerminalOutputPump` 直接分流
+/// （影子终端 → tap → surface），中间没有会丢字节的缓冲；画面解析不过来时停取后端的输出（背压）。
+///
+/// 这里逐条换成泵上的对应性质（用假的 surface，不建窗口）；纯属缓冲内部机制、泵上已有同名性质用例的，保留用例、
+/// 标跳过并指到 `TerminalOutputPumpTests` 里的那一条。
 final class TerminalOutputBufferTests: XCTestCase {
-    func testAppendThenDrainReturnsData() {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        buf.append(Data("hello".utf8), generation: 1)
-        let out = buf.drain(maxBytes: 1024, generation: 1)
-        XCTAssertEqual(String(decoding: out, as: UTF8.self), "hello")
+
+    private func makePump() -> (TerminalOutputPump, ShadowTerminal, RecordingTerminalSurface) {
+        let shadow = ShadowTerminal(cols: 80, rows: 24, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        let surface = RecordingTerminalSurface()
+        let pump = TerminalOutputPump(shadow: shadow, surface: surface)
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        return (pump, shadow, surface)
     }
 
-    func testDrainRespectsMaxBytes() {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        buf.append(Data("0123456789".utf8), generation: 1)
-        let first = buf.drain(maxBytes: 4, generation: 1)
-        XCTAssertEqual(String(decoding: first, as: UTF8.self), "0123")
-        let rest = buf.drain(maxBytes: 1024, generation: 1)
-        XCTAssertEqual(String(decoding: rest, as: UTF8.self), "456789")
-    }
-
-    func testHighFrequencySmallChunksCoalesceIntoBoundedFlushes() {
-        let buf = TerminalOutputBuffer(capacityBytes: 128 * 1024)
-        for _ in 0..<50_000 {
-            buf.append(Data([0x41]), generation: 1)
+    private func waitUntil(_ timeout: TimeInterval = 5, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { return false }
+            try? await Task.sleep(for: .milliseconds(5))
         }
-
-        let firstFrame = buf.drain(maxBytes: 32 * 1024, generation: 1)
-        let secondFrame = buf.drain(maxBytes: 32 * 1024, generation: 1)
-
-        XCTAssertEqual(firstFrame.count, 32 * 1024)
-        XCTAssertEqual(secondFrame.count, 50_000 - 32 * 1024)
-        XCTAssertTrue(buf.drain(maxBytes: 32 * 1024, generation: 1).isEmpty)
+        return true
     }
 
-    func testStaleGenerationChunksAreDropped() {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        buf.append(Data("old".utf8), generation: 1)
-        buf.append(Data("new".utf8), generation: 2)
-        let out = buf.drain(maxBytes: 1024, generation: 2)
-        XCTAssertEqual(String(decoding: out, as: UTF8.self), "new")
+    /// 进去什么、出来什么。
+    func testAppendThenDrainReturnsData() async {
+        let (pump, shadow, surface) = makePump()
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        pump.start(stream)
+        continuation.yield(Data("hello".utf8))
+        let arrived = await waitUntil { surface.liveBytes.count == 5 }
+        XCTAssertTrue(arrived)
+        XCTAssertEqual(String(decoding: surface.liveBytes, as: UTF8.self), "hello")
+        XCTAssertEqual(shadow.recentLines(1).lines, ["hello"])
+        pump.reset()
     }
 
-    func testOverflowDropsOldestChunks() {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        buf.append(Data(repeating: 0x41, count: 1024), generation: 1) // 占满
-        buf.append(Data(repeating: 0x42, count: 512), generation: 1)  // 触发丢弃
-        let out = buf.drain(maxBytes: 4096, generation: 1)
-        XCTAssertLessThanOrEqual(out.count, 1024)
-        XCTAssertTrue(out.contains(0x42))
+    /// 原来：`drain(maxBytes:)` 一次最多取这么多。现在：大块按 `sliceBytes` 切，每片不超过它，拼起来还是原样。
+    func testDrainRespectsMaxBytes() async {
+        let (pump, _, surface) = makePump()
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        pump.start(stream)
+        let big = Data((0..<(TerminalOutputPump.sliceBytes * 3 + 10)).map { UInt8(ascii: "0") + UInt8($0 % 10) })
+        continuation.yield(big)
+        let arrived = await waitUntil { surface.liveBytes.count == big.count }
+        XCTAssertTrue(arrived)
+        XCTAssertEqual(surface.pieces.map(\.count),
+                       [TerminalOutputPump.sliceBytes, TerminalOutputPump.sliceBytes, TerminalOutputPump.sliceBytes, 10])
+        XCTAssertEqual(surface.liveBytes, big)
+        pump.reset()
     }
 
-    func testClearEmptiesBuffer() {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        buf.append(Data("x".utf8), generation: 1)
-        buf.clear()
-        XCTAssertTrue(buf.drain(maxBytes: 1024, generation: 1).isEmpty)
-    }
-
-    /// Flush 循环用这个挂起原语把空闲时的 CPU 占用降到 0，又能在
-    /// `append()` 发生后立即恢复 —— 取代过去 100ms 的轮询间隔。
-    /// 调用时若已有缓冲字节，立即返回，避免 drain/wait 之间的丢信号竞态。
-    func testWaitForDataReturnsImmediatelyWhenBuffered() async {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        buf.append(Data("x".utf8), generation: 1)
-        let start = Date()
-        await buf.waitForData()
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.05, "已有数据时应立即返回")
-    }
-
-    /// `append()` 必须唤醒挂起的等待者，这是修复输入卡顿的核心机制。
-    func testWaitForDataResumesAfterAppend() async {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        let expectResumed = expectation(description: "waiter resumed after append")
-        Task {
-            await buf.waitForData()
-            expectResumed.fulfill()
+    /// 高频的小块（一次一个字节，5 万次）：一个不少、顺序不变。
+    func testHighFrequencySmallChunksCoalesceIntoBoundedFlushes() async {
+        let (pump, shadow, surface) = makePump()
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        pump.start(stream)
+        var expected = Data()
+        for index in 0..<50_000 {
+            let byte = UInt8(ascii: "A") + UInt8(index % 26)
+            expected.append(byte)
+            continuation.yield(Data([byte]))
         }
-        // 让等待者先进入挂起态。
-        try? await Task.sleep(for: .milliseconds(20))
-        buf.append(Data("y".utf8), generation: 1)
-        await fulfillment(of: [expectResumed], timeout: 0.2)
+        let arrived = await waitUntil(20) { shadow.totalFedBytes == 50_000 }
+        XCTAssertTrue(arrived)
+        XCTAssertEqual(surface.liveBytes, expected)
+        XCTAssertLessThanOrEqual(surface.pieces.map(\.count).max() ?? 0, TerminalOutputPump.sliceBytes)
+        pump.reset()
     }
 
-    /// `clear()` 也要唤醒等待者，这样 `resetFeedAndResizeState()` 在取消
-    /// flush task 时不会留下永远挂起的等待。
-    func testClearResumesPendingWaiters() async {
-        let buf = TerminalOutputBuffer(capacityBytes: 1024)
-        let expectResumed = expectation(description: "waiter resumed on clear")
-        Task {
-            await buf.waitForData()
-            expectResumed.fulfill()
+    /// 上一条连接的输出作废。
+    func testStaleGenerationChunksAreDropped() async {
+        let (pump, shadow, surface) = makePump()
+        let (old, oldContinuation) = AsyncStream<Data>.makeStream()
+        pump.start(old)
+        pump.reset()
+        oldContinuation.yield(Data("old".utf8))
+        let (new, newContinuation) = AsyncStream<Data>.makeStream()
+        pump.start(new)
+        newContinuation.yield(Data("new".utf8))
+        let arrived = await waitUntil { shadow.totalFedBytes >= 3 }
+        XCTAssertTrue(arrived)
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(String(decoding: surface.liveBytes, as: UTF8.self), "new")
+        pump.reset()
+    }
+
+    /// 原来：缓冲满了丢最旧的。现在不丢：画面解析不过来（积压到高水位）时入站停下，等它消化了再继续，
+    /// 这期间到的每一块之后都按原来的顺序进终端。
+    func testOverflowDropsOldestChunks() async {
+        let (pump, shadow, surface) = makePump()
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        pump.start(stream)
+        surface.setBacklogged(true)
+        var expected = Data()
+        for value in [UInt8(0x41), 0x42, 0x43] {
+            let chunk = Data(repeating: value, count: 1024)
+            expected.append(chunk)
+            continuation.yield(chunk)
         }
-        try? await Task.sleep(for: .milliseconds(20))
-        buf.clear()
-        await fulfillment(of: [expectResumed], timeout: 0.2)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(shadow.totalFedBytes, 0, "积压期间不取输出")
+
+        surface.setBacklogged(false)
+        let arrived = await waitUntil { surface.liveBytes.count == expected.count }
+        XCTAssertTrue(arrived)
+        XCTAssertEqual(surface.liveBytes, expected, "最旧的那一块也在")
+        pump.reset()
+    }
+
+    func testClearEmptiesBuffer() throws {
+        throw XCTSkip("没有缓冲可清了；换连接时作废旧输出见上面的 testStaleGenerationChunksAreDropped 与 TerminalOutputPumpTests.testResetDiscardsThePreviousConnectionsOutput")
+    }
+
+    func testWaitForDataReturnsImmediatelyWhenBuffered() throws {
+        throw XCTSkip("flush 循环的挂起原语随 TerminalOutputBuffer 删除；入站任务直接 for await 后端的流，没有轮询也没有等待原语")
+    }
+
+    func testWaitForDataResumesAfterAppend() throws {
+        throw XCTSkip("同上；「停下之后能被叫醒」现在是闸门放行，见 testOverflowDropsOldestChunks 与 TerminalOutputPumpTests.testBacklogPausesIngressUntilTheSurfaceCatchesUp")
+    }
+
+    func testClearResumesPendingWaiters() throws {
+        throw XCTSkip("同上；「换连接时不留永远挂起的等待」见 TerminalOutputPumpTests.testResetReleasesAnIngressParkedAtTheGate")
     }
 }
-#endif
