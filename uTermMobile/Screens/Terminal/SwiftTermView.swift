@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 import SwiftTerm
 import UIKit
@@ -54,6 +55,52 @@ final class MTerminalView: SwiftTerm.TerminalView {
     override func setNeedsDisplay() {
         if !suppressesDrawing { super.setNeedsDisplay() }
     }
+
+    #if DEBUG
+    // Ghostty 评估分支临时（M16 第八轮，按「上玻璃」给滚动打分）：每次滚动位置变了发一条 signpost（这边的时刻、
+    // 位置的物理像素、是不是在减速 / 手指按着）。外面用 xctrace 录的时候，trace 里就能把「这一帧画的是哪个位置」对到
+    // 「它哪个 vsync 上的玻璃」，真手指甩出来的 UIKit 减速也能量。每条约 1 µs。
+    private static let glassSignposter = OSSignposter(subsystem: "com.uozi.uTerm.glass", category: .pointsOfInterest)
+    private var glassWasDragging = false
+
+    override var contentOffset: CGPoint {
+        didSet {
+            guard contentOffset.y != oldValue.y, Self.glassSignposter.isEnabled else { return }
+            // 开始拖的那一刻（SwiftTerm 没有 willBeginDragging 可覆写，按 isDragging 翻转记）。
+            if isDragging != glassWasDragging {
+                glassWasDragging = isDragging
+                if isDragging { glassTouch(1) }
+            }
+            let px = Double(contentOffset.y * contentScaleFactor)
+            // 数值拼成字符串再发：Instruments 显示数值会加千分位、只留 4 位小数，脚本没法读。第五个数 0 = SwiftTerm（Ghostty 发 1）。
+            let text = String(format: "%.6f %.1f %d %d 0", CACurrentMediaTime(), px, isDecelerating ? 1 : 0, isTracking ? 1 : 0)
+            Self.glassSignposter.emitEvent("scroll-offset", "\(text, privacy: .public)")
+        }
+    }
+
+    // 触摸阶段的 signpost（和 Ghostty 标签同款：0 按下、1 开始拖、2 抬起 / 取消），录制时把冻结归到具体阶段。
+    private func glassTouch(_ phase: Int) {
+        guard Self.glassSignposter.isEnabled else { return }
+        let text = String(format: "%.6f %d", CACurrentMediaTime(), phase)
+        Self.glassSignposter.emitEvent("touch", "\(text, privacy: .public)")
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if (event?.touches(for: self)?.count ?? touches.count) == touches.count { glassTouch(0) }
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if (event?.touches(for: self)?.allSatisfy { $0.phase == .ended || $0.phase == .cancelled }) ?? true { glassTouch(2) }
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        glassTouch(2)
+        super.touchesCancelled(touches, with: event)
+    }
+
+    #endif
 
     override func setNeedsDisplay(_ rect: CGRect) {
         if !suppressesDrawing { super.setNeedsDisplay(rect) }

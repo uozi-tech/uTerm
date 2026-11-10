@@ -196,7 +196,7 @@ struct TerminalKeyBar: View {
     /// 发送一个键：先清掉粘滞修饰（修饰只作用于系统软键盘字符），再发字节序列。
     private func send(_ key: TerminalKey) {
         controller.clearStickyModifiers()
-        controller.sendText(key.send)
+        controller.sendKey(key)
     }
 
     // MARK: 面板

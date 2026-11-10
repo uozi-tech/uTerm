@@ -114,12 +114,19 @@ struct TerminalSessionBody: View {
                     // 连接中页期间不自动弹键盘（autoFocus=false）；中转页撤下后由终端屏重新聚焦。
                     // 字号随可用宽度自适应（窄屏更小、宽屏 / iPad / 分屏更大）。
                     GeometryReader { geo in
-                        SwiftTermView(controller: tab.controller,
-                                      fontSize: adaptiveFontSize(width: geo.size.width),
-                                      isActive: tab.mode == .terminal,
-                                      autoFocus: store.connecting == nil && isFocused,
-                                      isOnScreen: isActive && tab.mode == .terminal,
-                                      onInteract: onInteract)
+                        #if DEBUG
+                        if let bridge = tab.controller.ghostty {
+                            GhosttyTrialTerminalView(bridge: bridge, controller: tab.controller,
+                                                     isActive: tab.mode == .terminal,
+                                                     autoFocus: store.connecting == nil && isFocused,
+                                                     isOnScreen: isActive && tab.mode == .terminal,
+                                                     onInteract: onInteract)
+                        } else {
+                            swiftTermView(width: geo.size.width)
+                        }
+                        #else
+                        swiftTermView(width: geo.size.width)
+                        #endif
                     }
                     // 终端页边距（对齐 macOS `TerminalContainerView` 的 8pt 左右边）：字符不再贴着屏幕
                     // 边 / 圆角；上下不留，行数才能用满。
@@ -134,6 +141,15 @@ struct TerminalSessionBody: View {
                 }
             }
         }
+    }
+
+    private func swiftTermView(width: CGFloat) -> SwiftTermView {
+        SwiftTermView(controller: tab.controller,
+                      fontSize: adaptiveFontSize(width: width),
+                      isActive: tab.mode == .terminal,
+                      autoFocus: store.connecting == nil && isFocused,
+                      isOnScreen: isActive && tab.mode == .terminal,
+                      onInteract: onInteract)
     }
 
     /// 终端文本区与四周的间距（pt）。
