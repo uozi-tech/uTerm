@@ -39,15 +39,34 @@ final class TerminalThemeTests: XCTestCase {
         }
     }
 
-    /// 终端字体是等宽的：族名回退链里每一个都找得到、都是等宽字体，第一个是系统等宽字体。
-    func testFontFamiliesAreFixedPitch() {
+    /// 一个字体族在 CoreText 里有哪些款式（Ghostty 也是按族名 + 款式名在 CoreText 里找）。
+    private func styles(ofFamily family: String) -> [String] {
+        let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: family] as CFDictionary)
+        let matches = (CTFontDescriptorCreateMatchingFontDescriptors(descriptor, nil) as? [CTFontDescriptor]) ?? []
+        return matches.compactMap { CTFontDescriptorCopyAttribute($0, kCTFontStyleNameAttribute) as? String }
+    }
+
+    /// 终端字体的回退链：系统等宽 → Menlo → PingFang SC，按顺序写进配置；字重 Medium；加粗开着、强度 0。
+    /// 苹方必须显式写上且排在最后（汉字固定用它、字重稳定）；SF Mono 不是系统自带的，不写。
+    /// 画出来的样子（中文字重、全角标点位置、英文粗细）由 `GhosttyFontRenderingTests` 读像素核。
+    func testFontFallbackChainAndWeight() throws {
         let families = GhosttyTerminalConfig.fontFamilies()
-        XCTAssertEqual(families.first, TerminalSettings.textFont().familyName)
+        let system = try XCTUnwrap(TerminalSettings.textFont().familyName)
+        XCTAssertEqual(families, [system, "Menlo", "PingFang SC"])
+        XCTAssertFalse(families.contains("SF Mono"))
         XCTAssertTrue(TerminalSettings.textFont().isFixedPitch)
-        XCTAssertTrue(families.contains("Menlo"), "系统自带的等宽字体兜底")
+        XCTAssertTrue(NSFont(name: "Menlo", size: 12)?.isFixedPitch ?? false, "系统自带的等宽字体")
+        // 第一个和最后一个都要有 Medium 这一款：font-style 对链里每个族名都生效，没有这一款的族名会被跳过。
+        XCTAssertTrue(styles(ofFamily: system).contains("Medium"), "\(system)：\(styles(ofFamily: system))")
+        XCTAssertTrue(styles(ofFamily: "PingFang SC").contains("Medium"), "PingFang SC：\(styles(ofFamily: "PingFang SC"))")
+
         let config = entries(GhosttyTerminalConfig.base(settings: settings()))
         XCTAssertEqual(config["font-family"], families, "回退链按顺序写进配置")
         XCTAssertEqual((config["font-size"] ?? []).compactMap { Double($0) }, [TerminalSettings.fontSize])
+        XCTAssertEqual(config["font-style"], ["Medium"])
+        XCTAssertEqual(config["font-thicken"], ["true"])
+        XCTAssertEqual(config["font-thicken-strength"], ["0"])
+        XCTAssertNil(config["adjust-cell-height"], "行高不动")
     }
 
     /// 终端底色 = 内容卡的卡面色：暗夜 #141414（`UD.panel`）、日间白卡白终端。终端坐在工作区内容卡的凹槽里，
