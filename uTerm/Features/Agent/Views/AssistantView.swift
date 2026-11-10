@@ -806,6 +806,13 @@ private struct AgentToolCallCard: View {
         }
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.uw03))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // 收起时灰底本身就是边界；展开后输出区是 `termBg`，浅色下和对话区同为纯白，
+        // 没有这圈线输出就散在页面上、看不出属于哪条命令。
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(UD.border, lineWidth: 1)
+                .opacity(isResultExpanded ? 1 : 0)
+        )
     }
 
     @ViewBuilder
