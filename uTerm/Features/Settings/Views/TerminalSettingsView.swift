@@ -5,8 +5,8 @@ import SwiftUI
 /// 自定义（VS Code 家族随外观），本页只保留 光标 / 历史 /
 /// 选中即复制 + 预览。
 ///
-/// 余下 @AppStorage 仍全部 live-update：TerminalHostView 观察同名 key
-/// 触发 updateNSView 重 apply。
+/// 余下 @AppStorage 仍全部 live-update：`GhosttyHostView` 观察同名 key
+/// 触发 updateNSView 重新应用（`GhosttyTerminalBridge.apply(settings:)`）。
 struct TerminalSettingsView: View {
     @AppStorage(DefaultsKey.terminalCursorShape)  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
     @AppStorage(DefaultsKey.terminalCursorBlink)  private var cursorBlink: Bool = false

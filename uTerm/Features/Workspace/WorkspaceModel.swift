@@ -26,7 +26,7 @@ enum TerminalPaneAreaTuning {
     /// 与「未确认清单」第 2 条。
     ///
     /// 改成 `.allTabs` 只需要动这一行：切标签会从「重挂 NSView」变成「纯透明度
-    /// 翻转」，scrollback 两种取法都不丢（`TerminalHostView` 本来就复用
+    /// 翻转」，scrollback 两种取法都不丢（`GhosttyHostView` 本来就复用
     /// `TerminalSession` 持有的那个 NSView，重挂只是 attach/detach）。
     static let keepAlive: UPaneGroupsPolicy.KeepAlive = .activeTabPerGroup
 }

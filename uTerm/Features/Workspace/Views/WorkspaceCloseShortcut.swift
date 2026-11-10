@@ -39,7 +39,6 @@ struct WorkspaceCloseShortcutInstaller: NSViewRepresentable {
     final class MonitorView: NSView {
         var onCloseShortcut: @MainActor (NSWindow) -> Void
         // `nonisolated(unsafe)`：只在主线程读写；让 deinit / viewDidMoveToWindow 都能安全 removeMonitor
-        // （与 CopyableTerminalView.removeScrollActivityMonitor 同构）。
         private nonisolated(unsafe) var monitor: Any?
 
         init(_ cb: @escaping @MainActor (NSWindow) -> Void) {

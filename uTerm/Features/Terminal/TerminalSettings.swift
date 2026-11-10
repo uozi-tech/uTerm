@@ -6,7 +6,7 @@ import AppKit
 /// 终端/编辑器字体（族/字号/行距）与配色不再可自定义：字体走系统等宽，
 /// 字号/行距固定，配色固定 VS Code 家族（按外观取深/浅），均为 `static` 常量。
 /// 仅光标 / 历史 / 选中即复制 仍由 `@AppStorage` 驱动；读取由调用方
-/// （TerminalHostView / TerminalSettingsView）用 `@AppStorage` 单独完成。
+/// （GhosttyHostView / TerminalSettingsView）用 `@AppStorage` 单独完成。
 nonisolated struct TerminalSettings: Equatable {
     /// 统一系统等宽字体族，不注册或打包自定义字体。
     static let fontName = "System Monospaced"
