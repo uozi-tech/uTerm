@@ -62,15 +62,9 @@ final class RemoteMirrorStallTests: XCTestCase {
     }
 
     /// 经中继（relay-sz）：TCP，单程 25 ms，限速 1 MB/s——视频和终端挤在同一条 TCP 上，靠 `link-flow` 分道。
-    /// 会话里先攒几千行逐字换色的历史：快照带整段回滚，一张就比积压上限（1 MB）大，接入和每次超限重发都是这么大一张。
-    ///
-    /// **迁移后的已知退步（等主会话定）**：换引擎之前快照只带最近 1000 行（VT 流，接近 1 MB），1 MB/s 的中继上
-    /// 一秒左右发完；现在是整段回滚的二进制快照（3000 行逐字换色约 2.7 MB，和视频挤同一条 TCP），手机要落后好几秒
-    /// 才追上（不是卡死：停止输出后追得上）。「画面 2 秒内追上」仍然是要的行为，所以断言不放宽，用预期失败标出来；
-    /// 镜像快照按最近 N 行裁之后去掉这个标记（docs/ghostty-eval/migration-log.md「没做」那条）。
+    /// 会话里先攒几千行逐字换色的历史：整段回滚的快照一张约 2.7 MB，比积压上限（1 MB）大，接入和每次超限重发都是这么大一张，
+    /// 1 MB/s 的中继上手机要落后好几秒。镜像快照只带最近约 1000 行回滚（`RemoteConstants.snapshotScrollback`）之后约 0.8 MB。
     func test_claude_like_output_with_heavy_styled_history_over_relay() async throws {
-        XCTExpectFailure("镜像快照带整段回滚（约 2.7 MB），1 MB/s 的中继上 2 秒内追不上；等快照按最近 N 行裁",
-                         options: .nonStrict())
         try await runClaudeLoad(over: .relay(RemoteLinkImpairment(delay: 0.025, jitter: 0.005, bytesPerSecond: 1_000_000)),
                                 styledHistoryLines: 3000)
     }
@@ -209,13 +203,12 @@ final class RemoteMirrorStallTests: XCTestCase {
             _ = await waitUntil { self.firstLine(macTerminal).isEmpty == false }
             let snapshot = try macTerminal.snapshot()
             print("[镜像回归] 快照 \(snapshot.count) 字节（\(macTerminal.totalRows) 行），积压上限 \(RemoteConstants.maxPendingOutputBytes)")
-            // 读数：把这张快照还原进一台回滚上限 1000 行的终端再重拍（「按最近 N 行裁」的做法）有多大、要多久。
+            // 读数：镜像实际发的那张（只带最近约 1000 行回滚）有多大、拍一张要多久。
             let started = DispatchTime.now().uptimeNanoseconds
-            let trimmed = try ShadowTerminal(snapshot: snapshot,
-                                             options: TerminalScrollbackLimits(lines: RemoteConstants.snapshotScrollback).shadowOptions)
-            let trimmedSnapshot = try trimmed.snapshot()
+            let trimmedSnapshot = try macTerminal.snapshot(scrollbackLines: RemoteConstants.snapshotScrollback)
             let ms = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
-            print(String(format: "[镜像回归] 还原进 %d 行上限的终端再重拍：%d 字节（%d 行），%.1f ms",
+            let trimmed = try ShadowTerminal(snapshot: trimmedSnapshot, options: TerminalScrollbackLimits(lines: 10_000).shadowOptions)
+            print(String(format: "[镜像回归] 镜像快照（回滚上限 %d 行）：%d 字节（%d 行），%.1f ms",
                          RemoteConstants.snapshotScrollback, trimmedSnapshot.count, trimmed.totalRows, ms))
         }
 

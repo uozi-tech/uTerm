@@ -325,6 +325,29 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         return try Self.encode(handle)
     }
 
+    /// 只带最近约 `scrollbackLines` 行回滚的快照（远控镜像用：整段回滚 10 万行时一张能到几十 MB，窄链路上追不上）。
+    /// 回滚本来就不超过上限时就是 `snapshot()`；超过时把整张快照还原进一台回滚上限设成这么多行的临时终端再重拍。
+    /// 引擎按页裁，留下的行数比上限少几十到上百行（3000 行逐字换色的历史、上限 1000：剩 873 行、808 KB、约 2 ms）。
+    /// 屏幕、光标、模式、半个序列都不受影响，只少了上面那段历史。holder 检查点不要用它（要带全量）。
+    func snapshot(scrollbackLines limit: Int) throws -> Data {
+        // 备用屏上读到的总行数是备用屏的（没有回滚），主屏的回滚可能很长：一律重拍。
+        let (full, short) = try { () throws -> (Data, Bool) in
+            lock.lock()
+            defer { lock.unlock() }
+            var total = 0
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
+            let short = !Self.isAlternate(handle) && total - Int(Self.rows(handle)) <= limit
+            return (try Self.encode(handle), short)
+        }()
+        guard !short else { return full }
+        var trimmedOptions = options
+        trimmedOptions.scrollbackLines = min(limit, options.scrollbackLines ?? limit)
+        let trimmed = try Self.decode(full, continuationBytes: options.continuationBytes)
+        defer { ghostty_terminal_free(trimmed) }
+        Self.applyLimits(to: trimmed, options: trimmedOptions)
+        return try Self.encode(trimmed)
+    }
+
     private static func encode(_ handle: OpaquePointer) throws -> Data {
         var pointer: UnsafeMutablePointer<UInt8>?
         var length = 0

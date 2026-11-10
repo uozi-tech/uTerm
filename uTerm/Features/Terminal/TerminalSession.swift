@@ -109,7 +109,7 @@ final class TerminalSession: NSObject {
             suppressesPixelOnlyResizes: true)
         let pump = TerminalOutputPump(shadow: shadow, surface: surfaceIO)
         outputPump = pump
-        mirrorTap = TerminalMirrorTap(snapshot: { try? shadow.snapshot() },
+        mirrorTap = TerminalMirrorTap(snapshot: { try? shadow.snapshot(scrollbackLines: RemoteConstants.snapshotScrollback) },
                                       exclusively: { pump.performWhileFeedingPaused($0) })
         super.init()
         // tap：影子刚解析完这一片、泵的锁还在手上。镜像与检查点拿到的字节顺序与终端实际解析的顺序完全一致。

@@ -58,7 +58,15 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
     private func assertMirrored(_ receiver: Receiver, file: StaticString = #filePath, line: UInt = #line) {
         let mac = session.shadow
         XCTAssertEqual(receiver.shadow.viewportText(), mac.viewportText(), "视口不同", file: file, line: line)
-        XCTAssertEqual(receiver.shadow.totalRows, mac.totalRows, "总行数不同", file: file, line: line)
+        if mac.totalRows - mac.size.rows <= RemoteConstants.snapshotScrollback {
+            XCTAssertEqual(receiver.shadow.totalRows, mac.totalRows, "总行数不同", file: file, line: line)
+        } else {
+            // 快照只带最近约 `snapshotScrollback` 行回滚：接收端少了上面那段，留下的与 Mac 的最后几行逐行相同。
+            XCTAssertLessThan(receiver.shadow.totalRows, mac.totalRows, "快照应当裁掉早的回滚", file: file, line: line)
+            let kept = receiver.shadow.totalRows
+            XCTAssertEqual(receiver.shadow.recentLines(kept).lines.suffix(kept - 1), mac.recentLines(kept).lines.suffix(kept - 1),
+                           "留下的回滚与 Mac 的最后几行不同", file: file, line: line)
+        }
         XCTAssertEqual(receiver.shadow.cursor, mac.cursor, "光标不同", file: file, line: line)
         XCTAssertEqual(receiver.shadow.isOnAlternateScreen, mac.isOnAlternateScreen, file: file, line: line)
         XCTAssertEqual(receiver.shadow.size.cols, mac.size.cols, file: file, line: line)
@@ -106,6 +114,55 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
 
         XCTAssertEqual(session.shadow.recentLines(1).lines, ["ok 橙色 中"])
         assertMirrored(receiver)
+    }
+
+    /// 镜像快照只带最近约 `RemoteConstants.snapshotScrollback` 行回滚（整段回滚太大，窄链路上追不上）；
+    /// 屏幕、光标、标题照旧一致，Mac 自己的回滚不受影响。
+    func test_mirror_snapshot_keeps_only_recent_scrollback() throws {
+        let limit = RemoteConstants.snapshotScrollback
+        session.feedOutput(text: "\u{1B}]0;long\u{07}" + history(0..<3_000))
+        let mac = session.shadow
+        XCTAssertGreaterThan(mac.totalRows - mac.size.rows, 2 * limit, "用例前提：Mac 的回滚远超上限")
+        let full = try mac.snapshot()
+        let trimmed = try mac.snapshot(scrollbackLines: limit)
+        XCTAssertLessThan(trimmed.count * 2, full.count, "裁过的快照应当小得多")
+
+        let receiver = Receiver()
+        let subscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        receiver.drain(subscriber)
+        XCTAssertEqual(receiver.snapshots, 1)
+        let kept = receiver.shadow.totalRows - receiver.shadow.size.rows
+        XCTAssertLessThanOrEqual(kept, limit)
+        XCTAssertGreaterThan(kept, limit / 2, "按页裁，留下的应当接近上限")
+        XCTAssertGreaterThan(mac.totalRows - mac.size.rows, 2 * limit, "Mac 自己的回滚不受影响")
+        assertMirrored(receiver)
+
+        // 之后的实时字节照常接上。
+        session.feedOutput(text: history(3_000..<3_010))
+        receiver.drain(subscriber)
+        XCTAssertEqual(receiver.snapshots, 1)
+        assertMirrored(receiver)
+    }
+
+    /// 回滚不超上限时就是整张快照；备用屏上（读到的行数是备用屏的）照样裁主屏的回滚。
+    func test_trimmed_snapshot_on_short_history_and_on_the_alternate_screen() throws {
+        let limit = RemoteConstants.snapshotScrollback
+        session.feedOutput(text: history(0..<20))
+        let mac = session.shadow
+        XCTAssertEqual(try mac.snapshot(scrollbackLines: limit), try mac.snapshot())
+
+        session.feedOutput(text: history(20..<3_000) + "\u{1B}[?1049h\u{1B}[2;3Hvim")
+        XCTAssertTrue(mac.isOnAlternateScreen)
+        let restored = try ShadowTerminal(snapshot: try mac.snapshot(scrollbackLines: limit),
+                                          options: TerminalScrollbackLimits(lines: 10_000).shadowOptions)
+        XCTAssertEqual(restored.viewportText(), mac.viewportText())
+        XCTAssertEqual(restored.cursor, mac.cursor)
+        let leave = Data("\u{1B}[?1049l".utf8)
+        restored.feed(leave)
+        session.receiveOutputForTesting(leave)
+        XCTAssertLessThanOrEqual(restored.totalRows - restored.size.rows, limit, "主屏的回滚也裁了")
+        XCTAssertGreaterThan(mac.totalRows - mac.size.rows, 2 * limit)
+        XCTAssertEqual(restored.viewportText(), mac.viewportText())
     }
 
     /// 大快照切成很多段发，接收端拼回来还是那一张。
