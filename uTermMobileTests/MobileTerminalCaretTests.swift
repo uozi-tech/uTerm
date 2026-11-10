@@ -1,8 +1,8 @@
 import XCTest
 @testable import uTermMobile
 
-/// 收起键盘后用户还在看同一个终端：换引擎之前（SwiftTerm）这里核的是「光标继续是实心块，不变成表示失焦的空心框」，
-/// 靠的是 SwiftTerm 本地补丁给的 `caretViewTracksFocus = false`。
+/// 收起键盘后用户还在看同一个终端：换引擎之前这里核的是「光标继续是实心块，不变成表示失焦的空心框」，
+/// 靠的是旧引擎的本地补丁给的 `caretViewTracksFocus = false`。
 ///
 /// 换成 GhosttyKit 之后这条行为没有了：光标由引擎画，视图不是第一响应者时引擎一律画空心框，宿主没有开关
 ///（迁移计划 `docs/ghostty-migration-plan.md` §7「会丢的」第一条，user 已知情）。要找回来得改引擎或提给上游

@@ -3,7 +3,7 @@ import AppKit
 import GhosttyTerminal
 @testable import uTerm
 
-/// 终端的外观与设置怎么交给引擎。原来核的是 `TerminalTheme.apply(to:)`（往 SwiftTerm 视图上设颜色、字体、光标）；
+/// 终端的外观与设置怎么交给引擎。原来核的是 `TerminalTheme.apply(to:)`（往旧引擎视图上设颜色、字体、光标）；
 /// 现在是 `GhosttyTerminalConfig` 把 uTerm 的设置翻成 Ghostty 的配置文本（`base` 是与外观无关的部分，`colors` / `theme`
 /// 是深浅两套配色）。这里核产出的配置；配置在真的 surface 上生效没有，由带窗口的用例核
 /// （`TerminalContrastTests` 的像素、`TerminalFontChangeTests` 的配置重载）。
@@ -71,7 +71,7 @@ final class TerminalThemeTests: XCTestCase {
 
     /// 终端底色 = 内容卡的卡面色：暗夜 #141414（`UD.panel`）、日间白卡白终端。终端坐在工作区内容卡的凹槽里，
     /// 底色和卡面不一样的话凹槽四角会露出另一种颜色。（原来这条核的是 `TerminalTheme.backgroundColor` 这个兜底常数，
-    /// 它随 SwiftTerm 的宿主视图一起删了；现在只有配色方案里的这一个底色，直接写进 Ghostty 的配置。）
+    /// 它随旧引擎的宿主视图一起删了；现在只有配色方案里的这一个底色，直接写进 Ghostty 的配置。）
     func test_terminal_background_matches_workspace_sidebar_background() {
         let dark = uTerm.TerminalColorScheme.resolve(dark: true), light = uTerm.TerminalColorScheme.resolve(dark: false)
         XCTAssertEqual(GhosttyTerminalConfig.hex(dark.backgroundColor), "#141414")
@@ -99,7 +99,7 @@ final class TerminalThemeTests: XCTestCase {
     }
 
     /// 设置里的光标形状与闪烁写进配置。程序用 `CSI n q` 临时改光标、`CSI 0 q` 回到默认——「默认」由引擎按配置里的
-    /// 这两项还原，所以配置必须跟着用户的设置走（SwiftTerm 上要靠补丁把「默认」从写死的闪烁方块改成用户选的）。
+    /// 这两项还原，所以配置必须跟着用户的设置走（旧引擎上要靠补丁把「默认」从写死的闪烁方块改成用户选的）。
     func testCursorSettingsReachTheConfiguration() {
         let cases: [(TerminalCursorShape, Bool, String)] = [(.block, false, "block"), (.bar, false, "bar"), (.underline, true, "underline")]
         for (shape, blink, expected) in cases {
@@ -113,7 +113,7 @@ final class TerminalThemeTests: XCTestCase {
     }
 
     /// 每次 SwiftUI 更新都会 apply：设置没变就什么都不做，不会盖掉程序自己设的光标形状和颜色
-    /// （SwiftTerm 上是比对后跳过；Ghostty 上重载配置同样要跳过）。这里能核的是：重复 apply 之后控制器手上的配置
+    /// （旧引擎上是比对后跳过；Ghostty 上重载配置同样要跳过）。这里能核的是：重复 apply 之后控制器手上的配置
     /// 文本没有变；程序设的模式在配置重载后还在，由 `TerminalFontChangeTests` 在真的 surface 上核。
     func testRepeatedApplyWithUnchangedSettingsKeepsTheConfiguration() {
         let current = TerminalSettings.read()

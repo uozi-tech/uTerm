@@ -5,8 +5,8 @@ import XCTest
 
 /// Mac 上 Ghostty 渲染的窗格宿主（`GhosttyContainerView`）：手机接管时的尺寸、滚动条。
 ///
-/// SwiftTerm 路径的对应用例在 `TerminalMirrorTapTests`（钉尺寸）和 `CopyableTerminalView` 的滚动条用例里；
-/// 这里核的是换成 Ghostty 渲染之后同样的行为还在。
+/// 钉尺寸的另一半（没有画面的会话、镜像订阅者看到的尺寸）在 `TerminalMirrorTapTests`，视图自己加的行为
+/// （⌃↩、贴图、右键菜单）在 `CopyableTerminalViewTests`；这里核的是窗格宿主这一层。
 @MainActor
 final class GhosttyMacHostTests: XCTestCase {
 
@@ -78,7 +78,7 @@ final class GhosttyMacHostTests: XCTestCase {
 
     // MARK: 远控接管尺寸
 
-    /// 手机接管：Ghostty 的网格、影子 SwiftTerm、发给 PTY 的尺寸都要正好是手机的行列数；断开后回到按窗格排。
+    /// 手机接管：Ghostty 的网格、影子终端、发给 PTY 的尺寸都要正好是手机的行列数；断开后回到按窗格排。
     func testPinnedGridMatchesThePhoneExactly() async throws {
         let rig = try await makeRig()
         defer { rig.close() }

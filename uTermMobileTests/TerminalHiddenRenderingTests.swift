@@ -9,7 +9,7 @@ import XCTest
 /// - 从没露出过的标签不建 surface；
 /// - 关掉的标签连同它的视图、影子一起释放。
 ///
-/// 换引擎之前这份用例数的是 SwiftTerm 的 `draw(_:)` 次数、核的是补丁 #18 / #19；现在数 GhosttyKit 交了几帧
+/// 换引擎之前这份用例数的是旧引擎的 `draw(_:)` 次数、核的是补丁 #18 / #19；现在数 GhosttyKit 交了几帧
 ///（`GhosttyPresentLog`）、读 surface 与影子里的文字。原来「闪烁光标的重复动画在隐藏时停掉」那条没有对应物
 ///（光标由引擎画，不是 Core Animation 的重复动画），并进了「隐藏时不交帧」。
 @MainActor

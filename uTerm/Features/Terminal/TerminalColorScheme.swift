@@ -24,7 +24,7 @@ nonisolated struct TerminalRGB: Equatable, Sendable {
 /// 配色不再可自定义：终端固定用 VS Code 家族的前景 / ANSI 色，按 app 外观自动取
 /// 深 / 浅变体（`resolve(dark:)`）。深色背景对齐工作区基底。
 ///
-/// macOS 与 iOS 共用这一份表（iOS 的 `MTerminalColors` 只是转发壳）；翻成 Ghostty 的配置在 `GhosttyTerminalConfig.colors`。
+/// macOS 与 iOS 共用这一份表；翻成 Ghostty 的配置，Mac 在 `GhosttyTerminalConfig.colors`，iOS 在 `GhosttyPalette`。
 nonisolated struct TerminalColorScheme: @unchecked Sendable {
     /// 渲染期最低 WCAG 对比度（VS Code `minimumContrastRatio` 同思路）。远端
     /// prompt / TUI（p10k 等）常按深色背景硬编码 256 色 / 真彩色，不经过下面的

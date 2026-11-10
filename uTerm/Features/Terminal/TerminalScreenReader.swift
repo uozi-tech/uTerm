@@ -1,11 +1,11 @@
 import Foundation
 
-/// 终端读屏的**纯函数**层：只吃「已经渲染成文本的行数组」，不碰 SwiftTerm、不碰 AppKit，
+/// 终端读屏的**纯函数**层：只吃「已经渲染成文本的行数组」，不碰终端引擎、不碰 AppKit，
 /// 因此可以脱离窗口与运行时单测（`TerminalScreenReaderTests`）。
 ///
-/// 取行那一半（越界探测反推缓冲区末行 + `translateToString`）在
-/// `TerminalSession.snapshotScreen(lines:maxBytes:)` 里 —— 它必须在 MainActor 上跑，
-/// 这里则完全无隔离。两处的分界就是「谁需要 SwiftTerm」。
+/// 取行那一半（影子终端的 `recentLines`）在
+/// `TerminalSession.snapshotScreen(lines:maxBytes:)` 里 —— 它挂在 MainActor 的会话上，
+/// 这里则完全无隔离。两处的分界就是「谁需要终端」。
 ///
 /// 裁剪顺序是有讲究的，不要随手换：
 /// 1. **先**去掉尾部连续空行 —— 光标常停在半屏，尾部整屏空白会把 `maxLines` 白白吃光；

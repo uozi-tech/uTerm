@@ -12,7 +12,7 @@ import GhosttyTerminal
 /// 默认全部跳过：要 `TEST_RUNNER_GHOSTTY_MEASURE=1` 才跑。M14 会临时切系统输入法、动系统剪贴板（跑完还原），
 /// M1 / M7 会一次开 20 个窗口，都不适合进日常全量。读数一律打到标准输出，行首 `[GhosttyMeasure]`。
 ///
-/// 评估阶段每一项都拿 SwiftTerm 当对照（`*_ENGINE=swiftterm`、`swiftterm-bare` 这些配置）。SwiftTerm 移除后对照那一半
+/// 评估阶段每一项都拿旧引擎当对照（`*_ENGINE`、`*-bare` 这些对照配置）。旧引擎移除后对照那一半
 /// 去掉了，只留 Ghostty 的读数；当时的对照读数在报告里。`ghostty+shadow` 现在指「Ghostty + 影子终端」。
 @MainActor
 final class GhosttyMeasureTests: XCTestCase {
@@ -282,7 +282,7 @@ final class GhosttyMeasureTests: XCTestCase {
         -> (latencies: [Double], parts: [String: [Double]], misses: Int) {
         let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
         guard config.hasPrefix("ghostty") else {
-            throw XCTSkip("配置 \(config) 是 SwiftTerm 对照，已随 SwiftTerm 移除")
+            throw XCTSkip("配置 \(config) 是旧引擎对照，已随旧引擎移除")
         }
         let isSession = config.hasSuffix("session")
         defer {

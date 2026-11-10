@@ -78,7 +78,7 @@ final class GhosttyTerminalBridge {
         }
     }
 
-    /// 用户此刻在看这个终端：同 SwiftTerm 路径的 `isUserLooking`，只是焦点看 Ghostty 视图。
+    /// 键盘焦点在这个终端上、窗口是 key（`TerminalSession.isUserLooking` 再加上 app 在前台）。
     var isFocusedInWindow: Bool {
         guard let window = view.window else { return false }
         return window.isKeyWindow && window.firstResponder === view
@@ -158,7 +158,7 @@ final class GhosttyTerminalBridge {
     private var gridBeforeSurfacelessPin: (cols: Int, rows: Int)?
 
     /// 把 Ghostty 视图钉成 `cols × rows`：Ghostty 没有内留白（配置里 padding 是 0），网格 = ⌊视图像素 ÷ 格子像素⌋，
-    /// 所以视图取「行列数 × 格子像素 ÷ 屏幕倍率」正好是那个行列数，不用像 SwiftTerm 那样试探。
+    /// 所以视图取「行列数 × 格子像素 ÷ 屏幕倍率」正好是那个行列数，不用试探。
     /// 之后 Ghostty 报来新网格（`ghosttyDidResize`），影子终端、PTY、镜像都跟着走。
     func pinGrid(cols: Int, rows: Int) {
         pendingPin = (cols, rows)
@@ -272,7 +272,7 @@ final class GhosttyTerminalBridge {
         /// OSC 7。cwd 靠后端轮询，这里不接。
         func terminalDidChangeWorkingDirectory(_ path: String) {}
 
-        /// 影子 SwiftTerm 已经响过铃（SwiftTerm 的默认 `bell` 是 `NSSound.beep()`），这里不重复。
+        /// 铃由影子终端的 `.bell` 事件响（`handleShadowEvent`，标签藏着也响），这里不重复。
         func terminalDidRingBell() {}
 
         /// 不安全粘贴（多行 / 带控制字符）与受保护的 OSC 52。uTerm 一直没有粘贴保护，照放行处理；OSC 52 只许写不许读。
@@ -363,7 +363,7 @@ final class GhosttySurfaceView: AppTerminalView {
 
     // MARK: 右键菜单
 
-    /// 拷贝 / 粘贴 / 全选，和 SwiftTerm 路径同一份（GhosttyKit 自带的只在有选区时给一个「Copy」）。没有选区时「拷贝」置灰。
+    /// 拷贝 / 粘贴 / 全选，uTerm 自己的那一份（GhosttyKit 自带的只在有选区时给一个「Copy」）。没有选区时「拷贝」置灰。
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = TerminalSession.makeContextMenu(for: self)
         menu.autoenablesItems = false

@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// 读屏的纯函数层。这一层不碰 SwiftTerm，所以行为可以逐条钉死。
+/// 读屏的纯函数层。这一层不碰终端引擎，所以行为可以逐条钉死。
 final class TerminalScreenReaderTests: XCTestCase {
 
     // MARK: 行数截取

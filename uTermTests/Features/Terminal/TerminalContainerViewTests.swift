@@ -44,7 +44,7 @@ private struct FocusTestHost: View {
 /// 窗格里摆放终端的容器（`GhosttyContainerView`，由 `GhosttyHostView` 挂进 SwiftUI）：视图归属、键盘焦点、
 /// 尺寸怎么到 PTY。
 ///
-/// 尺寸这一组原来核的是 SwiftTerm 路径上的「停稳再提交」（`TerminalResizeSettler`：容器尺寸停稳 80 ms 才重排
+/// 尺寸这一组原来核的是旧引擎那条路径上的「停稳再提交」（`TerminalResizeSettler`：容器尺寸停稳 80 ms 才重排
 /// 缓冲区、才通知 PTY）。Ghostty 这边没接这套判定：视图尺寸一变 surface 当场跟着变，引擎的 IO 线程把 25 ms 内的
 /// 连续变化合并成一次，网格变了才经 `InMemoryTerminalSession` 的 resize 回调报上来，报上来就发给 PTY。
 /// 所以这一组改成核 Ghostty 上实际成立的那几条（网格只在 Ghostty 报来时发给 PTY、相同尺寸不重发、变过去又变回来
@@ -331,7 +331,7 @@ final class TerminalContainerViewTests: XCTestCase {
     private static let noSettleReason =
         "Ghostty 路径没接「停稳再提交」（TerminalResizeSettler）：窄尺寸停留超过引擎合并 resize 的 25 ms 就会发给 PTY"
 
-    /// 同一个回归点，窄尺寸停了 20 ms 才变成真实尺寸（真机上布局隔一两帧才定下来就是这样）。SwiftTerm 路径靠
+    /// 同一个回归点，窄尺寸停了 20 ms 才变成真实尺寸（真机上布局隔一两帧才定下来就是这样）。旧引擎那条路径靠
     /// 「停稳 80 ms 才提交」挡住。Ghostty 的容器接回了同一套判定（`GhosttyContainerView.syncSurfaceFrame`）：等待期间
     /// 视图保持旧尺寸，surface 自己报来的中间态网格也不发给 PTY，后端只收到最终那一次
     /// （没接之前实测是 `[[23, 21], [106, 42]]`，重启接回的 Claude Code 会按窄尺寸重排一段输出）。

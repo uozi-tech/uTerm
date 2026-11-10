@@ -8,7 +8,7 @@ import Foundation
 /// 尺寸：
 /// - `reportSize` 记下终端当前行列数，只合并同一轮主线程里的连续变化（`pinRemoteGrid` 会连设几次）后发一次。
 ///   不按时间防抖：尺寸已由容器（`TerminalContainerView` / `MTerminalContainerView`）等停稳才提交，
-///   缓冲区已经重排，程序越早知道越好。和这条后端上次发出的相同就不发——SwiftTerm 布局时会重复报同一个值，
+///   缓冲区已经重排，程序越早知道越好。和这条后端上次发出的相同就不发——终端视图布局时会重复报同一个值，
 ///   每发一次远端就收一个 SIGWINCH，全屏程序整屏重绘一遍。
 /// - `sendLatestSizeNow` 立刻补发当前尺寸，不去重（建连成功后、窗格重新显示时）。
 /// - `latestSize` 跨绑定保留：换了后端仍知道终端多大。

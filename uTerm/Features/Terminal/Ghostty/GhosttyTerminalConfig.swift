@@ -30,7 +30,7 @@ enum GhosttyTerminalConfig {
             b.withCustom("font-style", "Medium")
             // Ghostty 默认不做 macOS 的字体平滑加粗，笔画比 CoreGraphics 画的细一截。打开 font-thicken、强度给 0
             // （最轻的一档），英文回到迁移前的粗细。同一段文字并排渲染量的墨量（白底、同一块区域里的深色像素）：
-            //   迁移前 SwiftTerm 的英文 1044；Ghostty 不加粗时英文 902；
+            //   换引擎之前（CoreGraphics 画）英文 1044；Ghostty 不加粗时英文 902；
             //   回退链里显式写上 PingFang SC 之后中文稳定在 1098；
             //   再加 thicken（强度 0）：中文 1268 / 英文 1042 / 粗体 1151。
             // 回归用例 `GhosttyFontRenderingTests` 读画出来的像素核这几样。

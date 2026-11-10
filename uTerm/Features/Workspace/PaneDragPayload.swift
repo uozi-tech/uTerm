@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 extension UTType {
     /// 窗格拖拽载荷的专属类型。用专属类型而非 `.plainText`，避免被
-    /// 接受文本拖放的 SwiftTerm 终端 NSView 拦截当成粘贴。仅用于应用内
+    /// 接受文本拖放的终端 NSView 拦截当成粘贴。仅用于应用内
     /// 拖拽（`NSItemProvider` 注册时已限制 `.ownProcess` 可见性）。
     ///
     /// 使用 `exportedAs:` 必须同时在 `Info.plist` 的

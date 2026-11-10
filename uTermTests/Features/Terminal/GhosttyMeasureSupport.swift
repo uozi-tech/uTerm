@@ -32,9 +32,9 @@ nonisolated enum MeasureEnv {
 /// - `footprint`：`phys_footprint`，活动监视器的「内存」列、jetsam 看的那个数。
 /// - `graphics`：footprint 里记在 graphics 账上的部分（`ledger_tag_graphics_footprint`，含压缩）：
 ///   Metal 的 buffer / texture、IOSurface 都记在这里。
-/// - `malloc`：所有 malloc zone 的 `size_in_use`（Swift 对象、SwiftTerm 的行缓冲都在这里）。
+/// - `malloc`：所有 malloc zone 的 `size_in_use`（Swift 对象在这里）。
 /// - `metal`：系统默认 Metal 设备的 `currentAllocatedSize`（只在 Ghostty 已经建过 surface 后才读，免得
-///   SwiftTerm 那边为了读数平白建一个 Metal 设备）。
+///   为了读数平白建一个 Metal 设备）。
 /// - `tags`：按 VM 区域的 `user_tag` 汇总的 dirty + swapped（vmmap 的口径）。Ghostty 的回滚页由 Zig 的
 ///   page allocator 直接 mmap，不带 tag，落在 0（`VM_ALLOCATE`）。
 nonisolated struct MemSnapshot: Sendable {
@@ -151,7 +151,7 @@ nonisolated struct MemSnapshot: Sendable {
     }
 }
 
-/// 后台线程按固定间隔采 footprint 峰值（主线程忙着喂 SwiftTerm 时也采得到）。
+/// 后台线程按固定间隔采 footprint 峰值（主线程忙着喂终端时也采得到）。
 nonisolated final class FootprintSampler: @unchecked Sendable {
     private let lock = NSLock()
     private var peak = 0.0
@@ -368,7 +368,7 @@ actor CaptureBackend: TerminalImageReceiving {
 // MARK: - 窗格
 
 /// 一个测量用窗格：Ghostty 视图，或 Ghostty + 影子终端（uTerm 实际的形态：同一份字节先进影子终端、再进 surface）。
-/// 评估阶段还有一种 SwiftTerm 视图当对照，SwiftTerm 移除后去掉了。
+/// 评估阶段还有一种旧引擎视图当对照，旧引擎移除后去掉了。
 @MainActor
 final class MeasurePane {
     enum Engine: String, CaseIterable {

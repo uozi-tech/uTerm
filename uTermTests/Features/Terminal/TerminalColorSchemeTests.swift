@@ -48,7 +48,7 @@ final class TerminalColorSchemeTests: XCTestCase {
         XCTAssertEqual(scheme.ansiColors[11].blue, 0x00)
     }
 
-    // 原来这里还有两条核「浅色方案的黄经渲染期钳制后可读 / 在深灰段底上被提亮」（SwiftTerm 补丁的 `TerminalContrast`）。
+    // 原来这里还有两条核「浅色方案的黄经渲染期钳制后可读 / 在深灰段底上被提亮」（旧引擎的本地补丁的 `TerminalContrast`）。
     // 钳制现在在引擎的 shader 里，要读 surface 画出来的像素，挪到了 `TerminalContrastTests`
     // （test_vscode_light_yellow_readable_after_contrast_clamp / …_brightens_on_dark_segment）。
 }

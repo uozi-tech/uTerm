@@ -4,7 +4,7 @@ import SwiftUI
 import AppKit
 
 /// Draggable splitter between two panes. Updates the parent's `fraction`
-/// binding live during the drag so panes (and the SwiftTerm views inside them)
+/// binding live during the drag so panes (and the terminal views inside them)
 /// reflow in real time — Metal-backed terminals + the readLoop coalescing in
 /// `ProcessManager` make this cheap enough to stay smooth.
 ///

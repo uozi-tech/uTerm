@@ -1,11 +1,11 @@
 import XCTest
 @testable import uTerm
 
-/// 原来核的是 vendored SwiftTerm 补丁 #7：终端放宽后，原本铺满整行的右边距要跟着放宽（上游只在变窄时收、放宽时不动，
-/// 于是旧宽度以右的列操作什么都不做）。SwiftTerm 没有了，这个补丁也就没有了；同一条行为在新引擎（影子终端，
+/// 原来核的是旧引擎的本地补丁 #7：终端放宽后，原本铺满整行的右边距要跟着放宽（上游只在变窄时收、放宽时不动，
+/// 于是旧宽度以右的列操作什么都不做）。旧引擎没有了，这个补丁也就没有了；同一条行为在新引擎（影子终端，
 /// libghostty-vt，和画面是同一棵源码树）上照样要成立，因为 Mac 的终端仍然是先按一个初始尺寸建、再按窗口放宽的，
 /// 远控镜像也仍然要求两端的边距状态一致（现在靠二进制快照带过去）。文件名沿用旧的。
-final class SwiftTermResizeMarginTests: XCTestCase {
+final class TerminalResizeMarginTests: XCTestCase {
 
     private func makeTerminal(cols: UInt16, rows: UInt16) -> ShadowTerminal {
         ShadowTerminal(cols: cols, rows: rows, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
@@ -39,7 +39,7 @@ final class SwiftTermResizeMarginTests: XCTestCase {
     }
 
     /// 程序自己设的左右边距（DECSLRM）是终端状态的一部分：拍进快照、在另一台终端上还原之后，同样的字节在两边
-    /// 产生同样的结果（SwiftTerm 时代快照会把两块缓冲区的边距都比一遍，这里是同一条要求）。
+    /// 产生同样的结果（换引擎之前快照会把两块缓冲区的边距都比一遍，这里是同一条要求）。
     func test_custom_margins_travel_with_the_snapshot() throws {
         let a = makeTerminal(cols: 130, rows: 30)
         feed(a, "\u{1b}[?69h\u{1b}[5;40s")
@@ -54,7 +54,7 @@ final class SwiftTermResizeMarginTests: XCTestCase {
         XCTAssertEqual(a.character(col: 4, row: 3), "m", "折到下一行的左边距（第 5 列）")
     }
 
-    /// 改尺寸之后边距怎么处理由引擎定（xterm、Ghostty 都是改尺寸时把滚动区域复位到整屏；SwiftTerm 留着自定义边距）。
+    /// 改尺寸之后边距怎么处理由引擎定（xterm、Ghostty 都是改尺寸时把滚动区域复位到整屏；旧引擎留着自定义边距）。
     /// 这里只钉一条：改尺寸后的状态同样能随快照原样带到另一端。
     func test_margin_state_after_a_resize_travels_with_the_snapshot() throws {
         let a = makeTerminal(cols: 80, rows: 24)

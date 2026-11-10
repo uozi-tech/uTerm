@@ -4,7 +4,7 @@ import GhosttyTerminal
 import XCTest
 @testable import uTerm
 
-/// 原来核的是 vendored SwiftTerm 补丁 #14：换字号不能重置终端状态（上游换字号时走 `softReset()`，光标隐藏、方向键
+/// 原来核的是旧引擎的本地补丁 #14：换字号不能重置终端状态（上游换字号时走 `softReset()`，光标隐藏、方向键
 /// 模式、当前颜色都被清掉，vim 里的方向键就此发错序列）。
 ///
 /// 现在换字体 / 字号 / 光标 / 历史这类设置都是「整份 Ghostty 配置重载」（`GhosttyTerminalBridge.apply(settings:)` →

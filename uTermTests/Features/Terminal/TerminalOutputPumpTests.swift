@@ -4,7 +4,7 @@ import XCTest
 /// 两端共用的输出泵（`TerminalOutputPump`）：后端输出 → 影子终端 → tap → surface。
 /// surface 用假的（`TerminalSurfaceSink`），不建窗口；真的 surface 那一侧在 `GhosttyMacHostTests`。
 ///
-/// 迁移前这个文件核的是 SwiftTerm 时代的泵（主线程按节拍从 4 MiB 缓冲取字节喂视图、缓冲满了丢最旧的）。那套节拍、
+/// 迁移前这个文件核的是旧的泵（主线程按节拍从 4 MiB 缓冲取字节喂视图、缓冲满了丢最旧的）。那套节拍、
 /// 缓冲与丢弃都没有了：现在解析不在主线程上，背压靠闸门，surface 不吃字节时靠影子的回放补齐。同一个文件改成核新泵的
 /// 同一批性质：字节一个不少、顺序不乱、换连接后旧字节作废、对端跟不上时不无限堆积。
 final class TerminalOutputPumpTests: XCTestCase {

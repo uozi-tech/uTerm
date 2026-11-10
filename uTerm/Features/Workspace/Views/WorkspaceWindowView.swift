@@ -131,7 +131,7 @@ struct WorkspaceWindowView: View {
             .udCard()
             .padding(.horizontal, UD.Layout.cardInset)
 
-            // status bar 作为兄弟节点（非 safeAreaInset）—— SwiftTerm NSView 会渲染到
+            // status bar 作为兄弟节点（非 safeAreaInset）—— 终端的 NSView 会渲染到
             // inset 区域下面挡住末行（issue 反馈）。v3：坐在画布上，无分隔线。
             StatusBarView(workspace: workspace)
         }

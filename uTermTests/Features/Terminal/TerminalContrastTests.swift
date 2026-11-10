@@ -7,7 +7,7 @@ import GhosttyTerminal
 /// 在渲染时把前景色钳到可读对比度。钳制是保色相的：OKLCH 空间只调明度，色相不动、饱和度仅按色域收缩——彩色不应
 /// 被洗成黑白灰；装饰字形（盒线 / 块元素 / powerline）也不豁免。
 ///
-/// 原来这是 vendored SwiftTerm 的补丁（`TerminalContrast.ensureContrast`，纯函数，直接调）。现在钳制在引擎的 shader 里
+/// 原来这是旧引擎上的本地补丁（`TerminalContrast.ensureContrast`，纯函数，直接调）。现在钳制在引擎的 shader 里
 /// （引擎补丁 0022；官方 Ghostty 是达不到目标比就换成纯黑或纯白，块字符豁免），没有可以直接调的函数，所以这里读
 /// 真的 surface **画出来的像素**：用整格的块字符 █（它正好是「装饰字形也钳制」的那一类）铺一格前景色，取这一格中心
 /// 的颜色，和这一格的底色算 WCAG 对比度。

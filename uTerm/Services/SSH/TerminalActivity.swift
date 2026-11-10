@@ -185,7 +185,7 @@ nonisolated struct RemoteProcessTable {
 /// 写之前程序可能正写到一半（一条转义序列被隔开），所以只在确实分不清时才做，结果也缓存下来，
 /// 每个标签最多一次。
 nonisolated struct TTYMarkerScanner {
-    /// 私有 OSC 号，紧跟 `TerminalTrackedRun.oscCode`。SwiftTerm 对没注册的 OSC 不做任何显示。
+    /// 私有 OSC 号，紧跟 `TerminalTrackedRun.oscCode`。终端引擎对不认识的 OSC 不做任何显示。
     static let oscCode = 6974
 
     private static let prefix = Data("\u{1b}]\(oscCode);".utf8)

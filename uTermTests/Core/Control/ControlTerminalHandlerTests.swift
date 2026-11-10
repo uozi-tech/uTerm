@@ -96,7 +96,7 @@ final class ControlTerminalHandlerTests: XCTestCase {
         return (entry, session, backend)
     }
 
-    /// 往离屏 `TerminalView` 里喂 VT 字节（走 SwiftTerm 的解析器，不经后端泵）。
+    /// 往会话里喂 VT 字节（和正式路径同一条链：影子终端解析，不等节拍；见 `TerminalSessionTestFeed`）。
     private func feed(_ session: TerminalSession, _ text: String) {
         session.feedOutput(text: text)
     }

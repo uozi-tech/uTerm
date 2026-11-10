@@ -1,11 +1,11 @@
 import XCTest
 @testable import uTerm
 
-/// 原来核的是 `TerminalFlushPacing` / `TerminalFlushPacer` 的算法：SwiftTerm 路径上，输出在主线程按拍喂进视图，
+/// 原来核的是 `TerminalFlushPacing` / `TerminalFlushPacer` 的算法：旧引擎那条路径上，输出在主线程按拍喂进视图，
 /// 每拍喂多少（预算 32 KiB 起、有积压且解析得快就翻倍到 512 KiB、解析慢就减半）、拍与拍之间隔多久（有积压时
 /// 短间隔追赶、追久了退回正常节拍、后台不追赶）由它算。
 ///
-/// 这两个类型随 SwiftTerm 一起删了，节拍和预算的概念不存在了：解析不在主线程上（输出泵的入站任务 + Ghostty 自己的
+/// 这两个类型随旧引擎一起删了，节拍和预算的概念不存在了：解析不在主线程上（输出泵的入站任务 + Ghostty 自己的
 /// IO 线程），不需要「每拍只喂一点、别把主线程占满」；出帧由 Ghostty 的渲染线程按显示节拍做。对应的东西只有一样——
 /// 画面解析不过来时不无限堆积：输出泵的闸门（高 / 低水位），核在 `TerminalOutputPumpTests`
 /// （`testBacklogPausesIngressUntilTheSurfaceCatchesUp`、`testBacklogIsIgnoredWhileOnlyTheShadowIsFed`、
@@ -14,7 +14,7 @@ import XCTest
 /// 下面逐条保留原来的用例名、标跳过；另加一条核闸门的常数。
 final class TerminalFlushPacingTests: XCTestCase {
     private func skipPacing(_ what: String) throws {
-        throw XCTSkip("TerminalFlushPacing 随 SwiftTerm 删除，没有「\(what)」这个概念了；对应物是输出泵的背压，见 TerminalOutputPumpTests")
+        throw XCTSkip("TerminalFlushPacing 随旧引擎删除，没有「\(what)」这个概念了；对应物是输出泵的背压，见 TerminalOutputPumpTests")
     }
 
     func testDoublesWhileBacklogFeedsWellUnderTarget() throws { try skipPacing("有积压时预算翻倍") }

@@ -4,7 +4,7 @@ import XCTest
 @testable import uTermMobile
 
 /// GhosttyKit spike：输入这一侧在 uTerm 本地能做到什么（docs/ghostty-eval/ios-spike.md）。
-/// 对应 SwiftTerm 补丁 #2（键盘类型可写）、#8（组字可见 + 候选框跟着光标），以及键盘条 / 粘滞修饰 / 硬件键盘。
+/// 对应旧引擎的本地补丁 #2（键盘类型可写）、#8（组字可见 + 候选框跟着光标），以及键盘条 / 粘滞修饰 / 硬件键盘。
 @MainActor
 final class GhosttySpikeInputTests: XCTestCase {
     private func ready() async throws -> GhosttyProbeHost {
@@ -78,7 +78,7 @@ final class GhosttySpikeInputTests: XCTestCase {
         let anchor = host.view.firstRect(for: range)
         let caret = host.view.caretRect(for: range.end)
         print("SPIKE ime anchor=\(anchor) caret=\(caret) cell=\(cellW)x\(cellH) bounds=\(host.view.bounds)")
-        XCTAssertNotEqual(anchor, host.view.bounds, "候选框锚点不该是整个视图（SwiftTerm 上游的毛病）")
+        XCTAssertNotEqual(anchor, host.view.bounds, "候选框锚点不该是整个视图（旧引擎上游版本的毛病）")
         // Ghostty 的窗口有内边距，允许差一格。
         XCTAssertEqual(anchor.minY, 5 * cellH, accuracy: cellH * 1.2, "锚点在光标那一行")
         XCTAssertEqual(anchor.minX, 10 * cellW, accuracy: cellW * 1.5, "锚点从光标那一列开始")
@@ -143,7 +143,7 @@ final class GhosttySpikeInputTests: XCTestCase {
 
     // MARK: 键盘条
 
-    /// 键盘条的键走 GhosttyKit 的按键路径：由终端按当前模式编码。普通模式与 SwiftTerm 路径发的一样；
+    /// 键盘条的键走 GhosttyKit 的按键路径：由终端按当前模式编码。普通模式与旧引擎那条路径发的一样；
     /// 程序开了 DECCKM（vim、less）时方向键变成 SS3（`ESC O A`）——今天的键盘条固定发 `ESC [ A`。
     func testKeyBarKeysAreEncodedByTheTerminal() async throws {
         let host = try await ready()

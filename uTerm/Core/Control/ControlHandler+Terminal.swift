@@ -10,8 +10,8 @@ import SwiftData
 /// - **读屏是快照不是流**：两次 `terminal-read` 之间的输出会丢。要拿命令结果请用 `run`。
 /// - **注入没有输出边界**：`terminal-send` 与用户键入交错，不保证你能拿到这条命令的结果；
 ///   它的正当用途是「让用户看见」，不是拿数据。
-/// - SwiftTerm 的 buffer 读取只能在 MainActor 上做（`getScrollInvariantLine` /
-///   `translateToString`）—— 整个 `ControlHandler` 就是 `@MainActor`，天然满足。
+/// - 读屏读的是影子终端（`TerminalSession.snapshotScreen` → `ShadowTerminal.recentLines`），不碰画面；
+///   会话的其余状态只能在 MainActor 上读 —— 整个 `ControlHandler` 就是 `@MainActor`，天然满足。
 extension ControlHandler {
 
     func handleTerminal(

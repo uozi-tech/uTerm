@@ -16,7 +16,7 @@ enum PaneHeaderButtonLayout {
 /// **只剩内容。** 标题 / 关闭 / 分屏 / 拖拽手柄都搬到了组件的标签条上，旧的 22px
 /// 窗格头整条消失（设计文档 §4.4(g)）；焦点框、五区落点、按下即激活的 NSEvent
 /// 探针也都由 `UPaneGroupArea` 提供 —— 那个探针不能退回 SwiftUI 手势：终端内容是
-/// SwiftTerm 的 NSView，自己吃掉 `mouseDown`，而 SwiftUI 在 macOS 上不装
+/// 终端引擎（GhosttyKit）的 NSView，自己吃掉 `mouseDown`，而 SwiftUI 在 macOS 上不装
 /// `NSGestureRecognizer`，祖先的 `.onTapGesture` 永不触发。
 struct PaneView: View {
     let pane: PaneModel

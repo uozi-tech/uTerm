@@ -6,7 +6,7 @@ import XCTest
 
 /// 终端在什么时候画、画几次。挂在真实 scene 的窗口上：没有 scene 的窗口一次都不画，读数全是 0。
 ///
-/// 换引擎之前这里数的是 SwiftTerm 的 `draw(_:)`（主线程 CoreGraphics），核的是几条本地补丁：滚动的输出每拍只画一次、
+/// 换引擎之前这里数的是旧引擎的 `draw(_:)`（主线程 CoreGraphics），核的是几条本地补丁：滚动的输出每拍只画一次、
 /// 有积压时跳过中间帧、手动滚动当场重绘。GhosttyKit 的画面由渲染线程按 vsync 交帧，解析也不在主线程上，
 /// 那几条的前提（主线程一拍喂多少、画不画由 `setNeedsDisplay` 的节流决定）不存在了；留下来、新引擎上仍然成立的
 /// 是「有输出才画、画得不比屏幕刷新更勤、不在屏上不画」。数的是 `GhosttyPresentLog`（引擎每交一帧记一次）。
@@ -103,10 +103,10 @@ final class TerminalDrawCountTests: XCTestCase {
     }
 
     /// 换引擎之前的三条：「还有积压时不画中间帧，喂完立刻画最后一帧」（`feedPaced(backlogged:)`）、
-    /// 「手动滚动照常重绘」、「滚动那一帧里有输出排队时当场画、不重复画」（SwiftTerm 补丁 #14 / #21 的显示节流）。
-    /// 它们测的是 SwiftTerm 主线程绘制的节流逻辑，GhosttyKit 没有这层（渲染线程每个 vsync 看一次有没有变化）。
+    /// 「手动滚动照常重绘」、「滚动那一帧里有输出排队时当场画、不重复画」（旧引擎的本地补丁 #14 / #21 的显示节流）。
+    /// 它们测的是旧引擎主线程绘制的节流逻辑，GhosttyKit 没有这层（渲染线程每个 vsync 看一次有没有变化）。
     /// 新引擎上「边输出边滚不丢帧、不跳」由 `TerminalScrollWhileOutputProbeTests` 与 `GhosttyScrollEdgeTests` 核。
-    func testDisplayThrottleCasesAreGoneWithSwiftTerm() throws {
-        throw XCTSkip("SwiftTerm 的显示节流（feedPaced / displayThrottle）随引擎一起删了；见用例注释里指向的等价用例")
+    func testDisplayThrottleCasesAreGoneWithTheOldEngine() throws {
+        throw XCTSkip("旧引擎的显示节流（feedPaced / displayThrottle）随引擎一起删了；见用例注释里指向的等价用例")
     }
 }

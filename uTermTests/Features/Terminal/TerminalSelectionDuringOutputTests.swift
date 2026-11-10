@@ -4,7 +4,7 @@ import GhosttyTerminal
 
 /// 选区不能被持续刷新的程序（如 Claude Code 的 spinner）清掉，但原文没了的时候也不能留。
 ///
-/// 原来核的是 SwiftTerm 视图上的补丁（`preservesSelectionDuringOutput`：上游一有输出就清选区）。现在选区在 Ghostty 的
+/// 原来核的是旧引擎视图上的补丁（`preservesSelectionDuringOutput`：上游一有输出就清选区）。现在选区在 Ghostty 的
 /// surface 里（钉在内容上，跟着内容滚动），这里在真的 surface 上核同一组行为：三连击选中「line 1」那一行，再喂各种输出。
 @MainActor
 final class TerminalSelectionDuringOutputTests: XCTestCase {
@@ -69,7 +69,7 @@ final class TerminalSelectionDuringOutputTests: XCTestCase {
     }
 
     private static let engineKeepsSelection =
-        "引擎行为：Ghostty 的选区钉在格子上，擦除 / 改写那几格不会清掉选区（SwiftTerm 上是 uTerm 的补丁在清）；要一致得打引擎补丁"
+        "引擎行为：Ghostty 的选区钉在格子上，擦除 / 改写那几格不会清掉选区（旧引擎上是 uTerm 的补丁在清）；要一致得打引擎补丁"
 
     /// 清屏：原文没了，选区不能留。
     ///

@@ -132,7 +132,7 @@ final class TerminalProgramStatusTests: XCTestCase {
     }
 
     /// 收 OSC 133 的事件之外，引擎自己的语义提示符处理不能断（光标在提示符里）。
-    func testSemanticPromptStillReachesSwiftTerm() {
+    func testSemanticPromptStillReachesTheEngine() {
         osc(133, "A")
         XCTAssertTrue(session.shadow.isCursorAtPrompt)
     }

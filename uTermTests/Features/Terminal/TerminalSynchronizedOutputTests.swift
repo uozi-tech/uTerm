@@ -4,14 +4,14 @@ import XCTest
 /// Claude Code 思考时的帧，序列取自 2.1.318 的真实输出：每帧约 150 字节、10 帧/秒，包在 DEC 2026（同步输出）里，
 /// 可能被拆进两次读取。
 ///
-/// 原来核的是 SwiftTerm 视图里围着 2026 打的补丁（帧结束时只标脏这一帧碰过的行、帧没写完时光标不闪、滚轮等帧结束）。
+/// 原来核的是旧引擎视图里围着 2026 打的补丁（帧结束时只标脏这一帧碰过的行、帧没写完时光标不闪、滚轮等帧结束）。
 /// Ghostty 这些都在渲染器里：2026 开着时渲染器不出帧，关了（或超时）才画，没有对外的脏行范围和「滚轮在等」的状态。
 /// 能核的是解析这一半（影子终端，和画面同一个引擎）：帧拆不拆开结果一样、帧开着时引擎知道、内容与光标取帧的最终状态。
 /// 渲染器内部的那几条保留用例、标跳过。
 final class TerminalSynchronizedOutputTests: XCTestCase {
     private static let frameStart = "\u{1B}[?2026h\u{1B}[?25l\u{1B}[2D\u{1B}[3B\r\u{1B}[6A\u{1B}[38;2;215;119;87m*"
     private static let frameEnd = "\u{1B}[39m\r\r\n\r\n\r\n\r\n\r\n\r\n\u{1B}[2C\u{1B}[3A\u{1B}[?25h\u{1B}[?2026l"
-    private static let rendererInternal = "SwiftTerm 视图的同步输出补丁随 SwiftTerm 删除：Ghostty 的渲染器在 2026 开着时不出帧，"
+    private static let rendererInternal = "旧引擎视图的同步输出补丁随旧引擎删除：Ghostty 的渲染器在 2026 开着时不出帧，"
         + "脏行范围 / 滚轮等待都在渲染器内部，没有对外的读数"
 
     private func makeTerminal() -> ShadowTerminal {

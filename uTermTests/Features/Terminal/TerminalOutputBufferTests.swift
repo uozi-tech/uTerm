@@ -1,8 +1,8 @@
 import XCTest
 @testable import uTerm
 
-/// 原来核的是 `TerminalOutputBuffer`：SwiftTerm 路径上，后端输出先进一个有上限的缓冲（满了丢最旧的），主线程的
-/// flush 循环按拍从里面取。这个类型随 SwiftTerm 一起删了。现在后端输出由共享的 `TerminalOutputPump` 直接分流
+/// 原来核的是 `TerminalOutputBuffer`：旧引擎那条路径上，后端输出先进一个有上限的缓冲（满了丢最旧的），主线程的
+/// flush 循环按拍从里面取。这个类型随旧引擎一起删了。现在后端输出由共享的 `TerminalOutputPump` 直接分流
 /// （影子终端 → tap → surface），中间没有会丢字节的缓冲；画面解析不过来时停取后端的输出（背压）。
 ///
 /// 这里逐条换成泵上的对应性质（用假的 surface，不建窗口）；纯属缓冲内部机制、泵上已有同名性质用例的，保留用例、

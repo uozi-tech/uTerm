@@ -237,11 +237,11 @@ final class TerminalMirrorTapTests: XCTestCase {
         XCTAssertEqual(session.shadow.size.rows, TerminalSession.maxRemoteGridRows)
     }
 
-    /// 原来这里核的是 `RemoteGridFit`（按实测列数逼近 SwiftTerm 视图宽度的二分）。Ghostty 没有内留白，视图钉成
+    /// 原来这里核的是 `RemoteGridFit`（按实测列数逼近旧引擎视图宽度的二分）。Ghostty 没有内留白，视图钉成
     /// 「行列数 × 格子像素 ÷ 屏幕倍率」就正好是那个行列数，不需要逼近，算法已删；钉任意行列数都精确命中由
     /// `GhosttyMacHostTests` 在真的 surface 上核。
     func test_grid_fit_converges_even_when_the_cell_estimate_is_off() throws {
-        throw XCTSkip("RemoteGridFit 随 SwiftTerm 一起删除：Ghostty 按格子像素直接算，见 GhosttyMacHostTests")
+        throw XCTSkip("RemoteGridFit 随旧引擎一起删除：Ghostty 按格子像素直接算，见 GhosttyMacHostTests")
     }
 
     // MARK: 接管尺寸——钉住的终端摆在哪

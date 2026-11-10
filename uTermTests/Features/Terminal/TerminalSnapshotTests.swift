@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// 终端快照的保真度。原来核的是 vendored SwiftTerm 补丁 #6（`snapshotSequence`：把终端状态重新编成一段 VT 流）；
+/// 终端快照的保真度。原来核的是旧引擎的本地补丁 #6（`snapshotSequence`：把终端状态重新编成一段 VT 流）；
 /// 现在快照是影子终端的二进制快照（`ShadowTerminal.snapshot()`，libghostty-vt 的格式），远控镜像和 holder 检查点都用它。
 ///
 /// 远控时手机接入一条正在跑的会话：Mac 端发一份快照，之后只转发原始字节。所以快照必须让手机端的终端与 Mac 端一致，

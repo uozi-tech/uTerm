@@ -13,7 +13,7 @@ import GhosttyTerminal
 /// 2. `testThroughputGhostty` / `testFootprintSixPanes`：量 Ghostty 视图的吞吐、峰值内存、主线程 CPU 与进程 CPU。
 ///    读数打到标准输出（`[GhosttySpike]` 开头）。
 ///
-/// 评估阶段这里每一项都拿 SwiftTerm 当对照（同一份字节两边各跑一遍）；SwiftTerm 移除后对照那一半去掉了，
+/// 评估阶段这里每一项都拿旧引擎当对照（同一份字节两边各跑一遍）；旧引擎移除后对照那一半去掉了，
 /// 当时的对照读数留在 `docs/ghostty-eval/macos-spike.md`。
 @MainActor
 final class GhosttySpikeTests: XCTestCase {
@@ -281,7 +281,7 @@ final class GhosttySpikeTests: XCTestCase {
         return (n, n > 0 ? sat / Double(n) : 0, minLuma, n > 0 ? hue / Double(n) : 0)
     }
 
-    /// 浅色底上的亮黄字（#FFD600 对白底约 1.4:1）在最低对比度 3.0 下被改成什么颜色。评估时这里拿 SwiftTerm 的补丁 #1
+    /// 浅色底上的亮黄字（#FFD600 对白底约 1.4:1）在最低对比度 3.0 下被改成什么颜色。评估时这里拿旧引擎的补丁 #1
     /// （保色相：压暗成橄榄 / 棕，仍有饱和度）和官方 Ghostty（换成黑 / 白，饱和度≈0）对照；现在引擎带补丁 0022，
     /// 也是保色相。这里留 Ghostty 的读数；逐格的断言在 `TerminalContrastTests`。
     func testMinimumContrastClampsBrightYellowOnLight() async throws {

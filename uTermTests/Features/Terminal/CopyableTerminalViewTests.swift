@@ -3,7 +3,7 @@ import AppKit
 import Carbon.HIToolbox
 @testable import uTerm
 
-/// uTerm 的终端视图（原来是 SwiftTerm 上的 `CopyableTerminalView`，现在是 Ghostty 上的 `GhosttySurfaceView`）自己加的
+/// uTerm 的终端视图（原来是旧引擎上的 `CopyableTerminalView`，现在是 Ghostty 上的 `GhosttySurfaceView`）自己加的
 /// 那几样：滚动条只在滚动时浮现、⌃↩、只有图片的剪贴板（⌘V / ⌃V）、右键菜单。文件名沿用旧的。
 @MainActor
 final class CopyableTerminalViewTests: XCTestCase {
@@ -43,7 +43,7 @@ final class CopyableTerminalViewTests: XCTestCase {
         XCTAssertTrue(indicator.isHidden, "没有可滚的历史：连位置都不摆")
         XCTAssertNil(indicator.hitTest(NSPoint(x: 1, y: 1)), "滑块只显示、不接鼠标：点它等于点终端")
 
-        // 有了历史也不出现（旧的 SwiftTerm 默认行为是有历史就常驻显示）。
+        // 有了历史也不出现（旧引擎的默认行为是有历史就常驻显示）。
         harness.session.feedOutput(text: (1...200).map { "line \($0)\r\n" }.joined())
         try? await Task.sleep(for: .milliseconds(200))
         XCTAssertFalse(indicator.isShown, "有可滚历史但没滚动：仍然隐藏")
@@ -135,7 +135,7 @@ final class CopyableTerminalViewTests: XCTestCase {
 
     /// 终端有焦点时，uTerm 自己的窗口 / 菜单快捷键不能被终端视图吞掉。key equivalent 先问视图层级、再问菜单；
     /// Ghostty 自带一套默认按键绑定（⌘T 新标签、⌘W 关闭、⌘D 分屏、⌘K 清屏、⌘↩ 全屏……），GhosttyKit 的视图认了
-    /// 绑定就返回 true，菜单再也收不到（SwiftTerm 的视图不认这些组合，全部落到菜单）。所以 ⌘ 组合先交给主菜单：
+    /// 绑定就返回 true，菜单再也收不到（旧引擎的视图不认这些组合，全部落到菜单）。所以 ⌘ 组合先交给主菜单：
     /// 菜单接了就到此为止，Ghostty 不再处理、也不往程序里写东西。
     func testAppShortcutsGoToTheMenuBeforeGhosttyBindings() async {
         let harness = await focusedTerminal()

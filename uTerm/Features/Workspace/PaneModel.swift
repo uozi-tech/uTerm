@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// 一个终端窗格：绑定一台服务器，持有 SwiftTerm 会话。
+/// 一个终端窗格：绑定一台服务器，持有一条终端会话（`TerminalSession`）。
 @MainActor
 @Observable
 final class PaneModel: Identifiable {

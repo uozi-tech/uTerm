@@ -1,9 +1,9 @@
 import XCTest
 @testable import uTerm
 
-/// `TerminalSession` 怎么把后端输出喂进终端。原来这里核的是 SwiftTerm 路径上的节拍（`TerminalFlushPacing`：主线程上
+/// `TerminalSession` 怎么把后端输出喂进终端。原来这里核的是旧引擎那条路径上的节拍（`TerminalFlushPacing`：主线程上
 /// 每 16 ms 喂一拍，预算 32 KiB 起、有积压就翻倍到 512 KiB）和 4 MB 的输出缓冲（`TerminalOutputBuffer`，满了丢最旧的）。
-/// 这两样随 SwiftTerm 一起删了：现在是共享的 `TerminalOutputPump`——入站任务不在主线程上，按 64 KiB 切片，每片
+/// 这两样随旧引擎一起删了：现在是共享的 `TerminalOutputPump`——入站任务不在主线程上，按 64 KiB 切片，每片
 /// 喂影子终端 → tap（镜像、检查点）→ surface；surface 解析不过来时停取后端的输出（背压），**不丢字节**。
 /// 泵本身的单测在 `TerminalOutputPumpTests`，这里验 `TerminalSession` 真的按它喂。
 /// 每片喂多少从镜像订阅者看：tap 的 `didFeed` 紧跟在影子终端 `feed` 后面，一片一次。
@@ -127,7 +127,7 @@ final class TerminalFlushWiringTests: XCTestCase {
     /// 原来核「解析跟不上时预算停在下限，不把主线程全占了」。预算的概念没有了：喂字节不在主线程上，画面跟不上时
     /// 是入站任务停取（背压），由 `TerminalOutputPumpTests` 的背压用例核。
     func testSlowFeedStaysAtBaseBudget() throws {
-        throw XCTSkip("TerminalFlushPacing 的预算随 SwiftTerm 删除；对应物是输出泵的背压，见 TerminalOutputPumpTests")
+        throw XCTSkip("TerminalFlushPacing 的预算随旧引擎删除；对应物是输出泵的背压，见 TerminalOutputPumpTests")
     }
 
     /// 入站任务不在主线程上：主线程被占着的时候输出照样进影子终端（旧实现在主线程上按拍喂，主线程一卡就停）。
