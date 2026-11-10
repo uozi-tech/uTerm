@@ -255,6 +255,28 @@ nonisolated enum TerminalSpikeCorpus {
     }
 }
 
+// MARK: - surface 与影子终端逐行比
+
+/// surface 的视口文字（`InMemoryTerminalSession.readViewportText()`）和影子终端的（`ShadowTerminal.viewportText()`）逐行比。
+/// 行尾空白不算（两边读法不同）。另外容忍 GhosttyKit `readViewportText` 的一个读法缺陷（M4 查出来的，不是终端状态差异）：
+/// 一行的最后一格是 spacer head（宽字符放不下、折到了下一行）时，surface 读出来的这一行行尾会多带上下一行开头那个宽字符。
+nonisolated enum GhosttyViewportDiff {
+    static func trimmedLines(_ text: String) -> [String] {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { ShadowTerminal.trimmingTrailingWhitespace(String($0)) }
+    }
+
+    /// nil = 一致；否则是第一处不同的说明。
+    static func firstDifference(surface: String, shadow: String) -> String? {
+        let a = trimmedLines(surface), b = trimmedLines(shadow)
+        guard a.count == b.count else { return "行数不同 surface=\(a.count) shadow=\(b.count)" }
+        for index in a.indices where a[index] != b[index] {
+            if index + 1 < b.count, let spill = b[index + 1].first, a[index] == b[index] + String(spill) { continue }
+            return "第 \(index) 行不同 surface=«\(a[index])» shadow=«\(b[index])»"
+        }
+        return nil
+    }
+}
+
 // MARK: - 宿主
 
 /// 一扇可见的窗，挂一个终端视图。`.alert` 层级盖住宿主 App 的界面（不然宿主的 SwiftUI 也在画，混进读数）。
