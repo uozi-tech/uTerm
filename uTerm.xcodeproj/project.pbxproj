@@ -926,7 +926,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */,
-				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
 				C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
@@ -1850,10 +1849,6 @@
 		4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/kcp;
-		};
-		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/SwiftTerm;
 		};
 		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
