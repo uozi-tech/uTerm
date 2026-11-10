@@ -136,6 +136,46 @@ final class GhosttyTerminalBridge {
         guard cols > 0, rows > 0 else { return }
         grid = (cols, rows)
         owner?.ghosttyGridDidChange(cols: cols, rows: rows)
+        // surface 还没建好时就来了接管：现在有格子尺寸了，补上。
+        if let pending = pendingPin, view.pinnedFrameSize == nil { pinGrid(cols: pending.cols, rows: pending.rows) }
+    }
+
+    // MARK: 远控接管尺寸
+
+    /// 还没法钉（surface 没建好、量不到格子尺寸）时记下的目标。
+    private var pendingPin: (cols: Int, rows: Int)?
+
+    /// 把 Ghostty 视图钉成 `cols × rows`：Ghostty 没有内留白（配置里 padding 是 0），网格 = ⌊视图像素 ÷ 格子像素⌋，
+    /// 所以视图取「行列数 × 格子像素 ÷ 屏幕倍率」正好是那个行列数，不用像 SwiftTerm 那样试探。
+    /// 之后 Ghostty 报来新网格（`ghosttyDidResize`），影子 SwiftTerm、PTY、镜像都跟着走。
+    func pinGrid(cols: Int, rows: Int) {
+        pendingPin = (cols, rows)
+        guard let cell = view.uTermCellPixels else { return }
+        let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        view.pinnedFrameSize = NSSize(width: CGFloat(cols) * cell.width / scale, height: CGFloat(rows) * cell.height / scale)
+        view.pinnedCursorRow = cursorRow
+        view.superview?.needsLayout = true
+    }
+
+    func unpinGrid() {
+        pendingPin = nil
+        guard view.pinnedFrameSize != nil else { return }
+        view.pinnedFrameSize = nil
+        view.pinnedCursorRow = nil
+        if let container = view.superview {
+            container.needsLayout = true
+            container.layoutSubtreeIfNeeded()
+        }
+    }
+
+    /// 光标在屏幕第几行（看影子 SwiftTerm：吃的是同一份字节）。
+    private var cursorRow: Int? { owner?.terminalView.getTerminal().getCursorLocation().y }
+
+    /// 钉住期间来了新输出：光标换了行就让容器重新摆一次（比窗格高的终端跟着光标走）。
+    func repositionPinnedGridIfCursorMoved() {
+        guard view.pinnedFrameSize != nil, let row = cursorRow, row != view.pinnedCursorRow else { return }
+        view.pinnedCursorRow = row
+        view.superview?.needsLayout = true
     }
 
     // MARK: 外观
@@ -175,8 +215,13 @@ final class GhosttyTerminalBridge {
     /// Ghostty 的各个回调协议。单独一个对象：`TerminalSession` 不必知道这些协议。
     private final class DelegateProxy: TerminalSurfaceTitleDelegate, TerminalSurfaceFocusDelegate,
         TerminalSurfaceLifecycleDelegate, TerminalSurfacePwdDelegate,
-        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceBellDelegate {
+        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceBellDelegate, TerminalSurfaceScrollbarDelegate {
         weak var bridge: GhosttyTerminalBridge?
+
+        /// 视口滚了或者内容变长了：给容器画滚动条用。
+        func terminalDidUpdateScrollbar(_ scrollbar: TerminalScrollbar) {
+            bridge?.view.onScrollbar?(scrollbar)
+        }
 
         func terminalDidChangeTitle(_ title: String) {
             // 影子 SwiftTerm 也会报同一个标题；`receiveShellTitle` 去重。
@@ -215,6 +260,18 @@ final class GhosttySurfaceView: AppTerminalView {
     var onControlVImage: (@MainActor (TerminalImage) -> Bool)?
     /// ⌃↩。返回 true = 已经替程序发了回车；false = 交回 Ghostty 自己编码。
     var onControlReturn: (@MainActor () -> Bool)?
+    /// 远控接管尺寸时钉住的视图尺寸（对端行列数 × 格子）。非 nil 时 `GhosttyContainerView` 按它摆放而不是铺满。
+    var pinnedFrameSize: NSSize?
+    /// 钉住期间上一次摆放时光标在第几行（比窗格高时跟着光标走，规则同 `TerminalContainerView.pinnedFrame`）。
+    var pinnedCursorRow: Int?
+    /// 引擎报来的滚动条（总行数、视口首行、一屏行数），和用户刚滚了一下：容器据此画滚动条。
+    var onScrollbar: (@MainActor (TerminalScrollbar) -> Void)?
+    var onScrollActivity: (@MainActor () -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        onScrollActivity?()
+    }
     var pasteboard: NSPasteboard = .general
     /// 这次右键按下弹了我们的菜单（没报给程序）：松开时也不报。
     private var rightClickShowedMenu = false

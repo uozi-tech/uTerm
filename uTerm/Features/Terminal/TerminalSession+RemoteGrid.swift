@@ -24,6 +24,11 @@ extension TerminalSession {
         let rows = min(requestedRows, Self.maxRemoteGridRows)
         guard cols > 0, rows > 0, let view = terminalView as? CopyableTerminalView else { return }
         remoteController = controller
+        // Ghostty 渲染时上屏的是 Ghostty 的视图，尺寸以它的网格为准：钉它，影子 SwiftTerm 跟着它报来的网格走。
+        if let ghostty {
+            ghostty.pinGrid(cols: cols, rows: rows)
+            return
+        }
         let terminal = view.getTerminal()
         let start = view.getOptimalFrameSize().size
         let cellWidth = start.width / CGFloat(max(1, terminal.cols))
@@ -45,6 +50,10 @@ extension TerminalSession {
 
     /// 钉住期间来了新输出：光标换了行就让容器重新摆一次（比窗格高的终端跟着光标走）。每批输出查一次，只比一个整数。
     func repositionPinnedGridIfCursorMoved() {
+        if let ghostty {
+            ghostty.repositionPinnedGridIfCursorMoved()
+            return
+        }
         guard let view = terminalView as? CopyableTerminalView, view.pinnedFrameSize != nil else { return }
         let row = view.getTerminal().getCursorLocation().y
         guard row != view.pinnedCursorRow else { return }
@@ -56,6 +65,7 @@ extension TerminalSession {
     func unpinRemoteGrid() {
         guard let view = terminalView as? CopyableTerminalView else { return }
         remoteController = nil
+        ghostty?.unpinGrid()
         guard view.pinnedFrameSize != nil else { return }
         view.pinnedFrameSize = nil
         view.pinnedCursorRow = nil
