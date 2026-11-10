@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import SwiftTerm
 
 /// 一个终端窗格：绑定一台服务器，持有 SwiftTerm 会话。
 @MainActor

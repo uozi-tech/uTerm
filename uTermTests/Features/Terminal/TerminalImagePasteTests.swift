@@ -1,6 +1,5 @@
 import AppKit
 import Carbon.HIToolbox
-import SwiftTerm
 import XCTest
 @testable import uTerm
 

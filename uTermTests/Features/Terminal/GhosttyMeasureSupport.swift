@@ -7,7 +7,9 @@ import ObjectiveC
 import QuartzCore
 import XCTest
 import GhosttyTerminal
+#if UTERM_LEGACY_SWIFTTERM_TESTS
 import SwiftTerm
+#endif
 @testable import uTerm
 
 // 测量门（`docs/ghostty-eval/measure-macos.md`）用的夹具。测试本身在 `GhosttyMeasureTests.swift`。
@@ -314,6 +316,8 @@ nonisolated final class GhosttyFrameWatch: @unchecked Sendable {
     }
 }
 
+// 【迁移中，暂未编译】SwiftTerm 的出帧探针（拿 SwiftTerm 当对照的那一半），随对照用例一起去掉。
+#if UTERM_LEGACY_SWIFTTERM_TESTS
 /// SwiftTerm 的「出帧」：把 `SwiftTerm.TerminalView.draw(_:)` 换成「原实现 + 回调」，以 draw 返回为准。
 @MainActor
 enum SwiftTermDrawProbe {
@@ -347,6 +351,8 @@ enum SwiftTermDrawProbe {
 
     static func unhook(_ view: SwiftTerm.TerminalView) { hooks[ObjectIdentifier(view)] = nil }
 }
+
+#endif
 
 // MARK: - 后端
 
@@ -400,6 +406,8 @@ actor CaptureBackend: TerminalImageReceiving {
     nonisolated func emit(_ data: Data) { output.yield(data) }
 }
 
+// 【迁移中，暂未编译】测量窗格还带着 SwiftTerm 那一半；`GhosttyMeasureTests` 改写时把它改成只有 Ghostty。
+#if UTERM_LEGACY_SWIFTTERM_TESTS
 // MARK: - 窗格
 
 /// 一个测量用窗格：SwiftTerm 视图、Ghostty 视图，或 Ghostty + 不上屏的 SwiftTerm 影子（spike 的形态）。
@@ -530,6 +538,8 @@ final class MeasurePane {
     }
 }
 
+#endif
+
 // MARK: - 负载
 
 nonisolated enum MeasureLoad {
@@ -588,6 +598,7 @@ nonisolated enum MeasureLoad {
         return out
     }
 
+    #if UTERM_LEGACY_SWIFTTERM_TESTS
     /// 「重」内容：GhosttySpikeTests.makeLoad 的分布（每行最多 60 个不同真彩样式），按行数截取。
     static func heavyLines(count: Int) -> [UInt8] {
         let load = GhosttySpikeTests.makeLoad(bytes: count * 400)
@@ -599,6 +610,7 @@ nonisolated enum MeasureLoad {
         }
         return Array(load[0..<end])
     }
+    #endif
 
     /// Claude Code 式的一帧：同步更新（DEC 2026）里重画底部 12 行的活动区（转圈、计数、输入框、状态行），
     /// 每 4 帧先提交 2 行新内容（活动区随之下移，触发滚动）。

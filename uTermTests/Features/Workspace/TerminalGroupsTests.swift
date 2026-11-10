@@ -52,7 +52,7 @@ final class TerminalGroupsTests: XCTestCase {
         XCTAssertNil(ws.terminalGroups.tab(tabID))
         // `TerminalSession.dispose()` 解开终端视图的 delegate 并丢掉 backend；
         // connectionState 是异步 close 才改的，所以判据取前者。
-        XCTAssertNil(pane.session.terminalView.terminalDelegate)
+        XCTAssertNil(pane.session.ghostty.view.delegate)
     }
 
     /// 关一个**文件**标签不能释放 buffer —— buffer 归 `FilePreviewModel` 所有，

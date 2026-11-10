@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import SwiftUI
 import UDesignKit
 import UPaneGroups

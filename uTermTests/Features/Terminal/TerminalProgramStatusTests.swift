@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import UDesignKit
 import UserNotifications
 import XCTest
@@ -132,11 +131,10 @@ final class TerminalProgramStatusTests: XCTestCase {
         XCTAssertEqual(session.programStatus?.state, .done)
     }
 
-    /// 接管 OSC 133 后，SwiftTerm 内置的语义提示符处理不能断。
+    /// 收 OSC 133 的事件之外，引擎自己的语义提示符处理不能断（光标在提示符里）。
     func testSemanticPromptStillReachesSwiftTerm() {
         osc(133, "A")
-        let terminal = session.terminalView.getTerminal()
-        XCTAssertNotNil(terminal.activeSemanticPromptOrigin)
+        XCTAssertTrue(session.shadow.isCursorAtPrompt)
     }
 
     func testDisconnectClearsStatus() {

@@ -1,9 +1,8 @@
 import UDesignKit
 import SwiftUI
-import SwiftTerm
 
 /// 设置 · 终端 tab 内的实时预览面板。用当前 settings 渲染 fake 终端
-/// 输出（不接真 SwiftTerm，避免起 PTY）；改 setting 后立即可视。
+/// 输出（不建真的终端，避免起 PTY）；改 setting 后立即可视。
 struct TerminalPreview: View {
     let settings: TerminalSettings
     @Environment(\.colorScheme) private var scheme
@@ -14,7 +13,7 @@ struct TerminalPreview: View {
 
     private func ansi(_ idx: Int) -> SwiftUI.Color {
         let c = resolved.ansiColors[idx]
-        return SwiftUI.Color(red: Double(c.red)/65535, green: Double(c.green)/65535, blue: Double(c.blue)/65535)
+        return SwiftUI.Color(red: Double(c.red) / 255, green: Double(c.green) / 255, blue: Double(c.blue) / 255)
     }
 
     /// 跟真实终端一致使用系统等宽字体。

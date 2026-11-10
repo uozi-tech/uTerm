@@ -859,6 +859,35 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
 
     // MARK: 读文字
 
+    /// 程序用 OSC 7 报的当前目录（原样的 `file://…`）；没报过是空串。
+    var workingDirectory: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return Self.string(handle, GHOSTTY_TERMINAL_DATA_PWD)
+    }
+
+    /// 光标此刻在 shell 提示符或输入区里（靠 OSC 133 的标记；没有标记或在备用屏上是 false）。
+    var isCursorAtPrompt: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        var value = false
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &value)
+        return value
+    }
+
+    /// 活动区第 `row` 行第 `column` 列那一格带的超链接（OSC 8）；没有返回 nil。
+    func hyperlink(column: Int, row: Int) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard column >= 0, row >= 0, var ref = Self.gridRef(handle, x: UInt16(clamping: column), y: UInt32(row)) else { return nil }
+        var length = 0
+        _ = ghostty_grid_ref_hyperlink_uri(&ref, nil, 0, &length)
+        guard length > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: length)
+        guard ghostty_grid_ref_hyperlink_uri(&ref, &buffer, buffer.count, &length) == GHOSTTY_SUCCESS else { return nil }
+        return String(decoding: buffer.prefix(length), as: UTF8.self)
+    }
+
     /// kitty 键盘协议当前的标志位；0 = 程序没开。
     var kittyKeyboardFlags: UInt8 {
         lock.lock()

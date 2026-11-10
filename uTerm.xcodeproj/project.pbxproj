@@ -36,7 +36,6 @@
 		851030E33047167600A370DF /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000002 /* UDesignKit */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
-		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
 		474853540000000000000A11 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A01 /* GhosttyTerminal */; };
 		474853540000000000000A12 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A02 /* GhosttyKit */; };
 		474853540000000000000A13 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A03 /* GhosttyVt */; };
@@ -317,7 +316,6 @@
 				Features/SFTP/Views/SFTPStatusBar.swift,
 				Features/SFTP/Views/SFTPTransfersDock.swift,
 				Features/SFTP/Views/SFTPWindowView.swift,
-				Features/Terminal/CopyableTerminalView.swift,
 				Features/Terminal/Ghostty/GhosttyHostView.swift,
 				Features/Terminal/Ghostty/GhosttyTerminalBridge.swift,
 				Features/Terminal/Ghostty/GhosttyTerminalConfig.swift,
@@ -325,7 +323,6 @@
 				Features/Terminal/SSHSessionRestorer.swift,
 				Features/Terminal/TerminalAttentionCenter.swift,
 				Features/Terminal/TerminalCloseGuard.swift,
-				Features/Terminal/TerminalHostView.swift,
 				Features/Terminal/TerminalMirrorTap.swift,
 				Features/Terminal/TerminalQuitPolicy.swift,
 				Features/Terminal/TerminalScreenReader.swift,
@@ -334,11 +331,9 @@
 				"Features/Terminal/TerminalSession+ImagePaste.swift",
 				"Features/Terminal/TerminalSession+ProgramStatus.swift",
 				"Features/Terminal/TerminalSession+RemoteGrid.swift",
-				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
 				"Features/Terminal/TerminalSession+TrackedRun.swift",
 				"Features/Terminal/TerminalSession+TrueColor.swift",
 				Features/Terminal/TerminalSettings.swift,
-				Features/Terminal/TerminalTheme.swift,
 				Features/Terminal/TerminalWindowID.swift,
 				Features/Terminal/TerminalWindowRouter.swift,
 				Features/Terminal/Views/TerminalAgentView.swift,
@@ -564,7 +559,6 @@
 				4147454E544B495400000011 /* AgentKit in Frameworks */,
 				5541424B0000000000000011 /* UAppKitBridge in Frameworks */,
 				5550414E4750000000000011 /* UPaneGroups in Frameworks */,
-				A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */,
 				474853540000000000000A11 /* GhosttyTerminal in Frameworks */,
 				474853540000000000000A12 /* GhosttyKit in Frameworks */,
 				474853540000000000000A13 /* GhosttyVt in Frameworks */,
@@ -827,7 +821,6 @@
 				4147454E544B495400000001 /* AgentKit */,
 				5541424B0000000000000001 /* UAppKitBridge */,
 				5550414E4750000000000001 /* UPaneGroups */,
-				A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */,
 				474853540000000000000A01 /* GhosttyTerminal */,
 				474853540000000000000A02 /* GhosttyKit */,
 				474853540000000000000A03 /* GhosttyVt */,
@@ -2112,11 +2105,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterJavaScript;
-		};
-		A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */;
-			productName = SwiftTerm;
 		};
 		A50000000000000000000001 /* SwiftASN1 */ = {
 			isa = XCSwiftPackageProductDependency;

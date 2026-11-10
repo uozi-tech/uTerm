@@ -14,44 +14,53 @@ import GhosttyTerminal
 /// ## 时序
 ///
 /// Ghostty 的 surface 要等视图进了窗口才建（`AppTerminalView.viewDidMoveToWindow`），之前收到的字节最多缓 1 MiB，
-/// 超了丢最旧的——会截断转义序列。所以 surface 没挂上时不往里送；挂上那一刻把影子终端的状态回放进去
-/// （`ShadowTerminal.makeReplay`，开头自带复位；`receiveReplay` 不产生应答），之后再逐批转发。影子还是空的就不回放。
+/// 超了丢最旧的——会截断转义序列。所以 surface 没建好时输出泵不往里送（`TerminalOutputPump.setSurfaceFeeding`）；
+/// 建好那一刻泵把影子终端的状态回放进去（`ShadowTerminal.makeReplay`，开头自带复位；`receiveReplay` 不产生应答），
+/// 之后再逐片转发。影子还是空的就不回放。surface 一旦建好，视图离开窗口（切标签）也不销毁，继续吃字节。
 @MainActor
 final class GhosttyTerminalBridge {
     let view: GhosttySurfaceView
+    /// 会话的 host-managed IO（`TerminalSession.surfaceIO`）。
     let io: InMemoryTerminalSession
     private weak var owner: TerminalSession?
     private let delegate = DelegateProxy()
 
-    /// surface 已经挂上、并且已经用快照对齐过：之后的字节逐批转发。
-    private(set) var isLive = false
-    private var surfaceAttached = false
     /// Ghostty 最近报告的网格。
     private(set) var grid: (cols: Int, rows: Int)?
     /// 测试 / 探针用：Ghostty 发往后端的全部字节（键盘与应答）都经过这里。
     var onWriteForTesting: (@MainActor (Data) -> Void)?
-    /// 测试用：收到快照对齐时调用。
-    private(set) var seedCount = 0
+    /// surface 此刻在吃实时字节（挂上并且已经用影子的状态对齐过）。
+    var isLive: Bool { owner?.outputPump.isFeedingSurface ?? false }
+    /// 测试用：影子的状态回放进 surface 的次数。
+    var seedCount: Int { owner?.outputPump.currentStats.replays ?? 0 }
+
+    /// `InMemoryTerminalSession` 的 write / resize 回调（任意线程）转到主线程上的 bridge。会话先建 IO、后建 bridge，
+    /// 所以中间隔一个盒子。主队列是 FIFO，键入与应答的先后顺序不会乱。
+    nonisolated final class Relay: @unchecked Sendable {
+        private let lock = NSLock()
+        private weak var target: GhosttyTerminalBridge?
+
+        fileprivate func attach(_ bridge: GhosttyTerminalBridge) {
+            lock.withLock { target = bridge }
+        }
+
+        private var bridge: GhosttyTerminalBridge? { lock.withLock { target } }
+
+        func write(_ data: Data) {
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.bridge?.ghosttyDidWrite(data) } }
+        }
+
+        func resize(_ viewport: InMemoryTerminalViewport) {
+            let cols = Int(viewport.columns), rows = Int(viewport.rows)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.bridge?.ghosttyDidResize(cols: cols, rows: rows) } }
+        }
+    }
 
     init(owner: TerminalSession) {
         self.owner = owner
-        // write / resize 由 Ghostty 在任意线程回调。主队列是 FIFO，键入与应答的先后顺序不会乱。
-        let box = WeakBox()
-        io = InMemoryTerminalSession(
-            write: { data in
-                DispatchQueue.main.async { MainActor.assumeIsolated { box.bridge?.ghosttyDidWrite(data) } }
-            },
-            resize: { [shadow = owner.shadow] viewport in
-                let cols = Int(viewport.columns), rows = Int(viewport.rows)
-                // 影子终端只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。
-                shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                              cellWidth: UInt32(viewport.cellWidthPixels), cellHeight: UInt32(viewport.cellHeightPixels))
-                DispatchQueue.main.async { MainActor.assumeIsolated { box.bridge?.ghosttyDidResize(cols: cols, rows: rows) } }
-            },
-            // 只有行列数要发给远端（SIGWINCH）；像素级变化不用。
-            suppressesPixelOnlyResizes: true)
+        io = owner.surfaceIO
         view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
-        box.bridge = self
+        owner.surfaceIORelay.attach(self)
         delegate.bridge = self
         view.delegate = delegate
         view.controller = GhosttyTerminalConfig.controller
@@ -74,58 +83,32 @@ final class GhosttyTerminalBridge {
         return window.isKeyWindow && window.firstResponder === view
     }
 
-    // MARK: 字节入
+    // MARK: surface 的生命周期
 
-    /// 影子终端刚喂完的一批字节。
-    func didFeedShadow(_ bytes: ArraySlice<UInt8>) {
-        if isLive {
-            io.receive(Data(bytes))
-        } else if surfaceAttached {
-            seed()
-        }
-    }
-
-    /// 不经过输出泵、直接写进影子的字节（`clearOutput`、held 回放）之后调：重新对齐。
-    func resync() {
-        realign()
-    }
-
-    private func realign() {
-        isLive = false
-        if surfaceAttached { seed() }
-    }
-
-    private func seed() {
-        // 影子还是空的（新开的标签，一个字节都没来过）：没有画面可对齐，直接开始转发。
-        // 这时回放会把影子的整屏空行写进去；surface 刚挂上时网格还没停稳（常常先报一个偏小的尺寸），
-        // 多出来的空行被挤进回滚，新标签往上滚就是一屏空白。
-        if let shadow = owner?.shadow, shadow.hasContent, let replay = try? shadow.makeReplay() {
-            // 回放之前排着的实时字节已经在影子里，再解析一遍只会被回放盖掉。
-            io.discardPendingOutput()
-            io.receiveReplay(replay.stream)
-            seedCount += 1
-        }
-        isLive = true
-    }
-
+    /// surface 建好了：让影子终端先跟到它此刻的网格（回放流要按接收端的尺寸生成），再让输出泵开始喂它——
+    /// 泵会先把影子的状态回放进去（影子为空、surface 没落下过内容就不回放），然后接实时字节。
     fileprivate func surfaceDidAttach() {
-        surfaceAttached = true
-        realign()
+        guard let owner else { return }
+        if let grid = io.surfaceGrid {
+            owner.shadow.resize(cols: grid.columns, rows: grid.rows,
+                                cellWidth: grid.cellWidthPixels, cellHeight: grid.cellHeightPixels)
+        }
+        owner.outputPump.setSurfaceFeeding(true)
     }
 
+    /// surface 没了（视图被销毁、换了 controller 重建）：输出只进影子，下一个 surface 建好时再回放。
     fileprivate func surfaceDidDetach() {
-        surfaceAttached = false
-        isLive = false
+        owner?.outputPump.setSurfaceFeeding(false)
     }
 
     // MARK: 输入出 / 尺寸
 
-    private func ghosttyDidWrite(_ data: Data) {
+    fileprivate func ghosttyDidWrite(_ data: Data) {
         onWriteForTesting?(data)
         owner?.sendHostBytes(data)
     }
 
-    private func ghosttyDidResize(cols: Int, rows: Int) {
+    fileprivate func ghosttyDidResize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return }
         let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
@@ -149,11 +132,13 @@ final class GhosttyTerminalBridge {
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         view.pinnedFrameSize = NSSize(width: CGFloat(cols) * cell.width / scale, height: CGFloat(rows) * cell.height / scale)
         view.pinnedCursorRow = cursorRow
+        owner?.tracksCursorForPinnedGrid = true
         view.superview?.needsLayout = true
     }
 
     func unpinGrid() {
         pendingPin = nil
+        owner?.tracksCursorForPinnedGrid = false
         guard view.pinnedFrameSize != nil else { return }
         view.pinnedFrameSize = nil
         view.pinnedCursorRow = nil
@@ -201,10 +186,6 @@ final class GhosttyTerminalBridge {
     func dispose() {
         view.delegate = nil
         view.removeFromSuperview()
-    }
-
-    private final class WeakBox: @unchecked Sendable {
-        weak var bridge: GhosttyTerminalBridge?
     }
 
     /// Ghostty 的各个回调协议。单独一个对象：`TerminalSession` 不必知道这些协议。
@@ -336,7 +317,6 @@ final class GhosttySurfaceView: AppTerminalView {
 extension TerminalSession {
     /// Ghostty 的网格变了：远端随之 SIGWINCH。影子终端已经在 resize 回调里当场跟上了。
     func ghosttyGridDidChange(cols: Int, rows: Int) {
-        resizeLegacyShadow(cols: cols, rows: rows)
         inputChannel.reportSize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
     }
 

@@ -6,6 +6,8 @@ import Observation
 /// 接入一个终端后，接收它的输出与关闭事件。回调在连接队列上直接触发，不经主线程。
 nonisolated final class RemoteChannelSink: @unchecked Sendable {
     let onOutput: @Sendable (Data) -> Void
+    /// 终端画面的整屏快照的一段（`terminalSnapshot`）。终端通道用；桌面通道不用。
+    let onSnapshot: (@Sendable (_ piece: Data, _ isFirst: Bool, _ isLast: Bool) -> Void)?
     /// `sessionEnded` = Mac 明确结束了这个终端（关闭 / 断开 / 被别的设备接管）；
     /// false = 只是连接断了，可以重连再接入。
     let onClosed: @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void
@@ -14,9 +16,11 @@ nonisolated final class RemoteChannelSink: @unchecked Sendable {
     let onMessage: (@Sendable (RemoteMessage, RemoteLink) -> Void)?
 
     init(onOutput: @escaping @Sendable (Data) -> Void,
+         onSnapshot: (@Sendable (_ piece: Data, _ isFirst: Bool, _ isLast: Bool) -> Void)? = nil,
          onClosed: @escaping @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void,
          onMessage: (@Sendable (RemoteMessage, RemoteLink) -> Void)? = nil) {
         self.onOutput = onOutput
+        self.onSnapshot = onSnapshot
         self.onClosed = onClosed
         self.onMessage = onMessage
     }
@@ -473,7 +477,8 @@ final class RemoteMacClient: Identifiable {
                                     staticKey: phoneKey,
                                     features: RemoteConstants.localFeatures, pairingProof: proof,
                                     deviceModel: RemoteDeviceModel.current(),
-                                    platform: RemoteDevicePlatform.current.rawValue)
+                                    platform: RemoteDevicePlatform.current.rawValue,
+                                    terminalEngine: TerminalEngineVersion.current)
             let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: dialed.handshakeKeys)
             // 连上的不是要找的那台（同一地址上换了台机器，或有人冒充）：不往下走。
@@ -659,6 +664,10 @@ final class RemoteMacClient: Identifiable {
         switch message.kind {
         case .output:
             table.sink(message.channel)?.onOutput(message.payload)
+        case .terminalSnapshot:
+            if let piece = RemoteTerminalSnapshotPiece.decode(message.payload) {
+                table.sink(message.channel)?.onSnapshot?(piece.data, piece.isFirst, piece.isLast)
+            }
         case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult,
              .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame:
             table.sink(message.channel)?.onMessage?(message, link)
@@ -757,6 +766,10 @@ final class RemoteMacClient: Identifiable {
         await connect()
         guard state == .connected, let link else {
             throw connectionFailure
+        }
+        // 那台 Mac 的终端引擎和本机不是同一个版本：它发来的快照解不开，不接入（Mac 那边也会拒绝）。
+        guard RemoteTerminalEngine.matches(peer?.terminalEngine) else {
+            throw RemoteAttachError.rejected(RemoteTerminalEngine.mismatchMessage)
         }
         table.expect(sessionID: sessionID, sink: sink)
         let channel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt32, Error>) in

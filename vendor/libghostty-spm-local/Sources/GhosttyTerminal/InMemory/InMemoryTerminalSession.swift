@@ -153,6 +153,24 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         } ?? nil
     }
 
+    /// uTerm 本地补丁：surface 的终端此刻的网格（行列数与格子像素）；没挂 surface 时 nil。
+    /// 宿主在 surface 刚建好时读它：往里回放一段重建出来的历史之前，要先知道接收端现在是多大
+    /// （resize 回调只在尺寸变化时才来，重新挂上同样大小的 surface 不会再报）。
+    public var surfaceGrid: InMemoryTerminalViewport? {
+        surfaceAccess.withCurrentSurface { surface -> InMemoryTerminalViewport? in
+            let size = ghostty_surface_size(surface)
+            guard size.columns > 0, size.rows > 0 else { return nil }
+            return InMemoryTerminalViewport(
+                columns: size.columns,
+                rows: size.rows,
+                widthPixels: size.width_px,
+                heightPixels: size.height_px,
+                cellWidthPixels: size.cell_width_px,
+                cellHeightPixels: size.cell_height_px,
+            )
+        } ?? nil
+    }
+
     func updateViewport(_ size: TerminalGridMetrics) {
         TerminalDebugLog.log(.metrics, "in-memory viewport update \(size.debugSummary)")
         dispatchResize(InMemoryTerminalViewport(

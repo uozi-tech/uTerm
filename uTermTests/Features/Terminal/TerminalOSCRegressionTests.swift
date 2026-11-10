@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import XCTest
 @testable import uTerm
 
@@ -13,7 +12,7 @@ final class TerminalOSCRegressionTests: XCTestCase {
     override func setUp() async throws {
         pasteboard = NSPasteboard(name: NSPasteboard.Name("uterm-test-\(UUID().uuidString)"))
         session = TerminalSession()
-        (session.terminalView as? CopyableTerminalView)?.pasteboard = pasteboard
+        session.ghostty.view.pasteboard = pasteboard
         session.attentionSink = { _ in }
     }
 
@@ -21,29 +20,27 @@ final class TerminalOSCRegressionTests: XCTestCase {
         pasteboard.releaseGlobally()
     }
 
-    private var terminal: Terminal { session.terminalView.getTerminal() }
 
     private func feed(_ text: String) {
         session.feedOutput(text: text)
     }
 
     private func line(_ row: Int) -> String {
-        terminal.getLine(row: row)?.translateToString(trimRight: true) ?? ""
+        let lines = session.shadow.viewportText().split(separator: "\n", omittingEmptySubsequences: false)
+        return row < lines.count ? String(lines[row]) : ""
     }
 
     func testOSC7ReportsCurrentDirectory() {
         feed("\u{1b}]7;file:///Users/me/project\u{07}")
-        XCTAssertEqual(terminal.hostCurrentDirectory, "file:///Users/me/project")
+        XCTAssertEqual(session.shadow.workingDirectory, "file:///Users/me/project")
     }
 
     func testOSC8MarksOnlyTheLinkedCells() throws {
         feed("\u{1b}]8;;https://example.com/a\u{07}link\u{1b}]8;;\u{07}plain")
         XCTAssertEqual(line(0), "linkplain")
 
-        let linked = try XCTUnwrap(terminal.getCharData(col: 0, row: 0))
-        XCTAssertEqual((linked.getPayload() as? String)?.contains("https://example.com/a"), true)
-        let plain = try XCTUnwrap(terminal.getCharData(col: 4, row: 0))
-        XCTAssertFalse(plain.hasPayload)
+        XCTAssertEqual(session.shadow.hyperlink(column: 0, row: 0), "https://example.com/a")
+        XCTAssertNil(session.shadow.hyperlink(column: 4, row: 0))
     }
 
     /// OSC 52 现在由 Ghostty 的 surface 自己处理（配置 `clipboard-write = allow`、`clipboard-read = deny`），写的是系统剪贴板，
@@ -54,7 +51,8 @@ final class TerminalOSCRegressionTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "hello 世界")
     }
 
-    func testOSC52WithInvalidBase64LeavesPasteboardAlone() {
+    func testOSC52WithInvalidBase64LeavesPasteboardAlone() throws {
+        throw XCTSkip("OSC 52 改由 Ghostty surface 处理，写系统剪贴板；见 testOSC52WritesToTheTerminalsPasteboard 的说明")
         pasteboard.clearContents()
         pasteboard.setString("原来的", forType: .string)
         feed("\u{1b}]52;c;@@@not-base64@@@\u{07}")

@@ -1,13 +1,22 @@
 import Foundation
-import SwiftTerm
 #if canImport(AppKit)
 import AppKit
-/// 终端配色用的平台颜色类型：macOS `NSColor` / iOS `UIColor`（SwiftTerm 两端的 `TerminalView` 各收各的）。
+/// 终端配色用的平台颜色类型：macOS `NSColor` / iOS `UIColor`。
 typealias TerminalPlatformColor = NSColor
 #else
 import UIKit
 typealias TerminalPlatformColor = UIColor
 #endif
+
+/// ANSI 调色板里的一个颜色（sRGB，每通道 8 位）。
+nonisolated struct TerminalRGB: Equatable, Sendable {
+    var red: UInt8
+    var green: UInt8
+    var blue: UInt8
+
+    /// `#RRGGBB`，Ghostty 配置里颜色的写法。
+    var hex: String { String(format: "#%02X%02X%02X", red, green, blue) }
+}
 
 /// 一套完整的终端配色：背景 / 前景 / accent + 16 色 ANSI 表。
 /// bright 8-15 由 normal 0-7 经 lighten 公式生成。
@@ -15,12 +24,12 @@ typealias TerminalPlatformColor = UIColor
 /// 配色不再可自定义：终端固定用 VS Code 家族的前景 / ANSI 色，按 app 外观自动取
 /// 深 / 浅变体（`resolve(dark:)`）。深色背景对齐工作区基底。
 ///
-/// macOS 与 iOS 共用这一份表（iOS 的 `MTerminalColors` 只是转发壳）；装进视图走 `TerminalAppearance`。
+/// macOS 与 iOS 共用这一份表（iOS 的 `MTerminalColors` 只是转发壳）；翻成 Ghostty 的配置在 `GhosttyTerminalConfig.colors`。
 nonisolated struct TerminalColorScheme: @unchecked Sendable {
     /// 渲染期最低 WCAG 对比度（VS Code `minimumContrastRatio` 同思路）。远端
     /// prompt / TUI（p10k 等）常按深色背景硬编码 256 色 / 真彩色，不经过下面的
-    /// 16 色 ANSI 表——浅色背景下唯一可靠的解法是渲染时钳制前景色（vendored
-    /// SwiftTerm 补丁，见 vendor/SwiftTerm/UTERM-PATCHES.md）。
+    /// 16 色 ANSI 表——浅色背景下唯一可靠的解法是渲染时钳制前景色（Ghostty 的
+    /// `minimum-contrast` + 引擎补丁 0022：保色相、只调明度）。
     ///
     /// 取 3.0（WCAG 大字号 / UI 组件 AA 下限）而非 VS Code 的 4.5：钳制是
     /// 保色相的（OKLCH 只调明度），但 4.5 在中灰底上数学上只有逼近纯黑 / 纯白
@@ -36,17 +45,16 @@ nonisolated struct TerminalColorScheme: @unchecked Sendable {
     /// 选区底色：与编辑器同用 VS Code 选区蓝（深 #264F78 / 浅 #ADD6FF，同 `EditorTheme.selectionBg`），
     /// 保证选中文字在两种底上都可读。
     let selectionColor: TerminalPlatformColor
-    /// 16-色 ANSI palette（0-7 normal, 8-15 bright），按 SwiftTerm.installColors 顺序。
-    let ansiColors: [SwiftTerm.Color]
+    /// 16 色 ANSI 调色板（0-7 normal, 8-15 bright）。
+    let ansiColors: [TerminalRGB]
 
     /// 设计稿提供 8 色（normal 0-7）；bright (8-15) 由 lighten 公式生成：
     ///   bright = normal × 0.7 + white × 0.3
-    static func lightenForBright(_ c: SwiftTerm.Color) -> SwiftTerm.Color {
-        let blend: (UInt16) -> UInt16 = { v in
-            let scaled = UInt32(v) * 7 + UInt32(0xFFFF) * 3
-            return UInt16(scaled / 10)
+    static func lightenForBright(_ c: TerminalRGB) -> TerminalRGB {
+        let blend: (UInt8) -> UInt8 = { v in
+            UInt8((UInt32(v) * 7 + UInt32(0xFF) * 3) / 10)
         }
-        return SwiftTerm.Color(red: blend(c.red), green: blend(c.green), blue: blend(c.blue))
+        return TerminalRGB(red: blend(c.red), green: blend(c.green), blue: blend(c.blue))
     }
 
     /// sRGB 0xRRGGBB → 平台颜色。
@@ -61,12 +69,8 @@ nonisolated struct TerminalColorScheme: @unchecked Sendable {
         #endif
     }
 
-    private static func ansi(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> SwiftTerm.Color {
-        SwiftTerm.Color(
-            red: UInt16(r) * 257,
-            green: UInt16(g) * 257,
-            blue: UInt16(b) * 257
-        )
+    private static func ansi(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> TerminalRGB {
+        TerminalRGB(red: r, green: g, blue: b)
     }
 
     private static func makeAnsi(black: (UInt8, UInt8, UInt8),
@@ -76,7 +80,7 @@ nonisolated struct TerminalColorScheme: @unchecked Sendable {
                                   blue: (UInt8, UInt8, UInt8),
                                   magenta: (UInt8, UInt8, UInt8),
                                   cyan: (UInt8, UInt8, UInt8),
-                                  white: (UInt8, UInt8, UInt8)) -> [SwiftTerm.Color] {
+                                  white: (UInt8, UInt8, UInt8)) -> [TerminalRGB] {
         let normals = [black, red, green, yellow, blue, magenta, cyan, white].map { ansi($0.0, $0.1, $0.2) }
         let brights = normals.map { lightenForBright($0) }
         return normals + brights
@@ -84,7 +88,7 @@ nonisolated struct TerminalColorScheme: @unchecked Sendable {
 
     /// 显式 16 色（normal 0-7 + bright 8-15）。浅色方案用，brights 取官方值。
     private static func makeAnsi(normals: [(UInt8, UInt8, UInt8)],
-                                 brights: [(UInt8, UInt8, UInt8)]) -> [SwiftTerm.Color] {
+                                 brights: [(UInt8, UInt8, UInt8)]) -> [TerminalRGB] {
         (normals + brights).map { ansi($0.0, $0.1, $0.2) }
     }
 

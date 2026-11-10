@@ -3,18 +3,23 @@ import Foundation
 /// 远控终端后端：接入 Mac 上一个正在运行的终端，接进现有的 `MobileTerminalController`
 ///（与 SSH 同一个 `TerminalBackend` 抽象，终端视图与键盘条零改动）。
 ///
-/// - 输出：第一帧是 Mac 发来的快照（以 RIS 开头），之后是原始字节，原样喂给 SwiftTerm。
+/// - 输出：先是 Mac 发来的整屏快照（影子终端的二进制快照，输出泵把它还原进本地影子终端、再回放进画面），
+///   之后是原始字节。两种都按到达顺序进 `outputItems`；`outputStream` 不用（留着只为满足协议）。
 /// - 输入 / 尺寸：直接交给连接发出去，不经过主线程。手机的行列数就是终端的行列数（接管尺寸），
 ///   每次变化 Mac 都会调整 PTY 并重发一份快照。
 /// - 断线：在后端内部按退避重连并重新接入，快照到了屏幕自然对齐。控制器看到的是一条不断的流；
 ///   只有 Mac 明确结束了这个终端（关闭、被别的设备接管）才当作会话结束。
 actor RemoteTerminalBackend: TerminalImageReceiving {
+    /// 不产出任何东西：这个后端的输出走 `outputItems`。
     nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
     /// 断线重连的进度：true = 断了正在重连（这期间的输入发不出去），false = 接回了。界面据此提示。
     nonisolated let reconnecting: AsyncStream<Bool>
     private let reconnectingContinuation: AsyncStream<Bool>.Continuation
-    private let outputContinuation: AsyncStream<Data>.Continuation
+    private let outputContinuation: AsyncStream<TerminalOutputItem>.Continuation
+    /// 正在收的那张快照（分段到达）。只在连接队列上读写。
+    private nonisolated let snapshotAssembly = SnapshotAssembly()
     private let exitContinuation: AsyncStream<Void>.Continuation
 
     nonisolated let client: RemoteMacClient
@@ -32,7 +37,8 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     init(client: RemoteMacClient, sessionID: UUID) {
         self.client = client
         self.sessionID = sessionID
-        (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
+        outputStream = AsyncStream { $0.finish() }
+        (outputItems, outputContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
@@ -43,8 +49,14 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
 
     private func attach() async throws {
         let output = outputContinuation
+        let assembly = snapshotAssembly
         let sink = RemoteChannelSink(
-            onOutput: { output.yield($0) },
+            onOutput: { output.yield(.bytes($0)) },
+            onSnapshot: { piece, isFirst, isLast in
+                if let snapshot = assembly.append(piece, isFirst: isFirst, isLast: isLast) {
+                    output.yield(.snapshot(snapshot))
+                }
+            },
             onClosed: { [weak self] reason, ended in
                 Task { await self?.channelClosed(reason: reason, sessionEnded: ended) }
             }
@@ -159,9 +171,28 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         isClosed = true
         reconnectingContinuation.finish()
         let note = "\r\n\u{1b}[2m[\(reason.isEmpty ? "远程会话已结束" : reason)]\u{1b}[0m\r\n"
-        outputContinuation.yield(Data(note.utf8))
+        outputContinuation.yield(.bytes(Data(note.utf8)))
         exitContinuation.yield(())
         exitContinuation.finish()
         outputContinuation.finish()
+    }
+}
+
+/// 把分段到达的快照拼起来。回调都在同一条连接队列上，按顺序来；换了连接（重连）时新快照的第一段会把旧的顶掉。
+nonisolated final class SnapshotAssembly: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer: Data?
+
+    /// 收齐了返回整张快照。
+    func append(_ piece: Data, isFirst: Bool, isLast: Bool) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        if isFirst { buffer = Data() }
+        // 没见过开头的中间段（接入前的残留）：丢掉。
+        guard buffer != nil else { return nil }
+        buffer?.append(piece)
+        guard isLast else { return nil }
+        defer { buffer = nil }
+        return buffer
     }
 }

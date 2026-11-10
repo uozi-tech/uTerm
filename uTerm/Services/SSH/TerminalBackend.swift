@@ -25,6 +25,19 @@ protocol TerminalBackend: Actor {
 }
 
 extension TerminalBackend {
+    /// 输出流，带整屏快照的那种（见 `TerminalOutputItem`）。一般的后端只有字节，就是 `outputStream` 逐块包一层；
+    /// 远控镜像（`RemoteTerminalBackend`）自己实现它，字节之间夹着被控的 Mac 发来的快照。会话只读这一条。
+    nonisolated var outputItems: AsyncStream<TerminalOutputItem> {
+        let output = outputStream
+        return AsyncStream { continuation in
+            let task = Task.detached(priority: .userInitiated) {
+                for await chunk in output { continuation.yield(.bytes(chunk)) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     /// 默认恒真 —— 非网络后端（测试 mock）没有「静默断死」的概念。
     func verifyConnectionAlive() async -> Bool { true }
     /// 默认判断不了：关闭前宁可多问一句。

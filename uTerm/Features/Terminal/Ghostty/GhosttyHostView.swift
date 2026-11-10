@@ -48,12 +48,14 @@ struct GhosttyHostView: NSViewRepresentable {
     }
 }
 
-/// 摆放 Ghostty 视图：同 `TerminalContainerView` 的内边距，焦点规则同 `TerminalContainerView.canTakeFocus`。
+/// 摆放 Ghostty 视图：留内边距、远控钉尺寸时按 `pinnedFrame` 摆、成为活动面板时把键盘焦点交给终端。
 final class GhosttyContainerView: NSView {
-    private static let insets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
+    /// 顶边 0：终端凹槽紧贴在 40pt 标签条下方，条里 26pt 胶囊上下已各留 7pt。默认配色的终端底与卡面同色
+    /// （凹槽看不出边），再加内边距就成了「胶囊上 7、下 14」的不对称间距（实机反馈）。左右与底边保留，避开凹槽圆角。
+    static let insets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
     private weak var surface: GhosttySurfaceView?
     /// 滚动条：Ghostty 自己不画，按它报的总行数 / 视口位置自绘。只在用户滚动、且确有历史可滚时浮现，
-    /// 停手约 1 s 后淡出（和 SwiftTerm 路径的 `CopyableTerminalView` 同一个手感）。只显示，不能拖。
+    /// 停手约 1 s 后淡出。只显示，不能拖。
     let scrollIndicator = GhosttyScrollIndicator()
     private var lastScrollbar: TerminalScrollbar?
     private var hideIndicatorWork: DispatchWorkItem?
@@ -102,7 +104,7 @@ final class GhosttyContainerView: NSView {
         if let pinned = surface.pinnedFrameSize {
             layer?.masksToBounds = true
             let rows = pinned.height > 0 ? Int((pinned.height / max(1, cellHeightPoints(surface))).rounded()) : 0
-            frame = TerminalContainerView.pinnedFrame(pinned, in: bounds, insets: i,
+            frame = Self.pinnedFrame(pinned, in: bounds, insets: i,
                                                       cursorRow: surface.pinnedCursorRow, rows: rows)
         } else {
             layer?.masksToBounds = false
@@ -154,13 +156,48 @@ final class GhosttyContainerView: NSView {
         requestFocus()
     }
 
+    /// 连接可能晚于用户的操作才完成，这时终端才挂载，不能打断正在输入的 Agent 框、编辑器或正在
+    /// 浏览的文件列表。其它终端除外：切标签时旧终端可能还没卸载，它的焦点就是要交过来的。
+    static func canTakeFocus(from responder: NSResponder?) -> Bool {
+        if responder is GhosttySurfaceView { return true }
+        return !(responder is NSTextInputClient || responder is NSTableView)
+    }
+
+    /// 钉住的终端比窗格高时，光标那一行往下还要留在窗格里的行数（Claude Code 的输入框下面有一条边线和一两行状态）。
+    static let pinnedRowsKeptBelowCursor = 3
+
+    /// 钉住尺寸的终端摆在哪：放得下就贴左上角；比窗格高时跟着光标走——从顶上裁，裁到光标那一行
+    ///（再往下留 `pinnedRowsKeptBelowCursor` 行）刚好落在窗格里为止，最多裁到底边贴着窗格底。
+    ///
+    /// 手机竖屏的行数常比 Mac 窗格多。一律贴顶会把屏幕底部正在打字的那一行裁掉；一律贴底（之前的做法）则在
+    /// 屏幕没写满时裁错地方：程序刚起来、刚清过屏，内容都在屏幕顶上、下面是空行，留在窗格里的反而是一屏空白，
+    /// 看着像被接管状态条挡住了。裁掉的量取整到整行，窗格顶上不留半行。
+    ///
+    /// 不传 `cursorRow` 时按光标在最后一行算（贴底）。
+    static func pinnedFrame(_ pinned: NSSize, in bounds: NSRect, insets: NSEdgeInsets,
+                            cursorRow: Int? = nil, rows: Int = 0) -> NSRect {
+        let available = bounds.height - insets.top - insets.bottom
+        // 贴顶时的位置（容器不翻转，y 往上）。
+        var y = bounds.height - insets.top - pinned.height
+        if pinned.height > available {
+            let maxCut = pinned.height - available
+            var cut = maxCut
+            if let cursorRow, rows > 0 {
+                let rowHeight = pinned.height / CGFloat(rows)
+                let keepBottom = min(pinned.height, CGFloat(cursorRow + 1 + pinnedRowsKeptBelowCursor) * rowHeight)
+                cut = min(maxCut, (max(0, keepBottom - available) / rowHeight).rounded(.up) * rowHeight)
+            }
+            y += cut
+        }
+        return NSRect(x: insets.left, y: y, width: pinned.width, height: pinned.height)
+    }
+
     private func requestFocus() {
         guard isActive, window != nil else { return }
         Task { [weak self] in
             guard let self, self.isActive, let window = self.window, let surface = self.surface,
                   surface.superview === self,
-                  window.firstResponder is GhosttySurfaceView
-                    || TerminalContainerView.canTakeFocus(from: window.firstResponder) else { return }
+                  Self.canTakeFocus(from: window.firstResponder) else { return }
             window.makeFirstResponder(surface)
         }
     }
