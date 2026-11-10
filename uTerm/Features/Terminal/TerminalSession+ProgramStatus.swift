@@ -42,7 +42,8 @@ extension TerminalSession {
         case .titleChanged(let title):
             receiveShellTitle(title)
         case .bell:
-            break
+            // 标签藏着也响（和迁移前一样：每条会话都在解析）；surface 那边的 bell 回调不接，免得响两次。
+            NSSound.beep()
         }
     }
 

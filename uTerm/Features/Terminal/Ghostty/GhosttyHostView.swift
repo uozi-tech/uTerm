@@ -38,6 +38,7 @@ struct GhosttyHostView: NSViewRepresentable {
 
     private func apply() {
         let dark = appColorScheme == .dark
+        session.updateShadowColors(dark: dark)
         GhosttyTerminalBridge.applyAppearance(dark: dark)
         GhosttyTerminalBridge.apply(settings: settings)
     }

@@ -119,6 +119,7 @@ final class TerminalSession: NSObject {
         _ = ghostty
         installShadowEventHandler()
         installShadowReplyHandler()
+        updateShadowColors(dark: NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         attentionSink = { [weak self] attention in
             guard let self else { return }
             TerminalAttentionCenter.shared.post(attention, from: self)
@@ -139,6 +140,23 @@ final class TerminalSession: NSObject {
             }
         }
     }
+
+    /// 影子终端替 surface 答颜色查询（OSC 10 / 11 / 12、`CSI ? 996 n`）时用的配色，跟着 app 外观走。
+    /// 只在 surface 不吃字节时（还没建）才轮到影子答；`GhosttyHostView` 每次更新都会调，值没变就不动。
+    func updateShadowColors(dark: Bool) {
+        guard shadowColorsAreDark != dark else { return }
+        shadowColorsAreDark = dark
+        let scheme = TerminalColorScheme.resolve(dark: dark)
+        func rgb(_ color: NSColor) -> (UInt8, UInt8, UInt8) {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            return (UInt8((c.redComponent * 255).rounded()), UInt8((c.greenComponent * 255).rounded()),
+                    UInt8((c.blueComponent * 255).rounded()))
+        }
+        shadow.setDefaultColors(foreground: rgb(scheme.foregroundColor), background: rgb(scheme.backgroundColor),
+                                cursor: rgb(scheme.cursorColor), dark: dark)
+    }
+
+    @ObservationIgnored private var shadowColorsAreDark: Bool?
 
     /// uTerm 自己要发给程序的字节（OSC 7501 应答、贴图后的路径），以及 Ghostty 发出的键盘输入与终端应答。
     /// 进有序输入通道（`TerminalInputChannel`），按产生顺序到达后端。回放的是历史输出，里面的查询当年已经回答过了。
