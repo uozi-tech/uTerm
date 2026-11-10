@@ -94,6 +94,7 @@ final class GhosttyScrollFeelTests: XCTestCase {
     // MARK: 场景 1：停在底部往上推、松手回弹
 
     func testRubberBandWhileOutput() async throws {
+        try skipUnlessHighRefreshDisplay()
         var worst: [String: Int] = [:]
         for output in [false, true] {
             let host = try await hostAtBottom()
@@ -131,6 +132,7 @@ final class GhosttyScrollFeelTests: XCTestCase {
     // MARK: 场景 2：甩出去，到减速停下（含落到整行）
 
     func testFlingSettleWhileOutput() async throws {
+        try skipUnlessHighRefreshDisplay()
         var problems: [String] = []
         for output in [false, true] {
             let host = try await hostAtBottom()

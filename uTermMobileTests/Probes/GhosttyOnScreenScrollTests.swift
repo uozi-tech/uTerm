@@ -272,23 +272,7 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         let sign: Double = total < 0 ? -1 : 1
         let shown = window.map { delta[$0] * sign }
 
-        // 平滑速度：前后各 2 帧的平均位移。速度 ≥ 2 px/帧时，整像素取整不会造成 0 位移帧，出现 0 就是重复帧。
-        func speed(_ i: Int) -> Double {
-            let range = max(0, i - 2)...min(shown.count - 1, i + 2)
-            return range.reduce(0) { $0 + shown[$1] } / Double(range.count)
-        }
-        var repeats = 0, maxJerk = 0.0, maxRatio = 1.0
-        for i in shown.indices {
-            let fast = speed(i) >= 2
-            if fast, shown[i] < 0.5 { repeats += 1 }
-            guard i >= 2 else { continue }
-            if fast, i < shown.count - 1 {
-                maxJerk = max(maxJerk, abs(shown[i + 1] - 2 * shown[i] + shown[i - 1]))
-            }
-            if shown[i] >= 4, shown[i - 1] >= 4 {
-                maxRatio = max(maxRatio, shown[i] / shown[i - 1], shown[i - 1] / shown[i])
-            }
-        }
+        let (repeats, maxJerk, maxRatio) = smoothness(shown)
 
         var lag = 0, mismatches = 0
         var sentWindow: [Double]?
@@ -313,9 +297,130 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
                       decoded: sampler.samples.count, failures: sampler.failures, travelled: abs(total))
     }
 
+    /// 一串每拍位移（px，已按运动方向取正）有多不平滑：重复帧数、二阶差分的最大值、相邻两拍位移比的最大值。
+    static func smoothness(_ shown: [Double]) -> (repeats: Int, maxJerk: Double, maxRatio: Double) {
+        // 平滑速度：前后各 2 帧的平均位移。速度 ≥ 2 px/帧时，整像素取整不会造成 0 位移帧，出现 0 就是重复帧。
+        func speed(_ i: Int) -> Double {
+            let range = max(0, i - 2)...min(shown.count - 1, i + 2)
+            return range.reduce(0) { $0 + shown[$1] } / Double(range.count)
+        }
+        var repeats = 0, maxJerk = 0.0, maxRatio = 1.0
+        for i in shown.indices {
+            let fast = speed(i) >= 2
+            if fast, shown[i] < 0.5 { repeats += 1 }
+            guard i >= 2 else { continue }
+            if fast, i < shown.count - 1 {
+                maxJerk = max(maxJerk, abs(shown[i + 1] - 2 * shown[i] + shown[i - 1]))
+            }
+            if shown[i] >= 4, shown[i - 1] >= 4 {
+                maxRatio = max(maxRatio, shown[i] / shown[i - 1], shown[i - 1] / shown[i])
+            }
+        }
+        return (repeats, maxJerk, maxRatio)
+    }
+
+    // MARK: - 量化：contentOffset 到屏上像素这一路各取整一次
+
+    /// 这一次减速「按量化算出来的理论值」。
+    ///
+    /// 减速每帧想写的位置是连续的（三次缓出），到屏上要过两次取整：
+    /// 1. UIKit 把 contentOffset 取整到 1/`UIScreen.scale` pt；
+    /// 2. GhosttyKit 把 contentOffset × `nativeScale` 取整到整数物理像素发给引擎（`scrollViewDidScroll`）。
+    /// 两个倍率相同的屏（18 Pro Max：都是 3）上两次取整落在同一个格点上，位置误差 ≤ 0.5 px。Duo 内屏 `UIScreen.scale` = 3、
+    /// `nativeScale` ≈ 2.807：第一次取整的格点是 0.936 px，再取整到 1 px，两次的误差叠加，位置误差 ≤ 0.5 + 0.936 / 2 = 0.968 px。
+    /// 每拍位移是两个位置的差，误差翻倍；所以同一条减速曲线，Duo 上每拍位移的起伏天生比 18 Pro Max 大。
+    ///
+    /// 「每拍位移忽大忽小」因此不能用写死的像素数判：门槛就是这一次减速按上面两次取整算出来的那一串（`model`）自己的
+    /// 二阶差分和相邻比——上屏的不许比它更糙；上屏的画面有没有多画 / 晚画，直接拿它和这一串逐拍比。
+    struct Quantization {
+        let snapScale: Double
+        let nativeScale: Double
+        /// 按上面两次取整算出来的每个减速帧的位移（px），时刻 = 那一帧瞄准的 vsync 前 0.1 ms（同 `sent` 的归拍）。
+        let events: [(time: Double, value: Double)]
+        /// 理论值这一串自己的平滑度（去掉头尾不动的拍）。
+        let model: (repeats: Int, maxJerk: Double, maxRatio: Double)
+        /// 只取整到整数像素（两个倍率相同的屏会是这样）、以及完全不取整时同一条曲线的平滑度，对照用。
+        let pixelOnly: (repeats: Int, maxJerk: Double, maxRatio: Double)
+        let ideal: (repeats: Int, maxJerk: Double, maxRatio: Double)
+        /// 读回来的 contentOffset 和「想写的位置取整到 1/scale pt」差多少（pt，最大值）：模型的第一步对不对。
+        let snapError: Double
+        /// 同上，但假设 UIKit 是按 nativeScale 取整的（对照：哪个假设成立）。
+        let nativeSnapError: Double
+
+        /// 位置误差的上界（px）。
+        var positionError: Double { isIntegerGrid ? 0.5 : 0.5 + nativeScale / snapScale / 2 }
+        var isIntegerGrid: Bool { abs(snapScale - nativeScale) < 0.001 }
+        /// 理论值那一串最糙能到多少（任何起点、任何相位），用来核夹具自己：减速 link 跳了拍、曲线算错了，理论值就会超出它。
+        /// - 二阶差分是位置的三阶差分（系数 1、3、3、1），曲线本身的三阶差分不到 0.01 px，剩下的全是取整：≤ 8 × 位置误差。
+        ///   位移是整数，向下取整：18 Pro Max 4 px，Duo 7 px（离线把起点和相位扫一遍，实际最大是 3 / 5 px）。
+        /// - 相邻两拍位移各带 2 × 位置误差，相差最多 4 × 位置误差（取整）；两拍都 ≥ 4 px 才算，最坏是 (4 + 差) / 4：
+        ///   18 Pro Max 6/4 = 1.5，Duo 7/4 = 1.75（离线扫出来的最大值正是这两个数）。
+        var jerkCeiling: Double { (8 * positionError).rounded(.down) }
+        var ratioCeiling: Double { (4 + (4 * positionError).rounded(.down)) / 4 }
+
+        @MainActor
+        init(frames: [EdgeDecelerator.Frame], origin: CGFloat, screen: UIScreen) {
+            let snap = Double(screen.scale), native = Double(screen.nativeScale)
+            snapScale = snap
+            nativeScale = native
+            var events: [(time: Double, value: Double)] = []
+            var model: [Double] = [], pixelOnly: [Double] = [], ideal: [Double] = []
+            var previous = (Double(origin) * native).rounded()
+            var previousPixel = previous, previousIdeal = Double(origin) * native
+            var snapError = 0.0, nativeSnapError = 0.0
+            for frame in frames {
+                let requested = Double(frame.requested)
+                let snapped = (requested * snap).rounded() / snap
+                snapError = max(snapError, abs(Double(frame.offset) - snapped))
+                nativeSnapError = max(nativeSnapError, abs(Double(frame.offset) - (requested * native).rounded() / native))
+                let px = (snapped * native).rounded()
+                events.append((time: frame.target - 0.0001, value: px - previous))
+                model.append(px - previous)
+                previous = px
+                let pixel = (requested * native).rounded()
+                pixelOnly.append(pixel - previousPixel)
+                previousPixel = pixel
+                ideal.append(requested * native - previousIdeal)
+                previousIdeal = requested * native
+            }
+            self.events = events
+            // 去掉头尾不动的拍、按运动方向取正，和 analyze 对上屏位移做的一样。
+            func normalized(_ deltas: [Double]) -> [Double] {
+                guard let first = deltas.firstIndex(where: { abs($0) > 0.5 }),
+                      let last = deltas.lastIndex(where: { abs($0) > 0.5 }) else { return [] }
+                let window = deltas[first...last]
+                let sign: Double = window.reduce(0, +) < 0 ? -1 : 1
+                return window.map { $0 * sign }
+            }
+            self.model = GhosttyOnScreenScrollTests.smoothness(normalized(model))
+            self.pixelOnly = GhosttyOnScreenScrollTests.smoothness(normalized(pixelOnly))
+            self.ideal = GhosttyOnScreenScrollTests.smoothness(normalized(ideal))
+            self.snapError = snapError
+            self.nativeSnapError = nativeSnapError
+        }
+
+        var line: String {
+            String(format: "scale=%.3f native-scale=%.3f position-error<=%.3fpx model-ceilings: jerk<=%.0fpx ratio<=%.2f | "
+                + "model: repeats=%d jerk=%.0fpx ratio=%.2f | pixel-rounding-only: jerk=%.0fpx ratio=%.2f | unrounded: jerk=%.2fpx ratio=%.3f | "
+                + "readback-vs-snap(1/scale)=%.5fpt readback-vs-snap(1/native)=%.5fpt",
+                   snapScale, nativeScale, positionError, jerkCeiling, ratioCeiling,
+                   model.repeats, model.maxJerk, model.maxRatio, pixelOnly.maxJerk, pixelOnly.maxRatio,
+                   ideal.maxJerk, ideal.maxRatio, snapError, nativeSnapError)
+        }
+    }
+
+    /// 一次甩动的结果：上屏的每拍位移（和引擎收到的位移逐拍比过）、同一次减速按量化算的理论值、上屏和理论值逐拍比的结果。
+    struct Fling {
+        let report: Report
+        let quantization: Quantization
+        /// 上屏位移和理论值对不上的拍数、对齐用的错位拍数。
+        let modelMismatches: Int
+        let modelLag: Int
+    }
+
     // MARK: - Ghostty 甩动
 
-    private func ghosttyFling(output: Bool, velocity: CGFloat) async throws -> Report {
+    private func ghosttyFling(output: Bool, velocity: CGFloat) async throws -> Fling {
         let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 600))
         defer { host.close() }
         try await host.waitUntilReady()
@@ -328,7 +433,7 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
 
     /// 同一套量法，挂在整个工作区界面里（标签条、键盘条、SwiftUI 外壳都在），输出走假 SSH 后端、经控制器进 Ghostty——
     /// 和 user 手机上的路径只差真手指。
-    private func ghosttyFlingInWorkspace(output: Bool, velocity: CGFloat) async throws -> Report {
+    private func ghosttyFlingInWorkspace(output: Bool, velocity: CGFloat) async throws -> Fling {
         defer { MobileProbeWindow.closeAll() }
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
@@ -366,7 +471,7 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
 
     private func measureGhosttyFling(label: String, view: MGhosttyTerminalView, output: Bool, velocity: CGFloat = 1000,
                                      feed: @escaping @MainActor (String) async -> Void,
-                                     frame: @escaping @MainActor (Int) -> String) async throws -> Report {
+                                     frame: @escaping @MainActor (Int) -> String) async throws -> Fling {
         try await Task.sleep(for: .milliseconds(300))
         let cell = try XCTUnwrap(view.uTermCellPixels)
         for _ in 0..<60 { view.sendMouseScroll(x: 0, y: Double(cell.height), mods: TerminalScrollModifiers(precision: true)) }
@@ -430,6 +535,13 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         print("ONSCREEN-PHASE \(label) v=\(Int(velocity)) output=\(output) decel-frames=\(frames.count) decel-target-not-a-ref-vsync=\(offGrid)")
         print(report.line)
         print("ONSCREEN-DIAG \(decoder.diagnostic ?? "-")")
+        // 同一次减速按量化算的理论值，和上屏的位移逐拍比。
+        let screen = try XCTUnwrap(view.window?.screen)
+        let quantization = Quantization(frames: frames, origin: finger.decelerator.origin, screen: screen)
+        let againstModel = Self.analyze("model", sampler: sampler, sentEvents: quantization.events)
+        print("ONSCREEN-QUANT \(label) v=\(Int(velocity)) output=\(output) \(quantization.line) | "
+            + "shown-vs-model: mismatch=\(againstModel.mismatches) lag=\(againstModel.lag) | "
+            + "shown: jerk=\(Int(report.maxJerk))px ratio=\(String(format: "%.2f", report.maxRatio))")
 
         // 时序：减速每一步发出去之后，Ghostty 多久把画面交给 CA、交的那一刻在显示帧里的相位。
         let presents = GhosttyPresentLog.read()
@@ -447,7 +559,7 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
                      fourCC(decoder.pixelFormat), starts.count,
                      ProbeMetrics.percentile(zip(starts, starts.dropFirst()).map { ($1 - $0) * 1000 }, 0.5)))
         XCTAssertTrue(view.uTermScrollState.isAtRest, "\(report.label)：甩完之后没停在整行上 \(view.uTermScrollState)")
-        return report
+        return Fling(report: report, quantization: quantization, modelMismatches: againstModel.mismatches, modelLag: againstModel.lag)
     }
 
     private func fourCC(_ code: OSType) -> String {
@@ -458,26 +570,46 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
 
     /// 每拍上屏位移的回归门槛（单独窗口 / 整个工作区界面，有无输出，初速 1000 / 4000 pt/s 都要过）：
     /// - 重复帧 0（速度 ≥ 2 px/帧时没有一拍不换画面）；
-    /// - 和这一拍发出去的位移逐拍对得上（错位 ≤ 1 拍）；
-    /// - 二阶差分 ≤ 4 px、相邻两拍位移比 ≤ 1.35（整像素取整的噪声是 1–2 px、比值 1.25 左右）。
+    /// - 和这一拍引擎收到的位移逐拍对得上（错位 ≤ 1 拍）：引擎收到多少就画了多少、画在该画的那一拍；
+    /// - 和这一拍 contentOffset 按量化算出来的理论值逐拍对得上（错位 ≤ 1 拍）：GhosttyKit 这一侧的换算没有多走 / 少走；
+    /// - 二阶差分、相邻两拍位移比不比理论值那一串更糙（见 `Quantization`）。
+    ///
+    /// 最后一条原来是写死的 4 px / 1.35，在 18 Pro Max（`UIScreen.scale` = `nativeScale` = 3）上给自写惯性定的。
+    /// 换成系统滚动之后在 Duo 上超线（比值 1.4–1.5、二阶差分 5 px），而上屏位移和引擎收到的逐拍相同（mismatch ≤ 1）。
+    /// 离线按同一条曲线、Duo 的两个倍率把起点和相位扫一遍，量化本身就能产生比值 1.75、二阶差分 5 px，和超线的读数对得上；
+    /// 所以门槛改成「这一次减速的理论值」，另核理论值自己没超出这块屏的量化上界（超了是夹具的问题：减速 link 跳拍、曲线算错）。
+    /// 2026-11-10 在 Duo 外屏（两个倍率都是 3）上跑过：8 次甩动上屏与理论值逐拍相同（`ONSCREEN-QUANT` 的 mismatch = 0）；
+    /// 内屏（2.807）上还没核。拦「多画 / 晚画」的是前三条，一拍都没放宽。
     ///
     /// 原来还有一条「交接那一拍只有拖动那一步」（开头那一拍的位移 = 18 px）：那是本地包里「拖动 → 惯性交接对齐上屏」的
     /// 回归门槛，那段代码随自写物理删了；系统路径上手指最后一步和减速第一步谁落在哪一拍是 UIKit 的事，测试里的假减速
     /// 复现不了，所以这一条去掉，甩动也不再先拖一步（见 measureGhosttyFling）。
-    private func assertSmooth(_ report: Report, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertSmooth(_ fling: Fling, file: StaticString = #filePath, line: UInt = #line) {
+        let report = fling.report, quant = fling.quantization
         XCTAssertGreaterThan(report.shown.count, 30, "\(report.label)：上屏位置没解出来（decoded=\(report.decoded) failed=\(report.failures)）",
                              file: file, line: line)
         XCTAssertEqual(report.repeats, 0, "\(report.label)：重复帧", file: file, line: line)
         XCTAssertLessThanOrEqual(report.mismatches, 1, "\(report.label)：上屏和发出的位移对不上", file: file, line: line)
-        XCTAssertLessThanOrEqual(report.maxJerk, 4, "\(report.label)：每拍位移忽大忽小（二阶差分）", file: file, line: line)
-        XCTAssertLessThanOrEqual(report.maxRatio, 1.35, "\(report.label)：相邻两拍位移比", file: file, line: line)
+        // 理论值的前提：UIKit 确实把 contentOffset 取整到 1/UIScreen.scale pt。不成立的话下面按理论值比的几条都没有意义。
+        XCTAssertLessThan(quant.snapError, 0.001, "\(report.label)：读回来的 contentOffset 不是「取整到 1/UIScreen.scale pt」，量化模型不成立",
+                          file: file, line: line)
+        XCTAssertLessThanOrEqual(fling.modelMismatches, 1, "\(report.label)：上屏的位移和 contentOffset 量化后的理论值对不上",
+                                 file: file, line: line)
+        XCTAssertLessThanOrEqual(report.maxJerk, quant.model.maxJerk,
+                                 "\(report.label)：每拍位移忽大忽小（二阶差分），比这一次减速量化后的理论值还糙", file: file, line: line)
+        XCTAssertLessThanOrEqual(report.maxRatio, quant.model.maxRatio + 0.001,
+                                 "\(report.label)：相邻两拍位移比，比这一次减速量化后的理论值还糙", file: file, line: line)
+        XCTAssertLessThanOrEqual(quant.model.maxJerk, quant.jerkCeiling,
+                                 "\(report.label)：理论值自己的二阶差分超出了这块屏的量化上界（夹具的减速跳拍了？）", file: file, line: line)
+        XCTAssertLessThanOrEqual(quant.model.maxRatio, quant.ratioCeiling + 0.001,
+                                 "\(report.label)：理论值自己的相邻比超出了这块屏的量化上界（夹具的减速跳拍了？）", file: file, line: line)
     }
 
     func testGhosttyFlingOnScreen() async throws {
+        try skipUnlessHighRefreshDisplay()
         for velocity in [1000, 4000] as [CGFloat] {
             for output in [false, true] {
-                let report = try await ghosttyFling(output: output, velocity: velocity)
-                assertSmooth(report)
+                assertSmooth(try await ghosttyFling(output: output, velocity: velocity))
             }
         }
     }
@@ -493,10 +625,10 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
     }
 
     func testGhosttyFlingOnScreenInWorkspace() async throws {
+        try skipUnlessHighRefreshDisplay()
         for velocity in [1000, 4000] as [CGFloat] {
             for output in [false, true] {
-                let report = try await ghosttyFlingInWorkspace(output: output, velocity: velocity)
-                assertSmooth(report)
+                assertSmooth(try await ghosttyFlingInWorkspace(output: output, velocity: velocity))
             }
         }
     }

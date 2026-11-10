@@ -1088,12 +1088,18 @@ final class EdgeSystemFinger {
 /// 新的一次会顶掉上一次（手指又按下来时测试会先 begin()，那时它也该停：`stop()`）。
 @MainActor
 final class EdgeDecelerator: NSObject {
-    /// 这一次减速的每一帧：回调的时刻、这一帧瞄准的 vsync、写 contentOffset 花了多久（GhosttyKit 的 didScroll 就在里面跑）。
+    /// 这一次减速的每一帧：回调的时刻、这一帧瞄准的 vsync、写 contentOffset 花了多久（GhosttyKit 的 didScroll 就在里面跑），
+    /// 以及这一帧想写的位置和写完读回来的位置（pt）。两个位置不一样：UIKit 把 contentOffset 取整到 1/UIScreen.scale pt。
     struct Frame {
         let time: Double
         let target: Double
         let writeMS: Double
+        let requested: CGFloat
+        let offset: CGFloat
     }
+
+    /// 这一次减速开始前的位置（pt，已经是 UIKit 取整过的）。
+    private(set) var origin: CGFloat = 0
 
     private(set) var frames: [Frame] = []
     private var link: CADisplayLink?
@@ -1108,6 +1114,7 @@ final class EdgeDecelerator: NSObject {
         stop()
         self.scrollView = scrollView
         from = scrollView.contentOffset.y
+        origin = from
         to = target
         start = 0
         self.seconds = seconds
@@ -1134,8 +1141,10 @@ final class EdgeDecelerator: NSObject {
         if start == 0 { start = link.timestamp }
         let u = min(1, CGFloat(link.targetTimestamp - start) / CGFloat(seconds))
         let began = CACurrentMediaTime()
-        scrollView.contentOffset.y = from + (to - from) * (1 - pow(1 - u, 3))
-        frames.append(Frame(time: began, target: link.targetTimestamp, writeMS: (CACurrentMediaTime() - began) * 1000))
+        let requested = from + (to - from) * (1 - pow(1 - u, 3))
+        scrollView.contentOffset.y = requested
+        frames.append(Frame(time: began, target: link.targetTimestamp, writeMS: (CACurrentMediaTime() - began) * 1000,
+                            requested: requested, offset: scrollView.contentOffset.y))
         if u >= 1 {
             let finish = done
             stop()

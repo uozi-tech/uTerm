@@ -3,6 +3,7 @@ import GhosttyTerminal
 import ObjectiveC
 import QuartzCore
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import uTermMobile
 
@@ -267,6 +268,35 @@ func makeSpikeWindow(size: CGSize) throws -> UIWindow {
     return window
 }
 
+/// 测试期间有没有真手指碰过这扇窗。
+///
+/// 探针从不合成触摸事件（滚动是直接改 contentOffset / 调手势的处理函数），所以这个识别器的 `touchesBegan` 只要来了，
+/// 就是有人碰了真机的屏幕：窗口盖在最上层，终端视图里借来的 UIScrollView 会真的跟着手指滚、松手后真的减速，
+/// 量位移的探针读到的就是「测试喂的步子 + 手指的拖动和惯性」。2026-11-10 在 Duo 上
+/// `GhosttySmoothScrollPixelTests.testPrecisionScrollMovesByPixels` 四次里有一次中途多走了约 12 行、之后一串越来越小的位移
+///（先是几步不规则的大位移，再是一条衰减曲线），当时没有这个记录、事后没法分辨；现在碰了就记下来，宿主关掉时报出来。
+/// 它只看不拦：不取消、不延迟触摸，自己永远不识别成功。
+final class RealTouchWatch: UIGestureRecognizer {
+    private(set) var touchesSeen = 0
+    private(set) var firstAt: Double?
+
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        touchesSeen += touches.count
+        if firstAt == nil { firstAt = CACurrentMediaTime() }
+        state = .failed
+    }
+
+    override func canPrevent(_: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by _: UIGestureRecognizer) -> Bool { false }
+}
+
 /// GhosttyKit 那一侧。整个测试进程共用一个 ghostty app（`TerminalController`），和生产时一样。
 @MainActor
 final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
@@ -278,6 +308,9 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
     var view: MGhosttyTerminalView { bridge.view }
     private(set) var scrollbar: TerminalScrollbar?
     private(set) var scrollbarUpdates = 0
+    /// 测试期间真手指碰没碰过这扇窗（见 `RealTouchWatch`）；`close()` 时碰过就判这条用例失败。
+    let touchWatch = RealTouchWatch()
+    private let openedAt = CACurrentMediaTime()
 
     init(size: CGSize = CGSize(width: 393, height: 760)) throws {
         window = try makeSpikeWindow(size: size)
@@ -286,6 +319,7 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
         bridge.view.delegate = self
         bridge.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         window.addSubview(bridge.view)
+        window.addGestureRecognizer(touchWatch)
     }
 
     func terminalDidUpdateScrollbar(_ scrollbar: TerminalScrollbar) {
@@ -328,6 +362,10 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
     var grid: (cols: Int, rows: Int) { bridge.grid ?? (0, 0) }
 
     func close() {
+        if touchWatch.touchesSeen > 0 {
+            XCTFail(String(format: "测试期间有真手指碰了屏幕（%d 次，第一次在宿主建好后 %.1f s）：终端会跟着手指滚动、松手后还有惯性，"
+                + "这一条的读数作废，别碰手机重跑", touchWatch.touchesSeen, (touchWatch.firstAt ?? openedAt) - openedAt))
+        }
         bridge.view.removeFromSuperview()
         window.isHidden = true
     }
