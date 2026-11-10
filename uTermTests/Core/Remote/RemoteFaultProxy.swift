@@ -337,11 +337,14 @@ nonisolated final class RemoteUDPFaultProxy: @unchecked Sendable {
     private var droppedCount = 0
     private var portValue: UInt16?
 
-    init(targetPort: UInt16, impairment: RemoteLinkImpairment = .clean, seed: UInt64 = 1) throws {
+    /// - Parameter listenPort: 指定监听端口（nil = 随便挑）。放在中继前面时要和 TCP 代理同一个端口号：
+    ///   中继配置里 TCP 与 STUN 共用一个端口。
+    init(targetPort: UInt16, impairment: RemoteLinkImpairment = .clean, seed: UInt64 = 1,
+         listenPort: UInt16? = nil) throws {
         target = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: targetPort)!)
         self.impairment = impairment
         self.seed = seed
-        listener = try NWListener(using: .udp, on: .any)
+        listener = try NWListener(using: .udp, on: listenPort.flatMap { NWEndpoint.Port(rawValue: $0) } ?? .any)
         listener.stateUpdateHandler = { [weak self] state in
             guard case .ready = state, let self else { return }
             self.portValue = self.listener.port?.rawValue

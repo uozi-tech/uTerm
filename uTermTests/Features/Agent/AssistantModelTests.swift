@@ -142,7 +142,7 @@ final class AssistantModelTests: XCTestCase {
         model.input = "hello"
         await model.send(serverContext: "")
         guard case .failed(let m) = model.state else { return XCTFail("应为 .failed") }
-        XCTAssertTrue(m.contains("provider"))
+        XCTAssertEqual(m, "尚未配置模型服务")
     }
 
     func testActiveProviderFallbackToLowestSortOrder() {

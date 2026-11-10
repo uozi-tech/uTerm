@@ -43,14 +43,14 @@ final class TerminalActivityTests: XCTestCase {
     func testWindowWithSeveralBusyTabsCountsAndListsThem() throws {
         let prompt = try XCTUnwrap(TerminalClosePrompt.forWindow(
             [.running("npm"), .running("vim"), .running("npm"), .running(nil), .idle]))
-        XCTAssertEqual(prompt.title, "有 4 个标签还有程序在运行")
+        XCTAssertEqual(prompt.title, "有 4 个标签页还有程序在运行")
         XCTAssertEqual(prompt.message, "npm、vim。关闭这个窗口可能会中断它们。")
     }
 
     func testWindowWithOnlyUnknownTabsHedges() throws {
         let prompt = try XCTUnwrap(TerminalClosePrompt.forWindow([.unknown, .idle, .unknown]))
         XCTAssertEqual(prompt.title, "这个窗口里可能还有程序在运行")
-        XCTAssertTrue(prompt.message.contains("有 2 个标签"))
+        XCTAssertTrue(prompt.message.contains("有 2 个标签页"))
     }
 
     // MARK: - 解析 ps

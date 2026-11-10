@@ -89,6 +89,10 @@ final class RemoteDesktopProtocolTests: XCTestCase {
         XCTAssertEqual(try RemoteJSON.decode(RemoteDesktopInfo.self, from: RemoteJSON.encode(info)), info)
         let rejected = RemoteDesktopInfo(requestID: UUID(), failure: .screenPermission, message: "没授权")
         XCTAssertEqual(try RemoteJSON.decode(RemoteDesktopInfo.self, from: RemoteJSON.encode(rejected)), rejected)
+        for paused in [true, false] {
+            let pause = RemoteDesktopPauseRequest(paused: paused)
+            XCTAssertEqual(try RemoteJSON.decode(RemoteDesktopPauseRequest.self, from: RemoteJSON.encode(pause)), pause)
+        }
     }
 
     func test_message_kinds_keep_their_wire_values() {
@@ -102,6 +106,8 @@ final class RemoteDesktopProtocolTests: XCTestCase {
         XCTAssertEqual(RemoteMessage.Kind.desktopStarted.rawValue, 25)
         XCTAssertEqual(RemoteMessage.Kind.desktopFrame.rawValue, 26)
         XCTAssertEqual(RemoteMessage.Kind.desktopCursor.rawValue, 27)
+        XCTAssertEqual(RemoteMessage.Kind.desktopPause.rawValue, 44)
+        XCTAssertEqual(RemoteFeature.desktopPause, "desktop-pause")
         XCTAssertEqual(RemoteVideoCodec(wireValue: RemoteVideoCodec.hevc.wireValue), .hevc)
         XCTAssertEqual(RemoteVideoCodec(wireValue: RemoteVideoCodec.h264.wireValue), .h264)
     }

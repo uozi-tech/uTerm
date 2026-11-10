@@ -37,7 +37,10 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.localWorkspaces,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
-                                          RemoteFeature.relayConfig, RemoteFeature.desktopUnlock]
+                                          RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
+                                          RemoteFeature.desktopUnlockOutcomes,
+                                          RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
+                                          RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -54,6 +57,16 @@ nonisolated struct RemoteHeartbeat: Sendable {
     var probeReplyLimit: TimeInterval = 5
     /// Mac：声明支持心跳的手机这么久无声就断开。
     var peerSilenceLimit: TimeInterval = 30
+    /// 手机：链路一直有数据在走（开着屏幕、终端在刷）时也隔这么久 ping 一次，好让往返读数不断档。
+    /// 只按「安静了才 ping」的话，流不停就永远测不到往返。
+    var roundTripRefresh: TimeInterval = 15
+    /// 手机：开着远程桌面（数据本该一直在走）时，安静这么久就 ping。
+    var activeQuietPing: TimeInterval = 1
+    /// 手机：开着远程桌面时，ping 发出后这么久一个字节都没收到就判死。实测往返长时按 3 倍往返放宽，
+    /// 拥塞但还活着的中继（往返十几秒）不会被误判。
+    var activeReplyLimit: TimeInterval = 2.5
+    /// 开着远程桌面时检查得勤一点（平时约 1.7 秒一拍）。
+    var activeTick: TimeInterval = 0.5
 
     static let standard = RemoteHeartbeat()
 }
@@ -84,6 +97,24 @@ nonisolated enum RemoteFeature {
     /// 远程桌面里的锁屏状态、远程解锁与帘幕模式：认得 `desktopScreenState` / `desktopUnlock` /
     /// `desktopUnlockResult` / `desktopCurtain`。两端都要声明，Mac 只给声明了的手机发状态。
     static let desktopUnlock = "desktop-unlock"
+    /// 认得解锁结果里的 `inputBlocked`。老手机不认（整条结果解不开、等到超时），Mac 只对声明了的发，
+    /// 对老手机退回 `stillLocked`。
+    static let desktopUnlockOutcomes = "desktop-unlock-outcomes"
+    /// 手机退到后台时让 Mac 暂停推流、回前台再接上：认得 `desktopPause`。老 Mac 不认这个类型（收到会当未知消息
+    /// 断开整条连接），所以手机只对声明了这一项的 Mac 发；老 Mac 照旧推流，手机退回「照收照确认、不解码」。
+    static let desktopPause = "desktop-pause"
+    /// 远程桌面的声音：认得 `desktopAudio` / `desktopAudioFormat` / `desktopAudioFrame`。两端都要声明：
+    /// 手机只对声明了的 Mac 发开关，Mac 只给声明了的手机送声音。
+    static let desktopAudio = "desktop-audio"
+    /// 声音的无损档（ALAC）：认得 `RemoteAudioCodec.alac`。老 Mac 解手机的编码列表时遇到不认识的值会整条请求
+    /// 解不开，所以手机只对声明了这一项的 Mac 列无损；Mac 只在手机列了时才用。
+    static let desktopAudioLossless = "desktop-audio-lossless"
+    /// 终端里程序（Claude Code、Codex……）的状态：认得 `programStatus`。Mac 只给声明了的设备推；
+    /// 老 Mac 不推，设备上的标签照旧只显示连接状态。
+    static let programStatus = "program-status"
+    /// 链路层的端到端计量与分片（见 `RemoteLinkFlow`）：认得 `linkAck` / `linkFragment`。两端都声明才启用，
+    /// 否则照旧整条消息直接交给 TCP。
+    static let linkFlow = "link-flow"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -187,6 +218,33 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopUnlock = 37
         /// 打开 / 关闭帘幕模式（桌面通道）。负载 = `RemoteDesktopCurtainRequest`（JSON）。
         case desktopCurtain = 38
+        /// 打开 / 关闭声音（桌面通道）。负载 = `RemoteDesktopAudioRequest`（JSON）。只发给 `features` 带
+        /// `desktop-audio` 的 Mac。
+        case desktopAudio = 39
+
+        // Mac → 手机（续）
+        /// 声音流的格式（桌面通道）。负载 = `RemoteDesktopAudioFormat`（JSON）。只发给声明了 `desktop-audio` 的手机。
+        case desktopAudioFormat = 40
+        /// 一包声音（桌面通道）。负载 = `RemoteDesktopAudioFrame`（二进制）。
+        case desktopAudioFrame = 41
+
+        // 两个方向（链路层，`RemoteLink` 自己收发，不交给上层）
+        /// 累计收到多少链路字节（`[u64]`，通道 0）。只在两端都声明 `link-flow` 时发。
+        case linkAck = 42
+        /// 大消息的一片（`[u8 标志（bit0 = 最后一片）][u32 原消息的通道][片]`，通道 0）。拼齐后按原消息交给上层。只在两端都声明 `link-flow` 时发。
+        case linkFragment = 43
+
+        // 之后的编号与声音、链路层无关
+        /// 暂停 / 恢复推流（桌面通道）。负载 = `RemoteDesktopPauseRequest`（JSON）。手机退到后台时发「暂停」，
+        /// 回前台发「恢复」——恢复同时就是关键帧请求。只发给 `features` 带 `desktop-pause` 的 Mac。
+        case desktopPause = 44
+        /// Mac 上光标的形状（桌面通道）：形状变了才发。负载 = `RemoteDesktopCursorImage`（JSON）。
+        /// 只在开流请求带 `cursorImages` 时才发，老客户端不认这个类型。
+        case desktopCursorImage = 45
+        /// 各终端里程序的状态（通道 0）。负载 = `RemoteProgramStatusUpdate`（JSON）。订阅会话列表后先发一份
+        /// 全量快照，之后只发变了的会话。中途接入的设备看不到早先的 OSC 7501，所以状态由 Mac 记着、推过来，
+        /// 不靠设备自己解析镜像字节。只发给 `features` 带 `program-status` 的设备。
+        case programStatus = 46
     }
 
     var kind: Kind
@@ -235,17 +293,17 @@ nonisolated enum RemoteProtocolError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .malformedMessage: return "远控消息格式无效"
-        case .unknownMessage(let kind): return "未知的远控消息类型 \(kind)"
-        case .frameTooLarge(let bytes): return "远控数据帧过大（\(bytes) 字节）"
-        case .versionMismatch(let version): return "远控协议版本不兼容（对端 \(version)，本机 \(RemoteConstants.protocolVersion)），请把两端更新到同一版本"
-        case .handshakeFailed(let reason): return "远控握手失败：\(reason)"
-        case .decryptionFailed: return "远控数据校验失败，连接已断开"
-        case .peerIdentityChanged: return "这台 Mac 的身份与配对时不一致，已拒绝连接。若重装过 uTerm，请在手机上移除后重新配对"
+        case .malformedMessage: return "远程控制消息格式无效"
+        case .unknownMessage(let kind): return "未知的远程控制消息类型 \(kind)"
+        case .frameTooLarge(let bytes): return "远程控制数据帧过大（\(bytes) 字节）"
+        case .versionMismatch(let version): return "远程控制协议版本不兼容（对端 \(version)，本机 \(RemoteConstants.protocolVersion)），把两端的 uTerm 更新到同一版本"
+        case .handshakeFailed(let reason): return "远程控制握手失败：\(reason)"
+        case .decryptionFailed: return "远程控制数据校验失败，连接已断开"
+        case .peerIdentityChanged: return "这台 Mac 的身份与配对时不一致，已拒绝连接。若重装过 uTerm，在手机上移除这台 Mac 后重新配对"
         case .notPaired: return "这台设备尚未配对"
         case .pairingRejected: return "Mac 拒绝了配对请求"
-        case .timeout: return "远控连接超时"
-        case .closed: return "远控连接已断开"
+        case .timeout: return "远程控制连接超时"
+        case .closed: return "远程控制已断开"
         }
     }
 
@@ -304,8 +362,20 @@ nonisolated struct RemoteSessionInfo: Codable, Equatable, Sendable, Identifiable
     var controlledBy: String?
     /// Mac 标签上此刻显示的名字，跟着程序设的标题变。老版本 Mac 不发这个键。
     var tabTitle: String? = nil
+    /// 在 Mac 上的排位（0 起）：窗口按打开先后，窗口里的组从左到右、从上到下，组里按标签顺序。列表本身也按它排。
+    /// 老版本 Mac 不发这个键，那时设备上的标签保持原来的顺序。
+    var order: Int? = nil
 
     var displayTitle: String { tabTitle ?? title }
+}
+
+extension Array where Element == RemoteSessionInfo {
+    /// Mac 上的标签顺序；有哪一条没带排位（老版本 Mac）就是 nil，设备上的标签别跟着动。
+    nonisolated var macTabOrder: [UUID]? {
+        let ranked = compactMap { info in info.order.map { (rank: $0, id: info.id) } }
+        guard !isEmpty, ranked.count == count else { return nil }
+        return ranked.sorted { $0.rank < $1.rank }.map(\.id)
+    }
 }
 
 nonisolated struct RemoteGridSize: Equatable, Sendable {
@@ -446,6 +516,9 @@ nonisolated struct RemoteHello: Codable, Equatable, Sendable {
     /// 机型的商品名（如「iPhone 16 Pro」，见 `RemoteDeviceModel`）。只作展示；老版本不带这个键。
     /// 握手按收到的原始字节做转录，多出来的键不影响老版本对端认证。
     var deviceModel: String? = nil
+    /// 对端是什么设备（`RemoteDevicePlatform` 的原始值），只作展示。用字符串不用枚举：以后多一种取值，
+    /// 老版本解不出整条握手消息。老版本不带这个键。
+    var platform: String? = nil
 
     func supports(_ feature: String) -> Bool {
         features?.contains(feature) ?? false

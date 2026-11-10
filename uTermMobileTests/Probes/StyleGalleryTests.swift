@@ -134,7 +134,7 @@ final class StyleGalleryTests: XCTestCase {
                     .environment(store(tab: .settings))
                     .environment(sync)
                     .environment(lan)
-                    .environment(RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage())))
+                    .environment(RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())))
                     .modelContainer(c)
             }
             try await shoot("keys", on: device) {
@@ -172,7 +172,8 @@ final class StyleGalleryTests: XCTestCase {
                     .environment(store(tab: .commands))
                     .modelContainer(c)
             }
-            try await shoot("connecting", on: device) {
+            // 连接中页的内容晚 150ms 露面、再淡入，默认 350ms 会截到半透明。
+            try await shoot("connecting", on: device, settle: .milliseconds(700)) {
                 ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
                                     onFinish: {}, onCancel: {}, onRetry: {})
                     .environment(store(tab: .hosts))
@@ -189,7 +190,7 @@ final class StyleGalleryTests: XCTestCase {
                                   safeAreaInsets: EdgeInsets(top: 41, leading: 0, bottom: 0, trailing: 0))
         duo.topBar = CGRect(x: 0, y: 0, width: 520, height: 48)
         duo.isUnfoldedPhone = true
-        try await shoot("connecting-duo-status-row", on: unfolded) {
+        try await shoot("connecting-duo-status-row", on: unfolded, settle: .milliseconds(700)) {
             ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
                                 onFinish: {}, onCancel: {}, onRetry: {})
                 .environment(store(tab: .hosts))
@@ -244,18 +245,16 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    /// 主机页的「我的 Mac」：一台在线（调试直连）、一台不在线（名册里的），标题右侧是扫码配对。
+    /// 主机页的「我的 Mac」：一台在线（调试直连）、一台不在线（配对过的），标题右侧是扫码配对。
     func testRemoteMacSection() async throws {
         defer { MobileProbeWindow.closeAll() }
         let suite = "StyleGalleryTests.remoteMacs.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("127.0.0.1:1", forKey: "RemoteDebugEndpoint")
-        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
-        roster.publish(RemoteRosterEntry(id: UUID(), name: "办公室 iMac", publicKey: Data(count: 32), platform: .mac,
-                                         updatedAt: .now))
-        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
-                                           roster: roster, defaults: defaults)
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try identity.trust(RemotePeer(id: UUID(), name: "办公室 iMac", publicKey: Data(count: 32), pairedAt: .now))
+        let directory = RemoteMacDirectory(identity: identity, defaults: defaults)
         directory.activate()
         for device in Self.devices {
             try await shoot("remote-mac-section", on: device) {
@@ -299,7 +298,7 @@ final class StyleGalleryTests: XCTestCase {
             }
             log.append(seeded)
         }
-        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
                                            defaults: defaults)
         for device in Self.devices {
             try await shoot("network-diagnostics", on: device, settle: .milliseconds(600)) {

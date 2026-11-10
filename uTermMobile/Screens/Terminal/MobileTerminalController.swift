@@ -18,7 +18,10 @@ final class MobileTerminalController {
         didSet {
             if !canTakeKeyboard { resignKeyboard() }
             // 标题说的是那条连接上正在跑的程序，连接没了就不再成立（同 mac `TerminalSession`）。
-            if state != .connected { shellTitle = nil }
+            if state != .connected {
+                shellTitle = nil
+                resetProgramStatus()
+            }
         }
     }
     /// 本会话是不是此刻唯一该拿键盘的那个（聚焦格的前台标签、终端模式、上面没有连接中页 /
@@ -35,6 +38,12 @@ final class MobileTerminalController {
     @ObservationIgnored private var keyboardCollapsed = false
     /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil（标签退回主机名）。
     var shellTitle: String?
+    /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
+    /// 见 `ProgramStatusTracker`）。远控标签不用它：状态由 Mac 推来，见 `TermTab.programStatus`。
+    private(set) var programStatus: ProgramStatusRecord?
+    @ObservationIgnored private var programStatusTracker = ProgramStatusTracker()
+    /// 已经注册过程序状态处理器的终端视图（横屏切外壳时视图复用，不重复注册）。
+    @ObservationIgnored private weak var programStatusView: SwiftTerm.TerminalView?
     /// 曾经连上过：用于把随后的 `.disconnected` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
@@ -82,16 +91,62 @@ final class MobileTerminalController {
     var isForeground = true {
         didSet {
             guard isForeground != oldValue else { return }
-            outputPump.pacing = isForeground ? .foreground : .background
-            if isForeground { outputPump.restartFlushLoop() }
+            updatePacing()
+            syncRemoteWatch()
+            if isLooking { acknowledgeProgramStatus() }
         }
     }
+
+    /// 整个 App 在后台（`didEnterBackground` → `willEnterForeground`）。这段时间里 SSH 照常收发
+    ///（并行执行靠 `BGContinuedProcessingTask` 续命、或系统给的几十秒），只是谁也看不见终端：
+    /// 前台标签也按后台档喂（64ms 一拍，主线程每秒醒 16 次而不是 60 次），终端视图不画。
+    /// 字节一个不少照常解析，回到前台立刻重起泵、补画一次。网络 I/O 不受影响——入站任务不看它。
+    @ObservationIgnored private(set) var isAppInBackground = UIApplication.shared.applicationState == .background {
+        didSet {
+            guard isAppInBackground != oldValue else { return }
+            (terminalView as? MTerminalView)?.isAppInBackground = isAppInBackground
+            updatePacing()
+            syncRemoteWatch()
+            if isLooking { acknowledgeProgramStatus() }
+        }
+    }
+
+    /// 进出后台由通知驱动；测试直接调它。
+    func appVisibilityChanged(inBackground: Bool) {
+        isAppInBackground = inBackground
+    }
+
+    /// 只有「前台标签 + App 在前台」才按 16ms 喂。
+    nonisolated static func pacing(isForeground: Bool, isAppInBackground: Bool) -> TerminalFlushPacing {
+        isForeground && !isAppInBackground ? .foreground : .background
+    }
+
+    private func updatePacing() {
+        let next = Self.pacing(isForeground: isForeground, isAppInBackground: isAppInBackground)
+        guard next != outputPump.pacing else { return }
+        outputPump.pacing = next
+        // 换到前台档时截断后台档那一拍的等待。
+        if next == .foreground { outputPump.restartFlushLoop() }
+    }
+
+    /// 远控标签：告诉后端此刻有没有人看着它（与按前台档喂字节同一个判定）。Mac 长时间离线时，没人看的标签
+    /// 重连退避才会放长到最长一分钟；切回来的那一刻后端立刻重试（见 `RemoteReconnectPolicy`）。
+    private func syncRemoteWatch() {
+        guard let remote = connection as? RemoteTerminalBackend else { return }
+        remote.setWatched(isLooking)
+        if isLooking { remote.client.acknowledgeProgramStatus(for: remote.sessionID) }
+    }
+
+    /// 用户此刻看得见这个终端：前台标签，且 App 在前台。
+    var isLooking: Bool { isForeground && !isAppInBackground }
 
     typealias FlushPacing = TerminalFlushPacing
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
     @ObservationIgnored private nonisolated(unsafe) var metaResetObserver: NSObjectProtocol?
+    @ObservationIgnored private nonisolated(unsafe) var backgroundObserver: NSObjectProtocol?
+    @ObservationIgnored private nonisolated(unsafe) var foregroundObserver: NSObjectProtocol?
 
     /// 记下首次建连参数，供失败后 `restart()` 在同一控制器 / 同一终端视图上重连。
     @ObservationIgnored private var lastProfile: ServerProfile?
@@ -101,17 +156,74 @@ final class MobileTerminalController {
     /// `transportFactory` 默认真 SSH——生产侧调用点（`TermTab`）不用改。
     init(transportFactory: MobileTerminalTransportFactory = .live) {
         self.transportFactory = transportFactory
+        installAppVisibilityObservers()
+    }
+
+    /// 用 didEnterBackground / willEnterForeground，不用 resign / becomeActive：拉下控制中心、
+    /// 来电横幅、切 App 卡片时 App 只是 inactive，终端还看得见，不能停画。
+    private func installAppVisibilityObservers() {
+        let center = NotificationCenter.default
+        backgroundObserver = center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appVisibilityChanged(inBackground: true) }
+        }
+        foregroundObserver = center.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                                object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appVisibilityChanged(inBackground: false) }
+        }
     }
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
         outputPump.terminalView = view
+        (view as? MTerminalView)?.isAppInBackground = isAppInBackground
         // 远控快照带这么多行历史，接收端要装得下（SwiftTerm 默认只有 500 行）。
         let terminal = view.getTerminal()
         if (terminal.options.scrollback) < RemoteConstants.snapshotScrollback {
             terminal.changeScrollback(RemoteConstants.snapshotScrollback)
         }
         installModifierResetObserversIfNeeded()
+        installProgramStatusHandlers(on: view)
+    }
+
+    // MARK: 程序状态（OSC 7501 / 133）
+
+    private func installProgramStatusHandlers(on view: SwiftTerm.TerminalView) {
+        guard programStatusView !== view else { return }
+        programStatusView = view
+        ProgramStatusOSC.install(on: view.getTerminal(), onMessage: { [weak self] message in
+            // 远控标签：Mac 自己回答查询、经远控协议推状态。这里再答一遍就成了 Mac 上的程序收到的多余输入。
+            guard let self, !(self.connection is RemoteTerminalBackend) else { return }
+            self.applyProgramStatus(message)
+        }, onPrompt: { [weak self] in
+            guard let self else { return }
+            self.programStatusTracker.promptStarted()
+            self.publishProgramStatus()
+        })
+    }
+
+    /// 手机上没有系统通知可发：需要注意的状态只上标签。
+    func applyProgramStatus(_ message: ProgramStatusMessage) {
+        if programStatusTracker.receive(message, isLooking: isLooking) == .reply {
+            write(Data(ProgramStatusTracker.queryReply))
+        }
+        publishProgramStatus()
+    }
+
+    /// 用户看到结果了：`done` / `error` 不再上标签。
+    func acknowledgeProgramStatus() {
+        programStatusTracker.acknowledgeResults()
+        publishProgramStatus()
+    }
+
+    private func resetProgramStatus() {
+        programStatusTracker.reset()
+        publishProgramStatus()
+    }
+
+    private func publishProgramStatus() {
+        let next = programStatusTracker.display
+        if next != programStatus { programStatus = next }
     }
 
     // MARK: Ctrl / Alt 粘滞修饰
@@ -242,7 +354,7 @@ final class MobileTerminalController {
             return conn
         case .failure(let error):
             // 工厂只会从认证材料解析那一步抛错（与抽工厂之前同义）。
-            state = .failed("认证材料解析失败：\(error.localizedDescription)")
+            state = .failed("凭据解析失败：\(error.localizedDescription)")
             return nil
         }
     }
@@ -277,6 +389,10 @@ final class MobileTerminalController {
                 self?.isReconnecting = false
             }
         }
+        if let remote = conn as? RemoteTerminalBackend {
+            remote.client.setProgramStatusLooker(remote.sessionID) { [weak self] in self?.isLooking ?? false }
+        }
+        syncRemoteWatch()
         acceptsImages = conn is any TerminalImageReceiving
         let exitStream = conn.exitStream
         outputPump.reset()
@@ -316,9 +432,9 @@ final class MobileTerminalController {
                 guard let self else { return }
                 switch delivery {
                 case .clipboard:
-                    self.showImageNote("图片已放进 Mac 剪贴板，并按了 Ctrl+V")
+                    self.showImageNote("图片已放入 Mac 剪贴板，并已发送 Ctrl+V")
                 case .file(let path):
-                    self.showImageNote("图片已传到 \(path)")
+                    self.showImageNote("图片已上传到 \(path)")
                 }
             } catch {
                 self?.showImageNote(error.localizedDescription)
@@ -364,16 +480,14 @@ final class MobileTerminalController {
         paste(text)
     }
 
-    /// 发送提示词并提交。回车必须隔一下单独发：Codex 把和文字同一包到达的回车当粘贴里的换行，
-    /// 文字留在输入框不提交（实测 Codex 0.166.0）。
+    /// 发送提示词并提交。回车隔一下单独发（见 `AgentPromptSubmit.enterDelay`）。
     func submitPrompt(_ text: String) {
         insertPrompt(text)
         Task { [weak self] in
-            try? await Task.sleep(for: Self.promptSubmitDelay)
+            try? await Task.sleep(for: AgentPromptSubmit.enterDelay)
             self?.sendText("\r")
         }
     }
-    private static let promptSubmitDelay = Duration.milliseconds(120)
 
     /// 把新尺寸告诉远端：只合并同一轮主线程里的连续变化，和上次发出的相同就不发（见 `TerminalInputChannel`）。
     func resize(cols: UInt16, rows: UInt16) {
@@ -413,6 +527,9 @@ final class MobileTerminalController {
         reconnectTask?.cancel()
         reconnectTask = nil
         isReconnecting = false
+        if let remote = connection as? RemoteTerminalBackend {
+            remote.client.setProgramStatusLooker(remote.sessionID, nil)
+        }
         inputChannel.unbind()
         let conn = connection
         Task { await conn?.close() }
@@ -422,6 +539,8 @@ final class MobileTerminalController {
     deinit {
         if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
         if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
+        if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         // 输出泵与输入通道随控制器释放，各自的 deinit 收尾。
         exitTask?.cancel(); connectTask?.cancel()
     }

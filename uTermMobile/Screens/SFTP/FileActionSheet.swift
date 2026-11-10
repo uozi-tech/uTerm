@@ -178,7 +178,7 @@ struct FileActionSheet: View {
                     header.padding(.bottom, 8)
                     if isFolder { actionRow("folder-tag", "进入文件夹", action: onEnter) }
                     actionRow("download", "下载", action: onDownload)
-                    actionRow("copy", "复制路径", action: onCopyPath)
+                    actionRow("copy", "拷贝路径", action: onCopyPath)
                     actionRow("edit", "重命名", action: onRename)
                     NavigationLink { PermissionGrid(entry: entry, onApply: onChmod) } label: {
                         actionLabel("lock", "权限…", chevron: true)

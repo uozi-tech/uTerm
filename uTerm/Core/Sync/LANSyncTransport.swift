@@ -29,7 +29,7 @@ enum LANSyncTransportError: LocalizedError {
         case .authenticationFailed:
             return "局域网同步配对码不正确或认证失败"
         case .rejected:
-            return "移动设备拒绝了本次同步"
+            return "iPhone 或 iPad 拒绝了本次同步"
         }
     }
 }

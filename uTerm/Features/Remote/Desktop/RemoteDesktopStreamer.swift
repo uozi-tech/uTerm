@@ -18,6 +18,13 @@ nonisolated protocol RemoteDesktopFrameSource: AnyObject, Sendable {
     func start(onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
                onStop: @escaping @Sendable (Error?) -> Void) async throws
     func stop()
+    /// 静止精修用的那张：`frame`（之前交出去的某一帧）的高画质版本，没有就是 nil（照用 `frame`）。
+    /// 采集要再缩一截时，运动帧用快的缩法，这里换成 Lanczos 从原始采集重缩。在连接队列上调用。
+    func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer?
+}
+
+nonisolated extension RemoteDesktopFrameSource {
+    func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer? { nil }
 }
 
 /// 输入落点：生产是 `CGEvent` 注入，测试是记录器。在连接队列上调用。
@@ -41,6 +48,45 @@ nonisolated protocol RemoteDesktopClipboardSource: AnyObject, Sendable {
 nonisolated struct RemoteCapturedFrame: @unchecked Sendable {
     let image: CVPixelBuffer
     let captureNanos: UInt64
+    /// 跟上一张采集帧比，抽样点里变了几成（0…1）；nil = 没量（第一张、格式不认）。只用于诊断日志。
+    var change: Double? = nil
+}
+
+/// 量相邻两张采集帧变了多少：在亮度平面（单平面格式就是整张图）上按 256×256 的格子抽字节，数有几成不一样。
+/// 只为诊断「编码器把在变的画面当成没变跳过了」还是「画面本来就几乎没变」。在采集回调的队列上用，不加锁。
+nonisolated final class RemoteFrameChangeProbe: @unchecked Sendable {
+    static let grid = 256
+    private var previous: [UInt8] = []
+    private var previousSize = (0, 0)
+
+    func measure(_ image: CVPixelBuffer) -> Double? {
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        let planar = CVPixelBufferIsPlanar(image)
+        let width = planar ? CVPixelBufferGetWidthOfPlane(image, 0) : CVPixelBufferGetWidth(image)
+        let height = planar ? CVPixelBufferGetHeightOfPlane(image, 0) : CVPixelBufferGetHeight(image)
+        let stride = planar ? CVPixelBufferGetBytesPerRowOfPlane(image, 0) : CVPixelBufferGetBytesPerRow(image)
+        guard width > 0, height > 0,
+              let base = planar ? CVPixelBufferGetBaseAddressOfPlane(image, 0) : CVPixelBufferGetBaseAddress(image)
+        else { return nil }
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        let bytesPerPixel = max(1, stride / width)
+        var samples = [UInt8](repeating: 0, count: Self.grid * Self.grid)
+        for row in 0..<Self.grid {
+            let y = row * height / Self.grid
+            for column in 0..<Self.grid {
+                samples[row * Self.grid + column] = bytes[y * stride + column * width / Self.grid * bytesPerPixel]
+            }
+        }
+        defer {
+            previous = samples
+            previousSize = (width, height)
+        }
+        guard previousSize == (width, height), previous.count == samples.count else { return nil }
+        var changed = 0
+        for index in samples.indices where samples[index] != previous[index] { changed += 1 }
+        return Double(changed) / Double(samples.count)
+    }
 }
 
 /// 一条桌面流的发送端：采集 → 节拍（背压 / 丢帧）→ 编码 → 发送，以及确认、输入、光标。
@@ -71,6 +117,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 公网直连时视频走的不可靠通道；nil = 视频是 `link` 上的普通消息。
     private let video: (any RemoteVideoDatagramChannel)?
+    /// 同上，给声音用：视频走数据报时声音也走。
+    var datagramChannel: (any RemoteVideoDatagramChannel)? { video }
     private let source: any RemoteDesktopFrameSource
     private let injector: (any RemoteDesktopInputSink)?
     private let cursorLocation: (@Sendable () -> CGPoint?)?
@@ -81,20 +129,52 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     // 以下只在 link.queue 上。
     private var encoder: RemoteVideoEncoder?
-    /// 旁路精修的编码器（`sidecarRefine` 时才有）。
+    /// 旁路精修的编码器（`sidecarRefine` 时才有）：第一次精修时建，闲久了放掉。
     private var stillEncoder: RemoteVideoEncoder?
+    /// 排着的「放掉旁路精修编码器」。每次精修后重排。
+    private var stillEncoderRelease: DispatchWorkItem?
     private var pacer = RemoteDesktopPacer<RemoteCapturedFrame>()
     private var rate: RemoteRateController
     private var quality = RemoteQualityCap(now: DispatchTime.now().uptimeNanoseconds)
+    /// 告诉编码器的帧率跟着实际采集帧率走（见 `RemoteEncoderFrameRate`）。
+    private var encoderFrameRateEstimate = RemoteEncoderFrameRate()
+    private var encoderFrameRate = 0
     private var isLive = false
     private var isStopped = false
+    /// 手机在后台（`desktopPause`）：照常采集（留着最新一张），但不编码、不发帧、不发光标。只属于这一条流——
+    /// 重连 / 重新开流是新的发送端，从不暂停起步，不会卡在暂停里。
+    private var isPaused = false
     private var lastFrame: RemoteCapturedFrame?
     private var lastCaptureNanos: UInt64 = 0
+    /// 采集回调里量画面变化（诊断用）。采集回调是串行的。
+    private let changeProbe = RemoteFrameChangeProbe()
+    private var diagnostics = RemoteEncoderDiagnostics()
+    private var lastDiagnosticsLog: UInt64 = 0
+    /// 被编码器丢掉、还没补发过的那一张：画面随后静止就补发一次（见 `resendIfStill`）。
+    private var droppedCapture: UInt64?
     private var refined = true
     private var forceKeyframe = true
     private var forceLTRRefresh = false
+    /// 上一个恢复帧（关键帧 / LTR 刷新帧）被编码器丢了：下一个恢复帧临时按码控目标编（见 `encode`）。
+    private var recoveryDropped = false
+    /// 手机在等主流的恢复帧（报了丢帧 / 解坏 / 要关键帧），还没确认收到。这期间不精修：精修帧（尤其是旁路那张
+    /// 高画质关键帧）跟恢复帧抢窄链路，手机上只剩隔一阵来一张的精修在动（2026-11-08 mini）。
+    private var awaitingRecovery = false
+    /// 已发出、还没确认的主流恢复帧（关键帧 / LTR 刷新帧）。确认了就不再等恢复。
+    private var recoverySequences: Set<UInt32> = []
+    /// 已发出、还没确认的精修帧。它们的确认不进码控与往返读数：一张 4K 精修几百 KB，「采集 → 解码完」
+    /// 量的是它自己发多久，不是链路排队。
+    private var refineSequences: Set<UInt32> = []
     /// 这条链路现在的纠错强度（见 `RemoteLossPolicy`）。
     private var fecGroupSize = 0
+    /// 最近发出的一个主流关键帧有多大：还没精修过时拿它估一张精修多大。
+    private var lastKeyframeBytes = 0
+    /// 旁路精修各档画质最近一次编出来多大（画质 → 字节）。精修按它自己的大小判断链路发不发得完，不按关键帧。
+    private var refineBytes: [Double: Int] = [:]
+    /// 主流里精修（老手机）最近一次编出来多大。
+    private var inStreamRefineBytes: Int?
+    /// 视频延迟分段（见 `RemoteLatencyBreakdown`）。
+    private var latency = RemoteLatencyBreakdown()
     private var pasteAssembler = RemoteDesktopPasteAssembler()
     private var linkState: RemoteLinkState?
     /// 码控上一次定的码率（不扣纠错、不看节奏），用来判断这次是不是在往下调。
@@ -110,6 +190,20 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
     /// 手机开流时要了画面往返读数：随码控日志每 2 s 发一条 `desktopLatency`。
     private let sendsLatency: Bool
+    /// 窄链路降分辨率：主流按几分之一的尺寸编（见 `RemoteStreamScalePolicy`）。只在直连按发送节奏估容量时动；
+    /// 采集尺寸不变，送编码前用 `scaler` 缩。旁路精修照旧全尺寸。
+    private var scaleSelector = RemoteStreamScaleSelector()
+    /// 最近的采集 / 送出帧数（每份链路状态记一次），判断主流是不是在挨饿（见 `RemoteStreamScalePolicy.starved`）。
+    private var frameCountSamples: [(nanos: UInt64, captured: Int, sent: Int)] = []
+    private var scaler: RemoteFastFrameScaler?
+    private var scalerFormat: OSType = 0
+    /// 选好了、还没换成的档：在途还积着帧时先不换（见 `applyPendingScale`）。
+    private var pendingScale: (scale: RemoteStreamScale, from: RemoteStreamScale)?
+    /// 换尺寸时还没确认完的帧来自旧编码器：它们的长期参考帧令牌不能交给新编码器。序号小于它的确认不传令牌。
+    private var ltrSequenceFloor: UInt32 = 0
+    /// 建出来的时刻与第一帧发没发（日志：开流到第一帧要多久）。
+    private let createdNanos = DispatchTime.now().uptimeNanoseconds
+    private var sentFirstFrame = false
 
     init(link: RemoteLink, channel: UInt32, codec: RemoteVideoCodec, width: Int, height: Int,
          display: RemoteDesktopDisplay, sidecarRefine: Bool = false, sendsLatency: Bool = false,
@@ -133,28 +227,27 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.clipboard = clipboard
         self.onFirstInput = onFirstInput
         self.onSourceStopped = onSourceStopped
-        rate = RemoteRateController(width: width, height: height, path: path, now: DispatchTime.now().uptimeNanoseconds)
+        rate = RemoteRateController(width: width, height: height, path: path, paced: video != nil,
+                                    now: DispatchTime.now().uptimeNanoseconds)
     }
 
     /// 建编码器、开采集。采集出的帧在 `activate` 之前只留最新一张，不编码不发送。
     func start() async throws {
         let encoder = try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: rate.bitrate,
                                              frameRate: rate.frameRate, tenBit: sidecarRefine, ltr: video != nil)
-        let stillEncoder = sidecarRefine
-            ? try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: 0, frameRate: rate.frameRate,
-                                     tenBit: true, purpose: .still)
-            : nil
+        // 旁路精修的编码器不在这里建：第一次精修时才建，闲 `stillEncoderIdleNanos` 就放掉（见 `stillEncoderForUse`）。
         // 异步挂上即可：`activate` 排在它后面，之前采到的帧只留着不编。
         link.queue.async {
             self.encoder = encoder
-            self.stillEncoder = stillEncoder
         }
         appliedRate = rate.bitrate
+        encoderFrameRate = rate.frameRate
         stats.setBitrate(rate.bitrate)
         try await source.start(
             onFrame: { [weak self] image, nanos in
                 guard let self else { return }
-                let frame = RemoteCapturedFrame(image: image, captureNanos: nanos)
+                let frame = RemoteCapturedFrame(image: image, captureNanos: nanos,
+                                                change: self.changeProbe.measure(image))
                 self.link.queue.async { self.captured(frame) }
             },
             onStop: { [weak self] error in
@@ -196,6 +289,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             self.clipboardTimer = nil
             self.encoder = nil
             self.stillEncoder = nil
+            self.stillEncoderRelease?.cancel()
+            self.stillEncoderRelease = nil
             self.lastFrame = nil
             _ = self.pacer.takePending()
         }
@@ -235,12 +330,16 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             if let clipboard { seenClipboardChange = clipboard.changeCount }
         case .desktopKeyframe:
             forceKeyframe = true
+            awaitingRecovery = true
             // 屏幕静止时不会有新帧来触发编码：把最后一帧重编成关键帧。
             if let lastFrame, pacer.pending == nil { offer(lastFrame) }
         case .desktopVideoLost:
             guard let lost = try? RemoteDesktopVideoLost(decoding: message.payload) else { return }
             // 手机说放弃了，就算编码序号已经被别的途径释放过（空列表），也要恢复：它在等。
             video?.videoLost(lost.videoSequences) { [weak self] in self?.framesLost($0, recoverEvenIfEmpty: true) }
+        case .desktopPause:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopPauseRequest.self, from: message.payload) else { return }
+            setPaused(request.paused)
         default:
             break
         }
@@ -248,17 +347,23 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     private func captured(_ frame: RemoteCapturedFrame) {
         guard !isStopped else { return }
+        diagnostics.recordCapture(change: frame.change)
+        logDiagnosticsIfDue(now: DispatchTime.now().uptimeNanoseconds)
         lastFrame = frame
         lastCaptureNanos = DispatchTime.now().uptimeNanoseconds
+        updateEncoderFrameRate(now: lastCaptureNanos)
         refined = false
         refineRetries = 0
         stats.recordCapture()
-        guard isLive else { return }
+        latency.recordCaptureDelivery(DispatchTime.now().uptimeNanoseconds &- frame.captureNanos)
+        guard isLive, !isPaused else { return }
         offer(frame)
         scheduleRefineCheck()
     }
 
     private func offer(_ frame: RemoteCapturedFrame) {
+        // 暂停期间所有「补一帧」的入口（关键帧请求、丢帧恢复、码控重送）都落到这里：一律不编，恢复时统一补关键帧。
+        guard !isPaused else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let (submit, congested) = pacer.offer(frame, now: now)
         // 在途满了被替掉只记数，不降码率：往返比帧间隔长也会这样，带宽真不够时延迟会涨，由 `rate` 看延迟判。
@@ -271,6 +376,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 能编就把留着的帧编出去；卡在帧间隔上就到点再来。
     private func pump() {
+        guard !isPaused else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         while let (sequence, frame) = pacer.next(now: now) {
             encode(sequence, frame, refine: false)
@@ -291,8 +397,15 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 这些帧丢了：释放在途，发恢复帧。
     private func framesLost(_ sequences: [UInt32], recoverEvenIfEmpty: Bool = false) {
         guard !isStopped, !sequences.isEmpty || recoverEvenIfEmpty else { return }
-        for sequence in sequences { pacer.abandon(sequence) }
+        for sequence in sequences {
+            pacer.abandon(sequence)
+            refineSequences.remove(sequence)
+            recoverySequences.remove(sequence)
+            latency.forget(sequence: sequence)
+        }
         stats.recordLostFrames(sequences.count)
+        applyPendingScale()
+        awaitingRecovery = true
         if encoder?.usesLTR == true {
             forceLTRRefresh = true
         } else {
@@ -308,10 +421,27 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
+    /// 在途上限：码控按往返给的，直连上再不超过链路约一秒发得完的量（见 `RemoteLossPolicy.inflightByteCap`）。
+    private func updateInflightLimits() {
+        pacer.maxInflightFrames = rate.inflightFrameLimit
+        var bytes = rate.inflightByteLimit
+        if let linkState {
+            bytes = min(bytes, RemoteLossPolicy.inflightByteCap(pacingRate: linkState.pacingRate,
+                                                               roundTripNanos: linkState.roundTripNanos))
+        }
+        pacer.maxInflightBytes = bytes
+    }
+
     /// 链路现状变了：调纠错强度；丢得太多就降码率。
     private func linkChanged(_ state: RemoteLinkState) {
         guard !isStopped else { return }
         linkState = state
+        // 目标跟着链路封顶：不算降码率（画质上限不收紧），编码器拿的 min(目标, 视频份额) 也不变。
+        if rate.capToLink(videoShare: RemoteLossPolicy.videoShare(pacingRate: state.pacingRate)) {
+            appliedRate = min(appliedRate, rate.bitrate)
+        }
+        updateInflightLimits()
+        updateStreamScale(state)
         let groupSize = RemoteLossPolicy.fecGroupSize(lossRate: state.lossRate, roundTripNanos: state.roundTripNanos)
         let now = DispatchTime.now().uptimeNanoseconds
         let lowered = rate.observeLoss(lossRate: state.lossRate, now: now)
@@ -330,21 +460,34 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 给编码器的码率：不超过链路实测能发的，再扣掉纠错分片占的那部分。
     private var mediaBitrate: Int {
         var budget = Double(rate.bitrate)
-        if let linkState { budget = min(budget, linkState.pacingRate * 8 * RemoteLossPolicy.linkShare) }
+        if let linkState { budget = min(budget, RemoteLossPolicy.videoShare(pacingRate: linkState.pacingRate)) }
         return Int(budget * RemoteLossPolicy.mediaBudgetFactor(fecGroupSize: fecGroupSize))
     }
 
     private func acknowledged(_ ack: RemoteDesktopAck) {
         video?.acknowledgeVideo(sequence: ack.sequence)
-        if let token = ack.ltrToken { encoder?.acknowledgeLTR(token) }
+        if let token = ack.ltrToken, ack.sequence >= ltrSequenceFloor { encoder?.acknowledgeLTR(token) }
+        let refine = refineSequences.remove(ack.sequence) != nil
+        if recoverySequences.remove(ack.sequence) != nil, !ack.failed { awaitingRecovery = false }
         guard pacer.acknowledge(ack.sequence) else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let latency = now &- ack.captureNanos
-        stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
-        if ack.failed { forceKeyframe = true }
-        if rate.observe(latencyNanos: latency, now: now) { applyRate() }
-        pacer.maxInflightFrames = rate.inflightFrameLimit
-        pacer.maxInflightBytes = rate.inflightByteLimit
+        if ack.failed {
+            forceKeyframe = true
+            awaitingRecovery = true
+        }
+        if refine || ack.failed {
+            self.latency.forget(sequence: ack.sequence)
+        } else {
+            self.latency.recordAck(sequence: ack.sequence, decodeMicros: ack.decodeMicros, now: now)
+        }
+        if !refine {
+            stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
+            let linkQueueing = linkState.map { $0.queueDelayNanos > rate.config.queueDelayThreshold }
+            if rate.observe(latencyNanos: latency, now: now, linkQueueing: linkQueueing) { applyRate() }
+        }
+        updateInflightLimits()
+        applyPendingScale()
         logRateIfDue(now: now)
         pump()
     }
@@ -360,24 +503,32 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         lastRateLog = (now, current)
         let seconds = Double(now &- last.nanos) / 1e9
         let sent = current.sent - last.stats.sent
-        let trips = current.roundTripNanos.suffix(min(sent, current.roundTripNanos.count)).sorted()
+        // 精修帧的确认不计往返（见 `refineSequences`）。
+        let acked = max(0, sent - (current.refines - last.stats.refines))
+        let trips = current.roundTripNanos.suffix(min(acked, current.roundTripNanos.count)).sorted()
         func percentile(_ p: Double) -> Double {
             trips.isEmpty ? 0 : Double(trips[min(trips.count - 1, Int(Double(trips.count) * p))]) / 1e6
         }
-        let message = String(format: "桌面码控：目标 %.1f Mbps %d fps｜采集 %.1f fps，实发 %.1f fps %.1f Mbps｜往返 p50 %.0f p95 %.0f ms，"
-                             + "基线 %.0f ms，在途上限 %d｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
-                             Double(rate.bitrate) / 1e6, rate.frameRate,
+        let message = String(format: "桌面码控：目标 %.1f Mbps（编码器 %.1f）%d fps（编码器按 %d）｜采集 %.1f fps，实发 %.1f fps %.1f Mbps"
+                             + "（关键帧 %d 精修 %d）｜往返 p50 %.0f p95 %.0f ms，"
+                             + "基线 %.0f ms，在途上限 %d 帧 %d KB｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
+                             Double(rate.bitrate) / 1e6, Double(mediaBitrate) / 1e6, rate.frameRate, encoderFrameRate,
                              Double(current.captured - last.stats.captured) / seconds, Double(sent) / seconds,
                              Double(current.bytes - last.stats.bytes) * 8 / seconds / 1e6,
+                             current.keyframes - last.stats.keyframes, current.refines - last.stats.refines,
                              percentile(0.5), percentile(0.95), Double(rate.baselineLatency ?? 0) / 1e6,
-                             pacer.maxInflightFrames, current.congestionDrops - last.stats.congestionDrops,
+                             pacer.maxInflightFrames, pacer.maxInflightBytes / 1024,
+                             current.congestionDrops - last.stats.congestionDrops,
                              current.encoderDrops - last.stats.encoderDrops, quality.maxQP)
         let link = linkState.map {
-            String(format: "｜链路 丢包 %.1f%% 往返 %.0f ms 节奏 %.1f Mbps 纠错 %d 丢帧 %d",
-                   $0.lossRate * 100, Double($0.roundTripNanos ?? 0) / 1e6, $0.pacingRate * 8 / 1e6, fecGroupSize,
-                   current.lostFrames)
+            String(format: "｜链路 丢包 %.1f%% 往返 %.0f ms 抖动 %.0f ms 排队 %.0f ms 节奏 %.1f Mbps 纠错 %d 丢帧 %d",
+                   $0.lossRate * 100, Double($0.roundTripNanos ?? 0) / 1e6, Double($0.jitterNanos) / 1e6,
+                   Double($0.queueDelayNanos) / 1e6, $0.pacingRate * 8 / 1e6, fecGroupSize, current.lostFrames)
         } ?? ""
         AppLogger.info(message + link, category: RemoteLog.category)
+        if let breakdown = self.latency.drain() {
+            AppLogger.info("桌面延迟分段：" + breakdown, category: RemoteLog.category)
+        }
         if sendsLatency, !trips.isEmpty,
            let payload = try? JSONEncoder().encode(RemoteDesktopLatency(p50Millis: Int(percentile(0.5).rounded()),
                                                                         p95Millis: Int(percentile(0.95).rounded()))) {
@@ -389,7 +540,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private func recordQuality(bytes: Int?, keyframe: Bool) {
         guard encoder?.isLowLatency == true,
               quality.record(encodedBytes: bytes, keyframe: keyframe, targetBitrate: mediaBitrate,
-                             frameRate: rate.frameRate, now: DispatchTime.now().uptimeNanoseconds) else { return }
+                             frameRate: encoderFrameRate, now: DispatchTime.now().uptimeNanoseconds) else { return }
         encoder?.setMaxQP(quality.maxQP)
     }
 
@@ -399,11 +550,101 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             encoder?.setMaxQP(quality.maxQP)
         }
         encoder?.setBitrate(mediaBitrate)
-        encoder?.setFrameRate(rate.frameRate)
+        updateEncoderFrameRate(now: DispatchTime.now().uptimeNanoseconds)
         pacer.minimumIntervalNanos = rate.frameRate >= rate.config.fullFrameRate
             ? 0 : 1_000_000_000 / UInt64(max(1, rate.frameRate))
         appliedRate = rate.bitrate
         stats.setBitrate(mediaBitrate)
+    }
+
+    /// 编码器的预期帧率 = 平滑后的送编码帧率（见 `encode`），不超过码控帧率；变了才写给编码器。
+    private func updateEncoderFrameRate(now: UInt64) {
+        let frameRate = encoderFrameRateEstimate.expected(limit: rate.frameRate, now: now)
+        guard frameRate != encoderFrameRate else { return }
+        encoderFrameRate = frameRate
+        encoder?.setFrameRate(frameRate)
+    }
+
+    // MARK: - 窄链路降分辨率
+
+    /// 链路现状变了：按每像素每帧分到的比特数选尺寸档，换了档就按新尺寸重建主编码器。局域网、中继（没有
+    /// 发送节奏）不动。
+    private func updateStreamScale(_ state: RemoteLinkState) {
+        guard video != nil else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        let byLink = RemoteStreamScalePolicy.wanted(
+            videoShare: RemoteLossPolicy.videoShare(pacingRate: state.pacingRate), limited: state.limited,
+            width: width, height: height, current: scaleSelector.current)
+        let wanted = RemoteStreamScalePolicy.gated(byLink, current: scaleSelector.current, starved: mainStreamStarved(now: now))
+        let previous = pendingScale?.from ?? scaleSelector.current
+        if scaleSelector.update(wanted, now: now) { pendingScale = (scaleSelector.current, previous) }
+        applyPendingScale()
+    }
+
+    /// 选好的档等在途回到链路容得下的量再换：换尺寸的关键帧排在一堆没发完的旧帧后面，只会让看的那端干等（带宽
+    /// 骤降那一刻在途还积着骤降前的约 768 KB，1 Mbps 上要发 6 秒，2026-11-09 A/B 满屏最长卡顿 7 s）。在途上限
+    /// 按链路节奏算（见 `updateInflightLimits`），骤降后马上缩到零点几秒的量；超出的旧帧到点会被放弃，等不了太久。
+    /// 挨着上限的稳态窄链路（3G）不用等。确认、丢帧、链路状态变化时都来看一眼。
+    private func applyPendingScale() {
+        guard let pending = pendingScale, pacer.inflightBytes <= pacer.maxInflightBytes else { return }
+        pendingScale = nil
+        rebuildEncoder(scale: pending.scale, from: pending.from, pacingRate: linkState?.pacingRate ?? 0)
+    }
+
+    /// 记一份采集 / 送出帧数，看最近 `starvationWindowNanos` 里主流是不是在挨饿。精修帧不算送出。
+    private func mainStreamStarved(now: UInt64) -> Bool {
+        let snapshot = stats.snapshot()
+        frameCountSamples.append((now, snapshot.captured, snapshot.sent - snapshot.refines))
+        frameCountSamples.removeAll { now &- $0.nanos > RemoteStreamScalePolicy.starvationWindowNanos }
+        guard let oldest = frameCountSamples.first, let newest = frameCountSamples.last else { return false }
+        return RemoteStreamScalePolicy.starved(captured: newest.captured - oldest.captured,
+                                               sent: newest.sent - oldest.sent,
+                                               seconds: Double(newest.nanos &- oldest.nanos) / 1e9)
+    }
+
+    /// 按新尺寸重建主编码器（VideoToolbox 的会话改不了尺寸），下一帧是关键帧。手机每个关键帧按参数集重建解码
+    /// 会话、显示层按 Mac 屏幕的点尺寸拉伸，坐标也按屏幕归一化，新老手机都不用知道尺寸换了。建不了就留着旧的。
+    private func rebuildEncoder(scale: RemoteStreamScale, from previous: RemoteStreamScale, pacingRate: Double) {
+        let size = scale.size(width: width, height: height)
+        guard encoder?.width != size.width || encoder?.height != size.height else { return }
+        let rebuilt: RemoteVideoEncoder
+        do {
+            rebuilt = try RemoteVideoEncoder(codec: codec, width: size.width, height: size.height, bitrate: mediaBitrate,
+                                             frameRate: max(1, encoderFrameRate), tenBit: sidecarRefine, ltr: video != nil)
+        } catch {
+            AppLogger.info("远程桌面：按 \(size.width)×\(size.height) 重建编码器失败（\(error)），照旧", category: RemoteLog.category)
+            return
+        }
+        if rebuilt.isLowLatency { rebuilt.setMaxQP(quality.maxQP) }
+        encoder = rebuilt
+        ltrSequenceFloor = pacer.nextSequence
+        forceKeyframe = true
+        forceLTRRefresh = false
+        recoveryDropped = false
+        AppLogger.info(String(format: "远程桌面：链路 %.2f Mbps，画面 %@ → %@，按 %d×%d 编码",
+                              pacingRate * 8 / 1e6, Self.label(previous), Self.label(scale), size.width, size.height),
+                       category: RemoteLog.category)
+    }
+
+    private static func label(_ scale: RemoteStreamScale) -> String {
+        switch scale {
+        case .full: "全尺寸"
+        case .twoThirds: "2/3"
+        case .half: "1/2"
+        }
+    }
+
+    /// 送进 `encoder` 的那张：尺寸对得上就是原图，否则缩到编码尺寸（采集尺寸不变）。缩不出来返回 nil。
+    private func streamImage(_ image: CVPixelBuffer, for encoder: RemoteVideoEncoder) -> CVPixelBuffer? {
+        guard CVPixelBufferGetWidth(image) != encoder.width || CVPixelBufferGetHeight(image) != encoder.height else {
+            return image
+        }
+        let format = CVPixelBufferGetPixelFormatType(image)
+        if scaler?.width != encoder.width || scaler?.height != encoder.height || scalerFormat != format {
+            scaler = RemoteFastFrameScaler(width: encoder.width, height: encoder.height, outputFormat: format)
+            scalerFormat = format
+        }
+        return scaler?.scale(image)
     }
 
     // MARK: - 静止精修
@@ -428,28 +669,74 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
+    /// 这次精修用哪档画质：链路一秒内发得完的最高一档；哪档都发不完时 nil（不精修）。窄链路上不能放一张发好几秒
+    /// 的精修：它走可靠通道，占着在途名额和链路，主流一帧都发不出去（2026-11-09 3G 直连打字卡 8 s；同日一张估成
+    /// 61 KB、实际约 145 KB 的旁路精修在 3G 上卡了 2.9 s）。按精修自己的大小估：这档编过就用实测，没编过按主流
+    /// 关键帧折算（`refineSizeFactor`）。旁路精修发不完时降一档画质换一张发得完的，静止后照样能补清楚。
+    /// 没有链路节奏（局域网、中继）时照旧最高档。主流里精修（老手机）没有画质档。
+    private var refineQuality: Double? {
+        let top = Self.stillQualities[0]
+        guard let linkState else { return top }
+        let budget = linkState.pacingRate * Self.refineLinkSeconds
+        guard sidecarRefine else {
+            // 主流里精修跟一个主流关键帧差不多大。
+            return Double(inStreamRefineBytes ?? lastKeyframeBytes) <= budget ? top : nil
+        }
+        return Self.stillQualities.first { Double(estimatedRefineBytes(quality: $0)) <= budget }
+    }
+
+    /// 一张旁路精修大约多大：这档编过就用上次的；别的档编过就按画质折算；都没编过按主流关键帧折算；
+    /// 什么都还没有（0）时不拦。
+    private func estimatedRefineBytes(quality: Double) -> Int {
+        if let measured = refineBytes[quality] { return measured }
+        if let (known, bytes) = refineBytes.first {
+            return Int(Double(bytes) * Self.refineSizeFactor(quality) / Self.refineSizeFactor(known))
+        }
+        return Int(Double(lastKeyframeBytes) * Self.refineSizeFactor(quality))
+    }
+
+    static let refineLinkSeconds = 1.0
+    /// 旁路精修的画质档，从高到低（最高档即 `RemoteVideoEncoder.stillQuality`）。
+    static let stillQualities: [Double] = [RemoteVideoEncoder.stillQuality, 0.5, 0.3]
+
+    /// 各档旁路精修大约是一个主流关键帧的几倍。旁路编码器按画质编、不看码率，最高档比主流关键帧大一倍多
+    /// （1856×1206 实测：主流关键帧 233 / 264 KB，0.75 档 501 / 561 KB，0.5 档 296 / 338 KB，0.3 档 139 / 155 KB；
+    /// 打字画面 / 满屏细节）。只在这档没编过时粗估用，编过就按实测。
+    static func refineSizeFactor(_ quality: Double) -> Double {
+        switch quality {
+        case 0.6...: return 2.2
+        case 0.4..<0.6: return 1.3
+        default: return 0.6
+        }
+    }
+
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
         let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
-        guard isLive, !refined, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
-              pacer.inflight.isEmpty,
+        guard isLive, !isPaused, !refined, !awaitingRecovery, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
+              pacer.inflight.isEmpty, let quality = refineQuality,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
         refined = true
+        // 采集要再缩一截时运动帧用的是快缩法：精修换成来源从原始采集用 Lanczos 重缩的那张（采集时刻不变，
+        // `encodeStill` 据此判断画面变没变）。
+        let still = source.refinedImage(of: frame.image)
+            .map { RemoteCapturedFrame(image: $0, captureNanos: frame.captureNanos, change: frame.change) } ?? frame
         if sidecarRefine {
-            encodeStill(sequence, frame)
+            encodeStill(sequence, still, quality: quality)
         } else {
-            encode(sequence, frame, refine: true)
+            encode(sequence, still, refine: true)
         }
     }
 
     /// 旁路精修：另一个会话把这张静止画面编成高画质关键帧。编好时画面若已经变了（手机上已是更新的
     /// 主流画面），就不发：发了会把旧画面盖回去。
-    private func encodeStill(_ sequence: UInt32, _ frame: RemoteCapturedFrame) {
-        guard let stillEncoder else {
+    private func encodeStill(_ sequence: UInt32, _ frame: RemoteCapturedFrame, quality: Double) {
+        guard let stillEncoder = stillEncoderForUse() else {
             pacer.abandon(sequence)
             return
         }
+        stillEncoder.setStillQuality(quality)
         let submitted = DispatchTime.now().uptimeNanoseconds
         stillEncoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: true, refine: false) { [weak self] result in
             guard let self else { return }
@@ -462,10 +749,33 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.pump()
                     return
                 }
+                self.refineBytes[quality] = encoded.data.count
                 self.send(encoded, sequence: sequence, captureNanos: frame.captureNanos,
                           flags: [.keyframe, .refine, .sidecar], encodeNanos: encodeNanos)
             }
         }
+    }
+
+    /// 旁路精修的编码器多久没用就放掉。精修只在画面静止时来一次，一直开着的话这块会话（5K 下几十 MB 的
+    /// 表面与参考数据）大部分时间白占着（2026-11-09 mini：uTerm + VTEncoderXPCService 合计约 1 GB）。
+    static let stillEncoderIdleNanos: UInt64 = 30_000_000_000
+
+    /// 要精修了：没有编码器就现建一个（建不了就不精修），并把「闲久了放掉」往后推。
+    private func stillEncoderForUse() -> RemoteVideoEncoder? {
+        dispatchPrecondition(condition: .onQueue(link.queue))
+        guard sidecarRefine, !isStopped else { return nil }
+        if stillEncoder == nil {
+            stillEncoder = try? RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: 0,
+                                                   frameRate: rate.frameRate, tenBit: true, purpose: .still)
+        }
+        stillEncoderRelease?.cancel()
+        let release = DispatchWorkItem { [weak self] in
+            self?.stillEncoder = nil
+            self?.stillEncoderRelease = nil
+        }
+        stillEncoderRelease = release
+        link.queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.stillEncoderIdleNanos)), execute: release)
+        return stillEncoder
     }
 
     // MARK: - 编码与发送
@@ -479,14 +789,46 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         forceKeyframe = false
         let refresh = forceLTRRefresh && !keyframe
         forceLTRRefresh = false
+        // 编码器的预期帧率按真正送进主流的帧算，不按采集：窄链路上在途满了，采集 30 fps 只送得进几帧，
+        // 照采集报 60 时每帧预算只剩几百字节，送进去的也被编码器丢掉（2026-11-09 3G 直连）。
+        if !refine {
+            let now = DispatchTime.now().uptimeNanoseconds
+            encoderFrameRateEstimate.record(now: now)
+            updateEncoderFrameRate(now: now)
+        }
+        // 恢复帧被编码器丢过一次：这一帧放开到码控目标，不受「链路节奏 × linkShare」封顶，QP 上限也临时放开。
+        // 恢复帧比普通帧大得多，4K 下预算被节奏压在几 Mbps、又按帧率分到每帧，QP 再被画质上限卡住时，编码器会把它
+        // 整帧丢掉、再要、再丢，看的那端一直等恢复帧、普通帧全跳过（2026-11-08 mini：卡在刚连上的第一帧）。
+        // 编完立刻回到封顶：多出来的只有这一帧，由发送节奏摊开。
+        let boosted = (keyframe || refresh) && !refine && recoveryDropped
+        if boosted {
+            if rate.bitrate > mediaBitrate { encoder.setBitrate(rate.bitrate) }
+            if encoder.isLowLatency { encoder.setMaxQP(RemoteQualityCap.unrestricted) }
+        }
+        guard let image = streamImage(frame.image, for: encoder) else {
+            // 缩不出来（缓冲池用尽之类）：这一帧跳过，参考链没动。
+            pacer.abandon(sequence)
+            if keyframe { forceKeyframe = true }
+            if refresh { forceLTRRefresh = true }
+            pump()
+            return
+        }
+        let encodedSize = (width: encoder.width, height: encoder.height)
         let submitted = DispatchTime.now().uptimeNanoseconds
         let captureNanos = frame.captureNanos
-        encoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: keyframe, forceLTRRefresh: refresh,
+        encoder.encode(image, presentationNanos: submitted, forceKeyframe: keyframe, forceLTRRefresh: refresh,
                        refine: refine) { [weak self] result in
             guard let self else { return }
             let encodeNanos = DispatchTime.now().uptimeNanoseconds &- submitted
             self.link.queue.async {
                 guard !self.isStopped else { return }
+                if boosted {
+                    self.encoder?.setBitrate(self.mediaBitrate)
+                    if self.encoder?.isLowLatency == true { self.encoder?.setMaxQP(self.quality.maxQP) }
+                }
+                if keyframe || refresh, !refine {
+                    if case .failure(.dropped) = result { self.recoveryDropped = true } else { self.recoveryDropped = false }
+                }
                 switch result {
                 case .failure(.dropped):
                     // 码控丢帧：参考链没断，不要关键帧（关键帧更大，只会丢得更多）。但这张画面没发出去，
@@ -495,12 +837,15 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     if keyframe { self.forceKeyframe = true }
                     if refresh { self.forceLTRRefresh = true }
                     self.stats.recordEncoderDrop()
-                    if !refine { self.recordQuality(bytes: nil, keyframe: keyframe) }
+                    if !refine {
+                        self.recordQuality(bytes: nil, keyframe: keyframe)
+                        self.diagnostics.recordDrop(keyframe: keyframe, refresh: refresh, change: frame.change)
+                    }
                     if refine {
                         // 精修帧被丢：画面已经在手机上了，只是不够清楚。等码控缓过来再精修，别当普通帧重发。
                         self.retryRefine()
                     } else {
-                        self.retryLater(frame)
+                        self.resendIfStill(frame, recovery: keyframe || refresh)
                     }
                     self.pump()
                 case .failure:
@@ -509,13 +854,18 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.forceKeyframe = true
                     self.pump()
                 case .success(let encoded):
-                    if !refine { self.recordQuality(bytes: encoded.data.count, keyframe: encoded.isKeyframe) }
+                    if refine { self.inStreamRefineBytes = encoded.data.count }
+                    if !refine {
+                        self.recordQuality(bytes: encoded.data.count, keyframe: encoded.isKeyframe)
+                        self.diagnostics.recordSent(change: frame.change)
+                        if self.droppedCapture == frame.captureNanos { self.droppedCapture = nil }
+                    }
                     var flags: RemoteDesktopFrame.Flags = []
                     if encoded.isKeyframe { flags.insert(.keyframe) }
                     if refine { flags.insert(.refine) }
                     if refresh, !encoded.isKeyframe { flags.insert(.ltrRefresh) }
                     self.send(encoded, sequence: sequence, captureNanos: captureNanos, flags: flags,
-                              encodeNanos: encodeNanos)
+                              encodeNanos: encodeNanos, size: encodedSize)
                 }
             }
         }
@@ -523,9 +873,21 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 编好的一帧发出去，计入在途。在连接队列上调用。
     private func send(_ encoded: RemoteEncodedFrame, sequence: UInt32, captureNanos: UInt64,
-                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64) {
+                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64, size: (width: Int, height: Int)? = nil) {
+        // 暂停那一刻还在编码器里的帧：编好也不发。手机不看了，恢复时反正从关键帧接上，参考链断了无所谓。
+        guard !isPaused else {
+            pacer.abandon(sequence)
+            return
+        }
+        if !sentFirstFrame {
+            sentFirstFrame = true
+            let millis = (DispatchTime.now().uptimeNanoseconds &- createdNanos) / 1_000_000
+            AppLogger.notice("远程桌面：第一帧已发出（\(flags.contains(.keyframe) ? "关键帧" : "非关键帧") "
+                             + "\(encoded.data.count / 1024) KB，开流后 \(millis) ms）", category: RemoteLog.category)
+        }
         let payload = RemoteDesktopFrame(flags: flags, codec: codec, sequence: sequence, captureNanos: captureNanos,
-                                         width: UInt16(clamping: width), height: UInt16(clamping: height),
+                                         width: UInt16(clamping: size?.width ?? width),
+                                         height: UInt16(clamping: size?.height ?? height),
                                          parameterSets: encoded.parameterSets, data: encoded.data,
                                          ltrToken: encoded.ltrToken).encoded()
         // 单帧超过分帧上限（几乎不可能：码率上限下一帧远小于 4 MB）：不发，降码率、下一帧重来。
@@ -537,9 +899,20 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             return
         }
         pacer.encoded(sequence, bytes: payload.count)
+        if flags.contains(.keyframe), !flags.contains(.refine) { lastKeyframeBytes = payload.count }
+        if !flags.contains(.refine) {
+            let now = DispatchTime.now().uptimeNanoseconds
+            latency.recordSent(sequence: sequence, captureNanos: captureNanos, encodeNanos: encodeNanos, now: now)
+        }
+        if flags.contains(.refine) { refineSequences.insert(sequence) }
+        if !flags.contains(.refine), flags.contains(.keyframe) || flags.contains(.ltrRefresh) {
+            recoverySequences.insert(sequence)
+        }
         // 旁路精修帧不在参考链里，丢了也不用恢复，体积又大：走可靠通道，慢一点无所谓。
         if let video, !flags.contains(.sidecar) {
-            video.sendVideo(payload, sequence: sequence)
+            let kind: RemoteLossPolicy.FrameKind = flags.contains(.refine) ? .normal
+                : flags.contains(.keyframe) ? .keyframe : flags.contains(.ltrRefresh) ? .refresh : .normal
+            video.sendVideo(payload, sequence: sequence, kind: kind)
         } else {
             link.sendOnQueue(RemoteMessage(.desktopFrame, channel: channel, payload: payload),
                              countsTowardBackpressure: false)
@@ -549,12 +922,70 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                           refine: flags.contains(.refine))
     }
 
-    /// 码控丢掉的画面：一帧时间后若还没有更新的画面，再送一次。
-    private func retryLater(_ frame: RemoteCapturedFrame) {
-        link.queue.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in
-            guard let self, !self.isStopped, self.pacer.pending == nil,
-                  self.lastFrame?.captureNanos == frame.captureNanos else { return }
-            self.offer(frame)
+    /// 编码器丢掉的画面：不马上重送。以前 16 ms 后重送同一张，编码器（低延迟码控把变化太小的帧整帧跳过）
+    /// 再跳、再重送，日志里的丢帧被放大成每 2 秒上百（2026-11-08 mini：采集 11 fps 时丢 92）。画面接着在变时
+    /// 下一张新画面自然会来；只有画面随后静止下来（`resendDelay` 内没有新采集帧），手机会停在更旧的画面上，
+    /// 这时把它补发一次。补发的那张再被丢就算了：静止够久还有精修。
+    /// `recovery`：被丢的是恢复帧。看的那端在等它、普通帧全跳过，屏幕静止时没有别的帧会把它带出来——
+    /// 不能像普通帧那样重送一次就算了，每隔 `resendDelayNanos` 再来一次，直到编出来。
+    private func resendIfStill(_ frame: RemoteCapturedFrame, recovery: Bool = false) {
+        guard recovery || droppedCapture != frame.captureNanos else {
+            droppedCapture = nil
+            return
+        }
+        let capture = frame.captureNanos
+        droppedCapture = capture
+        // 只记时间戳，不攥着这张图：采集的表面池只有 `queueDepth` 张，多扣一张半秒，采集就可能出不了新帧。
+        link.queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.resendDelayNanos))) { [weak self] in
+            guard let self, !self.isStopped, self.pacer.pending == nil, self.droppedCapture == capture,
+                  let last = self.lastFrame, last.captureNanos == capture else { return }
+            self.offer(last)
+        }
+    }
+
+    static let resendDelayNanos: UInt64 = 500_000_000
+
+    /// 每 2 秒一行：编码器丢的帧分类、采集帧变了多少（info 级，只在有画面时）。
+    private func logDiagnosticsIfDue(now: UInt64) {
+        guard now &- lastDiagnosticsLog >= 2_000_000_000 else { return }
+        lastDiagnosticsLog = now
+        guard let line = diagnostics.drain() else { return }
+        AppLogger.info("桌面编码诊断：" + line, category: RemoteLog.category)
+    }
+
+    // MARK: - 暂停（手机在后台）
+
+    /// 手机退到后台 / 回到前台（`desktopPause`）。
+    ///
+    /// 暂停只是不编不发：采集照旧（只留最新一张，恢复时有画面可编），码控、QP 上限、链路估计都不碰——对它们来说
+    /// 跟屏幕静止一阵没有区别（静止时同样一帧不发），回前台不用重新爬码率。帘幕、锁屏、连接与心跳也都不受影响。
+    /// 恢复一律从关键帧接上：暂停前后手机可能跳过了帧，iOS 也可能在后台收走了硬解会话。恢复本身就当关键帧请求，
+    /// 手机不用再另发一条（否则同一张画面会编两遍关键帧）。
+    private func setPaused(_ paused: Bool) {
+        if paused {
+            guard !isPaused else { return }
+            isPaused = true
+            // 等着编的那张不编了；在途的照常等手机确认（后台的手机照收照确认，见 `RemoteDesktopReceiver.setPaused`）。
+            _ = pacer.takePending()
+            return
+        }
+        let wasPaused = isPaused
+        isPaused = false
+        forceKeyframe = true
+        forceLTRRefresh = false
+        // 光标在暂停期间没发：清掉记录，下一拍按当前位置补发。
+        lastCursor = nil
+        guard isLive, let lastFrame else { return }
+        if pacer.pending == nil {
+            offer(lastFrame)
+        } else {
+            pump()
+        }
+        if wasPaused {
+            // 恢复后若画面一直静止，关键帧之后照常补一次精修。
+            refined = false
+            refineRetries = 0
+            scheduleRefineCheck()
         }
     }
 
@@ -566,7 +997,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         timer.schedule(deadline: .now(), repeating: .nanoseconds(Int(Self.cursorIntervalNanos)), leeway: .milliseconds(2))
         let bounds = display.bounds
         timer.setEventHandler { [weak self] in
-            guard let self, self.isLive, let location = cursorLocation() else { return }
+            guard let self, self.isLive, !self.isPaused, let location = cursorLocation() else { return }
             let point = RemoteDesktopGeometry.normalized(location, displayBounds: bounds)
             let visible = bounds.contains(location)
             let cursor = RemoteDesktopCursor(x: point.x, y: point.y, visible: visible)
@@ -690,11 +1121,134 @@ nonisolated final class RemoteDesktopRoute: @unchecked Sendable {
     /// 在连接队列上调用。返回 true = 这是桌面流的消息，已处理（或已按通道不符丢弃）。
     func handle(_ message: RemoteMessage) -> Bool {
         switch message.kind {
-        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost:
+        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
+             .desktopPause:
             if let streamer, streamer.channel == message.channel { streamer.handle(message) }
             return true
         default:
             return false
         }
+    }
+}
+
+/// 编码器丢帧的诊断计数（连接队列上用）。区分「编码器把在变的画面当成没变跳过」与「画面本来就几乎没变」。
+nonisolated struct RemoteEncoderDiagnostics {
+    private var captured = 0
+    private var identical = 0
+    private var captureChanges: [Double] = []
+    private var dropNormal = 0
+    private var dropRefresh = 0
+    private var dropKeyframe = 0
+    private var dropChanges: [Double] = []
+    private var sentChanges: [Double] = []
+
+    mutating func recordCapture(change: Double?) {
+        captured += 1
+        guard let change else { return }
+        if change == 0 { identical += 1 }
+        captureChanges.append(change)
+    }
+
+    mutating func recordDrop(keyframe: Bool, refresh: Bool, change: Double?) {
+        if keyframe { dropKeyframe += 1 } else if refresh { dropRefresh += 1 } else { dropNormal += 1 }
+        if let change { dropChanges.append(change) }
+    }
+
+    mutating func recordSent(change: Double?) {
+        if let change { sentChanges.append(change) }
+    }
+
+    /// 这一段的一行摘要并清零；什么都没发生时返回 nil。
+    mutating func drain() -> String? {
+        defer { self = RemoteEncoderDiagnostics() }
+        guard captured > 0 || dropNormal + dropRefresh + dropKeyframe > 0 else { return nil }
+        func spread(_ values: [Double]) -> String {
+            guard !values.isEmpty else { return "—" }
+            let sorted = values.sorted()
+            func pct(_ q: Double) -> String {
+                String(format: "%.1f%%", sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))] * 100)
+            }
+            return "p50 \(pct(0.5)) / p95 \(pct(0.95))"
+        }
+        return "编码器丢 普通 \(dropNormal) 刷新 \(dropRefresh) 关键帧 \(dropKeyframe)｜采集 \(captured) 帧，"
+            + "与上一张完全相同 \(identical)，变化面积 \(spread(captureChanges))｜被丢的帧变化 \(spread(dropChanges))"
+            + "｜发出的帧变化 \(spread(sentChanges))"
+    }
+}
+
+/// 视频延迟分段（连接队列上用，随码控日志每 2 s 一行）：主流一帧从采集到手机确认，时间都花在哪。
+///
+/// 各段（Mac 单调时钟）：
+/// - 采集交出：ScreenCaptureKit 给的采集时刻 → 帧到连接队列（含采集缩放）。
+/// - 等编码：帧到连接队列 → 送进编码器（在途满、帧间隔）。这一段按「采集时刻 → 送编码」算，含上一段。
+/// - 编码：送进编码器 → 编好回到连接队列。
+/// - 发出到手机解码前：编好交给传输 → 确认回到 Mac，扣掉手机报的解码耗时。含发送节奏排队、链路去程、手机收齐与
+///   排队、确认的回程；直连上要再分只能靠手机的钟，这里不分。
+/// - 手机解码：手机确认里带的解码耗时。
+/// 精修帧、解坏的帧不计（它们量的是自己多大，不是固定开销）。
+nonisolated struct RemoteLatencyBreakdown {
+    private struct Sent {
+        var capture: UInt64
+        var submitted: UInt64
+        var encoded: UInt64
+    }
+
+    private var pending: [UInt32: Sent] = [:]
+    private var captureDelivery: [UInt64] = []
+    private var waits: [UInt64] = []
+    private var encodes: [UInt64] = []
+    private var transits: [UInt64] = []
+    private var decodes: [UInt64] = []
+    private var totals: [UInt64] = []
+    private static let maxPending = 600
+
+    mutating func recordCaptureDelivery(_ nanos: UInt64) {
+        captureDelivery.append(nanos)
+    }
+
+    /// 主流一帧编好交给传输。`encodeNanos` = 送进编码器到编好。
+    mutating func recordSent(sequence: UInt32, captureNanos: UInt64, encodeNanos: UInt64, now: UInt64) {
+        if pending.count >= Self.maxPending, let oldest = pending.min(by: { $0.value.encoded < $1.value.encoded }) {
+            pending.removeValue(forKey: oldest.key)
+        }
+        let submitted = now &- min(encodeNanos, now)
+        pending[sequence] = Sent(capture: captureNanos, submitted: max(submitted, captureNanos), encoded: now)
+    }
+
+    mutating func recordAck(sequence: UInt32, decodeMicros: UInt32, now: UInt64) {
+        guard let sent = pending.removeValue(forKey: sequence), now >= sent.encoded else { return }
+        let decode = UInt64(decodeMicros) * 1000
+        let transit = now - sent.encoded
+        waits.append(sent.submitted &- sent.capture)
+        encodes.append(sent.encoded &- sent.submitted)
+        transits.append(transit > decode ? transit - decode : 0)
+        decodes.append(decode)
+        totals.append(now &- sent.capture)
+    }
+
+    mutating func forget(sequence: UInt32) {
+        pending.removeValue(forKey: sequence)
+    }
+
+    /// 这一段的 p50 / p95（毫秒）一行并清零；这段没有确认过的主流帧时 nil。
+    mutating func drain() -> String? {
+        defer {
+            captureDelivery = []
+            waits = []
+            encodes = []
+            transits = []
+            decodes = []
+            totals = []
+        }
+        guard !totals.isEmpty else { return nil }
+        func spread(_ values: [UInt64]) -> String {
+            guard !values.isEmpty else { return "—" }
+            let sorted = values.sorted()
+            func pct(_ q: Double) -> Double { Double(sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]) / 1e6 }
+            return String(format: "%.0f/%.0f", pct(0.5), pct(0.95))
+        }
+        return "p50/p95 ms｜采集交出 \(spread(captureDelivery))｜采集→送编码 \(spread(waits))｜编码 \(spread(encodes))"
+            + "｜发出→确认（扣手机解码，含节奏、链路往返、手机收齐）\(spread(transits))｜手机解码 \(spread(decodes))"
+            + "｜合计 \(spread(totals))（\(totals.count) 帧）"
     }
 }

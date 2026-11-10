@@ -76,6 +76,8 @@ final class MTabCloseFlow {
 struct WorkspaceTabStrip: View {
     /// 标签条高度（不含顶边净空）。
     static let height: CGFloat = 48
+    /// 工作区分屏区的坐标空间：拖动判定、分隔条、标签条与标签的位置都在这里量。
+    static let coordinateSpace = "workspace-split"
     let tabs: [MWorkTab]
     let activeID: UUID?
     /// 本格是否为聚焦格。
@@ -97,7 +99,13 @@ struct WorkspaceTabStrip: View {
     /// Agent / 分屏两个开关是否放在条尾。状态栏在右侧一列时（Duo），它们改放到那一列状态栏
     /// 下面（WorkspaceSideControls），条上只留返回与标签。
     var showsTrailingControls: Bool = true
-    /// 开始拖某个标签（拖到工作区边上分屏 / 拖进另一格）。
+    /// 这一格的 id：标签条与标签的位置按它记进 `frames`。
+    var paneID: UUID? = nil
+    /// 正在进行的标签拖动（被拖的标签在原位留成空位）。
+    var drag: WorkspaceTabDragTracker? = nil
+    /// 标签条与标签的位置，交给工作区做拖动判定。
+    var frames: WorkspaceStripFrames? = nil
+    /// 开始拖某个标签：条里横着拖是排序，拖出条到工作区边上分屏、拖进另一格并入。
     var onDragTab: (UUID) -> Void = { _ in }
     /// 等用户确认的关闭。归属标签自己弹，所以宽屏下的 popover 指向那枚标签。
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
@@ -124,7 +132,15 @@ struct WorkspaceTabStrip: View {
                                              onMove: { onMoveToOtherPane(tab.id) },
                                              onDragStart: { onDragTab(tab.id) },
                                              closePrompt: closePrompt,
-                                             onConfirmClose: { onConfirmClose(tab.id, $0) })
+                                             onConfirmClose: { onConfirmClose(tab.id, $0) },
+                                             isPlaceholder: drag?.isPlaceholder(tab.id) == true)
+                                // 空位换位不滑：它要是也滑，会从让位的标签身上横穿过去。别的标签滑开，空位直接出现在新位置。
+                                .transaction { if drag?.isPlaceholder(tab.id) == true { $0.animation = nil } }
+                                .onGeometryChange(for: CGRect.self) {
+                                    $0.frame(in: .named(Self.coordinateSpace))
+                                } action: { frame in
+                                    if let paneID { frames?.strips[paneID, default: MStripFrame(frame: .zero)].chips[tab.id] = frame }
+                                }
                                 .id(tab.id)
                         }
                         newMenu
@@ -153,7 +169,15 @@ struct WorkspaceTabStrip: View {
         // 与终端同一个工作面（M.surface = 终端底色），只用底边 hairline 分区。
         .background(M.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+        .onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .named(Self.coordinateSpace))
+        } action: { frame in
+            guard let paneID, let frames else { return }
+            // 关掉 / 挪走的标签留下的旧位置不用清：判定只看这一格此刻的标签。
+            frames.strips[paneID, default: MStripFrame(frame: frame)].frame = frame
+        }
     }
+
 
     private func activity(_ tab: MWorkTab) -> MTabActivity {
         guard tab.id == activeID else { return .inactive }
@@ -172,7 +196,7 @@ struct WorkspaceTabStrip: View {
                 .padding(.vertical, inStatusRow ? 4 : 7).padding(.horizontal, 4)   // 命中区 ≥ 38×44
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel(Text("新建会话"))
+        .accessibilityLabel(Text("新建标签页"))
     }
 
     private var agentButton: some View {
@@ -267,6 +291,8 @@ struct WorkspaceTabChip: View {
     var onDragStart: () -> Void = {}
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
     var onConfirmClose: (_ alsoOnMac: Bool) -> Void = { _ in }
+    /// 正被拖着：原位只留一个空位（淡淡的胶囊底，没有字），被拖的标签由系统画在手指下。
+    var isPlaceholder = false
     @Environment(\.mAccent) private var accent
     /// Duo 状态行里胶囊加高到 36pt（行高 82，30pt 的胶囊显得太扁，实机反馈）。
     @Environment(\.mInStatusRow) private var inStatusRow
@@ -313,13 +339,14 @@ struct WorkspaceTabChip: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Text("关闭会话"))
+                .accessibilityLabel(Text("关闭标签页"))
             }
         }
         .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: pillHeight)
+        .opacity(isPlaceholder ? 0 : 1)
         .background(
             RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous)
-                .fill(isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
+                .fill(isPlaceholder ? M.pressed : isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
         // 挂在胶囊上而不是下面撑到 44pt 的命中区上：popover 的箭头要贴着看得见的标签。
         .modifier(TabCloseDialog(tabID: tab.id, prompt: closePrompt, onConfirm: onConfirmClose))
         .padding(.vertical, (44 - pillHeight) / 2)   // 命中区 44pt
@@ -340,11 +367,19 @@ struct WorkspaceTabChip: View {
             Button(role: .destructive, action: onClose) { Label("关闭", systemImage: "xmark") }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityValue(Text(verbatim: programStatus.map { "\($0.appName) \($0.statusLabel)" } ?? ""))
         .accessibilityAddTraits(activity == .active ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// 连接状态点：终端看 SSH 会话，文件浏览看 SFTP 会话。
+    /// 终端里程序（Claude Code、Codex……）的状态；文件浏览没有。
+    private var programStatus: ProgramStatusRecord? {
+        if case .terminal(let t) = tab { return t.programStatus }
+        return nil
+    }
+
+    /// 状态点：程序有状态时说程序（含义与配色同 mac 的标签），否则说连接——终端看 SSH 会话，文件浏览看 SFTP 会话。
     private var stateDot: (color: Color, pulse: Bool) {
+        if let programStatus { return (Self.color(for: programStatus.tone, accent: accent), false) }
         switch tab {
         case .terminal(let t):
             switch t.controller.state {
@@ -363,6 +398,19 @@ struct WorkspaceTabChip: View {
     }
 }
 
+extension WorkspaceTabChip {
+    /// 与 mac `ProgramStatusRecord.tabDot` 一一对应：等人处理 = 警示色，运行中 = 强调色，完成 = 成功色，出错 = 危险色。
+    static func color(for tone: ProgramStatusTone, accent: Color) -> Color {
+        switch tone {
+        case .needsAttention: M.warning
+        case .working: accent
+        case .done: M.success
+        case .failed: M.danger
+        case .idle: M.text4
+        }
+    }
+}
+
 /// 关标签前的确认。窄屏是底部操作表，宽屏是从这枚标签弹出的 popover（系统不显示「取消」，点外面即取消）。
 private struct TabCloseDialog: ViewModifier {
     let tabID: UUID
@@ -372,7 +420,7 @@ private struct TabCloseDialog: ViewModifier {
     /// 收起动画期间 `prompt` 已清空，标题仍要有字。
     private var title: Text {
         if case .busy(let busy)? = prompt?.kind { return Text(busy.title) }
-        return Text("关闭这个标签？")
+        return Text("关闭这个标签页？")
     }
 
     func body(content: Content) -> some View {
@@ -387,7 +435,7 @@ private struct TabCloseDialog: ViewModifier {
                 Button("只在手机上关闭") { onConfirm(false) }
                 Button("同时关闭 Mac 上的终端", role: .destructive) { onConfirm(true) }
             case .busy:
-                Button("关闭标签", role: .destructive) { onConfirm(false) }
+                Button("关闭标签页", role: .destructive) { onConfirm(false) }
             }
             Button("取消", role: .cancel) {}
         } message: { prompt in

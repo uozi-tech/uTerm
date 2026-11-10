@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 主机页的「我的 Mac」：配对过的 Mac（同一 Apple ID 自动出现，其他的扫码配对），在线的点进 `RemoteMacSheet`。
-/// 局域网里别人的 Mac 不出现在这里。
+/// 主机页的「我的 Mac」：配对过的 Mac，在线的点进 `RemoteMacSheet`；下面「附近的 Mac」列局域网里还没配对的，
+/// 点了同样进 `RemoteMacSheet`，先在 Mac 上核对 6 位码并点「允许」。不在同一局域网的 Mac 扫它的二维码配对。
 struct RemoteMacSection: View {
     /// 可选：样式画廊、探针等直接渲染主机页的地方不注入它，那时整块不显示。
     @Environment(RemoteMacDirectory.self) private var injected: RemoteMacDirectory?
@@ -10,8 +10,6 @@ struct RemoteMacSection: View {
     @State private var scanning = false
     @State private var diagnosing: RemoteMacDirectory.Mac?
     @Environment(\.mAccent) private var accent
-    /// 刚扫码配上、此刻还不在线的 Mac：它一上线就自动打开。
-    @State private var awaitingMac: String?
 
     var body: some View {
         if let directory = injected {
@@ -20,21 +18,39 @@ struct RemoteMacSection: View {
     }
 
     private func group(_ directory: RemoteMacDirectory) -> some View {
-        MInsetGroup(header: "我的 Mac", headerTrailing: AnyView(scanButton)) {
-            if !directory.isActivated {
-                MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端", chevron: true, last: true) {
-                    directory.activate()
+        VStack(spacing: 12) {
+            MInsetGroup(header: "我的 Mac", headerTrailing: AnyView(scanButton)) {
+                if !directory.isActivated {
+                    MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端", chevron: true, last: true) {
+                        directory.activate()
+                    }
+                } else if directory.macs.isEmpty {
+                    MInsetRow(icon: "mac", label: "还没有配对的 Mac",
+                              sub: directory.nearbyMacs.isEmpty ? "在 Mac 上打开「远程控制」，或扫 Mac 上的二维码" : "在下面选一台开始配对",
+                              last: true)
+                } else {
+                    ForEach(directory.macs) { mac in
+                        macRow(mac, last: mac.id == directory.macs.last?.id)
+                    }
                 }
-            } else if directory.macs.isEmpty {
-                MInsetRow(icon: "mac", label: "还没有配对的 Mac", sub: "同一 Apple ID 的 Mac 会自动出现", last: true)
-            } else {
-                ForEach(directory.macs) { mac in
-                    macRow(mac, last: mac.id == directory.macs.last?.id)
+            }
+            if directory.isActivated, !directory.nearbyMacs.isEmpty {
+                MInsetGroup(header: "附近的 Mac",
+                            footer: "同一局域网里打开了远程控制、还没和这台手机配对的 Mac。点一下，在 Mac 上核对数字并点「允许」即可配对。") {
+                    ForEach(directory.nearbyMacs) { mac in
+                        MInsetRow(icon: "mac", label: mac.name, value: "配对", chevron: true,
+                                  last: mac.id == directory.nearbyMacs.last?.id) {
+                            selected = mac
+                        }
+                    }
                 }
             }
         }
+        // 可见期间按间隔问中继谁在线；切到别的标签页、进终端就不再问（省电，见 `keepLiveStatusFresh`）。
+        .task { await directory.keepLiveStatusFresh() }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
+            openPendingIfOnline(directory)
             #if DEBUG
             // 调试：启动参数 `-RemoteDebugOpenDesktop YES`（配合 `-RemoteDebugEndpoint`）直接打开第一台 Mac 的屏幕，
             // 模拟器联调远程桌面时不用手点。
@@ -61,20 +77,26 @@ struct RemoteMacSection: View {
             RemotePairingScanner(onScanned: { invitation in
                 scanning = false
                 guard let mac = try? directory.pair(with: invitation) else { return }
-                if mac.isOnline { selected = mac } else { awaitingMac = mac.id }
+                directory.pendingOpenMacID = mac.id
+                openPendingIfOnline(directory)
             }, onRelayConfig: { config in
                 scanning = false
                 directory.importRelayConfig(config)
             })
         }
-        .onChange(of: directory.macs) { _, macs in
-            guard let awaitingMac, let mac = macs.first(where: { $0.id == awaitingMac }), mac.isOnline else { return }
-            self.awaitingMac = nil
-            selected = mac
-        }
+        .onChange(of: directory.macs) { _, _ in openPendingIfOnline(directory) }
+        .onChange(of: directory.pendingOpenMacID) { _, _ in openPendingIfOnline(directory) }
     }
 
-    /// 不同 Apple ID 的 Mac 扫它 设置 › 远程控制 里的二维码配对。同一 Apple ID 的自动出现，用不着它。
+    /// 刚凭邀请（扫码或链接）配上的 Mac：一上线（局域网或中继）就自动打开，用掉邀请完成配对。
+    private func openPendingIfOnline(_ directory: RemoteMacDirectory) {
+        guard let id = directory.pendingOpenMacID, selected == nil,
+              let mac = directory.macs.first(where: { $0.id == id }), mac.isOnline else { return }
+        directory.pendingOpenMacID = nil
+        selected = mac
+    }
+
+    /// 不在同一局域网的 Mac：扫它「设置 › 远程控制」里的二维码配对。
     private var scanButton: some View {
         Button { scanning = true } label: {
             Label("扫码配对", systemImage: "qrcode.viewfinder")
@@ -84,9 +106,9 @@ struct RemoteMacSection: View {
         .buttonStyle(.borderless)
     }
 
+    /// 局域网里在就不写（最常见、不用提醒），否则写走哪条路（`RemoteMacDirectory.Mac.reachabilityLabel`）。
     private func rowValue(_ mac: RemoteMacDirectory.Mac) -> String? {
-        if !mac.isOnline { return "不在线" }
-        return mac.endpoint == nil ? "公网" : nil
+        mac.endpoint != nil ? nil : mac.reachabilityLabel(.path)
     }
 
     private func macRow(_ mac: RemoteMacDirectory.Mac, last: Bool) -> some View {
@@ -129,8 +151,8 @@ struct RemoteMacSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(M.canvas)
-        .task { await client.connect() }
-        .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
+        .task { await client.connectInteractively() }
+        .alert("无法新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }
         } message: {
@@ -148,16 +170,18 @@ struct RemoteMacSheet: View {
 
     @ViewBuilder private var content: some View {
         switch client.state {
-        case .idle, .connecting:
-            scrolling { statusRow(icon: "refresh", text: "正在连接 \(client.macName)…") }
+        case .idle, .connecting, .failed where client.isAutoRetrying:
+            scrolling {
+                statusRow(icon: "refresh", text: client.connectProgress?.title ?? "", detail: client.connectProgress?.detail)
+            }
         case .awaitingApproval(let code):
             scrolling { pairing(code) }
         case .failed(let message):
             scrolling {
-                MInsetGroup {
+                MInsetGroup(footer: client.failureContext) {
                     MInsetRow(icon: "warn", iconColor: M.danger, label: "连接失败", sub: message, last: false)
                     MInsetRow(icon: "refresh", label: "重试", chevron: true, last: true) {
-                        Task { await client.connect() }
+                        Task { await client.connectInteractively() }
                     }
                 }
             }
@@ -188,10 +212,17 @@ struct RemoteMacSheet: View {
         }
     }
 
-    private func statusRow(icon: String, text: String) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-            Text(text).font(M.sans(14)).foregroundStyle(M.text2)
+    private func statusRow(icon: String, text: String, detail: String? = nil) -> some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(text).font(M.sans(14)).foregroundStyle(M.text2)
+            }
+            if let detail {
+                Text(detail).font(M.sans(12)).foregroundStyle(M.text3)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
@@ -200,10 +231,10 @@ struct RemoteMacSheet: View {
     private func pairing(_ code: String) -> some View {
         VStack(spacing: 14) {
             Text("在 Mac 上确认配对").font(M.sans(18, weight: .bold)).foregroundStyle(M.text)
-            Text("\(code.prefix(3)) \(code.suffix(3))")
+            Text(RemotePairingCode.grouped(code))
                 .font(.system(size: 40, weight: .semibold, design: .monospaced))
                 .foregroundStyle(M.text)
-            Text("Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接被人截获，请拒绝。")
+            Text("Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接可能被截获，点「拒绝」。")
                 .font(M.sans(13)).foregroundStyle(M.text3)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -218,8 +249,8 @@ struct RemoteMacSheet: View {
         List {
             section("这台 Mac",
                     footer: client.supportsLocalShell
-                        ? "在 Mac 上打开你的登录 shell，Mac 上也会弹出对应的终端窗口，断开后留在 Mac 上可以接着用。"
-                        : "Mac 上的 uTerm 版本太旧，不能新建终端。请先把 Mac 上的 uTerm 更新到最新版。") {
+                        ? "在 Mac 上打开你的登录 shell，并在 Mac 上弹出对应的终端窗口；断开后终端仍留在 Mac 上，可以接着用。"
+                        : "Mac 上的 uTerm 版本过旧，无法新建终端。将其更新到最新版本后即可使用。") {
                 if client.supportsLocalShell {
                     MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
                               sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
@@ -230,21 +261,21 @@ struct RemoteMacSheet: View {
                         Task { await openLocalShell(directory: directory) }
                     }
                 } else {
-                    MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "请更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "需要更新 Mac 上的 uTerm", last: true)
                 }
             }
-            section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本太旧，不支持远程桌面。请先把 Mac 上的 uTerm 更新到最新版。") {
+            section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本过旧，不支持远程桌面。将其更新到最新版本后即可使用。") {
                 if client.supportsDesktop {
                     MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
                               chevron: true, last: true) {
                         openDesktop()
                     }
                 } else {
-                    MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "请更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "需要更新 Mac 上的 uTerm", last: true)
                 }
             }
             section("Mac 上的终端",
-                    footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签，之后 Mac 上新开或关掉终端，手机上的标签也跟着变，直到断开全部。接管期间它们按这部手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
+                    footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签页，之后 Mac 上新开或关闭终端，手机上的标签页也跟着变，直到点「断开全部终端」。接管期间它们按这台手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
                 if client.sessions.isEmpty {
                     MInsetRow(icon: "term", label: "Mac 上没有已连接的终端", sub: "在 Mac 上打开一个终端后会出现在这里", last: true)
                 } else {
@@ -262,7 +293,7 @@ struct RemoteMacSheet: View {
                     let taken = workspace.remoteTabIDs(of: client)
                     MInsetRow(icon: "x", label: "断开全部终端",
                               sub: taken.isEmpty ? "不再自动接入这台 Mac 新开的终端"
-                                  : "关掉手机上的 \(taken.count) 个标签，Mac 上的终端继续运行",
+                                  : "关闭手机上的 \(taken.count) 个标签页，Mac 上的终端继续运行",
                               last: true) {
                         endTakeover()
                     }
@@ -333,12 +364,11 @@ struct RemoteMacSheet: View {
     /// Mac 有最近的工作区就先问开在哪，没有就直接开。
     private func chooseWorkspace() async {
         openingShell = true
-        let workspaces = await client.localWorkspaces()
+        let plan = await client.newShellPlan()
         openingShell = false
-        if let workspaces, !workspaces.directories.isEmpty {
-            workspaceChoices = workspaces
-        } else {
-            await openLocalShell(directory: nil)
+        switch plan {
+        case .ask(let workspaces): workspaceChoices = workspaces
+        case .openDirectly: await openLocalShell(directory: nil)
         }
     }
 
@@ -374,24 +404,6 @@ extension RemoteMacClient {
     }
 }
 
-extension View {
-    /// 在 Mac 上新开终端前问开在哪。要挂在触发它的行上：宽屏下它是 popover，箭头指向所挂的视图。
-    func macWorkspaceDialog(_ choices: Binding<RemoteLocalWorkspaces?>,
-                            onPick: @escaping (_ directory: String?) -> Void) -> some View {
-        confirmationDialog("在哪个目录打开？",
-                           isPresented: Binding(get: { choices.wrappedValue != nil },
-                                                set: { if !$0 { choices.wrappedValue = nil } }),
-                           titleVisibility: .visible,
-                           presenting: choices.wrappedValue) { workspaces in
-            Button("主目录") { onPick(nil) }
-            ForEach(workspaces.directories, id: \.self) { directory in
-                Button(RemoteLocalWorkspaces.displayPath(directory, home: workspaces.home)) { onPick(directory) }
-            }
-            Button("取消", role: .cancel) {}
-        }
-    }
-}
-
 /// 新建终端抽屉里的「这台 Mac 的本机终端」：每台配对过的 Mac 一行，点一下在 Mac 上开一个新的登录 shell。
 struct MacTerminalRows: View {
     let directory: RemoteMacDirectory
@@ -410,7 +422,10 @@ struct MacTerminalRows: View {
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
         }
-        .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
+        // 每一行可见期间让在线状态保持新鲜（Mac 下线了能及时从抽屉里消失）。一行都没有时，
+        // 抽屉打开那一刻读 `pairedMacs` 会补问一次中继。
+        .task { await directory.keepLiveStatusFresh() }
+        .alert("无法新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }
         } message: {
@@ -453,12 +468,13 @@ struct MacTerminalRows: View {
     private func chooseWorkspace(_ mac: RemoteMacDirectory.Mac) {
         openingMac = mac.id
         Task {
-            let workspaces = await directory.client(for: mac).localWorkspaces()
+            let plan = await directory.client(for: mac).newShellPlan()
             openingMac = nil
-            if let workspaces, !workspaces.directories.isEmpty {
+            switch plan {
+            case .ask(let workspaces):
                 choosingMac = mac.id
                 workspaceChoices = workspaces
-            } else {
+            case .openDirectly:
                 open(mac, directory: nil)
             }
         }

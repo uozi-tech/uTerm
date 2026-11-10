@@ -240,6 +240,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 #endif
     var cellDimension: CellDimension
     var caretView: CaretView?
+    /// uTerm patch #19: stop the blinking caret's repeating animation while the
+    /// host keeps this view in the window but hidden (a background tab). Turning
+    /// it back off restarts the blink. Upstream only stops it outside a window.
+    public var suspendsCaretAnimation = false {
+        didSet {
+            if oldValue != suspendsCaretAnimation {
+                caretView?.updateCursorStyle()
+            }
+        }
+    }
     var _lineSpacing: CGFloat = 1.0
     var terminal: Terminal!
     private var progressBarView: TerminalProgressBarView?
@@ -256,6 +266,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // of attributes for an NSAttributedString
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    /// uTerm patch #20: laid-out rows by absolute buffer row, see `renderedRow`.
+    var rowRenderCache: [Int: RowRenderCacheEntry] = [:]
+    /// uTerm patch #20: bumped whenever `attributes` is reset (colors, font, contrast).
+    var rowRenderGeneration: UInt64 = 0
 
     /// uTerm patch #13: how long `queuePendingDisplay` waits before the next
     /// redraw. The host raises it while a large repaint is draining, so the
@@ -277,8 +291,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
-    // Timer to display the terminal buffer
-    var link: CADisplayLink!
+    // uTerm patch #18: upstream kept a `CADisplayLink` here ("Timer to display
+    // the terminal buffer"), removed. See `setupDisplayUpdates`.
     // Cache for the colors in the 0..255 range
     var colors: [UIColor?] = Array(repeating: nil, count: 256)
     var trueColors: [Attribute.Color:UIColor] = [:]
@@ -505,12 +519,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 #endif
 
+    // uTerm patch #18: upstream created a `CADisplayLink` here that `feed` unpaused
+    // in `feedPrepare` and paused again in `feedFinish`. Both run synchronously in
+    // the same call on the main thread (the only way uTerm feeds), so the link
+    // never got to fire; redraws are all driven by `queuePendingDisplay` /
+    // `displayImmediately`. Yet every feed (up to 60 per second per terminal)
+    // flipped its paused state, registering and unregistering it with the vsync
+    // source each time. The link also retained the view as its target and was
+    // only invalidated by `updateUiClosed()`, so every terminal that was not
+    // explicitly closed leaked along with its whole scrollback.
+    // Start/suspend are kept as no-ops, like on the Mac.
     func setupDisplayUpdates ()
     {
-        link = CADisplayLink(target: self, selector: #selector(step))
-            
-        link.add(to: .current, forMode: .default)
-        suspendDisplayUpdates()
     }
 
     private func setupProgressBar() {
@@ -575,23 +595,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         resetProgressReportTimer()
     }
     
-    @objc
-    func step(displaylink: CADisplayLink) {
-        updateDisplay()
-    }
-
     func startDisplayUpdates()
     {
-        link.isPaused = false
+        // uTerm patch #18: no display link anymore.
     }
     
     func suspendDisplayUpdates()
     {
-        link.isPaused = true
+        // uTerm patch #18: no display link anymore.
     }
     
     public func updateUiClosed() {
-        self.link.invalidate()
         stopTextBlinking()
     }
     
@@ -1637,6 +1651,19 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // Clamp to the scroll view's real maximum so following the bottom rests
         // flush against the last line instead of over-scrolling past it.
         let offsetY = min(desiredY, maxContentOffsetY())
+        // uTerm patch #17: following the bottom while the scroll view is still
+        // coasting or rubber-banding. The coast lands on (or bounces back to) the
+        // bottom by itself; snapping contentOffset here fights that animation on
+        // every output tick — Claude Code ends a DEC 2026 frame ~10 times a
+        // second, each one landing here — and the view shakes at the bottom.
+        // Only when output pulled the tail more than a row away do we take over,
+        // and then stop the coast first so UIKit does not drag it back.
+        if !userScrolling && isDecelerating {
+            if contentOffset.y >= offsetY - cellDimension.height {
+                return
+            }
+            setContentOffset(contentOffset, animated: false)
+        }
         setContentOffsetFromTerminal(CGPoint (x: 0, y: offsetY))
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize
@@ -1840,16 +1867,36 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// redrew for that on top of the redraw already queued for the same output —
     /// two full draws per tick, and the throttle never applied. Let the queued one
     /// paint it; `updateFullScreen` makes sure it finds something to do.
+    ///
+    /// uTerm patch #21: that hand-off is only right when the output itself
+    /// moved the offset. When the user's drag or momentum moved it, the queued
+    /// redraw lands a frame or two later — this frame shows the old bitmap at the
+    /// new offset and the next one jumps. Claude Code ends ~10 output frames a
+    /// second, so scrolling while it thinks skipped ~10 frames a second. Paint the
+    /// queued output in this frame instead; the throttle timer then finds nothing
+    /// to do, so it is still one draw.
     private func redrawAfterLayout(sizeChanged: Bool, originChanged: Bool) {
-        if !sizeChanged, originChanged, pendingDisplay {
+        let scrolledByUser = contentOffsetMovedByUser
+        contentOffsetMovedByUser = false
+        if !sizeChanged, originChanged, pendingDisplay, !scrolledByUser {
             terminal.updateFullScreen()
         } else if sizeChanged || originChanged {
+            if originChanged, pendingDisplay {
+                flushPendingDisplay()
+            }
             setNeedsDisplay(bounds)
         }
     }
 
+    /// uTerm patch #21: set when `contentOffset` changed other than through
+    /// `setContentOffsetFromTerminal` since the last layout.
+    private var contentOffsetMovedByUser = false
+
     open override var contentOffset: CGPoint {
         didSet {
+            if !updatingContentOffsetFromTerminal, contentOffset != oldValue {
+                contentOffsetMovedByUser = true
+            }
             syncYDispFromContentOffset()
 #if canImport(MetalKit)
             if useMetalRenderer, metalView != nil {

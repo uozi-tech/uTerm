@@ -70,7 +70,7 @@ final class RemoteRelayManager {
 
     private func openTerminal(profile: ServerProfile, registry: TerminalSessionRegistry?) {
         guard let registry, let open = registry.openTerminalWindow, let windowID = open(profile.id) else {
-            updatePhase = .failed(String(localized: "这台主机的 sudo 要密码。请在终端里运行：\n\(RemoteRelayRelease.interactiveUpdateCommand)"))
+            updatePhase = .failed(String(localized: "这台主机的 sudo 需要密码，在终端里运行：\n\(RemoteRelayRelease.interactiveUpdateCommand)"))
             return
         }
         updatePhase = .openedTerminal

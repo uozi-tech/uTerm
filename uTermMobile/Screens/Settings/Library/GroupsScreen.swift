@@ -20,7 +20,7 @@ struct GroupsScreen: View {
         return Group {
             if groups.isEmpty {
                 MEmptyState(icon: "folder-tag", title: "还没有分组",
-                            message: "把主机按环境（prod / dev）或项目归类，列表更清爽。",
+                            message: "把主机按环境（prod / dev）或项目归类，便于查找。",
                             actionTitle: "新建分组", action: { creating = true })
             } else {
                 ScrollView {
@@ -111,7 +111,7 @@ struct GroupFormSheet: View {
         .alert("已有同名分组", isPresented: $duplicateName) {
             Button("好", role: .cancel) {}
         } message: {
-            Text("分组按名称归并：同名的两个分组在同步时会被合成一个。请换一个名称。")
+            Text("同名分组在同步时会合并为一个，换一个名称再试。")
         }
     }
 
@@ -180,7 +180,7 @@ struct GroupDetailView: View {
         .alert("已有同名分组", isPresented: $duplicateName) {
             Button("好", role: .cancel) { name = group.name }
         } message: {
-            Text("分组按名称归并：同名的两个分组在同步时会被合成一个。请换一个名称。")
+            Text("同名分组在同步时会合并为一个，换一个名称再试。")
         }
     }
 
@@ -290,7 +290,7 @@ struct GroupDetailView: View {
                 let store = GroupStore(context: context)
                 if tab == 0 { store.removeMember(h) } else { store.addMember(h, to: group.name) }
             } label: {
-                Text(tab == 0 ? "移出" : "+ 加入").font(M.sans(12.5, weight: .medium))
+                Text(tab == 0 ? "移出" : "添加").font(M.sans(12.5, weight: .medium))
                     .foregroundStyle(tab == 0 ? M.text2 : accent)
                     .padding(.horizontal, 12).frame(height: 30)
                     .background(tab == 0 ? M.fillMed : accent.opacity(0.14))

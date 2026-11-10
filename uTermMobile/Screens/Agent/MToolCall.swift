@@ -27,7 +27,7 @@ struct MToolCall: View {
     private var statusText: String {
         switch status {
         case .pending: return "待确认"
-        case .running: return "执行中"
+        case .running: return "运行中"
         case .done:    return "已完成"
         }
     }
@@ -126,7 +126,7 @@ struct MToolCall: View {
 
             Spacer(minLength: 0)
 
-            Text(isRunning ? "命令执行中" : "运行前会请求确认")
+            Text(isRunning ? "命令运行中" : "运行前会请求确认")
                 .font(M.sans(10)).foregroundStyle(M.text4)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)

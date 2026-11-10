@@ -114,11 +114,8 @@ struct TerminalArea: View {
                                   help: status.map { "\($0.tabHelp)\n\(baseHelp)" } ?? baseHelp)
     }
 
-    /// 标签宽度随标题撑开、组件不截断，shell 标题又常带整条路径，这里先截短；全文在悬停提示里。
-    static func clippedTabTitle(_ title: String) -> String {
-        let limit = 28
-        return title.count > limit ? "\(title.prefix(limit - 1))…" : title
-    }
+    /// 见 `TerminalTitle.clippedForTab`（两端共用）。
+    static func clippedTabTitle(_ title: String) -> String { TerminalTitle.clippedForTab(title) }
 
     /// 标签条右侧的「＋新建终端」。⌘T 走 `uTermApp` 的 CommandGroup 单独注册
     /// （按在终端焦点区时也能触发），这里只是 UI 入口。
@@ -129,7 +126,7 @@ struct TerminalArea: View {
     private func newTabButton(_ groupID: UUID) -> some View {
         if allowsOtherHosts {
             Menu {
-                Section("在新标签中打开") {
+                Section("在新标签页中打开") {
                     ForEach(hostChoices) { profile in
                         Button(profile.name) {
                             workspace.openServer(profileID: profile.id, title: profile.name, in: groupID)
@@ -146,8 +143,8 @@ struct TerminalArea: View {
             .frame(width: 26, height: 26)
             .contentShape(Rectangle())
             .iconButtonHover(cornerRadius: 6)
-            .help("新建终端标签（⌘T）· 按住选择其他主机")
-            .accessibilityLabel(Text("新建终端标签"))
+            .help("新建终端标签页（⌘T）· 按住选择其他主机")
+            .accessibilityLabel(Text("新建终端标签页"))
         } else {
             Button {
                 workspace.openServer(profileID: server.id, title: server.name, in: groupID)
@@ -160,8 +157,8 @@ struct TerminalArea: View {
             }
             .buttonStyle(.plain)
             .iconButtonHover(cornerRadius: 6)
-            .help("新建终端标签（⌘T）")
-            .accessibilityLabel(Text("新建终端标签"))
+            .help("新建终端标签页（⌘T）")
+            .accessibilityLabel(Text("新建终端标签页"))
         }
     }
 
@@ -199,11 +196,11 @@ struct TerminalArea: View {
                     .foregroundStyle(UD.text3)
             }
             if showsText {
-                Text("没有打开的终端标签")
+                Text("没有打开的终端标签页")
                     .font(.callout)
                     .foregroundStyle(UD.text2)
             }
-            UDButton(title: "新建终端标签", systemImage: "plus") {
+            UDButton(title: "新建终端标签页", systemImage: "plus") {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
         }

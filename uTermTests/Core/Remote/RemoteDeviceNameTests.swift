@@ -13,7 +13,27 @@ final class RemoteDeviceNameTests: XCTestCase {
         XCTAssertEqual(RemoteDeviceModel.marketingName(for: "iPhone19,4"), "iPhone Duo")
         XCTAssertEqual(RemoteDeviceModel.marketingName(for: "iPad16,6"), "iPad Pro (13-inch) (M4)")
         XCTAssertNil(RemoteDeviceModel.marketingName(for: "iPhone99,1"), "没见过的新机型不猜，交给调用方退回通用名")
-        XCTAssertNil(RemoteDeviceModel.current(), "Mac 不报机型")
+    }
+
+    /// Mac 的商品名读设备树（Apple 芯片才有），在沙盒里的测试宿主也读得到。
+    func test_mac_reports_its_product_name_on_apple_silicon() throws {
+        #if arch(arm64)
+        let name = try XCTUnwrap(RemoteDeviceModel.current())
+        XCTAssertTrue(name.hasPrefix("Mac"), "如「MacBook Pro (14-inch, M5 Pro)」，实际 \(name)")
+        XCTAssertFalse(name.contains("\u{0}"))
+        #else
+        throw XCTSkip("Intel Mac 的设备树里没有商品名")
+        #endif
+    }
+
+    func test_mac_peer_symbol_follows_its_model() {
+        var laptop = peer(name: "我的 Mac", model: "MacBook Pro (14-inch, M5 Pro)")
+        laptop.platform = RemoteDevicePlatform.mac.rawValue
+        var desktop = peer(name: "工作室", model: "Mac mini (2024)")
+        desktop.platform = RemoteDevicePlatform.mac.rawValue
+        XCTAssertEqual(settingsDeviceSymbol(for: laptop), "laptopcomputer")
+        XCTAssertEqual(settingsDeviceSymbol(for: desktop), "desktopcomputer")
+        XCTAssertEqual(settingsDeviceSymbol(for: peer(name: "iPad", model: "iPad Air")), "ipad", "老版本不报 platform，按手机看")
     }
 
     func test_rename_trims_and_clears_alias_when_blank_or_same_as_reported() {

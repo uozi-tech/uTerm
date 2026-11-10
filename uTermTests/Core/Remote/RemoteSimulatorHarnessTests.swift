@@ -31,7 +31,7 @@ final class RemoteSimulatorHarnessTests: XCTestCase {
         let desktop = environment["UTERM_HARNESS_DESKTOP"] == "1"
         let fakeMac = FakeDesktopMac()
         fakeMac.detail = true
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "uTerm 联调 Mac", localID: UUID(),
                                       // 默认不广播：Debug 测试宿主通常没有「本地网络」权限（Bonjour 注册报 NoAuth）。
                                       // 模拟器用 `-RemoteDebugEndpoint 127.0.0.1:<端口>` 直连，端口见日志。

@@ -21,10 +21,11 @@ struct WorkspaceScreen: View {
     /// 新建会话抽屉要开的类型（「+」菜单选的）。
     @State private var newKind: MConnectKind?
     @State private var dragging = false
-    /// 正被拖着的标签（拖拽开始时由标签条报上来）。投放端直接读它，不去异步解包载荷。
-    @State private var draggingTabID: UUID?
-    /// 拖拽悬停处松手的结果，驱动投放高亮。
-    @State private var dropTarget: MDropTarget?
+    /// 正被拖着的标签与它此刻会怎样（标签条里让位、分屏高亮）。投放端直接读它，不去异步解包载荷。
+    @State private var tabDrag = WorkspaceTabDragTracker()
+    /// 标签条与标签的位置，拖动判定用。
+    @State private var stripFrames = WorkspaceStripFrames()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 新建抽屉里已选了主机、连接中页还没盖上来的那一小段（抽屉收起后 0.3s 才发起连接）。
     /// 期间 UIKit 会把抽屉弹出前的第一响应者（旧标签的终端）恢复回来，必须算作「没人拥有键盘」。
     @State private var awaitingConnect = false
@@ -154,15 +155,16 @@ struct WorkspaceScreen: View {
         req.companionTabIDs = changes.opened.map(\.id).filter { $0 != front?.id }
     }
 
-    /// 接管中的 Mac 的终端列表。nil = 这条连接上还没收到，不能当成「终端都没了」。
+    /// 接管中的 Mac 的终端列表（按 Mac 上的标签顺序发来，重排了也会变）。nil = 这条连接上还没收到，
+    /// 不能当成「终端都没了」。
     private var followedSessionIDs: [[UUID]?] {
         workspace.followedClients.map(\.listedSessionIDs)
     }
 
-    /// Mac 上开关了终端：手机上的标签跟着开关。
+    /// Mac 上开关、重排了终端：手机上的标签跟着开关、换顺序。
     private func followRemoteSessions() {
         for client in workspace.followedClients {
-            apply(workspace.follow(client, sessionIDs: client.listedSessionIDs))
+            apply(workspace.follow(client, sessionIDs: client.listedSessionIDs, order: client.sessions.macTabOrder))
         }
     }
 
@@ -312,7 +314,7 @@ struct WorkspaceScreen: View {
                         .offset(x: horizontal ? layout.firstLength - Self.dividerHitWidth / 2 : 0,
                                 y: horizontal ? 0 : layout.firstLength - Self.dividerHitWidth / 2)
                 }
-                if let dropTarget {
+                if let dropTarget = tabDrag.splitTarget {
                     let rect = layout.highlightRect(for: dropTarget, panes: workspace.panes)
                     WorkspaceDropHighlight(target: dropTarget)
                         .frame(width: rect.width, height: rect.height)
@@ -321,32 +323,30 @@ struct WorkspaceScreen: View {
                         .transition(.opacity)
                 }
             }
-            .animation(.easeOut(duration: 0.12), value: dropTarget)
-            .coordinateSpace(.named("workspace-split"))
+            .animation(.easeOut(duration: 0.12), value: tabDrag.splitTarget)
+            .coordinateSpace(.named(WorkspaceTabStrip.coordinateSpace))
             .onDrop(of: [.utermTabID], delegate: WorkspaceDropDelegate(
                 resolve: { point in
-                    guard let id = draggingTabID else { return nil }
+                    guard let id = tabDrag.tabID else { return nil }
                     // 标签条贴顶时会撑到状态行高度（Duo 竖屏，见 mAvoidsStatusBar），按较高的算。
                     let strip = max(WorkspaceTabStrip.height, chrome.statusRowHeight ?? 0)
-                    return layout.target(at: point, tabID: id, in: workspace, stripHeight: strip)
+                    return WorkspaceTabDragResolver.action(at: point, tabID: id, strips: stripFrames.strips,
+                                                           split: layout, in: workspace, stripHeight: strip)
                 },
-                onHover: { target in
-                    if dropTarget != target { dropTarget = target }
-                },
-                onDrop: { target in
-                    guard let id = draggingTabID else { return }
-                    draggingTabID = nil
-                    switch target {
-                    case .edge(let edge): workspace.dock(id, to: edge)
-                    case .pane(let paneID): workspace.move(id, toPane: paneID)
-                    }
-                }))
+                onHover: { tabDrag.update($0, in: workspace, move: tabMoveAnimation) },
+                onDrop: { tabDrag.drop($0, in: workspace, move: tabMoveAnimation, land: tabLandAnimation) },
+                onExit: { tabDrag.cancel(in: workspace, move: tabMoveAnimation, land: tabLandAnimation) }))
         }
         .environment(\.mTerminalHoldsFontSize, dragging)
         .background(M.surface)
     }
 
     private static let dividerHitWidth: CGFloat = 24
+
+    /// 标签条里别的标签给被拖的标签让位时的滑动（与 macOS 标签条同一条曲线）。「减弱动态效果」时不滑，直接换位。
+    private var tabMoveAnimation: Animation? { reduceMotion ? nil : WorkspaceTabDragTracker.moveAnimation }
+    /// 松手后空位变回标签的过渡：只是淡入，「减弱动态效果」时也保留。
+    private var tabLandAnimation: Animation { .easeOut(duration: 0.2) }
 
     /// 两格之间的分隔条：1pt `divider` 线，中间一枚把手；拖动时线与把手转 accent
     ///（对齐 macOS `UPaneSplitter`）。命中区 24pt，比线宽得多，手指好抓。
@@ -361,7 +361,7 @@ struct WorkspaceScreen: View {
                height: horizontal ? crossLength : Self.dividerHitWidth)
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 1, coordinateSpace: .named("workspace-split"))
+            DragGesture(minimumDistance: 1, coordinateSpace: .named(WorkspaceTabStrip.coordinateSpace))
                 .onChanged { value in
                     dragging = true
                     let position = horizontal ? value.location.x : value.location.y
@@ -397,7 +397,10 @@ struct WorkspaceScreen: View {
                 onToggleSplit: toggleSplit,
                 onMoveToOtherPane: { workspace.moveToOtherPane($0) },
                 showsTrailingControls: chrome.statusColumn == nil,
-                onDragTab: { draggingTabID = $0 },
+                paneID: pane.id,
+                drag: tabDrag,
+                frames: stripFrames,
+                onDragTab: { tabDrag.begin($0) },
                 closePrompt: Binding(get: { closeFlow.pending }, set: { closeFlow.pending = $0 }),
                 onConfirmClose: confirmClose)
             // 标签主体不在这里，见 `tabBodies`；这里只留位置。
@@ -464,7 +467,7 @@ struct WorkspaceScreen: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.22), value: cover?.id)
+        .animation(.easeOut(duration: 0.18), value: cover?.id)
     }
 
     @ViewBuilder
@@ -544,6 +547,10 @@ struct WorkspaceScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { newKind = nil } } }
         }
+        // 中继在线查询只在有界面看着时才轮询（RemoteMacDirectory.keepLiveStatusFresh）。
+        // 抽屉里一台在线 Mac 都没有时 MacTerminalRows 不出行、登记不上，在这里兜一次，
+        // 期间刚连上中继的 Mac 才能照旧在 15 秒内出现。
+        .task { await macs?.keepLiveStatusFresh() }
         .presentationDetents([.medium, .large])
     }
 

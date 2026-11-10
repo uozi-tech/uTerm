@@ -66,7 +66,7 @@ struct KeyGeneratorView: View {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("生成新密钥").font(.system(size: 17, weight: .medium)).foregroundStyle(UD.text)
-                    Text("私钥保存在钥匙串，永不离开本机；公钥可一键复制到服务器。")
+                    Text("私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备；拷贝公钥后，把它添加到主机的 ~/.ssh/authorized_keys。")
                         .font(.system(size: 12)).foregroundStyle(UD.text3)
                 }
 
@@ -79,7 +79,7 @@ struct KeyGeneratorView: View {
                     }
                     DarkFormField(label: "类型") {
                         UDSegmented(selection: familyBinding, options: [
-                            (.ed25519, "ed25519（推荐）"), (.rsa, "RSA"), (.ecdsa, "ECDSA"),
+                            (.ed25519, "Ed25519（推荐）"), (.rsa, "RSA"), (.ecdsa, "ECDSA"),
                         ])
                     }
                     if isECDSA {

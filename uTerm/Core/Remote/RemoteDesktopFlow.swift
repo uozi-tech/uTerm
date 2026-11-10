@@ -156,6 +156,8 @@ nonisolated struct RemoteRateController: Equatable {
     let config: Config
     private(set) var bitrate: Int
     private(set) var frameRate: Int
+    /// 链路节奏给的目标上限（见 `linkHeadroom`）；nil = 没有链路节奏（局域网、中继）。
+    private(set) var linkCeiling: Int?
     private var lastDecrease: UInt64?
     private var lastCongestion: UInt64
     private var lastIncrease: UInt64
@@ -171,17 +173,49 @@ nonisolated struct RemoteRateController: Equatable {
     private var baselineBucketStart: UInt64
 
     /// 起始码率按像素算：每像素 12 bit/s（2144×1206 ≈ 31 Mbps，低延迟编码器在桌面内容上用得到的量），
-    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），下限 1 Mbps。
+    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），封顶
+    /// `absoluteMaxBitrate`；下限见 `minimumBitrate`。
     static func config(width: Int, height: Int) -> Config {
         let pixels = max(1, width * height)
-        return Config(minBitrate: 1_000_000, maxBitrate: max(2_000_000, pixels * 24))
+        return Config(minBitrate: minimumBitrate(pixels: pixels),
+                      maxBitrate: min(absoluteMaxBitrate, max(2_000_000, pixels * 24)))
     }
 
-    /// 公网路径的配置：上限不变（不设固定额度），在途帧放宽到按字节算的带宽时延积说了算，否则
-    /// 往返 200 ms 时被 8 帧卡在 40 fps。
-    static func config(width: Int, height: Int, path: RemoteLinkPath) -> Config {
+    /// 码率上限的绝对值。按像素算的上限在大屏上离谱：5120×2880 的虚拟屏是 353.9 Mbps，局域网上没有链路节奏
+    /// 兜底，这个数会原样交给编码器，要等延迟涨起来才往下压（2026-11-09 真机 931 读数）。
+    static let absoluteMaxBitrate = 150_000_000
+
+    /// 有链路节奏时目标码率最多是视频份额（`RemoteLossPolicy.videoShare`）的这么多倍。
+    ///
+    /// 直连上编码器拿的是 min(目标, 视频份额)，延迟一直低，目标就每 0.5 s 乘 1.25 涨到上限停着（5K 虚拟屏
+    /// 353.9 Mbps，链路才 60 Mbps）。码控行显示的目标因此没有参考价值，拥塞时按 0.7 倍往下压也压不到编码器
+    /// 头上——要连降好几次才降到链路以下。留 1.25 倍：链路一变宽，编码器马上跟得上。
+    static let linkHeadroom = 1.25
+
+    /// 码率下限：每像素 1 bit/s，夹在 2–8 Mbps（1920×1080 约 2 Mbps、2600×1462 约 3.8 Mbps、3840×2160 8 Mbps）。
+    ///
+    /// 以前一律 1 Mbps：真机 3840×2160 公网直连被压到 1.2–2 Mbps，QP 一直顶在 51，一动就糊成色块。下限只管
+    /// 「采集 → 解码完」这条信号能压到多低；链路真扛不住时，编码器拿到的是链路实测节奏（`linkShare`）与它取小，
+    /// 下限再高也不会多发。
+    static func minimumBitrate(pixels: Int) -> Int {
+        min(maxMinimumBitrate, max(minMinimumBitrate, pixels))
+    }
+
+    static let minMinimumBitrate = 2_000_000
+    static let maxMinimumBitrate = 8_000_000
+    /// 没有链路节奏兜底时（中继转发的 TCP：视频不走数据报）的下限。那里「采集 → 解码完」是唯一的拥塞信号，
+    /// 下限定高了，窄链路上就是一直排着几秒的队。
+    static let unpacedMinimumBitrate = 1_000_000
+
+    /// 按路径的配置。公网上限不变（不设固定额度），在途帧放宽到按字节算的带宽时延积说了算，否则
+    /// 往返 200 ms 时被 8 帧卡在 40 fps。`paced`：视频走数据报、有链路节奏兜底。公网上没有它时下限退回
+    /// `unpacedMinimumBitrate`。
+    static func config(width: Int, height: Int, path: RemoteLinkPath, paced: Bool = false) -> Config {
         var config = config(width: width, height: height)
-        if path.isInternet { config.maxInflightFrames = 30 }
+        if path.isInternet {
+            config.maxInflightFrames = 30
+            if !paced { config.minBitrate = unpacedMinimumBitrate }
+        }
         return config
     }
 
@@ -208,8 +242,8 @@ nonisolated struct RemoteRateController: Equatable {
         baselineBucketStart = now
     }
 
-    init(width: Int, height: Int, path: RemoteLinkPath = .localNetwork, now: UInt64) {
-        self.init(config: Self.config(width: width, height: height, path: path),
+    init(width: Int, height: Int, path: RemoteLinkPath = .localNetwork, paced: Bool = false, now: UInt64) {
+        self.init(config: Self.config(width: width, height: height, path: path, paced: paced),
                   initialBitrate: Self.initialBitrate(width: width, height: height, path: path), now: now)
     }
 
@@ -286,8 +320,14 @@ nonisolated struct RemoteRateController: Equatable {
     }
 
     /// 一帧的「采集 → 手机解码完」耗时。最近一小段里最快的一帧都排着队，才算拥塞。
+    ///
+    /// `linkQueueing`：链路层（`RemoteLinkEstimator`）此刻量没量到网络排队；nil = 没有链路层估计（局域网 TCP、
+    /// 中继转发），只能靠这条信号。有估计、且它说网络没排队时，帧耗时再高也不降码率：多出来的是自己的大帧
+    /// （关键帧、旁路精修）在发送队列里排着、或者确认在 Wi-Fi 上行晚到，降码率既治不了也只会让画面糊。
+    /// 真机 3840×2160 公网直连：链路 丢包 0%、往返 27–85 ms，帧往返 p95 却 1.1–2 s，码率被一路压到 1.2 Mbps。
+    /// 网络真排队时链路层自己会退节奏（编码器拿到的码率跟着节奏走），也会让这里照旧降。
     @discardableResult
-    mutating func observe(latencyNanos: UInt64, now: UInt64) -> Bool {
+    mutating func observe(latencyNanos: UInt64, now: UInt64, linkQueueing: Bool? = nil) -> Bool {
         updateBaseline(latencyNanos, now: now)
         recent.removeAll { now &- $0.nanos > config.congestionWindow }
         recent.append(LatencySample(nanos: now, latency: latencyNanos))
@@ -296,6 +336,8 @@ nonisolated struct RemoteRateController: Equatable {
         guard recent.count >= config.samplesForCongestion, queueDelay > config.queueDelayThreshold else {
             return queueDelay > config.queueDelayThreshold ? false : tick(now: now)
         }
+        // 排队不在网络上：不当拥塞。照常往上试——编码器拿到的码率还受链路节奏管着，涨的只是这条信号的上限。
+        guard linkQueueing != false else { return tick(now: now) }
         // 这一段已经判过了：清掉，下一次要靠新样本重新攒够。
         recent.removeAll()
         return congestion(now: now)
@@ -310,6 +352,17 @@ nonisolated struct RemoteRateController: Equatable {
         baselineCurrent = min(baselineCurrent ?? latency, latency)
     }
 
+    /// 链路节奏变了：目标最多是视频份额的 `linkHeadroom` 倍，但不低于下限。返回目标有没有被往下拉——
+    /// 这是跟着链路走，不是拥塞，调用方别把它当降码率处理（画质上限不收紧）。
+    @discardableResult
+    mutating func capToLink(videoShare: Double) -> Bool {
+        let ceiling = max(config.minBitrate, Int(videoShare * Self.linkHeadroom))
+        linkCeiling = ceiling
+        guard bitrate > ceiling else { return false }
+        bitrate = ceiling
+        return true
+    }
+
     /// 定期调用（每次确认时顺带）：拥塞后静默够久就往上调。返回有没有变。
     @discardableResult
     mutating func tick(now: UInt64) -> Bool {
@@ -321,13 +374,76 @@ nonisolated struct RemoteRateController: Equatable {
             frameRate = config.fullFrameRate
             return true
         }
-        guard bitrate < config.maxBitrate else { return false }
+        let limit = min(config.maxBitrate, linkCeiling ?? config.maxBitrate)
+        guard bitrate < limit else { return false }
         let probing = congestedBitrate.map {
             (Double($0) * 0.85..<Double($0) * 1.15).contains(Double(bitrate))
         } ?? false
         let factor = probing ? config.probeFactor : config.increaseFactor
-        bitrate = min(config.maxBitrate, max(bitrate + 1, Int(Double(bitrate) * factor)))
+        bitrate = min(limit, max(bitrate + 1, Int(Double(bitrate) * factor)))
         return true
+    }
+}
+
+/// 告诉编码器的帧率（`ExpectedFrameRate`）：按实际送进编码器的主流帧率，平滑过、隔一阵才改一次。
+///
+/// 送进编码器的帧 ≤ 采集的帧：在途满了的画面编码前就丢（`RemoteDesktopPacer`）。宽链路上两者一样；窄链路上
+/// （3G 0.75 Mbps，采集 30 fps 只送得进几帧）按采集报会让每帧预算小到装不下任何一帧（2026-11-09）。
+///
+/// 低延迟码控按「码率 ÷ 预期帧率」给每帧分预算。一直报 60 fps 而画面每秒只变 6 次时，每帧只分到十分之一，
+/// 稍大一点的帧（恢复帧、一个窗口整片刷新）就被编码器整帧丢掉（2026-11-08 mini：采集 6 fps，丢 3 出 1）。
+/// - 采集间隔按指数平均；静止的长间隔按 `maxInterval` 算，一段静止不会把帧率拉到 0。
+/// - 快升慢降：间隔变短（画面动起来了）按 `attack` 快跟、立刻写给编码器——报低了每帧预算偏大，满屏在变时
+///   一帧比一帧大、链路排队；间隔变长按 `smoothing` 慢跟，离上次改不到 `minChangeInterval`、差不到
+///   `changeRatio` 不改，别每帧都去动编码器。
+/// - 报给编码器的是采集帧率的 `headroom` 倍：如实报时，画面每帧都在变（30 fps 满屏细节）每帧预算翻倍、帧变大、
+///   码控丢得更多，显示帧数少两成（随机丢包闸门 188 vs 233）。留一倍余量后 30 fps 仍报 60，跟以前一样；
+///   6 fps 报 12，每帧预算比报 60 时大五倍，恢复帧不再被整帧丢掉。
+/// - 结果夹在 `[floor, 码控帧率]`：帧太少时也不让一帧独吞好几秒的预算（一帧要发那么久，延迟就上去了）。
+nonisolated struct RemoteEncoderFrameRate: Equatable {
+    static let smoothing = 0.2
+    static let attack = 0.5
+    static let maxInterval: UInt64 = 1_000_000_000
+    static let floor = 5
+    static let headroom = 2.0
+    static let changeRatio = 0.2
+    static let minChangeInterval: UInt64 = 1_000_000_000
+
+    private var lastCapture: UInt64?
+    private var interval: Double?
+    private var lastChange: UInt64 = 0
+    /// 当前告诉编码器的帧率（nil = 还没定过，用码控帧率）。
+    private(set) var applied: Int?
+
+    /// 送了一帧进编码器。
+    mutating func record(now: UInt64) {
+        defer { lastCapture = now }
+        guard let lastCapture else { return }
+        let gap = Double(min(now &- lastCapture, Self.maxInterval))
+        interval = interval.map { $0 + (gap - $0) * (gap < $0 ? Self.attack : Self.smoothing) } ?? gap
+    }
+
+    /// 给编码器的帧率；`limit` = 码控现在允许的帧率。返回值跟上次不同才需要写给编码器。
+    mutating func expected(limit: Int, now: UInt64) -> Int {
+        let ceiling = max(1, limit)
+        guard let interval, interval > 0 else { return applied.map { min($0, ceiling) } ?? ceiling }
+        let measured = min(ceiling, max(min(Self.floor, ceiling), Int((Self.headroom * 1e9 / interval).rounded())))
+        guard let current = applied else {
+            applied = measured
+            lastChange = now
+            return measured
+        }
+        // 画面动快了、或码控把帧率压下去了：立刻跟。
+        if measured > current || current > ceiling {
+            applied = measured
+            lastChange = now
+            return measured
+        }
+        guard now &- lastChange >= Self.minChangeInterval,
+              abs(Double(measured - current)) >= Double(current) * Self.changeRatio else { return current }
+        applied = measured
+        lastChange = now
+        return measured
     }
 }
 
@@ -337,7 +453,10 @@ nonisolated struct RemoteRateController: Equatable {
 /// 不设上限每帧 3–4 KB、约 1–2 Mbps，字是糊的；上限 30 时每帧 18 KB 且不丢帧）。但上限一压，编码器就按它出帧、
 /// 不管预算：复杂画面上每帧近 1 MB，透支的码率要靠之后连续丢帧还，写回 51 放开后还要丢好几秒（实测 50 Mbps 下
 /// 丢一半帧超过 4 s）。写 nil 清属性不管用。所以上限只能小步收、一超就退：
-/// - 起步不限。每 `window` 结算：没丢帧、样本够、实发不到目标码率一半，收紧一档（不限时直接到 `relaxed`）。
+/// - 起步不限。每 `window` 结算：没丢帧、窗口里出过帧、实发不到目标码率一半，收紧一档（不限时直接到 `relaxed`）。
+///   帧少不是不收的理由：屏幕上只有光标闪、时钟走时每秒只采到 3–5 帧，以前要求半秒 10 帧就永远收不紧，
+///   上限卡在开头那档，静止的字一直是关键帧那张的糊样子（真机 3840×2160、目标 199 Mbps、实发 4–9 Mbps、
+///   上限停在 37）。帧少时每帧分到的预算反而宽，收紧之后画面一动、单帧超预算就当场退开。
 /// - 非关键帧大过每帧预算的 `oversizeFactor` 倍、或一个窗口里码控丢到 `dropsToRaise` 帧：**当场**放宽 `raiseStep`
 ///  （到 `relaxed` 以上就不限），重新计窗。画面一下变复杂时一两帧之内退开，不攒成透支。
 /// - 码率控制报拥塞时同样放宽。
@@ -349,7 +468,7 @@ nonisolated struct RemoteQualityCap: Equatable {
     static let dropsToRaise = 3
     static let oversizeFactor = 1.5
     static let window: UInt64 = 500_000_000
-    static let minFramesToTighten = 10
+    static let minFramesToTighten = 1
 
     private(set) var maxQP = Self.unrestricted
     private var windowStart: UInt64
@@ -463,18 +582,27 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     /// 显示器的点尺寸（只用纵横比与相对大小）。
     var contentSize: CGSize
     var viewSize: CGSize
+    /// 视图四个角各自落在多大的圆角里（视图点）：画布铺到了屏幕 / 窗口的圆角里时由视图量出来。
+    var corners: RemoteDesktopCornerRadii = .square
     private(set) var zoom: CGFloat = 1
     private(set) var center = CGPoint(x: 0.5, y: 0.5)
 
-    init(contentSize: CGSize, viewSize: CGSize) {
+    init(contentSize: CGSize, viewSize: CGSize, corners: RemoteDesktopCornerRadii = .square) {
         self.contentSize = contentSize
         self.viewSize = viewSize
+        self.corners = corners
     }
 
-    /// 适配时每个显示器点占多少视图点。
+    /// 适配时每个显示器点占多少视图点：等比放进视图；画面的角会落进外圆角时四边留一圈窄边
+    ///（见 `RemoteDesktopCornerFit`）。
     var fitScale: CGFloat {
         guard contentSize.width > 0, contentSize.height > 0 else { return 1 }
-        return min(viewSize.width / contentSize.width, viewSize.height / contentSize.height)
+        return RemoteDesktopCornerFit.scale(content: contentSize, view: viewSize, corners: corners)
+    }
+
+    /// 画面四角与视图圆角同心的圆角（放大后出了视图的角不切）。
+    var pictureCorners: RemoteDesktopPictureCorners {
+        RemoteDesktopCornerFit.pictureCorners(frame: contentFrame, view: viewSize, corners: corners)
     }
 
     var scale: CGFloat { fitScale * zoom }

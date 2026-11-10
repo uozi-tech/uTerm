@@ -129,12 +129,10 @@ struct RemoteDesktopKeyBar: View {
         _ = keys.consume()
         send(.text(prompt))
         Task {
-            try? await Task.sleep(for: Self.submitDelay)
+            try? await Task.sleep(for: AgentPromptSubmit.enterDelay)
             for input in Self.press(RemoteKeyCatalog.enter, armed: []) { send(input) }
         }
     }
-
-    private static let submitDelay = Duration.milliseconds(120)
 
     /// 只填入：接下来要接着打字，键盘弹出来（键盘回来时面板会自己让位）。
     private func fill(_ prompt: String) {

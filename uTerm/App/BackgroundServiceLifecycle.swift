@@ -39,7 +39,7 @@ enum BackgroundLaunchMode {
     static func cliLaunchRefusal(arguments: [String], defaults: UserDefaults) -> String? {
         guard launchSource(arguments: arguments) == cliLaunchSource else { return nil }
         guard defaults.object(forKey: BackgroundServiceSettings.Keys.allowOnDemandLaunch) as? Bool == true else {
-            return "设置中没有允许 CLI 按需启动"
+            return "没有打开「允许 CLI 按需启动」（设置 › 命令行与技能）"
         }
         guard defaults.object(forKey: ControlSettings.Keys.enabled) as? Bool == true else {
             return "命令行接口未启用"
@@ -130,7 +130,30 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
     var dockMenu: DockMenuController?
     /// 欢迎窗关掉后它的视图就卸载了，所以入口不能挂在欢迎窗自己身上。
     static var openWelcome: (() -> Void)?
+    /// 打开 `uterm://pair` 邀请链接（另一台 Mac 设置里拷出的）：交给「我的 Mac」窗口确认。由 `uTermApp` 装好；
+    /// 冷启动时链接可能比它先到，先存着，装上时再交。
+    static var openPairingLink: ((RemotePairingInvitation) -> Void)? {
+        didSet {
+            guard let openPairingLink, let pending = pendingPairingLink else { return }
+            pendingPairingLink = nil
+            openPairingLink(pending)
+        }
+    }
+    private static var pendingPairingLink: RemotePairingInvitation?
     private static let backgroundedWindows = BackgroundedWindows()
+
+    /// 在这里接住链接，SwiftUI 就不会为它另开一个窗口。只认配对邀请，别的 `uterm://` 链接不处理。
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let invitation = RemotePairingInvitation(scanned: url.absoluteString) else { continue }
+            Self.showGUI()
+            if let open = Self.openPairingLink {
+                open(invitation)
+            } else {
+                Self.pendingPairingLink = invitation
+            }
+        }
+    }
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         dockMenu?.makeMenu()

@@ -111,7 +111,7 @@ struct MobileAgentChat: View {
 
             MMenu {
                 if sessions.isEmpty {
-                    Text("还没有历史会话")
+                    Text("还没有对话")
                 } else {
                     ForEach(sessions) { session in
                         Button { model.load(session) } label: {
@@ -126,11 +126,11 @@ struct MobileAgentChat: View {
             } label: {
                 barIcon("clock.arrow.circlepath")
             }
-            .accessibilityLabel("会话历史")
+            .accessibilityLabel("对话历史")
 
             Button { model.startNewSession() } label: { barIcon("square.and.pencil") }
                 .disabled(model.messages.isEmpty)
-                .accessibilityLabel("新对话")
+                .accessibilityLabel("新建对话")
         }
         .padding(.leading, 16).padding(.trailing, 4)
         .frame(height: 44)
@@ -239,7 +239,7 @@ struct MobileAgentChat: View {
                     .background(accent.opacity(0.14), in: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous))
                 Text("用自然语言操作 \(host.name)")
                     .font(M.sans(18, weight: .semibold)).foregroundStyle(M.text)
-                Text("描述你想做的事，Agent 会翻译成命令，按审批档位征求确认后在远端执行。")
+                Text("描述你想做的事，Agent 会生成命令，按审批档位决定是否先征求你的确认，再在远端执行。")
                     .font(M.sans(14)).foregroundStyle(M.text3)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -318,7 +318,7 @@ struct MobileAgentChat: View {
                     .background(accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .mContextMenu {
                         Button { UIPasteboard.general.string = m.text } label: {
-                            Label("复制", systemImage: "doc.on.doc")
+                            Label("拷贝", systemImage: "doc.on.doc")
                         }
                         Button { model.input = m.text } label: {
                             Label("放回输入框", systemImage: "arrow.uturn.down")

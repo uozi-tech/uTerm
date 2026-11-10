@@ -86,7 +86,8 @@ final class ParallelBackgroundKeeper {
             while !Task.isCancelled {
                 guard let self else { return }
                 if !self.tick() { break }
-                try? await Task.sleep(for: .seconds(1))
+                // 进度一秒一推就够，不需要准点：给 250 ms 余量，系统可以把这次唤醒和别的定时器并在一起。
+                try? await Task.sleep(for: .seconds(1), tolerance: .milliseconds(250))
             }
         }
     }
@@ -147,19 +148,28 @@ final class ParallelBackgroundKeeper {
 
     // MARK: iOS 26：系统后台继续处理
 
+    /// 系统的启动回调：`using: nil` 时系统在自己的后台队列上调它。必须在 nonisolated 的地方建——在本类（`@MainActor`）
+    /// 的方法里直接写闭包，Swift 会把它推断成主线程隔离、进入时检查执行者，系统一启动任务就崩（同远程桌面声音的
+    /// 播放回调，ebd13a48）。任务对象只在主线程上用：包一层带回主线程再交给 `adopt`。
+    nonisolated static func launchHandler<Handle>(_ adopt: @escaping @MainActor @Sendable (Handle) -> Void)
+        -> (Handle) -> Void {
+        { task in
+            let handed = UncheckedSendable(task)
+            Task { @MainActor in adopt(handed.value) }
+        }
+    }
+
     @available(iOS 26.0, *)
     private func submitContinuedTask(title: String) {
         // 已经有一个在跑 / 在排队：沿用，标题由 tick 更新。
         guard continued == nil, pendingIdentifier == nil else { return }
         let identifier = Self.identifierPrefix + UUID().uuidString
-        let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { [weak self] task in
-            // 启动回调在系统的后台队列上；任务对象只在主线程上用，包一层带过去。
-            let handed = UncheckedSendable(task)
-            Task { @MainActor in
-                guard let task = handed.value as? BGContinuedProcessingTask else { return }
+        let registered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: identifier, using: nil,
+            launchHandler: Self.launchHandler { [weak self] (task: BGTask) in
+                guard let task = task as? BGContinuedProcessingTask else { return }
                 self?.adopt(task, identifier: identifier)
-            }
-        }
+            })
         guard registered else { return }   // Info.plist 没登记：退回 beginBackgroundTask
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: "准备中…")
         request.strategy = .fail   // 现在跑不了就别排队：排到后面时运行早已结束

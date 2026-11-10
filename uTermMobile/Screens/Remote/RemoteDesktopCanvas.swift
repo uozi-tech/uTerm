@@ -66,6 +66,8 @@ final class RemoteDesktopCanvasView: UIView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     private let cursorLayer = CAShapeLayer()
     private let keyInput = RemoteKeyInputView()
+    /// 量画布四角落在多大的屏幕圆角里（见 `screenCornerRadius`）。不画东西、不接触摸。
+    private let cornerProbe = UIView()
     var fitToken = 0
     var onKeyboardDismissed: (() -> Void)?
 
@@ -106,7 +108,7 @@ final class RemoteDesktopCanvasView: UIView {
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = UIColor.black.cgColor
         layer.addSublayer(displayLayer)
-        cursorLayer.path = Self.arrowPath()
+        cursorLayer.path = RemoteDesktopArrowCursor.path()
         cursorLayer.fillColor = UIColor.black.cgColor
         cursorLayer.strokeColor = UIColor.white.cgColor
         cursorLayer.lineWidth = 1.5
@@ -116,10 +118,14 @@ final class RemoteDesktopCanvasView: UIView {
         cursorLayer.shadowOffset = CGSize(width: 0, height: 1)
         layer.addSublayer(cursorLayer)
         addSubview(keyInput)
+        cornerProbe.isUserInteractionEnabled = false
+        cornerProbe.alpha = 0
+        if #available(iOS 26.0, *) { cornerProbe.cornerConfiguration = .corners(radius: .containerConcentric()) }
+        addSubview(cornerProbe)
         keyInput.keys = keys
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
-        attachReceiver()
+        session.attachCanvas(displayLayer) { [weak self] cursor in self?.macCursor(cursor) }
     }
 
     @available(*, unavailable)
@@ -130,31 +136,7 @@ final class RemoteDesktopCanvasView: UIView {
         stopMomentum()
         displayLink?.invalidate()
         displayLink = nil
-        session.receiver.setHandlers(onImage: nil, onCursor: nil)
-    }
-
-    // MARK: - 画面
-
-    private func attachReceiver() {
-        let renderer = RendererBox(displayLayer.sampleBufferRenderer)
-        session.receiver.setHandlers(
-            onImage: { image, _ in
-                guard let sample = RemoteVideoDecoder.displaySample(image) else { return }
-                renderer.enqueue(sample)
-            },
-            onCursor: { [weak self] cursor in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.macCursor(cursor) } }
-            })
-    }
-
-    /// 渲染器从解码队列上用（`AVSampleBufferVideoRenderer` 可以在任意线程 enqueue；状态出错先 flush 再继续）。
-    private nonisolated final class RendererBox: @unchecked Sendable {
-        let renderer: AVSampleBufferVideoRenderer
-        init(_ renderer: AVSampleBufferVideoRenderer) { self.renderer = renderer }
-        func enqueue(_ sample: CMSampleBuffer) {
-            if renderer.status == .failed { renderer.flush() }
-            renderer.enqueue(sample)
-        }
+        session.detachCanvas()
     }
 
     // MARK: - 布局
@@ -176,10 +158,37 @@ final class RemoteDesktopCanvasView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         viewport.viewSize = bounds.size
+        cornerProbe.frame = bounds
+        viewport.corners = screenCorners()
         viewport.clamp()
         layoutContent()
         keyInput.frame = CGRect(x: 0, y: max(0, bounds.height - 48), width: bounds.width, height: min(48, bounds.height))
     }
+
+    /// 画布四个角各自落在多大的屏幕圆角里：画布铺满整屏，四角（键盘条收起时连下面两个）正是屏幕的
+    /// 物理圆角，「适配屏幕」让画面离四边留一圈窄边、自己的角切成同心圆角（`RemoteDesktopCornerFit`）。
+    ///
+    /// iOS 26 起用系统的同心圆角：探针视图与画布同框，`containerConcentric` 给出每个角离屏幕圆角
+    /// 还剩多大的半径（不在屏幕角上的角是 0）。在 `layoutSubviews` 里读，变了系统会再排一次版。
+    /// 更早的系统没有这个接口：画布的角贴着屏幕的角、且屏幕有 Home 条（全面屏）时按 55pt 算。
+    private func screenCorners() -> RemoteDesktopCornerRadii {
+        if #available(iOS 26.0, *) {
+            return RemoteDesktopCornerRadii(topLeft: cornerProbe.effectiveRadius(corner: .topLeft),
+                                            topRight: cornerProbe.effectiveRadius(corner: .topRight),
+                                            bottomLeft: cornerProbe.effectiveRadius(corner: .bottomLeft),
+                                            bottomRight: cornerProbe.effectiveRadius(corner: .bottomRight))
+        }
+        guard let window, window.safeAreaInsets.bottom > 0 else { return .square }
+        let frame = convert(bounds, to: window)
+        let screen = window.bounds
+        let top = abs(frame.minY - screen.minY) < 1, bottom = abs(frame.maxY - screen.maxY) < 1
+        let left = abs(frame.minX - screen.minX) < 1, right = abs(frame.maxX - screen.maxX) < 1
+        let r = Self.legacyScreenCornerRadius
+        return RemoteDesktopCornerRadii(topLeft: top && left ? r : 0, topRight: top && right ? r : 0,
+                                        bottomLeft: bottom && left ? r : 0, bottomRight: bottom && right ? r : 0)
+    }
+
+    private static let legacyScreenCornerRadius: CGFloat = 55
 
     func updateContentSize(_ size: CGSize?) {
         guard let size, size.width > 0, size.height > 0, size != viewport.contentSize else { return }
@@ -197,23 +206,10 @@ final class RemoteDesktopCanvasView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         displayLayer.frame = viewport.contentFrame
+        displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
         cursorLayer.position = viewport.viewPoint(normalized: pointer)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
         CATransaction.commit()
-    }
-
-    /// 箭头光标，尖端在原点。尺寸固定（视图点），不随缩放变。
-    private static func arrowPath() -> CGPath {
-        let path = UIBezierPath()
-        path.move(to: .zero)
-        path.addLine(to: CGPoint(x: 0, y: 17))
-        path.addLine(to: CGPoint(x: 4.2, y: 13))
-        path.addLine(to: CGPoint(x: 7.2, y: 19.5))
-        path.addLine(to: CGPoint(x: 9.8, y: 18.3))
-        path.addLine(to: CGPoint(x: 6.9, y: 12))
-        path.addLine(to: CGPoint(x: 12.3, y: 12))
-        path.close()
-        return path.cgPath
     }
 
     // MARK: - 每帧合并

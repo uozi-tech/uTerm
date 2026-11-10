@@ -78,8 +78,8 @@ struct ExternalOpenSystem {
             let alert = NSAlert()
             alert.messageText = String(localized: "远程文件已变化")
             alert.informativeText = String(localized: "\(fileName) 在你打开之后被别处改过。上传会覆盖远程的这些改动。")
-            alert.addButton(withTitle: String(localized: "保留我的（覆盖远程）"))
-            alert.addButton(withTitle: String(localized: "用远程的（丢弃本地）"))
+            alert.addButton(withTitle: String(localized: "覆盖远程文件"))
+            alert.addButton(withTitle: String(localized: "放弃本地改动"))
             alert.addButton(withTitle: String(localized: "暂不上传"))
             switch alert.runModal() {
             case .alertFirstButtonReturn:  return .keepMine
@@ -91,7 +91,7 @@ struct ExternalOpenSystem {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = String(localized: "停止同步 \(fileName)？")
-            alert.informativeText = String(localized: "本地副本还有没传到服务器的改动，停止后不会再上传。")
+            alert.informativeText = String(localized: "本地副本还有未上传到主机的改动，停止后不会再上传。")
             alert.addButton(withTitle: String(localized: "停止同步"))
             alert.addButton(withTitle: String(localized: "取消"))
             return alert.runModal() == .alertFirstButtonReturn
@@ -348,7 +348,7 @@ final class ExternalOpenCoordinator {
             detector: ExternalEditChangeDetector(synced: baseline)))
         startPolling()
         showToast(.info, String(localized: "已打开 \(name)"),
-                  detail: String(localized: "保存后会自动上传回服务器。"))
+                  detail: String(localized: "保存后自动上传回主机。"))
     }
 
     // MARK: - 监听与上传
@@ -392,7 +392,7 @@ final class ExternalOpenCoordinator {
     private func upload(_ id: UUID, fingerprint: LocalFileFingerprint, overwriteRemote: Bool = false) async {
         guard let session = session(id) else { return }
         guard let sftp = provider() else {
-            fail(id, fingerprint: fingerprint, message: String(localized: "SFTP 未连接"))
+            fail(id, fingerprint: fingerprint, message: String(localized: "SFTP 尚未连接"))
             return
         }
         update(id) { $0.state = .uploading }

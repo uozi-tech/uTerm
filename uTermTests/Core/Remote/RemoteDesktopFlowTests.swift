@@ -123,6 +123,95 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertEqual(rate.bitrate, config.maxBitrate, "不超过上限")
     }
 
+    func test_rate_ceiling_has_an_absolute_cap_for_huge_screens() {
+        XCTAssertEqual(RemoteRateController.config(width: 1856, height: 1206).maxBitrate, 1856 * 1206 * 24, "常见尺寸照旧")
+        XCTAssertEqual(RemoteRateController.config(width: 5120, height: 2880).maxBitrate,
+                       RemoteRateController.absoluteMaxBitrate, "5K 虚拟屏按像素是 353.9 Mbps")
+    }
+
+    func test_link_pacing_caps_the_target_without_counting_as_congestion() {
+        let config = RemoteRateController.Config(minBitrate: 2_000_000, maxBitrate: 300_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 6_000_000, now: 0)
+        rate.capToLink(videoShare: 40_000_000)
+        var now: UInt64 = 0
+        for _ in 0..<40 {
+            now += 1_000 * ms
+            rate.tick(now: now)
+        }
+        XCTAssertEqual(rate.bitrate, 50_000_000, "最多涨到视频份额的 1.25 倍，不是 300 Mbps")
+        XCTAssertTrue(rate.capToLink(videoShare: 8_000_000), "链路变窄：目标跟着往下拉")
+        XCTAssertEqual(rate.bitrate, 10_000_000)
+        XCTAssertEqual(rate.frameRate, 60, "跟着链路走不是拥塞，不减帧率")
+        XCTAssertTrue(rate.capToLink(videoShare: 400_000))
+        XCTAssertEqual(rate.bitrate, config.minBitrate, "不低于下限")
+        XCTAssertFalse(rate.capToLink(videoShare: 80_000_000), "链路变宽不直接抬目标，由 tick 慢慢涨")
+        XCTAssertEqual(rate.bitrate, config.minBitrate)
+        now += 1_000 * ms
+        XCTAssertTrue(rate.tick(now: now))
+        XCTAssertEqual(rate.bitrate, 2_500_000)
+    }
+
+    func test_rate_floor_scales_with_pixels_between_2_and_8_mbps() {
+        XCTAssertEqual(RemoteRateController.config(width: 64, height: 64).minBitrate, 2_000_000)
+        XCTAssertEqual(RemoteRateController.config(width: 1920, height: 1080).minBitrate, 1920 * 1080)
+        XCTAssertEqual(RemoteRateController.config(width: 2600, height: 1462).minBitrate, 2600 * 1462)
+        XCTAssertEqual(RemoteRateController.config(width: 3840, height: 2160).minBitrate, 8_000_000,
+                       "3840×2160 以前压到 1.2 Mbps、QP 顶在 51")
+    }
+
+    func test_rate_floor_stays_low_without_link_pacing() {
+        XCTAssertEqual(RemoteRateController.config(width: 3840, height: 2160, path: .direct, paced: true).minBitrate,
+                       8_000_000)
+        XCTAssertEqual(RemoteRateController.config(width: 3840, height: 2160, path: .relay, paced: false).minBitrate,
+                       RemoteRateController.unpacedMinimumBitrate, "中继转发没有链路节奏兜底：下限不抬")
+        XCTAssertEqual(RemoteRateController.config(width: 3840, height: 2160, path: .localNetwork).minBitrate, 8_000_000)
+        let relay = RemoteRateController(width: 3840, height: 2160, path: .relay, now: 0)
+        XCTAssertEqual(relay.bitrate, RemoteRateController.internetInitialBitrate)
+        let direct = RemoteRateController(width: 3840, height: 2160, path: .direct, paced: true, now: 0)
+        XCTAssertEqual(direct.bitrate, 8_000_000, "起步不低于下限")
+    }
+
+    /// 按真机日志（3840×2160 公网直连）喂：链路层说网络没排队时，帧往返一直 1 s 多也不降码率，照常往上试。
+    /// 同样的读数、没有链路层估计时仍按老规则当拥塞（看前 3 秒：再久基线会跟着抬上来）。
+    func test_frame_latency_spikes_do_not_lower_bitrate_when_link_has_no_queue() {
+        var paced = RemoteRateController(width: 3840, height: 2160, path: .direct, paced: true, now: 0)
+        var unknown = RemoteRateController(config: paced.config, initialBitrate: 20_000_000, now: 0)
+        let start = paced.bitrate
+        var now: UInt64 = 0
+        for latency: UInt64 in [45, 50, 47] {
+            now += 100 * ms
+            paced.observe(latencyNanos: latency * ms, now: now, linkQueueing: false)
+            unknown.observe(latencyNanos: latency * ms, now: now)
+        }
+        var lowered = false
+        for step in 0..<30 {
+            now += 100 * ms
+            let latency: UInt64 = step.isMultiple(of: 3) ? 1_100 : 1_250
+            paced.observe(latencyNanos: latency * ms, now: now, linkQueueing: false)
+            lowered = paced.bitrate < start || lowered
+            unknown.observe(latencyNanos: latency * ms, now: now)
+        }
+        XCTAssertFalse(lowered)
+        XCTAssertGreaterThan(paced.bitrate, start, "网络没排队：码率照常往上试")
+        XCTAssertEqual(paced.frameRate, 60)
+        XCTAssertLessThan(unknown.bitrate, 20_000_000, "没有链路层估计时仍按帧耗时降")
+    }
+
+    func test_frame_latency_still_lowers_bitrate_when_link_is_queueing() {
+        var rate = RemoteRateController(config: RemoteRateController.config(width: 3840, height: 2160, path: .direct, paced: true),
+                                        initialBitrate: 20_000_000, now: 0)
+        rate.observe(latencyNanos: 45 * ms, now: 100 * ms, linkQueueing: false)
+        var now = 100 * ms
+        var lowered = false
+        for _ in 0..<5 {
+            now += 100 * ms
+            lowered = rate.observe(latencyNanos: 400 * ms, now: now, linkQueueing: true) || lowered
+        }
+        XCTAssertTrue(lowered, "链路层也量到排队：照旧降")
+        XCTAssertLessThan(rate.bitrate, 20_000_000)
+        XCTAssertGreaterThanOrEqual(rate.bitrate, rate.config.minBitrate)
+    }
+
     func test_rate_controller_treats_sustained_high_latency_as_congestion() {
         var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
@@ -367,17 +456,24 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertEqual(cap.maxQP, 40)
     }
 
-    func test_quality_cap_needs_enough_frames_to_tighten() {
+    /// 屏幕上只有光标闪、时钟走：每秒几帧也要收紧，否则静止的字一直糊（真机 4K 上限卡在 37）。
+    func test_quality_cap_tightens_at_a_low_frame_rate() {
         var cap = RemoteQualityCap(now: 0)
-        _ = feedWindow(&cap, from: 0, frames: 5, bytes: 4_000)
-        XCTAssertEqual(cap.maxQP, RemoteQualityCap.unrestricted, "半秒只有 5 帧：样本太少，不收紧")
+        var now = feedWindow(&cap, from: 0, frames: 2, bytes: 4_000)
+        XCTAssertEqual(cap.maxQP, 40, "半秒只有 2 帧、预算没用上：照样收")
+        for _ in 0..<20 { now = feedWindow(&cap, from: now, frames: 2, bytes: 4_000) }
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.floor)
+        // 收到底后画面一动、单帧超预算：当场放宽。
+        XCTAssertTrue(cap.record(encodedBytes: 400_000, targetBitrate: 90_000_000, frameRate: 60, now: now + 16 * ms))
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.floor + RemoteQualityCap.raiseStep)
     }
 
     func test_initial_bitrate_scales_with_pixels() {
         XCTAssertEqual(RemoteRateController.initialBitrate(width: 1920, height: 1080), 1920 * 1080 * 12)
         XCTAssertEqual(RemoteRateController.initialBitrate(width: 2144, height: 1206), 2144 * 1206 * 12,
                        "约 31 Mbps：低延迟编码器在桌面上用得到的量，起步就给")
-        XCTAssertEqual(RemoteRateController.initialBitrate(width: 64, height: 64), 1_000_000, "下限")
+        XCTAssertEqual(RemoteRateController.initialBitrate(width: 64, height: 64), RemoteRateController.minMinimumBitrate,
+                       "下限")
         let config = RemoteRateController.config(width: 2464, height: 1600)
         XCTAssertEqual(config.maxBitrate, 2464 * 1600 * 24)
     }

@@ -171,7 +171,7 @@ private struct PermCheckbox: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label ?? "")
-        .accessibilityValue(on ? "已启用" : "已关闭")
+        .accessibilityValue(on ? "已勾选" : "未勾选")
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 }

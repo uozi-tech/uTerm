@@ -23,9 +23,31 @@ final class RemoteDesktopSession {
         case ended(String)
         /// Mac 上的 uTerm 太旧，不认桌面消息。
         case unsupported
+
+        /// 停在这里不会自己变了（要用户点重试 / 关闭）。
+        var isTerminal: Bool {
+            switch self {
+            case .failed, .ended, .unsupported: return true
+            case .idle, .connecting, .streaming, .reconnecting: return false
+            }
+        }
     }
 
     private(set) var state: State = .idle
+    /// 开流成功了、第一帧还没解出来（界面上显示「正在等待画面」，不是一片黑）。
+    private(set) var awaitingFirstFrame = false
+    /// 第一次打开失败后正在自动重试：界面显示「正在重试」与上次的原因，而不是失败页。
+    private(set) var retryReason: String?
+    /// 连接中界面上的一行进度：还在建连时用连接的进度，连上之后是开流的进度。
+    var progress: String? {
+        if let stage = client.connectStage { return stage.progress }
+        if state == .connecting { return RemoteConnectStage.desktopStart.progress }
+        if awaitingFirstFrame { return RemoteConnectStage.firstFrame.progress }
+        return nil
+    }
+    /// 正在开的这一路流的时间线（请求、回复、第一帧）。
+    @ObservationIgnored private var openTrace: RemoteConnectTrace?
+    @ObservationIgnored private var openAttempt = 0
     /// 最近一次开流成功时 Mac 报的信息（显示器尺寸、能不能控制）。
     private(set) var info: RemoteDesktopInfo?
     /// 每秒刷新一次的读数（帧率、码率、解码耗时），给界面上的小字用。
@@ -39,6 +61,25 @@ final class RemoteDesktopSession {
     private(set) var screen = RemoteDesktopScreenState(locked: false, curtained: false, unlockAvailable: false)
     /// 这台 Mac 支持远程解锁（能收到锁屏状态、能发解锁请求）。
     var supportsUnlock: Bool { client.supportsUnlock }
+
+    /// 声音（调研 §17）。
+    enum AudioState: Equatable {
+        case off
+        /// 已经请求，等 Mac 回格式。
+        case starting
+        case playing
+        /// Mac 没开开关、采集停了、耳机拔了……附带原因。按钮复位为关。
+        case unavailable(String)
+    }
+    private(set) var audioState: AudioState = .off
+    /// 这台 Mac 能传声音。
+    var supportsAudio: Bool { client.supportsDesktopAudio }
+    /// 每秒刷新一次的声音读数（调试信息用）。
+    private(set) var audioStats = RemoteAudioReceiver.Snapshot()
+    @ObservationIgnored private var wantsAudio = false
+    @ObservationIgnored private let audioOutput: (any RemoteAudioOutput)?
+    @ObservationIgnored private var audioPlaying = false
+    nonisolated let audioReceiver: RemoteAudioReceiver
     @ObservationIgnored private var unlockWaiters: [UUID: CheckedContinuation<RemoteDesktopUnlockResult.Outcome, Never>] = [:]
 
     nonisolated let receiver: RemoteDesktopReceiver
@@ -46,47 +87,85 @@ final class RemoteDesktopSession {
     private let codec: RemoteVideoCodec
     private let maxWidth: Int
     private let maxHeight: Int
+    /// 要看的显示器（nil = 那台 Mac 的主显示器）。`switchDisplay` 改它再重开流。
+    private(set) var displayID: UInt32?
+    /// 要不要光标形状（Mac 主控端要，拿它当本机光标；手机自己画箭头，不要）。
+    private let wantsCursorImages: Bool
+    /// Mac 报来的光标此刻的样子（开流时要了才有）。
+    private(set) var cursorImage: RemoteDesktopCursorImage?
     @ObservationIgnored private var attachment: RemoteAttachment?
     @ObservationIgnored private var pasteUploader: RemoteDesktopPasteUploader?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var statsTask: Task<Void, Never>?
     @ObservationIgnored private var isStopped = false
     @ObservationIgnored private var generation = 0
+    /// App 在后台。重连开出的新流在 Mac 那边从不暂停起步，开好后要按它再暂停一次。
+    @ObservationIgnored private var backgrounded = false
 
     /// - Parameters:
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
-    ///   - outputPixelFormat: 解出来的像素格式（显示用 4:2:0，测试比对用 BGRA）。
+    ///   - outputPixelFormat: 解出来的像素格式。nil = 按码流位深出 4:2:0（Main10 出 10-bit）；测试比对用 BGRA。
+    ///   - audioOutput: 声音放到哪里。nil = 系统扬声器（`RemoteAudioEnginePlayer`）；Mac 单测传一个不出声的。
     init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, codec: RemoteVideoCodec = .hevc,
-         outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+         outputPixelFormat: OSType? = nil, displayID: UInt32? = nil,
+         cursorImages: Bool = false, audioOutput: (any RemoteAudioOutput)? = nil) {
         self.client = client
+        self.displayID = displayID
+        self.wantsCursorImages = cursorImages
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
         self.codec = codec
         receiver = RemoteDesktopReceiver(outputPixelFormat: outputPixelFormat)
+        // 直连的抖动小；TCP 中继上关键帧前后包会成串晚到，起步缓深一些。
+        audioReceiver = RemoteAudioReceiver(config: client.path == .relay ? .relay : .direct)
+        self.audioOutput = audioOutput ?? RemoteAudioEnginePlayer()
     }
 
     var canControl: Bool { info?.canControl ?? false }
 
     // MARK: - 起停
 
+    /// 打开屏幕。网络原因失败时自动再试两次（间隔同 `RemoteMacClient.connectInteractively`），
+    /// 期间停在「正在连接」并显示上次的原因；Mac 明确拒绝、版本太旧、配对被拒时不重试。
     func start() async {
         isStopped = false
         reconnectTask?.cancel()
         reconnectTask = nil
         state = .connecting
+        retryReason = nil
+        openAttempt = 0
         startStatsTicker()
-        do {
-            try await open()
-        } catch RemoteDesktopError.macTooOld {
-            state = .unsupported
-        } catch {
-            if !isStopped { state = .failed(error.localizedDescription) }
+        var delays = RemoteMacClient.interactiveRetryDelays[...]
+        while !isStopped {
+            do {
+                try await open()
+                retryReason = nil
+                return
+            } catch RemoteDesktopError.macTooOld {
+                state = .unsupported
+            } catch RemoteAttachError.rejected(let message) {
+                if !isStopped { state = .failed(message) }
+            } catch {
+                guard !isStopped else { break }
+                if client.canAutoReconnect, let delay = delays.popFirst() {
+                    retryReason = error.localizedDescription
+                    AppLogger.notice("打开 \(self.client.macName) 的屏幕失败（\(error.localizedDescription)），自动重试",
+                                     category: RemoteLog.category)
+                    _ = await client.retryGate.wait(delay)
+                    continue
+                }
+                state = .failed(error.localizedDescription)
+            }
+            break
         }
+        retryReason = nil
     }
 
     func stop() {
         guard !isStopped else { return }
         isStopped = true
+        finishOpenTrace(ok: false, outcome: String(localized: "已关闭"))
+        attachment?.link.expectSteadyTraffic(false)
         reconnectTask?.cancel()
         reconnectTask = nil
         statsTask?.cancel()
@@ -97,15 +176,37 @@ final class RemoteDesktopSession {
         }
         attachment = nil
         receiver.detach()
+        stopAudioPlayback()
+        audioReceiver.reset()
         state = .idle
+    }
+
+    /// 换一块显示器看：停掉当前这路，按新的 id 重开（Mac 那边换采集源与注入坐标系）。
+    func switchDisplay(to id: UInt32) async {
+        guard id != info?.displayID else { return }
+        displayID = id
+        stop()
+        await start()
     }
 
     /// 开一条流。失败（Mac 拒绝）抛 `RemoteAttachError.rejected`。
     private func open() async throws {
         generation += 1
         let current = generation
+        openAttempt += 1
+        finishOpenTrace(ok: false, outcome: String(localized: "被新的请求取代"))
+        let trace = RemoteConnectTrace(kind: .desktop, macName: client.macName, attempt: openAttempt)
+        openTrace = trace
+        trace.setNetwork(client.path?.label ?? String(localized: "未连接"))
+        awaitingFirstFrame = false
+        receiver.expectFirstImage(trace: trace) { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.firstImageArrived(generation: current) }
+            }
+        }
         let receiver = self.receiver
         receiver.reset(generation: current)
+        let audioReceiver = self.audioReceiver
         let sink = RemoteChannelSink(
             onOutput: { _ in },
             onClosed: { [weak self] reason, ended in
@@ -123,30 +224,98 @@ final class RemoteDesktopSession {
                 case .desktopScreenState:
                     guard let state = try? RemoteJSON.decode(RemoteDesktopScreenState.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.screen = state } }
+                case .desktopCursorImage:
+                    guard let image = try? RemoteJSON.decode(RemoteDesktopCursorImage.self, from: message.payload) else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, current == self.generation else { return }
+                            self.cursorImage = image
+                        }
+                    }
                 case .desktopUnlockResult:
                     guard let result = try? RemoteJSON.decode(RemoteDesktopUnlockResult.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.unlockResultArrived(result) } }
+                case .desktopAudioFrame:
+                    audioReceiver.receive(frame: message.payload)
+                case .desktopAudioFormat:
+                    guard let format = try? RemoteJSON.decode(RemoteDesktopAudioFormat.self, from: message.payload) else { return }
+                    audioReceiver.receive(format: format)
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { self?.audioFormatArrived(format, generation: current) }
+                    }
                 default:
                     receiver.receive(message, from: link, generation: current)
                 }
             }
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
-                                                sidecarRefine: true, latencyStats: true)
-        let (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
-            receiver.attachVideo(video, link: link, generation: current)
-        })
+                                                displayID: displayID, sidecarRefine: true, latencyStats: true,
+                                                cursorImages: wantsCursorImages ? true : nil)
+        let wasConnected = client.state == .connected
+        let startStep = trace.begin(.desktopStart, detail: wasConnected ? nil : String(localized: "含建连"))
+        let attached: RemoteAttachment
+        let info: RemoteDesktopInfo
+        do {
+            (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
+                receiver.attachVideo(video, link: link, generation: current)
+                // 视频走数据报时声音也走数据报（Mac 那边同样按这条路选）。
+                video.startAudioReceiving { payload, _ in audioReceiver.receive(frame: payload) }
+            })
+        } catch {
+            trace.end(startStep, ok: false, detail: error.localizedDescription)
+            finishOpenTrace(ok: false, outcome: error.localizedDescription)
+            throw error
+        }
+        trace.end(startStep, ok: info.failure == nil, detail: client.path?.label)
         guard current == generation, !isStopped else {
             if info.failure == nil { client.stopDesktop(attached) }
             return
         }
         if info.failure != nil {
-            throw RemoteAttachError.rejected(info.message ?? "Mac 拒绝了远程桌面请求")
+            let message = info.message ?? "Mac 拒绝了远程桌面请求"
+            finishOpenTrace(ok: false, outcome: message)
+            throw RemoteAttachError.rejected(message)
+        }
+        if firstImageGeneration == current {
+            // 第一帧比开流回复先到（数据报视频）：画面已经有了。
+            trace.end(trace.begin(.firstFrame), ok: true)
+            finishOpenTrace(ok: true, outcome: client.path?.label ?? "")
+        } else {
+            firstFrameStep = trace.begin(.firstFrame)
+            awaitingFirstFrame = true
         }
         self.info = info
         attachment = attached
         receiver.attach(link: attached.link, channel: attached.channel, generation: current)
+        // 流在走、有人在看：静默断开几秒内就要发现（见 `RemoteLink.expectSteadyTraffic`）。
+        attached.link.expectSteadyTraffic(!backgrounded)
         state = .streaming
+        // 后台里重连上的（一般是回前台前最后那几秒）：新流照样请 Mac 停下，别在没人看时推满码率。
+        if backgrounded { sendPause(true) }
+        // 重连后重新要声音：Mac 那边的声音流随旧的桌面流一起结束了。第一次开流时，上次看这台 Mac 开着声音就照样打开。
+        if wantsAudio { requestAudio(true) } else { restoreAudioIfWanted() }
+    }
+
+    @ObservationIgnored private var firstFrameStep: Int?
+    @ObservationIgnored private var firstImageGeneration: Int?
+
+    private func firstImageArrived(generation arrived: Int) {
+        guard arrived == generation, !isStopped else { return }
+        firstImageGeneration = arrived
+        awaitingFirstFrame = false
+        guard firstFrameStep != nil else { return }
+        if let trace = openTrace, let step = firstFrameStep {
+            trace.end(step, ok: true)
+        }
+        firstFrameStep = nil
+        finishOpenTrace(ok: true, outcome: client.path?.label ?? "")
+    }
+
+    private func finishOpenTrace(ok: Bool, outcome: String) {
+        guard let trace = openTrace else { return }
+        openTrace = nil
+        firstFrameStep = nil
+        trace.finish(ok: ok, outcome: outcome)
     }
 
     private func clipboardArrived(_ content: RemoteDesktopClipboard, generation arrived: Int) {
@@ -156,6 +325,9 @@ final class RemoteDesktopSession {
 
     private func channelClosed(generation closed: Int, reason: String, ended: Bool) {
         guard closed == generation, !isStopped else { return }
+        finishOpenTrace(ok: false, outcome: reason)
+        awaitingFirstFrame = false
+        attachment?.link.expectSteadyTraffic(false)
         attachment = nil
         receiver.detach()
         if ended {
@@ -212,6 +384,105 @@ final class RemoteDesktopSession {
         pasteUploader?.enqueue(content.encoded())
     }
 
+    /// App 退到后台 / 回到前台。后台时画面没人看（显示层也不出图）。
+    ///
+    /// - 新 Mac（认得 `desktopPause`）：请它停止推流——iOS 给的约 30 s 后台时间里不再收满码率的帧，省电省射频；
+    ///   回前台发「恢复」，Mac 恢复时自带关键帧。
+    /// - 老 Mac：发了会被当未知消息断开整条连接，所以不发，Mac 照旧推流；接收端照收照确认、不解码不渲染，
+    ///   回前台另要一个关键帧。见 `RemoteDesktopReceiver.setPaused`。
+    ///
+    /// 新 Mac 也同样让接收端暂停：暂停消息到达之前已在路上的帧照样只回确认、不解码。
+    /// 回前台（包括从 inactive 回来）总会拿到一个关键帧，与改动前每次回前台都要关键帧的行为一致。
+    func setBackgrounded(_ backgrounded: Bool) {
+        self.backgrounded = backgrounded
+        receiver.setPaused(backgrounded)
+        attachment?.link.expectSteadyTraffic(!backgrounded)
+        if backgrounded {
+            sendPause(true)
+        } else if !sendPause(false) {
+            requestKeyframe()
+        }
+    }
+
+    /// 发暂停 / 恢复。没有流（重连中）或 Mac 不认得时返回 false。
+    @discardableResult
+    private func sendPause(_ paused: Bool) -> Bool {
+        guard let attachment, client.supportsDesktopPause else { return false }
+        attachment.link.send(RemoteMessage(.desktopPause, channel: attachment.channel,
+                                           payload: RemoteJSON.encode(RemoteDesktopPauseRequest(paused: paused))))
+        return true
+    }
+
+    // MARK: - 声音
+
+    /// 打开 / 关闭声音（远程桌面工具栏上的扬声器按钮，见 `toggleAudio`）。
+    func setAudio(_ on: Bool) {
+        guard supportsAudio else { return }
+        wantsAudio = on
+        if on {
+            audioState = .starting
+            startAudioPlayback()
+        } else {
+            audioState = .off
+            stopAudioPlayback()
+        }
+        // 本机播放没能打开时 `startAudioPlayback` 已把 `wantsAudio` 复位：这时不能再叫 Mac 开声音，
+        // 不然 Mac 一路采集、编码、发送，手机这头没人放。
+        requestAudio(wantsAudio)
+    }
+
+    private func requestAudio(_ on: Bool) {
+        guard let attachment else { return }
+        let request = RemoteDesktopAudioRequest(
+            enabled: on, codecs: RemoteDesktopAudioRequest.codecs(lossless: client.supportsDesktopAudioLossless))
+        attachment.link.send(RemoteMessage(.desktopAudio, channel: attachment.channel, payload: RemoteJSON.encode(request)))
+    }
+
+    private func audioFormatArrived(_ format: RemoteDesktopAudioFormat, generation arrived: Int) {
+        guard arrived == generation, !isStopped else { return }
+        guard wantsAudio else {
+            // 手机已经不要声音了，Mac 却开起了一条（开关交错到达）：叫它停下，免得白白采集、发送。
+            if format.codec != nil { requestAudio(false) }
+            return
+        }
+        if format.codec == nil {
+            wantsAudio = false
+            stopAudioPlayback()
+            audioState = .unavailable(format.message ?? "Mac 没有传来声音")
+        } else {
+            audioState = .playing
+        }
+    }
+
+    private func startAudioPlayback() {
+        guard !audioPlaying, let audioOutput else { return }
+        let receiver = audioReceiver
+        audioOutput.onInterrupted = { [weak self] reason in self?.audioInterrupted(reason) }
+        do {
+            try audioOutput.start(pull: { receiver.pull(into: $0, frames: $1) })
+            audioPlaying = true
+        } catch {
+            #if os(macOS)
+            audioState = .unavailable("这台 Mac 上无法播放声音：\(error.localizedDescription)")
+            #else
+            audioState = .unavailable("手机上无法播放声音：\(error.localizedDescription)")
+            #endif
+            wantsAudio = false
+        }
+    }
+
+    private func stopAudioPlayback() {
+        guard audioPlaying else { return }
+        audioPlaying = false
+        audioOutput?.stop()
+    }
+
+    private func audioInterrupted(_ reason: String) {
+        guard wantsAudio else { return }
+        setAudio(false)
+        audioState = .unavailable(reason)
+    }
+
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。
     func requestKeyframe() {
         receiver.requestKeyframe(force: true)
@@ -225,9 +496,9 @@ final class RemoteDesktopSession {
         attachment.link.send(RemoteMessage(.desktopUnlock, channel: attachment.channel, payload: RemoteJSON.encode(request)))
         return await withCheckedContinuation { continuation in
             unlockWaiters[requestID] = continuation
-            // Mac 解锁要走输入+轮询，给足够时间；超时当失败处理。
+            // Mac 解锁要叫醒锁屏（约 2 秒）+ 输入 + 轮询 6 秒，再留出链路余量；超时当失败处理。
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(15))
                 self?.unlockWaiters.removeValue(forKey: requestID)?.resume(returning: .timedOut)
             }
         }
@@ -250,10 +521,15 @@ final class RemoteDesktopSession {
         statsTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                // 失败 / 结束 / Mac 太旧：没有流了，不再每秒醒一次。重试走 `start()`，会重新起这个计时。
+                if self.state.isTerminal { return }
                 let snapshot = receiver.stats.snapshot()
                 let latency = receiver.latestLatency
-                guard let self else { return }
-                self.stats = snapshot
+                // 读数没变（画面静止、连接中）就不写：`@Observable` 每次赋值都通知，读着它的界面会白白重算。
+                if self.stats != snapshot { self.stats = snapshot }
+                let audio = self.audioReceiver.snapshot()
+                if self.audioStats != audio { self.audioStats = audio }
                 if self.latency != latency { self.latency = latency }
             }
         }
@@ -331,8 +607,56 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     private var generation = 0
     private var lastKeyframeRequest: UInt64 = 0
     private var onImage: (@Sendable (CVPixelBuffer, RemoteDesktopFrame) -> Void)?
+    /// 下一帧解出来时调一次（开流后量第一帧要多久）。
+    private var onFirstImage: (@Sendable () -> Void)?
+    /// 开屏时间线：第一帧上屏之前的各段记在它上面（见 `FirstImageProgress`）。
+    private var firstImageTrace: RemoteConnectTrace?
+    /// 只在解码队列上。
+    private var firstImageProgress = FirstImageProgress()
+    /// 每 2 秒一行的接收诊断（只在解码队列上）。
+    private var receiveCounts = ReceiveCounts()
+    private var lastReceiveLog: UInt64 = 0
+
+    /// 收到什么、解出什么、为什么没解：看「卡在第一帧」是不是一直在等恢复帧。
+    private struct ReceiveCounts {
+        var keyframes = 0
+        var refreshes = 0
+        var normal = 0
+        var sidecar = 0
+        var decoded = 0
+        var skippedRecovering = 0
+        var failed = 0
+        var lost = 0
+        var nudges = 0
+        var isEmpty: Bool { keyframes + refreshes + normal + sidecar + lost == 0 }
+    }
+
+    private func logReceiveIfDue(now: UInt64) {
+        guard now &- lastReceiveLog >= 2_000_000_000 else { return }
+        lastReceiveLog = now
+        let c = receiveCounts
+        receiveCounts = ReceiveCounts()
+        guard !c.isEmpty else { return }
+        let waiting = recovering ? String(format: "，在等恢复帧 %.1f s", Double(now &- recoveringStarted) / 1e9) : ""
+        AppLogger.info("桌面接收：收到 关键帧 \(c.keyframes) 刷新 \(c.refreshes) 普通 \(c.normal) 旁路 \(c.sidecar)｜"
+                       + "解出 \(c.decoded)，等恢复跳过 \(c.skippedRecovering)，解码失败 \(c.failed)，没收齐 \(c.lost)，"
+                       + "催恢复 \(c.nudges)\(waiting)", category: RemoteLog.category)
+    }
+
+    /// 开流到第一帧上屏之间发生了什么：各记一次，第一帧解出来时一并报数。
+    private struct FirstImageProgress {
+        var sawFrame = false
+        var reportedLost = false
+        var reportedFailure = false
+        var lost = 0
+        var skipped = 0
+        var failed = 0
+        var stale = 0
+    }
     private var onCursor: (@Sendable (RemoteDesktopCursor) -> Void)?
     private var latestLatencyValue: RemoteDesktopLatency?
+    /// App 在后台：帧照收照确认，但不解码、不渲染（见 `setPaused`）。
+    private var paused = false
 
     /// Mac 最近报的画面往返。
     var latestLatency: RemoteDesktopLatency? {
@@ -344,11 +668,15 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     /// 参考链断了，在等恢复帧（关键帧或 LTR 刷新帧）。
     private var recovering = false
     private var recoveringSince: UInt64 = 0
+    /// 这一轮从什么时候开始等恢复帧（`recoveringSince` 每催一次会重置，日志看的是这个）。
+    private var recoveringStarted: UInt64 = 0
+    /// 暂停期间跳过过帧：解码器的参考链已经断了，恢复后要等关键帧。
+    private var skippedWhilePaused = false
 
     /// 等恢复帧这么久还没来，再催一次。恢复帧自己也可能丢。
     static let recoveryRetryNanos: UInt64 = 500_000_000
 
-    init(outputPixelFormat: OSType) {
+    init(outputPixelFormat: OSType?) {
         decoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
         stillDecoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
     }
@@ -361,7 +689,40 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         self.onCursor = onCursor
     }
 
+    /// App 退到后台时暂停解码，回前台恢复。
+    ///
+    /// 后台时屏幕上看不见画面，解码、往显示层送帧都是白耗电；iOS 还会在后台收走硬解会话，每帧解码失败 →
+    /// 回「失败」确认 → Mac 每帧都补关键帧，链路上全是大帧。暂停期间每帧照常回确认（不报失败），Mac 的
+    /// 在途计数与码控看到的是一条正常的流：不会因为「没确认 / 丢帧」降码率，回前台画质不用重新爬升。
+    /// 恢复后第一帧前把解码器标成「参考断了」，P 帧跳过、等关键帧（调用方同时会要一个）。
+    func setPaused(_ paused: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        self.paused = paused
+    }
+
     /// 新开一条流之前：换代，旧流迟到的帧不再处理；解码器回到「等关键帧」。
+    /// 下一次解出画面时调 `callback` 一次。
+    func expectFirstImage(trace: RemoteConnectTrace? = nil, _ callback: @escaping @Sendable () -> Void) {
+        lock.lock()
+        onFirstImage = callback
+        firstImageTrace = trace
+        lock.unlock()
+        decodeQueue.async { self.firstImageProgress = FirstImageProgress() }
+    }
+
+    /// 第一帧上屏之前的事记到开屏时间线上。在解码队列上调用。
+    private func noteBeforeFirstImage(_ text: String) {
+        lock.lock()
+        let trace = firstImageTrace
+        lock.unlock()
+        trace?.event(text)
+    }
+
+    private var awaitingFirstImage: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return firstImageTrace != nil
+    }
+
     func reset(generation: Int) {
         lock.lock()
         self.generation = generation
@@ -398,11 +759,21 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         let current = generation == self.generation
         lock.unlock()
         guard current else { return }
+        if awaitingFirstImage {
+            firstImageProgress.lost += videoSequences.count
+            if !firstImageProgress.reportedLost {
+                firstImageProgress.reportedLost = true
+                noteBeforeFirstImage("首帧前有帧没收齐、放弃（\(videoSequences.count) 帧）")
+            }
+        }
         decoder.markReferenceLost()
         if !recovering {
             recovering = true
             recoveringSince = DispatchTime.now().uptimeNanoseconds
+            recoveringStarted = recoveringSince
         }
+        receiveCounts.lost += videoSequences.count
+        logReceiveIfDue(now: DispatchTime.now().uptimeNanoseconds)
         stats.recordLost(videoSequences.count)
         link.send(RemoteMessage(.desktopVideoLost, channel: channel,
                                 payload: RemoteDesktopVideoLost(videoSequences: videoSequences).encoded()))
@@ -419,6 +790,7 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         link = nil
         video?.stopVideoReceiving()
+        video?.stopAudioReceiving()
         video = nil
     }
 
@@ -456,8 +828,42 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         lock.lock()
         let current = generation == self.generation
         let handler = onImage
+        let paused = self.paused
+        let viaDatagram = video != nil
         lock.unlock()
-        guard current, let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
+        guard current else {
+            if awaitingFirstImage { firstImageProgress.stale += 1 }
+            return
+        }
+        guard let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
+        if frame.flags.contains(.sidecar) {
+            receiveCounts.sidecar += 1
+        } else if frame.isKeyframe {
+            receiveCounts.keyframes += 1
+        } else if frame.flags.contains(.ltrRefresh) {
+            receiveCounts.refreshes += 1
+        } else {
+            receiveCounts.normal += 1
+        }
+        logReceiveIfDue(now: DispatchTime.now().uptimeNanoseconds)
+        if awaitingFirstImage, !firstImageProgress.sawFrame {
+            firstImageProgress.sawFrame = true
+            let kind = frame.isKeyframe ? "关键帧" : frame.flags.contains(.ltrRefresh) ? "刷新帧" : "普通帧"
+            noteBeforeFirstImage("收到首个视频帧（\(kind) \(payload.count / 1024) KB，序号 \(frame.sequence)，"
+                                 + "\(viaDatagram ? "直连数据报" : "可靠通道")）")
+        }
+        // 后台暂停：只回确认（不报失败、不带 LTR 令牌——没解过），不解码不渲染。
+        if paused {
+            skippedWhilePaused = true
+            link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
+                sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 0).encoded()))
+            stats.recordSkipped()
+            return
+        }
+        if skippedWhilePaused {
+            skippedWhilePaused = false
+            decoder.markReferenceLost()
+        }
         let sidecar = frame.flags.contains(.sidecar)
         let start = DispatchTime.now().uptimeNanoseconds
         // 在等恢复帧：这一帧的参考没了，不能喂给解码器。确认照发，Mac 的在途计数靠它释放。
@@ -465,7 +871,10 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
             link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
                 sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 0).encoded()))
             stats.recordSkipped()
+            receiveCounts.skippedRecovering += 1
+            if awaitingFirstImage { firstImageProgress.skipped += 1 }
             if start &- recoveringSince >= Self.recoveryRetryNanos {
+                receiveCounts.nudges += 1
                 recoveringSince = start
                 link.send(RemoteMessage(.desktopVideoLost, channel: channel,
                                         payload: RemoteDesktopVideoLost(videoSequences: []).encoded()))
@@ -483,9 +892,29 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         // 确认发回帧来的那条连接。
         link.send(RemoteMessage(.desktopAck, channel: channel, payload: ack.encoded()))
         stats.record(bytes: payload.count, decodeNanos: elapsed, failed: image == nil)
+        if image != nil { receiveCounts.decoded += 1 } else { receiveCounts.failed += 1 }
         if let image {
             handler?(image, frame)
+            lock.lock()
+            let first = onFirstImage
+            let trace = firstImageTrace
+            onFirstImage = nil
+            firstImageTrace = nil
+            lock.unlock()
+            if let trace {
+                let p = firstImageProgress
+                trace.event("首帧解码完（\(frame.isKeyframe ? "关键帧" : "非关键帧")，解码 \(elapsed / 1_000_000) ms；此前"
+                            + "没收齐 \(p.lost)、等恢复帧跳过 \(p.skipped)、解码失败 \(p.failed)、旧流丢弃 \(p.stale)）")
+            }
+            first?()
         } else if !sidecar {
+            if awaitingFirstImage {
+                firstImageProgress.failed += 1
+                if !firstImageProgress.reportedFailure {
+                    firstImageProgress.reportedFailure = true
+                    noteBeforeFirstImage("首帧前解码失败（\(frame.isKeyframe ? "关键帧" : "非关键帧")，序号 \(frame.sequence)）")
+                }
+            }
             requestKeyframe(force: false)
         }
     }

@@ -11,6 +11,25 @@ private final class FocusTestTabs {
     init(active: TerminalSession) { self.active = active }
 }
 
+@MainActor
+@Observable
+private final class MountWidth {
+    var width: CGFloat
+    init(_ width: CGFloat) { self.width = width }
+}
+
+/// 本机终端与 SSH 窗格挂终端都走 `RemoteControlledTerminal`。宽度可变：模拟挂上时布局还没定下来。
+private struct ResizingMountHost: View {
+    let session: TerminalSession
+    let size: MountWidth
+
+    var body: some View {
+        RemoteControlledTerminal(session: session)
+            .frame(width: size.width, height: 500)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
 private struct FocusTestHost: View {
     let tabs: FocusTestTabs
     let gate: ActivePaneGate
@@ -178,14 +197,39 @@ final class TerminalContainerViewTests: XCTestCase {
         await backend.resizes.map { [Int($0.cols), Int($0.rows)] }
     }
 
-    func testFirstLayoutCommitsImmediately() async {
+    /// 首次挂载也等停稳：挂上那一刻量到的尺寸可能只是中间态（窗口还在定尺寸、分屏还在排）。
+    func testFirstLayoutCommitsOnceSettled() async {
         let session = TerminalSession()
         let container = TerminalContainerView(terminalView: session.terminalView)
         let placeholder = grid(session)
 
         lay(container, mounted)
+        XCTAssertEqual(grid(session), placeholder, "停稳之前不能重排")
+        await settle()
 
         XCTAssertNotEqual(grid(session), placeholder)
+        session.dispose()
+    }
+
+    /// 回归点：重启接回时终端首次挂载，先量到一个临时的窄尺寸、随即才是真实尺寸。窄尺寸不能发给 pty——
+    /// 全屏程序（Claude Code）会按它重排一段输出，之后拉宽了那段也还是窄的。
+    func testReattachedTerminalSendsOnlyTheSettledSizeOnFirstMount() async {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        // 接回：pty 已经是上次的尺寸，终端按检查点回到同样的行列数。
+        session.terminalView.getTerminal().resize(cols: 168, rows: 53)
+        await session.connect(using: backend)
+        let container = TerminalContainerView(terminalView: session.terminalView)
+
+        lay(container, NSSize(width: 190, height: 300))
+        try? await Task.sleep(for: .milliseconds(20))
+        lay(container, mounted)
+        await settle()
+
+        let final = grid(session)
+        XCTAssertGreaterThan(final[0], 80)
+        let sent = await forwarded(backend)
+        XCTAssertEqual(sent, [final], "只发最终尺寸，中间的窄尺寸不碰 pty")
         session.dispose()
     }
 
@@ -252,6 +296,30 @@ final class TerminalContainerViewTests: XCTestCase {
         await settle()
 
         XCTAssertEqual(grid(session), before)
+        session.dispose()
+    }
+
+    /// 同一个回归点，走真实的 SwiftUI 挂载路径：挂上时那一格还很窄，下一轮布局才拉到真实宽度。
+    func testSwiftUIMountDuringTransientNarrowLayoutSendsOnlyFinalSize() async throws {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        session.terminalView.getTerminal().resize(cols: 168, rows: 53)
+        await session.connect(using: backend)
+        let size = MountWidth(190)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: ResizingMountHost(session: session, size: size))
+
+        try await Task.sleep(for: .milliseconds(30))
+        size.width = 1100
+        try await Task.sleep(for: TerminalContainerView.settleDelay * 4)
+
+        let final = grid(session)
+        XCTAssertGreaterThan(final[0], 120)
+        let sent = await forwarded(backend)
+        XCTAssertEqual(sent, [final])
+        window.contentView = nil
         session.dispose()
     }
 }

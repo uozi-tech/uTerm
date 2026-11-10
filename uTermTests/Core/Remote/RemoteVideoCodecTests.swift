@@ -90,6 +90,87 @@ final class RemoteVideoCodecTests: XCTestCase {
         }
     }
 
+    /// Mac 发的是 HEVC Main10：接收端要按 10-bit 解出来。以前两端都把解码输出写死成 8-bit 的 420v，
+    /// 10-bit 码流在解码这一步被截掉精度，渐变出色带（真机反馈「看着还是 8-bit」）。
+    /// 编一张横向平滑亮度渐变，解码后数一行里不同的亮度级数：8-bit 视频范围最多 220 级，10-bit 应远多于此。
+    func test_main10_stream_decodes_to_ten_bit_and_keeps_gradient_levels() throws {
+        let width = 1280, height = 256
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 40_000_000,
+                                             frameRate: 60, tenBit: true)
+        let source = Self.tenBitLumaRamp(width: width, height: height)
+        let key = try encode(encoder, source, nanos: 1, keyframe: true)
+        let frame = try wire(key, codec: .hevc, sequence: 1, width: width, height: height)
+        let format = try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: frame.parameterSets)
+        XCTAssertEqual(RemoteVideoDecoder.bitDepth(of: format), 10, "Main10 码流")
+
+        let image = try RemoteVideoDecoder().decode(frame)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(image), kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                       "默认解码输出要跟着码流走 10-bit")
+        let levels = Self.distinctLumaLevels(image, row: height / 2)
+        XCTAssertGreaterThan(levels, 400, "10-bit 渐变解出来只有 \(levels) 级，精度被截掉了")
+    }
+
+    /// 8-bit 码流照旧出 8-bit：跟着码流走，不是一律 10-bit。
+    func test_eight_bit_stream_still_decodes_to_eight_bit() throws {
+        let width = 640, height = 384
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 4_000_000, frameRate: 60)
+        let key = try encode(encoder, RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1), nanos: 1,
+                             keyframe: true)
+        let frame = try wire(key, codec: .hevc, sequence: 1, width: width, height: height)
+        let format = try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: frame.parameterSets)
+        XCTAssertEqual(RemoteVideoDecoder.bitDepth(of: format), 8)
+        let image = try RemoteVideoDecoder().decode(frame)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(image), kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+    }
+
+    /// x420：每个分量 16 位存放、有效 10 位在高位。亮度从 64 线性走到 940（10-bit 视频范围），色度居中。
+    private static func tenBitLumaRamp(width: Int, height: Int) -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                            attributes as CFDictionary, &buffer)
+        let image = buffer!
+        CVPixelBufferLockBaseAddress(image, [])
+        defer { CVPixelBufferUnlockBaseAddress(image, []) }
+        let lumaRow = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let luma = CVPixelBufferGetBaseAddressOfPlane(image, 0)!
+        for y in 0..<height {
+            let row = luma.advanced(by: y * lumaRow).assumingMemoryBound(to: UInt16.self)
+            for x in 0..<width {
+                let value = 64 + (x * 876) / (width - 1)
+                row[x] = UInt16(value << 6)
+            }
+        }
+        let chromaRow = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+        let chroma = CVPixelBufferGetBaseAddressOfPlane(image, 1)!
+        for y in 0..<CVPixelBufferGetHeightOfPlane(image, 1) {
+            let row = chroma.advanced(by: y * chromaRow).assumingMemoryBound(to: UInt16.self)
+            for x in 0..<(CVPixelBufferGetWidthOfPlane(image, 1) * 2) { row[x] = UInt16(512 << 6) }
+        }
+        CVBufferSetAttachment(image, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
+        CVBufferSetAttachment(image, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
+        CVBufferSetAttachment(image, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        return image
+    }
+
+    /// 一行里不同的亮度码值个数（按输出位深换算到 10-bit 刻度再数）。
+    private static func distinctLumaLevels(_ image: CVPixelBuffer, row: Int) -> Int {
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        let width = CVPixelBufferGetWidthOfPlane(image, 0)
+        let base = CVPixelBufferGetBaseAddressOfPlane(image, 0)!
+            .advanced(by: row * CVPixelBufferGetBytesPerRowOfPlane(image, 0))
+        var seen = Set<Int>()
+        if CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange {
+            let pixels = base.assumingMemoryBound(to: UInt16.self)
+            for x in 0..<width { seen.insert(Int(pixels[x] >> 6)) }
+        } else {
+            let pixels = base.assumingMemoryBound(to: UInt8.self)
+            for x in 0..<width { seen.insert(Int(pixels[x]) << 2) }
+        }
+        return seen.count
+    }
+
     /// 参数集或码流是空的（坏帧）：报错，不能在取指针时崩掉。
     func test_empty_parameter_set_or_payload_throws_instead_of_crashing() throws {
         XCTAssertThrowsError(try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: [Data([0x40]), Data()]))
@@ -270,5 +351,48 @@ final class RemoteVideoCodecTests: XCTestCase {
         print(String(format: "[桌面探针] 静止精修 1856×1206 HEVC @%.1f Mbps：PSNR %.2f → %.2f dB；精修帧 %d B，之前每帧 p50 %d B，之后一帧 %d B；精修后码控连丢 %.0f ms 才出下一帧；共丢 %d 次",
                      Double(bitrate) / 1e6, before, after, refined.data.count, bytes.sorted()[bytes.count / 2], next.data.count, recoveryMs, drops))
         XCTAssertGreaterThanOrEqual(after, before - 0.5)
+    }
+
+    /// 一个长期参考帧都没确认过（刚连上第一帧就丢了）时要 LTR 刷新：改出关键帧，之后的普通帧照常小。
+    /// 回归：直接交给 VideoToolbox 要刷新时它也出关键帧，但之后每一帧都跟关键帧一样大（2026-11-08 mini 卡死）。
+    func test_ltr_refresh_without_any_acknowledged_frame_falls_back_to_a_keyframe() throws {
+        let width = 3024, height = 1964
+        let window = CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.2)
+        let background = RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1, detail: true)
+        let frames = (0..<6).map {
+            RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1000 + $0, detail: true,
+                                           window: window, background: 1)
+        }
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 6_000_000,
+                                             frameRate: 60, tenBit: true, ltr: true)
+        try XCTSkipUnless(encoder.usesLTR, "这台机器的编码器不支持长期参考帧")
+        var nanos = DispatchTime.now().uptimeNanoseconds
+        // 第一帧（关键帧）发出去就丢了：手机什么都没确认。
+        _ = try encode(encoder, background, nanos: nanos, keyframe: true)
+        encoder.setBitrate(1_600_000)
+        encoder.setFrameRate(5)
+        var recovery: RemoteEncodedFrame?
+        var sizes: [Int] = []
+        for frame in [background] + frames {
+            Thread.sleep(forTimeInterval: 0.2)
+            nanos = DispatchTime.now().uptimeNanoseconds
+            let done = expectation(description: "encoded")
+            nonisolated(unsafe) var output: Result<RemoteEncodedFrame, RemoteVideoEncoderError>?
+            encoder.encode(frame, presentationNanos: nanos, forceKeyframe: false, forceLTRRefresh: recovery == nil,
+                           refine: false) { result in
+                output = result
+                done.fulfill()
+            }
+            wait(for: [done], timeout: 5)
+            guard case .success(let encoded) = output else { continue }
+            if let token = encoded.ltrToken { encoder.acknowledgeLTR(token) }
+            if recovery == nil { recovery = encoded } else { sizes.append(encoded.data.count) }
+        }
+        let key = try XCTUnwrap(recovery)
+        XCTAssertTrue(key.isKeyframe)
+        XCTAssertFalse(sizes.isEmpty, "恢复之后的普通帧全被丢了")
+        for size in sizes {
+            XCTAssertLessThan(size, key.data.count / 8, "只变 4% 的画面，普通帧不该跟关键帧一样大：\(sizes)")
+        }
     }
 }

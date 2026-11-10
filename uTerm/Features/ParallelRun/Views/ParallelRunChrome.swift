@@ -238,7 +238,7 @@ struct ParallelStatusBar: View {
             Text("完成 \(doneCount)/\(total)").foregroundStyle(UD.text3)
             if failedCount > 0 { Text("\(failedCount) 失败").foregroundStyle(UD.danger) }
             Spacer()
-            Text(allDone ? "已完成" : "执行中").foregroundStyle(UD.text3)
+            Text(allDone ? "已完成" : "运行中").foregroundStyle(UD.text3)
             Text("UTF-8").foregroundStyle(UD.text3)
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 Text(UFormat.time(ctx.date)).foregroundStyle(UD.text4)

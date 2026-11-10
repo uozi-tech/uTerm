@@ -57,7 +57,7 @@ struct TerminalWindowView: View {
             if let windowID, let server = currentServer {
                 terminalBody(server: server, windowID: windowID)
             } else {
-                ContentUnavailableView(windowID == nil ? "正在恢复…" : "服务器已删除",
+                ContentUnavailableView(windowID == nil ? "正在恢复…" : "主机已删除",
                                        systemImage: windowID == nil ? "clock" : "server.rack")
             }
         }
@@ -86,7 +86,7 @@ struct TerminalWindowView: View {
                     TerminalAgentView(
                         model: workspace.assistantModel,
                         host: server.displayEndpoint,
-                        serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
+                        serverContext: "主机：\(server.name)（\(server.displayEndpoint)）",
                         safety: safetyBinding,
                         activeProviderIDString: $activeProviderIDString,
                         onOpenSettings: { openWindow(id: SettingsWindow.id) })
@@ -106,6 +106,7 @@ struct TerminalWindowView: View {
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)
         })
+        .background(HeldWindowTrackerBinding(tracker: workspace.windowTracker))
         .background(TerminalWindowCloseGuardInstaller(sessions: {
             workspace.terminalGroups.allTabs.map(\.payload.session)
         }))
@@ -205,16 +206,16 @@ struct TerminalWindowView: View {
                 workspace.splitActiveGroup(direction: .horizontal)
             },
             CommandPaletteItem(id: "term.splitV", kind: .command,
-                               title: "向下分屏", detail: "", hint: "⌘⇧D", group: nil) {
+                               title: "向下分屏", detail: "", hint: "⇧⌘D", group: nil) {
                 mode = .terminal
                 workspace.splitActiveGroup(direction: .vertical)
             },
             CommandPaletteItem(id: "term.closePane", kind: .command,
-                               title: "关闭当前终端标签", detail: single ? "仅一个分组" : "", hint: "⌘W", group: nil) {
+                               title: "关闭当前终端标签页", detail: single ? "仅一个分组" : "", hint: "⌘W", group: nil) {
                 workspace.requestCloseActiveTerminalTab()
             },
             CommandPaletteItem(id: "term.newTab", kind: .command,
-                               title: "新建终端标签", detail: "", hint: "⌘T", group: nil) {
+                               title: "新建终端标签页", detail: "", hint: "⌘T", group: nil) {
                 workspace.openServer(profileID: server.id, title: server.name)
                 mode = .terminal
             },
@@ -237,7 +238,7 @@ struct TerminalWindowView: View {
                     id: "host.\(id.uuidString)", kind: .host,
                     title: profile.name.isEmpty ? profile.host : profile.name,
                     detail: profile.displayEndpoint,
-                    hint: "新标签", group: profile.group) {
+                    hint: "新标签页", group: profile.group) {
                         openTab(serverID: id)
                     }
             }

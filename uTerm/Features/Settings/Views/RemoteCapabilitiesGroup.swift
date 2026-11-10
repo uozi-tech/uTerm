@@ -13,7 +13,7 @@ struct RemoteCapabilitiesGroup: View {
 
     var body: some View {
         SettingsGroup(title: "能力",
-                      footer: String(localized: "本机终端由 uTerm 内置的辅助程序启动（不受 App 沙盒限制，才能读写你的主目录），这台 Mac 上也会弹出对应的窗口，断开后留着可以接着用。有设备在看屏幕时，屏幕顶部会一直显示提示，可随时断开。")) {
+                      footer: String(localized: "本机终端由 uTerm 内置的辅助程序启动（不受 App 沙盒限制，才能读写你的主目录），这台 Mac 上会同时打开对应的窗口，手机断开后窗口保留，可以继续使用。有设备查看屏幕时，屏幕顶部会持续显示提示，可随时断开。")) {
             SettingsRow(label: "允许打开本机终端",
                         hint: "配对过的设备可以在这台 Mac 上新开一个终端（你的登录 shell）") {
                 UDToggle(Binding(get: { settings.isLocalShellEnabled }, set: { settings.isLocalShellEnabled = $0 }))
@@ -37,7 +37,7 @@ struct RemoteCapabilitiesGroup: View {
             }
             if settings.isDesktopEnabled {
                 if permissions.isLoaded {
-                    SettingsRow(label: "屏幕录制", hint: "看屏幕必需，macOS 会定期请你重新确认") {
+                    SettingsRow(label: "屏幕录制", hint: "查看屏幕必需；macOS 会定期要求重新确认") {
                         permissionControl(granted: permissions.screenCapture,
                                           request: permissions.requestScreenCapture,
                                           openSettings: RemoteDesktopPermissions.openScreenCaptureSettings)
@@ -51,7 +51,7 @@ struct RemoteCapabilitiesGroup: View {
                     .settingsNested()
                     if !permissions.screenCapture || !permissions.postEvents {
                         SettingsRow(label: "授权后需重启 uTerm",
-                                    hint: "在系统设置里打开开关后，要等 uTerm 重新启动才生效") {
+                                    hint: "在「系统设置」里打开开关后，要等 uTerm 重新启动才生效") {
                             UDButton(title: "重新启动", style: permissions.requestedThisRun ? .primary : .secondary) {
                                 RemoteDesktopPermissions.relaunch()
                             }
@@ -59,8 +59,14 @@ struct RemoteCapabilitiesGroup: View {
                         .settingsNested()
                     }
                 }
+                SettingsRow(label: "允许传输声音",
+                            hint: "查看屏幕时把这台 Mac 的声音传到手机，在手机上打开扬声器后才传输。沿用「屏幕录制」授权，不需要其他权限") {
+                    UDToggle(Binding(get: { settings.isDesktopAudioEnabled },
+                                     set: { settings.isDesktopAudioEnabled = $0 }))
+                }
+                .settingsNested()
                 SettingsRow(label: "允许远程解锁",
-                            hint: "Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠）") {
+                            hint: "Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠和扬声器）") {
                     UDToggle(Binding(get: { settings.isDesktopUnlockEnabled },
                                      set: { settings.isDesktopUnlockEnabled = $0 }))
                 }
@@ -97,8 +103,9 @@ struct RemoteCapabilitiesGroup: View {
     }
 
     private func viewerSubtitle(_ viewer: RemoteHostServer.DesktopViewer) -> String {
-        let action = viewer.isControlling ? String(localized: "正在控制") : String(localized: "正在查看")
-        return viewer.canControl ? action : action + String(localized: " · 只能查看（没有辅助功能授权）")
+        var action = viewer.isControlling ? String(localized: "正在控制") : String(localized: "正在查看")
+        if viewer.hasAudio { action += String(localized: " · 含声音") }
+        return viewer.canControl ? action : action + String(localized: " · 只能查看（没有「辅助功能」授权）")
     }
 
     @ViewBuilder private var helperStatus: some View {

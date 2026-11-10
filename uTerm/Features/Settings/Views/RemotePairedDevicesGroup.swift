@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UDesignKit
 
@@ -11,18 +12,25 @@ struct RemotePairedDevicesGroup: View {
 
     var body: some View {
         SettingsGroup(title: "已配对的设备",
-                      footer: String(localized: "同一 Apple ID 的手机打开 uTerm 主机页「我的 Mac」就会自动配对；其他手机扫码配对。撤销后这台设备要重新扫码才能连接，同一 Apple ID 也不会再自动配对。")) {
+                      footer: String(localized: "配对过的设备才能连接这台 Mac，同一 Apple ID 的也要配对一次。撤销后这台设备要重新配对。")) {
             if settings.isEnabled {
                 SettingsListRow(icon: "qrcode", tint: UD.accent, title: String(localized: "扫码配对"),
                                 subtitle: RemoteControlPresentation.pairingHint(hasInvitation: server.pairingInvitation != nil)) {
                     if server.pairingInvitation == nil {
                         UDButton(title: "显示二维码", style: .secondary) { _ = try? server.makePairingInvitation() }
                     } else {
-                        UDButton(title: "收起", style: .secondary) { server.cancelPairingInvitation() }
+                        HStack(spacing: 8) {
+                            UDButton(title: "拷贝链接", style: .secondary) {
+                                guard let invitation = server.pairingInvitation else { return }
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(invitation.url.absoluteString, forType: .string)
+                            }
+                            UDButton(title: "收起", style: .secondary) { server.cancelPairingInvitation() }
+                        }
                     }
                 }
                 if let invitation = server.pairingInvitation {
-                    SettingsCenteredBlock(caption: String(localized: "在 iPhone / iPad 的 uTerm 主机页打开「我的 Mac › 扫码配对」扫这个二维码。")) {
+                    SettingsCenteredBlock(caption: RemoteControlPresentation.invitationCaption(relayName: invitation.relay?.name)) {
                         PairingQRCode(text: invitation.url.absoluteString)
                     }
                     .settingsDivider(inset: nil)
@@ -33,7 +41,7 @@ struct RemotePairedDevicesGroup: View {
             } else {
                 ForEach(server.trustedPeers) { peer in
                     let online = server.connectedPeerIDs.contains(peer.id)
-                    SettingsListRow(icon: settingsDeviceSymbol(for: peer.model ?? peer.name),
+                    SettingsListRow(icon: settingsDeviceSymbol(for: peer),
                                     tint: online ? UD.success : UD.accent,
                                     title: peer.displayName,
                                     subtitle: subtitle(for: peer, online: online)) {
@@ -45,7 +53,7 @@ struct RemotePairedDevicesGroup: View {
                             UDMenuItem(label: String(localized: "撤销配对…"), systemImage: "xmark.circle", danger: true) {
                                 server.revoke(peer.id)
                             },
-                        ], help: String(localized: "撤销后这台设备要重新扫码才能连接，同一 Apple ID 也不会再自动配对"))
+                        ], help: String(localized: "撤销后这台设备要重新配对才能连接"))
                     }
                 }
             }
@@ -58,7 +66,7 @@ struct RemotePairedDevicesGroup: View {
                 renaming = nil
             }
         } message: {
-            Text("只改这台 Mac 上显示的名字。留空则恢复为设备自己报的名字。")
+            Text("只改这台 Mac 上显示的名称；留空则恢复为设备上报的名称。")
         }
     }
 

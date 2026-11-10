@@ -27,6 +27,20 @@ struct RemoteDesktopScreen: View {
     @State private var enteringPassword = false
     @State private var passwordDraft = ""
     @State private var vault: RemoteUnlockPasswordStore = KeychainRemoteUnlockStore()
+    /// 这次锁屏里用户点了「自己输入」：先不再盖遮罩，Mac 解锁后（再锁时）重置。
+    @State private var lockOverlayDismissed = false
+    /// 密码框只保存（顶栏「设置解锁密码」）还是保存后立即解锁（锁屏遮罩）。
+    @State private var passwordSheetSavesOnly = false
+    /// 这台 Mac 存没存过解锁密码。查钥匙串有开销，不能每次重绘都查（顶栏每秒刷新统计）：
+    /// 只在进页面、存、删之后刷新一次。
+    @State private var hasSavedPassword = false
+    /// 这一屏在显示中（控制屏幕常亮用，见 `keepsScreenAwake`）。
+    @State private var onScreen = false
+    /// 本机的生物识别名称（面容 ID / 触控 ID）；以 ASCII 结尾时补一个空格，便于直接接中文。
+    private static let biometryLead: String = {
+        let title = MobileBiometry.describe().title
+        return title.last?.isASCII == true ? title + " " : title
+    }()
 
     enum UnlockPhase: Equatable {
         case idle
@@ -68,6 +82,9 @@ struct RemoteDesktopScreen: View {
             .background(Color.black.ignoresSafeArea())
             .background(ScreenCornerInsetsReader(insets: $barInsets).ignoresSafeArea())
             .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
+            .sheet(isPresented: $enteringPassword) {
+                if let session { passwordSheet(session) }
+            }
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
@@ -78,6 +95,7 @@ struct RemoteDesktopScreen: View {
                 let created = makeSession(size: geometry.size)
                 created.onClipboard = { content in copyFromMac(content) }
                 session = created
+                refreshVault()
                 await created.start()
             }
         }
@@ -87,22 +105,62 @@ struct RemoteDesktopScreen: View {
         .defersSystemGestures(on: .all)
         // 这一屏永远是黑底：配色一律按深色解析。跟随系统时浅色模式下的次要按钮是深灰字，落在黑底上看不见。
         .environment(\.colorScheme, .dark)
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+        // 看画面时不自动锁屏；停在失败 / 已结束这类要人处理的页面上就交还系统，不然手机放着屏幕一直亮。
+        // 重连中照样不锁：短暂断一下就恢复，静静看着的人不该在这几秒里被锁屏。
+        .onChange(of: Self.keepsScreenAwake(session?.state)) { _, awake in
+            // 离开后（`stop()` 把状态改回 idle 也会触发这里）不能再把常亮打开。
+            guard onScreen else { return }
+            UIApplication.shared.isIdleTimerDisabled = awake
+        }
+        .onAppear {
+            onScreen = true
+            UIApplication.shared.isIdleTimerDisabled = Self.keepsScreenAwake(session?.state)
+        }
         .onDisappear {
+            onScreen = false
             UIApplication.shared.isIdleTimerDisabled = false
             session?.stop()
         }
+        .onChange(of: session?.screen.locked ?? false) { _, locked in
+            refreshVault()
+            // Mac 解开了：清掉这次锁屏的「自己输入」与失败提示，下次锁屏重新显示解锁入口。
+            if !locked {
+                lockOverlayDismissed = false
+                unlockPhase = .idle
+            }
+        }
+        .onChange(of: session?.audioState) { _, state in
+            // Mac 上没开、采集停了、拔了耳机：按钮已经复位，这里说一声为什么。
+            if case .unavailable(let reason) = state { showPasteNote(reason) }
+        }
         .onChange(of: scenePhase) { _, phase in
-            // 回到前台：连接还在就要一个关键帧（后台期间可能丢了解码状态）；断了的由会话自己重连。
-            if phase == .active { session?.requestKeyframe() }
+            switch phase {
+            case .background:
+                // 看不见画面了（切走 / 锁屏）：请 Mac 暂停推流（老 Mac 不认得就照旧推流），本机停掉解码和渲染、只回确认。
+                session?.setBackgrounded(true)
+            case .active:
+                // 回到前台：恢复推流并从关键帧接上（后台期间跳过了帧、硬解会话也可能被收走）——会话自己要关键帧，
+                // 新 Mac 靠「恢复」、老 Mac 靠关键帧请求；断了的由会话自己重连。
+                session?.setBackgrounded(false)
+            default:
+                // inactive（拉下控制中心、来电横幅）画面还看得见，照常解。
+                break
+            }
         }
     }
 
-    /// 视频尺寸按这台设备的屏幕像素要（与方向无关），至少 1080p：放大看细节时还有余量。
+    /// 什么时候让屏幕常亮：还没开流、连接中、看画面中、重连中。
+    static func keepsScreenAwake(_ state: RemoteDesktopSession.State?) -> Bool {
+        guard let state else { return true }
+        return !state.isTerminal
+    }
+
+    /// 视频尺寸按这台设备的屏幕像素要（见 `RemoteDesktopSession.requestedSize`）。
     private func makeSession(size: CGSize) -> RemoteDesktopSession {
-        let long = Int(max(size.width, size.height) * displayScale)
-        let short = Int(min(size.width, size.height) * displayScale)
-        return RemoteDesktopSession(client: client, maxWidth: max(long, 1920), maxHeight: max(short, 1080))
+        let requested = RemoteDesktopSession.requestedSize(
+            longPixels: Int(max(size.width, size.height) * displayScale),
+            shortPixels: Int(min(size.width, size.height) * displayScale))
+        return RemoteDesktopSession(client: client, maxWidth: requested.width, maxHeight: requested.height)
     }
 
     // MARK: - 顶栏
@@ -125,18 +183,9 @@ struct RemoteDesktopScreen: View {
             }
             .onTapGesture { showStats.toggle() }
             Spacer(minLength: 8)
-            if session?.canPaste == true {
-                MMenu {
-                    Button { Task { await pasteClipboard() } } label: {
-                        Label("粘贴剪贴板内容", systemImage: "doc.on.clipboard")
-                    }
-                    Button { pickingPhoto = true } label: {
-                        Label("从相册选择图片…", systemImage: "photo")
-                    }
-                } label: {
-                    barIcon("doc.on.clipboard")
-                }
-                .accessibilityLabel("粘贴到 Mac")
+            if let session, session.supportsAudio, session.state == .streaming {
+                barButton(audioOn ? "speaker.wave.2.fill" : "speaker.slash", active: audioOn) { session.toggleAudio() }
+                    .accessibilityLabel(audioOn ? "关闭声音" : "打开声音")
             }
             barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
                 .accessibilityLabel("适配屏幕")
@@ -145,7 +194,12 @@ struct RemoteDesktopScreen: View {
                     keyBarShown.toggle()
                     keyboardVisible = keyBarShown
                 }
-                .accessibilityLabel(keyBarShown ? "收起键盘" : "键盘")
+                .accessibilityLabel(keyBarShown ? "收起键盘" : "弹出键盘")
+            }
+            // 不常用的（粘贴、帘幕、解锁密码）收进一个菜单，顶栏只留声音、适配屏幕和键盘。
+            if hasMoreActions {
+                MMenu { moreActions } label: { barIcon("ellipsis") }
+                    .accessibilityLabel("更多")
             }
         }
         // 上、左、右都是离屏幕边缘的绝对距离（整列已铺满屏幕），按安全区与屏幕圆角取大，
@@ -156,23 +210,66 @@ struct RemoteDesktopScreen: View {
         .padding(.trailing, barInsets.trailing)
     }
 
-    private var statusLine: String {
-        guard let session else { return "正在连接…" }
-        switch session.state {
-        case .streaming:
-            let base = session.canControl ? "触控板模式" : "只能查看"
-            guard showStats else { return base }
-            let stats = session.stats
-            // 延迟放最前：最先要看的是「点一下多久见到结果」，其余是排查用的分项。
-            let latency = session.latency.map { "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）· " } ?? ""
-            return base + " · " + latency + String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
-                                                   stats.megabitsPerSecond, stats.decodeMillis)
-        case .idle, .connecting: return "正在连接…"
-        case .reconnecting: return "连接中断，正在重连…"
-        case .failed: return "连接失败"
-        case .ended: return "已结束"
-        case .unsupported: return "Mac 版本太旧"
+    private var canPaste: Bool { session?.canPaste == true }
+
+    private var canCurtain: Bool {
+        guard let session else { return false }
+        return session.screen.canToggleCurtain(supportsUnlock: session.supportsUnlock)
+    }
+
+    private var canManagePassword: Bool { session?.supportsUnlock == true && client.macDeviceID != nil }
+
+    private var hasMoreActions: Bool { canPaste || canCurtain || canManagePassword }
+
+    @ViewBuilder private var moreActions: some View {
+        if canPaste {
+            Section {
+                Button { Task { await pasteClipboard() } } label: {
+                    Label("粘贴到 Mac", systemImage: "doc.on.clipboard")
+                }
+                Button { pickingPhoto = true } label: {
+                    Label("从相册选择图片…", systemImage: "photo")
+                }
+            }
         }
+        if canCurtain, let session {
+            let curtained = session.screen.curtained
+            Section {
+                Button { session.setCurtain(!curtained) } label: {
+                    Label(curtained ? "关闭帘幕" : "开启帘幕", systemImage: curtained ? "eye" : "eye.slash")
+                }
+            }
+        }
+        if canManagePassword {
+            Section {
+                Button {
+                    passwordDraft = ""
+                    passwordSheetSavesOnly = true
+                    enteringPassword = true
+                } label: {
+                    Label(vaultHasPassword ? "修改解锁密码…" : "设置解锁密码…", systemImage: "key")
+                }
+                if vaultHasPassword {
+                    Button(role: .destructive) {
+                        if let macID = client.macDeviceID { vault.remove(forMac: macID) }
+                        refreshVault()
+                    } label: {
+                        Label("删除已保存的密码", systemImage: "trash")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 声音
+
+    private var audioOn: Bool { session?.isAudioOn == true }
+
+    private var statusLine: String {
+        guard let session else { return String(localized: "正在连接…") }
+        let base = session.statusText(controlling: String(localized: "触控板模式")) ?? ""
+        guard showStats, session.state == .streaming else { return base }
+        return base + " · " + session.statsText
     }
 
     private func barButton(_ symbol: String, active: Bool = false, action: @escaping () -> Void) -> some View {
@@ -202,9 +299,9 @@ struct RemoteDesktopScreen: View {
     private func pastePhoto(_ item: PhotosPickerItem) async {
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw RemoteDesktopPasteSource.Failure.unreadableImage
+                throw RemoteDesktopPasteEncoding.Failure.unreadableImage
             }
-            send(try await RemoteDesktopPasteSource.image(data: data))
+            send(try await RemoteDesktopPasteEncoding.image(data: data))
         } catch {
             showPasteNote(error.localizedDescription)
         }
@@ -213,22 +310,13 @@ struct RemoteDesktopScreen: View {
     private func send(_ content: RemoteDesktopPaste) {
         guard let session, session.canPaste else { return }
         session.paste(content)
-        switch content {
-        case .text: showPasteNote("已把文字粘贴到 Mac")
-        case .png, .jpeg: showPasteNote("已把图片粘贴到 Mac")
-        }
+        showPasteNote(RemoteDesktopPasteEncoding.sentNote(content))
     }
 
     /// Mac 上拷贝的文字（⌘C / 右键「拷贝」）放进手机剪贴板。
     private func copyFromMac(_ content: RemoteDesktopClipboard) {
-        switch content {
-        case .text(let text):
-            UIPasteboard.general.string = text
-            showPasteNote("已复制到手机")
-        case .tooLarge(let bytes):
-            let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-            showPasteNote("Mac 上拷贝的内容太大（\(size)），没有复制到手机")
-        }
+        if case .text(let text) = content { UIPasteboard.general.string = text }
+        showPasteNote(RemoteDesktopPasteEncoding.receivedNote(content, source: "Mac", here: String(localized: "手机")))
     }
 
     private func showPasteNote(_ note: String) {
@@ -257,52 +345,54 @@ struct RemoteDesktopScreen: View {
     // MARK: - 状态遮罩
 
     @ViewBuilder private func overlay(_ session: RemoteDesktopSession) -> some View {
-        switch session.state {
-        case .idle, .connecting:
-            notice(spinner: true, title: "正在连接 \(client.macName) 的屏幕…", message: nil)
-        case .reconnecting:
-            notice(spinner: true, title: "连接中断，正在重连…", message: "接上后画面会自动恢复", dim: true)
-        case .streaming:
-            if !session.canControl, let note = session.info?.controlNote {
-                VStack {
-                    Spacer()
-                    Text(note)
-                        .font(M.sans(12))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(Capsule().fill(.black.opacity(0.6)))
-                        .padding(.bottom, 24).padding(.horizontal, 20)
+        if let notice = session.notice(macName: client.macName, showsClose: true) {
+            self.notice(spinner: notice.spinner, title: notice.title, message: notice.message, dim: notice.dim) {
+                ForEach(Array(notice.actions.enumerated()), id: \.offset) { index, action in
+                    MBtn(title: action.title, kind: index == 0 ? .primary : .secondary, height: 42) {
+                        perform(action, session)
+                    }.fixedSize()
                 }
-                .allowsHitTesting(false)
             }
-        case .failed(let message):
-            notice(spinner: false, title: "没能打开屏幕", message: message) {
-                MBtn(title: "重试", kind: .primary, height: 42) { Task { await session.start() } }.fixedSize()
-                MBtn(title: "关闭", kind: .secondary, height: 42, action: onClose).fixedSize()
-            }
-        case .ended(let reason):
-            notice(spinner: false, title: "远程桌面已结束", message: reason) {
-                MBtn(title: "重新连接", kind: .primary, height: 42) { Task { await session.start() } }.fixedSize()
-                MBtn(title: "关闭", kind: .secondary, height: 42, action: onClose).fixedSize()
-            }
-        case .unsupported:
-            notice(spinner: false, title: "请更新 Mac 上的 uTerm",
-                   message: RemoteDesktopError.macTooOld.localizedDescription) {
-                MBtn(title: "关闭", kind: .primary, height: 42, action: onClose).fixedSize()
-            }
+        } else if let caption = session.controlCaption {
+            bottomCaption(caption)
         }
+    }
+
+    private func perform(_ action: RemoteDesktopNotice.Action, _ session: RemoteDesktopSession) {
+        switch action {
+        case .retry, .reconnect: Task { await session.start() }
+        case .close: onClose()
+        }
+    }
+
+    /// 底部一句说明，不挡画面、不接触摸。
+    private func bottomCaption(_ text: String) -> some View {
+        VStack {
+            Spacer()
+            Text(text)
+                .font(M.sans(12))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Capsule().fill(.black.opacity(0.6)))
+                .padding(.bottom, 24).padding(.horizontal, 20)
+        }
+        .allowsHitTesting(false)
     }
 
     // MARK: - 锁屏解锁
 
     /// Mac 停在锁屏、且这台 Mac 支持远程解锁时盖在画面上：一个「解锁 Mac」入口。解锁成功后 Mac 进入帘幕，
-    /// 锁屏状态由 Mac 推来的 `desktopScreenState` 翻转，这层自然消失。
+    /// 锁屏状态由 Mac 推来的 `desktopScreenState` 翻转，这层自然消失。什么时候显示见 `lockPrompt`。
     @ViewBuilder private func lockOverlay(_ session: RemoteDesktopSession) -> some View {
-        if session.supportsUnlock, session.screen.locked {
+        switch session.lockPrompt(macName: client.macName) {
+        case .none:
+            EmptyView()
+        case .caption(let text):
+            bottomCaption(text)
+        case .unlock where !lockOverlayDismissed:
             let working = unlockPhase == .working
-            notice(spinner: working, title: "Mac 已锁定",
-                   message: lockMessage(session)) {
+            notice(spinner: working, title: String(localized: "Mac 已锁定"), message: lockMessage(session)) {
                 if !working {
                     MBtn(title: vaultHasPassword ? "解锁 Mac" : "输入密码解锁", kind: .primary, height: 42) {
                         beginUnlock(session)
@@ -310,28 +400,31 @@ struct RemoteDesktopScreen: View {
                     if vaultHasPassword {
                         MBtn(title: "改用其他密码", kind: .secondary, height: 42) {
                             passwordDraft = ""
+                            passwordSheetSavesOnly = false
                             enteringPassword = true
                         }.fixedSize()
                     }
-                    MBtn(title: "关闭", kind: .secondary, height: 42, action: onClose).fixedSize()
+                    // 关掉这层，直接在锁屏画面上用键盘输密码（这样解开的不会进帘幕）。
+                    MBtn(title: "在锁屏上输入", kind: .secondary, height: 42) { lockOverlayDismissed = true }.fixedSize()
                 }
             }
-            .sheet(isPresented: $enteringPassword) { passwordSheet(session) }
+        case .unlock:
+            EmptyView()
         }
     }
 
+    /// 只在 `unlockAvailable` 为真时由 `lockOverlay` 调用。
     private func lockMessage(_ session: RemoteDesktopSession) -> String {
         if case .failed(let reason) = unlockPhase { return reason }
-        if !session.screen.unlockAvailable {
-            return "这台 Mac 没有开启远程解锁（设置 › 远程控制 › 允许远程解锁），或没有「辅助功能」授权。"
-        }
-        return vaultHasPassword ? "用 Face ID 取出已保存的密码解锁，解锁后 Mac 屏幕会变黑并暂停本机键鼠。"
-            : "输入这台 Mac 的登录密码，解锁后 Mac 屏幕会变黑并暂停本机键鼠。密码只存在这台手机上。"
+        return vaultHasPassword
+            ? "用\(Self.biometryLead)取出已保存的密码解锁。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。"
+            : "输入这台 Mac 的登录密码。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。密码只保存在这台手机上。"
     }
 
-    private var vaultHasPassword: Bool {
-        guard let macID = client.macDeviceID else { return false }
-        return vault.hasPassword(forMac: macID)
+    private var vaultHasPassword: Bool { hasSavedPassword }
+
+    private func refreshVault() {
+        hasSavedPassword = client.macDeviceID.map { vault.hasPassword(forMac: $0) } ?? false
     }
 
     private func passwordSheet(_ session: RemoteDesktopSession) -> some View {
@@ -341,22 +434,31 @@ struct RemoteDesktopScreen: View {
                     SecureField("登录密码", text: $passwordDraft)
                         .textContentType(.password)
                 } footer: {
-                    Text("密码只保存在这台手机的钥匙串里，不会同步到 iCloud，取用时需要 Face ID。")
+                    Text("密码只保存在这台手机的钥匙串里，不会同步到 iCloud，取用时需要\(Self.biometryLead)验证。")
                 }
             }
-            .navigationTitle("解锁 \(client.macName)")
+            .navigationTitle(passwordSheetSavesOnly ? "\(client.macName) 的解锁密码" : "解锁 \(client.macName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { enteringPassword = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("解锁") {
+                    Button(passwordSheetSavesOnly ? "保存" : "解锁") {
                         let password = passwordDraft
                         passwordDraft = ""
                         enteringPassword = false
-                        if let macID = client.macDeviceID { try? vault.save(password, forMac: macID) }
-                        Task { await submitUnlock(session, password: password) }
+                        if let macID = client.macDeviceID {
+                            do {
+                                try vault.save(password, forMac: macID)
+                                if passwordSheetSavesOnly { showPasteNote("已保存解锁密码") }
+                            } catch {
+                                showPasteNote("无法把密码保存到钥匙串：\(RemoteUnlockVaultError.describe(error))")
+                            }
+                        }
+                        refreshVault()
+                        // 只保存时不发解锁：Mac 可能根本没锁，用户只是先把密码存好。
+                        if !passwordSheetSavesOnly { Task { await submitUnlock(session, password: password) } }
                     }.disabled(passwordDraft.isEmpty)
                 }
             }
@@ -367,6 +469,7 @@ struct RemoteDesktopScreen: View {
     private func beginUnlock(_ session: RemoteDesktopSession) {
         guard let macID = client.macDeviceID, vault.hasPassword(forMac: macID) else {
             passwordDraft = ""
+            passwordSheetSavesOnly = false
             enteringPassword = true
             return
         }
@@ -375,12 +478,13 @@ struct RemoteDesktopScreen: View {
             do {
                 guard let password = try await vault.password(forMac: macID, reason: "解锁 \(client.macName)") else {
                     unlockPhase = .idle
+                    passwordSheetSavesOnly = false
                     enteringPassword = true
                     return
                 }
                 await submitUnlock(session, password: password)
             } catch {
-                unlockPhase = .failed("Face ID 验证未通过，请重试。")
+                unlockPhase = .failed("\(Self.biometryLead)验证未通过。")
             }
         }
     }
@@ -388,16 +492,7 @@ struct RemoteDesktopScreen: View {
     private func submitUnlock(_ session: RemoteDesktopSession, password: String) async {
         unlockPhase = .working
         let outcome = await session.unlock(password: password)
-        switch outcome {
-        case .unlocked, .notLocked:
-            unlockPhase = .idle
-        case .rejected:
-            unlockPhase = .failed("密码不对，请重试或改用其他密码。")
-        case .timedOut:
-            unlockPhase = .failed("解锁超时，请重试。")
-        case .notAllowed:
-            unlockPhase = .failed("这台 Mac 当前不允许远程解锁。")
-        }
+        unlockPhase = outcome.failureMessage.map { .failed($0) } ?? .idle
     }
 
     private func notice(spinner: Bool, title: String, message: String?, dim: Bool = false) -> some View {

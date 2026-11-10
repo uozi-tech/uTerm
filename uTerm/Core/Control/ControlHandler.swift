@@ -106,7 +106,7 @@ final class ControlHandler {
             return .failure(
                 id: request.id,
                 code: .control_disabled,
-                message: "命令行接口未启用：在 uTerm 设置 ▸ 命令行与技能 里打开「启用命令行接口」",
+                message: "命令行接口未启用：在 uTerm「设置 › 命令行与技能」里打开「启用命令行接口」",
                 app: await appInfo(deps)
             )
         }
@@ -115,7 +115,7 @@ final class ControlHandler {
             return .failure(
                 id: request.id,
                 code: .mutations_disabled,
-                message: "改动未启用：在 uTerm 设置 ▸ 命令行与技能 里打开「允许执行命令与写入」",
+                message: "写入未启用：在 uTerm「设置 › 命令行与技能」里打开「允许执行命令与写入」",
                 app: await appInfo(deps)
             )
         }

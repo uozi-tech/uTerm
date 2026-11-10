@@ -1,4 +1,5 @@
 import Foundation
+import UPaneGroups
 
 /// 连着一个 `uterm-holder` 的会话：attach、收发帧、收尾。本机 shell 和 SSH 两种后端共用。
 ///
@@ -175,8 +176,8 @@ nonisolated enum HolderSessionFailure: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .disconnected: return "终端的辅助进程断开了连接"
-        case .badReply: return "终端的辅助进程回了看不懂的内容"
+        case .disconnected: return "终端辅助程序断开了连接"
+        case .badReply: return "终端辅助程序返回了无法识别的内容"
         }
     }
 }
@@ -256,5 +257,178 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
         let finished = onReplayFinished
         onReplayFinished = nil
         finished?(result)
+    }
+}
+
+// MARK: - 窗口布局
+
+/// 窗口的终端布局（分屏方向与比例、每组的标签顺序、前台标签、活动组），标签记成会话 id。
+///
+/// 存进窗口里**每个**会话的 holder 归属：holder 是会话的真值，App 重启后谁活着就从谁那里读。布局一变就重写
+/// 一遍，各份副本可能新旧不一（刚开的会话还没连上、写的那一刻某个 holder 正好没接上），恢复时取 `revision`
+/// 最大的一份。
+nonisolated struct HeldSessionLayout: Codable, Equatable, Sendable {
+    /// 写下这份布局的时刻（Unix 秒）。
+    var revision: Double
+    var tree: UPaneGroupsSnapshot<UUID>
+    /// 窗口的位置与大小。旧版写的、还没挂上窗口时写的没有。
+    var window: HeldWindowFrame? = nil
+
+    static func newest(_ layouts: some Sequence<HeldSessionLayout?>) -> HeldSessionLayout? {
+        layouts.compactMap { $0 }.max { $0.revision < $1.revision }
+    }
+}
+
+extension UPaneGroupsSnapshot {
+    /// 窗口里标签的先后：组从左到右、从上到下（分屏的 `first` 一侧，即左 / 上，在前），组里按标签顺序。
+    /// 远控按它给接入的设备排标签。树没引用到的组不算。
+    nonisolated var tabOrder: [P] {
+        func walk(_ node: Node) -> [P] {
+            switch node {
+            case .leaf(let index): groups.indices.contains(index) ? groups[index].tabs : []
+            case .split(_, _, let first, let second): walk(first) + walk(second)
+            }
+        }
+        return walk(root)
+    }
+}
+
+extension UPaneGroupsModel {
+    /// 接回上次留下的会话：按布局放回原来的组和位置，布局里没有的（旧版写的归属、布局还没来得及写进去的会话）
+    /// 按 `ids` 的顺序交给 `append`。只在模型还空着时套用布局，已经有标签的不动它们的位置。
+    /// `id` 取标签的会话 id（SSH 终端的标签 id 与会话 id 不是同一个）。
+    /// 返回是否套用了布局（模型原本空着）：说明这个窗口就是为接回开的，窗口位置也该照布局还原。
+    @discardableResult
+    func adoptHeldSessions(_ ids: [UUID], layout: HeldSessionLayout?, id: (UPaneTab<Payload>) -> UUID?,
+                           make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void) -> Bool {
+        let existing = Set(allTabs.compactMap(id))
+        var remaining = ids.filter { !existing.contains($0) }
+        var restoredActive: UUID?
+        var applied = false
+        if allTabs.isEmpty, let layout {
+            let wanted = Set(remaining)
+            var placed: Set<UUID> = []
+            restore(layout.tree) { id -> UPaneTab<Payload>? in
+                guard wanted.contains(id), placed.insert(id).inserted else { return nil }
+                return make(id)
+            }
+            remaining.removeAll { placed.contains($0) }
+            restoredActive = activeTab?.id
+            applied = true
+        }
+        for id in remaining { append(id) }
+        // 补在后面的会话开进来时会抢成前台，把布局里的前台标签还回去。
+        if !remaining.isEmpty, let restoredActive, let at = locateTab(restoredActive) {
+            activateTab(groupID: at.groupID, index: at.index)
+        }
+        return applied
+    }
+}
+
+/// 退出 App 时把各窗口还攒着没写的布局写出去（`TerminalQuitPolicy.applicationWillTerminate`）。
+/// 写布局的地方是泛型的，这里只记一个「立刻写」的入口。
+@MainActor
+enum HeldLayoutWriters {
+    private static var flushers: [ObjectIdentifier: () -> Void] = [:]
+
+    static func add(_ writer: AnyObject, flush: @escaping () -> Void) {
+        flushers[ObjectIdentifier(writer)] = flush
+    }
+
+    static func remove(_ writer: AnyObject) {
+        flushers[ObjectIdentifier(writer)] = nil
+    }
+
+    /// 同步写完才返回：之后 holder 的连接就要断了。
+    static func flushPending() {
+        for flush in Array(flushers.values) { flush() }
+    }
+}
+
+/// 布局一变（重排、拆分、跨组拖动、关标签、拖分隔条、切前台标签、窗口挪动或改大小）就把新布局交给 `write`。
+/// 拖分隔条每帧都在变，攒一小会儿再写；退出 App 时攒着的那份立刻写（`HeldLayoutWriters.flushPending`）。
+@MainActor
+final class HeldLayoutWriter<Payload> {
+    private weak var groups: UPaneGroupsModel<Payload>?
+    private let delay: Duration
+    private let id: (UPaneTab<Payload>) -> UUID?
+    private let write: @MainActor (HeldSessionLayout) -> Void
+    private var pending: Task<Void, Never>?
+    /// 布局变了、还没写。变化的那一刻就记下（观察回调里同步），不等攒批任务排上：⌘Q 可能就在下一刻。
+    private var isDirty = false
+    private var isStopped = false
+    /// 窗口最近的位置（`HeldWindowTracker` 报来）。
+    private var window: HeldWindowFrame?
+
+    init(groups: UPaneGroupsModel<Payload>, delay: Duration = .milliseconds(300),
+         id: @escaping (UPaneTab<Payload>) -> UUID?, write: @escaping @MainActor (HeldSessionLayout) -> Void) {
+        self.groups = groups
+        self.delay = delay
+        self.id = id
+        self.write = write
+        observe()
+        HeldLayoutWriters.add(self) { [weak self] in self?.flushPending() }
+    }
+
+    isolated deinit {
+        HeldLayoutWriters.remove(self)
+    }
+
+    /// 窗口关了。`flushingPending`：退出 App 途中窗口跟着关，攒着的那份先写掉，不丢最后一次改动。
+    func stop(flushingPending: Bool = false) {
+        if flushingPending { flushPending() }
+        isStopped = true
+        pending?.cancel()
+        pending = nil
+        HeldLayoutWriters.remove(self)
+    }
+
+    /// 窗口挪了、改了大小或成了前台。
+    func noteWindow(_ frame: HeldWindowFrame) {
+        guard frame != window, !isStopped else { return }
+        window = frame
+        isDirty = true
+        schedule()
+    }
+
+    /// 还有攒着没写的就立刻写。
+    func flushPending() {
+        guard isDirty else { return }
+        flush()
+    }
+
+    /// `id` 返回 nil 的标签（文件预览）不进布局。
+    private func flush() {
+        pending?.cancel()
+        pending = nil
+        isDirty = false
+        guard !isStopped, let groups else { return }
+        write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id), window: window))
+    }
+
+    private func observe() {
+        guard !isStopped, let groups else { return }
+        withObservationTracking {
+            _ = groups.snapshot(id)
+        } onChange: { [weak self] in
+            // 布局模型只在主线程上改，回调同步跑在改它的那一刻。
+            MainActor.assumeIsolated { self?.isDirty = true }
+            Task { @MainActor in self?.changed() }
+        }
+    }
+
+    private func changed() {
+        guard !isStopped else { return }
+        observe()
+        schedule()
+    }
+
+    private func schedule() {
+        pending?.cancel()
+        pending = Task { [weak self, delay] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.flush()
+        }
     }
 }

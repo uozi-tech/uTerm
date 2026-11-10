@@ -84,7 +84,7 @@ struct MobileRootView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.22), value: store.connecting?.id)
+        .animation(.easeOut(duration: 0.18), value: store.connecting?.id)
         // 主机密钥信任弹层：连接遇到首次 / 变化的密钥时，覆盖所有标签居中呈现。
         .overlay {
             if let challenge = hostKeyRelay.pendingChallenge {

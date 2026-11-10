@@ -38,6 +38,11 @@ nonisolated struct RemoteTrackpadGesture {
     static let fingerStillThreshold: CGFloat = 3
     /// 只有一根手指在动时，要走到这么远才下结论：另一根可能只是晚起步。
     static let oneFingerIntentThreshold: CGFloat = 16
+    /// 只有一根手指在动、而且沿着双指连线走时，要走到这么远才判成捏合：两指左右并排横着滚动正好也是沿连线走，
+    /// 后面那根晚起步时同样只有一根在动，多等一段让它跟上。
+    static let alongLineIntentThreshold: CGFloat = 32
+    /// 另一根手指没「起步」（不到 `fingerStillThreshold`）但已被带着朝同一方向挪了这么多：是跟着滚，不是捏合的支点。
+    static let followThreshold: CGFloat = 1.5
     private static let velocityWindow: TimeInterval = 0.1
 
     private enum Phase {
@@ -243,7 +248,9 @@ nonisolated struct RemoteTrackpadGesture {
 
     /// 真实的双指滚动不会同时起步，也不会完全平行，所以不能只比间距变化和整体位移：
     /// - 两根都在动：方向大致相同是滚动（哪怕一根走得多，间距也在变）；否则比间距变化和整体位移。
-    /// - 只有一根在动：先等等，另一根可能只是晚起步。走够远还是这样，就看它是不是沿着双指连线在走。
+    /// - 只有一根在动：先等等，另一根可能只是晚起步。走够远还是这样，就看它是不是沿着双指连线在走：
+    ///   不沿连线是滚动；沿连线既可能是单指不动的捏合，也可能是两指左右并排横着滚、后面那根还没跟上——
+    ///   另一根被带着朝同一方向挪了一点就是滚动，否则等走到 `alongLineIntentThreshold` 才判成捏合。
     private static func twoFingerIntent(first: RemoteTrackpadTouch, second: RemoteTrackpadTouch,
                                         firstNow: RemoteTrackpadTouch,
                                         secondNow: RemoteTrackpadTouch) -> TwoFingerIntent {
@@ -258,7 +265,12 @@ nonisolated struct RemoteTrackpadGesture {
         if min(lengthA, lengthB) < fingerStillThreshold {
             let moved = max(lengthA, lengthB)
             guard moved >= oneFingerIntentThreshold else { return .undecided }
-            return stretch >= moved * 0.7 ? .pinch : .scroll
+            guard stretch >= moved * 0.7 else { return .scroll }
+            let (lead, follower) = lengthA >= lengthB ? (a, b) : (b, a)
+            let followed = hypot(follower.width, follower.height) >= followThreshold
+                && lead.width * follower.width + lead.height * follower.height > 0
+            if followed { return .scroll }
+            return moved >= alongLineIntentThreshold ? .pinch : .undecided
         }
         let alignment = (a.width * b.width + a.height * b.height) / (lengthA * lengthB)
         if alignment > 0.5 { return .scroll }

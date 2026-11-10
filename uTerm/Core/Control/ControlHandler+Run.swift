@@ -204,7 +204,7 @@ extension ControlHandler {
         guard !prepared.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "快捷命令「\(command.name)」没有绑定任何服务器，也没有给 `-H`"
+                message: "快捷命令「\(command.name)」没有绑定任何主机，也没有给 `-H`"
             )
         }
 

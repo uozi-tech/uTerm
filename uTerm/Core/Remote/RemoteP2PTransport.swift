@@ -6,7 +6,8 @@ nonisolated protocol RemoteVideoDatagramChannel: AnyObject, Sendable {
     func startVideoSending(channel: UInt32, callbackQueue: DispatchQueue,
                            onLinkState: @escaping @Sendable (RemoteLinkState) -> Void,
                            onExpired: @escaping @Sendable ([UInt32]) -> Void)
-    func sendVideo(_ payload: Data, sequence: UInt32)
+    /// `kind` 决定接收端最多等这一帧多久，见 `RemoteLossPolicy.frameDeadlineMillis`。
+    func sendVideo(_ payload: Data, sequence: UInt32, kind: RemoteLossPolicy.FrameKind)
     func acknowledgeVideo(sequence: UInt32)
     /// 手机说这些帧放弃了，把对应的编码序号回给 `completion`（在回调队列上）。
     func videoLost(_ videoSequences: [UInt32], completion: @escaping @Sendable ([UInt32]) -> Void)
@@ -16,6 +17,11 @@ nonisolated protocol RemoteVideoDatagramChannel: AnyObject, Sendable {
     func startVideoReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void,
                              onLost: @escaping @Sendable ([UInt32], UInt32) -> Void)
     func stopVideoReceiving()
+    /// Mac：发一包声音（`RemoteDesktopAudioFrame` 编码后的字节）。不重传。
+    func sendAudio(_ payload: Data, channel: UInt32)
+    /// 手机：开始收声音。回调在内部队列上；第二个参数是桌面通道号。
+    func startAudioReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void)
+    func stopAudioReceiving()
 }
 
 /// 把一条数据报路径变成 `RemoteLink` 要的可靠字节流，并在旁边开一条不可靠的视频通道。
@@ -40,6 +46,9 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
     private var kcp: RemoteKCP?
     private var pacer: RemoteDatagramPacer
     private var estimator: RemoteLinkEstimator
+    private var activityHandler: (@Sendable (TimeInterval?) -> Void)?
+    private var lastActivityNotice: UInt64 = 0
+    private static let activityNoticeInterval: UInt64 = 100_000_000
     private let timer: DispatchSourceTimer
     private var armedFor: UInt64 = .max
 
@@ -75,6 +84,8 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
     private var reassembler = RemoteVideoReassembler()
     private var onVideoFrame: (@Sendable (Data, UInt32) -> Void)?
     private var onVideoLost: (@Sendable ([UInt32], UInt32) -> Void)?
+    // 声音接收。
+    private var onAudioFrame: (@Sendable (Data, UInt32) -> Void)?
 
     init(path: any RemoteDatagramPath, keys: RemoteDatagramKeys) {
         self.path = path
@@ -170,8 +181,13 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         }
     }
 
+    func onAuthenticatedActivity(_ handler: @escaping @Sendable (TimeInterval?) -> Void) {
+        queue.async { self.activityHandler = handler }
+    }
+
     func cancel() {
         queue.async { [self] in
+            activityHandler = nil
             guard !isStopped else { return }
             isStopped = true
             // 尽力告诉对端，省得它等超时。丢了也没事，对端有心跳。
@@ -207,17 +223,18 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         }
     }
 
-    func sendVideo(_ payload: Data, sequence: UInt32) {
+    func sendVideo(_ payload: Data, sequence: UInt32, kind: RemoteLossPolicy.FrameKind) {
         queue.async { [self] in
             guard !isStopped, let videoChannel else { return }
             let now = DispatchTime.now().uptimeNanoseconds
             let state = estimator.state
             let deadline = RemoteLossPolicy.frameDeadlineMillis(frameBytes: payload.count, roundTripNanos: state.roundTripNanos,
-                                                                pacingRate: state.pacingRate)
+                                                                pacingRate: state.pacingRate, kind: kind)
             let packets = videoBuffer.add(payload: payload, sequence: sequence, channel: videoChannel,
                                           fecGroupSize: fecGroupSize, deadlineMillis: deadline,
                                           roundTripMillis: Int((state.roundTripNanos ?? 0) / 1_000_000), now: now)
             for packet in packets { pacer.enqueue(.media, packet, priority: .media) }
+            frameEnds.append((pacer.mediaEnqueued, videoBuffer.newestVideoSequence))
             nextProbe = nextProbe ?? now &+ probeWait(state)
             pump()
             rearm()
@@ -249,6 +266,26 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         }
     }
 
+    func sendAudio(_ payload: Data, channel: UInt32) {
+        queue.async { [self] in
+            guard !isStopped else { return }
+            var writer = RemoteByteWriter(capacity: 4 + payload.count)
+            writer.u32(channel)
+            writer.bytes(payload)
+            pacer.enqueue(.audio, writer.data, priority: .audio)
+            pump()
+            rearm()
+        }
+    }
+
+    func startAudioReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void) {
+        queue.async { self.onAudioFrame = onFrame }
+    }
+
+    func stopAudioReceiving() {
+        queue.async { self.onAudioFrame = nil }
+    }
+
     func startVideoReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void,
                              onLost: @escaping @Sendable ([UInt32], UInt32) -> Void) {
         queue.async { [self] in
@@ -269,6 +306,11 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
     private func receive(_ datagram: Data) {
         guard !isStopped, let opened = cipher.open(datagram) else { return }
         let now = DispatchTime.now().uptimeNanoseconds
+        // 验过的才算对端还在；一秒最多报十次，存活判定的精度远粗于它。
+        if let activityHandler, now &- lastActivityNotice >= Self.activityNoticeInterval {
+            lastActivityNotice = now
+            activityHandler(estimator.minimumRoundTripNanos.map { TimeInterval($0) / 1_000_000_000 })
+        }
         receivedHighest = max(receivedHighest, opened.sequence)
         receivedPackets += 1
         receivedBytes += UInt64(datagram.count)
@@ -293,8 +335,15 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             handleVideoOutput(reassembler.receive(opened.payload, now: now))
         case .mediaNack:
             guard let nack = try? RemoteVideoNack(decoding: opened.payload), nack.channel == videoChannel else { return }
-            // 重传排在新帧前面：这一帧不到，解码器就卡着。
-            for packet in videoBuffer.packets(for: nack, now: now) { pacer.enqueue(.media, packet, priority: .control) }
+            // 重传排在新帧前面（这一帧不到，解码器就卡着）、声音后面（见 `RemoteDatagramPacer.Priority.retransmit`）。
+            let resent = videoBuffer.packets(for: nack, now: now, firstTicket: pacer.retransmitEnqueued &+ 1,
+                                             resendGapNanos: estimator.state.roundTripNanos ?? 0,
+                                             departure: retransmitDeparture)
+            for packet in resent { pacer.enqueue(.media, packet, priority: .retransmit) }
+        case .audio:
+            guard let onAudioFrame, opened.payload.count > 4 else { return }
+            let channel = opened.payload.prefix(4).reduce(0) { $0 << 8 | UInt32($1) }
+            onAudioFrame(Data(opened.payload.dropFirst(4)), channel)
         case .pathCheck:
             break
         }
@@ -359,6 +408,17 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
 
     // MARK: - 发与定时
 
+    /// 每帧最后一片在视频队列里的序号（`RemoteDatagramPacer.mediaEnqueued`），发出去后告诉发送缓冲开始探测计时。
+    private var frameEnds: [(end: UInt64, videoSequence: UInt32)] = []
+    /// 重传队列的发出记录：每次 `pump` 发出去的号截至 `upTo`、时刻 `at`。只留 5 秒，更早的当作早就发了。
+    private var retransmitDepartures: [(upTo: UInt64, at: UInt64)] = []
+
+    /// 重传队列里第 `ticket` 个离开的时刻；还排着为 nil。
+    private func retransmitDeparture(_ ticket: UInt64) -> UInt64? {
+        guard ticket <= pacer.retransmitSent else { return nil }
+        return retransmitDepartures.first(where: { $0.upTo >= ticket })?.at ?? 0
+    }
+
     private func pump() {
         let now = DispatchTime.now().uptimeNanoseconds
         while let (kind, payload) = pacer.next(now: now) {
@@ -367,6 +427,16 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             path.send(datagram)
         }
         if !pacer.isEmpty { estimator.noteBacklog() }
+        if pacer.retransmitSent > (retransmitDepartures.last?.upTo ?? 0) {
+            retransmitDepartures.append((pacer.retransmitSent, now))
+            if let stale = retransmitDepartures.firstIndex(where: { now &- $0.at < 5_000_000_000 }), stale > 0 {
+                retransmitDepartures.removeFirst(stale)
+            }
+        }
+        while let first = frameEnds.first, first.end <= pacer.mediaSent {
+            frameEnds.removeFirst()
+            videoBuffer.markSent(videoSequence: first.videoSequence, now: now)
+        }
     }
 
     private func probeWait(_ state: RemoteLinkState) -> UInt64 {
@@ -396,7 +466,7 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         if videoChannel != nil, let due = nextProbe, now >= due {
             let state = estimator.state
             for packet in videoBuffer.probes(now: now, roundTripNanos: state.roundTripNanos ?? 100_000_000) {
-                pacer.enqueue(.media, packet, priority: .control)
+                pacer.enqueue(.media, packet, priority: .retransmit)
             }
             let grace = (state.roundTripNanos ?? 100_000_000) * 2 + 200_000_000
             let expired = videoBuffer.expire(now: now, graceNanos: grace)

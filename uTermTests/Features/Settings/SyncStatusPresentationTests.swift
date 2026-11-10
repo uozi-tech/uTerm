@@ -47,6 +47,6 @@ final class SyncStatusPresentationTests: XCTestCase {
         XCTAssertEqual(SyncStatusPresentation.diagnosticsSubtitle(status: .synced, lastError: "boom"),
                        "最近一次同步出错，点右侧查看详情与日志", "错误原文不进副标题，只提示去弹窗看")
         XCTAssertEqual(SyncStatusPresentation.diagnosticsSubtitle(status: .synced, lastError: nil),
-                       "查看最近同步事件 · 复制日志")
+                       "查看最近同步事件 · 拷贝日志")
     }
 }

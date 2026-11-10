@@ -211,7 +211,7 @@ struct GroupsManagerView: View {
         HStack(spacing: 6) {
             Text("\(sortedGroups.count + (ungroupedCount > 0 ? 1 : 0)) 个分组")
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(totalHosts) 主机")
+            Text("\(totalHosts) 台主机")
                 .font(UD.monoMetric)
         }
         .font(.system(size: 11))
@@ -558,7 +558,7 @@ private struct GroupDetailView: View {
         } content: {
             if tab == 0 {
                 if members.isEmpty {
-                    emptyBox(title: "这个分组还没有主机", hint: "切到「添加」标签把已有主机加入此分组")
+                    emptyBox(title: "这个分组还没有主机", hint: "切到「添加」标签页，把已有主机加入此分组")
                 } else {
                     memberList(members, action: .remove, scroll: false)
                 }

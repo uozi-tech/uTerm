@@ -119,4 +119,24 @@ final class TerminalDrawCountTests: XCTestCase {
 
         XCTAssertGreaterThan(Self.draws, 0)
     }
+
+    /// 手指滚动的那一帧里正好有输出在排队等节流（Claude Code 思考时每秒约 10 次）：这一帧要当场画，
+    /// 不能等排队的那次——否则画面停在原地一两帧再跳过去。排队的那次到点后也不该再画一遍。
+    func testUserScrollWithQueuedOutputPaintsInTheSameFrame() async throws {
+        let (view, _) = try await hostedTerminal()
+        _ = try await drawsWhileFeeding(view, ticks: 3)
+        try await Task.sleep(for: .milliseconds(60))
+        // 节流拉长到半秒，下面滚动时输出一定还在排队（不改的话这一帧一次都不画）。
+        view.displayThrottleNanoseconds = 500_000_000
+        view.feed(text: "\u{1B}[?2026h\u{1B}[1;1H\u{1B}[2Kspinner\u{1B}[?2026l")
+
+        Self.draws = 0
+        view.contentOffset.y = max(0, view.contentOffset.y - 200)
+        view.layoutIfNeeded()
+        CATransaction.flush()
+
+        XCTAssertEqual(Self.draws, 1, "滚动这一帧没画")
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(Self.draws, 1, "排队的那次到点后又画了一遍")
+    }
 }

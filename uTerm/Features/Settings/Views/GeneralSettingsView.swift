@@ -24,7 +24,7 @@ struct GeneralSettingsView: View {
                         options: StartupBehavior.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "恢复终端会话",
-                            hint: "启动时重新加载上次工作区的标签与分屏布局") {
+                            hint: "启动时重新加载上次工作区的标签页与分屏布局") {
                     UDToggle($restoreTerminalSession)
                 }
             }

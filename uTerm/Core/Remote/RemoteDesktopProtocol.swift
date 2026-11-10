@@ -42,7 +42,7 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var maxWidth: Int
     var maxHeight: Int
     var codec: RemoteVideoCodec
-    /// nil = 主显示器。多显示器切换留的口子，本期 Mac 只认主显示器。
+    /// nil = 主显示器。要看别的显示器时填 `RemoteDesktopInfo.displays` 里的 id。
     var displayID: UInt32? = nil
     /// 手机能另开一个解码器解旁路精修帧（`RemoteDesktopFrame.Flags.sidecar`）。HEVC 时 Mac 据此改用
     /// 10-bit 主流 + 旁路精修；nil / false（老手机）时照旧 8-bit + 主流里精修。老 Mac 不认这个键，照旧发。
@@ -51,6 +51,17 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var videoDatagrams: Bool? = nil
     /// 手机要画面往返读数（`desktopLatency`），显示在调试信息里。老 Mac 不认这个键，什么都不发。
     var latencyStats: Bool? = nil
+    /// 要光标形状（`desktopCursorImage`）：Mac 主控端拿它当本机光标。老 Mac 不认这个键，什么都不发。
+    var cursorImages: Bool? = nil
+}
+
+/// Mac → 主控端：光标此刻的样子（I 形、调整大小的箭头…）。图是 PNG，尺寸与热点都按点算。
+nonisolated struct RemoteDesktopCursorImage: Codable, Equatable, Sendable {
+    var png: Data
+    var width: Double
+    var height: Double
+    var hotX: Double
+    var hotY: Double
 }
 
 /// Mac → 手机：画面往返（`desktopLatency`），有画面在走时每 2 s 一条。
@@ -92,6 +103,18 @@ nonisolated struct RemoteDesktopInfo: Codable, Equatable, Sendable {
     var controlNote: String? = nil
     /// 这条流的视频走数据报通道。
     var videoDatagrams: Bool? = nil
+    /// Mac 上此刻接着的全部显示器（老 Mac 不报，为 nil）。看哪一块由开流请求的 `displayID` 定。
+    var displays: [RemoteDesktopDisplaySummary]? = nil
+}
+
+/// 一块显示器的简介：给主控端的「切换显示器」菜单用。
+nonisolated struct RemoteDesktopDisplaySummary: Codable, Equatable, Hashable, Sendable {
+    var id: UInt32
+    var name: String
+    /// 点尺寸。
+    var width: Double
+    var height: Double
+    var isMain: Bool
 }
 
 /// Mac → 手机：锁屏与帘幕状态（`desktopScreenState`，桌面通道）。只发给声明了 `desktop-unlock` 的手机。
@@ -120,8 +143,13 @@ nonisolated struct RemoteDesktopUnlockResult: Codable, Equatable, Sendable {
     enum Outcome: String, Codable, Sendable {
         /// 解开了，帘幕已挂上。
         case unlocked
-        /// 输完密码 Mac 仍锁着：多半是密码不对。
-        case rejected
+        /// 输完密码回车后 Mac 仍锁着。不等于密码不对：Mac 读不到锁屏「拒绝了这个密码」的信号，
+        /// 密码也可能根本没进锁屏的输入框（2026-11-08：一个卡住的选区截图抓着键盘，按键全被它吃掉）。
+        /// 线上值沿用老版的 "rejected"，老手机照旧认得。
+        case stillLocked = "rejected"
+        /// Mac 上有程序占着键盘（截图选区等），按 Esc 也没让开：密码没有输。只发给声明了
+        /// `desktopUnlockOutcomes` 的手机。
+        case inputBlocked
         /// Mac 本来就没锁。
         case notLocked
         /// Mac 没开远程解锁，或没有「辅助功能」授权，或这台手机不是正在看屏幕的那台。
@@ -137,6 +165,14 @@ nonisolated struct RemoteDesktopUnlockResult: Codable, Equatable, Sendable {
 /// 手机 → Mac：开 / 关帘幕（`desktopCurtain`，桌面通道）。
 nonisolated struct RemoteDesktopCurtainRequest: Codable, Equatable, Sendable {
     var on: Bool
+}
+
+/// 手机 → Mac：暂停 / 恢复推流（`desktopPause`，桌面通道）。
+///
+/// 只管这一条桌面流：Mac 换流（重连、重新开流）后从不暂停起步。暂停不动帘幕 / 锁屏、不断连接，
+/// 也不动码控状态（对码控而言就像屏幕静止了一阵）。
+nonisolated struct RemoteDesktopPauseRequest: Codable, Equatable, Sendable {
+    var paused: Bool
 }
 
 /// 一帧视频（`desktopFrame`）：

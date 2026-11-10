@@ -39,7 +39,7 @@ final class RemoteReconnectTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "测试主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()), session: session)
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       peerSilenceLimit: heartbeat.peerSilenceLimit)
         server.start()
@@ -49,7 +49,7 @@ final class RemoteReconnectTests: XCTestCase {
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1",
                                                          port: NWEndpoint.Port(rawValue: try XCTUnwrap(proxy.port))!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
                                      heartbeat: heartbeat)
         let connecting = Task { await client.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
@@ -136,6 +136,22 @@ final class RemoteReconnectTests: XCTestCase {
         XCTAssertTrue(back, "链路恢复后应自动接回")
     }
 
+    /// 连上就有往返读数：心跳第一拍就 ping，不等链路安静满 `pingInterval`。
+    /// 「我的 Mac」详情在已连接时显示往返；以前只在安静时 ping，开着屏幕、终端在刷就一直是「—」。
+    func test_round_trip_is_measured_right_after_connecting() async throws {
+        // 安静 6 秒才 ping：修之前最早第 6 秒才有读数；心跳一拍 2 秒，修之后第一拍就有。
+        let heartbeat = RemoteHeartbeat(pingInterval: 6, replyLimit: 600, probeReplyLimit: 5, peerSilenceLimit: 600)
+        let fixture = try await makeFixture(heartbeat: heartbeat)
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        XCTAssertNil(fixture.client.roundTripMillis)
+        let measured = await waitUntil(4.5) { fixture.client.roundTripMillis != nil }
+        XCTAssertTrue(measured, "连上后第一拍心跳就应 ping 一次、拿到往返")
+    }
+
     /// 网络一变就问一声：链路已经走不通时不用等完整的判死时限。
     func test_network_change_probe_detects_dead_link_quickly_and_wakes_backoff() async throws {
         let slowPing = RemoteHeartbeat(pingInterval: 60, replyLimit: 600, probeReplyLimit: 0.3, peerSilenceLimit: 600)
@@ -164,12 +180,12 @@ final class RemoteReconnectTests: XCTestCase {
     /// 老手机不发心跳，空闲时一个字节都没有：Mac 不能把它当成死链路断开。
     func test_mac_does_not_cut_old_phone_without_heartbeat() async throws {
         let registry = TerminalSessionRegistry()
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false, peerSilenceLimit: 0.3)
         server.start()
         defer { server.stop() }
         _ = await waitUntil { server.port != nil }
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let staticKey = try identity.localIdentity()
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let port = try XCTUnwrap(server.port)
@@ -216,4 +232,46 @@ final class RemoteReconnectTests: XCTestCase {
         // 输入后超过 30 分钟的输出（无人理会的 htop）不再算。
         XCTAssertFalse(RemoteSleepPolicy.holdsAwake(now: start + 41 * minute, lastInput: start, lastOutput: start + 40 * minute))
     }
+
+    /// 开着屏幕时（`expectSteadyTraffic`）链路静默断开：用正式的心跳参数，5 秒内发现（之后由桌面会话 / 标签重连），
+    /// 不等平时的 20 秒判死。没有网络变化通知（NAT 映射过期、中间设备掐流）。
+    func test_silent_break_is_detected_within_five_seconds_while_the_screen_is_open() async throws {
+        let fixture = try await makeFixture()
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        let sink = RemoteChannelSink(onOutput: { _ in }, onClosed: { _, _ in })
+        let attachment = try await fixture.client.attach(sessionID: fixture.sessionID,
+                                                         size: RemoteGridSize(cols: 80, rows: 24), sink: sink)
+        attachment.link.expectSteadyTraffic(true)
+        try await Task.sleep(for: .seconds(1))
+
+        let before = fixture.proxy.accepted
+        fixture.proxy.setMode(.stalled)
+        let start = Date()
+        let noticed = await waitUntil(8) { fixture.client.state != .connected }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertTrue(noticed)
+        XCTAssertLessThan(elapsed, 5, "开着屏幕时静默断开应在 5 秒内发现（用了 \(elapsed) 秒）")
+        XCTAssertEqual(fixture.proxy.accepted, before, "判死靠自己的探测，不是重连撞出来的")
+    }
+
+    /// 同样开着屏幕，但链路健康、只是没有画面在变：靠 ping 的回音保持，不能误判。
+    func test_quiet_but_healthy_link_is_kept_while_the_screen_is_open() async throws {
+        let fixture = try await makeFixture()
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        let sink = RemoteChannelSink(onOutput: { _ in }, onClosed: { _, _ in })
+        let attachment = try await fixture.client.attach(sessionID: fixture.sessionID,
+                                                         size: RemoteGridSize(cols: 80, rows: 24), sink: sink)
+        attachment.link.expectSteadyTraffic(true)
+        try await Task.sleep(for: .seconds(6))
+        XCTAssertEqual(fixture.client.state, .connected)
+    }
+
 }

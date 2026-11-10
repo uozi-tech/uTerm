@@ -64,7 +64,7 @@ final class RemoteHostServerTests: XCTestCase {
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()),
                           session: session)
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         let ready = await waitUntil { server.port != nil }
@@ -98,7 +98,7 @@ final class RemoteHostServerTests: XCTestCase {
     /// 不能写进信任、不能算已连接，也不能弹审批，到时限就断开。
     func test_peer_that_never_confirms_its_key_is_not_trusted_or_authorized() async throws {
         let registry = TerminalSessionRegistry()
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
         let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
                                       advertises: false, keyConfirmationTimeout: .milliseconds(200))
         server.start()
@@ -133,7 +133,7 @@ final class RemoteHostServerTests: XCTestCase {
     /// 冒充者在握手里干脆不报 key-confirm：不能因此跳过验证，直接断开。
     func test_peer_that_omits_key_confirmation_feature_is_rejected() async throws {
         let registry = TerminalSessionRegistry()
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
         let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
                                       advertises: false, keyConfirmationTimeout: .seconds(5))
         server.start()
@@ -202,7 +202,7 @@ final class RemoteHostServerTests: XCTestCase {
         defer { server.stop(); session.dispose() }
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         defer { client.disconnect() }
         let connecting = Task { await client.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
@@ -215,7 +215,7 @@ final class RemoteHostServerTests: XCTestCase {
     /// 不经过 `listener` 的连接也能接：公网路径就是这样进来的，局域网监听失败不该连累它。
     func test_accept_transport_works_without_a_listener() async throws {
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         let (phoneSide, macSide) = RemoteMemoryTransport.pair()
         server.accept(transport: macSide)
@@ -417,7 +417,7 @@ final class RemoteHostServerTests: XCTestCase {
     /// 只有标签名变时，列表要更新，但不能惊动按 id 跟随的工作区。
     func test_client_keeps_listed_ids_quiet_when_only_titles_change() {
         let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         var info = RemoteSessionInfo(id: UUID(), serverID: UUID(), serverName: "本机", title: "zsh 2",
                                      windowKind: TerminalWindowKind.terminal, tabTitle: "zsh 2")
         client.receiveSessions([info])

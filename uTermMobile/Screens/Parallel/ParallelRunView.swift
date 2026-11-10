@@ -47,7 +47,6 @@ struct ParallelRunView: View {
     @AppStorage(DefaultsKey.activeProviderID) private var activeProviderIDString = ""
 
     @State private var controller: ParallelRunController?
-    @State private var now = Date()
     /// 本屏可用宽度，判断要不要切成大屏布局（见 `wide`）。
     @State private var width: CGFloat = 0
     /// 大屏 Shell 当前在第几页。
@@ -58,7 +57,6 @@ struct ParallelRunView: View {
     @State private var revealLane: UUID?
     @State private var aiFilter: ParAIFilter = .all
     @Namespace private var modeThumb
-    private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     /// - Parameters:
     ///   - makeController: 控制器工厂，默认造真控制器。
@@ -97,7 +95,8 @@ struct ParallelRunView: View {
                 }
             }
             .navigationTitle(controller?.commandName ?? request.name)
-            .mNavigationSubtitle(controller.map(subtitle))
+            // 副标题（含实时用时）交给独立的修饰器自己计时，见 `ParRunSubtitle`。
+            .modifier(ParRunSubtitle(controller: controller))
             .navigationBarTitleDisplayMode(.inline)
             .modifier(ParPinnedBars())
             .toolbar {
@@ -124,7 +123,6 @@ struct ParallelRunView: View {
             }
         }
         .onAppear { if controller == nil { setup() } }
-        .onReceive(ticker) { t in if controller?.allDone == false { now = t } }
     }
 
     private func setup() {
@@ -177,15 +175,6 @@ struct ParallelRunView: View {
         .sensoryFeedback(trigger: c.allDone) { _, done in
             done ? (c.failedCount > 0 ? .warning : .success) : nil
         }
-    }
-
-    /// 导航栏副标题：台数 + 实时进度。失败数与用时也在这里，不再另画一条底部状态栏。
-    private func subtitle(_ c: ParallelRunController) -> String {
-        let elapsed = (c.finishedAt ?? now).timeIntervalSince(c.startedAt)
-        var parts = ["\(c.mode == .ai ? "AI" : "并行") · \(c.total) 台", "完成 \(c.doneCount)/\(c.total)"]
-        if c.failedCount > 0 { parts.append("\(c.failedCount) 失败") }
-        parts.append(UFormat.duration(seconds: max(0, elapsed)))
-        return parts.joined(separator: " · ")
     }
 
     /// 底栏：只放视图切换，始终居中（页码点在内容里、网格下方——放进底栏会把分段控件挤到一边，
@@ -444,7 +433,7 @@ struct ParallelRunView: View {
                     }
                 }
                 if visible.isEmpty {
-                    Text("没有\(aiFilter.title)的服务器")
+                    Text("没有\(aiFilter.title)的主机")
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .frame(maxWidth: .infinity).padding(.vertical, 24)
                 }
@@ -495,7 +484,7 @@ struct ParallelRunView: View {
                         overviewTitle(c, size: 16)
                         overviewCounts(c)
                         if !c.allDone, c.aiAssisted {
-                            Text("遇到报错会先自行诊断、换办法修复，处理不了的才交给你。")
+                            Text("遇到报错时先自行诊断并尝试其他办法修复，无法解决的再交给你。")
                                 .font(M.sans(12.5)).foregroundStyle(M.text3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -529,7 +518,7 @@ struct ParallelRunView: View {
 
     private func overviewTitle(_ c: ParallelRunController, size: CGFloat) -> some View {
         let title: String = !c.allDone
-            ? "正在 \(c.total) 台服务器上执行"
+            ? "正在 \(c.total) 台主机上执行"
             : (c.failedCount > 0 ? "已完成，\(c.failedCount) 台失败" : "全部 \(c.total) 台执行成功")
         return Text(title).font(M.sans(size, weight: .semibold)).foregroundStyle(M.text)
     }
@@ -630,6 +619,56 @@ private struct ParPinnedBars: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// 导航栏副标题：台数 + 实时进度。失败数与用时也在这里，不再另画一条底部状态栏。
+///
+/// 为什么单拆一个修饰器自己持有 `now`：原先 `now` 是 `ParallelRunView` 的 `@State`，由一个
+/// 常驻的 0.5 s `Timer.publish` 推进 —— 每拍都让**整屏** body（十几台的输出卡片、AI 泳道）
+/// 重求一遍，只为改副标题里那一个用时数字；而且计时器从页面出现起一直跑，全部完成后、
+/// App 退到后台继续跑（iOS 26 `BGContinuedProcessingTask`）时也照样每秒唤醒主线程两次。
+/// 现在 `now` 只在这里：`ViewModifier` 的 `content` 是占位，`now` 变只重求本修饰器的 body，
+/// 外层整屏不受牵连。计时仍是 0.5 s 一拍（副标题用三位有效数字显示秒，降频会让数字跳得
+/// 更粗，看得出来，所以不动节拍），只是：
+/// - 全部完成即停（完成后用时取 `finishedAt`，`now` 不再参与显示）；
+/// - 退到后台即停（`.inactive` 时画面仍可见，比如下拉控制中心，照常走）；回前台下一拍补上。
+private struct ParRunSubtitle: ViewModifier {
+    let controller: ParallelRunController?
+    @State private var now = Date()
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content
+            .mNavigationSubtitle(controller.map { Self.text($0, now: now) })
+            // keyed by 是否该计时：完成 / 进后台时 task 被取消，重新运行 / 回前台时重起。
+            .task(id: ParElapsedTicker.shouldTick(allDone: controller?.allDone, phase: scenePhase)) {
+                guard ParElapsedTicker.shouldTick(allDone: controller?.allDone, phase: scenePhase) else { return }
+                // 与原 `Timer.publish(every: 0.5)` 同一节拍：先等一拍再刷新。
+                while (try? await Task.sleep(for: ParElapsedTicker.interval)) != nil {
+                    now = Date()
+                }
+            }
+    }
+
+    private static func text(_ c: ParallelRunController, now: Date) -> String {
+        let elapsed = (c.finishedAt ?? now).timeIntervalSince(c.startedAt)
+        var parts = ["\(c.mode == .ai ? "AI" : "并行") · \(c.total) 台", "完成 \(c.doneCount)/\(c.total)"]
+        if c.failedCount > 0 { parts.append("\(c.failedCount) 失败") }
+        parts.append(UFormat.duration(seconds: max(0, elapsed)))
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// 并行执行页「用时」的计时规则（纯函数，便于单测）。
+nonisolated enum ParElapsedTicker {
+    /// 刷新节拍。副标题用时显示三位有效数字（如 `12.5 s`），0.5 s 是原有节拍，不改。
+    static let interval: Duration = .milliseconds(500)
+
+    /// 该不该走表：还有没跑完的（`allDone == false`；控制器还没造好时为 nil，不走），
+    /// 且场景不在后台。`.inactive`（控制中心 / 通知中心盖在上面、App 切换器）画面仍可见，照常走。
+    static func shouldTick(allDone: Bool?, phase: ScenePhase) -> Bool {
+        allDone == false && phase != .background
     }
 }
 

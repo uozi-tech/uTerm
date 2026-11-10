@@ -31,9 +31,9 @@ final class RemoteWANImpairmentTests: XCTestCase {
     private func makeRig(registry: TerminalSessionRegistry = TerminalSessionRegistry(),
                          desktop: RemoteDesktopEnvironment = .disabled,
                          impairment: RemoteLinkImpairment, path: RemoteLinkPath = .relay) async throws -> Rig {
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let phoneID = RemoteLocalDevice.id()
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       desktopEnvironment: desktop)
         server.internetAccessPolicy = { $0 == phoneID }
@@ -68,7 +68,7 @@ final class RemoteWANImpairmentTests: XCTestCase {
         let proxyPort = try XCTUnwrap(proxy.port)
         let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: phoneIdentity)
-        client.updateRoutes(endpoint: nil, internetDialer: {
+        client.updateRoutes(endpoint: nil, internetDialer: { _ in
             let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxyPort)!,
                                           using: RemoteLink.parameters())
             return RemoteDialedPath(transport: RemoteNWTransport(connection: connection), handshakeKeys: phoneKeys, path: path)

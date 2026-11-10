@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,6 +24,12 @@ const (
 	// nonceBytes is the raw challenge the relay writes after the client's magic.
 	nonceBytes = 32
 	signPrefix = "uterm-relay-v1"
+	// certPrefix starts the text a member certificate signs, see certMessage. v1 certificates (relay 1.2.x)
+	// had no expiry and are no longer accepted.
+	certPrefix = "uterm-relay-member-v2"
+	// certMaxLifetime caps how far ahead a certificate may expire. Hosts issue a year; anything signed
+	// further out is refused, which also bounds how long a revocation has to be kept.
+	certMaxLifetime = 400 * 24 * time.Hour
 )
 
 const (
@@ -49,6 +57,14 @@ type requestFrame struct {
 	Ticket  string `json:"ticket,omitempty"`
 	Sig     string `json:"sig,omitempty"`
 	HostSig string `json:"hostSig,omitempty"`
+	// Member, Cert and Scope are set by a member that holds its own key instead of the relay's:
+	// Member is its public key, Cert the relay key's signature over certMessage, Scope the only host
+	// it may reach, Expires (Unix seconds) when the certificate stops working. Sig is then made with the
+	// member's own key.
+	Member  string `json:"member,omitempty"`
+	Cert    string `json:"cert,omitempty"`
+	Scope   string `json:"scope,omitempty"`
+	Expires int64  `json:"exp,omitempty"`
 }
 
 type answerFrame struct {
@@ -69,6 +85,10 @@ type messageFrame struct {
 	Box     string   `json:"box,omitempty"`
 	Ticket  string   `json:"ticket,omitempty"`
 	Hosts   []string `json:"hosts,omitempty"`
+	// Member is the public key a host revokes, and the one the relay confirms. Expires is when that
+	// member's certificate runs out anyway: the revocation is kept until then and no longer.
+	Member  string `json:"member,omitempty"`
+	Expires int64  `json:"exp,omitempty"`
 }
 
 func writeFrame(w io.Writer, value any) error {
@@ -104,6 +124,12 @@ func readFrame(r io.Reader, value any) error {
 
 func signedMessage(role, relayID, nonce, parameter string) []byte {
 	return []byte(strings.Join([]string{signPrefix, role, relayID, nonce, parameter}, "\n"))
+}
+
+// certMessage is what the relay's member key signs to let another key in: that key may reach one host
+// until expires (Unix seconds).
+func certMessage(relayID, member, scope string, expires int64) []byte {
+	return []byte(strings.Join([]string{certPrefix, relayID, member, scope, strconv.FormatInt(expires, 10)}, "\n"))
 }
 
 func verifySignature(key *ecdsa.PublicKey, message []byte, signature string) bool {

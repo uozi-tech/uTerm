@@ -206,6 +206,47 @@ struct ViewLineInfo {
     var powerlineGlyphs: [PowerlineRenderItem]
 }
 
+// MARK: uTerm patch #20 — per-row layout cache (CoreGraphics path)
+
+/// One segment of a row with its CTLine and the per-run attributes both draw
+/// passes read.
+typealias PreparedSegment = (segment: ViewLineSegment, ctLine: CTLine, runs: [PreparedRun])
+
+/// Everything outside the line's own cells that changes how a row lays out.
+/// The CoreGraphics path cannot rely on dirty ranges (iOS hands `draw` the whole
+/// view no matter what was invalidated), so view-level state goes in the key.
+struct RowRenderKey: Equatable {
+    var generation: UInt64
+    var bidiParagraphRevision: Int
+    var cols: Int
+    var selection: Range<Int>?
+    var linkMode: LinkHighlightMode
+    var commandActive: Bool
+    var hoveredLink: Range<Int>?
+    var blinkVisible: Bool
+    var renderGeneration: UInt64
+    var customBlockGlyphs: Bool
+    var bidiHostPolicy: BidiHostPolicy
+    var selectionBackground: ObjectIdentifier
+    var selectionForeground: ObjectIdentifier
+}
+
+final class RowRenderCacheEntry {
+    /// The row must still map to the same line object: scrolling rotates line
+    /// references in the circular list, and recycled lines bump `generation`.
+    let line: BufferLine
+    let key: RowRenderKey
+    let lineInfo: ViewLineInfo
+    let segments: [PreparedSegment]
+
+    init(line: BufferLine, key: RowRenderKey, lineInfo: ViewLineInfo, segments: [PreparedSegment]) {
+        self.line = line
+        self.key = key
+        self.lineInfo = lineInfo
+        self.segments = segments
+    }
+}
+
 /// How to place a single glyph within its `columnWidth`-cell slot.
 ///
 /// Full-width (CJK) and other substituted glyphs would otherwise be pinned to
@@ -288,6 +329,7 @@ extension TerminalView {
     func resetCaches ()
     {
         self.attributes = [:]
+        rowRenderGeneration &+= 1   // uTerm patch #20
         self.urlAttributes = [:]
         self.colors = Array(repeating: nil, count: 256)
         self.trueColors = [:]
@@ -573,6 +615,7 @@ extension TerminalView {
     {
         urlAttributes = [:]
         attributes = [:]
+        rowRenderGeneration &+= 1   // uTerm patch #20
         clearCGColorCache()
 
 #if os(macOS)
@@ -1303,6 +1346,71 @@ extension TerminalView {
                             powerlineGlyphs: powerlineGlyphs)
     }
 
+    /// uTerm patch #20: the laid-out row from the cache, or freshly built when the
+    /// line or any view state it depends on changed (see `RowRenderKey`).
+    func renderedRow(_ row: Int, line: BufferLine, buffer: Buffer) -> (ViewLineInfo, [PreparedSegment]) {
+        let cols = buffer.cols
+        let key = RowRenderKey(
+            generation: line.generation,
+            bidiParagraphRevision: TerminalBidi.layoutRevision(
+                row: row, buffer: buffer, maximumRows: terminal.options.maximumBidiParagraphRows),
+            cols: cols,
+            selection: selectedColumnsRange(row: row, cols: cols),
+            linkMode: linkHighlightMode,
+            commandActive: commandActive,
+            hoveredLink: linkHighlightRange?.first(where: { $0.row == row })?.range,
+            blinkVisible: textBlinkVisible,
+            renderGeneration: rowRenderGeneration,
+            customBlockGlyphs: customBlockGlyphs,
+            bidiHostPolicy: bidiHostPolicy,
+            selectionBackground: ObjectIdentifier(selectedTextBackgroundColor),
+            selectionForeground: ObjectIdentifier(selectedTextForegroundColor))
+        if let entry = rowRenderCache[row], entry.line === line, entry.key == key {
+            return (entry.lineInfo, entry.segments)
+        }
+        let lineInfo = buildAttributedString(row: row, line: line, cols: cols)
+        let segments = prepareSegments(lineInfo)
+        pruneRowRenderCache(around: row, rows: buffer.rows)
+        rowRenderCache[row] = RowRenderCacheEntry(line: line, key: key, lineInfo: lineInfo, segments: segments)
+        return (lineInfo, segments)
+    }
+
+    /// Keeps the cache to the neighbourhood of what is being drawn, so scrolling
+    /// back and forth over a screen or two stays cached without growing unbounded.
+    private func pruneRowRenderCache(around row: Int, rows: Int) {
+        let window = max(rows, 1)
+        guard rowRenderCache.count > window * 6 else { return }
+        let keep = (row - window * 2)...(row + window * 2)
+        rowRenderCache = rowRenderCache.filter { keep.contains($0.key) }
+    }
+
+    // Pre-create CTLines and runs once per row to avoid duplicate
+    // creation, and extract the attribute values both draw passes need
+    // once per run: bridging the whole attribute dictionary per pass is
+    // far more expensive than these keyed lookups.
+    private func prepareSegments(_ lineInfo: ViewLineInfo) -> [PreparedSegment] {
+        lineInfo.segments.compactMap { segment in
+            guard segment.attributedString.length > 0 else { return nil }
+            let ctLine = cachedCTLine(segment.attributedString)
+            guard let ctRuns = CTLineGetGlyphRuns(ctLine) as? [CTRun] else { return nil }
+            let runs = ctRuns.map { run -> PreparedRun in
+                // Toll-free cast: no per-entry bridging.
+                let attrs = CTRunGetAttributes(run) as NSDictionary
+                let selectionBackground = attrs.object(forKey: selectionBackgroundKeyNS) as? TTColor
+                return PreparedRun(
+                    run: run,
+                    font: attrs.object(forKey: fontKeyNS) as? TTFont,
+                    foregroundColor: attrs.object(forKey: foregroundKeyNS) as? TTColor,
+                    backgroundColor: selectionBackground
+                        ?? attrs.object(forKey: backgroundKeyNS) as? TTColor,
+                    hasDecorations: attrs.object(forKey: underlineStyleKeyNS) != nil
+                        || attrs.object(forKey: strikethroughStyleKeyNS) != nil,
+                    attributes: attrs)
+            }
+            return (segment, ctLine, runs)
+        }
+    }
+
     func shouldUnderlineLink(row: Int, column: Int, width: Int, cell: CharData) -> Bool
     {
         switch linkHighlightMode {
@@ -1880,7 +1988,9 @@ extension TerminalView {
             } 
             #endif
             let line = displayBuffer.lines [row]
-            let lineInfo = buildAttributedString(row: row, line: line, cols: displayBuffer.cols)
+            // uTerm patch #20: rows whose cells and view state did not change reuse
+            // their attributed strings and CTLines instead of laying out again.
+            let (lineInfo, preparedSegments) = renderedRow(row, line: line, buffer: displayBuffer)
             let rowBase = lineOrigin.y + cellDimension.height
             var underTextImages: [AppleImage] = []
             var overTextKittyImages: [AppleImage] = []
@@ -1911,32 +2021,6 @@ extension TerminalView {
                 underTextImages.sort(by: sortKitty)
                 overTextKittyImages.sort(by: sortKitty)
             }
-
-            // Pre-create CTLines and runs once per row to avoid duplicate
-            // creation, and extract the attribute values both draw passes need
-            // once per run: bridging the whole attribute dictionary per pass is
-            // far more expensive than these keyed lookups.
-            let preparedSegments: [(segment: ViewLineSegment, ctLine: CTLine, runs: [PreparedRun])] =
-                lineInfo.segments.compactMap { segment in
-                    guard segment.attributedString.length > 0 else { return nil }
-                    let ctLine = cachedCTLine(segment.attributedString)
-                    guard let ctRuns = CTLineGetGlyphRuns(ctLine) as? [CTRun] else { return nil }
-                    let runs = ctRuns.map { run -> PreparedRun in
-                        // Toll-free cast: no per-entry bridging.
-                        let attrs = CTRunGetAttributes(run) as NSDictionary
-                        let selectionBackground = attrs.object(forKey: selectionBackgroundKeyNS) as? TTColor
-                        return PreparedRun(
-                            run: run,
-                            font: attrs.object(forKey: fontKeyNS) as? TTFont,
-                            foregroundColor: attrs.object(forKey: foregroundKeyNS) as? TTColor,
-                            backgroundColor: selectionBackground
-                                ?? attrs.object(forKey: backgroundKeyNS) as? TTColor,
-                            hasDecorations: attrs.object(forKey: underlineStyleKeyNS) != nil
-                                || attrs.object(forKey: strikethroughStyleKeyNS) != nil,
-                            attributes: attrs)
-                    }
-                    return (segment, ctLine, runs)
-                }
 
             // Background fill loop — uses cached CTLines
             context.saveGState()

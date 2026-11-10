@@ -11,6 +11,20 @@ final class LocalShellRestorer {
     private struct PendingPane {
         let id: UUID
         let ordinal: Int
+        let layout: HeldSessionLayout?
+    }
+
+    private struct PendingWindow {
+        /// 按序号排好。
+        let panes: [PendingPane]
+        /// 窗口里各会话存的布局中最新的一份；全是旧版写的归属时为 nil。
+        let layout: HeldSessionLayout?
+
+        var firstPaneID: UUID? { panes.first?.id }
+
+        func adopt(into model: LocalShellWindowModel) {
+            model.adopt(panes.map { (id: $0.id, ordinal: $0.ordinal) }, layout: layout)
+        }
     }
 
     private let client: LocalShellAgentClient
@@ -21,7 +35,7 @@ final class LocalShellRestorer {
     private var openWindow: (@MainActor (UUID, UUID) -> Void)?
     private var didStart = false
     private var isDone = false
-    private var pending: [UUID: [PendingPane]] = [:]
+    private var pending: [UUID: PendingWindow] = [:]
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(client: LocalShellAgentClient = LocalShellService.shared.client, namespace: String = LocalShellNamespace.current,
@@ -45,10 +59,7 @@ final class LocalShellRestorer {
 
     /// 窗口出现时领走属于自己的标签。这一步放在窗口的 `.task` 里，SwiftUI 自己恢复的窗口也走这条路。
     func adoptPending(windowID: UUID, into model: LocalShellWindowModel) {
-        guard let panes = pending.removeValue(forKey: windowID) else { return }
-        for pane in panes where model.groups.tab(pane.id) == nil {
-            model.addTab(id: pane.id, ordinal: pane.ordinal)
-        }
+        pending.removeValue(forKey: windowID)?.adopt(into: model)
     }
 
     /// 接回完成（或确定没有要接回的）后返回。手机接入前等它，否则会看到一份缺了本机终端的列表。
@@ -71,19 +82,20 @@ final class LocalShellRestorer {
                 case .live(let attributes):
                     // 没有归属的会话（没来得及写归属就崩了）单独开一个窗口，不丢。
                     let window = attributes?.windowID ?? UUID()
-                    byWindow[window, default: []].append(PendingPane(id: id, ordinal: attributes?.ordinal ?? 1))
+                    byWindow[window, default: []].append(PendingPane(id: id, ordinal: attributes?.ordinal ?? 1,
+                                                                     layout: attributes?.layout))
                 case .gone:
                     break
                 }
             }
         }
         for (windowID, panes) in byWindow {
-            let sorted = panes.sorted { $0.ordinal < $1.ordinal }
-            pending[windowID] = sorted
+            let window = Self.pendingWindow(panes)
+            pending[windowID] = window
             if let model = LocalShellWindowRouter.shared.model(forWindow: windowID) {
                 adoptPending(windowID: windowID, into: model)
-            } else if let first = sorted.first {
-                openWindow?(windowID, first.id)
+            } else if let first = window.firstPaneID {
+                openWindow?(windowID, first)
             }
         }
         await reopenUnclaimedWindows()
@@ -98,10 +110,23 @@ final class LocalShellRestorer {
     private func reopenUnclaimedWindows() async {
         for _ in 0..<3 where !pending.isEmpty {
             try? await Task.sleep(for: reopenDelay)
-            for (windowID, panes) in pending {
-                if let first = panes.first { openWindow?(windowID, first.id) }
+            for (windowID, window) in pending {
+                if let first = window.firstPaneID { openWindow?(windowID, first) }
             }
         }
+    }
+
+    private static func pendingWindow(_ panes: [PendingPane]) -> PendingWindow {
+        PendingWindow(panes: panes.sorted { $0.ordinal < $1.ordinal },
+                      layout: HeldSessionLayout.newest(panes.map(\.layout)))
+    }
+
+    /// 把读到的归属交给窗口模型，与重启接回同一条路径，只是不经 holder（测试用）。
+    static func adopt(_ sessions: [(id: UUID, attributes: LocalShellSessionAttributes)], windowID: UUID,
+                      into model: LocalShellWindowModel) {
+        pendingWindow(sessions.filter { $0.attributes.windowID == windowID }.map {
+            PendingPane(id: $0.id, ordinal: $0.attributes.ordinal, layout: $0.attributes.layout)
+        }).adopt(into: model)
     }
 
     /// 等接回的会话都走完回放。之后它们才进注册表，手机才看得到。

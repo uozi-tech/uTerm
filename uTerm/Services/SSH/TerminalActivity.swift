@@ -42,13 +42,13 @@ nonisolated enum TerminalActivity: Equatable, Sendable {
             return nil
         case .running(let name?):
             return TerminalClosePrompt(title: "「\(name)」还在运行",
-                                       message: "关闭这个标签可能会中断它。")
+                                       message: "关闭这个标签页可能会中断它。")
         case .running(nil):
-            return TerminalClosePrompt(title: "这个标签里还有程序在运行",
-                                       message: "关闭这个标签可能会中断它。")
+            return TerminalClosePrompt(title: "这个标签页里还有程序在运行",
+                                       message: "关闭这个标签页可能会中断它。")
         case .unknown:
-            return TerminalClosePrompt(title: "这个标签里可能还有程序在运行",
-                                       message: "没能确认它现在的状态。关闭标签会断开这个终端，里面的程序可能被中断。")
+            return TerminalClosePrompt(title: "这个标签页里可能还有程序在运行",
+                                       message: "无法确认它现在的状态。关闭标签页会断开这个终端，里面的程序可能被中断。")
         }
     }
 }
@@ -76,11 +76,11 @@ nonisolated struct TerminalClosePrompt: Equatable, Sendable {
         guard running + unknown > 0 else { return nil }
         guard running > 0 else {
             return TerminalClosePrompt(title: "这个窗口里可能还有程序在运行",
-                                       message: "有 \(unknown) 个标签没能确认状态。关闭窗口会断开它们，里面的程序可能被中断。")
+                                       message: "有 \(unknown) 个标签页无法确认状态。关闭窗口会断开它们，里面的程序可能被中断。")
         }
         let title = running == 1 && names.count == 1
             ? "「\(names[0])」还在运行"
-            : "有 \(running) 个标签还有程序在运行"
+            : "有 \(running) 个标签页还有程序在运行"
         let listed = running > 1 && !names.isEmpty ? names.joined(separator: "、") + "。" : ""
         let pronoun = running + unknown > 1 ? "它们" : "它"
         return TerminalClosePrompt(title: title, message: "\(listed)关闭这个窗口可能会中断\(pronoun)。")

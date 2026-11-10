@@ -64,7 +64,7 @@ nonisolated enum TerminalImageError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConnected: return "终端还没连上"
+        case .notConnected: return "终端尚未连接"
         case .unsupported(let message): return message
         }
     }

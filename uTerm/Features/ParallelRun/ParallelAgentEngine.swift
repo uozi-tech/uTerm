@@ -125,7 +125,7 @@ struct ParallelAgentEngine {
                 }
                 conclusion = (status: "failed",
                               summary: turn.text.isEmpty
-                                ? "已诊断并给出修复建议；当前安全档位「\(safetyLabel)」需人工确认，未自动执行。"
+                                ? "已诊断并给出修复建议；审批档位「\(safetyLabel)」需要人工确认，未自动执行。"
                                 : turn.text)
                 stoppedForSafety = true
                 break
@@ -343,13 +343,13 @@ nonisolated enum ParallelRunCopy {
 
     static func noProvider(ranInitial: Bool, exit: Int?, goal: String) -> String {
         ranInitial
-            ? "命令执行失败（退出码 \(ParallelAgentEngine.exitText(exit))）。未配置 AI provider，无法自动诊断修复。"
-            : "未配置 AI provider，无法按「\(goal)」自主下发命令。请到设置里配置 AI provider。"
+            ? "命令执行失败（退出码 \(ParallelAgentEngine.exitText(exit))）。未配置模型服务，无法自动诊断修复。"
+            : "未配置模型服务，无法按「\(goal)」自主下发命令。在「设置 › 模型服务」里添加后再试。"
     }
 
     /// 命令跑起来了但被看门狗终止。`signalled` = 已终止远端进程组（远端可能停在半截）。
     static func stalled(_ reason: String, signalled: Bool) -> String {
-        "执行超时：" + reason + (signalled ? "远端状态可能停在半截，请人工复核。" : "")
+        "执行超时：" + reason + (signalled ? "远端可能停在中间状态，需要人工复核。" : "")
     }
 
     /// 交给 Agent 时附在初始结果后的说明。
@@ -359,11 +359,11 @@ nonisolated enum ParallelRunCopy {
 
     static func hostKeyUntrusted(mismatch: Bool) -> String {
         mismatch
-            ? "无法连接：该主机的密钥与已信任的不一致（可能是服务器重装，也可能存在中间人风险）。请核对指纹，确认无误后「信任并重试」。"
-            : "无法连接：尚未信任该主机的指纹。请核对指纹，确认无误后点「信任并重试」。"
+            ? "无法连接：该主机出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后点「信任并重试」。"
+            : "无法连接：尚未信任该主机的密钥。核对指纹无误后点「信任并重试」。"
     }
 
-    static func unreachable(_ reason: String) -> String { "无法连接到该服务器：\(reason)。命令未执行。" }
+    static func unreachable(_ reason: String) -> String { "无法连接到该主机：\(reason)。命令未执行。" }
 
     /// 把连接错误整理成一句原因（去空白；空则兜底）。
     static func connectionReason(_ text: String?) -> String {

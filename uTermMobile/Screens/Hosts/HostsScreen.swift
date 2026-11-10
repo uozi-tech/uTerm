@@ -42,16 +42,16 @@ struct HostsScreen: View {
         let recent = ServerGrouping.recent(hosts)
         let lazy = hosts.count > Self.eagerHostLimit
 
-        return MScreen(title: "主机", sub: "\(hosts.count) 台服务器",
+        return MScreen(title: "主机", sub: "\(hosts.count) 台主机",
                        maxContentWidth: M.gridContentWidth, pinsHeader: true, actions: {
             // 有会话开着（工作区收起了）时给一个回去的入口。系统工具栏按钮，底由系统画。
             if let workspace, !workspace.isEmpty {
                 Button { store.showWorkspace = true } label: {
-                    Label("会话 \(workspace.tabs.count)", systemImage: MGlyph.symbol("term"))
+                    Label("标签页 \(workspace.tabs.count)", systemImage: MGlyph.symbol("term"))
                         .labelStyle(.titleAndIcon)
                 }
                 .tint(accent)
-                .accessibilityLabel(Text("回到 \(workspace.tabs.count) 个会话"))
+                .accessibilityLabel(Text("回到 \(workspace.tabs.count) 个标签页"))
             }
             MRoundBtn(icon: "search") { store.showPalette = true }
             MRoundBtn(icon: "plus", filled: true) { creating = true }
@@ -69,8 +69,8 @@ struct HostsScreen: View {
 
                 if hosts.isEmpty {
                     MEmptyState(icon: "server", title: "还没有主机",
-                                message: "添加一台服务器即可开始连接终端、浏览文件或运行命令。",
-                                actionTitle: "添加服务器", action: { creating = true })
+                                message: "添加一台主机，即可连接终端、浏览文件或运行命令。",
+                                actionTitle: "添加主机", action: { creating = true })
                 } else if filter == .recent {
                     // 宽屏（iPhone Duo 展开 / iPad / 横屏）一行排 2–3 张卡（MCardGrid 按宽度定列数），
                     // 窄屏仍是一列。分组标题在网格外，独占一行。
@@ -127,7 +127,7 @@ struct HostsScreen: View {
             Button("删除主机", role: .destructive) { if let h = pendingDelete { delete(h) } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将一并删除该主机保存的密码 / 口令。此操作不可撤销。")
+            Text("将一并删除该主机保存的密码 / 口令。此操作无法撤销。")
         }
         .onChange(of: store.requestNewServer) { _, newVal in
             if newVal { creating = true; store.requestNewServer = false }

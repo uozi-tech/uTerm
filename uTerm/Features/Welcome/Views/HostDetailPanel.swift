@@ -94,7 +94,7 @@ struct HostDetailPanel: View {
                 if copiedField != nil {
                     HStack(spacing: 3) {
                         Image(systemName: "checkmark")
-                        Text("已复制")
+                        Text("已拷贝")
                     }
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(UD.success)
@@ -107,7 +107,7 @@ struct HostDetailPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("复制 \(fullEndpoint)")
+        .help("拷贝 \(fullEndpoint)")
     }
 
     /// 写剪贴板 + 触发瞬时「已复制」反馈（与 SFTP / 密钥详情的复制实现一致）。
@@ -146,20 +146,7 @@ struct HostDetailPanel: View {
     }
 
     private func metaCell(_ label: String, _ value: String, mono: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 10.5))
-                .tracking(0.5)
-                .foregroundStyle(UD.text3)
-            Text(value)
-                .font(.system(size: 13, design: mono ? .monospaced : .default))
-                .foregroundStyle(UD.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .help(value)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label)：\(value)")
+        DetailMetaCell(label: label, value: value, mono: mono)
     }
 
     // MARK: actions
@@ -185,34 +172,11 @@ struct HostDetailPanel: View {
         }
     }
 
-    /// 「仅 SFTP」主操作：accent 实心 + 内嵌 ↵ 键帽 + 柔光，回车直达 SFTP 浏览。
+    /// 「仅 SFTP」主操作：回车直达 SFTP 浏览。
     private var sftpPrimaryButton: some View {
-        Button(action: onBrowseSFTP) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .font(.system(size: 13, weight: .medium))
-                Text("SFTP 浏览文件")
-                    .font(.system(size: 13.5, weight: .medium))
-                Text("↵")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.white.opacity(0.18))
-                    )
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 40)
-            .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(UD.accent)
-            )
-            .shadow(color: UD.accent.opacity(0.45), radius: 10, y: 5)
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.return, modifiers: [])
+        DetailActionButton(title: "在 SFTP 中打开", systemImage: "folder", shortcutHint: "↵", prominent: true,
+                           action: onBrowseSFTP)
+            .keyboardShortcut(.return, modifiers: [])
     }
 
     /// 终端禁用提示：虚线描边 + 锁图标，非交互。对齐设计稿「终端会话已禁用 · 仅文件传输」。
@@ -240,74 +204,22 @@ struct HostDetailPanel: View {
         )
     }
 
-    /// 主操作：accent 实心 + 内嵌 ↵ 键帽 + 柔光，回车直达工作区。
+    /// 主操作：回车直达工作区。
     private var openWorkspaceButton: some View {
-        Button(action: onConnect) {
-            HStack(spacing: 10) {
-                Text("在工作区打开")
-                    .font(.system(size: 13.5, weight: .medium))
-                Text("↵")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.white.opacity(0.18))
-                    )
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 40)
-            .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(UD.accent)
-            )
-            .shadow(color: UD.accent.opacity(0.45), radius: 10, y: 5)
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.return, modifiers: [])
+        DetailActionButton(title: "在工作区打开", shortcutHint: "↵", prominent: true, action: onConnect)
+            .keyboardShortcut(.return, modifiers: [])
     }
 
-    /// 次操作：软底 + ⌥↵ 键帽；⌥+回车在终端中打开。
+    /// 次操作：⌥+回车在终端中打开。
     private var openTerminalButton: some View {
-        Button(action: onOpenTerminal) {
-            HStack(spacing: 8) {
-                Text("在终端中打开")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(1)
-                KbdChip(text: "⌥↵")
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(UD.fillSoft)
-            )
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.return, modifiers: .option)
+        DetailActionButton(title: "在终端中打开", shortcutHint: "⌥↵", action: onOpenTerminal)
+            .keyboardShortcut(.return, modifiers: .option)
     }
 
-    /// 次操作：软底 + ⌘↵ 键帽，复用通用 `KbdChip`；⌘+回车进 SFTP 浏览。
+    /// 次操作：⌘+回车进 SFTP 浏览。
     private var browseSFTPButton: some View {
-        Button(action: onBrowseSFTP) {
-            HStack(spacing: 8) {
-                Text("SFTP 浏览文件")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(1)
-                KbdChip(text: "⌘↵")
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(UD.fillSoft)
-            )
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.return, modifiers: .command)
+        DetailActionButton(title: "在 SFTP 中打开", shortcutHint: "⌘↵", action: onBrowseSFTP)
+            .keyboardShortcut(.return, modifiers: .command)
     }
 
     // MARK: derived
@@ -348,7 +260,7 @@ private struct EndpointCopyChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .help("点击复制：\(text)")
+        .help("点击拷贝：\(text)")
     }
 }
 
@@ -377,7 +289,7 @@ private struct NameCopyButton: View {
         .buttonStyle(.plain)
         .padding(.horizontal, -4)
         .onHover { hover = $0 }
-        .help("点击复制：\(name)")
+        .help("点击拷贝：\(name)")
     }
 }
 

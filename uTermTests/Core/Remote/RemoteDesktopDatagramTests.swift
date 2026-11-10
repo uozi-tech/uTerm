@@ -19,6 +19,13 @@ final class RemoteDesktopDatagramTests: XCTestCase {
         let macTransport: RemoteP2PTransport
     }
 
+    private final class PullCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func increment() { lock.lock(); count += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    }
+
     private final class Shown: @unchecked Sendable {
         private let lock = NSLock()
         private var times: [Date] = []
@@ -36,10 +43,10 @@ final class RemoteDesktopDatagramTests: XCTestCase {
     }
 
     private func makeRig(desktop: RemoteDesktopEnvironment) throws -> Rig {
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let phoneID = RemoteLocalDevice.id()
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       desktopEnvironment: desktop)
         server.internetAccessPolicy = { $0 == phoneID }
@@ -56,7 +63,7 @@ final class RemoteDesktopDatagramTests: XCTestCase {
                       origin: .internet(peerID: phoneID, keys: macHandshake, path: .direct))
         let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: phoneIdentity)
-        client.updateRoutes(endpoint: nil, internetDialer: {
+        client.updateRoutes(endpoint: nil, internetDialer: { _ in
             RemoteDialedPath(transport: RemoteP2PTransport(path: phonePath, keys: datagramKeys.second),
                              handshakeKeys: phoneHandshake, path: .direct)
         })
@@ -212,7 +219,8 @@ final class RemoteDesktopDatagramTests: XCTestCase {
             var sequence: UInt32 = 0
             while !Task.isCancelled {
                 sequence += 1
-                mac.sendVideo(Data(repeating: UInt8(truncatingIfNeeded: sequence), count: 40_000), sequence: sequence)
+                mac.sendVideo(Data(repeating: UInt8(truncatingIfNeeded: sequence), count: 40_000), sequence: sequence,
+                              kind: .normal)
                 try? await Task.sleep(for: .milliseconds(33))
             }
         }
@@ -236,5 +244,52 @@ final class RemoteDesktopDatagramTests: XCTestCase {
                      frames, Double(state.roundTripNanos ?? 0) / 1e6, state.pacingRate * 8 / 1e6))
         XCTAssertGreaterThan(frames, 60, "视频也在跑")
         XCTAssertLessThan(millis[15], 100, "单程约 50 ms，手机到 Mac 这个方向不限速")
+    }
+
+    /// 声音走数据报（调研 §17.3）：视频拉满上行、随机丢 1% 时，声音包排在视频前面，丢的包靠冗余补上，几乎不用补静音。
+    func test_audio_over_datagrams_survives_loss_alongside_video() async throws {
+        let mac = FakeDesktopMac()
+        mac.detail = true
+        let rig = try makeRig(desktop: mac.environment())
+        defer {
+            rig.client.disconnect()
+            rig.server.stop()
+        }
+        await rig.client.connect()
+        let output = SilentAudioOutput()
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 1206, maxHeight: 2622, codec: .hevc,
+                                           audioOutput: output)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(session.info?.videoDatagrams, true)
+        session.setAudio(true)
+        let playing = await waitUntil { session.audioState == .playing }
+        XCTAssertTrue(playing, "\(session.audioState)")
+        let source = try XCTUnwrap(mac.latestSource)
+        source.prepareCycle(count: 12)
+        source.run(fps: 30)
+        // 按输出节拍拉：每 10 ms 取 480 个采样，抖动缓冲的补洞与丢包读数要靠播放推进。
+        let pull = try XCTUnwrap(output.pull)
+        let pulls = PullCounter()
+        let player = Task.detached {
+            while !Task.isCancelled {
+                _ = pull(480)
+                pulls.increment()
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        try await Task.sleep(for: .seconds(10))
+        player.cancel()
+        source.pause()
+        let audio = session.audioReceiver.snapshot()
+        print("[直连探针·声音] 放出 \(audio.counters.played)，拉取 \(pulls.value) 次，收到 \(audio.received) 包，冗余补回 \(audio.recovered)，补静音 \(audio.counters.concealed)，"
+              + "欠载 \(audio.counters.underruns)，丢包追上 \(audio.counters.dropped)，晚到 \(audio.counters.late)，"
+              + "目标深度 \(audio.targetMillis) ms，链路丢包 \(String(format: "%.1f%%", linkState(rig).lossRate * 100))")
+        XCTAssertGreaterThan(audio.received + audio.recovered, 420, "10 s 应有约 500 包")
+        XCTAssertGreaterThan(audio.recovered, 0, "1% 丢包时冗余应补回一些包")
+        XCTAssertLessThanOrEqual(audio.counters.concealed, 5, "丢包几乎都由冗余补上")
+        XCTAssertLessThanOrEqual(audio.counters.underruns, 2)
+        XCTAssertEqual(rig.client.state, .connected)
     }
 }

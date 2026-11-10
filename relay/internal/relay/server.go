@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bufio"
+	"crypto/ecdsa"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -67,7 +68,9 @@ type Server struct {
 	listener     net.Listener
 	packet       *net.UDPConn
 	allConns     map[net.Conn]struct{}
-	waitGroup    sync.WaitGroup
+	// connections a certificate let in, by member key, so a revocation can cut them off at once
+	memberConns map[string]map[net.Conn]struct{}
+	waitGroup   sync.WaitGroup
 }
 
 // control is one registered Mac or one phone's control connection.
@@ -76,6 +79,8 @@ type control struct {
 	writeMu sync.Mutex
 	hostID  string
 	hostKey string
+	// scope is the one host a certificate member may reach; empty for holders of the relay's key.
+	scope string
 	// sessions a phone opened, cleared when it goes away.
 	sessions map[string]struct{}
 	tickets  map[string]struct{}
@@ -92,12 +97,13 @@ type pendingDial struct {
 func NewServer(store *Store, limits Limits) *Server {
 	return &Server{
 		store: store, limits: limits,
-		rate:     newRateLimiter(limits.RatePerIP, limits.RateWindow),
-		hosts:    map[string]*control{},
-		clients:  map[*control]struct{}{},
-		sessions: map[string]*control{},
-		tickets:  map[string]*pendingDial{},
-		allConns: map[net.Conn]struct{}{},
+		rate:        newRateLimiter(limits.RatePerIP, limits.RateWindow),
+		hosts:       map[string]*control{},
+		clients:     map[*control]struct{}{},
+		sessions:    map[string]*control{},
+		tickets:     map[string]*pendingDial{},
+		allConns:    map[net.Conn]struct{}{},
+		memberConns: map[string]map[net.Conn]struct{}{},
 
 		unauthedFrom: map[netip.Addr]int{},
 	}
@@ -297,25 +303,44 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 		return
 	}
 
+	// A certificate member signs with its own key and may only phone and dial the host it names.
+	signer, scope := member, ""
+	if request.Member != "" {
+		key, ok := s.certified(request, relayID, member)
+		if !ok {
+			return
+		}
+		signer, scope = key, request.Scope
+	}
+
 	switch request.Role {
 	case roleHost:
 		message := signedMessage(roleHost, relayID, nonce, request.HostID)
-		if !verifySignature(member, message, request.Sig) {
+		if scope != "" || !verifySignature(member, message, request.Sig) {
 			return
 		}
 		release()
 		s.serveHost(conn, request, message)
 	case roleClient:
-		if !verifySignature(member, signedMessage(roleClient, relayID, nonce, ""), request.Sig) {
+		if !verifySignature(signer, signedMessage(roleClient, relayID, nonce, ""), request.Sig) {
 			return
 		}
 		release()
-		s.serveClient(conn)
+		defer s.trackMember(request.Member, conn)()
+		if s.revokedSince(request.Member) {
+			return
+		}
+		s.serveClient(conn, scope)
 	case roleDial:
-		if !verifySignature(member, signedMessage(roleDial, relayID, nonce, request.HostID), request.Sig) {
+		if !verifySignature(signer, signedMessage(roleDial, relayID, nonce, request.HostID), request.Sig) ||
+			(scope != "" && request.HostID != scope) {
 			return
 		}
 		release()
+		defer s.trackMember(request.Member, conn)()
+		if s.revokedSince(request.Member) {
+			return
+		}
 		s.serveDial(conn, request)
 	case roleAccept:
 		release()
@@ -323,6 +348,65 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 	default:
 		// Not a role: as silent as a bad signature.
 	}
+}
+
+// certified checks a member certificate: the relay's key vouches for this member key and the host
+// it may reach, it hasn't expired (nor claims to last longer than certMaxLifetime), and no host has
+// revoked it since.
+func (s *Server) certified(request requestFrame, relayID string, root *ecdsa.PublicKey) (*ecdsa.PublicKey, bool) {
+	now := time.Now()
+	if request.Scope == "" || request.Cert == "" ||
+		request.Expires <= now.Unix() || request.Expires > now.Add(certMaxLifetime).Unix() ||
+		!verifySignature(root, certMessage(relayID, request.Member, request.Scope, request.Expires), request.Cert) ||
+		s.store.IsRevoked(request.Member) {
+		return nil, false
+	}
+	key, err := parsePublicKey(request.Member)
+	return key, err == nil
+}
+
+// revokedSince catches a revocation that landed between the certificate check and trackMember: revoke
+// closes only the connections it finds tracked, so one tracked a moment later must look again itself.
+func (s *Server) revokedSince(member string) bool {
+	return member != "" && s.store.IsRevoked(member)
+}
+
+// trackMember records a connection a certificate let in until the returned func runs.
+func (s *Server) trackMember(member string, conn net.Conn) func() {
+	if member == "" {
+		return func() {}
+	}
+	s.mu.Lock()
+	if s.memberConns[member] == nil {
+		s.memberConns[member] = map[net.Conn]struct{}{}
+	}
+	s.memberConns[member][conn] = struct{}{}
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.memberConns[member], conn)
+		if len(s.memberConns[member]) == 0 {
+			delete(s.memberConns, member)
+		}
+		s.mu.Unlock()
+	}
+}
+
+// revoke withdraws a member key and cuts off whatever it has open, relayed connections included.
+func (s *Server) revoke(member string, expires int64) error {
+	if err := s.store.Revoke(member, expires); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	var open []net.Conn
+	for conn := range s.memberConns[member] {
+		open = append(open, conn)
+	}
+	s.mu.Unlock()
+	for _, conn := range open {
+		conn.Close()
+	}
+	return nil
 }
 
 func (c *control) send(value any, timeout time.Duration) error {
@@ -400,6 +484,23 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 				return
 			}
 		case "pong":
+		case "revoke":
+			// Any registered host holds the relay's key, which could sign certificates anyway.
+			if frame.Member == "" {
+				continue
+			}
+			// A revoke without an expiry is kept as long as any certificate could still last.
+			expires := frame.Expires
+			if expires == 0 {
+				expires = time.Now().Add(certMaxLifetime).Unix()
+			}
+			if err := s.revoke(frame.Member, expires); err != nil {
+				log.Printf("uterm-relay: saving revocation: %v", err)
+				continue
+			}
+			if host.send(messageFrame{Type: "revoked", Member: frame.Member}, s.limits.WriteTimeout) != nil {
+				return
+			}
 		case "signal":
 			s.mu.Lock()
 			client := s.sessions[frame.Session]
@@ -440,8 +541,8 @@ func (s *Server) removeHost(host *control) {
 	}
 }
 
-func (s *Server) serveClient(conn net.Conn) {
-	client := &control{conn: conn, sessions: map[string]struct{}{}}
+func (s *Server) serveClient(conn net.Conn, scope string) {
+	client := &control{conn: conn, scope: scope, sessions: map[string]struct{}{}}
 	s.mu.Lock()
 	if len(s.clients) >= s.limits.Controls {
 		s.mu.Unlock()
@@ -481,12 +582,21 @@ func (s *Server) serveClient(conn net.Conn) {
 			s.mu.Lock()
 			hosts := s.onlineHostsLocked()
 			s.mu.Unlock()
+			if scope != "" {
+				hosts = filterHosts(hosts, scope)
+			}
 			if client.send(messageFrame{Type: "hosts", Hosts: hosts}, s.limits.WriteTimeout) != nil {
 				return
 			}
 		case "signal":
 			if frame.Session == "" {
 				return
+			}
+			if scope != "" && frame.To != scope {
+				if client.send(messageFrame{Type: "undeliverable", Session: frame.Session}, s.limits.WriteTimeout) != nil {
+					return
+				}
+				continue
 			}
 			s.mu.Lock()
 			// A session belongs to the phone that opened it, so another member
@@ -510,6 +620,15 @@ func (s *Server) serveClient(conn net.Conn) {
 			}
 		}
 	}
+}
+
+func filterHosts(hosts []string, only string) []string {
+	for _, host := range hosts {
+		if host == only {
+			return []string{only}
+		}
+	}
+	return []string{}
 }
 
 // serveDial parks a phone until its Mac calls back, then splices the two.

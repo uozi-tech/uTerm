@@ -37,7 +37,7 @@ enum RemoteControlPresentation {
         case .unknown: return .hidden
         case .checking: return .progress
         case .ok: return .badge(symbol: "checkmark.circle.fill", tone: .success, label: "正常")
-        case .failed: return .badge(symbol: "exclamationmark.triangle.fill", tone: .danger, label: "连不上")
+        case .failed: return .badge(symbol: "exclamationmark.triangle.fill", tone: .danger, label: "无法连接")
         }
     }
 
@@ -54,7 +54,7 @@ enum RemoteControlPresentation {
         if let config {
             return "\(config.name)（\(config.endpointDescription)）。这份配置含成员密钥，二维码只给自己的设备扫。"
         }
-        return "跨网络控制需要一台你自己的服务器。可以让 AI 经 uterm 技能装在你保存的主机上，或导入 uterm-relay 生成的配置文件。"
+        return "跨网络控制需要在你自己的主机上运行中继：可以让 AI 经 uterm 技能装到已保存的主机上，或导入 uterm-relay 生成的配置文件。"
     }
 
     /// 已配中继那一行的副标题：名字 · 地址 · 版本（知道时）。
@@ -69,7 +69,7 @@ enum RemoteControlPresentation {
         if let host {
             return current + String(localized: "会在「\(host)」上下载、校验后替换并重启，新版本起不来会自动换回。")
         }
-        return current + String(localized: "还不知道中继装在哪台主机：在更多菜单里「指定所在主机」，或让 AI 更新。")
+        return current + String(localized: "尚未指定中继所在的主机：在「更多操作」菜单里选「指定所在主机…」，或让 AI 更新。")
     }
 
     struct Note: Equatable {
@@ -83,7 +83,7 @@ enum RemoteControlPresentation {
         case .running: return Note(tone: .muted, text: String(localized: "正在更新中继…"))
         case .finished(let text): return Note(tone: .success, text: text)
         case .openedTerminal:
-            return Note(tone: .warning, text: String(localized: "这台主机的 sudo 要密码，已经开了一个终端窗口跑更新命令，请在那里输入密码。"))
+            return Note(tone: .warning, text: String(localized: "这台主机的 sudo 需要密码，已打开终端窗口运行更新命令，在那里输入密码。"))
         case .failed(let text): return Note(tone: .danger, text: String(localized: "更新失败：\(text)"))
         }
     }
@@ -108,7 +108,7 @@ enum RemoteControlPresentation {
         switch state {
         case .registered: return "已连接中继"
         case .connecting, .none: return "正在连接"
-        case .failed: return "连不上"
+        case .failed: return "无法连接"
         case .superseded: return "被其他设备顶替"
         case .stopped: return "已停止"
         }
@@ -117,8 +117,25 @@ enum RemoteControlPresentation {
     static func relayStatusHint(_ state: RemoteRelayHostLink.State?) -> String? {
         switch state {
         case .failed(let message): return message
-        case .superseded: return "另一台机器用这台 Mac 的身份注册了中继，这里不再自动重连。"
+        case .superseded: return "另一台机器用这台 Mac 的身份注册了中继。稍后会自动再试，也可以现在重新连接。"
         default: return nil
+        }
+    }
+
+    /// 这个 uTerm 不注册中继（开发构建 / 测试宿主）：设置页公网区顶上那一行。
+    static func relayRegistrationBlockLabel(_ block: RemoteRelayRegistrationBlock) -> String {
+        switch block {
+        case .developmentBuild: return "开发构建，不注册"
+        case .testHost: return "测试宿主，不注册"
+        }
+    }
+
+    static func relayRegistrationBlockHint(_ block: RemoteRelayRegistrationBlock) -> String {
+        switch block {
+        case .developmentBuild:
+            return "这个 uTerm 不在「应用程序」文件夹里，不会以这台 Mac 的身份注册中继，以免顶替已安装的 uTerm。"
+        case .testHost:
+            return "这是跑测试用的 uTerm，不连接中继，也不读写已安装的 uTerm 的远程控制设置。"
         }
     }
 
@@ -132,9 +149,17 @@ enum RemoteControlPresentation {
 
     // MARK: - 配对
 
+    /// 二维码下面的说明：邀请带不带中继，决定了对方能不能在外网配对，也要讲明中继会一起交出去。
+    static func invitationCaption(relayName: String?) -> String {
+        guard let relayName else {
+            return String(localized: "在 iPhone / iPad 的 uTerm 主机页打开「我的 Mac › 扫码配对」扫这个二维码，或拷贝链接发给对方。这张邀请只能在同一局域网里用；打开「允许经公网接入」后重新显示，不在同一网络也能配对。")
+        }
+        return String(localized: "在 iPhone / iPad 的 uTerm 主机页打开「我的 Mac › 扫码配对」扫这个二维码，或拷贝链接发给对方。邀请里带着中继「\(relayName)」，不在同一网络也能配对；对方配上后可以经公网连接这台 Mac，也能使用这台中继。")
+    }
+
     static func pairingHint(hasInvitation: Bool) -> String {
         hasInvitation
-            ? "二维码 10 分钟内有效，只能用一次。"
-            : "不同 Apple ID 的 iPhone / iPad 用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码。"
+            ? "二维码和链接 10 分钟内有效，只能用一次。"
+            : "不在同一局域网的设备用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码，或把链接发给对方。"
     }
 }

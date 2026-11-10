@@ -3,13 +3,12 @@ import Foundation
 @preconcurrency import Network
 import Observation
 
-/// Mac 端远控服务：让配对过的手机接入这台 Mac 上已打开的终端。
+/// Mac 端远控服务：让配对过的设备（手机或另一台 Mac）接入这台 Mac 上已打开的终端。
 ///
 /// `RemoteControlSettings` 打开时监听（Bonjour `_uterm-remote._tcp`，TXT 带本机设备 ID），关闭时连广播一起撤掉。
 ///
-/// 谁能直接接入：本机信任过的设备，或同一 Apple ID 名册里的设备（`RemoteCloudRoster`），或带着本机正在出示的
-/// 扫码邀请凭据来的设备（`pairingInvitation`）。都不是的，才退回到在 Mac 上核对 6 位码、点「允许」——
-/// 名册还没同步过来、或老版本的手机，走的是这一条。
+/// 谁能直接接入：本机配对过的设备，或带着本机正在出示的邀请凭据来的设备（`pairingInvitation`）。都不是的，
+/// 退回到在 Mac 上核对 6 位码、点「允许」。同一 Apple ID 不算数：每对设备都要配对一次。
 /// 每台连上来的设备一个 `RemoteHostConnection`。同一个终端同一时刻只给一台设备接管尺寸：
 /// 后来的设备接入时，前一台收到「已被接管」并断开该终端。
 @MainActor
@@ -59,11 +58,17 @@ final class RemoteHostServer {
         let canControl: Bool
         /// 收到过输入：从「查看」升级成「控制」（Mac 上的指示据此改字）。
         var isControlling = false
+        /// 正在把声音传给它（指示条上加一个扬声器）。
+        var hasAudio = false
     }
 
     private(set) var desktopViewer: DesktopViewer?
     /// 在中继上的注册（打开公网接入且导入过配置时才有）。
     private(set) var relayLink: RemoteRelayHostLink?
+    /// 这个进程为什么不注册中继（nil = 照常注册）。开发构建与测试宿主和正式版同身份，注册了就会把它顶掉。
+    let relayRegistrationBlock: RemoteRelayRegistrationBlock?
+    /// 被顶替后的退避（测试里调短）。
+    @ObservationIgnored var relaySupersededBackoff = RemoteRelaySupersededBackoff.standard
     /// 存中继配置的地方。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
     @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
     /// 中继版本与新版本提醒。
@@ -86,8 +91,6 @@ final class RemoteHostServer {
 
     @ObservationIgnored let registry: TerminalSessionRegistry
     @ObservationIgnored let identity: RemoteIdentityStore
-    /// 同一 Apple ID 的名册。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
-    @ObservationIgnored let roster: RemoteCloudRoster?
     @ObservationIgnored private var invitationExpiry: Task<Void, Never>?
     @ObservationIgnored let localName: String
     @ObservationIgnored let localID: UUID
@@ -103,8 +106,15 @@ final class RemoteHostServer {
     @ObservationIgnored private var isRunning = false
     /// 经公网接入的规则，由设置决定。默认谁都不行。
     @ObservationIgnored var internetAccessPolicy: (UUID) -> Bool = { _ in false }
-    /// 当前的中继配置，交给勾选过的设备。可观察：命令行导入后设置页要跟着变。
+    /// 凭邀请经公网配上的设备：替它勾上「允许经公网接入」。邀请是本机的人主动发出去的，配上了还要再去设置里
+    /// 勾一次的话，对方第一次连就会被断开。
+    @ObservationIgnored var grantInternetAccess: (UUID) -> Void = { _ in }
+    /// 当前的中继配置。可观察：命令行导入后设置页要跟着变。交给别的设备的是 `relayConfig(forPeer:)`。
     var relayConfig: RemoteRelayConfig?
+    /// 要吊销、中继还没确认的成员证书。
+    @ObservationIgnored let relayRevocations: RemoteRelayRevocations
+    /// 正在出示的邀请里带的成员证书：邀请用掉就记到那台设备名下，作废了就吊销。
+    @ObservationIgnored private var invitationGrant: RemoteRelayConfig?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
     @ObservationIgnored private var pairingWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     /// 会话 → 正在接管它的连接与通道。
@@ -115,10 +125,13 @@ final class RemoteHostServer {
     @ObservationIgnored private var lastRemoteOutput: Date?
     @ObservationIgnored private var activityRecheck: Task<Void, Never>?
     @ObservationIgnored private var tabTitlePush: Task<Void, Never>?
+    /// 上次推给设备的程序状态（含 `idle`）。变化推送拿它比出哪些会话变了。
+    @ObservationIgnored private var pushedProgramReports: [UUID: ProgramStatusRecord] = [:]
+    /// 上次发出去的会话列表里的先后。重排之后跟它不同才重发列表：新开、关掉标签时列表已经随之发过了。
+    @ObservationIgnored private var listedTabOrder: [UUID] = []
 
     init(registry: TerminalSessionRegistry,
-         identity: RemoteIdentityStore = RemoteIdentityStore(),
-         roster: RemoteCloudRoster? = nil,
+         identity: RemoteIdentityStore = RemoteIdentityStore(role: .controllers),
          localName: String = LANSyncCoordinator.localDeviceName(),
          localID: UUID = RemoteLocalDevice.id(),
          advertises: Bool = true,
@@ -127,16 +140,21 @@ final class RemoteHostServer {
          keyConfirmationTimeout: Duration = RemoteConstants.handshakeTimeout,
          relayStore: RemoteRelayConfigStore? = nil,
          relayUpdates: RemoteRelayUpdateMonitor = .inert(),
-         desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
+         relayRevocations: RemoteRelayRevocations = RemoteRelayRevocations(defaults: RemoteLocalState.defaults),
+         desktopEnvironment: RemoteDesktopEnvironment = .disabled,
+         relayRegistrationBlock: RemoteRelayRegistrationBlock? = nil) {
         self.relayStore = relayStore
+        self.relayRegistrationBlock = relayRegistrationBlock
+        self.relayRevocations = relayRevocations
         self.relayUpdates = relayUpdates
         self.localFeatures = localFeatures
         self.peerSilenceLimit = peerSilenceLimit
         self.keyConfirmationTimeout = keyConfirmationTimeout
         self.registry = registry
         self.desktopEnvironment = desktopEnvironment
+        // 被控端只认「允许来控制本机」那张表；传成主控端的表，本机去控制过的主机就能反过来免审批控制本机。
+        precondition(identity.role == .controllers, "被控端必须用 controllers 方向的信任表")
         self.identity = identity
-        self.roster = roster
         self.localName = localName
         self.localID = localID
         self.advertises = advertises
@@ -150,15 +168,12 @@ final class RemoteHostServer {
         isRunning = true
         do {
             // 先把本机长期密钥备好：钥匙串出错时在设置页里直接显示，而不是等到第一台设备连上来。
-            let key = try identity.localIdentity().publicKey.rawRepresentation
+            _ = try identity.localIdentity()
             let listener = try NWListener(using: RemoteLink.parameters(), on: .any)
             if advertises {
                 let txt = NWTXTRecord([RemoteConstants.deviceIDKey: localID.uuidString])
                 listener.service = NWListener.Service(name: localName, type: RemoteConstants.serviceType, txtRecord: txt)
             }
-            // 同一 Apple ID 的手机凭名册直接认出这台 Mac；关掉远控时撤下。
-            roster?.publish(RemoteRosterEntry(id: localID, name: localName, publicKey: key, platform: .mac,
-                                              updatedAt: Date()))
             listener.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.listenerStateChanged(state) } }
             }
@@ -174,6 +189,10 @@ final class RemoteHostServer {
             tabTitlePush = nil
             observeRegistry(generation: observationGeneration)
             observeTabTitles(generation: observationGeneration)
+            pushedProgramReports = currentProgramReports()
+            observeProgramStatuses(generation: observationGeneration)
+            listedTabOrder = registry.orderedEntries().map(\.id)
+            observeTabOrder(generation: observationGeneration)
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -181,13 +200,18 @@ final class RemoteHostServer {
 
     func stop() {
         isRunning = false
+        // 连接的关闭是异步的，退出 uTerm 时等不到它们各自收尾：帘幕还挂着就在这里先锁屏、再撤帘幕，
+        // 免得进程一退、gamma 一恢复就把已解锁的桌面露出来。
+        if let controller = _screenController, controller.isCurtained {
+            controller.lockScreen()
+            controller.setCurtain(false)
+        }
         listener?.cancel()
         listener = nil
         port = nil
         for connection in connections.values { connection.close() }
         for id in Array(pairingWaiters.keys) { resolvePairing(id, approved: false) }
         cancelPairingInvitation()
-        roster?.withdraw(id: localID)
         relayLink?.stop()
         relayLink = nil
         updateInternetActivity(active: false, keepAwake: false)
@@ -214,7 +238,7 @@ final class RemoteHostServer {
     /// Bonjour 广播注册报 NoAuth（-65555），手机就发现不了这台 Mac。
     private static func describe(_ error: NWError) -> String {
         if case .dns(let code) = error, code == DNSServiceErrorType(kDNSServiceErr_NoAuth) {
-            return "macOS 没有允许 uTerm 使用本地网络。请在 系统设置 › 隐私与安全性 › 本地网络 里打开 uTerm，再重新打开这个开关"
+            return "macOS 没有允许 uTerm 使用本地网络。在「系统设置 › 隐私与安全性 › 本地网络」里打开 uTerm，再重新打开这个开关。"
         }
         return error.localizedDescription
     }
@@ -249,30 +273,25 @@ final class RemoteHostServer {
         internetAccessPolicy(id) && !identity.isBlocked(id)
     }
 
-    /// 这个设备 ID 是谁：本机信任过的，或名册担保的。信令用它决定回不回应。
+    /// 这个设备 ID 是谁：本机配对过的设备。信令用它决定回不回应。
     func knownPeer(id: UUID) -> RemotePeer? {
         if identity.isBlocked(id) { return nil }
-        if let peer = identity.peer(id: id) { return peer }
-        return roster?.entry(id: id)?.peer
+        return identity.peer(id: id)
     }
 
-    /// 能在设置里勾选公网接入的设备：配对过的手机，加上名册里的手机。
+    /// 能在设置里勾选公网接入的设备：配对过的设备（手机、Mac 都算）。
     var internetAccessCandidates: [RemotePeer] {
-        var byID = Dictionary(trustedPeers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for entry in roster?.entries() ?? [] where entry.platform == .mobile && !identity.isBlocked(entry.id) {
-            if byID[entry.id] == nil { byID[entry.id] = entry.peer }
-        }
-        return byID.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        trustedPeers.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
 
     /// 按设置起停中继注册。配置变了就换一条。
     func updateInternetAccess(enabled: Bool, keepAwake: Bool) {
         keepsAwakeForInternet = keepAwake
         relayConfig = relayStore?.load() ?? relayConfig
-        if enabled, let relayConfig {
+        if enabled, let relayConfig, relayRegistrationBlock == nil {
             if relayLink?.config != relayConfig {
                 relayLink?.stop()
-                let link = RemoteRelayHostLink(config: relayConfig, server: self)
+                let link = RemoteRelayHostLink(config: relayConfig, server: self, supersededBackoff: relaySupersededBackoff)
                 relayLink = link
                 link.start()
             }
@@ -284,14 +303,23 @@ final class RemoteHostServer {
         internetAccessChanged()
     }
 
+    /// 设置里的「重新连接」：被顶替后不等退避，立刻再注册。
+    func reconnectRelay() {
+        relayLink?.reconnect()
+    }
+
     /// 钥匙串里当前的中继配置（没有存储的测试里用内存里那份）。
     func loadRelayConfig() -> RemoteRelayConfig? {
         relayStore?.load() ?? relayConfig
     }
 
-    /// 导入中继配置。文件不对时返回 false。
+    /// 导入中继配置。文件不对、或是别的 Mac 发的成员证书（注册不了主机）时返回 false。
     @discardableResult
     func importRelayConfig(_ config: RemoteRelayConfig) -> Bool {
+        guard !config.isCertificate else {
+            AppLogger.info("没有导入中继配置：这是别的 Mac 发的成员证书，只能用来连那台 Mac", category: RemoteLog.category)
+            return false
+        }
         do {
             try relayStore?.save(config)
         } catch {
@@ -364,8 +392,14 @@ final class RemoteHostServer {
     @discardableResult
     func makePairingInvitation() throws -> RemotePairingInvitation {
         let key = try identity.localIdentity().publicKey.rawRepresentation
+        cancelPairingInvitation()
+        // 开着公网接入（已注册到中继）才带上中继：否则对方拿着它也找不到这台 Mac。
+        let relay = relayLink.flatMap {
+            sharedRelay(from: $0.config, lifetime: RemoteRelayConfig.invitationCertificateLifetime)
+        }
+        invitationGrant = relay?.isCertificate == true ? relay : nil
         let invitation = RemotePairingInvitation(macID: localID, macName: localName, macKey: key,
-                                                 token: RemotePairingInvitation.newToken())
+                                                 token: RemotePairingInvitation.newToken(), relay: relay)
         pairingInvitation = invitation
         invitationExpiry?.cancel()
         invitationExpiry = Task { [weak self] in
@@ -375,19 +409,93 @@ final class RemoteHostServer {
         return invitation
     }
 
+    /// 收回正在出示的邀请。没用掉的邀请里带的成员证书一并吊销：链接可能已经发出去了。
     func cancelPairingInvitation() {
         invitationExpiry?.cancel()
         invitationExpiry = nil
         pairingInvitation = nil
+        if let grant = invitationGrant { revokeRelayGrant(grant) }
+        invitationGrant = nil
     }
 
-    /// 手机带来的扫码凭据对得上正在出示的邀请：用掉它（一次性）并返回 true。
-    func redeemPairingProof(_ proof: Data, phoneKey: Data) -> Bool {
+    /// 凭邀请配上的结果：邀请里带的成员证书（有的话）记到那台设备名下。
+    struct PairingRedemption {
+        var relayGrant: RemoteRelayConfig?
+    }
+
+    /// 对方带来的邀请凭据对得上正在出示的邀请：用掉它（一次性）。对不上返回 nil。
+    func redeemPairingProof(_ proof: Data, phoneKey: Data) -> PairingRedemption? {
         guard let invitation = pairingInvitation,
               RemotePairingInvitation.verify(proof, token: invitation.token, phoneKey: phoneKey,
-                                             macKey: invitation.macKey) else { return false }
+                                             macKey: invitation.macKey) else { return nil }
+        let redemption = PairingRedemption(relayGrant: invitationGrant)
+        invitationGrant = nil
         cancelPairingInvitation()
-        return true
+        return redemption
+    }
+
+    // MARK: - 中继成员证书
+
+    /// 交给别人的中继：中继认证书（1.3.0 起）时是只能连本机、有到期时间的证书，老中继上是共用的成员密钥，
+    /// 还不知道中继版本（没注册上）时不给。
+    ///
+    /// 同一台设备复用上次那张；签发超过 7 天就续（同一把钥匙、新的到期时间，见 `needsRenewal`）。设备每次连上来
+    /// 主机都会把它交过去，平时还会经中继来要（`renewRelayGrant`），所以正常用着的设备感觉不到续期。邀请里那张
+    /// 只给 `lifetime`（1 天），配上后第一次就续成一年。
+    private func sharedRelay(from root: RemoteRelayConfig, peer: inout RemotePeer?,
+                             lifetime: TimeInterval = RemoteRelayConfig.certificateLifetime) -> RemoteRelayConfig? {
+        guard !root.isCertificate,
+              let supported = RemoteRelayVersion.supportsMemberCertificates(relayUpdates.runningVersion) else { return nil }
+        guard supported else { return root }
+        if var grant = peer?.relayGrant, grant.relayID == root.relayID {
+            if grant.needsRenewal(), let renewed = try? grant.renewed(by: root) { grant = renewed }
+            // 中继改了地址或名字就跟着改。
+            grant.name = root.name
+            grant.host = root.host
+            grant.port = root.port
+            peer?.relayGrant = grant
+            return grant
+        }
+        guard let grant = try? root.certificate(for: localID, lifetime: lifetime) else { return nil }
+        if let old = peer?.relayGrant { revokeRelayGrant(old) }
+        peer?.relayGrant = grant
+        return grant
+    }
+
+    private func sharedRelay(from root: RemoteRelayConfig, lifetime: TimeInterval) -> RemoteRelayConfig? {
+        var none: RemotePeer?
+        return sharedRelay(from: root, peer: &none, lifetime: lifetime)
+    }
+
+    /// 交给这台配对过的设备的中继配置（见 `sharedRelay`）。第一次给它发证书时记到它名下。
+    func relayConfig(forPeer peerID: UUID) -> RemoteRelayConfig? {
+        guard let root = relayConfig, let known = identity.peer(id: peerID) else { return nil }
+        var peer: RemotePeer? = known
+        let config = sharedRelay(from: root, peer: &peer)
+        if let peer, peer != known { try? trust(peer) }
+        return config
+    }
+
+    /// 设备经中继来续它手里那张证书：只续自己给这台设备记着的那张（公钥对得上、还没过期），勾选过公网接入
+    /// （信令那层已核对）。续了还是同一把钥匙；没到续的时候就原样再给一次。
+    func renewRelayGrant(peerID: UUID, member: String) -> RemoteRelayConfig? {
+        guard let grant = identity.peer(id: peerID)?.relayGrant, grant.memberPublicKey == member,
+              !grant.isExpired() else { return nil }
+        let renewed = relayConfig(forPeer: peerID)
+        guard renewed?.memberPublicKey == member else { return nil }
+        return renewed
+    }
+
+    /// 吊销一张发出去的证书：先记下，注册在那台中继上时立刻发，否则下次注册上再补。
+    func revokeRelayGrant(_ grant: RemoteRelayConfig) {
+        guard let member = grant.memberPublicKey else { return }
+        relayRevocations.add(member, relayID: grant.relayID, expires: grant.expires)
+        relayLink?.sendRevocations()
+    }
+
+    /// 中继注册上了：现在知道它的版本，把中继交给已经连着、勾选过的设备，补发没确认的吊销。
+    func relayRegistered() {
+        for connection in connections.values { connection.sendRelayConfigIfAllowed() }
     }
 
     func approvePairing(_ id: UUID) { resolvePairing(id, approved: true) }
@@ -418,8 +526,9 @@ final class RemoteHostServer {
         refreshConnectedDevices()
     }
 
-    /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。
+    /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。发给它的中继证书一并吊销。
     func revoke(_ peerID: UUID) {
+        if let grant = identity.peer(id: peerID)?.relayGrant { revokeRelayGrant(grant) }
         try? identity.revoke(id: peerID)
         trustedPeers = identity.trustedPeers()
         for connection in connections.values where connection.peerID == peerID {
@@ -429,12 +538,24 @@ final class RemoteHostServer {
 
     // MARK: - 会话与接管
 
+    /// 会话列表，按 Mac 上的标签顺序排（`TerminalSessionRegistry.orderedEntries`），每条带上排位。
     func sessionInfos() -> [RemoteSessionInfo] {
-        registry.entries.map { entry in
+        let ordered = registry.orderedEntries()
+        listedTabOrder = ordered.map(\.id)
+        return ordered.enumerated().map { index, entry in
             RemoteSessionInfo(id: entry.id, serverID: entry.serverID, serverName: entry.serverName, title: entry.title,
                               windowKind: entry.windowKind, connectedAt: entry.connectedAt,
                               controlledBy: controllers[entry.id].flatMap { connections[$0.connection]?.peerName },
-                              tabTitle: registry.displayTitle(of: entry))
+                              tabTitle: registry.displayTitle(of: entry), order: index)
+        }
+    }
+
+    /// 此刻有程序状态的会话（订阅时的全量快照）。
+    func programStatusSnapshot() -> [RemoteProgramStatusUpdate.Entry] {
+        registry.entries.compactMap { entry in
+            registry.programReport(of: entry).map {
+                RemoteProgramStatusUpdate.Entry(sessionID: entry.id, status: RemoteProgramStatus($0))
+            }
         }
     }
 
@@ -525,12 +646,14 @@ final class RemoteHostServer {
         }
         desktopViewer = DesktopViewer(connection: connection.id, channel: channel, deviceName: connection.peerName,
                                       canControl: canControl)
+        desktopEnvironment.displaysInUse(true)
         updateActivity()
     }
 
     func releaseDesktop(connection: RemoteHostConnection, channel: UInt32) {
         guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel else { return }
         desktopViewer = nil
+        desktopEnvironment.displaysInUse(false)
         updateActivity()
     }
 
@@ -538,6 +661,24 @@ final class RemoteHostServer {
         guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel,
               !viewer.isControlling else { return }
         desktopViewer?.isControlling = true
+    }
+
+    /// 远控设置变了（如打开 / 关闭「允许远程解锁」）：把最新的锁屏状态推给正在看屏幕的手机，解锁入口立刻随之变化。
+    func desktopSettingsChanged() {
+        guard let viewer = desktopViewer else { return }
+        connections[viewer.connection]?.sendScreenState()
+    }
+
+    func desktopAudioChanged(connection: RemoteHostConnection, channel: UInt32, on: Bool) {
+        guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel,
+              viewer.hasAudio != on else { return }
+        desktopViewer?.hasAudio = on
+    }
+
+    /// Mac 上关了「允许传输声音」：正在送的声音停掉（画面不受影响）。
+    func endDesktopAudio(reason: String) {
+        guard let viewer = desktopViewer, let holder = connections[viewer.connection] else { return }
+        holder.stopAudio(notify: reason)
     }
 
     /// 在 Mac 上结束桌面流（指示条上的「断开」、关掉开关）。
@@ -586,6 +727,59 @@ final class RemoteHostServer {
         }
     }
 
+    /// 程序状态不节流：「等待确认」要马上到手机上。同一轮主线程里的多次变化由观察回调合成一次。
+    private func observeProgramStatuses(generation: Int) {
+        withObservationTracking {
+            for entry in registry.entries { _ = registry.programReport(of: entry) }
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                    self.pushProgramStatusChanges()
+                    self.observeProgramStatuses(generation: generation)
+                }
+            }
+        }
+    }
+
+    /// Mac 上重排、拆分、跨组拖动标签：重发会话列表，设备上的标签跟着换顺序。不节流，重排本来就不频繁；
+    /// 拖分隔条也会叫醒这里，但先后没变就不发。
+    private func observeTabOrder(generation: Int) {
+        withObservationTracking {
+            _ = registry.orderedEntries()
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                    if self.registry.orderedEntries().map(\.id) != self.listedTabOrder {
+                        for connection in self.connections.values { connection.sendSessions() }
+                    }
+                    self.observeTabOrder(generation: generation)
+                }
+            }
+        }
+    }
+
+    private func currentProgramReports() -> [UUID: ProgramStatusRecord] {
+        var reports: [UUID: ProgramStatusRecord] = [:]
+        for entry in registry.entries {
+            if let report = registry.programReport(of: entry) { reports[entry.id] = report }
+        }
+        return reports
+    }
+
+    private func pushProgramStatusChanges() {
+        let current = currentProgramReports()
+        let previous = pushedProgramReports
+        pushedProgramReports = current
+        let changed = Set(current.keys).union(previous.keys).filter { current[$0] != previous[$0] }
+        guard !changed.isEmpty else { return }
+        let update = RemoteProgramStatusUpdate(replacesAll: false, entries: changed.sorted { $0.uuidString < $1.uuidString }.map {
+            RemoteProgramStatusUpdate.Entry(sessionID: $0, status: current[$0].map(RemoteProgramStatus.init))
+        })
+        for connection in connections.values { connection.sendProgramStatus(update) }
+    }
+
     private func scheduleTabTitlePush(generation: Int) {
         guard isRunning, generation == observationGeneration, tabTitlePush == nil else { return }
         tabTitlePush = Task { [weak self] in
@@ -597,5 +791,19 @@ final class RemoteHostServer {
             for connection in self.connections.values { connection.sendSessions() }
             self.observeTabTitles(generation: generation)
         }
+    }
+}
+
+/// 这个进程不注册中继的原因。
+nonisolated enum RemoteRelayRegistrationBlock: Equatable, Sendable {
+    /// 不在 /Applications 或 ~/Applications 里的开发构建（启动参数 `-RemoteRelayAllowDevBuild YES` 可放开）。
+    case developmentBuild
+    /// 跑测试的宿主进程。
+    case testHost
+
+    static func current(isTestHost: Bool, isInstalled: Bool, arguments: [String]) -> Self? {
+        if isTestHost { return .testHost }
+        if isInstalled || AppInstallLocation.allowsDevBuildRelay(arguments: arguments) { return nil }
+        return .developmentBuild
     }
 }

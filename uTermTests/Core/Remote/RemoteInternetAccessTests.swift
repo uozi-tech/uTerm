@@ -42,11 +42,13 @@ final class RemoteInternetAccessTests: XCTestCase {
         return true
     }
 
-    private func makeServer(allowed: Set<UUID> = [], roster: RemoteCloudRoster? = nil) -> RemoteHostServer {
+    private func makeServer(allowed: Set<UUID> = [], relayVersion: String? = nil) -> RemoteHostServer {
+        let updates = RemoteRelayUpdateMonitor.inert()
+        updates.noteRunning(relayVersion)
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()), roster: roster,
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
-                                      keyConfirmationTimeout: .milliseconds(300))
+                                      keyConfirmationTimeout: .milliseconds(300), relayUpdates: updates)
         server.internetAccessPolicy = { allowed.contains($0) }
         return server
     }
@@ -59,7 +61,7 @@ final class RemoteInternetAccessTests: XCTestCase {
     /// 发起一条公网连接，走完握手。`confirm` = 握手后发不发 `keyConfirm`。
     private func connect(_ phone: Phone, to server: RemoteHostServer, expected: UUID? = nil, helloID: UUID? = nil,
                          features: [String]? = [RemoteFeature.keyConfirmation, RemoteFeature.heartbeat],
-                         confirm: Bool = true) async -> (RemoteLink, Inbox) {
+                         proof: Data? = nil, confirm: Bool = true) async -> (RemoteLink, Inbox) {
         let (phoneSide, macSide) = RemoteMemoryTransport.pair()
         let pair = keys()
         server.accept(transport: macSide, origin: .internet(peerID: expected ?? phone.id, keys: pair.mac, path: .relay))
@@ -70,7 +72,8 @@ final class RemoteInternetAccessTests: XCTestCase {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: helloID ?? phone.id, deviceName: "手机",
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                staticKey: phone.key.publicKey.rawRepresentation, features: features)
+                                staticKey: phone.key.publicKey.rawRepresentation, features: features,
+                                pairingProof: proof)
         do {
             _ = try await link.establish(role: .initiator, hello: hello, staticKey: phone.key, ephemeralKey: ephemeral,
                                          handshakeKeys: pair.phone)
@@ -119,23 +122,15 @@ final class RemoteInternetAccessTests: XCTestCase {
         XCTAssertTrue(server.connectedDevices.isEmpty)
     }
 
-    /// 名册里的设备也要单独勾选：iCloud 账号失守不等于能静默控制这台 Mac。
-    func test_roster_device_needs_the_tick_too() async throws {
+    /// 没配对过的设备勾选了也连不进来：公网来的连接不弹审批框，只认本机配对过的。
+    func test_unpaired_device_is_refused_even_if_ticked() async throws {
         let phone = Phone()
-        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
-        roster.publish(RemoteRosterEntry(id: phone.id, name: "手机", publicKey: phone.peer.publicKey, platform: .mobile,
-                                         updatedAt: Date()))
-        let refused = makeServer(allowed: [], roster: roster)
-        let (_, refusedInbox) = await connect(phone, to: refused)
-        let closed = await waitUntil { refusedInbox.closed }
+        let server = makeServer(allowed: [phone.id])
+        let (_, inbox) = await connect(phone, to: server)
+        let closed = await waitUntil { inbox.closed }
         XCTAssertTrue(closed)
-        XCTAssertTrue(refused.identity.trustedPeers().isEmpty)
-
-        let allowed = makeServer(allowed: [phone.id], roster: roster)
-        let (link, inbox) = await connect(phone, to: allowed)
-        let trusted = await waitUntil { self.pairing(inbox).contains(.trusted) }
-        XCTAssertTrue(trusted)
-        link.close()
+        XCTAssertTrue(server.identity.trustedPeers().isEmpty)
+        XCTAssertTrue(server.pairingRequests.isEmpty, "公网连接不弹审批")
     }
 
     func test_identity_different_from_the_signaled_device_is_dropped() async throws {
@@ -219,7 +214,7 @@ final class RemoteInternetAccessTests: XCTestCase {
         let phone = Phone()
         var allowed: Set<UUID> = [phone.id]
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.internetAccessPolicy = { allowed.contains($0) }
         try server.trust(phone.peer)
@@ -269,9 +264,10 @@ final class RemoteInternetAccessTests: XCTestCase {
         XCTAssertTrue(refused, "第 9 条起直接拒绝，实际 \(closedInboxes.filter(\.closed).count)")
     }
 
+    /// 老中继（1.3.0 之前）不认有到期时间的成员证书：照旧发共用的成员密钥。
     func test_ticked_device_receives_the_relay_config_after_connecting() async throws {
         let phone = Phone()
-        let server = makeServer(allowed: [phone.id])
+        let server = makeServer(allowed: [phone.id], relayVersion: "1.1.1")
         try server.trust(phone.peer)
         let config = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
                                        key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
@@ -281,6 +277,44 @@ final class RemoteInternetAccessTests: XCTestCase {
         let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
         XCTAssertTrue(delivered)
         XCTAssertEqual(RemoteRelayConfig(importing: try XCTUnwrap(inbox.of(.relayConfig).first).payload), config)
+        link.close()
+    }
+
+    /// 中继认证书：发的是只能连这台 Mac 的成员证书，不是中继本身的成员密钥。
+    func test_ticked_device_receives_its_own_certificate() async throws {
+        let phone = Phone()
+        let server = makeServer(allowed: [phone.id], relayVersion: "1.3.0")
+        try server.trust(phone.peer)
+        let config = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
+                                       key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
+        server.relayConfig = config
+        let (link, inbox) = await connect(phone, to: server,
+                                              features: [RemoteFeature.keyConfirmation, RemoteFeature.relayConfig])
+        let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
+        XCTAssertTrue(delivered)
+        let received = try XCTUnwrap(RemoteRelayConfig(importing: try XCTUnwrap(inbox.of(.relayConfig).first).payload))
+        XCTAssertEqual(received.scope, server.localID.uuidString)
+        XCTAssertNotEqual(received.key, config.key)
+        XCTAssertNotNil(received.expires)
+        XCTAssertEqual(server.identity.peer(id: phone.id)?.relayGrant, received)
+        link.close()
+    }
+
+    /// 还没注册上中继、不知道它认不认证书：先不发，注册上后补推给连着的设备。
+    func test_relay_config_waits_until_the_relay_version_is_known() async throws {
+        let phone = Phone()
+        let server = makeServer(allowed: [phone.id])
+        try server.trust(phone.peer)
+        server.relayConfig = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
+                                               key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
+        let (link, inbox) = await connect(phone, to: server,
+                                              features: [RemoteFeature.keyConfirmation, RemoteFeature.relayConfig])
+        let early = await waitUntil(0.5) { !inbox.of(.relayConfig).isEmpty }
+        XCTAssertFalse(early)
+        server.relayUpdates.noteRunning("1.3.0")
+        server.relayRegistered()
+        let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
+        XCTAssertTrue(delivered)
         link.close()
     }
 
@@ -310,16 +344,15 @@ final class RemoteInternetAccessTests: XCTestCase {
         link.close()
     }
 
-    func test_internet_candidates_merge_trusted_and_roster_phones_only() throws {
-        let phone = Phone(), rosterPhone = Phone(), rosterMac = Phone()
-        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
-        roster.publish(RemoteRosterEntry(id: rosterPhone.id, name: "B", publicKey: rosterPhone.peer.publicKey, platform: .mobile,
-                                         updatedAt: Date()))
-        roster.publish(RemoteRosterEntry(id: rosterMac.id, name: "Mac", publicKey: rosterMac.peer.publicKey, platform: .mac,
-                                         updatedAt: Date()))
-        let server = makeServer(roster: roster)
+    /// 能勾选公网接入的就是配对过的设备，手机和 Mac 都算。
+    func test_internet_candidates_are_the_paired_devices() throws {
+        let phone = Phone(), mac = Phone()
+        let server = makeServer()
         try server.trust(phone.peer)
-        XCTAssertEqual(Set(server.internetAccessCandidates.map(\.id)), [phone.id, rosterPhone.id])
+        var macPeer = mac.peer
+        macPeer.platform = RemoteDevicePlatform.mac.rawValue
+        try server.trust(macPeer)
+        XCTAssertEqual(Set(server.internetAccessCandidates.map(\.id)), [phone.id, mac.id])
     }
 
     func test_settings_default_to_closed_and_persist() {
@@ -377,5 +410,58 @@ final class RemoteInternetAccessTests: XCTestCase {
         }
         XCTAssertNotNil(measured)
         link.close()
+    }
+
+    // MARK: - 凭邀请经公网配对
+
+    private func proof(_ invitation: RemotePairingInvitation, for phone: Phone) -> Data {
+        RemotePairingInvitation.proof(token: invitation.token, phoneKey: phone.key.publicKey.rawRepresentation,
+                                      macKey: invitation.macKey)
+    }
+
+    /// 不同 Apple ID、不在同一网络：凭邀请凭据第一次经公网连上来就配对，并替它开通公网接入，不弹审批框。
+    func test_invitation_proof_pairs_an_unknown_device_over_the_internet() async throws {
+        let phone = Phone()
+        var granted: [UUID] = []
+        var allowed: Set<UUID> = []
+        let server = makeServer()
+        server.internetAccessPolicy = { allowed.contains($0) }
+        server.grantInternetAccess = { granted.append($0); allowed.insert($0) }
+        let invitation = try server.makePairingInvitation()
+
+        let (link, inbox) = await connect(phone, to: server, proof: proof(invitation, for: phone))
+        let approved = await waitUntil { self.pairing(inbox).contains(.approved) }
+        XCTAssertTrue(approved)
+        XCTAssertTrue(server.pairingRequests.isEmpty, "公网上仍然不弹审批框")
+        XCTAssertEqual(server.trustedPeers.map(\.id), [phone.id])
+        XCTAssertEqual(granted, [phone.id], "替它勾上公网接入，否则立刻会被断开")
+        XCTAssertNil(server.pairingInvitation, "邀请用一次就作废")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(inbox.closed, "开通之后连接留着")
+        link.close()
+
+        let late = Phone()
+        let (_, lateInbox) = await connect(late, to: server, proof: proof(invitation, for: late))
+        let closed = await waitUntil { lateInbox.closed }
+        XCTAssertTrue(closed, "同一张邀请第二台设备用不了")
+        XCTAssertEqual(server.trustedPeers.count, 1)
+    }
+
+    func test_proof_for_another_key_or_expired_invitation_is_refused() async throws {
+        let phone = Phone(), other = Phone()
+        let server = makeServer()
+        var granted = false
+        server.grantInternetAccess = { _ in granted = true }
+        let invitation = try server.makePairingInvitation()
+        let (_, inbox) = await connect(phone, to: server, proof: proof(invitation, for: other))
+        let closed = await waitUntil { inbox.closed }
+        XCTAssertTrue(closed, "截到别人的凭据换一把钥匙用不了")
+
+        server.cancelPairingInvitation()
+        let (_, lateInbox) = await connect(phone, to: server, proof: proof(invitation, for: phone))
+        let lateClosed = await waitUntil { lateInbox.closed }
+        XCTAssertTrue(lateClosed, "收起（或过期）的邀请不算数")
+        XCTAssertTrue(server.trustedPeers.isEmpty)
+        XCTAssertFalse(granted)
     }
 }

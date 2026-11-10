@@ -68,9 +68,9 @@ nonisolated enum SupervisedExec {
             case .signalled:
                 return cause + "，已终止远端进程组（TERM，\(SupervisedExec.killGraceSeconds) 秒后 KILL）。"
             case .noPID:
-                return cause + "，已放弃等待；没拿到远端进程号，**命令可能仍在远端运行**。"
+                return cause + "，已放弃等待；没拿到远端进程号，命令可能仍在远端运行。"
             case .failed(let why):
-                return cause + "，已放弃等待；终止远端进程失败（\(why)），**命令可能仍在远端运行**。"
+                return cause + "，已放弃等待；终止远端进程失败（\(why)），命令可能仍在远端运行。"
             }
         }
     }

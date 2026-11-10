@@ -106,6 +106,14 @@ final class TerminalSessionRegistry {
     /// 每个窗口「把这条会话的标签切到前台并带出窗口」的入口（点系统通知时用）。
     @ObservationIgnored private var revealers: [UUID: @MainActor (UUID) -> Bool] = [:]
 
+    /// 每个窗口此刻的标签顺序（会话 id），按窗口第一次登记的先后排。可观察：远控在顺序变了时重推会话列表。
+    private var tabOrders: [WindowTabOrder] = []
+
+    private struct WindowTabOrder {
+        let windowID: UUID
+        let read: @MainActor () -> [UUID]
+    }
+
     private final class WeakSessionBox {
         weak var value: TerminalSession?
         /// 登记时到底给没给会话本体。给了却读出 nil = 会话已被释放（幻影行，要清）；
@@ -167,6 +175,23 @@ final class TerminalSessionRegistry {
         revealers[windowID] = revealer
     }
 
+    /// 窗口登记（或用 nil 撤掉）「读它此刻的标签顺序」的入口。`read` 读可观察的布局，顺序一变观察方就会知道。
+    /// 再次登记只换入口，不改这个窗口排在第几。
+    func setTabOrder(forWindow windowID: UUID, _ read: (@MainActor () -> [UUID])?) {
+        let index = tabOrders.firstIndex { $0.windowID == windowID }
+        switch (read, index) {
+        case let (read?, index?): tabOrders[index] = WindowTabOrder(windowID: windowID, read: read)
+        case let (read?, nil): tabOrders.append(WindowTabOrder(windowID: windowID, read: read))
+        case let (nil, index?): tabOrders.remove(at: index)
+        case (nil, nil): break
+        }
+    }
+
+    /// 全部会话在 Mac 上的先后（规则见 `TerminalTabOrder`）。在观察里读会跟踪到各窗口的布局。
+    func orderedEntries() -> [TerminalSessionEntry] {
+        TerminalTabOrder.ordered(entries, id: \.id, windows: tabOrders.map { $0.read() })
+    }
+
     /// 回到某条会话所在的标签。返回 false = 找不到会话或它的窗口没登记入口。
     @discardableResult
     func requestReveal(sessionID: UUID) -> Bool {
@@ -183,6 +208,11 @@ final class TerminalSessionRegistry {
     }
 
     /// 这个会话对象登记时用的 id；没登记过则 nil。
+    /// 那条会话里程序报的状态（含 `idle`）；远控推给接入的设备。在观察里读会跟踪到这条会话。
+    func programReport(of entry: TerminalSessionEntry) -> ProgramStatusRecord? {
+        sessions[entry.id]?.value?.programReport
+    }
+
     func sessionID(of session: TerminalSession) -> UUID? {
         sessions.first { $0.value.value === session }?.key
     }
@@ -210,6 +240,7 @@ final class TerminalSessionRegistry {
         windows.removeValue(forKey: windowID)
         closers.removeValue(forKey: windowID)
         revealers.removeValue(forKey: windowID)
+        setTabOrder(forWindow: windowID, nil)
     }
 
     /// 某条会话此刻是不是「key window 的前台终端标签」。**读取时现算**，
@@ -316,6 +347,21 @@ final class TerminalSessionRegistry {
             guard ContinuousClock.now < deadline else { return nil }
             do { try await Task.sleep(for: pollInterval) } catch { return nil }
         }
+    }
+}
+
+// MARK: - 标签顺序
+
+/// 会话在 Mac 上的先后：窗口按 `windows` 的先后（第一次登记的先后），窗口里按它自己的标签顺序；
+/// 哪个窗口顺序里都没有的会话（窗口还没登记顺序、单测里的占位登记）排在最后，保持原来的先后。
+nonisolated enum TerminalTabOrder {
+    static func ordered<Item>(_ items: [Item], id: (Item) -> UUID, windows: [[UUID]]) -> [Item] {
+        var rank: [UUID: Int] = [:]
+        for window in windows {
+            for sessionID in window where rank[sessionID] == nil { rank[sessionID] = rank.count }
+        }
+        let listed = items.enumerated().map { (rank: rank[id($0.element)] ?? rank.count + $0.offset, item: $0.element) }
+        return listed.sorted { $0.rank < $1.rank }.map(\.item)
     }
 }
 

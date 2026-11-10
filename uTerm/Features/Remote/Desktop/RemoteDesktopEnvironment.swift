@@ -14,17 +14,33 @@ struct RemoteDesktopEnvironment {
     var canPostEvents: @MainActor () async -> Bool
     /// 要看的显示器（nil = 主显示器）。
     var display: @MainActor (_ requested: UInt32?) -> RemoteDesktopDisplay?
+    /// 开流前整理显示器：无显示器的 Mac 建一块按看的设备像素（与方向无关）来的 2 倍虚拟屏
+    ///（`RemoteHeadlessDisplay`）。
+    var prepareDisplays: @MainActor (_ viewerPixels: (width: Int, height: Int)) async -> Void = { _ in }
+    /// 有没有人在看桌面：没人了虚拟屏过一会儿拆掉，又有人来就留着。
+    var displaysInUse: @MainActor (_ inUse: Bool) -> Void = { _ in }
+    /// 此刻接着的全部显示器（主显示器在前）。
+    var listDisplays: @MainActor () -> [RemoteDesktopDisplaySummary] = { [] }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
         -> any RemoteDesktopFrameSource
     var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
     /// Mac 光标的全局坐标（在连接队列上轮询）。
     var cursorLocation: (@Sendable () -> CGPoint?)?
+    /// 光标形状的指纹（便宜，每 100 ms 调一次）与图（贵，指纹变了才调）。nil = 不发形状。
+    var cursorSignature: (@MainActor () -> Int?)? = nil
+    var cursorImage: (@MainActor () -> RemoteDesktopCursorImage?)? = nil
     /// Mac 的系统剪贴板（拷贝的文字回传手机）。nil = 不回传。
     var clipboard: (any RemoteDesktopClipboardSource)? = nil
     /// 锁屏状态、唤醒、远程解锁与帘幕。nil = 这台 Mac 不支持远程解锁（不声明 `desktop-unlock` 能力）。
     var makeScreenController: (@MainActor () -> any RemoteScreenController)? = nil
     /// 用户是否打开了「允许远程解锁」。关着时不声明 `desktop-unlock` 能力、也拒绝解锁请求。
     var isUnlockEnabled: @MainActor () -> Bool = { false }
+    /// 开流前点亮显示器并等它醒来：息屏时 ScreenCaptureKit 列不出睡着的显示器，采集会起不来。测试里不做事。
+    var wakeDisplay: @MainActor (_ id: CGDirectDisplayID) async -> Void = { _ in }
+    /// 用户是否打开了「允许传输声音」。
+    var isAudioEnabled: @MainActor () -> Bool = { false }
+    /// 系统声音的来源。nil = 这台 Mac 不送声音。
+    var makeAudioSource: (@MainActor (_ display: RemoteDesktopDisplay) -> any RemoteAudioSource)? = nil
 
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
@@ -38,14 +54,46 @@ struct RemoteDesktopEnvironment {
             screenCaptureAuthorized: { await RemoteDesktopPermissions.screenCaptureGranted() },
             canPostEvents: { await RemoteDesktopPermissions.postEventsGranted() },
             display: { requested in RemoteDesktopEnvironment.display(id: requested ?? CGMainDisplayID()) },
+            prepareDisplays: { viewer in await RemoteHeadlessDisplay.ensureHiDPI(viewerPixels: viewer) },
+            displaysInUse: { inUse in
+                if inUse { RemoteHeadlessDisplay.cancelRelease() } else { RemoteHeadlessDisplay.scheduleRelease() }
+            },
+            listDisplays: { RemoteDesktopEnvironment.activeDisplays() },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
             },
             makeInjector: { display in RemoteEventInjector(display: display) },
             cursorLocation: { CGEvent(source: nil)?.location },
+            cursorSignature: { RemoteSystemCursor.signature() },
+            cursorImage: { RemoteSystemCursor.image() },
             clipboard: RemoteSystemClipboard(),
             makeScreenController: { LiveRemoteScreenController() },
-            isUnlockEnabled: { settings.isDesktopUnlockEnabled })
+            isUnlockEnabled: { settings.isDesktopUnlockEnabled },
+            wakeDisplay: { id in await RemoteDisplayWake.wake(display: id) },
+            isAudioEnabled: { settings.isDesktopAudioEnabled },
+            makeAudioSource: { display in ScreenCaptureAudioSource(displayID: display.id) })
+    }
+
+    /// 接着的显示器，主显示器在前。名字取系统给的（「内建视网膜显示器」、外接显示器的型号）。
+    static func activeDisplays() -> [RemoteDesktopDisplaySummary] {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        guard count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        let names = Dictionary(NSScreen.screens.compactMap { screen -> (CGDirectDisplayID, String)? in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return nil
+            }
+            return (CGDirectDisplayID(number.uint32Value), screen.localizedName)
+        }, uniquingKeysWith: { first, _ in first })
+        let main = CGMainDisplayID()
+        return ids.prefix(Int(count)).map { id in
+            let bounds = CGDisplayBounds(id)
+            return RemoteDesktopDisplaySummary(id: id, name: names[id] ?? String(localized: "显示器 \(id)"),
+                                               width: bounds.width, height: bounds.height, isMain: id == main)
+        }
+        .sorted { $0.isMain && !$1.isMain }
     }
 
     /// 显示器的全局点坐标与原生像素尺寸。

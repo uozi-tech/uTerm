@@ -210,7 +210,7 @@ struct DesignKitGallery: View {
         Section(title: "控件 · Controls", subtitle: "按钮 / 输入框 / 徽章 · Chip · Kbd / 进度") {
             Group(label: "按钮 Button") {
                 HStack(spacing: 14) {
-                    UDButton(title: "新建服务器", style: .primary, systemImage: "plus") {}
+                    UDButton(title: "新建主机", style: .primary, systemImage: "plus") {}
                     UDButton(title: "取消", style: .secondary) {}
                     UDButton(title: "了解更多", style: .ghost) {}
                     UDButton(title: "删除", style: .danger) {}
@@ -219,8 +219,8 @@ struct DesignKitGallery: View {
             }
             Group(label: "输入框 Input") {
                 HStack(alignment: .top, spacing: 20) {
-                    UDTextFieldDemo(label: "主机地址", placeholder: "请输入主机地址")
-                    UDTextField(label: "主机地址", placeholder: "请输入主机地址",
+                    UDTextFieldDemo(label: "主机地址", placeholder: "输入主机地址")
+                    UDTextField(label: "主机地址", placeholder: "输入主机地址",
                                 text: .constant("root@203.0.113.10"), errorMessage: "无法解析该地址")
                         .frame(width: 240)
                     UDTextFieldDemo(label: "密码", placeholder: "••••••••",
@@ -273,7 +273,7 @@ struct DesignKitGallery: View {
                     ])
                     UDMenu(width: 184, items: [
                         UDMenuItem(label: "在终端打开", kbd: "↩"),
-                        UDMenuItem(label: "复制路径", kbd: "⌘C"),
+                        UDMenuItem(label: "拷贝路径", kbd: "⌘C"),
                         .divider(),
                         UDMenuItem(label: "删除", kbd: "⌫", danger: true),
                     ])
@@ -419,7 +419,7 @@ private struct CommandPaletteGalleryDemo: View {
             CommandPaletteItem(id: "h2", kind: .host, title: "api-prod-01",
                                detail: "deploy@10.0.4.18", hint: "连接") {},
             CommandPaletteItem(id: "c1", kind: .command, title: "新建主机…",
-                               detail: "创建一台新服务器", hint: "⌘N") {},
+                               detail: "新建一台主机", hint: "⌘N") {},
             CommandPaletteItem(id: "f1", kind: .file, title: "main.go",
                                detail: "~/src/main.go", hint: "打开") {},
             CommandPaletteItem(id: "s1", kind: .setting, title: "设置 · 终端",

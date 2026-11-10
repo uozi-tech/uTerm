@@ -21,7 +21,7 @@ final class RemoteLocalShellTests: XCTestCase {
     /// 起服务端 + 配对好的手机客户端。`features` 传 nil 用默认能力（含 local-shell）。
     private func pairedClient(registry: TerminalSessionRegistry, features: [String]? = nil,
                               opener: RemoteLocalShellOpener) async throws -> (RemoteHostServer, RemoteMacClient) {
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       localFeatures: features ?? RemoteConstants.localFeatures)
         server.localShellOpener = opener
@@ -30,7 +30,7 @@ final class RemoteLocalShellTests: XCTestCase {
         let port = try XCTUnwrap(server.port)
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
         _ = await waitUntil { !server.pairingRequests.isEmpty }
         server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
@@ -247,5 +247,73 @@ final class RemoteLocalShellTests: XCTestCase {
         XCTAssertEqual(try RemoteJSON.decode(RemoteOpenLocalShellResult.self, from: RemoteJSON.encode(ok)), ok)
         let failed = RemoteOpenLocalShellResult(requestID: UUID(), sessionID: nil, error: "没开")
         XCTAssertEqual(try RemoteJSON.decode(RemoteOpenLocalShellResult.self, from: RemoteJSON.encode(failed)), failed)
+    }
+
+    /// Mac 控 Mac：打开窗口时那台 Mac 上一个终端都没有，直接新建一个（只在接管时做一次）。
+    func test_mac_window_opens_a_shell_when_the_remote_mac_has_none() async throws {
+        let registry = TerminalSessionRegistry()
+        let shell = TerminalSession()
+        var opened = 0
+        let opener = RemoteLocalShellOpener { _ in
+            opened += 1
+            await shell.connect(using: MockBackend())
+            let id = UUID()
+            registry.register(TerminalSessionEntry(id: id, serverID: RemoteConstants.localShellServerID,
+                                                   serverName: LocalShellIdentity.serverName,
+                                                   windowKind: TerminalWindowKind.terminal, title: "zsh",
+                                                   connectedAt: Date()), session: shell)
+            return .success(id)
+        }
+        let (server, client) = try await pairedClient(registry: registry, opener: opener)
+        defer { server.stop(); shell.dispose(); client.disconnect() }
+        _ = await waitUntil { client.listedSessionIDs != nil }
+        XCTAssertEqual(client.listedSessionIDs, [])
+
+        let model = RemoteMacWindowModel(client: client) { _ in }
+        model.takeOver()
+        XCTAssertTrue(model.isPreparingFirstShell, "新建期间显示「正在打开终端」，不闪空态")
+        let ready = await waitUntil { model.panes.count == 1 }
+        XCTAssertTrue(ready, "没有终端时自动新建一个")
+        XCTAssertEqual(opened, 1)
+        XCTAssertFalse(model.isPreparingFirstShell)
+
+        // 用户把标签关光：不再自动开。先让列表跟上（界面里 `onChange(listedSessionIDs)` 会做这一步）。
+        let id = try XCTUnwrap(model.panes.first?.id)
+        _ = await waitUntil { client.listedSessionIDs?.contains(id) == true }
+        model.follow(client.listedSessionIDs)
+        XCTAssertTrue(model.close(id))
+        model.follow(client.listedSessionIDs)
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(opened, 1)
+        XCTAssertTrue(model.panes.isEmpty)
+        model.disposeAll()
+    }
+
+    /// 那台 Mac 上已经有终端：照常接管，不多开。
+    func test_mac_window_does_not_open_a_shell_when_terminals_exist() async throws {
+        let registry = TerminalSessionRegistry()
+        let existing = TerminalSession()
+        await existing.connect(using: MockBackend())
+        let existingID = UUID()
+        registry.register(TerminalSessionEntry(id: existingID, serverID: RemoteConstants.localShellServerID,
+                                               serverName: LocalShellIdentity.serverName,
+                                               windowKind: TerminalWindowKind.terminal, title: "zsh",
+                                               connectedAt: Date()), session: existing)
+        var opened = 0
+        let opener = RemoteLocalShellOpener { _ in
+            opened += 1
+            return .success(UUID())
+        }
+        let (server, client) = try await pairedClient(registry: registry, opener: opener)
+        defer { server.stop(); existing.dispose(); client.disconnect() }
+        _ = await waitUntil { client.listedSessionIDs != nil }
+
+        let model = RemoteMacWindowModel(client: client) { _ in }
+        model.takeOver()
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(model.panes.map(\.id), [existingID])
+        XCTAssertEqual(opened, 0)
+        XCTAssertFalse(model.isPreparingFirstShell)
+        model.disposeAll()
     }
 }

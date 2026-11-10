@@ -32,7 +32,7 @@ struct SyncSettingsView: View {
             }
 
             SettingsGroup(title: "局域网",
-                          footer: String(localized: "Mac 发现同一局域网里的 iPhone / iPad 后主动发送全量数据，移动端确认后才会传输。在移动端的「局域网同步」里输入上面的配对码。")) {
+                          footer: String(localized: "Mac 发现同一局域网里的 iPhone / iPad 后，点「发送同步」把全量数据发过去，对方确认后才开始传输。在 iPhone / iPad 的「局域网同步」里输入上面的配对码。")) {
                 SettingsRow(label: "发送状态") {
                     let lan = SyncStatusPresentation.lan(lanSync.status)
                     SettingsStatusLabel(symbol: lan.symbol, tone: lan.tone, text: lanSync.status.label)
@@ -52,7 +52,7 @@ struct SyncSettingsView: View {
                             .tracking(2)
                             .foregroundStyle(UD.text)
                             .textSelection(.enabled)
-                        UDButton(title: copiedCode ? "已复制" : "复制", style: .secondary) {
+                        UDButton(title: copiedCode ? "已拷贝" : "拷贝", style: .secondary) {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(lanSync.pairingCode, forType: .string)
                             copiedCode = true
@@ -67,7 +67,7 @@ struct SyncSettingsView: View {
 
             SettingsGroup(title: "历史",
                           footer: ChatRetentionPresentation.footer(for: chatRetentionDays, platform: .macOS)) {
-                SettingsRow(label: "AI 会话保留") {
+                SettingsRow(label: "AI 对话保留") {
                     SettingsNumberField(value: $chatRetentionDays, width: 72,
                                         minValue: 0, maxValue: 3_650, suffix: "天")
                 }

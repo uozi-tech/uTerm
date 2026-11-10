@@ -32,8 +32,8 @@ struct ConnectionSettingsView: View {
 
             SettingsGroup(title: "文件传输",
                           footer: String(localized: "超出的文件排队，随槽位空出依次开始。改动对新开始的传输生效。")) {
-                SettingsRow(label: "并发上传数",
-                            hint: "SFTP 同时上传的文件数上限（1–64）") {
+                SettingsRow(label: "同时传输数",
+                            hint: "SFTP 上传与下载合计同时进行的文件数上限（1–64）") {
                     SettingsNumberField(value: $maxConcurrentUploads,
                                         width: 72, minValue: 1, maxValue: 64, suffix: "个文件")
                 }

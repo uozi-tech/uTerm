@@ -120,7 +120,7 @@ struct TerminalKeyBar: View {
             pickedPhoto = nil
             controller.sendImage {
                 guard let data = try await item.loadTransferable(type: Data.self) else {
-                    throw RemoteDesktopPasteSource.Failure.unreadableImage
+                    throw RemoteDesktopPasteEncoding.Failure.unreadableImage
                 }
                 return try await RemoteDesktopPasteSource.terminalImage(data: data)
             }
@@ -190,7 +190,7 @@ struct TerminalKeyBar: View {
         } label: {
             MKeyIconCap(symbol: "photo")
         }
-        .accessibilityLabel("贴图片")
+        .accessibilityLabel("粘贴图片")
     }
 
     /// 发送一个键：先清掉粘滞修饰（修饰只作用于系统软键盘字符），再发字节序列。

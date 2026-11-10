@@ -108,7 +108,9 @@ final class HostReachabilityMonitor {
         defer { entry.watchers -= 1 }
         enqueueIfStale(key, entry: entry, maxAge: staleAfter)
         while !Task.isCancelled {
-            try? await Task.sleep(for: refreshInterval)
+            // 每一行各自一个 5 分钟的定时器，各行出现的时刻不同，准点触发就是一行一次单独唤醒、一次单独的射频
+            // 起落。给 10% 的余量，系统能把相近的几行并成一次唤醒；重探本来就只求「几分钟内」新鲜。
+            try? await Task.sleep(for: refreshInterval, tolerance: refreshInterval / 10)
             if Task.isCancelled { break }
             // 周期重探：只要上一次不是刚刚（别的行同端点刚探过）就再探。
             enqueueIfStale(key, entry: entry, maxAge: refreshInterval / .seconds(1) * 0.5)

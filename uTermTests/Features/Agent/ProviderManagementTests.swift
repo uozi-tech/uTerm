@@ -27,7 +27,7 @@ final class ProviderManagementTests: XCTestCase {
         let second = ProviderManagement.add(name: "DeepSeek", kind: .openai, in: context)
         XCTAssertEqual(second.sortOrder, 1)
         XCTAssertEqual(second.baseURL, ProviderPreset.openAIBaseURL)
-        XCTAssertEqual(try ordered(context).map(\.name), ["新 Provider", "DeepSeek"])
+        XCTAssertEqual(try ordered(context).map(\.name), ["新模型服务", "DeepSeek"])
     }
 
     func testDeleteRemovesProvider() throws {
@@ -94,6 +94,6 @@ final class ProviderManagementTests: XCTestCase {
         let provider = AIProvider(name: "p", kind: .openai, baseURL: "https://x", model: "")
         let keychain = AgentKeychain(service: "ProviderManagementTests-\(UUID().uuidString)")
         let result = await ProviderManagement.testConnection(provider, keychain: keychain)
-        XCTAssertEqual(result, .init(ok: false, message: "请先填或保存 API Key"))
+        XCTAssertEqual(result, .init(ok: false, message: "先填写或保存 API Key"))
     }
 }

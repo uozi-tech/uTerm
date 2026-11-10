@@ -17,7 +17,7 @@ enum MobileBiometry {
         // 必须先 canEvaluatePolicy 一次，biometryType 才会被填充。
         _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
         switch ctx.biometryType {
-        case .faceID:  return ("Face ID", "faceid")
+        case .faceID:  return ("面容 ID", "faceid")
         case .touchID: return ("触控 ID", "touchid")
         default:       return ("生物识别", "lock")
         }

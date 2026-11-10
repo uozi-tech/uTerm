@@ -43,6 +43,14 @@ final class TermTab: Identifiable {
         self.controller = MobileTerminalController(
             transportFactory: .remote(client: remote.client, sessionID: remote.sessionID))
     }
+
+    /// 标签上显示的程序状态。远控标签读 Mac 推来的（中途接入也拿得到当前状态），直连读本机解析的。
+    /// 没连上就没有程序可言。
+    var programStatus: ProgramStatusRecord? {
+        guard controller.state == .connected else { return nil }
+        if let remote { return remote.client.programStatus(for: remote.sessionID) }
+        return controller.programStatus
+    }
 }
 
 // MARK: - 单个会话主体：终端 + 键盘条，或失败态
@@ -160,7 +168,7 @@ struct TerminalSessionBody: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: 340)
                 HStack(spacing: 10) {
-                    MBtn(title: "复制错误", icon: "copy", kind: .secondary, height: 44) {
+                    MBtn(title: "拷贝错误", icon: "copy", kind: .secondary, height: 44) {
                         UIPasteboard.general.string = msg
                     }.fixedSize()
                     MBtn(title: "关闭", kind: .tinted, height: 44, action: onClose).fixedSize()

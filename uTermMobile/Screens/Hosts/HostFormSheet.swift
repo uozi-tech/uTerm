@@ -27,7 +27,7 @@ struct HostFormSheet: View {
             ScrollView {
                 VStack(spacing: 22) {
                     MInsetGroup(header: "连接") {
-                        formInput("名称", "生产 Web 服务器", $draft.name, autocap: .sentences)
+                        formInput("名称", "例如：prod-web-01", $draft.name, autocap: .sentences)
                         formInput("主机地址", "example.com 或 10.0.0.1", $draft.host)
                         formInput("端口", "22", $draft.port, keyboard: .numberPad, last: false)
                         formInput("用户名", "root", $draft.username, last: true)
@@ -65,7 +65,7 @@ struct HostFormSheet: View {
                         } else {
                             MRowDivider()
                             if keys.isEmpty {
-                                MInsetRow(label: "未找到密钥", sub: "请先在「设置 › 密钥」中添加", last: true)
+                                MInsetRow(label: "未找到密钥", sub: "先在「设置 › SSH 密钥」中添加", last: true)
                             } else {
                                 ForEach(Array(keys.enumerated()), id: \.element.id) { idx, key in
                                     keyRow(key, last: idx == keys.count - 1)

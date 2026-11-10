@@ -33,7 +33,7 @@ struct HostKeyTrustModal: View {
                     .foregroundStyle(unknown ? M.text : M.danger)
                 Text(unknown
                      ? "主机 \(challenge.host)（端口 \(String(challenge.port))）的密钥尚未被信任。"
-                     : "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不同。可能是服务器重装，也可能是中间人攻击。")
+                     : "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不同。这可能是主机重装过系统，也可能是中间人攻击。")
                     .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -54,7 +54,7 @@ struct HostKeyTrustModal: View {
     }
 
     private var mismatchBanner: some View {
-        Text("如果你最近没有重装这台服务器，不要继续。先通过其他渠道与管理员确认。")
+        Text("如果你最近没有重装这台主机，不要继续，先通过其他渠道与管理员确认。")
             .font(M.sans(12.5)).foregroundStyle(M.danger).lineSpacing(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(11)

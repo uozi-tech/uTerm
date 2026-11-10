@@ -67,6 +67,12 @@ nonisolated enum DefaultsKey {
     static let remoteDesktopEnabled = "remote.desktopEnabled"
     /// macOS：允许手机远程解锁锁屏并进入帘幕模式（需在远程桌面之上单独开）。
     static let remoteDesktopUnlockEnabled = "remote.desktopUnlockEnabled"
+    /// macOS：看桌面时允许把声音传到手机。
+    static let remoteDesktopAudioEnabled = "remote.desktopAudioEnabled"
+    /// macOS：帘幕模式改过静音的输出设备与原值（崩溃后下次启动据此恢复）。只在本机，不同步。
+    static let remoteCurtainMutedOutputs = "remote.curtainMutedOutputs"
+    /// iOS：看桌面时要声音的 Mac（设备 ID）。
+    static let remoteDesktopAudioMacs = "remote.desktopAudioMacs"
     static let remoteLocalShellEnabled = "remote.localShellEnabled"
     static let remoteDeviceID = "remote.deviceID"
     /// macOS：允许经公网（中继 / 打洞）接入。
@@ -83,10 +89,16 @@ nonisolated enum DefaultsKey {
     static let remotePathMatrixRounds = "remote.pathMatrixRounds"
     /// 不测的路（存「跳过哪些」而不是「测哪些」：以后加了新路，默认就会测）。
     static let remotePathMatrixSkippedModes = "remote.pathMatrixSkippedModes"
+    /// 最近 20 次建连的时间线（本机诊断数据，不同步）。
+    static let remoteConnectTraces = "remote.connectTraces"
+    /// 按网络类型记的最近几次打洞成败，决定下次等直连多久（本机，不同步）。
+    static let remoteDirectOutcomes = "remote.directOutcomes"
     /// iOS：用户点过「控制我的 Mac」之后才在启动时浏览（要「本地网络」授权）。
     static let remoteBrowseActivated = "remote.browseActivated"
     /// iOS：远程桌面里手机键盘上次用的输入语言。
     static let remoteDesktopKeyboardLanguage = "remote.desktop.keyboardLanguage"
+    /// macOS：控制另一台 Mac 时把系统快捷键（⌘Tab、⌘空格、⌘W…）也发过去。
+    static let remoteDesktopSendSystemShortcuts = "remote.desktop.sendSystemShortcuts"
     /// macOS：中继 relayID → 装着它的已保存主机（ServerProfile.id），本机自己管，不同步。
     static let remoteRelayManagedHosts = "remote.relay.managedHosts"
     /// macOS：最近一次从 OSS 取到的中继最新版本与取的时间。
@@ -94,6 +106,8 @@ nonisolated enum DefaultsKey {
     static let remoteRelayLatestCheckedAt = "remote.relay.latestCheckedAt"
     /// macOS：已经为哪个中继新版本发过通知（每个版本只提醒一次）。
     static let remoteRelayNotifiedVersion = "remote.relay.notifiedVersion"
+    /// macOS：还没被中继确认的成员证书吊销（中继 ID → 成员公钥），注册上中继时补发。
+    static let remoteRelayPendingRevocations = "remote.relay.pendingRevocations"
 
     static let lanSyncDeviceID = "lanSync.deviceID"
     static let lanSyncHostPairingCode = "lanSync.hostPairingCode"

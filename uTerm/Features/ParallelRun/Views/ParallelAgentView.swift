@@ -48,7 +48,7 @@ struct ParallelAgentView: View {
                     if showProgress {
                         HStack(spacing: 9) {
                             ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 12, height: 12)
-                            Text(resolvedAll ? "正在生成跨服务器汇总…" : "正在并行执行并汇总…")
+                            Text(resolvedAll ? "正在生成跨主机汇总…" : "正在并行执行并汇总…")
                                 .font(.system(size: 11.5, design: .monospaced))
                                 .foregroundStyle(UD.text3)
                         }
@@ -100,7 +100,7 @@ struct ParallelAgentView: View {
         let head = AttributedString("正在 ")
         var count = AttributedString("\(total) 台")
         count.font = .system(size: 13, weight: .semibold)
-        let tail = AttributedString("服务器上并行执行「\(commandName)」。我会在每台上完成操作并验证结果，遇到异常时自动诊断并尝试修复 —— 下面用大白话逐台汇报，不用你去翻 shell 输出。")
+        let tail = AttributedString("主机上并行执行「\(commandName)」。每台都会完成操作并验证结果，遇到异常时自动诊断并尝试修复；下面逐台给出简要结论，无需查看 shell 输出。")
         return head + count + tail
     }
 

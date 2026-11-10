@@ -40,7 +40,8 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 **找不到就直说找不到，不要自己写 socket 客户端、也不要改用 `ssh`。**
 
 客户端自己找 socket。要连 Xcode 跑起来的 Debug 版（它的 socket 叫 `dev.sock`），用
-环境变量 `UTERM_CONTROL_SOCKET=<socket 路径>` 指过去；平时不用管。
+环境变量 `UTERM_CONTROL_SOCKET=<socket 路径>` 指过去；平时不用管。链接只由装在
+「应用程序」文件夹（`/Applications` 或 `~/Applications`）里的 uTerm 对齐，开发构建启动时不会改它们。
 
 万一执行时报 `operation not permitted`（uTerm 1.12.x 装下的旧链接指向 app 自己写出的
 文件，带着 `com.apple.quarantine`），跑一句

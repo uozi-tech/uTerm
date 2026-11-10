@@ -141,7 +141,8 @@ final class MobileStore {
         req.remote = MRemoteSource(client: client, sessionID: focus)
         req.originInWorkspace = showWorkspace
         connecting = req
-        remoteTakeover = MRemoteTakeover(client: client, sessionIDs: sessionIDs, focus: focus)
+        remoteTakeover = MRemoteTakeover(client: client, sessionIDs: sessionIDs, focus: focus,
+                                         order: client.sessions.macTabOrder)
         showWorkspace = true
     }
     func openSFTP(_ host: ServerProfile) { requestConnect(host, kind: .sftp) }

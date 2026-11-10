@@ -33,7 +33,7 @@ nonisolated struct AgentToolCallPresentation: Equatable, Sendable {
                 isProgressVisible: false, isApprovalVisible: true)
         case .running:
             return AgentToolCallPresentation(
-                title: "执行中", systemImage: "terminal.fill", tone: .accent,
+                title: "运行中", systemImage: "terminal.fill", tone: .accent,
                 isProgressVisible: true, isApprovalVisible: false)
         case .done:
             if let exitCode = call.exitCode, exitCode != 0 {
@@ -143,8 +143,8 @@ struct AssistantView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("会话历史")
-            .help("会话历史")
+            .accessibilityLabel("对话历史")
+            .help("对话历史")
 
             Button {
                 model.startNewSession()
@@ -170,7 +170,7 @@ struct AssistantView: View {
 
     private var sessionsDropdown: some View {
         VStack(spacing: 0) {
-            Text("会话历史")
+            Text("对话历史")
                 .font(.system(size: 10.5))
                 .tracking(0.5)
                 .foregroundStyle(UD.text4)
@@ -184,7 +184,7 @@ struct AssistantView: View {
                 }
 
             if sessions.isEmpty {
-                Text("还没有历史会话")
+                Text("还没有历史对话")
                     .font(.system(size: 11.5))
                     .foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -278,12 +278,12 @@ struct AssistantView: View {
         VStack(spacing: 12) {
             Image(systemName: "sparkles")
                 .font(.largeTitle).foregroundStyle(UD.text3)
-            Text("还没添加 AI Provider")
+            Text("还没有模型服务")
                 .font(.headline).foregroundStyle(UD.text)
-            Text("在 Settings 添加一个 Anthropic / OpenAI 配置。")
+            Text("在「设置 › 模型服务」里添加 Anthropic 或 OpenAI 兼容的服务。")
                 .font(.caption).foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
-            UDButton(title: "打开 Settings", systemImage: "gearshape") {
+            UDButton(title: "打开设置", systemImage: "gearshape") {
                 openWindow(id: SettingsWindow.id)
             }
         }
@@ -367,7 +367,7 @@ struct AssistantView: View {
     }
 
     private static let starterPrompts = [
-        "检查服务器健康状态",
+        "检查主机健康状态",
         "分析最近的错误日志",
         "给出当前服务的排查步骤",
     ]
@@ -387,7 +387,7 @@ struct AssistantView: View {
                 Text("让 Agent 接手下一步")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(UD.text)
-                Text("描述目标即可。Agent 会结合当前服务器上下文分析问题，按所选档位审批命令，敏感操作仍需你确认。")
+                Text("描述目标即可。Agent 会结合这台主机的上下文分析问题，按所选审批档位确认命令，敏感操作仍需你确认。")
                     .font(.system(size: 12.5))
                     .lineSpacing(3)
                     .foregroundStyle(UD.text3)
@@ -634,7 +634,7 @@ struct AssistantView: View {
             return "上下文：\n\(context)"
         }
         let name = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "" : "当前服务器：\(name)"
+        return name.isEmpty ? "" : "当前主机：\(name)"
     }
 }
 
@@ -766,7 +766,7 @@ private struct AgentToolCallCard: View {
                             .fixedSize()
                     }
                     if let exitCode = call.exitCode, exitCode != 0 {
-                        Text("exit \(exitCode)")
+                        Text("退出码 \(exitCode)")
                             .font(UD.mono(9.5))
                             .foregroundStyle(UD.danger)
                             .fixedSize()
@@ -783,7 +783,7 @@ private struct AgentToolCallCard: View {
             }
             .buttonStyle(.plain)
             .contextMenu {
-                Button("复制命令", action: copyCommand)
+                Button("拷贝命令", action: copyCommand)
                     .disabled(call.command.isEmpty)
             }
             .accessibilityLabel(compactAccessibilityLabel)
@@ -894,8 +894,8 @@ private struct AgentToolCallCard: View {
             }
             .buttonStyle(.plain)
             .disabled(call.command.isEmpty)
-            .accessibilityLabel(isCommandCopied ? "命令已复制" : "复制命令")
-            .help(whenHovering: isHoveringCommandRow, isCommandCopied ? "已复制" : "复制命令")
+            .accessibilityLabel(isCommandCopied ? "命令已拷贝" : "拷贝命令")
+            .help(whenHovering: isHoveringCommandRow, isCommandCopied ? "已拷贝" : "拷贝命令")
         }
         .font(UD.mono(11))
         .padding(.leading, 11)
@@ -921,7 +921,7 @@ private struct AgentToolCallCard: View {
                     Text(call.status == .failed ? "错误输出" : "工具输出")
                         .font(.system(size: 10.5, weight: .medium))
                     if let exitCode = call.exitCode {
-                        Text("exit \(exitCode)")
+                        Text("退出码 \(exitCode)")
                             .font(UD.mono(9.5))
                             .foregroundStyle(exitCode == 0 ? UD.text4 : UD.danger)
                     }

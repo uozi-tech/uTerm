@@ -100,7 +100,7 @@ final class MobileTabCloseFlowTests: XCTestCase {
 
     func testRemoteTabOfAnOldMacClosesRightAway() {
         let client = RemoteMacClient(macName: "老 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let sessionID = UUID()
         let term = TermTab(host: client.tabHost(for: sessionID), remote: MRemoteSource(client: client, sessionID: sessionID))
         let flow = MTabCloseFlow()

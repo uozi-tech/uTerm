@@ -11,12 +11,28 @@ import Foundation
 @MainActor
 final class RemoteHostConnection {
     let id = UUID()
+    /// 接入的时刻（日志：握手、开流各在接入后多久）。
+    private let createdAt = ContinuousClock.now
     private let link: RemoteLink
     private unowned let server: RemoteHostServer
     private let pump: RemoteOutputPump
     private let desktopRoute: RemoteDesktopRoute
     /// 当前的桌面流（同一连接最多一路）。
     private var desktop: (channel: UInt32, streamer: RemoteDesktopStreamer)?
+    /// 当前桌面流上的声音（手机打开了扬声器才有）。
+    private var audio: RemoteAudioStreamer?
+    /// 每开一次声音 +1，手机据此认出新的一条声音流（序号从头算）。
+    /// 声音流号：开新声音流、声音中途换档都从这里取（换档在连接队列上，所以要加锁）。
+    private let audioStreams = RemoteAudioStreamNumbers()
+    /// 手机每发一次开 / 关声音就 +1（收到时同步加）。开声音要先 hop 一次再开采集，这期间又收到了关或新的开，
+    /// 旧的那次就作废：不然「开了马上关」时关先执行、扑空，开随后照样把声音流开起来。
+    private var audioRequestGeneration = 0
+    /// 手机认得声音消息（`desktop-audio`）。
+    private var peerSupportsAudio = false
+    /// 对端能解无损声音（声明了 `desktopAudioLossless`）。
+    private var peerSupportsAudioLossless = false
+    /// 对端认得 `programStatus`（老设备收到会当未知消息断开整条连接）。本机也要声明过才推。
+    private var peerTakesProgramStatus = false
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -32,9 +48,18 @@ final class RemoteHostConnection {
     private var peerTakesClipboard = false
     /// 手机认得远程解锁 / 帘幕相关消息（`desktopScreenState` 等）。
     private var peerSupportsUnlock = false
+    /// 对端认得解锁结果里的 `inputBlocked`。
+    private var peerSupportsUnlockOutcomes = false
     /// 这条桌面流的锁屏状态监听（当前在看屏幕时才挂）。
     private var lockObservers: [NSObjectProtocol] = []
-    /// 从哪条路进来的。公网路径规则更严：不弹审批、不收扫码凭据。
+    /// 这条连接远程解锁过 Mac：远控结束时不管帘幕开没开都要锁回去。
+    private var remotelyUnlocked = false
+    /// 正在执行解锁（按键序列 + 轮询）：同时来的第二个请求直接拒掉，免得两串按键交错。
+    private var unlockInFlight = false
+    /// 光标形状的轮询（开流请求要了 `cursorImages` 才挂）与上次发出的形状。
+    private var cursorShapeTimer: Timer?
+    private var lastCursorSignature: Int?
+    /// 从哪条路进来的。公网路径规则更严：不弹审批框，没配对过的只认邀请凭据。
     let origin: RemoteConnectionOrigin
     private var peerSupportsRelayConfig = false
     private var keyConfirmed = false
@@ -88,10 +113,12 @@ final class RemoteHostConnection {
         link.close()
     }
 
-    /// 握手里报给手机的能力。远程解锁没开时不报 `desktop-unlock`，手机据此不显示解锁入口。
+    /// 握手里报给手机的能力。`desktop-unlock` 只表示「这台 Mac 认得解锁消息、会推锁屏状态」，与设置开关无关：
+    /// 能力只在握手时交换一次，连接会一直留着，若随开关增减，打开开关后已有连接永远看不到解锁入口。
+    /// 开关是否打开随锁屏状态（`unlockAvailable`）实时推送。
     private func advertisedFeatures() -> [String] {
         var features = server.localFeatures
-        if !server.desktopEnvironment.isUnlockEnabled() {
+        if server.desktopEnvironment.makeScreenController == nil {
             features.removeAll { $0 == RemoteFeature.desktopUnlock }
         }
         return features
@@ -106,7 +133,9 @@ final class RemoteHostConnection {
             let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: server.localID,
                                     deviceName: server.localName, ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                     staticKey: staticKey.publicKey.rawRepresentation,
-                                    features: advertisedFeatures().isEmpty ? nil : advertisedFeatures())
+                                    features: advertisedFeatures().isEmpty ? nil : advertisedFeatures(),
+                                    deviceModel: RemoteDeviceModel.current(),
+                                    platform: RemoteDevicePlatform.current.rawValue)
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: origin.handshakeKeys)
             let peer = established.peer
@@ -115,6 +144,11 @@ final class RemoteHostConnection {
             peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
+            peerSupportsUnlockOutcomes = peer.supports(RemoteFeature.desktopUnlockOutcomes)
+            peerSupportsAudio = peer.supports(RemoteFeature.desktopAudio)
+            peerSupportsAudioLossless = peer.supports(RemoteFeature.desktopAudioLossless)
+            peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
+                && server.localFeatures.contains(RemoteFeature.programStatus)
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
             if case .internet(let expected, _, _) = origin {
                 try await authorizeFromInternet(peer: peer, expected: expected)
@@ -128,13 +162,13 @@ final class RemoteHostConnection {
                 }
                 try await waitForKeyConfirmation()
             }
-            if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {
+            if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey) {
                 try rememberRecognized(peer)
                 authorize(.trusted)
                 return
             }
-            if let proof = peer.pairingProof, server.redeemPairingProof(proof, phoneKey: peer.staticKey) {
-                try server.trust(newPeer(from: peer))
+            if let proof = peer.pairingProof, let redemption = server.redeemPairingProof(proof, phoneKey: peer.staticKey) {
+                try server.trust(newPeer(from: peer, redemption: redemption))
                 authorize(.approved)
                 return
             }
@@ -156,41 +190,52 @@ final class RemoteHostConnection {
         }
     }
 
-    /// 公网来的连接：只认信令里打过招呼的那台设备，必须能证明持有私钥，且此刻仍被允许。
+    /// 公网来的连接：只认信令里打过招呼的那台设备，必须能证明持有私钥，且此刻仍被允许；
+    /// 或者带着本机正在出示的邀请凭据（凭据绑定它的公钥，一次性），这时配对并替它开通公网接入。
     /// 任何一条不满足就断开。不弹审批框，否则任何拿到中继配置的人都能远程刷弹窗骗点击。
     private func authorizeFromInternet(peer: RemoteHello, expected: UUID) async throws {
         guard peer.deviceID == expected, peer.supports(RemoteFeature.keyConfirmation) else {
             throw RemoteProtocolError.handshakeFailed("公网连接的身份与信令不符")
         }
         try await waitForKeyConfirmation()
-        guard !isClosed, server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster),
-              server.allowsInternetAccess(peer.deviceID) else {
-            throw RemoteProtocolError.pairingRejected
-        }
-        try rememberRecognized(peer)
-        authorize(.trusted)
-    }
-
-    /// 认出来的设备：名册担保、第一次来的记进本机信任（设置里才看得到、能撤销）；早就信任的只跟着更新名字。
-    /// 名字只在首次配对时记一次的话，手机改了名、或 App 后来拿到了真实设备名，Mac 上永远是旧的。
-    /// 已信任的那条保留原公钥与配对时间：名册担保的新公钥不该顶掉本机记的那把。
-    private func rememberRecognized(_ peer: RemoteHello) throws {
-        guard var known = server.identity.peer(id: peer.deviceID) else {
-            try server.trust(newPeer(from: peer))
+        guard !isClosed else { throw RemoteProtocolError.closed }
+        if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey),
+           server.allowsInternetAccess(peer.deviceID) {
+            try rememberRecognized(peer)
+            authorize(.trusted)
             return
         }
+        guard let proof = peer.pairingProof,
+              let redemption = server.redeemPairingProof(proof, phoneKey: peer.staticKey) else {
+            throw RemoteProtocolError.pairingRejected
+        }
+        try server.trust(newPeer(from: peer, redemption: redemption))
+        server.grantInternetAccess(peer.deviceID)
+        authorize(.approved)
+    }
+
+    /// 认出来的设备只跟着更新名字与机型。名字只在配对时记一次的话，手机改了名、或 App 后来拿到了真实设备名，
+    /// Mac 上永远是旧的。公钥与配对时间不动。
+    private func rememberRecognized(_ peer: RemoteHello) throws {
+        guard var known = server.identity.peer(id: peer.deviceID) else { return }
         let reported = known
         let name = peer.deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty { known.name = name }
         // 老版本不报机型：保留上次记的，别清空。本机起的别名不动。
         if let model = peer.deviceModel { known.model = model }
+        if let platform = peer.platform { known.platform = platform }
         guard known != reported else { return }
         try server.trust(known)
     }
 
-    private func newPeer(from peer: RemoteHello) -> RemotePeer {
-        RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey, pairedAt: Date(),
-                   model: peer.deviceModel)
+    /// 新配上（或重新配对）的设备。之前发给它的中继证书留着；凭邀请配上的换成邀请里那张，旧的吊销。
+    private func newPeer(from peer: RemoteHello, redemption: RemoteHostServer.PairingRedemption? = nil) -> RemotePeer {
+        var trusted = RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey, pairedAt: Date(),
+                                 model: peer.deviceModel, platform: peer.platform)
+        let previous = server.identity.peer(id: peer.deviceID)?.relayGrant
+        trusted.relayGrant = redemption?.relayGrant ?? previous
+        if let previous, previous != trusted.relayGrant { server.revokeRelayGrant(previous) }
+        return trusted
     }
 
     /// 等手机证明它真的持有握手里报的长期私钥。公钥是公开的，只凭握手消息信任会让冒充者被记进信任列表、
@@ -221,6 +266,8 @@ final class RemoteHostConnection {
         isAuthorized = true
         // 横幅、桌面指示条、设置里的「已连接」都按这个名字显示：在 Mac 上改过名就用改过的。
         if let peerID, let known = server.identity.peer(id: peerID) { peerName = known.displayName }
+        AppLogger.notice("远控：\(self.peerName) 已确认身份（\(self.origin.path.label)，接入后 "
+                         + "\(RemoteConnectTrace.millis(ContinuousClock.now - self.createdAt)) ms）", category: RemoteLog.category)
         sendPairing(state)
         // 公网连接不管对方声明什么都要判死，否则不发东西的连接会一直占着名额。
         if peerSendsHeartbeat || origin.isInternet { link.startSilenceWatch(limit: server.peerSilenceLimit) }
@@ -231,7 +278,7 @@ final class RemoteHostConnection {
     /// 把中继配置交给勾选过公网接入的设备。之后它在外面也连得上。
     func sendRelayConfigIfAllowed() {
         guard isAuthorized, peerSupportsRelayConfig, let peerID, server.allowsInternetAccess(peerID),
-              let config = server.relayConfig else { return }
+              let config = server.relayConfig(forPeer: peerID) else { return }
         link.send(RemoteMessage(.relayConfig, payload: RemoteJSON.encode(config)))
     }
 
@@ -257,8 +304,12 @@ final class RemoteHostConnection {
         switch message.kind {
         case .subscribeSessions:
             afterSessionRestoration { [weak self] in
-                self?.subscribedToSessions = true
-                self?.sendSessions()
+                guard let self else { return }
+                self.subscribedToSessions = true
+                self.sendSessions()
+                // 紧跟在列表后面：设备先认识这些会话，再拿到它们的状态。
+                self.sendProgramStatus(RemoteProgramStatusUpdate(replacesAll: true,
+                                                                 entries: self.server.programStatusSnapshot()))
             }
         case .attach:
             guard let request = try? RemoteJSON.decode(RemoteAttachRequest.self, from: message.payload) else { return }
@@ -303,12 +354,23 @@ final class RemoteHostConnection {
         case .desktopCurtain:
             guard let request = try? RemoteJSON.decode(RemoteDesktopCurtainRequest.self, from: message.payload) else { return }
             setCurtain(request.on, channel: message.channel)
-        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost:
+        case .desktopAudio:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopAudioRequest.self, from: message.payload) else { return }
+            audioRequestGeneration += 1
+            if request.enabled {
+                let generation = audioRequestGeneration
+                Task { await startAudio(request, channel: message.channel, generation: generation) }
+            } else {
+                stopAudio(notify: nil)
+            }
+        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
+             .desktopPause:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
-             .desktopScreenState, .desktopUnlockResult:
+             .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
+             .linkAck, .linkFragment, .programStatus:
             break
         }
     }
@@ -330,6 +392,12 @@ final class RemoteHostConnection {
     func sendSessions() {
         guard subscribedToSessions else { return }
         link.send(RemoteMessage(.sessions, payload: RemoteJSON.encode(server.sessionInfos())))
+    }
+
+    /// 程序状态：订阅时的全量快照，之后是变了的会话。只发给认得这条消息、且订阅了会话列表的设备。
+    func sendProgramStatus(_ update: RemoteProgramStatusUpdate) {
+        guard subscribedToSessions, peerTakesProgramStatus else { return }
+        link.send(RemoteMessage(.programStatus, payload: RemoteJSON.encode(update)))
     }
 
     private func attach(_ request: RemoteAttachRequest) {
@@ -369,7 +437,7 @@ final class RemoteHostConnection {
                 do {
                     if case .file(let path) = try await backend.deliverImage(request.image) { reply.path = path }
                 } catch {
-                    reply.error = "图片没传过去：\(error.localizedDescription)"
+                    reply.error = "图片发送失败：\(error.localizedDescription)"
                 }
             } else {
                 reply.error = "这个终端不能接收图片"
@@ -467,19 +535,37 @@ extension RemoteHostConnection {
                 RemoteDesktopInfo(requestID: request.requestID, failure: failure, message: message))))
         }
         guard environment.isEnabled() else {
-            return reject(.disabled, "Mac 上没有打开远程桌面。请在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许远程桌面")
+            return reject(.disabled, "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。")
         }
+        let clock = ContinuousClock()
+        let started = clock.now
+        func millis() -> Int { RemoteConnectTrace.millis(clock.now - started) }
+        AppLogger.notice("远程桌面：收到 \(self.peerName) 的开流请求（连接接入后 \(RemoteConnectTrace.millis(clock.now - self.createdAt)) ms）",
+                         category: RemoteLog.category)
+        // 息屏要等显示器醒来（最多约 3 秒），和授权查询、准备显示器同时进行，不排在它们后面。
+        // 准备显示器可能换出别的显示器，下面还会对真正要采的那块再确认一次（醒着时立即返回）。
+        let earlyWake = Task { await environment.wakeDisplay(request.displayID ?? CGMainDisplayID()) }
         async let screenAuthorized = environment.screenCaptureAuthorized()
         async let postEventsAuthorized = environment.canPostEvents()
         let (canCapture, canControl) = await (screenAuthorized, postEventsAuthorized)
+        let authorizedAt = millis()
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard canCapture else {
             return reject(.screenPermission,
-                          "Mac 上的 uTerm 还没有屏幕录制权限。请在 Mac 的 设置 › 远程控制 里授权，并按提示重启 uTerm")
+                          "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
         }
+        await environment.prepareDisplays((request.maxWidth, request.maxHeight))
+        let preparedAt = millis()
+        guard generation == desktopStartGeneration, !isClosed else { return }
         guard let display = environment.display(request.displayID) ?? environment.display(nil) else {
             return reject(.captureFailed, "找不到 Mac 的显示器")
         }
+        // 息屏时先把显示器叫醒再采集，否则 ScreenCaptureKit 找不到它。等的这会儿可能又来了新请求或断了。
+        await earlyWake.value
+        await environment.wakeDisplay(display.id)
+        AppLogger.notice("远程桌面开流计时：授权 \(authorizedAt) ms · 准备显示器 \(preparedAt) ms · 显示器就绪 \(millis()) ms",
+                         category: RemoteLog.category)
+        guard generation == desktopStartGeneration, !isClosed else { return }
         let size = RemoteDesktopGeometry.streamSize(
             displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),
             maxWidth: request.maxWidth, maxHeight: request.maxHeight)
@@ -521,8 +607,9 @@ extension RemoteHostConnection {
             requestID: request.requestID, displayID: display.id,
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
-            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 远程控制 里授权后重启 uTerm 即可控制",
-            videoDatagrams: video != nil ? true : nil)
+            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的「设置 › 远程控制」里授权后重启 uTerm，即可控制。",
+            videoDatagrams: video != nil ? true : nil,
+            displays: { let all = environment.listDisplays(); return all.isEmpty ? nil : all }())
         AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
                        category: RemoteLog.category)
         Task {
@@ -531,7 +618,7 @@ extension RemoteHostConnection {
             } catch {
                 guard desktop?.channel == channel else { return }
                 stopDesktop(channel: channel, notify: false)
-                reject(.captureFailed, "Mac 上的屏幕采集没能启动：\(error.localizedDescription)")
+                reject(.captureFailed, "Mac 上的屏幕采集无法启动：\(error.localizedDescription)")
                 return
             }
             guard desktop?.channel == channel, !isClosed else {
@@ -539,21 +626,141 @@ extension RemoteHostConnection {
                 return
             }
             streamer.activate(started: RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(info)))
-            // 初始锁屏状态排在 `desktopStarted` 之后发：手机要先靠它绑定通道，才接得到后续消息。
+            // 初始锁屏状态、光标形状排在 `desktopStarted` 之后发：对端要先靠它绑定通道，才接得到后续消息。
             sendScreenState()
+            if request.cursorImages == true { startCursorShapes(channel: channel) }
         }
     }
 
     /// 结束桌面流。`notify` = 告诉手机（Mac 上断开、被别的设备接管、采集停了）。
     func stopDesktop(channel: UInt32, notify: Bool, reason: String = "") {
         guard let current = desktop, current.channel == channel else { return }
+        stopAudio(notify: nil)
         desktop = nil
         desktopRoute.set(nil)
         current.streamer.stop()
+        stopCursorShapes()
         teardownScreenControl()
         server.releaseDesktop(connection: self, channel: channel)
         if notify {
             link.send(RemoteMessage(.closed, channel: channel, payload: Data(reason.utf8)))
+        }
+    }
+}
+
+// MARK: - 光标形状
+
+extension RemoteHostConnection {
+    /// 每 100 ms 看一眼系统光标，形状变了才发（一张几 KB 的 PNG）。主控端拿它当本机光标，I 形、调整大小这些都对得上。
+    func startCursorShapes(channel: UInt32) {
+        stopCursorShapes()
+        let environment = server.desktopEnvironment
+        guard let signature = environment.cursorSignature, let image = environment.cursorImage else { return }
+        let tick: @MainActor () -> Void = { [weak self] in
+            guard let self, self.desktop?.channel == channel, let current = signature(),
+                  current != self.lastCursorSignature else { return }
+            self.lastCursorSignature = current
+            guard let shape = image() else { return }
+            self.link.send(RemoteMessage(.desktopCursorImage, channel: channel, payload: RemoteJSON.encode(shape)))
+        }
+        tick()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in MainActor.assumeIsolated { tick() } }
+        RunLoop.main.add(timer, forMode: .common)
+        cursorShapeTimer = timer
+    }
+
+    func stopCursorShapes() {
+        cursorShapeTimer?.invalidate()
+        cursorShapeTimer = nil
+        lastCursorSignature = nil
+    }
+}
+
+// MARK: - 声音
+
+extension RemoteHostConnection {
+    /// 手机打开了扬声器：开一条声音流。先发格式，之后的声音包按它解。开不起来（Mac 上关了开关、编码器或采集起不来）
+    /// 回一条没有编码的格式，带上原因，桌面流不受影响。
+    fileprivate func startAudio(_ request: RemoteDesktopAudioRequest, channel: UInt32, generation: Int) async {
+        guard generation == audioRequestGeneration, let current = desktop, current.channel == channel,
+              peerSupportsAudio else { return }
+        stopAudio(notify: nil)
+        let stream = audioStreams.next()
+        let environment = server.desktopEnvironment
+        func refuse(_ message: String) {
+            link.send(RemoteMessage(.desktopAudioFormat, channel: channel, payload: RemoteJSON.encode(
+                RemoteDesktopAudioFormat(stream: stream, codec: nil, message: message))))
+        }
+        guard environment.isAudioEnabled(), let makeSource = environment.makeAudioSource else {
+            return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开「设置 › 远程控制 › 允许传输声音」")
+        }
+        let display = current.streamer.display
+        let numbers = audioStreams
+        let streamer = RemoteAudioStreamer(
+            link: link, channel: channel, stream: stream, codecs: request.codecs,
+            nextStream: { numbers.next() },
+            linkInfo: Self.audioLinkInfo(link: link, path: origin.path, video: current.streamer,
+                                         lossless: peerSupportsAudioLossless),
+            datagrams: current.streamer.datagramChannel,
+            source: makeSource(display),
+            onSourceStopped: { [weak self] error in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        AppLogger.info("远程桌面声音采集停止：\(error?.localizedDescription ?? "无错误")", category: RemoteLog.category)
+                        self?.stopAudio(notify: "Mac 上的声音采集已停止")
+                    }
+                }
+            })
+        audio = streamer
+        do {
+            let format = try await streamer.start()
+            // 等采集起来的这段时间里，桌面流可能结束了、声音可能又被关了。
+            guard audio === streamer, desktop?.channel == channel, !isClosed else {
+                streamer.stop()
+                return
+            }
+            link.send(RemoteMessage(.desktopAudioFormat, channel: channel, payload: RemoteJSON.encode(format)))
+            server.desktopAudioChanged(connection: self, channel: channel, on: true)
+            AppLogger.info("远程桌面：开始向 \(self.peerName) 传输声音（\(streamer.codec.rawValue)）", category: RemoteLog.category)
+        } catch {
+            guard audio === streamer else { return }
+            audio = nil
+            streamer.stop()
+            if case RemoteAudioStreamerError.noCodec = error {
+                refuse("Mac 无法编码手机支持的声音格式")
+            } else {
+                refuse("Mac 上的声音采集无法启动：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// 声音档位要的链路情况（在连接队列上调）。直连走数据报时用发送节奏与丢包率；局域网 TCP 没有节奏，
+    /// 用画面编码器眼下的码率当容量（画面码控对局域网的估计）；中继给固定档。
+    static func audioLinkInfo(link: RemoteLink, path: RemoteLinkPath, video: RemoteDesktopStreamer,
+                              lossless: Bool) -> () -> RemoteAudioPolicy.Link {
+        let datagrams = video.datagramChannel != nil
+        let stats = video.stats
+        return {
+            if datagrams, let state = link.datagramLinkState {
+                return RemoteAudioPolicy.Link(path: .direct, capacity: state.pacingRate * 8, lossRate: state.lossRate,
+                                              peerDecodesLossless: lossless)
+            }
+            if path == .relay { return RemoteAudioPolicy.Link(path: .relay) }
+            let bitrate = stats.snapshot().bitrate
+            return RemoteAudioPolicy.Link(path: .localNetwork, capacity: bitrate > 0 ? Double(bitrate) : nil,
+                                          peerDecodesLossless: lossless)
+        }
+    }
+
+    /// 停掉声音。`notify` 不为 nil 时告诉手机原因（它会把扬声器按钮复位并提示）。
+    func stopAudio(notify reason: String?) {
+        guard let streamer = audio else { return }
+        audio = nil
+        streamer.stop()
+        server.desktopAudioChanged(connection: self, channel: streamer.channel, on: false)
+        if let reason {
+            link.send(RemoteMessage(.desktopAudioFormat, channel: streamer.channel, payload: RemoteJSON.encode(
+                RemoteDesktopAudioFormat(stream: streamer.stream, codec: nil, message: reason))))
         }
     }
 }
@@ -563,9 +770,8 @@ extension RemoteHostConnection {
 extension RemoteHostConnection {
     /// 开桌面流后（手机支持远程解锁时）：点亮显示器、推一次锁屏状态、挂锁屏状态监听、接本机解除帘幕的出口。
     func setupScreenControl(channel: UInt32) {
-        guard peerSupportsUnlock, server.desktopEnvironment.isUnlockEnabled(),
-              let controller = server.screenController else { return }
-        controller.wake()
+        // 不看开关：开关关着也要推锁屏状态，手机才能显示「已锁定、未开启远程解锁」并在开关打开后立刻可用。
+        guard peerSupportsUnlock, let controller = server.screenController else { return }
         controller.onLocalCurtainRelease = { [weak self] in
             guard let self, let channel = self.desktop?.channel else { return }
             self.stopDesktop(channel: channel, notify: true, reason: "已在 Mac 上解除帘幕")
@@ -584,12 +790,14 @@ extension RemoteHostConnection {
         lockObservers.removeAll()
         if let controller = server.screenController {
             controller.onLocalCurtainRelease = nil
-            // 远控结束时若仍在帘幕：先把 Mac 锁回去，再撤掉黑屏与本机输入暂停，避免一撤帘幕就露出桌面。
-            if controller.isCurtained {
+            // 远控结束时：远程解锁过、或帘幕还开着，就先把 Mac 锁回去，再撤掉黑屏与本机输入暂停，
+            // 避免一撤帘幕就露出桌面；手机中途手动关了帘幕的，同样要锁回去。
+            if remotelyUnlocked || controller.isCurtained {
                 controller.lockScreen()
                 controller.setCurtain(false)
             }
         }
+        remotelyUnlocked = false
     }
 
     /// 把当前锁屏 / 帘幕状态推给手机。
@@ -601,9 +809,15 @@ extension RemoteHostConnection {
         link.send(RemoteMessage(.desktopScreenState, channel: channel, payload: RemoteJSON.encode(state)))
     }
 
-    private var canUnlockRemotely: Bool {
+    /// 发请求的这条连接正是在看屏幕、能控制的那一路（另一台已配对的手机没开桌面流，不能替它解锁）。
+    private func ownsControllingDesktop(channel: UInt32) -> Bool {
+        guard desktop?.channel == channel, let viewer = server.desktopViewer else { return false }
+        return viewer.connection == id && viewer.channel == channel && viewer.canControl
+    }
+
+    private func canUnlockRemotely(channel: UInt32) -> Bool {
         peerSupportsUnlock && server.desktopEnvironment.isUnlockEnabled()
-            && (server.desktopViewer?.canControl ?? false) && server.screenController != nil
+            && ownsControllingDesktop(channel: channel) && server.screenController != nil
     }
 
     fileprivate func handleUnlock(requestID: UUID, password: String, channel: UInt32) {
@@ -611,25 +825,55 @@ extension RemoteHostConnection {
             link.send(RemoteMessage(.desktopUnlockResult, channel: channel,
                                     payload: RemoteJSON.encode(RemoteDesktopUnlockResult(requestID: requestID, outcome: outcome))))
         }
-        guard canUnlockRemotely, let controller = server.screenController else { return reply(.notAllowed) }
+        guard canUnlockRemotely(channel: channel), !unlockInFlight,
+              let controller = server.screenController else { return reply(.notAllowed) }
         guard controller.isLocked else { return reply(.notLocked) }
         AppLogger.info("远程桌面：\(self.peerName) 请求解锁 Mac", category: RemoteLog.category)
+        unlockInFlight = true
+        // 帘幕开着时注入的按键进不了锁屏密码框（2026-11-09 真机实测，见 `RemoteUnlockTypist`）：打字时撤掉，
+        // 打完密码、按回车之前再挂上——锁屏一消失物理屏已经是黑的，不会闪出桌面。打字期间物理屏上看到的只是锁屏。
+        let wasCurtained = controller.isCurtained
+        if wasCurtained { controller.setCurtain(false) }
         Task {
-            let success = await controller.unlock(password: password)
-            guard !isClosed, desktop?.channel == channel else { return }
+            let attempt = await controller.unlock(password: password) { controller.setCurtain(true) }
+            let success = attempt == .unlocked
+            unlockInFlight = false
+            guard !isClosed, desktop?.channel == channel else {
+                // 手机在解锁过程中走了：解开了就锁回去，别把已解锁的桌面晾在那里。
+                if success { controller.lockScreen() }
+                if controller.isCurtained != wasCurtained { controller.setCurtain(wasCurtained) }
+                return
+            }
             if success {
-                controller.setCurtain(true)
+                // 中途被 Mac 前的人解开时没走到回车那一步，这里补上帘幕。
+                if !controller.isCurtained { controller.setCurtain(true) }
+                remotelyUnlocked = true
                 AppLogger.info("远程桌面：解锁成功，已进入帘幕", category: RemoteLog.category)
             } else {
-                AppLogger.info("远程桌面：解锁未成功", category: RemoteLog.category)
+                // 没解开：恢复解锁前的帘幕状态，Mac 前的人还能看到锁屏。
+                if controller.isCurtained != wasCurtained { controller.setCurtain(wasCurtained) }
+                AppLogger.info(attempt == .inputBlocked ? "远程桌面：解锁未进行（有程序占着键盘）"
+                                                        : "远程桌面：解锁未成功（输完密码仍锁着）", category: RemoteLog.category)
             }
-            reply(success ? .unlocked : .rejected)
+            reply(Self.unlockOutcome(attempt, peerKnowsBlocked: peerSupportsUnlockOutcomes))
             sendScreenState()
         }
     }
 
+    /// 解锁结果怎么告诉对端：老对端不认 `inputBlocked`，退回 `stillLocked`。
+    nonisolated static func unlockOutcome(_ attempt: RemoteUnlockAttempt,
+                                          peerKnowsBlocked: Bool) -> RemoteDesktopUnlockResult.Outcome {
+        switch attempt {
+        case .unlocked: .unlocked
+        case .stillLocked: .stillLocked
+        case .inputBlocked: peerKnowsBlocked ? .inputBlocked : .stillLocked
+        }
+    }
+
     fileprivate func setCurtain(_ on: Bool, channel: UInt32) {
-        guard canUnlockRemotely, let controller = server.screenController else { return }
+        guard let controller = server.screenController, ownsControllingDesktop(channel: channel) else { return }
+        // 关帘幕不看开关：开关中途被关掉时，手机仍要能把帘幕撤掉。开帘幕才要求开关打开。
+        if on, !canUnlockRemotely(channel: channel) { return }
         controller.setCurtain(on)
         sendScreenState()
     }
@@ -717,5 +961,17 @@ enum RemoteConnectionOrigin {
     var path: RemoteLinkPath {
         if case .internet(_, _, let path) = self { return path }
         return .localNetwork
+    }
+}
+
+/// 声音流号的计数器（加锁：连接在主线程上开新流，声音发送端在连接队列上换档）。
+nonisolated final class RemoteAudioStreamNumbers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt16 = 0
+
+    func next() -> UInt16 {
+        lock.lock(); defer { lock.unlock() }
+        value &+= 1
+        return value
     }
 }

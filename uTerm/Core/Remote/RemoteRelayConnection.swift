@@ -18,6 +18,30 @@ nonisolated struct RemoteRelayRequest: Encodable, Sendable {
     var ticket: String?
     var sig: String?
     var hostSig: String?
+    /// 用成员证书认证时：自己的成员公钥、证书、能连的主机、到期时间。中继 1.3.0 之前不认。
+    var member: String?
+    var cert: String?
+    var scope: String?
+    var exp: Int64?
+
+    /// 成员身份的请求（`client` / `dial`）：用配置里的成员私钥签，持证书时一并带上证书。
+    static func member(role: String, config: RemoteRelayConfig, nonce: String, parameter: String = "",
+                       hostID: String? = nil, session: String? = nil) throws -> RemoteRelayRequest {
+        guard let key = config.memberKey else { throw RemoteRelayError.notConfigured }
+        // 过期的证书中继只会一言不发地断开；本地先拦下，说清楚怎么续。
+        guard !config.isExpired() else { throw RemoteRelayError.certificateExpired }
+        var request = RemoteRelayRequest(
+            role: role, hostID: hostID, session: session,
+            sig: try RemoteRelaySignature.sign(key, role: role, relayID: config.relayID, nonce: nonce,
+                                               parameter: parameter))
+        if config.isCertificate {
+            request.member = config.memberPublicKey
+            request.cert = config.cert
+            request.scope = config.scope
+            request.exp = config.expires
+        }
+        return request
+    }
 }
 
 nonisolated struct RemoteRelayAnswer: Decodable, Sendable {
@@ -36,6 +60,10 @@ nonisolated struct RemoteRelayMessage: Codable, Sendable {
     var box: String?
     var ticket: String?
     var hosts: [String]?
+    /// `revoke` / `revoked`：吊销的成员公钥。
+    var member: String?
+    /// `revoke`：那张证书的到期时间（Unix 秒）。中继记到那时为止。
+    var exp: Int64?
 
     init(type: String, session: String? = nil, from: String? = nil, to: String? = nil, box: String? = nil) {
         self.type = type
@@ -62,28 +90,35 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
     case notAllowed
     /// 手机这边的配置缺东西（还没导入中继、不知道 Mac 的公钥）。
     case notConfigured
+    /// 那台 Mac 发的成员证书过期了（设备太久没连过它）。
+    case certificateExpired
+    /// 信令交给中继了，Mac 没在时限内回（睡着了、不认识这台设备，或者网络太差）。
+    case noReply
 
     var errorDescription: String? {
         switch self {
-        case .unreachable(let reason): return "连不上中继服务器：\(reason)"
+        case .unreachable(let reason): return "无法连接中继：\(reason)"
         case .refused(let reason): return Self.describe(reason)
-        case .timeout: return "中继服务器没有响应"
-        case .malformed: return "中继服务器的回应无法识别"
+        case .timeout: return "中继没有响应（网络可能刚切换或信号太差）"
+        case .noReply: return "Mac 没有回应。它可能已睡眠、没有允许这台设备经公网连接，或者网络太差"
+        case .malformed: return "中继的回应无法识别"
         case .closed: return "连接已断开"
-        case .rejected: return "中继服务器没有接受这份配置（密钥不对、配置不是这台中继的，或版本不一致），请重新导入"
-        case .macOffline: return "Mac 不在线。它可能睡眠了，或者没有打开公网接入"
-        case .notAllowed: return "这台设备还不能经公网连接。请在 Mac 的 设置 › 远程控制 里勾选它"
-        case .notConfigured: return "还没有配置中继服务器"
+        case .rejected: return "中继没有接受这份配置（成员密钥不对、配置不属于这台中继，或版本不一致），需要重新导入"
+        case .macOffline: return "Mac 不在线。它可能已睡眠，或者没有打开「允许经公网接入」"
+        case .notAllowed: return "这台设备还不能经公网连接。在 Mac 的「设置 › 远程控制」里的「允许经公网连接的设备」中勾选它"
+        case .notConfigured: return "还没有配置中继"
+        case .certificateExpired:
+            return "这台 Mac 给的中继授权已过期（很久没连过它）。在同一网络里连一次这台 Mac，或重新扫码配对，就会自动续上"
         }
     }
 
     private static func describe(_ reason: String) -> String {
         switch reason {
-        case "full": return "中继服务器已满"
+        case "full": return "中继已满"
         case "offline": return "Mac 不在线"
-        case "hostKey": return "这台 Mac 在中继上的身份对不上。如果重装过，请在服务器上运行 uterm-relay forget"
+        case "hostKey": return "这台 Mac 在中继上登记的身份不一致。如果重装过 uTerm，在中继所在的主机上运行 uterm-relay forget"
         case "ticket": return "Mac 没有及时响应"
-        default: return "中继服务器拒绝了连接（\(reason)）"
+        default: return "中继拒绝了连接（\(reason)）"
         }
     }
 }
@@ -107,6 +142,8 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.uozi.uTerm.remote.relay", qos: .userInteractive)
     private let config: RemoteRelayConfig
     private var readyWaiter: CheckedContinuation<Void, Error>?
+    /// 建连超时被看门狗关掉的（队列上读写）。
+    private var openTimedOut = false
 
     init(config: RemoteRelayConfig) {
         self.config = config
@@ -116,6 +153,16 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
 
     /// 连上并读 hello。
     func open(timeout: TimeInterval = requestTimeout) async throws -> RemoteRelayHello {
+        guard RemoteLocalState.allowsRelay(host: config.host) else {
+            throw RemoteRelayError.unreachable("测试宿主不连外部中继")
+        }
+        // 时限从建连开始算：连上、发魔数、读挑战整段一起，不让任何一步单独拖过时限。
+        let watchdog = DispatchWorkItem { [weak self] in
+            self?.openTimedOut = true
+            self?.connection.cancel()
+        }
+        queue.asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer { watchdog.cancel() }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 self.readyWaiter = continuation
@@ -126,15 +173,15 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
         var opening = Data("UTRL".utf8)
         opening.append(1)
         try await sendRaw(opening)
-        let watchdog = DispatchWorkItem { [connection] in connection.cancel() }
-        queue.asyncAfter(deadline: .now() + timeout, execute: watchdog)
-        defer { watchdog.cancel() }
         let challenge: Data
         do {
             challenge = try await read(exactly: RemoteRelayHello.nonceBytes)
-        } catch RemoteRelayError.closed {
+        } catch {
+            // 时限到了被看门狗关掉的：是网络慢，不是中继不认。
+            if queue.sync(execute: { openTimedOut }) { throw RemoteRelayError.timeout }
             // 魔数之后什么都不回：不是中继，或者协议版本不一致。
-            throw RemoteRelayError.rejected
+            if case RemoteRelayError.closed = error { throw RemoteRelayError.rejected }
+            throw error
         }
         return RemoteRelayHello(nonce: challenge.base64EncodedString())
     }
@@ -158,7 +205,7 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
             readyWaiter = nil
             if case .waiting = state { connection.cancel() }
         case .cancelled:
-            readyWaiter?.resume(throwing: RemoteRelayError.unreachable("连接已关闭"))
+            readyWaiter?.resume(throwing: openTimedOut ? RemoteRelayError.timeout : RemoteRelayError.unreachable("连接已关闭"))
             readyWaiter = nil
         default:
             break
@@ -231,6 +278,11 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
     func close() {
         connection.cancel()
     }
+
+    /// 这条连接走的网卡（连上之后才有）。
+    var interfaceLabel: String? {
+        queue.sync { RemoteNetworkLabel.interface(of: connection.currentPath) }
+    }
 }
 
 /// 一条已经连上、在自己队列上跑的 `NWConnection`。回调转到 `RemoteLink` 的队列上。
@@ -274,4 +326,6 @@ nonisolated final class RemoteStartedNWTransport: RemoteTransport, @unchecked Se
         connection.stateUpdateHandler = nil
         connection.cancel()
     }
+
+    var interfaceName: String? { connection.currentPath?.availableInterfaces.first?.name }
 }

@@ -112,12 +112,12 @@ struct ServerFormView: View {
     }
 
     private var targetSection: some View {
-        DarkFormSection(title: "目标服务器") {
+        DarkFormSection(title: "目标主机") {
             DarkFormField(label: "名称") {
                 UDTextField(placeholder: "例如：api-prod", text: $draft.name)
             }
             HStack(alignment: .top, spacing: 10) {
-                DarkFormField(label: "主机") {
+                DarkFormField(label: "地址") {
                     UDTextField(placeholder: "host.example.com", text: $draft.host,
                                 errorMessage: hostError, monospaced: true)
                         .accessibilityValue(draft.host.isEmpty ? "未填写" : draft.host)
@@ -144,7 +144,7 @@ struct ServerFormView: View {
                                 isSecure: true, revealable: true)
                 }
             } else {
-                DarkFormField(label: "密钥", hint: "从密钥管理器选择") {
+                DarkFormField(label: "密钥", hint: "从「密钥管理」中选择") {
                     KeySelectorView(
                         keys: allKeys, selected: selectedKey, open: $keyPickerOpen,
                         onPick: { draft.keyID = $0; keyPickerOpen = false },
@@ -206,11 +206,11 @@ struct ServerFormView: View {
             UDToggle($draft.useJumpHost)
         }) {
             if !draft.useJumpHost {
-                Text("如目标服务器在内网，可通过跳板机间接连接。")
+                Text("目标主机在内网时，可以经跳板机连接。")
                     .font(.system(size: 11.5)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                DarkFormField(label: "跳板机", hint: "只能从已有服务器中选择") {
+                DarkFormField(label: "跳板机", hint: "只能从已有主机中选择") {
                     JumpHostSelectorView(
                         hosts: availableJumps, selected: selectedJump, open: $jumpPickerOpen,
                         onPick: { draft.jumpHostID = $0; jumpPickerOpen = false })
@@ -227,7 +227,7 @@ struct ServerFormView: View {
                 if testInFlight { cancelTest() } else { startTest() }
             }
             .disabled(!testInFlight && !canTest)
-            .help("用当前填写的主机、认证方式即时验证 SSH 连接（无需先保存）")
+            .help("用已填写的地址与认证信息测试 SSH 连接，无需先保存")
 
             if testInFlight {
                 UDIndeterminateBar().frame(width: 60)
@@ -265,7 +265,7 @@ struct ServerFormView: View {
     /// 主机名 inline 校验：必填。仅在用户编辑过又清空时提示（避免开屏 / 编辑态即红）。
     private var hostError: String? {
         guard hostTouched else { return nil }
-        return draft.trimmedHost.isEmpty ? "请填写主机地址" : nil
+        return draft.trimmedHost.isEmpty ? "填写主机地址" : nil
     }
 
     /// 已有的非空分组名，去重 + locale 排序。
@@ -273,9 +273,9 @@ struct ServerFormView: View {
 
     /// 标题：编辑 / 复制 / 新建。
     private var titleText: String {
-        if editing != nil { return "编辑服务器" }
-        if duplicating != nil { return "复制服务器" }
-        return "新建服务器"
+        if editing != nil { return "编辑主机" }
+        if duplicating != nil { return "复制主机" }
+        return "新建主机"
     }
 
     // MARK: - 测试连接

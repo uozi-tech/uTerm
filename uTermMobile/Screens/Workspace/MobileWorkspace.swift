@@ -52,11 +52,15 @@ enum MWorkTab: Identifiable {
         return nil
     }
 
-    /// 标签标题：远控终端跟 Mac 上那枚标签同名，其他终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
+    /// 标签标题：远控终端以 Mac 上那枚标签的名字为准（`RemoteSessionInfo.remoteTabTitle`，Mac 控 Mac 同一规则），
+    /// 其他终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
     var title: String {
         switch self {
         case .terminal(let t):
-            if let title = t.remote?.macTabTitle { return title }
+            if let remote = t.remote {
+                return RemoteSessionInfo.remoteTabTitle(remote.sessionInfo, shellTitle: t.controller.shellTitle,
+                                                        fallback: hostName)
+            }
             return t.controller.shellTitle ?? hostName
         case .files: return hostName
         }
@@ -108,11 +112,8 @@ struct RemoteTabChanges {
 
 private struct RemoteFollow {
     let client: RemoteMacClient
-    /// 上次收到的终端列表。
-    var listed: Set<UUID> = []
-    /// 接管时已开标签、但还没在列表里出现过的终端。刚在 Mac 上开的本机 shell 可能排在列表更新之前，
-    /// 不能因为列表里没有就当它关了。
-    var awaitingListing: Set<UUID>
+    /// 列表对账与「用户亲手排过」（两端共用的 `RemoteTakeoverState`）。
+    var state: RemoteTakeoverState
 }
 
 /// 移动端工作区：全部会话标签（终端 / 文件）+ 至多两个分屏格 + 聚焦格。
@@ -198,8 +199,10 @@ final class MobileWorkspace {
     /// 这里只摆标签：`opened` 由调用方建连，`removed` 由调用方清理。
     func takeOver(_ takeover: MRemoteTakeover) -> RemoteTabChanges {
         follows.removeAll { $0.client === takeover.client }
-        follows.append(RemoteFollow(client: takeover.client, awaitingListing: Set(takeover.sessionIDs)))
+        follows.append(RemoteFollow(client: takeover.client,
+                                    state: RemoteTakeoverState(takingOver: takeover.sessionIDs)))
         let changes = openRemoteTabs(takeover.client, sessionIDs: takeover.sessionIDs, activate: true)
+        arrangeRemoteTabs(of: takeover.client, order: takeover.order)
         if let front = existing(remote: MRemoteSource(client: takeover.client, sessionID: takeover.focus)) {
             activate(front.id)
         }
@@ -229,18 +232,14 @@ final class MobileWorkspace {
     /// Mac 的终端列表更新了，手机上的标签跟着它走：
     /// - 没见过的终端在后台开标签，不抢前台。在手机上关掉的不算新的，不会再开回来。
     /// - 列表里出现过、现在没了的终端（在 Mac 上关了、Mac 上的连接断了）关掉标签。之后回来的算新的。
+    /// - `order` 是 Mac 上的标签顺序（老版本 Mac 不发，为 nil），这台 Mac 的标签跟着它排（`arrangeRemoteTabs`）。
     /// - `sessionIDs` 为 nil = 这条连接上还没收到列表（刚连上、断开了），不能当成「终端都没了」，什么也不动。
-    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]?) -> RemoteTabChanges {
+    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]?, order: [UUID]? = nil) -> RemoteTabChanges {
         guard let sessionIDs, let index = follows.firstIndex(where: { $0.client === client }) else {
             return RemoteTabChanges()
         }
-        let current = Set(sessionIDs)
-        let gone = follows[index].listed.subtracting(current)
-        let fresh = sessionIDs.filter {
-            !follows[index].listed.contains($0) && !follows[index].awaitingListing.contains($0)
-        }
-        follows[index].listed = current
-        follows[index].awaitingListing.subtract(current)
+        let update = follows[index].state.update(sessionIDs)
+        let (gone, fresh) = (update.gone, update.fresh)
 
         var changes = RemoteTabChanges()
         for sessionID in gone {
@@ -251,7 +250,23 @@ final class MobileWorkspace {
         let added = openRemoteTabs(client, sessionIDs: fresh, activate: false)
         changes.opened = added.opened
         changes.removed += added.removed
+        arrangeRemoteTabs(of: client, order: order)
         return changes
+    }
+
+    /// 这台 Mac 的标签按它上面的顺序排：每一格各排各的，只在这些标签原来占的位置之间换（`RemoteTabArrangement`），
+    /// 直连与文件标签、用户挪到另一格的远控标签都留在原处。前台标签和聚焦格不变，正看着的那个不会被切走。
+    /// `order` 为 nil（老版本 Mac）时不动。
+    /// 用户在手机上亲手排过这台 Mac 的标签（`noteArrangedByHand`）之后也不动，重新接管才恢复。
+    func arrangeRemoteTabs(of client: RemoteMacClient, order: [UUID]?) {
+        guard let order = follows.first(where: { $0.client === client })?.state.arrangement(order) else { return }
+        for index in panes.indices {
+            let arranged = RemoteTabArrangement.arranged(panes[index].tabIDs, order: order) { id in
+                guard let remote = tab(id)?.terminal?.remote, remote.client === client else { return nil }
+                return remote.sessionID
+            }
+            if arranged != panes[index].tabIDs { panes[index].tabIDs = arranged }
+        }
     }
 
     /// 还接着的标签不动；接入已结束的（被别的设备接管、在 Mac 上断开）换成新标签，不然就是一张死画面。
@@ -377,6 +392,40 @@ final class MobileWorkspace {
         merged.activeID = keepActive
         panes = [merged]
         focusedPaneID = merged.id
+    }
+
+    /// 用户亲手把这个标签排到了某个位置：它若是远控标签，这台 Mac 推来的顺序从此不再覆盖手机上的排法，
+    /// 直到重新接管（`takeOver` 换一份新的跟进状态）。
+    func noteArrangedByHand(_ tabID: UUID) {
+        guard let client = tab(tabID)?.terminal?.remote?.client,
+              let index = follows.firstIndex(where: { $0.client === client }) else { return }
+        follows[index].state.noteArrangedByHand()
+    }
+
+    /// 这台 Mac 的标签是否被用户亲手排过。
+    func isArrangedByHand(_ client: RemoteMacClient) -> Bool {
+        follows.first { $0.client === client }?.state.arrangedByHand ?? false
+    }
+
+    /// 在所在格里把标签挪到第 `index` 位（拖动排序）。前台标签与聚焦格不变，越界时夹到两端。
+    func reorder(_ tabID: UUID, to index: Int) {
+        guard let pane = paneIndex(containing: tabID),
+              let from = panes[pane].tabIDs.firstIndex(of: tabID) else { return }
+        var ids = panes[pane].tabIDs
+        ids.remove(at: from)
+        ids.insert(tabID, at: min(max(index, 0), ids.count))
+        if ids != panes[pane].tabIDs { panes[pane].tabIDs = ids }
+    }
+
+    /// 拖到另一格的标签条上松手：并进那一格的第 `index` 位，成为那一格的前台并聚焦。原格空了就收起。
+    func move(_ tabID: UUID, toPane paneID: UUID, at index: Int) {
+        guard let source = paneIndex(containing: tabID),
+              let target = panes.firstIndex(where: { $0.id == paneID }),
+              source != target else { return }
+        move(tabID, from: source, to: target)
+        reorder(tabID, to: index)
+        focusedPaneID = panes[target].id
+        if panes[source].tabIDs.isEmpty { removePane(at: source) }
     }
 
     /// 把标签挪到另一格（没分屏就先拆出一格）。挪走后原格空了会收起，等同取消分屏。

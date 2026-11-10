@@ -2,7 +2,7 @@ import AppKit
 import SwiftData
 import SwiftUI
 
-/// Dock 右键菜单里的自定义项：新建本机终端 + 最近连接。系统把它们排在窗口列表下方。
+/// Dock 右键菜单里的自定义项：打开欢迎页、新建本机终端 + 最近连接。系统把它们排在窗口列表下方。
 @MainActor
 final class DockMenuController: NSObject {
     struct Server: Equatable {
@@ -12,17 +12,20 @@ final class DockMenuController: NSObject {
 
     private let isLocked: @MainActor () -> Bool
     private let recentServers: @MainActor () -> [Server]
+    private let onOpenWelcome: @MainActor () -> Void
     private let onNewLocalShell: @MainActor () -> Void
     private let onOpenServer: @MainActor (UUID) -> Void
 
     init(
         isLocked: @escaping @MainActor () -> Bool,
         recentServers: @escaping @MainActor () -> [Server],
+        onOpenWelcome: @escaping @MainActor () -> Void,
         onNewLocalShell: @escaping @MainActor () -> Void,
         onOpenServer: @escaping @MainActor (UUID) -> Void
     ) {
         self.isLocked = isLocked
         self.recentServers = recentServers
+        self.onOpenWelcome = onOpenWelcome
         self.onNewLocalShell = onNewLocalShell
         self.onOpenServer = onOpenServer
     }
@@ -31,6 +34,12 @@ final class DockMenuController: NSObject {
     func makeMenu() -> NSMenu? {
         guard !isLocked() else { return nil }
         let menu = NSMenu()
+        let welcome = NSMenuItem(
+            title: String(localized: "打开欢迎页"),
+            action: #selector(openWelcome),
+            keyEquivalent: "")
+        welcome.target = self
+        menu.addItem(welcome)
         let newShell = NSMenuItem(
             title: String(localized: "新建本机终端"),
             action: #selector(newLocalShell),
@@ -65,6 +74,10 @@ final class DockMenuController: NSObject {
                     serverName: profile.name.isEmpty ? profile.host : profile.name,
                     groupName: profile.group))
         }
+    }
+
+    @objc private func openWelcome() {
+        onOpenWelcome()
     }
 
     @objc private func newLocalShell() {

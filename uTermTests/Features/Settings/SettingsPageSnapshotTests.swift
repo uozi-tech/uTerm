@@ -1,6 +1,7 @@
 import AppKit
 import SwiftData
 import SwiftUI
+import UDesignKit
 import XCTest
 @testable import uTerm
 
@@ -116,7 +117,7 @@ final class SettingsPageSnapshotTests: XCTestCase {
             defaults: defaults)
 
         let remoteSettings = RemoteControlSettings(defaults: defaults)
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
         if options.pairedDevices {
             let peers: [(String, TimeInterval)] = [
                 ("我的 iPhone", 1_789_000_000),
@@ -275,6 +276,24 @@ final class SettingsPageSnapshotTests: XCTestCase {
             }
         }
         print("[settings-shots] done dir=\(dir.path)")
+    }
+
+    /// 公网接入一组单独拍：打开「允许经公网接入」后才有「中继状态」「保持唤醒」与它下面的合盖提示。
+    /// 中继地址是 `.invalid`，`onAppear` 里那次连接注定连不上，不会真连外网；保持唤醒关着，不在测试宿主里拿电源断言。
+    func testRenderInternetAccessGroup() async throws {
+        defer { closeAllWindows() }
+        let dir = try outputDirectory()
+        for dark in [false, true] {
+            let fixture = try makeFixture(Options())
+            fixture.remoteSettings.keepsAwakeForInternet = false
+            fixture.remoteSettings.isInternetEnabled = true
+            try await shoot("remote-internet", size: NSSize(width: 720, height: 760), dark: dark, into: dir) {
+                environment(RemoteInternetGroup().padding(24).environment(TerminalSessionRegistry()), fixture, dark: dark)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .background(UD.bg)
+            }
+            fixture.remoteServer.updateInternetAccess(enabled: false, keepAwake: false)
+        }
     }
 }
 

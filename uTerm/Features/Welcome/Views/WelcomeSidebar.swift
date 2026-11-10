@@ -298,6 +298,15 @@ struct WelcomeSidebar: View {
                     shortcutHint: WelcomeSidebarNav.shortcutHint(for: .quickCommands, in: navEntries)
                 )
                 .padding(.horizontal, 8)
+                // 去控制别的 Mac：与快捷命令一样在本窗口右侧换成「我的 Mac」面板。
+                UDSidebarRow(
+                    systemImage: "desktopcomputer",
+                    label: "我的 Mac",
+                    selected: pane == .remoteMacs,
+                    action: { pane = .remoteMacs },
+                    shortcutHint: WelcomeSidebarNav.shortcutHint(for: .remoteMacs, in: navEntries)
+                )
+                .padding(.horizontal, 8)
             }
             // 设计稿 Sidebar：padding 6 0 14 —— 顶部紧贴工具栏，分组靠 16pt 间距 + 小标题。
             .padding(.top, 6)
@@ -318,7 +327,11 @@ struct WelcomeSidebar: View {
 
     /// 当前侧栏选中的目标（用于 ⌥↑↓ 计算相邻项）。
     private var currentTarget: WelcomeNavTarget {
-        pane == .quickCommands ? .quickCommands : .section(filter.section)
+        switch pane {
+        case .hosts: .section(filter.section)
+        case .quickCommands: .quickCommands
+        case .remoteMacs: .remoteMacs
+        }
     }
 
     /// 应用一次侧栏跳转：主机分区切回主机面板并设 section；「快捷命令」切到命令面板。
@@ -329,6 +342,8 @@ struct WelcomeSidebar: View {
             filter.section = s
         case .quickCommands:
             pane = .quickCommands
+        case .remoteMacs:
+            pane = .remoteMacs
         }
     }
 

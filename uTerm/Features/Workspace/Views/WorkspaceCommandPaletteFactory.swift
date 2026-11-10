@@ -50,17 +50,17 @@ enum WorkspaceCommandPaletteFactory {
         // 命令
         items.append(CommandPaletteItem(
             id: "cmd.splitPane", kind: .command,
-            title: "新建终端分组", detail: "在当前工作区分屏", hint: "⇧⌘D", group: nil) {
+            title: "向下分屏", detail: "", hint: "⇧⌘D", group: nil) {
                 workspace.splitActiveGroup(direction: .vertical)
             })
         items.append(CommandPaletteItem(
             id: "cmd.closeTab", kind: .command,
-            title: "关闭当前终端标签", detail: "", hint: "⌘W", group: nil) {
+            title: "关闭当前终端标签页", detail: "", hint: "⌘W", group: nil) {
                 workspace.requestCloseActiveTerminalTab()
             })
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,
-            title: "新建主机…", detail: "创建一台新服务器", hint: "↵", group: nil) {
+            title: "新建主机…", detail: "在欢迎窗口中新建", hint: "↵", group: nil) {
                 actions.openWelcome()
             })
 
@@ -72,7 +72,7 @@ enum WorkspaceCommandPaletteFactory {
 
         items.append(CommandPaletteItem(
             id: "cmd.importConfig", kind: .command,
-            title: "导入 ~/.ssh/config", detail: "从本地 SSH config 批量导入", hint: "↵", group: nil) {
+            title: "导入 SSH 配置…", detail: "从 ~/.ssh/config 批量导入", hint: "↵", group: nil) {
                 actions.openImport()
             })
 
@@ -90,7 +90,7 @@ enum WorkspaceCommandPaletteFactory {
         if hit.isDirectory {
             return CommandPaletteItem(
                 id: "dir.\(path)", kind: .file, title: name, detail: path,
-                hint: "进入", group: "目录") {
+                hint: "进入", group: "文件夹") {
                     let browser = workspace.fileBrowserModel
                     // 显示左侧文件 sidebar（leftSidebarVisibility 是真实字段；.detailOnly = 隐藏）。
                     // 先显示侧栏给即时反馈，再异步导航（导航完成后列表自然刷新）。

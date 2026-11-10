@@ -26,10 +26,12 @@ nonisolated enum RemoteDatagramKind: UInt8, Sendable {
     case mediaNack = 5
     /// 打洞后确认路径双向可用（见 `RemoteDirectAttempt`）。用单独的密钥，传输层解不开也用不着解。
     case pathCheck = 6
+    /// 声音包：`[u32 桌面通道][RemoteDesktopAudioFrame]`。不重传，丢包靠包里的冗余补。老版本解不出这个种类，直接丢掉。
+    case audio = 7
 
     /// 视频用会话密钥派生的密钥，其余用信令派生的密钥。信令密钥只由两端长期密钥和随机数决定，
     /// 长期密钥日后泄露就能解开录下来的流量；会话密钥有临时密钥参与，所以画面不能用前者加密。
-    var usesMediaKey: Bool { self == .media || self == .mediaNack }
+    var usesMediaKey: Bool { self == .media || self == .mediaNack || self == .audio }
 }
 
 /// 一个方向一把密钥。
@@ -165,14 +167,26 @@ nonisolated struct RemoteDatagramCipher {
     }
 }
 
-/// 发送节奏：令牌桶加两级队列。控制消息和终端总在视频前面，手机和基站的缓冲才不会被一帧视频撑满。
+/// 发送节奏：令牌桶加四级队列（控制 > 声音 > 视频重传 > 视频）。控制消息和终端总在视频前面，手机和基站的
+/// 缓冲才不会被一帧视频撑满。
 nonisolated struct RemoteDatagramPacer {
     enum Priority {
         /// KCP、报告、视频重传请求。
         case control
+        /// 声音包：排在控制之后、视频之前。视频占满上行时声音也不被挤掉。
+        case audio
+        /// 视频重传的分片和尾部探测：在新视频之前（它们补的是手机正在等的帧），但在声音之后。
+        ///
+        /// 以前跟控制一个队列，排在声音前面：3G（0.75 Mbps）上视频一丢包，重传成批插到声音前面，声音欠载从
+        /// 0–2 次涨到 6–12 次（2026-11-09）。也不能跟新视频排一个队：排在一大串新分片后面，等轮到时这一帧早
+        /// 过了时限，成批放弃、码率崩掉（试过）。
+        case retransmit
         /// 视频分片。
         case media
     }
+
+    /// 声音最多排这么多包（20 ms 一包 = 200 ms）：再旧的到了也赶不上播放，丢掉最旧的。
+    static let maxQueuedAudio = 10
 
     /// 字节 / 秒。
     var rate: Double
@@ -180,9 +194,18 @@ nonisolated struct RemoteDatagramPacer {
     private var lastRefill: UInt64
     private var control: [(RemoteDatagramKind, Data)] = []
     private var controlHead = 0
+    private var audio: [(RemoteDatagramKind, Data)] = []
+    private var retransmits: [(RemoteDatagramKind, Data)] = []
+    private var retransmitHead = 0
     private var media: [(RemoteDatagramKind, Data)] = []
     private var mediaHead = 0
     private(set) var queuedMediaBytes = 0
+    /// 进过 / 离开视频队列的分片数（只增）。视频队列先进先出、不丢，发送端拿它判断某一帧的最后一片发没发。
+    private(set) var mediaEnqueued: UInt64 = 0
+    private(set) var mediaSent: UInt64 = 0
+    /// 同上，重传队列的（含尾部探测）。
+    private(set) var retransmitEnqueued: UInt64 = 0
+    private(set) var retransmitSent: UInt64 = 0
 
     init(rate: Double, now: UInt64) {
         self.rate = rate
@@ -195,13 +218,22 @@ nonisolated struct RemoteDatagramPacer {
         max(2400, rate * 0.005)
     }
 
-    var isEmpty: Bool { controlHead == control.count && mediaHead == media.count }
+    var isEmpty: Bool {
+        controlHead == control.count && audio.isEmpty && retransmitHead == retransmits.count && mediaHead == media.count
+    }
 
     mutating func enqueue(_ kind: RemoteDatagramKind, _ payload: Data, priority: Priority) {
         switch priority {
         case .control: control.append((kind, payload))
+        case .audio:
+            audio.append((kind, payload))
+            if audio.count > Self.maxQueuedAudio { audio.removeFirst(audio.count - Self.maxQueuedAudio) }
+        case .retransmit:
+            retransmits.append((kind, payload))
+            retransmitEnqueued += 1
         case .media:
             media.append((kind, payload))
+            mediaEnqueued += 1
             queuedMediaBytes += payload.count
         }
     }
@@ -220,9 +252,26 @@ nonisolated struct RemoteDatagramPacer {
             tokens -= Double(item.1.count + RemoteDatagramCipher.overhead)
             return item
         }
+        if !audio.isEmpty {
+            let item = audio.removeFirst()
+            tokens -= Double(item.1.count + RemoteDatagramCipher.overhead)
+            return item
+        }
+        if retransmitHead < retransmits.count {
+            let item = retransmits[retransmitHead]
+            retransmitHead += 1
+            retransmitSent += 1
+            if retransmitHead == retransmits.count {
+                retransmits.removeAll(keepingCapacity: true)
+                retransmitHead = 0
+            }
+            tokens -= Double(item.1.count + RemoteDatagramCipher.overhead)
+            return item
+        }
         if mediaHead < media.count {
             let item = media[mediaHead]
             mediaHead += 1
+            mediaSent += 1
             queuedMediaBytes -= item.1.count
             if mediaHead == media.count {
                 media.removeAll(keepingCapacity: true)

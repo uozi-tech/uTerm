@@ -51,7 +51,7 @@ struct PortForwardWindowView: View {
         if windowID != nil, let server {
             pfBody(server: server)
         } else {
-            placeholder(windowID == nil ? "正在恢复…" : "服务器已删除",
+            placeholder(windowID == nil ? "正在恢复…" : "主机已删除",
                         systemImage: windowID == nil ? "clock" : "server.rack")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: .top)

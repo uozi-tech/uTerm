@@ -49,7 +49,7 @@ final class RemoteEndToEndTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "测试主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()), session: session)
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         defer { server.stop(); session.dispose() }
@@ -60,9 +60,13 @@ final class RemoteEndToEndTests: XCTestCase {
         // 手机端：首次连接要配对。
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
-        let asked = await waitUntil { !server.pairingRequests.isEmpty }
+        // Mac 先登记配对请求、再把「等待审批」发给手机，两件事之间隔着一次网络往返：两边都到了才往下。
+        let asked = await waitUntil {
+            guard !server.pairingRequests.isEmpty, case .awaitingApproval = client.state else { return false }
+            return true
+        }
         XCTAssertTrue(asked)
         guard case .awaitingApproval(let phoneCode) = client.state else {
             return XCTFail("手机端应在等待审批，实际 \(client.state)")
@@ -131,7 +135,7 @@ final class RemoteEndToEndTests: XCTestCase {
                                                    connectedAt: Date()), session: session)
             sessions.append((id, session, backend))
         }
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         defer {
@@ -142,7 +146,7 @@ final class RemoteEndToEndTests: XCTestCase {
         let port = try XCTUnwrap(server.port)
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
         XCTAssertTrue(asked)
@@ -201,7 +205,7 @@ final class RemoteEndToEndTests: XCTestCase {
 
     func test_refused_pairing_is_not_retried_automatically() async throws {
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         defer { server.stop() }
@@ -209,7 +213,7 @@ final class RemoteEndToEndTests: XCTestCase {
         let port = try XCTUnwrap(server.port)
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
         XCTAssertTrue(asked)

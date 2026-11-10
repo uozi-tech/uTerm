@@ -54,7 +54,7 @@ struct QuickCommandDetailView: View {
         .alert("删除命令「\(cmd.name)」？", isPresented: $pendingDelete) {
             Button("删除", role: .destructive) { delete() }
             Button("取消", role: .cancel) {}
-        } message: { Text("此操作不可恢复。") }
+        } message: { Text("此操作无法撤销。") }
     }
 
     // MARK: 头部
@@ -106,7 +106,7 @@ struct QuickCommandDetailView: View {
     private var targetsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                MSectionCap(text: "目标服务器 · \(n) 台")
+                MSectionCap(text: "目标主机 · \(n) 台")
                 if n > 1 { Text("并行执行").font(M.sans(11)).foregroundStyle(M.success) }
             }
             VStack(spacing: 7) {
@@ -137,7 +137,7 @@ struct QuickCommandDetailView: View {
             ("执行方式", n > 1 ? "并行 · \(n) 台" : "单台", false),
             ("上次运行", lastRunText, false),
             ("运行次数", "\(cmd.runCount)", true),
-            ("AI 介入", cmd.aiAssisted ? "已开启" : "关闭", false),
+            ("AI 介入", cmd.aiAssisted ? "已开启" : "已关闭", false),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
                          spacing: 16) {
@@ -157,7 +157,7 @@ struct QuickCommandDetailView: View {
             MIcon(name: "spark", size: 16, color: cmd.aiAssisted ? M.aiAccent : M.text3)
             VStack(alignment: .leading, spacing: 1) {
                 Text("AI 介入").font(M.sans(14, weight: .medium)).foregroundStyle(M.text)
-                Text("运行后把命令与输出交给 AI 诊断、续接下一步").font(M.sans(12)).foregroundStyle(M.text3)
+                Text("运行时让 AI 读取输出、自动诊断并续接下一步").font(M.sans(12)).foregroundStyle(M.text3)
             }
             Spacer(minLength: 6)
             MSwitch(on: Binding(get: { cmd.aiAssisted }, set: { commandStore.setAIAssisted(cmd, $0) }))

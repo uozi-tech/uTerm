@@ -203,7 +203,7 @@ final class QuickCommandStoreTests: XCTestCase {
         XCTAssertTrue(resolved[0].exists)
         XCTAssertEqual(resolved[1].name, "10.0.0.1")          // 名为空 → 回退主机名
         XCTAssertTrue(resolved[1].exists)
-        XCTAssertEqual(resolved[2].name, "已删除服务器")        // 未找到 → 占位
+        XCTAssertEqual(resolved[2].name, "已删除的主机")        // 未找到 → 占位
         XCTAssertNil(resolved[2].endpoint)
         XCTAssertFalse(resolved[2].exists)
     }

@@ -11,7 +11,7 @@ struct SettingsRemoteSection: View {
     var body: some View {
         MInsetGroup(header: "远程控制",
                     footer: "「只走公网」打开后，即使 Mac 就在同一个局域网里，连接也经中继或打洞，用来在家里复现外出时的情况。"
-                        + "切换后马上断开现有连接、按新的路重连。网络诊断不受它影响。") {
+                        + "切换后立即断开现有连接，并按新设置重新连接。网络诊断不受它影响。") {
             NavigationLink { RemoteNetworkDiagnosticsScreen() } label: {
                 MInsetRow(icon: "globe", label: "网络诊断", chevron: true)
             }

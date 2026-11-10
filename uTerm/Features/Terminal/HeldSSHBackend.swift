@@ -130,7 +130,7 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         var jumpHost: SSHBridgeJumpHost?
         if let jump = target.profile.jumpHost {
             guard let jumpAuth = resolved.jump else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少跳板机认证材料")
+                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少登录凭据")
             }
             let jumpMaterial = Self.material(jumpAuth)
             jumpHost = SSHBridgeJumpHost(host: jump.host, port: jump.port, username: jumpMaterial.username,
@@ -167,6 +167,17 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
     func setAttributes(_ attributes: Data) async {
         self.attributes = attributes
         await core.setAttributes(attributes)
+    }
+
+    /// 同步交给连接的发送队列（退出 App 途中异步任务不一定来得及跑，之后的 `flushAndClose` 会等它写完），
+    /// 再记下来供重连时重发。
+    nonisolated func sendAttributes(_ attributes: Data) {
+        holderLink.send(HolderFrame(.setAttributes, payload: Array(attributes)))
+        Task { await remember(attributes) }
+    }
+
+    private func remember(_ attributes: Data) {
+        self.attributes = attributes
     }
 
     /// 探活在 `uterm-ssh` 里做（它才有连接）。死了它退出，由退出流程报告，所以这里总是回 true。
@@ -374,15 +385,19 @@ nonisolated struct SSHSessionAttributes: Codable, Equatable, Sendable {
     var windowKind: String
     var serverID: UUID
     var title: String
-    /// 标签的先后（打开时的时间戳）。
+    /// 标签打开时的时间戳。只在没有 `layout`（旧版写的）或会话不在布局里时用来排先后。
     var order: Double
+    /// 写入时整个窗口的布局，位置以它为准（见 `HeldSessionLayout`）。
+    var layout: HeldSessionLayout?
 
-    init(windowID: UUID, windowKind: String, serverID: UUID, title: String, order: Double) {
+    init(windowID: UUID, windowKind: String, serverID: UUID, title: String, order: Double,
+         layout: HeldSessionLayout? = nil) {
         self.windowID = windowID
         self.windowKind = windowKind
         self.serverID = serverID
         self.title = title
         self.order = order
+        self.layout = layout
     }
 
     /// 存在 holder 里、会跨版本读：只有放回窗口必需的两个 ID 是硬要求，其余缺了给默认值。
@@ -394,5 +409,7 @@ nonisolated struct SSHSessionAttributes: Codable, Equatable, Sendable {
         windowKind = try container.decodeIfPresent(String.self, forKey: .windowKind) ?? TerminalWindowKind.workspace
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
         order = try container.decodeIfPresent(Double.self, forKey: .order) ?? 0
+        // 布局只是锦上添花：别的版本写的解不开就当没有，不连累整条归属（那样会话就接不回来了）。
+        layout = try? container.decodeIfPresent(HeldSessionLayout.self, forKey: .layout)
     }
 }

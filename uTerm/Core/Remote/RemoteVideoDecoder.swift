@@ -17,16 +17,18 @@ nonisolated enum RemoteVideoDecodeError: Error, Equatable {
 /// 同步解码是有意的：低延迟流没有 B 帧、不重排，解码器不需要攒帧；同步调用让「这一帧解完了」
 /// 的时刻确定，背压确认（`RemoteDesktopAck`）就在这之后发。不是线程安全的，由调用方在一条串行队列上用。
 nonisolated final class RemoteVideoDecoder {
-    private let outputPixelFormat: OSType
+    /// nil = 跟着码流走：10-bit（HEVC Main10）出 x420，8-bit 出 420v。
+    private let outputPixelFormat: OSType?
     private var session: VTDecompressionSession?
     private var format: CMVideoFormatDescription?
     private var parameterSets: [Data] = []
     /// 解码出过错之后，要等下一个关键帧才继续。
     private(set) var awaitingKeyframe = true
 
-    /// - Parameter outputPixelFormat: 解出来的像素格式。显示用 4:2:0（`AVSampleBufferDisplayLayer` 直接吃，
-    ///   零拷贝）；测试比对像素时用 BGRA。
-    init(outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+    /// - Parameter outputPixelFormat: 解出来的像素格式。默认 nil：按码流的位深出 4:2:0（`AVSampleBufferDisplayLayer`
+    ///   直接吃，零拷贝）——Main10 出 10-bit 的 x420，否则 8-bit 的 420v。写死 8-bit 会把 Mac 发来的 10-bit 码流
+    ///   在解码这一步截成 8-bit（真机反馈「看着还是 8-bit」，渐变出色带）。测试比对像素时传 BGRA。
+    init(outputPixelFormat: OSType? = nil) {
         self.outputPixelFormat = outputPixelFormat
     }
 
@@ -75,8 +77,24 @@ nonisolated final class RemoteVideoDecoder {
             return output
         } catch {
             awaitingKeyframe = true
+            if Self.sessionIsGone(error) { dropSession() }
             throw error
         }
+    }
+
+    /// iOS 在 App 退到后台时会收走硬解会话，之后每次解码都报 `kVTInvalidSessionErr`。会话对象还在，
+    /// `prepare` 见参数集没变就直接复用它——下一个关键帧照样失败，失败确认又让 Mac 补关键帧，循环下去画面
+    /// 一直不出、链路上全是关键帧（白耗电）。报这个错就扔掉会话，下一个关键帧重建。
+    static func sessionIsGone(_ error: Error) -> Bool {
+        guard case RemoteVideoDecodeError.decode(let status) = error else { return false }
+        return status == kVTInvalidSessionErr
+    }
+
+    private func dropSession() {
+        if let session { VTDecompressionSessionInvalidate(session) }
+        session = nil
+        format = nil
+        parameterSets = []
     }
 
     /// 关键帧：参数集变了（开流、Mac 换了分辨率）就重建格式描述；会话接不了新格式就重建会话。
@@ -93,7 +111,7 @@ nonisolated final class RemoteVideoDecoder {
             self.session = nil
         }
         var attributes: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: outputPixelFormat,
+            kCVPixelBufferPixelFormatTypeKey: outputPixelFormat ?? Self.displayPixelFormat(for: description),
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
         ]
         #if os(iOS)
@@ -113,6 +131,29 @@ nonisolated final class RemoteVideoDecoder {
         session = created
         format = description
         parameterSets = frame.parameterSets
+    }
+
+    /// 显示用的输出格式：码流是 10-bit 就出 10-bit，别在解码时截掉精度。
+    static func displayPixelFormat(for description: CMFormatDescription) -> OSType {
+        bitDepth(of: description) > 8 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    }
+
+    /// 码流的亮度位深。HEVC 读 hvcC 里的 bitDepthLumaMinus8（第 17 字节低 3 位）；读不到时看 profile 是不是
+    /// Main10（第 1 字节低 5 位 = 2）。H.264 远控只用 8-bit。
+    static func bitDepth(of description: CMFormatDescription) -> Int {
+        if let bits = CMFormatDescriptionGetExtension(
+            description, extensionKey: kCMFormatDescriptionExtension_BitsPerComponent) as? Int, bits > 0 {
+            return bits
+        }
+        guard let atoms = CMFormatDescriptionGetExtension(
+                  description, extensionKey: kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms)
+                  as? [String: Any],
+              let hvcC = atoms["hvcC"] as? Data, hvcC.count > 17 else { return 8 }
+        let bytes = [UInt8](hvcC)
+        let luma = Int(bytes[17] & 0x07) + 8
+        if luma > 8 { return luma }
+        return bytes[1] & 0x1F == 2 ? 10 : 8
     }
 
     /// 解码回调的落点（回调的闭包是 `@Sendable` 的，不能直接改局部变量）。

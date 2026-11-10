@@ -66,7 +66,7 @@ struct FilesSessionBody: View {
             Button("取消", role: .cancel) { pendingDelete = nil }
         } message: {
             if pendingDelete?.entry.isDirectory == true {
-                Text("文件夹里的全部内容都会一并删除，且无法恢复。")
+                Text("文件夹里的全部内容都会一并删除。此操作无法撤销。")
             }
         }
         // 长按文件 → 操作单（设计稿 FileActionSheet）。
@@ -188,7 +188,7 @@ struct FilesSessionBody: View {
                         actionTitle: "关闭", action: onClose)
         case .connected:
             if controller.entries.isEmpty && !controller.loading {
-                MEmptyState(icon: "folder", title: "空目录", message: "此文件夹没有内容。")
+                MEmptyState(icon: "folder", title: "空文件夹", message: "此文件夹没有内容。")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {

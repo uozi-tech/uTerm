@@ -148,10 +148,10 @@ func commandPaletteSettingsItems(openSettings: @escaping () -> Void) -> [Command
         (.appearance,  "主题、强调色、语言"),
         (.providers,   "Anthropic / OpenAI 兼容"),
         (.terminal,    "光标、历史行数、退出行为"),
-        (.connection,  "SSH 超时 / 主机校验 / 并发传输"),
-        (.security,    "应用锁 / SSH 密钥 / 主机分组"),
-        (.sync,        "iCloud / 局域网同步 / 会话保留"),
-        (.diagnostics, "日志等级 / 显示日志"),
+        (.connection,  "SSH 超时、主机密钥校验、同时传输数"),
+        (.security,    "应用锁、SSH 密钥、主机分组"),
+        (.sync,        "iCloud、局域网同步、AI 对话保留"),
+        (.diagnostics, "日志等级、显示日志"),
     ]
     return tabs.map { tab, detail in
         CommandPaletteItem(

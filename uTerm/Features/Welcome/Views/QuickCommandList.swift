@@ -303,10 +303,10 @@ struct QuickCommandEmptyState: View {
 
     /// 「AI 介入」染紫，其余继承 text3。用 AttributedString 避免 Text `+` 拼接（macOS 26 已弃用）。
     private var blurb: AttributedString {
-        let head = AttributedString("把常用运维操作存成一条命令，绑定一台或多台服务器并行执行，也可以让 ")
+        let head = AttributedString("把常用运维操作存成一条命令，绑定一台或多台主机并行执行，也可以让 ")
         var ai = AttributedString("AI 介入")
         ai.foregroundColor = UD.aiAccent
-        let tail = AttributedString(" 自动诊断与续接。")
+        let tail = AttributedString("，自动诊断并续接。")
         return head + ai + tail
     }
 

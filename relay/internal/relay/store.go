@@ -14,10 +14,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 )
+
+// revocationLimit bounds revoked.json. Entries leave on their own when the revoked certificate expires
+// (at most certMaxLifetime ahead), so this is only reached by thousands of revocations inside that
+// window. Past it the entry closest to expiring goes. Only a host can add entries.
+const revocationLimit = 4096
 
 // ClientConfig is the file devices import. It holds the member private key.
 type ClientConfig struct {
@@ -61,6 +68,8 @@ type Store struct {
 	name    string
 	public  *ecdsa.PublicKey
 	hosts   map[string]string
+	// revoked maps a member public key the hosts have withdrawn to when (Unix seconds).
+	revoked map[string]int64
 }
 
 func OpenStore(dir, name string) (*Store, error) {
@@ -74,7 +83,7 @@ func OpenStore(dir, name string) (*Store, error) {
 			log.Printf("uterm-relay: %s is readable by others and can't be tightened: %v", dir, err)
 		}
 	}
-	store := &Store{dir: dir, name: name, hosts: map[string]string{}}
+	store := &Store{dir: dir, name: name, hosts: map[string]string{}, revoked: map[string]int64{}}
 	unlock, err := store.lockFiles()
 	if err != nil {
 		return nil, err
@@ -93,12 +102,23 @@ func OpenStore(dir, name string) (*Store, error) {
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
 	}
+	data, err = os.ReadFile(store.revokedPath())
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &store.revoked); err != nil {
+			return nil, fmt.Errorf("revoked.json: %w", err)
+		}
+		store.pruneRevokedLocked(time.Now().Unix())
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, err
+	}
 	return store, nil
 }
 
-func (s *Store) relayPath() string  { return filepath.Join(s.dir, "relay.json") }
-func (s *Store) hostsPath() string  { return filepath.Join(s.dir, "hosts.json") }
-func (s *Store) configPath() string { return filepath.Join(s.dir, "member.key") }
+func (s *Store) relayPath() string   { return filepath.Join(s.dir, "relay.json") }
+func (s *Store) hostsPath() string   { return filepath.Join(s.dir, "hosts.json") }
+func (s *Store) revokedPath() string { return filepath.Join(s.dir, "revoked.json") }
+func (s *Store) configPath() string  { return filepath.Join(s.dir, "member.key") }
 
 // lockFiles keeps other processes out while the key files change. `serve` and `config` often start together
 // (`docker compose up -d`, then `exec … config`); without it each generates a key and the exported
@@ -220,6 +240,11 @@ func (s *Store) Rotate() error {
 		return err
 	}
 	s.hosts = map[string]string{}
+	// Certificates die with the key that signed them; nothing left to revoke.
+	s.revoked = map[string]int64{}
+	if err := s.saveRevokedLocked(); err != nil {
+		return err
+	}
 	return s.saveHostsLocked()
 }
 
@@ -256,4 +281,72 @@ func (s *Store) saveHostsLocked() error {
 		return err
 	}
 	return writeAtomic(s.hostsPath(), body, 0o644)
+}
+
+// Revoke withdraws a member key that a certificate let in, until its certificate expires (Unix seconds).
+// Revoking again keeps the later expiry: a host may have renewed the certificate in between.
+func (s *Store) Revoke(member string, expires int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().Unix()
+	s.pruneRevokedLocked(now)
+	if expires <= now {
+		// Already expired: the certificate can't be used anyway.
+		return nil
+	}
+	if current, ok := s.revoked[member]; ok && current >= expires {
+		return nil
+	}
+	s.revoked[member] = expires
+	if len(s.revoked) > revocationLimit {
+		type entry struct {
+			key     string
+			expires int64
+		}
+		entries := make([]entry, 0, len(s.revoked))
+		for key, when := range s.revoked {
+			entries = append(entries, entry{key, when})
+		}
+		// The one just added always survives; of the rest, the closest to expiring goes first.
+		sort.Slice(entries, func(i, j int) bool {
+			if (entries[i].key == member) != (entries[j].key == member) {
+				return entries[j].key == member
+			}
+			if entries[i].expires != entries[j].expires {
+				return entries[i].expires < entries[j].expires
+			}
+			return entries[i].key < entries[j].key
+		})
+		for _, old := range entries[:len(entries)-revocationLimit] {
+			delete(s.revoked, old.key)
+		}
+	}
+	return s.saveRevokedLocked()
+}
+
+// pruneRevokedLocked drops revocations whose certificate has expired: the relay refuses it anyway.
+// revoked.json from 1.2.x stored revocation times rather than expiries, so those entries go at once,
+// which is right: 1.2.x certificates carry no expiry and are no longer accepted at all.
+func (s *Store) pruneRevokedLocked(now int64) {
+	for key, expires := range s.revoked {
+		if expires <= now {
+			delete(s.revoked, key)
+		}
+	}
+}
+
+// IsRevoked reports whether a host withdrew this member key.
+func (s *Store) IsRevoked(member string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	expires, ok := s.revoked[member]
+	return ok && expires > time.Now().Unix()
+}
+
+func (s *Store) saveRevokedLocked() error {
+	body, err := json.MarshalIndent(s.revoked, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.revokedPath(), body, 0o644)
 }

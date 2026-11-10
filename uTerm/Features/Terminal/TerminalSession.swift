@@ -52,7 +52,11 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil。
     /// 和 `shellTitle` 一样，要在单枚标签自己的 body 里读。
     var programStatus: ProgramStatusRecord?
-    @ObservationIgnored var programStatusBoard = ProgramStatusBoard()
+    /// 含 `idle` 的那条（远控把它推给接入的设备：程序空闲也说明前台是 Agent 而不是 shell）。
+    var programReport: ProgramStatusRecord?
+    @ObservationIgnored var programStatusTracker = ProgramStatusTracker()
+    /// 单测替换「用户此刻在不在看」：测试宿主不一定是前台 app，`NSApp.isActive` 由不得测试。
+    @ObservationIgnored var userLookingOverride: (@MainActor () -> Bool)?
     /// 窗格上的真彩提示，见 `TerminalSession+TrueColor`。
     var trueColorOffer: TrueColorOffer?
     @ObservationIgnored var trueColorChecked = false
@@ -136,7 +140,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// of which view currently holds first responder.
     private static func makeContextMenu(for terminalView: SwiftTerm.TerminalView) -> NSMenu {
         let menu = NSMenu()
-        let copyItem = NSMenuItem(title: "复制", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let copyItem = NSMenuItem(title: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         let pasteItem = NSMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         let selectAllItem = NSMenuItem(title: "全选", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
         for item in [copyItem, pasteItem, selectAllItem] {

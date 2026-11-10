@@ -123,7 +123,7 @@ struct ExternalSyncChip: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .fixedSize()
-        .help("用本机应用打开的文件，保存后会自动上传回服务器")
+        .help("用本机应用打开的文件，保存后自动上传回主机")
     }
 
     private var hasFailure: Bool {

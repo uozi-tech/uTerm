@@ -123,6 +123,7 @@
 				App/BackgroundServiceSettings.swift,
 				App/DockMenuController.swift,
 				App/uTermApp.swift,
+				Core/AppInstallLocation.swift,
 				Core/Control/ControlConnectionPool.swift,
 				Core/Control/ControlConnectionPooling.swift,
 				Core/Control/ControlFilePayloadBuilder.swift,
@@ -198,6 +199,7 @@
 				Features/Keys/Views/KeyImportView.swift,
 				Features/Keys/Views/KeyManagerView.swift,
 				Features/LocalShell/HeldSessionCore.swift,
+				Features/LocalShell/HeldWindowFrame.swift,
 				Features/LocalShell/HolderConnection.swift,
 				Features/LocalShell/LocalShellBackend.swift,
 				Features/LocalShell/LocalShellNetworkPolicy.swift,
@@ -245,7 +247,9 @@
 				Features/Preview/Views/PreviewBufferBody.swift,
 				Features/Preview/Views/PreviewStatusRow.swift,
 				Features/Preview/Views/PreviewTabMenu.swift,
+				Features/Remote/Desktop/RemoteAudioStreamer.swift,
 				Features/Remote/Desktop/RemoteCurtain.swift,
+				Features/Remote/Desktop/RemoteCurtainMute.swift,
 				Features/Remote/Desktop/RemoteDesktopEnvironment.swift,
 				Features/Remote/Desktop/RemoteDesktopIndicator.swift,
 				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
@@ -253,7 +257,19 @@
 				Features/Remote/Desktop/RemoteFrameScaler.swift,
 				Features/Remote/Desktop/RemoteScreenControl.swift,
 				Features/Remote/Desktop/RemoteVideoEncoder.swift,
+				Features/Remote/Desktop/RemoteHeadlessDisplay.swift,
+				Features/Remote/Desktop/RemoteSystemCursor.swift,
+				Features/Remote/Desktop/ScreenCaptureAudioSource.swift,
 				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
+				Features/Remote/Controller/RemoteDesktopEventMapper.swift,
+				Features/Remote/Controller/RemoteDesktopMacCanvas.swift,
+				Features/Remote/Controller/RemoteDesktopKeyboardCapture.swift,
+				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
+				Features/Remote/Controller/RemoteDesktopWindow.swift,
+				Features/Remote/Controller/RemoteDiagnosticsWindow.swift,
+				Features/Remote/Controller/RemoteMacWindow.swift,
+				Features/Remote/Controller/RemoteMacWindowModel.swift,
+				Features/Remote/Controller/RemoteMacsPane.swift,
 				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteHostConnection.swift,
@@ -1196,7 +1212,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用面容 ID 解锁应用，并在远程解锁 Mac 时取用你保存的登录密码。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1235,7 +1251,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用面容 ID 解锁应用，并在远程解锁 Mac 时取用你保存的登录密码。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

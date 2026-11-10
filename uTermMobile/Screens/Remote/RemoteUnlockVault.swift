@@ -21,6 +21,17 @@ protocol RemoteUnlockPasswordStore {
 enum RemoteUnlockVaultError: Error {
     case biometryUnavailable
     case keychain(OSStatus)
+
+    /// 给人看的原因（带系统错误码，便于排查）。
+    static func describe(_ error: Error) -> String {
+        switch error as? RemoteUnlockVaultError {
+        case .biometryUnavailable: return "这台手机没有可用的面容 ID 或触控 ID"
+        case .keychain(let status):
+            let text = SecCopyErrorMessageString(status, nil) as String? ?? "未知错误"
+            return "\(text)（\(status)）"
+        case nil: return error.localizedDescription
+        }
+    }
 }
 
 /// 真钥匙串实现：条目绑生物识别（`.biometryCurrentSet`），录入新指纹 / 面容后旧条目自动失效；仅本机、不同步。
@@ -89,14 +100,19 @@ final class KeychainRemoteUnlockStore: RemoteUnlockPasswordStore {
     }
 
     func hasPassword(forMac macID: UUID) -> Bool {
-        // 只查存在性，不取数据，所以不触发生物识别。
+        // 只读属性、不读密码本身，不需要验证身份。不能用 `kSecUseAuthenticationUISkip`：它会直接跳过需要
+        // 验证的条目，绑了 Face ID 的密码因此永远查不到。再给一个不许交互的上下文兜底，保证这里绝不弹 Face ID；
+        // 这种情况下条目存在会回 `errSecInteractionNotAllowed`，同样算「存过」。
+        let context = LAContext()
+        context.interactionNotAllowed = true
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account(macID),
             kSecUseDataProtectionKeychain as String: true,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip,
-            kSecReturnData as String: false,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
         ]
         let status = SecItemCopyMatching(query as CFDictionary, nil)
         return status == errSecSuccess || status == errSecInteractionNotAllowed

@@ -4,10 +4,11 @@ import SwiftData
 import AppKit
 import UniformTypeIdentifiers
 
-/// Welcome 窗口的内容分区：主机列表 或 快捷命令库。
+/// Welcome 窗口的内容分区：主机列表、快捷命令库，或「我的 Mac」（去控制别的 Mac）。
 nonisolated enum WelcomePane: Hashable, Sendable {
     case hosts
     case quickCommands
+    case remoteMacs
 }
 
 /// Welcome 窗口：服务器列表 + 增删改 + 连接入口。Spec 3 重写为 toolbar +
@@ -19,6 +20,7 @@ struct WelcomeView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
     @Environment(HostKeyChallengeRelay.self) private var launchRelay
+    @Environment(RemoteMacDirectory.self) private var remoteMacs
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query private var groups: [ServerGroup]
 
@@ -147,7 +149,7 @@ struct WelcomeView: View {
             }
         }
         .confirmationDialog(
-            "删除服务器？",
+            "删除主机？",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }),
@@ -177,6 +179,10 @@ struct WelcomeView: View {
         // 启动模式下常驻可见，是启动期最稳的弹窗宿主（全局转发窗口启动时尚未打开）。
         // .sheet(item:) 仅在有 pendingChallenge 时才弹，与新建表单 sheet 不冲突。
         .hostKeySheet(launchRelay)
+        // 打开了 uterm://pair 邀请链接：切到「我的 Mac」，由面板接走邀请弹出确认框。
+        .onChange(of: remoteMacs.pendingInvitation, initial: true) { _, invitation in
+            if invitation != nil { pane = .remoteMacs }
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleConfigDrop(providers)
         }
@@ -203,6 +209,8 @@ struct WelcomeView: View {
     private var bodyContent: some View {
         if pane == .quickCommands {
             QuickCommandList(hosts: displayProfiles)
+        } else if pane == .remoteMacs {
+            RemoteMacsPane()
         } else if displayProfiles.isEmpty {
             EmptyServersState(onNewServer: { formRoute = .new })
         } else {
@@ -229,6 +237,8 @@ struct WelcomeView: View {
         case .welcome:
             break  // 保留 Welcome 窗
         case .restore:
+            // 冷启动是打开邀请链接带起来的：欢迎窗口要留着给它确认。
+            guard remoteMacs.pendingInvitation == nil else { return }
             dismissWindow(id: "welcome")
         case .lastHost:
             if let id = fetchLastHostWindowID() {
@@ -329,7 +339,7 @@ struct WelcomeView: View {
         }
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,
-            title: "新建主机…", detail: "创建一台新服务器", hint: "⌘N", group: nil) {
+            title: "新建主机…", detail: "添加一台主机", hint: "⌘N", group: nil) {
                 formRoute = .new
             })
         items.append(CommandPaletteItem(
@@ -349,7 +359,7 @@ struct WelcomeView: View {
             })
         items.append(CommandPaletteItem(
             id: "cmd.globalForwarding", kind: .command,
-            title: "全局转发…", detail: "跨主机管理端口转发 + 随 uTerm 启动", hint: "↵", group: nil) {
+            title: "全局端口转发…", detail: "跨主机管理端口转发，可随 uTerm 启动", hint: "↵", group: nil) {
                 openWindow(id: "global-forwarding")
             })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
@@ -589,7 +599,7 @@ struct WelcomeTitleBar: View {
             UDIconButton(systemImage: "arrow.left.arrow.right") {
                 openWindow(id: "global-forwarding")
             }
-            .help("全局转发")
+            .help("全局端口转发")
             .padding(.trailing, 8)
         }
         .frame(height: 38)

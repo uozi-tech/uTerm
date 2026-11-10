@@ -23,10 +23,10 @@ enum LocalShellNetworkPolicy {
     @MainActor
     private static func presentQuestion() -> Bool {
         let alert = NSAlert()
-        alert.messageText = String(localized: "uTerm 重启时，要保住本机终端里的局域网连接吗？")
-        alert.informativeText = String(localized: "比如在本机终端里 ssh 到局域网的机器。不保住时这些连接会在 uTerm 重启时断开，终端和其他程序不受影响。保住的话，系统会就访问文稿、局域网等再问你一次授权，记在「uTerm 终端」名下。之后可以在设置 › 终端里改。")
-        alert.addButton(withTitle: String(localized: "不保住"))
-        alert.addButton(withTitle: String(localized: "保住"))
+        alert.messageText = String(localized: "uTerm 重启时，要保持本机终端里的局域网连接吗？")
+        alert.informativeText = String(localized: "比如在本机终端里 ssh 到局域网的机器。不保持时这些连接会在 uTerm 重启时断开，终端和其他程序不受影响。保持的话，系统会就访问文稿、局域网等再问你一次授权，记在「uTerm 终端」名下。之后可以在「设置 › 终端」里更改。")
+        alert.addButton(withTitle: String(localized: "不保持"))
+        alert.addButton(withTitle: String(localized: "保持"))
         return alert.runModal() == .alertSecondButtonReturn
     }
 }

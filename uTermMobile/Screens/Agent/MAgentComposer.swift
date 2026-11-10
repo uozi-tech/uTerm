@@ -332,7 +332,7 @@ struct MModelPickerSheet: View {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .font(M.sans(13)).foregroundStyle(M.warning)
                 case .ready where items.isEmpty && query.isEmpty:
-                    Text("服务器没有返回任何模型").foregroundStyle(M.text3)
+                    Text("模型服务没有返回任何模型").foregroundStyle(M.text3)
                 default:
                     EmptyView()
                 }

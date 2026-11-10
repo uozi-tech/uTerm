@@ -5,8 +5,8 @@ extension SSHHostKeyPolicy {
     var settingsHint: String {
         switch self {
         case .strict: return "未知 / 不匹配的主机密钥直接拒绝连接，不弹窗。"
-        case .ask:    return "未知 / 不匹配时弹窗让你决定（默认 + 推荐）。"
-        case .none:   return "⚠️ 不安全：未知 / 不匹配都静默信任。仅本地实验用。"
+        case .ask:    return "未知 / 不匹配时弹窗让你决定（默认，推荐）。"
+        case .none:   return "不安全：主机密钥未知或不匹配都直接信任，仅用于本地测试。"
         }
     }
 }

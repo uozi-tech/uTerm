@@ -15,7 +15,7 @@ final class RemoteFollowRealMacTests: XCTestCase {
             throw XCTSkip("没有设置 UTERM_HARNESS_PORT，跳过")
         }
         let client = RemoteMacClient(macName: "联调 Mac", endpoint: .hostPort(host: "127.0.0.1", port: port),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let store = MobileStore()
         let workspace = MobileWorkspace()
         let (window, _) = MobileProbeWindow.make(

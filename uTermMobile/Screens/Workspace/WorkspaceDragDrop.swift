@@ -28,6 +28,157 @@ enum MDropTarget: Equatable {
     case pane(UUID)
 }
 
+/// 拖着标签此刻会怎样（悬停时据此让位 / 画高亮，松手时执行）。
+enum MTabDragAction: Equatable {
+    /// 还在自己那一格的标签条里：只排序，挪到第 `index` 位。不分屏、不画高亮。
+    case reorder(index: Int)
+    /// 在另一格的标签条上：并进那一格，放在第 `index` 位。
+    case insert(paneID: UUID, index: Int)
+    /// 离开了标签条、进到格子区域：分屏 / 并入判定（`WorkspaceSplitGeometry.target`）。
+    case split(MDropTarget)
+}
+
+/// 一格标签条在工作区坐标里的位置，以及条上各标签的位置（拖动判定用）。
+struct MStripFrame: Equatable {
+    var frame: CGRect
+    var chips: [UUID: CGRect] = [:]
+}
+
+/// 标签条与标签的位置。不可观察：每次布局 / 滚动都会写，只在拖动判定时读，写它不该触发重绘。
+@MainActor
+final class WorkspaceStripFrames {
+    var strips: [UUID: MStripFrame] = [:]
+}
+
+/// 拖动判定：手指还在标签条里（含上下各 `stripTolerance` 的容差）只排序；离开标签条进到格子区域才走分屏判定。
+/// 标签条贴着工作区上沿、两端又挨着左右边，不先排除掉的话，在条里横着拖到头就会落进「停到左 / 右边」，
+/// 一松手就分了屏（macOS 同一个问题见 uAppKit 1.9.5 `UPaneTabStripDropDelegate`）。
+enum WorkspaceTabDragResolver {
+    /// 标签条上下的容差：手指拖着走难免上下晃，晃出条外一点不该就变成分屏。
+    static let stripTolerance: CGFloat = 20
+
+    @MainActor
+    static func action(at point: CGPoint, tabID: UUID, strips: [UUID: MStripFrame],
+                       split: WorkspaceSplitGeometry, in workspace: MobileWorkspace,
+                       stripHeight: CGFloat) -> MTabDragAction? {
+        guard let source = workspace.paneIndex(containing: tabID) else { return nil }
+        for pane in workspace.panes {
+            guard let strip = strips[pane.id],
+                  strip.frame.insetBy(dx: 0, dy: -stripTolerance).contains(point) else { continue }
+            let index = insertionIndex(at: point.x, among: pane.tabIDs.filter { $0 != tabID }, chips: strip.chips)
+            return pane.id == workspace.panes[source].id ? .reorder(index: index) : .insert(paneID: pane.id, index: index)
+        }
+        return split.target(at: point, tabID: tabID, in: workspace, stripHeight: stripHeight).map(MTabDragAction.split)
+    }
+
+    /// 落在第几位：数一数中线在手指左边的标签（被拖的那个不算）。被拖的标签让位挪动只会把别的标签推离手指，
+    /// 所以位置不会来回跳。还没量到位置的标签按它在条上的先后算（排在已量到的后面）。
+    static func insertionIndex(at x: CGFloat, among ids: [UUID], chips: [UUID: CGRect]) -> Int {
+        ids.reduce(0) { count, id in
+            guard let frame = chips[id] else { return count }
+            return frame.midX < x ? count + 1 : count
+        }
+    }
+}
+
+/// 一次标签拖动：拎起时记下标签；进到工作区后在标签条里实时让位（被拖标签的原位留成空位，别的标签滑开）；
+/// 离开标签条或取消就退回原位；松手执行。只有在标签条里松手才改顺序。
+@MainActor
+@Observable
+final class WorkspaceTabDragTracker {
+    /// 让位滑动：0.22s、不回弹的弹簧，与 macOS 标签条（uAppKit UPaneGroups）对齐。
+    static let moveAnimation = Animation.spring(duration: 0.22, bounce: 0)
+
+    /// 正在拖的标签（拎起时记下；投放判定要它）。
+    private(set) var tabID: UUID?
+    /// 拖进了工作区：它在标签条上的位置显示成空位。
+    private(set) var isHovering = false
+    /// 此刻松手会怎样；排序不画高亮，见 `splitTarget`。
+    private(set) var action: MTabDragAction?
+    /// 拖动开始时在哪一格的第几位：离开标签条 / 取消时退回这里。
+    @ObservationIgnored private var origin: (pane: UUID, index: Int)?
+
+    /// 要画的分屏 / 并入高亮。
+    var splitTarget: MDropTarget? {
+        switch action {
+        case .split(let target): target
+        case .insert(let paneID, _): .pane(paneID)
+        case .reorder, nil: nil
+        }
+    }
+
+    /// 是不是正被拖着、原位留空的那枚标签。
+    func isPlaceholder(_ id: UUID) -> Bool { isHovering && tabID == id }
+
+    func begin(_ id: UUID) {
+        tabID = id
+        isHovering = false
+        action = nil
+        origin = nil
+    }
+
+    /// 悬停位置变了。`move` 是标签条里让位滑动用的动画（「减弱动态效果」时传 nil）。
+    func update(_ next: MTabDragAction?, in workspace: MobileWorkspace, move: Animation?) {
+        guard let tabID else { return }
+        if !isHovering {
+            guard let pane = workspace.paneIndex(containing: tabID),
+                  let index = workspace.panes[pane].tabIDs.firstIndex(of: tabID) else { return }
+            origin = (workspace.panes[pane].id, index)
+            isHovering = true
+        }
+        if case .reorder(let index) = next {
+            withAnimation(move) { workspace.reorder(tabID, to: index) }
+        } else {
+            revert(in: workspace, move: move)
+        }
+        if action != next { action = next }
+    }
+
+    /// 松手。`land` 是空位恢复成标签的过渡。
+    func drop(_ final: MTabDragAction?, in workspace: MobileWorkspace, move: Animation?, land: Animation?) {
+        guard let tabID else { return }
+        update(final, in: workspace, move: move)
+        switch final {
+        case .reorder:
+            if let origin, workspace.panes.first(where: { $0.id == origin.pane })?.tabIDs.firstIndex(of: tabID) != origin.index {
+                workspace.noteArrangedByHand(tabID)
+            }
+        case .insert(let paneID, let index):
+            withAnimation(move) { workspace.move(tabID, toPane: paneID, at: index) }
+            workspace.noteArrangedByHand(tabID)
+        case .split(.edge(let edge)):
+            workspace.dock(tabID, to: edge)
+        case .split(.pane(let paneID)):
+            workspace.move(tabID, toPane: paneID)
+        case nil:
+            break
+        }
+        finish(land: land)
+    }
+
+    /// 拖出工作区或取消：退回原位。
+    func cancel(in workspace: MobileWorkspace, move: Animation?, land: Animation?) {
+        guard tabID != nil else { return }
+        revert(in: workspace, move: move)
+        finish(land: land)
+    }
+
+    private func revert(in workspace: MobileWorkspace, move: Animation?) {
+        guard let tabID, let origin, workspace.paneIndex(containing: tabID).map({ workspace.panes[$0].id }) == origin.pane
+        else { return }
+        withAnimation(move) { workspace.reorder(tabID, to: origin.index) }
+    }
+
+    private func finish(land: Animation?) {
+        withAnimation(land) {
+            isHovering = false
+            action = nil
+        }
+        tabID = nil
+        origin = nil
+    }
+}
+
 /// 分屏几何：每格的矩形与分隔条位置。布局、拖分隔条、投放区判定共用一份，算法只有一处。
 struct WorkspaceSplitGeometry {
     let size: CGSize
@@ -149,11 +300,16 @@ struct WorkspaceDropHighlight: View {
     }
 }
 
-/// 整个工作区一个投放代理：位置换算成 `MDropTarget`，悬停时报给视图画高亮，松手时执行。
+/// 整个工作区一个投放代理：位置换算成 `MTabDragAction`，悬停时报给视图（让位 / 高亮），松手时执行。
+///
+/// 在不会有任何变化的地方也回 `.move` 而不是 `.forbidden`：被拒的投放不走 `performDrop`，
+/// 标签条里的空位就收不回来。松手时动作为 nil 即原样退回。
 struct WorkspaceDropDelegate: DropDelegate {
-    let resolve: (CGPoint) -> MDropTarget?
-    let onHover: (MDropTarget?) -> Void
-    let onDrop: (MDropTarget) -> Void
+    let resolve: (CGPoint) -> MTabDragAction?
+    let onHover: (MTabDragAction?) -> Void
+    let onDrop: (MTabDragAction?) -> Void
+    /// 拖出工作区，或这次拖动被取消（UIKit 两种都报成离开）。
+    let onExit: () -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.utermTabID])
@@ -164,20 +320,16 @@ struct WorkspaceDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        let target = resolve(info.location)
-        onHover(target)
-        return DropProposal(operation: target == nil ? .forbidden : .move)
+        onHover(resolve(info.location))
+        return DropProposal(operation: .move)
     }
 
     func dropExited(info: DropInfo) {
-        onHover(nil)
+        onExit()
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let target = resolve(info.location)
-        onHover(nil)
-        guard let target else { return false }
-        onDrop(target)
+        onDrop(resolve(info.location))
         return true
     }
 }

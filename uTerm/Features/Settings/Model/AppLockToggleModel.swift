@@ -15,9 +15,9 @@ final class AppLockToggleModel {
     /// 「无法开启」提示的标题与说明（两端视图挂 `.alert` 用）。说明按平台给出系统里该去哪设。
     nonisolated static let unavailableTitle = "无法开启应用锁"
     #if os(macOS)
-    nonisolated static let unavailableMessage = "请先在「系统设置」里录入触控 ID 或设置登录密码，再开启应用锁。"
+    nonisolated static let unavailableMessage = "先在「系统设置」里录入触控 ID 或设置登录密码，再开启应用锁。"
     #else
-    nonisolated static let unavailableMessage = "请先在系统「设置」里启用 Face ID / 触控 ID 或设置锁屏密码，再开启应用锁。"
+    nonisolated static let unavailableMessage = "先在「设置」App 里启用面容 ID / 触控 ID 或设置锁屏密码，再开启应用锁。"
     #endif
 
     @ObservationIgnored private let defaults: UserDefaults

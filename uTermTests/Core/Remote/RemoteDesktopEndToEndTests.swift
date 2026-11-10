@@ -60,13 +60,13 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         async throws -> (RemoteHostServer, FakeDesktopMac, RemoteMacClient) {
         let mac = FakeDesktopMac()
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       localFeatures: features, desktopEnvironment: mac.environment())
         server.start()
         let ready = await waitUntil { server.port != nil }
         XCTAssertTrue(ready, "服务端没起来：\(server.status)")
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         try server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "测试 iPhone",
                                     publicKey: try phoneIdentity.localIdentity().publicKey.rawRepresentation,
                                     pairedAt: Date()))
@@ -216,6 +216,240 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertEqual(client.state, .connected, "结束桌面流不断开整条连接")
     }
 
+    // MARK: - 退到后台
+
+    /// 老 Mac（不认得 `desktopPause`）：App 退到后台（切走 / 锁屏）时流还在走：帧照收照确认——Mac 不会因为在途满了
+    /// 停发、也不会因为丢帧降码率——但不解码、不渲染。回前台后从关键帧接上，不往屏幕上送参考已断的 P 帧。
+    /// 手机不能把暂停消息发给它（老 Mac 会当未知消息断开整条连接），关键帧要靠手机自己要。
+    func test_backgrounded_phone_acks_without_decoding_and_resumes_from_a_keyframe() async throws {
+        let (server, mac, client) = try await makeRig(features: RemoteConstants.localFeatures.filter { $0 != RemoteFeature.desktopPause })
+        defer { server.stop() }
+        XCTAssertFalse(client.supportsDesktopPause)
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        let first = await waitUntil { !screen.frames.isEmpty }
+        XCTAssertTrue(first, "开流后应收到第一帧")
+        let source = try XCTUnwrap(mac.latestSource)
+
+        session.setBackgrounded(true)
+        // 暂停之前已经进了解码队列的帧可能还会显示出来：等它们走完再记起点。
+        try? await Task.sleep(for: .milliseconds(200))
+        let shownBefore = screen.frames.count
+        let skippedBefore = session.receiver.stats.snapshot().skippedFrames
+        // 在途上限最多 8 帧：跳过的帧远多于它，说明确认一直在回、Mac 一直在编。
+        let streamed = await waitUntil(8) {
+            _ = source.emit()
+            try? await Task.sleep(for: .milliseconds(30))
+            return session.receiver.stats.snapshot().skippedFrames - skippedBefore >= 16
+        }
+        XCTAssertTrue(streamed, "后台时 Mac 应照常收到确认并继续发帧")
+        XCTAssertEqual(screen.frames.count, shownBefore, "后台时不解码、不渲染")
+        XCTAssertEqual(session.state, .streaming, "暂停不影响连接")
+
+        // 不另调 `requestKeyframe`：回前台时会话自己要关键帧。
+        session.setBackgrounded(false)
+        var latest = 0
+        let resumed = await waitUntil(5) {
+            latest = source.emit()
+            try? await Task.sleep(for: .milliseconds(30))
+            return screen.frames.dropFirst(shownBefore).contains { !$0.sidecar && self.matches($0, seed: latest) }
+        }
+        XCTAssertTrue(resumed, "回前台后画面应恢复")
+        let firstMain = try XCTUnwrap(screen.frames.dropFirst(shownBefore).first { !$0.sidecar })
+        XCTAssertTrue(firstMain.keyframe, "回前台后主流第一张必须是关键帧")
+    }
+
+    /// 新 Mac：手机退到后台就请 Mac 停止推流——采集照旧，但一帧不发、光标也不发，连接、码率都不动；回前台 Mac 立刻
+    /// 补一个关键帧（屏幕静止也补，只补一个），之后照常推流。
+    func test_backgrounded_phone_pauses_the_mac_and_resumes_from_one_keyframe() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        XCTAssertTrue(client.supportsDesktopPause, "新版 Mac 握手时报 desktop-pause 能力")
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        let first = await waitUntil { !screen.frames.isEmpty }
+        XCTAssertTrue(first, "开流后应收到第一帧")
+        let source = try XCTUnwrap(mac.latestSource)
+        let stats = try XCTUnwrap(server.desktopStats)
+
+        session.setBackgrounded(true)
+        // 暂停消息到达之前已经编好、在路上的帧让它走完再记起点。
+        try? await Task.sleep(for: .milliseconds(200))
+        let paused = stats.snapshot()
+        let cursorBefore = screen.lastCursor
+        mac.moveCursor(to: CGPoint(x: 756, y: 491))
+        for _ in 0..<30 {
+            _ = source.emit()
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        let during = stats.snapshot()
+        XCTAssertEqual(during.sent, paused.sent, "暂停期间 Mac 一帧都不发")
+        XCTAssertGreaterThanOrEqual(during.captured - paused.captured, 20, "采集照旧（恢复时要有最新画面可编）")
+        XCTAssertEqual(screen.lastCursor, cursorBefore, "暂停期间光标也不发")
+        XCTAssertEqual(during.bitrateHistory, paused.bitrateHistory, "暂停不动码率")
+        XCTAssertEqual(session.state, .streaming, "暂停不影响桌面流")
+        XCTAssertEqual(client.state, .connected, "暂停不影响连接")
+        XCTAssertNotNil(server.desktopViewer, "Mac 上仍显示有人在看")
+
+        // 回前台：屏幕此刻是静止的，Mac 也要立刻补一个关键帧，画面就是暂停期间最后那张。
+        let shownBefore = screen.frames.count
+        let stillSeed = try XCTUnwrap(source.emitted.last)
+        session.setBackgrounded(false)
+        let resumed = await waitUntil {
+            screen.frames.dropFirst(shownBefore).contains { !$0.sidecar && self.matches($0, seed: stillSeed) }
+        }
+        XCTAssertTrue(resumed, "回前台后应立刻收到当前画面")
+        let firstMain = try XCTUnwrap(screen.frames.dropFirst(shownBefore).first { !$0.sidecar })
+        XCTAssertTrue(firstMain.keyframe, "回前台后主流第一张必须是关键帧")
+        let cursorBack = await waitUntil {
+            guard let c = screen.lastCursor else { return false }
+            return abs(c.x - 0.5) < 1e-3 && abs(c.y - 0.5) < 1e-3
+        }
+        XCTAssertTrue(cursorBack, "恢复后补发当前光标：\(String(describing: screen.lastCursor))")
+
+        // 之后照常推流（P 帧）；恢复只补了一个关键帧（「恢复」本身就是关键帧请求，手机不再另要）。
+        for _ in 0..<3 {
+            let seed = source.emit()
+            let arrived = await waitUntil { screen.frames.contains { !$0.sidecar && self.matches($0, seed: seed) } }
+            XCTAssertTrue(arrived, "恢复后帧 \(seed) 没到")
+        }
+        let afterResume = screen.frames.dropFirst(shownBefore).filter { !$0.sidecar }
+        XCTAssertEqual(afterResume.filter(\.keyframe).count, 1, "恢复只补一个关键帧：\(afterResume.map(\.keyframe))")
+        XCTAssertEqual(stats.snapshot().keyframes - during.keyframes, 1)
+    }
+
+    /// 在后台里重连上（回前台前最后那几秒常见）：新流在 Mac 那边从不暂停起步，手机开好后再请它暂停一次。
+    func test_stream_reopened_while_backgrounded_is_paused_again() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        let first = await waitUntil { !screen.frames.isEmpty }
+        XCTAssertTrue(first, "开流后应收到第一帧")
+
+        session.setBackgrounded(true)
+        client.disconnect()
+        let back = await waitUntil(10) { session.state == .streaming && mac.sources.count == 2 }
+        XCTAssertTrue(back, "应自动重连：\(session.state)")
+        // 新流的第一帧（关键帧）可能赶在暂停消息之前发出：等它走完。
+        try? await Task.sleep(for: .milliseconds(300))
+        let source = try XCTUnwrap(mac.latestSource)
+        let stats = try XCTUnwrap(server.desktopStats)
+        let paused = stats.snapshot()
+        for _ in 0..<20 {
+            _ = source.emit()
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        XCTAssertEqual(stats.snapshot().sent, paused.sent, "后台里重开的流也要暂停")
+
+        let shownBefore = screen.frames.count
+        session.setBackgrounded(false)
+        let latest = try XCTUnwrap(source.emitted.last)
+        let resumed = await waitUntil {
+            screen.frames.dropFirst(shownBefore).contains { !$0.sidecar && self.matches($0, seed: latest) }
+        }
+        XCTAssertTrue(resumed, "回前台后画面应恢复")
+        XCTAssertTrue(try XCTUnwrap(screen.frames.dropFirst(shownBefore).first { !$0.sidecar }).keyframe)
+    }
+
+    /// 暂停只属于那一条流：同一连接上重新开流、或断开重连，Mac 都从不暂停起步，不会卡在暂停里。
+    func test_pause_does_not_carry_over_to_a_new_stream_or_connection() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        client.disconnect()
+        let (link, inbox, channel) = try await rawPhone(server)
+        var acknowledged = 0
+        func ackAll() {
+            let frames = inbox.of(.desktopFrame)
+            for message in frames.dropFirst(acknowledged) {
+                guard let frame = try? RemoteDesktopFrame(decoding: message.payload) else { continue }
+                link.send(RemoteMessage(.desktopAck, channel: message.channel, payload: RemoteDesktopAck(
+                    sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 1000).encoded()))
+            }
+            acknowledged = frames.count
+        }
+        ackAll()
+        link.send(RemoteMessage(.desktopPause, channel: channel,
+                                payload: RemoteJSON.encode(RemoteDesktopPauseRequest(paused: true))))
+        try? await Task.sleep(for: .milliseconds(150))
+        let pausedCount = inbox.of(.desktopFrame).count
+        let firstSource = try XCTUnwrap(mac.latestSource)
+        for _ in 0..<15 {
+            _ = firstSource.emit()
+            ackAll()
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        XCTAssertEqual(inbox.of(.desktopFrame).count, pausedCount, "暂停后不再发帧")
+
+        // 同一连接上重新开流：新流照常推。
+        link.send(RemoteMessage(.desktopStart, payload: RemoteJSON.encode(
+            RemoteDesktopStartRequest(requestID: UUID(), maxWidth: 1280, maxHeight: 800, codec: .hevc))))
+        let restarted = await waitUntil { inbox.of(.desktopStarted).count == 2 }
+        XCTAssertTrue(restarted)
+        let newChannel = try XCTUnwrap(inbox.of(.desktopStarted).last).channel
+        XCTAssertNotEqual(newChannel, channel)
+        let secondSource = try XCTUnwrap(mac.latestSource)
+        let flowing = await waitUntil {
+            _ = secondSource.emit()
+            ackAll()
+            try? await Task.sleep(for: .milliseconds(30))
+            return inbox.of(.desktopFrame).filter { $0.channel == newChannel }.count >= 3
+        }
+        XCTAssertTrue(flowing, "重新开的流不该沿用暂停")
+        link.close()
+
+        // 断开重连：新连接上的流同样照常推（`rawPhone` 要等到第一帧才返回）。
+        let (link2, inbox2, channel2) = try await rawPhone(server)
+        defer { link2.close() }
+        var acknowledged2 = 0
+        let thirdSource = try XCTUnwrap(mac.latestSource)
+        let flowingAgain = await waitUntil {
+            _ = thirdSource.emit()
+            let frames = inbox2.of(.desktopFrame)
+            for message in frames.dropFirst(acknowledged2) {
+                guard let frame = try? RemoteDesktopFrame(decoding: message.payload) else { continue }
+                link2.send(RemoteMessage(.desktopAck, channel: channel2, payload: RemoteDesktopAck(
+                    sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 1000).encoded()))
+            }
+            acknowledged2 = frames.count
+            try? await Task.sleep(for: .milliseconds(30))
+            return frames.count >= 3
+        }
+        XCTAssertTrue(flowingAgain, "重连后的流不该沿用暂停")
+    }
+
+    // MARK: - 精修用来源给的高画质版本
+
+    /// 采集要再缩一截时运动帧用快缩法，精修要换成来源从原始采集用 Lanczos 重缩的那张：手机收到的精修帧是
+    /// 来源给的画面，不是运动帧那张。少了这一步，精修就和运动帧一样软。
+    func test_refine_uses_the_sources_high_quality_image() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        let source = try XCTUnwrap(mac.latestSource)
+        source.refinedSeed = 4242
+        let shown = await waitUntil { !screen.frames.isEmpty }
+        XCTAssertTrue(shown)
+        let seed = source.emit()
+        let moved = await waitUntil { screen.frames.contains { !$0.refine && self.matches($0, seed: seed) } }
+        XCTAssertTrue(moved, "运动帧照常是采集的那张")
+        let refined = await waitUntil(3) { screen.frames.contains(where: \.refine) }
+        let bitrates = server.desktopStats?.snapshot().bitrateHistory ?? []
+        let floor = RemoteRateController.config(width: 1856, height: 1206).minBitrate
+        if let bitrate = bitrates.last, bitrate <= floor { return }  // 码率压到下限时按设计不精修，见上面的用例。
+        XCTAssertTrue(refined, "画面静止后应有一帧精修（码率变化 \(bitrates)）")
+        XCTAssertGreaterThan(source.refinedRequests, 0)
+        let refine = try XCTUnwrap(screen.frames.last(where: \.refine))
+        XCTAssertTrue(matches(refine, seed: 4242), "精修的是来源给的高画质那张")
+    }
+
     // MARK: - 老手机
 
     func test_phone_without_sidecar_support_gets_refine_inside_the_main_stream() async throws {
@@ -266,6 +500,26 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         let latency = try XCTUnwrap(session.latency)
         XCTAssertGreaterThan(latency.p50Millis, 0)
         XCTAssertGreaterThanOrEqual(latency.p95Millis, latency.p50Millis)
+    }
+
+    /// 开屏时间线把第一帧之前的各段补全：收到首个视频帧、首帧解码完（2026-11-08 MBP 等了 5.9 s 才见到 mini 的
+    /// 第一帧，而 mini 170 ms 就发出了；中间缺日志，看不出卡在哪一段）。
+    func test_open_timeline_records_first_frame_arrival_and_decode() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        _ = mac
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        let shown = await waitUntil(6) { !screen.frames.isEmpty }
+        XCTAssertTrue(shown)
+        let finished = await waitUntil(3) { RemoteConnectTraceLog.standard.load().first?.kind == .desktop }
+        XCTAssertTrue(finished)
+        let record = try XCTUnwrap(RemoteConnectTraceLog.standard.load().first)
+        XCTAssertTrue(record.ok)
+        XCTAssertTrue(record.events.contains { $0.contains("收到首个视频帧（关键帧") }, "\(record.events)")
+        XCTAssertTrue(record.events.contains { $0.contains("首帧解码完（关键帧") }, "\(record.events)")
     }
 
     /// 老手机不认 `desktopLatency`（解析会当成坏消息断开），开流请求里没要就一条也不能发。
@@ -440,7 +694,7 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         // 第二台设备（另一份身份）：首次要在 Mac 上审批。
         let other = RemoteMacClient(macName: "测试 Mac",
                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: try XCTUnwrap(server.port))!),
-                                    identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                    identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await other.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
         XCTAssertTrue(asked)

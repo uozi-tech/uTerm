@@ -94,6 +94,45 @@ final class SplitLayoutProbeTests: XCTestCase {
         XCTAssertEqual(problems, [])
     }
 
+    /// 每一格前台的终端都在画：分屏、挪标签、折叠 / 展开（Duo 外屏 466 宽时只能单格）之后，
+    /// 不能有哪个看得见的终端停画——停了画面就永远停在那一刻（真机回归：远控 Claude 标签画面卡死）。
+    private func frozen(_ work: MobileWorkspace, _ step: String) -> [String] {
+        work.panes.enumerated().compactMap { index, pane in
+            guard let term = work.tab(pane.activeID)?.terminal,
+                  let view = term.controller.terminalView as? MTerminalView, view.window != nil else { return nil }
+            return view.suppressesDrawing ? "\(step) pane\(index): 前台终端停画了" : nil
+        }
+    }
+
+    func testVisibleTerminalsKeepDrawingAcrossSplitMoveAndFold() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let (work, win) = try await mount()
+        let folded = CGSize(width: 466, height: 640)
+        var problems = frozen(work, "mounted")
+        work.split()
+        try await Task.sleep(for: .milliseconds(400))
+        problems += frozen(work, "split")
+        let ids = work.tabs.map(\.id)
+        for round in 1...3 {
+            work.activate(ids[round % ids.count])
+            try await Task.sleep(for: .milliseconds(300))
+            work.moveToOtherPane(ids[round % ids.count])
+            try await Task.sleep(for: .milliseconds(400))
+            problems += frozen(work, "move\(round)")
+            try await resize(win, folded)
+            problems += frozen(work, "fold\(round)")
+            try await resize(win, portrait)
+            problems += frozen(work, "unfold\(round)")
+            if work.panes.count < 2 {
+                work.split()
+                try await Task.sleep(for: .milliseconds(400))
+                problems += frozen(work, "resplit\(round)")
+            }
+        }
+        for tab in work.terminalTabs { tab.controller.close() }
+        XCTAssertEqual(problems, [])
+    }
+
     /// 运行中新开的标签同样要跟着转屏。
     func testTabOpenedLiveFollowsResize() async throws {
         defer { MobileProbeWindow.closeAll() }

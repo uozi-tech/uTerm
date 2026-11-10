@@ -469,7 +469,7 @@ private struct LegacyQuickCommandLogEntry: View {
                 .font(.system(size: 11.5, weight: .medium)).foregroundStyle(UD.text)
                 .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text(result.exitCode.map { "退出码 \($0) · \(result.durationMs)ms" }
-                 ?? "连接失败 · \(result.durationMs)ms")
+                 ?? "连接失败或超时 · \(result.durationMs)ms")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(result.ok ? UD.text4 : UD.danger).lineLimit(1)
         }

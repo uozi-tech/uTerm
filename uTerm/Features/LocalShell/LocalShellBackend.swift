@@ -87,6 +87,11 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
         await core.setAttributes(attributes)
     }
 
+    /// 同步交给连接的发送队列，不等 actor：退出 App 途中异步任务不一定来得及跑。之后的 `flushAndClose` 会等它写完。
+    nonisolated func sendAttributes(_ attributes: Data) {
+        holderLink.send(HolderFrame(.setAttributes, payload: Array(attributes)))
+    }
+
     /// 主端在 holder 手里，但内核记着 shell 的控制终端上前台进程组是谁，按 shell 的 pid 就能问到。
     func foregroundActivity() async -> TerminalActivity {
         guard let shell = await core.pid else { return .unknown }

@@ -73,6 +73,13 @@ class CaretView: UIView {
         if window == nil {
             return
         }
+        // uTerm patch #19: the host hides this terminal without taking it out
+        // of the window (a background tab), so `window == nil` does not catch
+        // it. A repeating fade keeps Core Animation producing frames for a
+        // caret nobody can see.
+        if terminal?.suspendsCaretAnimation == true {
+            return
+        }
         if to {
             UIView.animate(withDuration: 0.7, delay: 0, options: [.autoreverse, .repeat, .curveEaseIn], animations: {
                 self.layer.opacity = 0.0

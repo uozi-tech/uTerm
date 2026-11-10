@@ -62,7 +62,7 @@ struct SSHConfigImportView: View {
         VStack(spacing: 14) {
             Spacer()
             Text("选择你的 ~/.ssh 目录").font(UD.body).foregroundStyle(UD.text2)
-            Text("沙箱限制：需选目录以读取 config 与私钥").font(UD.caption).foregroundStyle(UD.text4)
+            Text("受 App 沙盒限制，需要选择目录才能读取 config 与私钥").font(UD.caption).foregroundStyle(UD.text4)
             Button("选择 ~/.ssh 目录…") { pickDirectory() }
                 .buttonStyle(.borderedProminent)
             if let pickError { Text(pickError).font(UD.caption).foregroundStyle(UD.danger) }

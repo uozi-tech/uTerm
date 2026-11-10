@@ -15,7 +15,7 @@ enum ExternalEditCloseGuard {
         let names = pending.map(\.fileName)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = String(localized: "有 \(pending.count) 个文件的改动还没上传到服务器")
+        alert.messageText = String(localized: "有 \(pending.count) 个文件的改动还没上传到主机")
         alert.informativeText = names.prefix(6).joined(separator: "\n")
             + (names.count > 6 ? "\n…" : "")
         alert.addButton(withTitle: quitting ? String(localized: "上传后退出")
@@ -39,8 +39,8 @@ enum ExternalEditCloseGuard {
         if !allSynced {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = String(localized: "有文件没能上传")
-            alert.informativeText = String(localized: "请查看右下角的提示后重试，或选择「直接关闭」放弃这些改动。")
+            alert.messageText = String(localized: "有文件未能上传")
+            alert.informativeText = String(localized: "查看右下角的提示后重试，或选择「直接关闭」放弃这些改动。")
             alert.runModal()
         }
         return allSynced

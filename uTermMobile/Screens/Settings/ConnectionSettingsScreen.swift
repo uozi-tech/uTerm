@@ -17,7 +17,7 @@ struct ConnectionSettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                MInsetGroup(header: "SSH 连接", footer: "建立 SSH 握手的最长等待时间，改动只对下次连接生效。") {
+                MInsetGroup(header: "SSH 连接", footer: "等待 SSH 连接建立的最长时间，修改后对新连接生效。") {
                     MInsetRow(label: "连接超时", last: true,
                               trailing: AnyView(menu(current: ConnectionPresentation.timeoutLabel(connectTimeout)) {
                                   ForEach(ConnectionPresentation.timeoutOptions, id: \.self) { seconds in
@@ -34,7 +34,7 @@ struct ConnectionSettingsScreen: View {
                               }))
                 }
                 MInsetGroup(header: "文件传输",
-                            footer: "SFTP 同时传输的文件数上限，超出的排队依次开始。这些设置与 Mac 同步。") {
+                            footer: "SFTP 同时传输的文件数上限，超出的排队依次开始。以上设置与 Mac 同步。") {
                     MInsetRow(label: "并发传输", last: true,
                               trailing: AnyView(menu(current: ConnectionPresentation.sftpConcurrencyLabel(sftpConcurrency)) {
                                   ForEach(ConnectionPresentation.sftpConcurrencyOptions, id: \.self) { count in

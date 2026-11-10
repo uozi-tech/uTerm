@@ -139,7 +139,7 @@ nonisolated enum SSHClientFactory {
         let jumpHost: USSHKit.SSHJumpHost?
         if let jump = profile.jumpHost {
             guard let jumpHostAuth else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少跳板机认证材料")
+                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少登录凭据")
             }
             let jumpMaterial = packageAuth(jumpHostAuth)
             jumpHost = USSHKit.SSHJumpHost(

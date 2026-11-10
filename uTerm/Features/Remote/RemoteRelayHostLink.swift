@@ -1,6 +1,34 @@
+import AppKit
 import CryptoKit
 import Foundation
 import Observation
+
+/// 被顶替（另一台机器用这台 Mac 的身份注册了中继）之后多久再注册：5 分钟起、每次翻倍、最多 1 小时。
+///
+/// 被顶替多半是同一台 Mac 上一个短命的开发构建，它退出后这台得自己回来；但也可能是两台真机共用一个身份
+///（克隆的磁盘、迁移过来的 Mac），那样互相顶的间隔至少是这个下限，并且越来越长，不会每几秒抢一次。
+nonisolated struct RemoteRelaySupersededBackoff: Equatable, Sendable {
+    static let standard = RemoteRelaySupersededBackoff(initial: .seconds(300), maximum: .seconds(3600))
+
+    let initial: Duration
+    let maximum: Duration
+    private(set) var next: Duration
+
+    init(initial: Duration, maximum: Duration) {
+        self.initial = initial
+        self.maximum = maximum
+        next = initial
+    }
+
+    /// 这次被顶替后等多久；下一次翻倍。
+    mutating func take() -> Duration {
+        let delay = next
+        next = min(next * 2, maximum)
+        return delay
+    }
+
+    mutating func reset() { next = initial }
+}
 
 /// Mac 在中继上的注册：保持一条出站控制连接，回应手机的信令，手机要走中继时回拨。
 ///
@@ -12,7 +40,8 @@ final class RemoteRelayHostLink {
         case connecting
         case registered
         case failed(String)
-        /// 另一台机器用同样的身份注册了，互相顶替没有意义，不再自动重连。
+        /// 另一台机器用同样的身份注册了：按 `RemoteRelaySupersededBackoff` 隔一阵再注册，
+        /// 换网络、唤醒或在设置里点「重新连接」时立刻再试。
         case superseded
         case stopped
     }
@@ -32,6 +61,10 @@ final class RemoteRelayHostLink {
     @ObservationIgnored private var networkWatcher: RemoteNetworkWatcher?
     @ObservationIgnored private let pingInterval: Duration
     @ObservationIgnored private let pongTimeout: TimeInterval
+    @ObservationIgnored private var supersededBackoff: RemoteRelaySupersededBackoff
+    /// 这次注册上的时间。注册稳定够久（一个退避上限）再被顶替，退避从头算。
+    @ObservationIgnored private var registeredSince: Date?
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
 
     private static let maxCallbacksInFlight = 4
     private static let maxProbesInFlight = 4
@@ -40,21 +73,42 @@ final class RemoteRelayHostLink {
     @ObservationIgnored var acceptsDirect = true
 
     init(config: RemoteRelayConfig, server: RemoteHostServer, pingInterval: Duration = .seconds(60),
-         pongTimeout: TimeInterval = 20) {
+         pongTimeout: TimeInterval = 20, supersededBackoff: RemoteRelaySupersededBackoff = .standard) {
         self.config = config
         self.server = server
         self.pingInterval = pingInterval
         self.pongTimeout = pongTimeout
+        self.supersededBackoff = supersededBackoff
     }
 
     func start() {
         guard runner == nil else { return }
         state = .connecting
         // 换了网络，旧连接多半已经死了；等 keepalive 报错要半分钟。
-        networkWatcher = RemoteNetworkWatcher { [weak self] isSatisfied in
-            if isSatisfied { self?.reconnectNow() }
+        networkWatcher = RemoteNetworkWatcher { [weak self] snapshot in
+            if snapshot.isSatisfied { self?.reconnectNow() }
+        }
+        // 睡醒时连接多半已经死了；被顶替时也趁这一下再试一次。
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reconnectNow() }
         }
         runner = Task { [weak self] in await self?.run() }
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+
+    /// 设置里的「重新连接」：立刻再注册，被顶替的退避从头算。
+    func reconnect() {
+        supersededBackoff.reset()
+        if runner == nil {
+            start()
+            return
+        }
+        reconnectNow()
     }
 
     func stop() {
@@ -63,6 +117,8 @@ final class RemoteRelayHostLink {
         heartbeat?.cancel()
         heartbeat = nil
         networkWatcher = nil
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        wakeObserver = nil
         control?.close()
         control = nil
         wakeRetry()
@@ -99,18 +155,27 @@ final class RemoteRelayHostLink {
                 guard !Task.isCancelled else { return }
                 if case RemoteRelayError.refused(let reason) = error, reason == "superseded" {
                     state = .superseded
-                    return
+                    if let since = registeredSince, Date().timeIntervalSince(since) >= Self.seconds(supersededBackoff.maximum) {
+                        supersededBackoff.reset()
+                    }
+                    registeredSince = nil
+                    let delay = supersededBackoff.take()
+                    let endpoint = config.endpointDescription
+                    AppLogger.notice("中继注册被顶替：另一台机器用这台 Mac 的身份注册了 \(endpoint)，"
+                                     + "\(Int(Self.seconds(delay).rounded())) 秒后再注册", category: RemoteLog.category)
+                    await waitBeforeRetry(delay)
+                    continue
                 }
+                registeredSince = nil
                 state = .failed(error.localizedDescription)
                 AppLogger.info("中继注册断开：\(error.localizedDescription)", category: RemoteLog.category)
             }
-            await waitBeforeRetry()
+            await waitBeforeRetry(retryDelay)
             retryDelay = min(retryDelay * 2, .seconds(60))
         }
     }
 
-    private func waitBeforeRetry() async {
-        let delay = retryDelay
+    private func waitBeforeRetry(_ delay: Duration) async {
         let sleeper = Task { [weak self] in
             try? await Task.sleep(for: delay)
             self?.wakeRetry()
@@ -122,7 +187,10 @@ final class RemoteRelayHostLink {
     }
 
     private func registerAndServe() async throws {
-        guard let server, let memberKey = config.memberKey else { throw RemoteRelayError.notConfigured }
+        // 成员证书只能连一台主机，不能注册：本机被控用的必须是中继本身的成员密钥。
+        guard let server, !config.isCertificate, let memberKey = config.memberKey else {
+            throw RemoteRelayError.notConfigured
+        }
         let identity = server.identity
         let hostKey = try identity.relayHostKey()
         let hostID = server.localID.uuidString
@@ -149,12 +217,19 @@ final class RemoteRelayHostLink {
         responder = RemoteSignalResponder(
             localKey: try identity.localIdentity(), localID: server.localID,
             recognize: { [weak server] id in MainActor.assumeIsolated { server?.knownPeer(id: id) } },
-            isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } })
+            isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } },
+            invitationToken: { [weak server] in MainActor.assumeIsolated { server?.pairingInvitation?.token } })
         state = .registered
+        registeredSince = Date()
+        let endpoint = config.endpointDescription, relayVersion = answer.server ?? "?"
+        AppLogger.notice("已注册到中继 \(endpoint)（中继 \(relayVersion)）",
+                         category: RemoteLog.category)
         server.relayUpdates.noteRunning(answer.server)
         retryDelay = .seconds(1)
         lastHeard = Date()
         startHeartbeat(connection)
+        server.relayRegistered()
+        sendRevocations()
 
         while !Task.isCancelled {
             let message: RemoteRelayMessage = try await connection.receive(timeout: nil)
@@ -163,11 +238,28 @@ final class RemoteRelayHostLink {
             case "signal": await handleSignal(message, on: connection)
             case "incoming": handleIncoming(message)
             case "ping": try await connection.send(RemoteRelayMessage(type: "pong"))
+            case "revoked":
+                if let member = message.member { server.relayRevocations.confirm(member, relayID: config.relayID) }
             case "superseded": throw RemoteRelayError.refused("superseded")
             default: break
             }
         }
         throw CancellationError()
+    }
+
+    /// 把还没确认的成员证书吊销发给中继。中继回 `revoked` 才从待发里划掉；没注册上就等下次注册。
+    func sendRevocations() {
+        guard state == .registered, let control, let server else { return }
+        let pending = server.relayRevocations.pending(relayID: config.relayID)
+        guard !pending.isEmpty else { return }
+        Task {
+            for revocation in pending {
+                var message = RemoteRelayMessage(type: "revoke")
+                message.member = revocation.member
+                message.exp = revocation.expires
+                try? await control.send(message)
+            }
+        }
     }
 
     private func startHeartbeat(_ connection: RemoteRelayConnection) {
@@ -200,11 +292,11 @@ final class RemoteRelayHostLink {
         switch responder?.receiveOffer(session: session, from: message.from, box: message.box, now: now,
                                        acceptsDirect: canTryDirect) {
         case .reply(let reply):
-            AppLogger.info("公网接入：收到打招呼（\(session.prefix(6))），不试直连，等中继回拨", category: RemoteLog.category)
+            AppLogger.notice("公网接入：收到打招呼（\(session.prefix(6))），不试直连，等中继回拨", category: RemoteLog.category)
             try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
             return
         case .direct(let offer):
-            AppLogger.info("公网接入：收到打招呼（\(session.prefix(6))），先试直连", category: RemoteLog.category)
+            AppLogger.notice("公网接入：收到打招呼（\(session.prefix(6))），先试直连", category: RemoteLog.category)
             startDirect(offer, session: session, connection: connection)
             return
         case .ignore, nil:
@@ -217,8 +309,18 @@ final class RemoteRelayHostLink {
             startProbe(request, session: session, connection: connection)
         case .relayEcho(let reply):
             try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
+            return
         case .ignore, nil:
             break
+        }
+        if let request = responder?.receiveRenewal(session: session, from: message.from, box: message.box, now: now),
+           let renewed = server?.renewRelayGrant(peerID: request.peer.id, member: request.member) {
+            var reply = RemoteSignalBody(kind: .renewedCertificate, deviceID: server?.localID ?? UUID(), sentAt: now,
+                                         nonce: RemoteSignalBody.newNonce())
+            reply.relay = RemoteJSON.encode(renewed)
+            guard let sealed = try? RemoteSignalBox.seal(reply, key: request.sharedKey, session: session,
+                                                         direction: .macToPhone) else { return }
+            try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: sealed))
         }
     }
 
@@ -265,7 +367,7 @@ final class RemoteRelayHostLink {
         }
         try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
         guard let attempt, description != nil else {
-            AppLogger.info("公网接入（\(session.prefix(6))）：Mac 这边收集不到地址，只能走中继", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：Mac 这边收集不到地址，只能走中继", category: RemoteLog.category)
             attempt?.close()
             return
         }
@@ -274,9 +376,9 @@ final class RemoteRelayHostLink {
         if checked, let selected = attempt.selectedCandidates() {
             let local = RemoteICECandidateKind(sdp: selected.local)?.label ?? "?"
             let remote = RemoteICECandidateKind(sdp: selected.remote)?.label ?? "?"
-            AppLogger.info("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)", category: RemoteLog.category)
         } else if !checked {
-            AppLogger.info("公网接入（\(session.prefix(6))）：直连没打通，等中继回拨", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：直连没打通，等中继回拨", category: RemoteLog.category)
         }
         guard checked, runner != nil, let server,
               server.allowsInternetAccess(offer.peer.id),
@@ -314,14 +416,14 @@ final class RemoteRelayHostLink {
             do {
                 try await self?.callBack(ticket: ticket, pending: pending)
             } catch {
-                AppLogger.info("中继回拨失败：\(error.localizedDescription)", category: RemoteLog.category)
+                AppLogger.notice("中继回拨失败：\(error.localizedDescription)", category: RemoteLog.category)
             }
         }
     }
 
     private func callBack(ticket: String, pending: RemoteSignalResponder.PendingSession) async throws {
         guard let server, let transport = try await accept(ticket: ticket) else { return }
-        AppLogger.info("公网接入：中继回拨接通", category: RemoteLog.category)
+        AppLogger.notice("公网接入：中继回拨接通", category: RemoteLog.category)
         server.accept(transport: transport,
                       origin: .internet(peerID: pending.peer.id, keys: pending.keys, path: .relay))
     }

@@ -35,6 +35,22 @@ final class RemoteUnlockVaultTests: XCTestCase {
         XCTAssertNil(read)
     }
 
+    /// 真钥匙串：存进去的绑 Face ID 的条目，`hasPassword` 必须查得到（且不弹验证）。曾因查询用了
+    /// `kSecUseAuthenticationUISkip` 而把这类条目直接跳过，存了也显示「没存过」。
+    func test_keychain_store_reports_saved_password() throws {
+        let store = KeychainRemoteUnlockStore()
+        let mac = UUID()
+        defer { store.remove(forMac: mac) }
+        do {
+            try store.save("pw", forMac: mac)
+        } catch {
+            throw XCTSkip("这台设备 / 模拟器不能创建绑生物识别的钥匙串条目：\(RemoteUnlockVaultError.describe(error))")
+        }
+        XCTAssertTrue(store.hasPassword(forMac: mac))
+        store.remove(forMac: mac)
+        XCTAssertFalse(store.hasPassword(forMac: mac))
+    }
+
     func test_read_surfaces_biometry_failure() async throws {
         let store = MemoryRemoteUnlockStore()
         let mac = UUID()

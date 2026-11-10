@@ -12,6 +12,7 @@ final class RemoteControlSettings {
         static let enabled = DefaultsKey.remoteEnabled
         static let desktopEnabled = DefaultsKey.remoteDesktopEnabled
         static let desktopUnlockEnabled = DefaultsKey.remoteDesktopUnlockEnabled
+        static let desktopAudioEnabled = DefaultsKey.remoteDesktopAudioEnabled
         static let localShellEnabled = DefaultsKey.remoteLocalShellEnabled
         static let internetEnabled = DefaultsKey.remoteInternetEnabled
         static let internetDevices = DefaultsKey.remoteInternetDevices
@@ -49,6 +50,16 @@ final class RemoteControlSettings {
         }
     }
 
+    /// 「允许传输声音」：看桌面时把 Mac 的系统声音传到手机（默认开）。授权就是屏幕录制那一项（系统里叫
+    /// 「录屏与系统录音」），所以不用再授权；手机上的扬声器按钮默认关，打开才传。
+    var isDesktopAudioEnabled: Bool {
+        didSet {
+            guard isDesktopAudioEnabled != oldValue else { return }
+            defaults.set(isDesktopAudioEnabled, forKey: Keys.desktopAudioEnabled)
+            onChange?(self)
+        }
+    }
+
     /// 「允许手机打开本机终端」：手机能在这台 Mac 上开一个登录 shell（默认关）。那是这个用户账户的全部
     /// 权限，比接管已经开着的终端更大，也单独开一次。
     var isLocalShellEnabled: Bool {
@@ -68,8 +79,7 @@ final class RemoteControlSettings {
         }
     }
 
-    /// 允许经公网接入的设备。不因为配对过、或在同一 Apple ID 名册里就自动有：否则 iCloud 账号失守等于
-    /// 对方能静默控制这台 Mac。
+    /// 允许经公网接入的设备。不因为配对过就自动有：要在设置里逐台打开。
     var internetDevices: Set<UUID> {
         didSet {
             guard internetDevices != oldValue else { return }
@@ -91,11 +101,12 @@ final class RemoteControlSettings {
         isEnabled && isInternetEnabled && internetDevices.contains(id)
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = RemoteLocalState.defaults) {
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
         isDesktopEnabled = defaults.object(forKey: Keys.desktopEnabled) as? Bool ?? false
         isDesktopUnlockEnabled = defaults.object(forKey: Keys.desktopUnlockEnabled) as? Bool ?? false
+        isDesktopAudioEnabled = defaults.object(forKey: Keys.desktopAudioEnabled) as? Bool ?? true
         isLocalShellEnabled = defaults.object(forKey: Keys.localShellEnabled) as? Bool ?? false
         isInternetEnabled = defaults.object(forKey: Keys.internetEnabled) as? Bool ?? false
         internetDevices = Set((defaults.stringArray(forKey: Keys.internetDevices) ?? []).compactMap(UUID.init(uuidString:)))

@@ -33,7 +33,7 @@ struct HostSheet: View {
             MBtn(title: "连接终端", icon: "term", kind: .primary, full: true, height: 52, action: onConnect)
                 .padding(.top, 22)
             HStack(spacing: 10) {
-                actionTile("folder-tag", "SFTP 文件", action: onSFTP)
+                actionTile("folder-tag", "浏览文件", action: onSFTP)
                 actionTile("edit", "编辑", action: onEdit)
             }
             .padding(.top, 10)

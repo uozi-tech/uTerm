@@ -35,7 +35,7 @@ struct KeySelectorView: View {
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 0) {
                 if keys.isEmpty {
-                    Text("密钥管理器里还没有密钥")
+                    Text("「密钥管理」里还没有密钥")
                         .font(.system(size: 12)).foregroundStyle(UD.text4)
                         .padding(.vertical, 20).padding(.horizontal, 12)
                 } else {
@@ -104,7 +104,7 @@ struct JumpHostSelectorView: View {
                     Text(h.name).font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
                     Text(endpoint(h)).font(UD.mono(11)).foregroundStyle(UD.text3).lineLimit(1).truncationMode(.middle)
                 } else {
-                    Text("从已有服务器选择跳板机…").font(.system(size: 13)).foregroundStyle(UD.text4)
+                    Text("从已有主机中选择跳板机…").font(.system(size: 13)).foregroundStyle(UD.text4)
                 }
                 Spacer(minLength: 0)
                 Chevron(open: open)
@@ -116,7 +116,7 @@ struct JumpHostSelectorView: View {
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 0) {
-                Text("已有服务器")
+                Text("已有主机")
                     .font(.system(size: 10.5)).tracking(0.5).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)

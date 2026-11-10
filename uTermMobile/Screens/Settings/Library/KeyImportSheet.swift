@@ -34,7 +34,7 @@ struct KeyImportSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("粘贴私钥内容，或从文件导入。私钥保存在钥匙串，永不离开本机。")
+                    Text("粘贴私钥内容，或从文件导入。私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备。")
                         .font(M.sans(13)).foregroundStyle(M.text3).lineSpacing(2)
 
                     MField(label: "名称", hint: "留空则用文件名或 imported-key") {
@@ -70,7 +70,7 @@ struct KeyImportSheet: View {
 
                     if showsPassphrase {
                         MField(label: "口令", hint: "此私钥已加密") {
-                            MInput(text: $passphrase, placeholder: "私钥口令（不是服务器登录密码）",
+                            MInput(text: $passphrase, placeholder: "私钥口令（不是主机登录密码）",
                                    secure: true, revealable: true)
                         }
                     }

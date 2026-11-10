@@ -36,9 +36,9 @@ nonisolated enum RemoteFileAction: CaseIterable {
 
     var help: String {
         switch self {
-        case .preview:  String(localized: "在内置编辑器中查看和编辑，⌘S 保存回服务器")
-        case .open:     String(localized: "用本机应用打开，保存后自动上传回服务器")
-        case .openWith: String(localized: "选择用哪个应用打开，保存后自动上传回服务器")
+        case .preview:  String(localized: "在内置编辑器中查看和编辑，⌘S 保存回主机")
+        case .open:     String(localized: "用本机应用打开，保存后自动上传回主机")
+        case .openWith: String(localized: "选择用哪个应用打开，保存后自动上传回主机")
         case .download: String(localized: "另存一份到本地，之后不再同步")
         }
     }
@@ -110,16 +110,16 @@ enum OpenWithChoices {
     static func openTargetDescription(forPath path: String,
                                       preference: ExternalAppPreference = ExternalAppPreference()) -> String {
         if SQLiteFileDetector.isCandidate(path: path), UTableHandoff.isAvailable {
-            return String(localized: "将用 uTable 打开，改动由 uTable 自动保存回服务器")
+            return String(localized: "将用 uTable 打开，改动由 uTable 自动保存回主机")
         }
         if let remembered = preference.application(forPath: path) {
-            return String(localized: "将用 \(displayName(remembered)) 打开，保存后自动上传回服务器")
+            return String(localized: "将用 \(displayName(remembered)) 打开，保存后自动上传回主机")
         }
         if let type = contentType(forPath: path),
            let app = NSWorkspace.shared.urlForApplication(toOpen: type) {
-            return String(localized: "将用 \(displayName(app)) 打开，保存后自动上传回服务器")
+            return String(localized: "将用 \(displayName(app)) 打开，保存后自动上传回主机")
         }
-        return String(localized: "将让你选择一个应用来打开，保存后自动上传回服务器")
+        return String(localized: "将让你选择打开用的应用，保存后自动上传回主机")
     }
 
     static func contentType(forPath path: String) -> UTType? {

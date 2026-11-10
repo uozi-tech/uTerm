@@ -7,9 +7,9 @@ struct MRemoteSource: Equatable {
 
     var macName: String { client.macName }
 
-    /// Mac 上这枚标签此刻显示的名字。老版本 Mac 或断线时为 nil。
-    var macTabTitle: String? {
-        client.sessions.first { $0.id == sessionID }?.tabTitle
+    /// 那台 Mac 报的这个终端（标签名等）。断线时为 nil。
+    var sessionInfo: RemoteSessionInfo? {
+        client.sessions.first { $0.id == sessionID }
     }
 
     static func == (lhs: MRemoteSource, rhs: MRemoteSource) -> Bool {
@@ -24,6 +24,8 @@ struct MRemoteTakeover: Equatable {
     let sessionIDs: [UUID]
     /// 放到前台的那个，连接中页跟踪它。
     let focus: UUID
+    /// Mac 上的标签顺序；老版本 Mac 不发，为 nil。
+    var order: [UUID]? = nil
     /// 让同样内容的连续请求也能被 `onChange` 看到。
     let token = UUID()
 

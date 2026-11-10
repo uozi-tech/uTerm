@@ -100,6 +100,26 @@ nonisolated struct RemotePathProbeSummary: Equatable, Sendable {
         }
     }
 
+    /// 这条路失败的原因按出现先后列，重复的记次数：「超时 ×3；中继拒绝」。
+    static func failures(of mode: RemotePathProbeMode, in results: [RemotePathProbeResult]) -> String {
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+        for result in results where result.mode == mode && !result.connected {
+            let reason = result.failure ?? "未知"
+            if counts[reason] == nil { order.append(reason) }
+            counts[reason, default: 0] += 1
+        }
+        return order.map { reason in
+            let count = counts[reason] ?? 1
+            return count > 1 ? "\(reason) ×\(count)" : reason
+        }.joined(separator: "；")
+    }
+
+    /// 毫秒读数的显示：10 以下留一位小数。
+    static func millis(_ value: Double?) -> String? {
+        value.map { $0 < 10 ? String(format: "%.1f ms", $0) : String(format: "%.0f ms", $0) }
+    }
+
     var line: String {
         "\(mode.label)：成功 \(successes)/\(attempts)，建立 \(medianSetupMillis.map { "\($0)ms" } ?? "-")，"
             + "往返 p50 \(RemotePathProbeResult.format(medianRoundTripMillis)) "
@@ -192,7 +212,7 @@ struct RemoteLANProbe {
             result.failure = message
             return result
         case .awaitingApproval:
-            result.failure = "Mac 上还没同意这台手机"
+            result.failure = "Mac 上还没同意这台设备"
             return result
         case .idle, .connecting:
             result.failure = "超时"
@@ -268,7 +288,7 @@ nonisolated struct RemoteRelayProbe: Sendable {
         do {
             box = try await relay.signal(to: mac.id, from: localID, session: session, box: sealed,
                                          timeout: Self.signalTimeout)
-        } catch RemoteRelayError.notAllowed {
+        } catch RemoteRelayError.noReply {
             throw RemoteRelayProbeError.noAnswer
         }
         let reply: RemoteSignalBody
@@ -431,7 +451,7 @@ private nonisolated final class RemoteEchoDone: @unchecked Sendable {
     }
 }
 
-/// 链路诊断记录：只存在这台手机上，留最近 300 条。
+/// 链路诊断记录：只存在这台设备上，留最近 300 条。
 nonisolated struct RemotePathMatrixLog {
     private static let key = DefaultsKey.remotePathMatrixLog
     static let limit = 300
@@ -451,6 +471,26 @@ nonisolated struct RemotePathMatrixLog {
 
     func clear() {
         defaults.removeObject(forKey: Self.key)
+    }
+
+    /// 记录是最新在前的平铺列表；按 `runID` 切成一次次检测，最新的一次在前，每次之内按时间先后
+    /// （旧记录没有 `runID` 的各自成组）。
+    static func runs(_ results: [RemotePathProbeResult]) -> [[RemotePathProbeResult]] {
+        var runs: [[RemotePathProbeResult]] = []
+        for result in results {
+            if let runID = result.runID, let index = runs.lastIndex(where: { $0.first?.runID == runID }) {
+                runs[index].append(result)
+            } else {
+                runs.append([result])
+            }
+        }
+        return runs.map { $0.reversed() }
+    }
+
+    /// 拷贝给排查用的纯文本：先每条路的汇总，空一行，再逐条明细。
+    static func exportText(_ results: [RemotePathProbeResult]) -> String {
+        let summaries = RemotePathProbeSummary.summarize(results).map(\.line)
+        return (summaries + [""] + results.map(\.summaryLine)).joined(separator: "\n")
     }
 
     /// 最近一次诊断的全部结果（按时间先后）。

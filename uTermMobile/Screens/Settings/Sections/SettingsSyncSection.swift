@@ -39,7 +39,7 @@ struct ChatRetentionRow: View {
     var last = false
 
     var body: some View {
-        MInsetRow(icon: "clock", label: "会话保留", last: last,
+        MInsetRow(icon: "clock", label: "AI 对话保留", last: last,
                   trailing: AnyView(
                       MMenu {
                           ForEach(ChatRetentionPresentation.options, id: \.days) { option in

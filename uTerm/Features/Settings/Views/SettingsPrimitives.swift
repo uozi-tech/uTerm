@@ -86,6 +86,8 @@ enum SettingsMetrics {
 
 /// 设置页容器：`UD.bg` 底、内容列 maxWidth 640 左对齐、顶部 24 / 左右 32 / 底 32，分组间距 24。
 struct SettingsScroll<Content: View>: View {
+    /// 设置窗口里是 UD.bg；嵌进欢迎窗口（整窗 UD.panel）时跟着换。
+    var background: Color = UD.bg
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -99,7 +101,7 @@ struct SettingsScroll<Content: View>: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(UD.bg)
+        .background(background)
     }
 }
 
@@ -413,6 +415,13 @@ struct SettingsCenteredBlock<Content: View>: View {
 /// 设备列表的图标：机型（老版本没报机型就用名字）里带 iPad 的用 ipad，其余按 iPhone 画。
 nonisolated func settingsDeviceSymbol(for name: String) -> String {
     name.localizedCaseInsensitiveContains("ipad") ? "ipad" : "iphone"
+}
+
+/// 配对过的设备的图标：Mac 按机型分笔记本 / 台式，其余按名字分 iPhone / iPad。
+nonisolated func settingsDeviceSymbol(for peer: RemotePeer) -> String {
+    let name = peer.model ?? peer.name
+    guard peer.isMac else { return settingsDeviceSymbol(for: name) }
+    return name.localizedCaseInsensitiveContains("MacBook") ? "laptopcomputer" : "desktopcomputer"
 }
 
 // MARK: - 状态与提示

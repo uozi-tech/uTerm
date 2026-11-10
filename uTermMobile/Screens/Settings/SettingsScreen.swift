@@ -93,7 +93,7 @@ struct SettingsScreen: View {
     // 动作（快捷命令已升为底部「命令」主标签，此处仅留命令面板）
     @ViewBuilder private var actionsGroup: some View {
         MInsetGroup(header: "动作") {
-            MInsetRow(icon: "cmd", label: "命令面板", sub: "搜索主机、命令、文件",
+            MInsetRow(icon: "cmd", label: "命令面板", sub: "搜索主机、命令、密钥、分组",
                       chevron: true, last: true, onTap: { store.showPalette = true })
         }
     }

@@ -41,8 +41,8 @@ nonisolated enum LocalShellError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .agentUnavailable(let reason): return "连不上终端的辅助程序：\(reason)"
-        case .openFailed(let reason): return "终端没能启动：\(reason)"
+        case .agentUnavailable(let reason): return "无法连接终端辅助程序：\(reason)"
+        case .openFailed(let reason): return "终端未能启动：\(reason)"
         }
     }
 }

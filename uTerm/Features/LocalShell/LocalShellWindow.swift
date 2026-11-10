@@ -15,10 +15,30 @@ nonisolated struct LocalShellWindowID: Codable, Hashable, Sendable, Identifiable
     var directory: String?
 }
 
-/// 存在 holder 里的会话归属：App 重启后据此把标签放回原来的窗口。holder 只当它是不透明的数据。
+/// 存在 holder 里的会话归属：App 重启后据此把标签放回原来的窗口、原来的位置。holder 只当它是不透明的数据。
+///
+/// 会跨版本读：加的字段一律可选。旧版写的没有 `layout`，按 `ordinal` 排成一组；旧版读到新版写的也照样解得开
+/// （不认识的键被忽略）。
 nonisolated struct LocalShellSessionAttributes: Codable, Equatable, Sendable {
     var windowID: UUID
+    /// 默认标题的序号（「zsh 2」），不是位置：标签拖来拖去名字不变。
     var ordinal: Int
+    /// 写入时整个窗口的布局。位置以它为准。
+    var layout: HeldSessionLayout?
+
+    init(windowID: UUID, ordinal: Int, layout: HeldSessionLayout? = nil) {
+        self.windowID = windowID
+        self.ordinal = ordinal
+        self.layout = layout
+    }
+
+    /// 布局是别的版本写的、解不开时当没有，不连累整条归属：否则这个会话会被单独开进一个新窗口。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        windowID = try container.decode(UUID.self, forKey: .windowID)
+        ordinal = try container.decode(Int.self, forKey: .ordinal)
+        layout = try? container.decodeIfPresent(HeldSessionLayout.self, forKey: .layout)
+    }
 }
 
 /// 本机 shell 在会话注册表里的身份。不对应任何 `ServerProfile`：`serverID` 用固定的哨兵值，
@@ -40,6 +60,8 @@ final class LocalShellPane: Identifiable {
     let ordinal: Int
     /// shell 现在所在的目录；还没问到时是开标签时要的那个。重新启动时从这里接着。
     private(set) var workingDirectory: String?
+    /// 所在窗口最近一次的布局，跟归属一起存进 holder。
+    @ObservationIgnored private(set) var layout: HeldSessionLayout?
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
     @ObservationIgnored private var directoryTracking: Task<Void, Never>?
     @ObservationIgnored private(set) var isDisposed = false
@@ -72,11 +94,28 @@ final class LocalShellPane: Identifiable {
                                         directory: workingDirectory, columns: terminal.cols, rows: terminal.rows,
                                         ownsResponsibility: LocalShellNetworkPolicy.keepsLANConnections())
         await session.connect(using: backend)
-        if let windowID = registrar?.windowID, session.backend === backend,
-           let attributes = try? JSONEncoder().encode(LocalShellSessionAttributes(windowID: windowID, ordinal: ordinal)) {
+        if session.backend === backend, let attributes = encodedAttributes() {
             await backend.setAttributes(attributes)
         }
         trackWorkingDirectory(backend)
+    }
+
+    /// 存进 holder 的归属。窗口还没把凭条发下来时是 nil。
+    var attributes: LocalShellSessionAttributes? {
+        guard let windowID = registrar?.windowID else { return nil }
+        return LocalShellSessionAttributes(windowID: windowID, ordinal: ordinal, layout: layout)
+    }
+
+    private func encodedAttributes() -> Data? {
+        attributes.flatMap { try? JSONEncoder().encode($0) }
+    }
+
+    /// 窗口布局变了。已经连着的会话立刻改写 holder 里的归属；还没连上的等 `start()` 连上时一起写。
+    func updateLayout(_ layout: HeldSessionLayout) {
+        self.layout = layout
+        guard !isDisposed, session.connectionState == .connected,
+              let backend = session.backend as? LocalShellBackend, let attributes = encodedAttributes() else { return }
+        backend.sendAttributes(attributes)
     }
 
     private func trackWorkingDirectory(_ backend: LocalShellBackend) {
@@ -134,6 +173,9 @@ final class LocalShellWindowModel {
         releasesHiddenEditorFocusOnTabSwitch: true,
         keepAlive: TerminalPaneAreaTuning.keepAlive))
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
+    @ObservationIgnored private var layoutWriter: HeldLayoutWriter<LocalShellPane>?
+    /// 窗口的位置跟布局一起存；接回时照它还原。
+    @ObservationIgnored let windowTracker = HeldWindowTracker()
     private let startShell: @MainActor (LocalShellPane) -> Void
 
     var panes: [LocalShellPane] { groups.allTabs.map(\.payload) }
@@ -148,6 +190,12 @@ final class LocalShellWindowModel {
         groups.cloneTab = { [weak self] _ in self?.makeTab() }
         // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
         groups.makeTabForNewGroup = { [weak self] in self?.makeTab() }
+        // 重启后按它放回标签的顺序和分屏（`LocalShellRestorer`）。
+        let layoutWriter = HeldLayoutWriter(groups: groups, id: \.id) { [weak self] layout in
+            for pane in self?.panes ?? [] { pane.updateLayout(layout) }
+        }
+        windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
+        self.layoutWriter = layoutWriter
     }
 
     func attach(_ registrar: TerminalSessionRegistrar) {
@@ -210,8 +258,18 @@ final class LocalShellWindowModel {
     }
 
     func disposeAll() {
+        layoutWriter?.stop(flushingPending: TerminalQuitPolicy.shared.isQuitting)
         for pane in panes { pane.dispose() }
         groups.reset()
+    }
+
+    /// 接回上次留下的会话（`LocalShellRestorer`）：窗口还空着时按布局放回原位，其余按序号接在活动组末尾。
+    func adopt(_ restored: [(id: UUID, ordinal: Int)], layout: HeldSessionLayout?) {
+        let ordinals = Dictionary(restored.map { ($0.id, $0.ordinal) }, uniquingKeysWith: { first, _ in first })
+        let applied = groups.adoptHeldSessions(restored.map(\.id), layout: layout, id: \.id,
+                                               make: { makeTab(id: $0, ordinal: ordinals[$0]) },
+                                               append: { addTab(id: $0, ordinal: ordinals[$0]) })
+        if applied { windowTracker.restore(layout?.window) }
     }
 
     func syncFocus() {
@@ -367,6 +425,7 @@ struct LocalShellWindowView: View {
         .background(WorkspaceWindowChrome(serverName: "", background: WS.canvasNSColor))
         .background(LocalShellWindowTitleBinding(model: model))
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
+        .background(HeldWindowTrackerBinding(tracker: model.windowTracker))
         .background(WorkspaceCloseShortcutInstaller { window in
             model.handleCloseShortcut { window.performClose(nil) }
         })
@@ -393,6 +452,10 @@ struct LocalShellWindowView: View {
             // 点系统通知回到标签走这里。
             registry.setRevealer(forWindow: windowID.id) { [weak windowModel] paneID in
                 windowModel?.reveal(paneID) ?? false
+            }
+            // 手机远控按 Mac 上的标签顺序排标签：取写进 holder 的同一份布局。
+            registry.setTabOrder(forWindow: windowID.id) { [weak windowModel] in
+                windowModel?.groups.snapshot(\.id).tabOrder ?? []
             }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
@@ -497,8 +560,8 @@ private struct LocalShellNewTabButton: View {
             }
             .buttonStyle(.plain)
             .iconButtonHover(cornerRadius: 6)
-            .help("新开本机终端（⌘T）")
-            .accessibilityLabel(Text("新开本机终端"))
+            .help("新建本机终端（⌘T）")
+            .accessibilityLabel(Text("新建本机终端"))
         } else {
             Menu {
                 Button("主目录") { model.addTab(in: groupID) }
@@ -517,8 +580,8 @@ private struct LocalShellNewTabButton: View {
             .frame(width: 26, height: 26)
             .contentShape(Rectangle())
             .iconButtonHover(cornerRadius: 6)
-            .help("新开本机终端")
-            .accessibilityLabel(Text("新开本机终端"))
+            .help("新建本机终端")
+            .accessibilityLabel(Text("新建本机终端"))
         }
     }
 }
@@ -546,7 +609,7 @@ private struct LocalShellPaneView: View {
         case .connected:
             RemoteControlledTerminal(session: pane.session)
         case .failed(let message):
-            stateView(systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message)
+            stateView(systemImage: "exclamationmark.triangle", title: "本机终端未能启动", detail: message)
         case .disconnected:
             stateView(systemImage: "checkmark.circle", title: "shell 已退出", detail: "")
         }
@@ -563,7 +626,7 @@ private struct LocalShellPaneView: View {
             }
             HStack(spacing: 10) {
                 UDButton(title: "重新启动") { Task { await pane.start() } }
-                UDButton(title: "关闭标签", style: .secondary, action: onClose)
+                UDButton(title: "关闭标签页", style: .secondary, action: onClose)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -38,6 +38,10 @@ struct uTermApp: App {
     /// 远控：配对过的手机接入本机已打开的终端。开关在 设置 › 远程控制，默认关闭。
     @State private var remoteSettings: RemoteControlSettings
     @State private var remoteServer: RemoteHostServer
+    /// 从这台 Mac 去控制别的 Mac（「我的 Mac」窗口）。不改本机默认中继：它也是本机被控时注册的那台。
+    @State private var remoteMacs = RemoteMacDirectory(
+        relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
+        adoptsRelayAsDefault: false)
     /// 配对审批面板。独立 NSPanel，无窗口的后台模式下也能弹。
     private let remotePairingPrompt: RemotePairingPrompt?
     private let remoteDesktopIndicator: RemoteDesktopIndicator?
@@ -102,13 +106,18 @@ struct uTermApp: App {
         _globalForwarding = State(initialValue: globalForwarding)
         _launchRelay = State(initialValue: launchRelay)
         let remoteSettings = RemoteControlSettings()
-        // 测试宿主不碰真实的 iCloud 名册：它和正式版共用身份与设置，写进去会以正式版的名义同步出去。
+        // 测试宿主不碰真实的 iCloud 钥匙串：它和正式版共用身份与设置，写进去会以正式版的名义同步出去。
+        if !BackgroundLaunchMode.isRunningInTestHost { RemoteLegacyRoster.withdrawLocalDevice() }
         let remoteServer = RemoteHostServer(registry: terminalRegistry,
-                                            roster: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteCloudRoster(),
                                             relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
                                             relayUpdates: BackgroundLaunchMode.isRunningInTestHost ? .inert() : RemoteRelayUpdateMonitor(),
-                                            desktopEnvironment: .live(settings: remoteSettings))
+                                            desktopEnvironment: .live(settings: remoteSettings),
+                                            relayRegistrationBlock: .current(
+                                                isTestHost: BackgroundLaunchMode.isRunningInTestHost,
+                                                isInstalled: AppInstallLocation.isCurrentInstalled,
+                                                arguments: ProcessInfo.processInfo.arguments))
         remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
+        remoteServer.grantInternetAccess = { [remoteSettings] in remoteSettings.internetDevices.insert($0) }
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
         remotePairingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemotePairingPrompt(server: remoteServer)
@@ -117,6 +126,8 @@ struct uTermApp: App {
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
         if !BackgroundLaunchMode.isRunningInTestHost {
+            // 上次在帘幕期间退出（崩溃、强制退出）：把帘幕静音的输出设备恢复回去。
+            RemoteCurtainMute.shared.restoreLeftovers()
             StartupMaintenance.run(container: modelContainer)
             // 技能链接直接指向 app 包内：升级后首次启动 / app 搬家后把旧链接改指过来，
             // 与命令行接口开没开无关（技能文档先读得到，接口没开时 utermctl 会照实报错）。
@@ -145,6 +156,8 @@ struct uTermApp: App {
                 remoteServer.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
                                                   keepAwake: settings.keepsAwakeForInternet)
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
+                remoteServer.desktopSettingsChanged()
+                if !settings.isDesktopAudioEnabled { remoteServer.endDesktopAudio(reason: "Mac 上关闭了「允许传输声音」") }
             }
             let server = controlServer
             NotificationCenter.default.addObserver(
@@ -154,6 +167,9 @@ struct uTermApp: App {
             ) { _ in
                 server.stop()
                 MainActor.assumeIsolated {
+                    // 帘幕要在这里同步收：断连接后的拆除是异步的，等不到它进程就退了。gamma 系统会自己复位，
+                    // 扬声器的静音不会（只能等下次启动 restoreLeftovers）。
+                    RemoteCurtain.shared.disable()
                     remoteServer.stop()
                     TerminalQuitPolicy.shared.applicationWillTerminate()
                 }
@@ -192,6 +208,10 @@ struct uTermApp: App {
     private func installTerminalWindowOpener() {
         let open = openWindow
         UTermLifecycleDelegate.openWelcome = { open(id: "welcome") }
+        UTermLifecycleDelegate.openPairingLink = { [remoteMacs] invitation in
+            remoteMacs.pendingInvitation = invitation
+            open(id: "welcome")
+        }
         RemoteRelayUpdateMonitor.openSettings = {
             UTermLifecycleDelegate.showGUI()
             open(id: SettingsWindow.id)
@@ -235,6 +255,10 @@ struct uTermApp: App {
         lifecycleDelegate.dockMenu = DockMenuController(
             isLocked: { !lock.isUnlocked },
             recentServers: { DockMenuController.recentServers(in: context) },
+            onOpenWelcome: {
+                NSApp.activate(ignoringOtherApps: true)
+                open(id: "welcome")
+            },
             onNewLocalShell: {
                 NSApp.activate(ignoringOtherApps: true)
                 open.newLocalShellAskingFirst()
@@ -301,6 +325,7 @@ struct uTermApp: App {
                 .environment(controlSettings)
                 .environment(backgroundSettings)
                 .environment(terminalRegistry)
+                .environment(remoteMacs)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
@@ -390,7 +415,7 @@ struct uTermApp: App {
             // 所有工作区级快捷键的唯一注册点 —— 工具栏按钮不再挂 .keyboardShortcut，
             // 避免双重注册导致的双触发 no-op（Fix #4 + #10）。
             CommandGroup(after: .newItem) {
-                Button("新建终端标签") {
+                Button("新建终端标签页") {
                     NotificationCenter.default.post(name: .newTerminalTab, object: nil)
                 }
                 .keyboardShortcut("t", modifiers: .command)
@@ -415,7 +440,7 @@ struct uTermApp: App {
 
                 Divider()
 
-                Button("显示/隐藏 SFTP") {
+                Button("显示/隐藏文件") {
                     NotificationCenter.default.post(name: .toggleLeftSidebar, object: nil)
                 }
                 .keyboardShortcut("1", modifiers: [.command, .option])
@@ -476,6 +501,50 @@ struct uTermApp: App {
         .defaultSize(width: 860, height: 560)
         // 不用系统的窗口恢复：会话的真值在 holder 里，由 `LocalShellRestorer` 接回。系统恢复的窗口里值可能是空的，
         // 还原出来是没有标签的空窗口，每崩溃一次多一个；已关闭的会话也会被它按旧 id 新开一个 shell。
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
+
+        // 一台远程 Mac 一个窗口：整台接管它的终端，每个一个标签。连接不跨重启，不用系统的窗口恢复。
+        WindowGroup(for: RemoteMacWindowID.self) { $macID in
+            RemoteMacWindowView(windowID: macID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .environment(remoteMacs)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 900, height: 600)
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
+
+        // 一台远程 Mac 的屏幕一个窗口：黑底、一条细工具栏，和手机上的远程桌面一样，与终端窗口共用连接。
+        WindowGroup(for: RemoteDesktopWindowID.self) { $macID in
+            RemoteDesktopWindowView(windowID: macID)
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .environment(remoteMacs)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 840)
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
+
+        // 一台远程 Mac 的网络诊断：各条路逐一测，看实际会走哪条。
+        WindowGroup(for: RemoteDiagnosticsWindowID.self) { $windowID in
+            RemoteDiagnosticsWindowView(windowID: windowID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .environment(remoteMacs)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 640, height: 720)
         .restorationBehavior(.disabled)
         .routesNewWindowToWelcome()
 

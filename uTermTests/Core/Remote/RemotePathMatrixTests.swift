@@ -39,7 +39,7 @@ final class RemotePathMatrixTests: XCTestCase {
     // MARK: - 缺前提
 
     func test_missing_lan_or_relay_fails_with_a_reason_without_touching_the_network() async {
-        let phone = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phone = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let mac = RemotePeer(id: UUID(), name: "测试 Mac", publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
                              pairedAt: Date())
         var runner = RemotePathMatrixRunner(identity: phone, localID: UUID())
@@ -55,14 +55,14 @@ final class RemotePathMatrixTests: XCTestCase {
 
     func test_lan_probe_connects_and_measures_round_trips_through_a_real_server() async throws {
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         defer { server.stop() }
         let deadline = Date().addingTimeInterval(5)
         while server.port == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
         let port = try XCTUnwrap(server.port.flatMap { NWEndpoint.Port(rawValue: $0) })
-        let phone = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phone = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         try server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "测试 iPhone",
                                     publicKey: try phone.localIdentity().publicKey.rawRepresentation, pairedAt: Date()))
         let target = RemoteLANTarget(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: port),
@@ -79,7 +79,7 @@ final class RemotePathMatrixTests: XCTestCase {
     /// Mac 不认识这台手机：要等 Mac 上的人同意，诊断不能一直等，报原因收工。
     func test_lan_probe_does_not_wait_for_approval_forever() async throws {
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         defer { server.stop() }
@@ -89,7 +89,7 @@ final class RemotePathMatrixTests: XCTestCase {
         let target = RemoteLANTarget(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: port),
                                      expectedPeer: nil)
         let started = Date()
-        let result = await RemoteLANProbe(identity: RemoteIdentityStore(storage: RemoteMemoryStorage())).run(target)
+        let result = await RemoteLANProbe(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())).run(target)
         XCTAssertFalse(result.connected)
         XCTAssertNotNil(result.failure)
         XCTAssertLessThan(Date().timeIntervalSince(started), 10)

@@ -101,12 +101,12 @@ struct WorkspaceTitleBar: View {
                 // 让位窗口红绿灯（标准位 ~x13–68）。
                 Color.clear.frame(width: 68)
                 WSIconButton(systemName: "sidebar.leading",
-                             help: "显示/隐藏文件（⌘⌥1）",
+                             help: "显示/隐藏文件（⌥⌘1）",
                              action: onToggleSidebar)
                 Spacer()
                 // 右侧图标簇：Agent 聊天气泡 + 端口转发 + 设置齿轮（对齐 Cursor 右上）。
                 WSIconButton(systemName: inspectorPresented ? "bubble.left.fill" : "bubble.left",
-                             help: inspectorPresented ? "隐藏 Agent（⌘⌥2）" : "显示 Agent（⌘⌥2）",
+                             help: inspectorPresented ? "隐藏 Agent（⌥⌘2）" : "显示 Agent（⌥⌘2）",
                              selected: inspectorPresented,
                              action: onToggleInspector)
                 // 端口转发：有活跃隧道时右上角叠计数徽章（ZStack .topTrailing + 小偏移，
@@ -184,7 +184,7 @@ struct WSCanvasTab<Leading: View>: View {
     let active: Bool
     /// 激活胶囊的底色 = 下面内容卡的颜色（SFTP 是 `UD.panel`，终端是终端底色）。
     var activeFill: Color = UD.panel
-    var closeHelp = "关闭标签"
+    var closeHelp = "关闭标签页"
     let onSelect: () -> Void
     let onClose: () -> Void
     @ViewBuilder let leading: (_ active: Bool) -> Leading

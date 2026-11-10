@@ -324,6 +324,93 @@ Claude Code 在 SwiftTerm 里每帧都包 `?2026h` … `?2026l`，思考时约 1
 
 uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalSynchronizedOutputTests.swift`。
 
+## 17. iOS 跟随底部时，惯性 / 回弹还没停就不抢滚动位置
+
+`iOS/iOSTerminalView.swift` `updateScroller`：跟随底部（`userScrolling == false`）时，上游每次调用都把 `contentOffset`
+直接设成底部，只在手指按着时让开。`synchronizedOutputChanged` 每帧结束都调它，Claude Code 思考时一秒约 10 次；用户把
+终端甩回底部、松手后的减速或橡皮筋回弹还在走，这里每帧把位置硬拽回底部，UIKit 的动画下一帧又按自己的轨迹设回去，滚到
+底部时整屏抖。没有同步帧的普通输出不增行就不会走到这里，所以只有 Claude 思考时才明显。
+
+改成：正在减速（含回弹）且离底部不到一行时什么也不做，让它自己落到底部，下一帧输出再贴齐；新输出把尾巴拉开超过一行时
+先 `setContentOffset(_, animated: false)` 停掉惯性再贴底。手指按着、往上翻看历史（`userScrolling`）的行为不变。
+
+uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalBottomFollowTests.swift`。
+
+## 18. iOS 去掉永不触发的 CADisplayLink
+
+上游 iOS 在 `setupDisplayUpdates` 里建一个 `CADisplayLink`，`feedPrepare` 里取消暂停、`feedFinish` 里再暂停。两者在
+同一次主线程调用里同步执行（uTerm 只在主线程 feed），链接从来轮不到触发——重绘全靠 `queuePendingDisplay` /
+`displayImmediately`——但每次 feed（每个终端最多每秒 60 次）都要把它的暂停状态翻两次，反复向 vsync 源登记、注销。
+链接还把视图当 target 强持有，只有 `updateUiClosed()` 才 `invalidate`，uTerm 从不调：关掉的标签连同整份回滚缓冲
+（远控要 1 万行）一直留在内存里。
+
+涉及文件：`iOS/iOSTerminalView.swift`：删掉 `link` 属性与 `step(displaylink:)`；`setupDisplayUpdates` /
+`startDisplayUpdates` / `suspendDisplayUpdates` 留空（同 Mac）；`updateUiClosed()` 只停文字闪烁。
+
+uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalHiddenRenderingTests.swift`
+（`testTerminalViewIsReleasedWhenNoLongerReferenced`）。上游若改成真用这个链接（例如后台线程 feed），重新评估。
+
+## 19. iOS 隐藏的终端不跑光标闪烁动画
+
+`iOS/iOSCaretView.swift` 的闪烁光标是一个 `.repeat` 的 `UIView.animate`，上游只在视图离开窗口时停。uTerm 的后台标签
+留在窗口里（`opacity(0)` / 移出屏外），程序设了闪烁光标（`CSI 1 q`，zsh vi 模式等）时，每个后台标签的光标都在
+让 Core Animation 一帧帧出图。
+
+涉及文件：
+
+- `iOS/iOSTerminalView.swift`：新增 `public var suspendsCaretAnimation`，变化时重新应用光标样式。
+- `iOS/iOSCaretView.swift`：`updateAnimation` 在它为真时只复位不透明度、不起动画。
+
+uTerm 侧入口：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `MTerminalView.suppressesDrawing`（后台标签或
+App 在后台时为真）。回归测试见 `uTermMobileTests/TerminalHiddenRenderingTests.swift`。
+
+## 20. CoreGraphics 绘制按行缓存排版结果
+
+iOS 上 `setNeedsDisplay(rect)` 只标一小块也没用：`draw` 拿到的永远是整个视图（实测连最简单的 `UIView` 子类也一样），
+位图整块清掉重画，滚动时每一帧也是。所以「只重绘变过的行」在 iOS 上省不到任何东西，能省的是「没变的行别再排一遍版」。
+uTerm 配色下采样（54×58 的屏、优化构建）：建属性串约 25%、建 CTLine 约 11%、释放约 3%。
+
+`Apple/AppleTerminalView.swift`：绘制循环里原先每行都 `buildAttributedString` + 建 CTLine，改成走 `renderedRow`，按绝对行号缓存
+`ViewLineInfo` 和备好的段（CTLine + 每段属性）。命中条件 = 同一个行对象（滚动会在环形缓冲里轮换行对象）+ `RowRenderKey` 相等：
+行的 `generation`、双向文字段落修订号（同 Metal 渲染器）、列数，以及不在格子里、但会改变这一行样子的视图状态——这一行的选区、
+链接高亮（模式、修饰键、悬停范围）、闪烁相位、属性缓存代次（`resetCaches` / `colorsChanged` 里 +1，覆盖配色、字号、最低对比度）、
+自绘方块字形开关、双向文字策略、选区配色。CoreGraphics 路径拿不到脏行范围（iOS 总是整屏），所以视图状态只能放进键里。
+缓存只留绘制位置前后两屏，超过六屏就修剪。两端共用这段代码，Mac 也受益（Mac 滚动时同样整块重画）。
+
+读数（同一次运行、优化构建、模拟器）：不开缓存三种情形都是 3.8–4.1ms；开缓存后内容没变（滚动、回弹的每一帧）2.1ms，
+只变一行（Claude Code 思考时转圈那一行）2.2ms，每行都变 3.7ms。
+
+注意：软折行连成的段落里一行变了，整段都要重排（双向文字按段落排版，修订号按段落算）。Claude Code 按终端宽度自己断行、输出硬换行，
+不受影响；长的软折行输出会。
+没做：剩下的时间主要在 CoreGraphics 记录字形时比对颜色（`colorResourceForColor`，约 17%）、光栅化字形和填背景。
+试过把缓存的 `CGColor` 转成标准 sRGB，没有变化；把背景填充改成 `.copy` 只在上游默认的透明背景下有用，uTerm 用实色背景，填充本来就走 `memset`。
+
+uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalRowCacheTests.swift`（缓存视图与全新视图逐字节比截图，键里每一项都做过破坏性 A/B）
+和 `uTermMobileTests/Probes/TerminalDrawCostProbeTests.swift`（同一次运行里的相对开销）。
+
+## 21. 手指滚动时，排队的输出画进当前这一帧
+
+补丁 #13 的做法：滚动位置变了，但已经有一次绘制在等节流时，这一帧不画，留给排队的那次。
+输出自己引起的滚动这样处理是对的，否则每拍会画两遍。可滚动要是手指或惯性带起来的，排队的那次
+要晚一两帧才到：这一帧滚动位置变了，画面却没动，下一帧再跳过去。Claude Code 思考时每秒结束约
+10 个同步帧，边输出边滚动时，每秒就要丢掉约 10 帧。探针实测，有输出时 4 秒里 245 个滚动帧只画了
+200 次；改完后是 240 次，和没有输出时一样。
+
+涉及文件：`iOS/iOSTerminalView.swift`。`contentOffset` 的 didSet 里，凡是不经过
+`setContentOffsetFromTerminal` 的改动都记一个标记。`redrawAfterLayout` 看到这个标记，
+而且有绘制在排队，就当场 `flushPendingDisplay()` 并重画。节流计时器到点后已经没有要画的东西，
+所以一帧仍然只画一次。输出自己引起的滚动维持 #13 原样，积压时的节流也不受影响。
+尺寸和滚动位置同时变化时（转屏）也走这条路：当场画，省掉计时器到点后的第二遍。
+这里不标整屏脏（不调 `updateFullScreen`）：反正要 `setNeedsDisplay(bounds)`，而同步帧
+（DEC 2026）还没结束时标整屏脏，帧结束后会多重排一整屏。
+
+有意的取舍：输出积压时（节流拉长到 100ms）手指仍在滚动，现在每一帧都画，比积压期间每秒约 10 帧要多。
+滚动本来就要每帧重画，没有输出排队时也是这样。
+
+回归测试见 `uTermMobileTests/TerminalDrawCountTests.swift` 的
+`testUserScrollWithQueuedOutputPaintsInTheSameFrame`；整屏探针（工作区界面、假后端回放 Claude 帧、
+按显示刷新节拍滚动）见 `uTermMobileTests/Probes/TerminalScrollWhileOutputProbeTests.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

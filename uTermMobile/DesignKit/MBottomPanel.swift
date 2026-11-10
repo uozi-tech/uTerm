@@ -25,6 +25,8 @@ nonisolated enum MBottomPanelMetrics {
     static let contentInset: CGFloat = 24
     static let maxWidth: CGFloat = 560
     static let fallbackRadius: CGFloat = 28
+    /// 背板遮罩的不透明度。
+    static let scrimOpacity: Double = 0.28
 }
 
 private struct MBottomPanelPresenter<Item: Identifiable, Panel: View>: ViewModifier {
@@ -74,8 +76,11 @@ private struct MBottomPanelChrome<Panel: View>: View {
         GeometryReader { proxy in
             ZStack(alignment: .bottom) {
                 // 不用 M.backdrop：它在日间是透明的（设计语言 v2），面板会和底下的页面混在一起。
-                Color.black.opacity(0.28)
+                Color.black.opacity(MBottomPanelMetrics.scrimOpacity)
                     .opacity(shown ? 1 : 0)
+                    // 遮罩铺满四边（状态栏、Home 条、Duo 侧列）；外层 ZStack 只让出了底边，
+                    // 遮罩跟着它走的话顶部状态栏那一条还是亮的（真机反馈）。
+                    .ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onDismiss)
                     .accessibilityLabel(Text("关闭"))

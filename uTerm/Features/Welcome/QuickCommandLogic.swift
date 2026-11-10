@@ -22,7 +22,7 @@ nonisolated struct QuickCommandHostRef: Identifiable, Equatable, Sendable {
 /// 把命令的 `serverIDs` 解析为展示信息。集中「名为空回退主机名」与「已删除服务器」占位，
 /// 避免列表行 / 详情 / 执行器各写一份且行为不一致。`@MainActor`（读 @Model 属性）。
 enum QuickCommandTargets {
-    static let deletedLabel = "已删除服务器"
+    static let deletedLabel = "已删除的主机"
 
     static func displayName(_ profile: ServerProfile) -> String {
         profile.name.isEmpty ? profile.host : profile.name

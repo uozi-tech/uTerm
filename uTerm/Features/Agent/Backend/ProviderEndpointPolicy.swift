@@ -31,7 +31,7 @@ nonisolated enum ProviderEndpointPolicy {
         var message: String {
             switch self {
             case .invalidURL:
-                return "请填写包含主机名的合法地址"
+                return "填写包含主机名的有效地址"
             case .unsupportedScheme:
                 return "仅支持 HTTPS；本机服务可使用 HTTP"
             case .embeddedCredentials:
@@ -39,7 +39,7 @@ nonisolated enum ProviderEndpointPolicy {
             case .queryOrFragment:
                 return "Base URL 不能包含查询参数或片段"
             case .insecureHTTP:
-                return "远程 Provider 必须使用 HTTPS；HTTP 仅允许 localhost/127.0.0.0/8/::1"
+                return "远程模型服务必须使用 HTTPS；只有 localhost、127.0.0.0/8、::1 可以用 HTTP"
             }
         }
     }
