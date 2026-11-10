@@ -290,6 +290,47 @@ final class TerminalReattachImagePasteTests: XCTestCase {
         session.dispose()
     }
 
+    /// 引擎升级了：旧检查点的快照用不了，但里面的程序状态照用——标签圆点在，⌘V 也不用猜。
+    func testStatusFromCheckpointOfAnotherEngineIsKept() async throws {
+        let journal = ProgramStatusJournal()
+        journal.receive(.programStatus(.report(id: "", record: ProgramStatusRecord(state: .working, app: "claude-code"))))
+        let shadow = ShadowTerminal(cols: 80, rows: 24, options: TerminalScrollbackLimits(lines: 100).shadowOptions)
+        let blob = TerminalCheckpointBlob.encode(snapshot: try shadow.snapshot(), programStatus: journal.encoded,
+                                                 engine: "an-older-engine")
+        XCTAssertNil(TerminalCheckpointBlob.decode(blob), "别的引擎版本的快照不能用")
+
+        let (session, backend) = await connect(blob: blob, activity: .unknown)
+        XCTAssertTrue(session.programStatusTracker.hasRecords)
+        XCTAssertEqual(session.programStatus?.state, .working)
+        XCTAssertEqual(session.programStatus?.app, "claude-code")
+        XCTAssertFalse(session.programStatusUnknown)
+        XCTAssertTrue(session.pasteImage(image))
+        let delivered = await waitUntil { await backend.delivered == 1 }
+        XCTAssertTrue(delivered)
+        session.dispose()
+    }
+
+    /// 状态段坏了（解不开的 JSON、长度超出整份数据）：当没有状态，接回照常。
+    func testCorruptStatusSegmentFallsBackToNoStatus() async throws {
+        let shadow = ShadowTerminal(cols: 80, rows: 24, options: TerminalScrollbackLimits(lines: 100).shadowOptions)
+        let snapshot = try shadow.snapshot()
+        let garbled = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: Data("{\"board\":[".utf8),
+                                                    engine: "an-older-engine")
+        XCTAssertNotNil(TerminalCheckpointBlob.decodeProgramStatus(garbled))
+        XCTAssertNil(TerminalCheckpointBlob.decodeProgramStatus(garbled).flatMap(ProgramStatusJournal.decode))
+        var truncated = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: Data(repeating: 0x7B, count: 64))
+        truncated.removeLast(snapshot.count + 32)
+        XCTAssertNil(TerminalCheckpointBlob.decodeProgramStatus(truncated))
+
+        for blob in [garbled, truncated] {
+            let (session, _) = await connect(blob: blob, activity: .unknown)
+            XCTAssertFalse(session.programStatusTracker.hasRecords)
+            XCTAssertNil(session.programStatus)
+            XCTAssertTrue(session.programStatusUnknown, "接回了却不知道状态，该交给前台判断")
+            session.dispose()
+        }
+    }
+
     /// 前台判断不了：不贴，下次再问。
     func testUnknownForegroundSendsNothing() async throws {
         let (session, backend) = await connect(blob: try foreignCheckpoint(), activity: .unknown)

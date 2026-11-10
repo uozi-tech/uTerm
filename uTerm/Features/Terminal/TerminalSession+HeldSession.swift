@@ -6,8 +6,8 @@ import Foundation
 ///（检查点）连同它对应的字节位置交给 holder。接回时：把检查点还原进影子终端，再喂那个位置之后的字节，影子就回到了
 /// 最新画面；画面（surface）等标签第一次露出时再建，建好后由输出泵把影子的状态回放进去（M7）。
 ///
-/// 检查点只认同一个引擎版本存的（`TerminalCheckpointBlob`）：版本变了就丢弃，holder 里的 shell 不受影响，只是回滚
-/// 历史从 holder 还留着的那段字节开始。
+/// 检查点的快照只认同一个引擎版本存的（`TerminalCheckpointBlob`）：版本变了就丢弃，holder 里的 shell 不受影响，只是回滚
+/// 历史从 holder 还留着的那段字节开始。和快照存在一起的程序状态不认版本，照用。
 ///
 /// 回放的字节全是历史。里面的终端查询、命令跟踪标记、状态上报、通知，当时要么已经处理过，要么过时了，
 /// 所以回放期间不发应答、不发通知、不认标记（`isReplayingHeldOutput`），否则历史查询的回答会打进 shell 的输入。
@@ -27,13 +27,14 @@ extension TerminalSession {
 
         let checkpoint = replay.checkpoint
         var restored = false
-        if let contents = TerminalCheckpointBlob.decodeContents(checkpoint.blob) {
-            restored = (try? shadow.restore(snapshot: contents.snapshot)) != nil
-            // 程序状态跟检查点存在一起：一直在 working 的程序接回后不会再报一次，标签上的圆点只能从这里来。
-            if restored, let status = contents.programStatus.flatMap(ProgramStatusJournal.decode) {
-                programStatusTracker = status
-                statusJournal.current = status
-            }
+        if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
+            restored = (try? shadow.restore(snapshot: snapshot)) != nil
+        }
+        // 程序状态跟检查点存在一起：一直在 working 的程序接回后不会再报一次，标签上的圆点只能从这里来。
+        // 快照用不了（别的引擎版本存的）也照用：状态对应的是检查点那个字节位置，和快照格式无关。
+        if let status = TerminalCheckpointBlob.decodeProgramStatus(checkpoint.blob).flatMap(ProgramStatusJournal.decode) {
+            programStatusTracker = status
+            statusJournal.current = status
         }
         // 检查点没法用（空的、别的引擎版本存的）：之后的字节仍然是按当时的尺寸产生的，先回到那个尺寸。
         if !restored, checkpoint.cols > 0, checkpoint.rows > 0 {
@@ -158,17 +159,28 @@ nonisolated enum TerminalCheckpointBlob {
 
     static func decodeContents(_ blob: [UInt8], engine: String = TerminalEngineVersion.current)
         -> (snapshot: Data, programStatus: Data?)? {
+        guard let parts = split(blob), parts.engine == Array(engine.utf8.prefix(255)) else { return nil }
+        return (parts.snapshot, parts.programStatus)
+    }
+
+    /// 程序状态那一段，不核引擎版本：状态是宿主记的（`ProgramStatusJournal` 的 JSON），和快照格式无关，换了引擎、
+    /// 快照用不了时照样对应着检查点那个字节位置。
+    static func decodeProgramStatus(_ blob: [UInt8]) -> Data? {
+        split(blob)?.programStatus
+    }
+
+    private static func split(_ blob: [UInt8]) -> (engine: [UInt8], programStatus: Data?, snapshot: Data)? {
         guard blob.count > magic.count, Array(blob.prefix(magic.count)) == magic else { return nil }
         let versionLength = Int(blob[magic.count])
         var cursor = magic.count + 1
-        guard blob.count >= cursor + versionLength + 4,
-              Array(blob[cursor..<(cursor + versionLength)]) == Array(engine.utf8.prefix(255)) else { return nil }
+        guard blob.count >= cursor + versionLength + 4 else { return nil }
+        let engine = Array(blob[cursor..<(cursor + versionLength)])
         cursor += versionLength
         let statusLength = blob[cursor..<(cursor + 4)].reduce(0) { $0 << 8 | Int($1) }
         cursor += 4
         guard blob.count > cursor + statusLength else { return nil }
         let status = statusLength > 0 ? Data(blob[cursor..<(cursor + statusLength)]) : nil
-        return (Data(blob[(cursor + statusLength)...]), status)
+        return (engine, status, Data(blob[(cursor + statusLength)...]))
     }
 }
 
