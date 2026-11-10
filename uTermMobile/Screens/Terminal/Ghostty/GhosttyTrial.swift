@@ -32,8 +32,11 @@ enum GhosttyTrial {
 
     /// M16 第七轮：user 说第六轮（引擎 wakeup 不再在主线程同步重画）滚动时变糊。测试里两种行为的画面都不撕裂、不混合、
     /// 边缘一样锐，找不出差别，所以默认先回到第五轮的行为，留一个开关让 user 在同一台手机上来回比（全局生效，下一次 wakeup 起）。
+    /// M16 第十轮：单指滚动默认交给 UIScrollView（手势、减速、回弹都是系统的），另一个开关切回第九轮的自写物理（下一次按下起）。
+    /// 两个开关独立，四种组合都能跑。
     static func applyRendererMode() {
         UTermScrollTrace.legacyWakeupSyncDraw = !UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyFreeRenderer)
+        UTermScrollTrace.usesSystemScrolling = !UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyOwnScrollPhysics)
     }
 }
 

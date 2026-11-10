@@ -31,6 +31,8 @@
         #if !targetEnvironment(macCatalyst)
             var softwareKeyboard: SoftwareKeyboardState = .init()
             var fontZoom: FontZoomState = .init()
+            /// uTerm 本地补丁：单指滚动交给 UIScrollView（见 +SystemScroll）。
+            var systemScroll: SystemScrollState = .init()
         #endif
 
         lazy var selectionContextMenuInteraction = UIContextMenuInteraction(delegate: self)
@@ -166,6 +168,10 @@
                 stopMomentumScrolling(sendTerminalEndEvent: false)
                 dismissTouchSelection()
             }
+            #if !targetEnvironment(macCatalyst)
+                // uTerm 本地补丁：不显示的终端（后台标签）不接系统滚动的手势。
+                systemScroll.driver?.panGestureRecognizer.isEnabled = visible
+            #endif
             core.setDisplayVisible(visible)
         }
 
@@ -220,6 +226,20 @@
             }
             core.onCellSizeDidChange = { [weak self] in
                 self?.refreshTextInputGeometry(reason: "cell-size-action")
+                #if !targetEnvironment(macCatalyst)
+                    self?.systemScrollSyncFromEngine()
+                #endif
+            }
+            // uTerm 本地补丁：滚动条回报一到就让系统滚动那边的 contentSize / contentOffset 跟上引擎。
+            core.bridge.onScrollbarChange = { [weak self] in
+                #if !targetEnvironment(macCatalyst)
+                    guard let self else { return }
+                    if let bar = core.bridge.scrollbar {
+                        UTermScrollTrace.signpostEngineBar(offset: bar.offset, total: bar.total, len: bar.len,
+                                                           modelRow: momentumScroll.modelRow, modelFrac: momentumScroll.modelFrac)
+                    }
+                    systemScrollBarChanged()
+                #endif
             }
             core.onMouseShape = { [weak self] shape in
                 self?.applyMouseShape(shape)
@@ -234,6 +254,7 @@
             setupPlatformInput()
             #if !targetEnvironment(macCatalyst)
                 setupKeyboardObservers()
+                installSystemScrollDriver()
             #endif
         }
 

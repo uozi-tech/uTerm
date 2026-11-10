@@ -31,13 +31,17 @@
                 return
             }
             super.touchesBegan(touches, with: event)
+            #if !targetEnvironment(macCatalyst)
+                // uTerm 本地补丁：触摸阶段的 signpost（按「上玻璃」打分时把冻结归到按下 / 拖动 / 松手）。
+                if touches.count == (event?.touches(for: self)?.count ?? touches.count) { UTermScrollTrace.signpostTouch(.down) }
+            #endif
             if usesInlineTextSelection {
                 return
             }
             #if targetEnvironment(macCatalyst)
                 becomeFirstResponder()
             #else
-                if momentumScroll.displayLink != nil {
+                if momentumScroll.displayLink != nil || systemScrollInMotion {
                     // A touch during momentum is a scroll-stop, not a tap.
                     stopMomentumForTouchDown()
                     softwareKeyboard.tapCandidateArmed = false
@@ -85,6 +89,12 @@
             if handleIndirectPointerTouches(touches, phase: .ended, event: event) {
                 return
             }
+            #if !targetEnvironment(macCatalyst)
+                if (event?.touches(for: self)?.allSatisfy { $0.phase == .ended || $0.phase == .cancelled }) ?? true {
+                    UTermScrollTrace.signpostTouch(.up)
+                    systemScrollTouchEnded()
+                }
+            #endif
             if usesInlineTextSelection {
                 super.touchesEnded(touches, with: event)
                 return
@@ -123,6 +133,7 @@
             }
             #if !targetEnvironment(macCatalyst)
                 softwareKeyboard.tapCandidateArmed = false
+                UTermScrollTrace.signpostTouch(.up)
             #endif
             super.touchesCancelled(touches, with: event)
         }
@@ -241,7 +252,7 @@
             }
             if usesInlineTextSelection, gestureRecognizer === touchSelection.tapRecognizers.first {
                 touchSelection.tapBeganWithMenu = isTouchMenuVisible
-                touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil
+                touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil || systemScrollInMotion
                 if touchSelection.tapStopsMomentum {
                     stopMomentumForTouchDown()
                 }
@@ -259,6 +270,12 @@
             if gestureRecognizer is UILongPressGestureRecognizer {
                 return usesInlineTextSelection
             }
+            #if !targetEnvironment(macCatalyst)
+                // uTerm 本地补丁：单指滚动归 UIScrollView 的 pan 时，自写的 pan 让位（双指、选区拖动、没有回滚可滚的照旧归它）。
+                if gestureRecognizer === touchSelection.scrollGesture, gestureRecognizer.numberOfTouches == 1, systemPanWouldBegin {
+                    return false
+                }
+            #endif
             return true
         }
     }

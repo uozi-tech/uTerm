@@ -84,6 +84,90 @@ public enum UTermScrollTrace {
     /// 测试用 A/B 开关：true = 回到第五轮的行为（引擎 wakeup 也让协调器在主线程同步整帧重画）。默认 false。
     nonisolated(unsafe) public static var legacyWakeupSyncDraw = false
 
+    /// M16 第十轮：单指滚动的手势和物理交给 UIScrollView（`UITerminalView+SystemScroll.swift`）。false = 第九轮的自写
+    /// 拖动 / 惯性 / 回弹。按手势生效（下一次按下起）。宿主的诊断页有开关，默认开。
+    nonisolated(unsafe) public static var usesSystemScrolling = true
+
+    /// 触摸的阶段（signpost `touch` 的第二个数）：0 按下、1 开始拖、2 抬起 / 取消。
+    public enum TouchPhase: Int { case down = 0, dragBegan = 1, up = 2 }
+
+    /// 触摸阶段：按「上玻璃」打分时把冻结归到按下未拖 / 拖动 / 松手后。
+    static func signpostTouch(_ phase: TouchPhase) {
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %d", CACurrentMediaTime(), phase.rawValue)
+        glassSignposter.emitEvent("touch", "\(text, privacy: .public)")
+    }
+
+    // MARK: 系统滚动的排查打点（M16 第十轮：user 说「顶部底部中间会有反复横跳」）
+
+    /// 我们主动改滚动视图或引擎位置的原因（不是 UIKit 自己动的）。signpost `sv-write`：时刻、原因、改之前、改之后（物理像素）。
+    public enum ScrollWrite: Int {
+        /// 静止时按引擎对 contentSize（前后是 contentSize 高度，px）。
+        case restSize = 1
+        /// 静止时按引擎对 contentOffset。
+        case restOffset = 2
+        /// 跟踪 / 减速中回滚变长，只放宽 contentSize（前后是 contentSize 高度）。
+        case motionGrowSize = 3
+        /// 跟踪 / 减速中停在底部来了输出，改 shift（前后是 shift，px）。
+        case shiftChange = 4
+        /// 对齐到整行：起我们自己的对齐动画（display link 一帧帧写 contentOffset）。
+        case alignAnimated = 5
+        /// 对齐到整行：直接设 contentOffset。
+        case alignImmediate = 6
+        /// 对齐到整行：滚动视图取整后不会动，只把引擎对齐（前后是引擎位置）。
+        case alignEngineOnly = 7
+        /// 停住减速 / 对齐动画（前后是 contentOffset）。
+        case stopDecel = 8
+        /// 进回弹那一下给引擎多发一屏（前后是这次发给引擎的位移：不含 / 含多发的那一屏）。
+        case edgeHeal = 9
+        /// 松手后的减速没收到结束回调，兜底当它结束了。
+        case watchdog = 10
+    }
+
+    static func signpostScrollWrite(_ reason: ScrollWrite, from: Double, to: Double) {
+        record("sv-write", Double(reason.rawValue))
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %d %.1f %.1f", CACurrentMediaTime(), reason.rawValue, from, to)
+        glassSignposter.emitEvent("sv-write", "\(text, privacy: .public)")
+    }
+
+    /// 滚动视图的生命周期（signpost `sv-phase`：时刻、阶段、两个值）：1 开始拖、2 将松手（速度 px/s、落点 px）、
+    /// 3 松手（会不会减速）、4 减速结束、5 对齐动画结束、6 点停兜底触发。
+    static func signpostScrollPhase(_ phase: Int, _ a: Double = 0, _ b: Double = 0) {
+        record("sv-phase", Double(phase))
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %d %.1f %.1f", CACurrentMediaTime(), phase, a, b)
+        glassSignposter.emitEvent("sv-phase", "\(text, privacy: .public)")
+    }
+
+    /// 每次 scrollViewDidScroll（signpost `sv-scroll`）：contentOffset（px）、越界平移（px）、换算出的引擎目标、发给引擎的位移、
+    /// 跟踪中、减速中、对齐动画中。
+    static func signpostDidScroll(offset: Double, over: Double, target: Int, delta: Int, tracking: Bool, decelerating: Bool, animating: Bool) {
+        record("sv-scroll", offset)
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %.1f %.1f %d %d %d %d %d", CACurrentMediaTime(), offset, over, target, delta,
+                          tracking ? 1 : 0, decelerating ? 1 : 0, animating ? 1 : 0)
+        glassSignposter.emitEvent("sv-scroll", "\(text, privacy: .public)")
+    }
+
+    /// 引擎报来的滚动条和那一刻的镜像（signpost `engine-bar`）：行号、总行数、一屏行数、镜像行号、镜像小数 px。
+    static func signpostEngineBar(offset: UInt64, total: UInt64, len: UInt64, modelRow: Int, modelFrac: Int) {
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %llu %llu %llu %d %d", CACurrentMediaTime(), offset, total, len, modelRow, modelFrac)
+        glassSignposter.emitEvent("engine-bar", "\(text, privacy: .public)")
+    }
+
+    /// 和 SwiftTerm 标签同款：视口位置（物理像素）、在不在减速、手指按没按着。第五个数是谁发的：SwiftTerm 0、
+    /// Ghostty 系统滚动 1、Ghostty 自写物理 2（自写物理的甩动由 glide-start / glide 切段，打分脚本不再按这个切）。
+    /// 第六个数是哪条代码路径动的位置（1 系统滚动的 didScroll、2 自写拖动 / 惯性、3 对齐时只动引擎、4 当场对齐、5 滚轮），
+    /// 第七个数是终端视图的编号（同一进程里第几个建出来的），用来分清多个标签。
+    static func signpostScrollOffset(px: Double, decelerating: Bool, tracking: Bool, systemPhysics: Bool, source: Int, view: Int) {
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %.1f %d %d %d %d %d", CACurrentMediaTime(), px, decelerating ? 1 : 0, tracking ? 1 : 0,
+                          systemPhysics ? 1 : 2, source, view)
+        glassSignposter.emitEvent("scroll-offset", "\(text, privacy: .public)")
+    }
+
     /// 取出并清空。
     public static func drain() -> [Event] {
         lock.lock(); defer { lock.unlock() }
@@ -122,10 +206,28 @@ public enum UTermScrollTrace {
         }
 
         var uTermScrollState: UTermScrollState {
-            UTermScrollState(row: momentumScroll.modelRow, fractionPixels: momentumScroll.modelFrac,
-                             overscrollPixels: Double(momentumScroll.overscrollRaw),
-                             isGliding: momentumScroll.displayLink != nil, isBouncing: momentumScroll.bounceLink != nil)
+            var over = Double(momentumScroll.overscrollRaw)
+            var gliding = momentumScroll.displayLink != nil
+            #if !targetEnvironment(macCatalyst)
+                if let driver = systemScroll.driver, let g = systemScrollGeometry() {
+                    let offsetPx = Double(driver.contentOffset.y * g.scale)
+                    let maxPx = Double(g.viewMax)
+                    // UIKit 把 contentOffset 取整到 1/UIScreen.scale pt，Duo 内屏上 UIScreen.scale 是 3 而 nativeScale 是 2.807，
+                    // 停在底上也可能差零点几个物理像素，不到 1 px 不算越界。
+                    if offsetPx < -1 { over = -offsetPx } else if offsetPx > maxPx + 1 { over = maxPx - offsetPx }
+                    gliding = gliding || systemScrollInMotion
+                }
+            #endif
+            return UTermScrollState(row: momentumScroll.modelRow, fractionPixels: momentumScroll.modelFrac,
+                                    overscrollPixels: over, isGliding: gliding, isBouncing: momentumScroll.bounceLink != nil)
         }
+
+        #if !targetEnvironment(macCatalyst)
+            /// uTerm 测试用：系统滚动那条路径借的 UIScrollView。
+            var uTermSystemScrollView: UIScrollView? { systemScroll.driver }
+            /// uTerm 测试用：现在一下单指拖动会不会归系统滚动。
+            var uTermSystemPanWouldBegin: Bool { systemPanWouldBegin }
+        #endif
     }
 
     /// 惯性期间「画面哪一刻真正提交给 Core Animation」：在主 runloop 上 CA 提交之后（order 排在 CA 的 2000000 之后）

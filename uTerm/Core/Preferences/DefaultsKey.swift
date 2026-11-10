@@ -137,6 +137,8 @@ nonisolated enum DefaultsKey {
     static let debugGhosttyInputLog = "debug.ghosttyInputLog"
     /// 同上，M16 第七轮 A/B：打开 = 第六轮行为（引擎 wakeup 不在主线程同步重画，渲染线程自由出帧）；关（默认）= 第五轮行为。
     static let debugGhosttyFreeRenderer = "debug.ghosttyFreeRenderer"
+    /// 同上，M16 第十轮 A/B：打开 = 第九轮的自写拖动 / 惯性 / 回弹；关（默认）= 单指滚动交给 UIScrollView（系统滚动）。
+    static let debugGhosttyOwnScrollPhysics = "debug.ghosttyOwnScrollPhysics"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）
 

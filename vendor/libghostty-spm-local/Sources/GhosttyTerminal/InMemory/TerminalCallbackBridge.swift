@@ -7,6 +7,7 @@
 
 import Foundation
 import GhosttyKit
+import QuartzCore
 
 /// Dispatches C runtime callbacks to a ``TerminalSurfaceViewDelegate``.
 ///
@@ -19,6 +20,11 @@ final class TerminalCallbackBridge {
     /// Raw surface pointer for use in C callbacks (e.g. clipboard).
     nonisolated(unsafe) var rawSurface: ghostty_surface_t?
     var scrollbar: TerminalScrollbar?
+    // uTerm 本地补丁：最近一次处理滚动条回报的时刻（主线程 tick 里）。视口位置的镜像靠它分辨手里这份回报
+    // 是不是「发完位移之后」的（见 UITerminalView.syncScrollModel）。
+    var scrollbarStamp: CFTimeInterval = 0
+    /// uTerm 本地补丁：滚动条回报变了（系统滚动那边据此对 contentSize / contentOffset）。
+    var onScrollbarChange: (() -> Void)?
     var onCellSizeChange: ((UInt32, UInt32) -> Void)?
     var onRenderRequest: (() -> Void)?
     var onMouseShape: ((ghostty_action_mouse_shape_e) -> Void)?
@@ -173,7 +179,10 @@ final class TerminalCallbackBridge {
 
         case GHOSTTY_ACTION_SCROLLBAR:
             let payload = action.action.scrollbar
+            let changed = scrollbar.map { $0.total != payload.total || $0.offset != payload.offset || $0.len != payload.len } ?? true
             scrollbar = TerminalScrollbar(total: payload.total, offset: payload.offset, len: payload.len)
+            scrollbarStamp = CACurrentMediaTime()
+            if changed { onScrollbarChange?() }
             TerminalDebugLog.log(
                 .actions,
                 "callback action=scrollbar total=\(payload.total) offset=\(payload.offset) len=\(payload.len)",

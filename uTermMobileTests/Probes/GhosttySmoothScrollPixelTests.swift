@@ -90,7 +90,11 @@ final class GhosttySmoothScrollPixelTests: XCTestCase {
     /// 整扇窗口的合成结果（回弹靠平移图层，视图自己的 drawHierarchy 不一定带上 sublayerTransform，截窗口才是屏幕上那一帧）。
     private func windowFrame(_ host: GhosttyProbeHost) async throws -> CGImage {
         try await Task.sleep(for: .milliseconds(30))
-        let renderer = UIGraphicsImageRenderer(bounds: host.window.bounds)
+        // 按屏幕的 nativeScale 出图：回弹量按物理像素算，Duo 内屏是 2.807 px/pt（UIScreen.scale 是 3），
+        // 默认格式按 3 出图会把位移多量 7%。
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = host.window.screen.nativeScale
+        let renderer = UIGraphicsImageRenderer(bounds: host.window.bounds, format: format)
         let image = renderer.image { _ in host.window.drawHierarchy(in: host.window.bounds, afterScreenUpdates: false) }
         return try XCTUnwrap(image.cgImage)
     }
