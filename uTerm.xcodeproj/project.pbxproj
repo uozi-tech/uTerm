@@ -39,6 +39,7 @@
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
 		474853540000000000000A11 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A01 /* GhosttyTerminal */; };
 		474853540000000000000A12 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A02 /* GhosttyKit */; };
+		474853540000000000000A13 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A03 /* GhosttyVt */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
 		A61DF38274718E88C0968BB9 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29DE64AF6B8DE16B490ADC2 /* main.swift */; };
 		A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = 018260924700EAFE1739852A /* TreeSitterPython */; };
@@ -566,6 +567,7 @@
 				A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */,
 				474853540000000000000A11 /* GhosttyTerminal in Frameworks */,
 				474853540000000000000A12 /* GhosttyKit in Frameworks */,
+				474853540000000000000A13 /* GhosttyVt in Frameworks */,
 				SPRK00000000000000000002 /* Sparkle in Frameworks */,
 				C17ADE1000000000000002 /* Citadel in Frameworks */,
 				A50000000000000000000002 /* SwiftASN1 in Frameworks */,
@@ -828,6 +830,7 @@
 				A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */,
 				474853540000000000000A01 /* GhosttyTerminal */,
 				474853540000000000000A02 /* GhosttyKit */,
+				474853540000000000000A03 /* GhosttyVt */,
 				SPRK00000000000000000001 /* Sparkle */,
 				C17ADE1000000000000001 /* Citadel */,
 				A50000000000000000000001 /* SwiftASN1 */,
@@ -1989,6 +1992,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
 			productName = GhosttyKit;
+		};
+		474853540000000000000A03 /* GhosttyVt */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			productName = GhosttyVt;
 		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
