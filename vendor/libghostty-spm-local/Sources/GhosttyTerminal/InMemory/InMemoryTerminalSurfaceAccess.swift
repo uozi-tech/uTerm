@@ -13,6 +13,8 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         qos: .userInitiated,
     )
     private let write: Write
+    /// uTerm 本地补丁：回放用的写入口（`ghostty_surface_write_buffer_replay`）。
+    private let replay: Write
     private let processExit: ProcessExit
     private let tick: Tick
 
@@ -62,10 +64,12 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
 
     init(
         write: @escaping Write,
+        replay: @escaping Write,
         processExit: @escaping ProcessExit,
         tick: @escaping Tick,
     ) {
         self.write = write
+        self.replay = replay
         self.processExit = processExit
         self.tick = tick
     }
@@ -129,11 +133,36 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         backlogChange?()
     }
 
+    /// uTerm 本地补丁：把一段重建出来的历史排进同一条队列（和实时输出保持先后），轮到它时用不产生应答的入口交给
+    /// surface。没挂 surface 时也排着等，不受离线 1 MiB 上限裁剪。
+    func enqueueReplay(_ data: Data) {
+        condition.lock()
+        operations.append(.replay(data))
+        if surface != nil {
+            scheduleDrain()
+        }
+        let backlogChange = takeBacklogChange()
+        condition.unlock()
+        backlogChange?()
+    }
+
+    /// uTerm 本地补丁：丢掉所有还没交给 surface 的输出，返回丢了多少字节。已经交出去、正在解析的那一块不受影响。
+    @discardableResult
+    func discardPendingOutput() -> Int {
+        condition.lock()
+        let dropped = operations.removeAllOutput()
+        pendingTrimOwed = false
+        let backlogChange = takeBacklogChange()
+        condition.unlock()
+        backlogChange?()
+        return dropped
+    }
+
     /// Bytes received and not yet handed to a surface.
     var pendingByteCount: Int {
         condition.lock()
         defer { condition.unlock() }
-        return operations.writeByteCount
+        return operations.writeByteCount + operations.replayByteCount
     }
 
     func setBacklogObserver(_ observer: BacklogObserver?) {
@@ -265,6 +294,8 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         switch operation {
         case let .write(data):
             write(surface, data)
+        case let .replay(data):
+            replay(surface, data)
         case let .processExit(exitCode, runtimeMilliseconds):
             processExit(surface, exitCode, runtimeMilliseconds)
         }
@@ -275,7 +306,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     /// so a handler may call back into the session.
     private func takeBacklogChange() -> (() -> Void)? {
         guard let backlogObserver else { return nil }
-        let bytes = operations.writeByteCount
+        let bytes = operations.writeByteCount + operations.replayByteCount
         let backlogged: Bool = if isBacklogged {
             bytes > backlogObserver.lowWater
         } else {

@@ -14,6 +14,7 @@
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
 		4748535400000000000000A2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A1 /* GhosttyTerminal */; };
 		4748535400000000000000A4 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A3 /* GhosttyKit */; };
+		4748535400000000000000A6 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A5 /* GhosttyVt */; };
 		11C9AA437B69DB1986D60B81 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC2B686538A588EAD56ECE6E /* Cocoa.framework */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
@@ -512,6 +513,7 @@
 				10C0DE0000000000000000E5 /* Markdown in Frameworks */,
 				4748535400000000000000A2 /* GhosttyTerminal in Frameworks */,
 				4748535400000000000000A4 /* GhosttyKit in Frameworks */,
+				4748535400000000000000A6 /* GhosttyVt in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -697,6 +699,7 @@
 				10C0DE0000000000000000D5 /* Markdown */,
 				4748535400000000000000A1 /* GhosttyTerminal */,
 				4748535400000000000000A3 /* GhosttyKit */,
+				4748535400000000000000A5 /* GhosttyVt */,
 			);
 			productName = uTermMobile;
 			productReference = 10C0DE0000000000000000A6 /* uTermMobile.app */;
@@ -2172,6 +2175,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
 			productName = GhosttyKit;
+		};
+		4748535400000000000000A5 /* GhosttyVt */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			productName = GhosttyVt;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

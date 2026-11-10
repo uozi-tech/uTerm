@@ -2,6 +2,8 @@
 // 本地副本：Lakr233/libghostty-spm tag 2.2.2026110702（1d84cf66）的 GhosttyKit / GhosttyTerminal 两个 Swift target，
 // 源码未改；只把 binaryTarget 换成本地路径，好接我们自己编的 GhosttyKit.xcframework（0022 对比度、0023 平滑滚动…）。
 // 换版本：改 build/ghostty-kit/current 这个软链指向的 xcframework，见同目录 README.md。Ghostty 评估分支临时用，不进 main。
+// 另带 GhosttyVt（libghostty-vt，影子终端用）：与 GhosttyKit 同一棵打过补丁的源码树编出的预链接静态库，同样走软链。
+// Swift 源码有 uTerm 的本地补丁，清单在 README.md。
 import PackageDescription
 
 let swiftSettings: [SwiftSetting] = [
@@ -18,6 +20,8 @@ let package = Package(
     products: [
         .library(name: "GhosttyKit", targets: ["GhosttyKit"]),
         .library(name: "GhosttyTerminal", targets: ["GhosttyTerminal"]),
+        // libghostty-vt 的 C API（模块名 GhosttyVt）。要链 libc++：GhosttyKit 那个 target 已经带了，两者总是一起用。
+        .library(name: "GhosttyVt", targets: ["GhosttyVt"]),
     ],
     dependencies: [
         .package(url: "https://github.com/Lakr233/DisplayLink.git", from: "3.0.1"),
@@ -46,6 +50,9 @@ let package = Package(
         ),
         // 软链：BinaryTarget/GhosttyKit.xcframework → ../../../build/ghostty-kit/current（gitignore 的 build/ 下，再软链到实际的 xcframework）。
         .binaryTarget(name: "libghostty", path: "BinaryTarget/GhosttyKit.xcframework"),
+        // 软链：BinaryTarget/ghostty-vt.xcframework → ../../../build/ghostty-vt/ghostty-vt.xcframework（同样 gitignore，
+        // 内容是仓库外 <workspace>/uTerm-ghostty-artifacts/2026-11-09/ghostty-vt.xcframework 的副本）。
+        .binaryTarget(name: "GhosttyVt", path: "BinaryTarget/ghostty-vt.xcframework"),
     ],
     swiftLanguageModes: [.v6]
 )

@@ -41,6 +41,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
         surfaceAccess = InMemoryTerminalSurfaceAccess(
             write: Self.writeToSurface,
+            replay: Self.replayToSurface,
             processExit: Self.reportProcessExit,
             tick: Self.tickApp,
         )
@@ -53,6 +54,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void,
         suppressesPixelOnlyResizes: Bool = false,
         surfaceWrite: @escaping InMemoryTerminalSurfaceAccess.Write,
+        surfaceReplay: InMemoryTerminalSurfaceAccess.Write? = nil,
         processExit: @escaping InMemoryTerminalSurfaceAccess.ProcessExit =
             InMemoryTerminalSession.reportProcessExit,
         tick: @escaping InMemoryTerminalSurfaceAccess.Tick = { _ in },
@@ -62,6 +64,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
         surfaceAccess = InMemoryTerminalSurfaceAccess(
             write: surfaceWrite,
+            replay: surfaceReplay ?? surfaceWrite,
             processExit: processExit,
             tick: tick,
         )
@@ -208,6 +211,33 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         surfaceAccess.setBacklogObserver(handler.map {
             .init(highWater: highWater, lowWater: lowWater, handler: $0)
         })
+    }
+
+    /// uTerm 本地补丁（迁移计划 §6 的 PR 1，上游还没有）：把一段**重建出来的历史**交给终端——影子终端的快照回放、
+    /// holder 检查点回放。和 ``receive(_:)`` 走同一条串行队列、保持先后，解析与终端状态的更新也完全一样，区别只在
+    /// 这段字节引出的协议应答（DA、DSR、OSC 10/11 查询、标题上报……）在源头就被丢掉
+    ///（`ghostty_surface_write_buffer_replay`，libghostty-spm 补丁 0011）：这些查询当初已经答过一次，再答一遍等于往
+    /// shell 里敲垃圾。应答是在 termio 线程上异步产生的，宿主自己在 write 回调里按时间窗丢不干净，所以必须走这个入口。
+    ///
+    /// 一次调用的数据由 surface 拿着终端锁一口气解析完，渲染线程看不到中间状态；要整屏替换就一次给全。
+    /// 没挂 surface 时排着等下一个，不受 1 MiB 离线上限裁剪。
+    public func receiveReplay(_ data: Data) {
+        guard !data.isEmpty else { return }
+        surfaceAccess.enqueueReplay(data)
+        TerminalDebugLog.log(
+            .output,
+            "terminal <- host replay bytes=\(data.count)",
+        )
+    }
+
+    /// uTerm 本地补丁：丢掉所有 ``receive(_:)`` / ``receiveReplay(_:)`` 进来、还没交给 surface 解析的字节，返回丢了多少。
+    /// 给「surface 暂时不吃字节、之后用回放整屏补齐」的宿主用（App 进后台）：留着这些字节，回前台时它们会先被解析
+    /// 一遍（连同它们带的标题、bell 一条条过 app mailbox）再被回放盖掉。正在解析的那一块不受影响。
+    @discardableResult
+    public func discardPendingOutput() -> Int {
+        let dropped = surfaceAccess.discardPendingOutput()
+        TerminalDebugLog.log(.output, "pending output discarded bytes=\(dropped)")
+        return dropped
     }
 
     /// Feed a UTF-8 string into the terminal from the host backend.
@@ -368,6 +398,16 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
                 return
             }
             ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
+        }
+    }
+
+    /// uTerm 本地补丁：见 ``receiveReplay(_:)``。
+    private static func replayToSurface(_ surface: ghostty_surface_t, _ data: Data) {
+        data.withUnsafeBytes { buffer in
+            guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return
+            }
+            ghostty_surface_write_buffer_replay(surface, ptr, UInt(buffer.count))
         }
     }
 
