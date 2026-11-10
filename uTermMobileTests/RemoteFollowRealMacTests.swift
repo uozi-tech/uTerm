@@ -36,6 +36,11 @@ final class RemoteFollowRealMacTests: XCTestCase {
         try await waitUntil { workspace.terminalTabs.first?.controller.state == .connected }
         store.finishConnect()
         let front = try XCTUnwrap(workspace.activeTab?.id)
+        // 远控标签上有 Mac 那边的字：快照与之后的字节经 `any TerminalBackend` 到了影子和画面
+        // （`outputItems` 只写在协议扩展里时这里一片空白，只有一个光标）。
+        let firstTab = try XCTUnwrap(workspace.terminalTabs.first)
+        try await waitUntil { firstTab.controller.terminal.shadow.viewportText().contains("远控联调") }
+        try await waitUntil { firstTab.controller.terminal.session.readViewportText()?.contains("远控联调") == true }
 
         try await waitUntil { workspace.terminalTabs.count == 2 }
         let added = try XCTUnwrap(workspace.terminalTabs.last)
