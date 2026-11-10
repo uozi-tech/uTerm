@@ -99,15 +99,20 @@ final class GhosttyTerminalBridge {
     static func makeController(
         fontSize: Float,
         cursor: TerminalCursorLook = TerminalCursorLook(shape: TerminalCursorPreference.defaultShape,
-                                                        blink: TerminalCursorPreference.defaultBlink)
+                                                        blink: TerminalCursorPreference.defaultBlink),
+        overrides: (inout GhosttyTerminal.TerminalConfiguration.Builder) -> Void = { _ in }
     ) -> GhosttyTerminal.TerminalController {
         let theme = GhosttyTerminal.TerminalTheme(light: GhosttyPalette.colors(TerminalColorScheme.resolve(dark: false)),
                                                   dark: GhosttyPalette.colors(TerminalColorScheme.resolve(dark: true)))
         return GhosttyTerminal.TerminalController(theme: theme) { builder in
-            // 系统等宽字体在 iOS 上只认这个私有 family 名（`.AppleSystemUIFontMonospaced`；"SF Mono" 等名字都会静默退回
-            // 内置的 JetBrains Mono，M12）。font-family 可以重复写，按顺序作为回退链：取不到再用 Menlo。
-            builder.withFontFamily(UIFont.monospacedSystemFont(ofSize: 11, weight: .regular).familyName)
-            builder.withFontFamily("Menlo")
+            // 字体回退链（font-family 可以重复写，按顺序找）：
+            // 1. 系统等宽。iOS 上只认这个私有 family 名（`.AppleSystemUIFontMonospaced`；"SF Mono" 等名字都会静默退回
+            //    内置的 JetBrains Mono，M12）。不写 font-style：Ghostty 自己选到的就是常规字重（用例核过不是 Light）。
+            // 2. Menlo：系统等宽万一取不到，拉丁字符落到它，而不是后面苹方的比例字形。
+            // 3. 苹方：中文要显式写。靠 Ghostty 自动回退找中文字体的话，同一份配置不同次运行选到的字重不稳定
+            //   （有时细体、有时中等），而且落到苹方的 UI Text 变体，全角标点和引号贴左。
+            // 不开 font-thicken：那是对齐 macOS 字体平滑加粗用的，iOS 的 CoreGraphics 没有这一层。
+            for family in fontFamilies { builder.withFontFamily(family) }
             builder.withFontSize(fontSize)
             builder.withCursorStyle(cursorStyle(cursor.shape))
             builder.withCursorStyleBlink(cursor.blink)
@@ -130,8 +135,13 @@ final class GhosttyTerminalBridge {
             builder.withCustom("faint-opacity", "0.5")
             // 回滚上限：与影子终端同一份（见 `scrollback`）。不设的话是 Ghostty 的默认 50 MB、不限行数。
             for item in scrollback.ghosttyConfiguration { builder.withCustom(item.key, item.value) }
+            // 生产不传；用例拿它在同一份配置上改一两项做对照（换字体、换字重）。
+            overrides(&builder)
         }
     }
+
+    /// 见 `makeController` 里的说明。
+    static let fontFamilies = [UIFont.monospacedSystemFont(ofSize: 11, weight: .regular).familyName, "Menlo", "PingFang SC"]
 
     private static func cursorStyle(_ shape: TerminalCursorShape) -> GhosttyTerminal.TerminalCursorStyle {
         switch shape {
@@ -201,6 +211,13 @@ final class GhosttyTerminalBridge {
                 MainActor.assumeIsolated { box.bridge?.onEvent?(event) }
             } else {
                 Task { @MainActor in box.bridge?.onEvent?(event) }
+            }
+        }
+        // 影子被整个换掉（远控发来的整屏快照）时不会逐条发事件：回放之后把标题对一次。
+        outputPump.onReplayed = {
+            Task { @MainActor in
+                guard let bridge = box.bridge else { return }
+                bridge.onEvent?(.titleChanged(bridge.shadow.title))
             }
         }
         // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后 `syncSurfaceFeeding` 开闸，回放接上。

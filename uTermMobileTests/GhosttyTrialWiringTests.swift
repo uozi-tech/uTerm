@@ -127,6 +127,53 @@ final class GhosttyTrialWiringTests: XCTestCase {
         controller.close()
     }
 
+    /// 远控标签（手机是主控端）：Mac 发来的整屏二进制快照经输出泵还原进本地影子、回放进画面，之后的实时字节接着它。
+    /// 协议那一段（握手带引擎版本、47 号消息拼段）在共享层，用例在 Mac 的 `TerminalMirrorSnapshotTests`；这里核 iOS 的终端接得住。
+    func testRemoteSnapshotRestoresTheShadowAndTheSurface() async throws {
+        // 被控端那一侧：另一个影子终端，带回滚、带备用屏之外的普通内容。
+        let source = ShadowTerminal(cols: 60, rows: 20, options: GhosttyTerminalBridge.scrollback.shadowOptions)
+        for index in 0..<50 { source.feed(Data("mac line \(index)\r\n".utf8)) }
+        source.feed(Data("\u{1B}]2;from the mac\u{07}$ ".utf8))
+        let snapshot = try source.snapshot()
+
+        let bridge = GhosttyTerminalBridge(controller: GhosttyProbeHost.controller)
+        var titles: [String] = []
+        bridge.onEvent = { if case .titleChanged(let title) = $0 { titles.append(title) } }
+        let window = try makeSpikeWindow(size: CGSize(width: 393, height: 600))
+        defer { bridge.view.removeFromSuperview(); window.isHidden = true }
+        bridge.view.frame = window.bounds
+        window.addSubview(bridge.view)
+        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
+        }
+        XCTAssertTrue(ready)
+        bridge.feed(Data("local junk that the snapshot replaces\r\n".utf8))
+
+        bridge.outputPump.start(AsyncStream<TerminalOutputItem> { continuation in
+            continuation.yield(.snapshot(snapshot))
+            continuation.yield(.bytes(Data("live after snapshot".utf8)))
+            continuation.finish()
+        })
+        let applied = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
+            bridge.shadow.viewportText().contains("live after snapshot")
+        }
+        XCTAssertTrue(applied, "快照和后面的字节没进影子：\(bridge.shadow.viewportText().suffix(120))")
+        bridge.outputPump.waitForCatchUp()
+        bridge.session.waitForPendingOutput()
+
+        XCTAssertEqual(bridge.outputPump.currentStats.rejectedSnapshots, 0)
+        XCTAssertEqual(bridge.shadow.title, "from the mac")
+        let titled = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) { titles.last == "from the mac" }
+        XCTAssertTrue(titled, "快照里的标题没报给会话：\(titles)")
+        XCTAssertFalse(bridge.shadow.viewportText().contains("local junk"), "快照是整屏替换")
+        XCTAssertGreaterThan(bridge.shadow.totalRows, 40, "回滚也跟着快照过来")
+        let surface = bridge.session.readViewportText() ?? ""
+        XCTAssertTrue(surface.contains("mac line 49") && surface.contains("live after snapshot"),
+                      "画面没跟上：\(surface.suffix(160))")
+        XCTAssertFalse(surface.contains("local junk"))
+        print("WIRING remote-snapshot titles=\(titles) shadow-size=\(bridge.shadow.size) grid=\(String(describing: bridge.grid))")
+    }
+
     /// 终端的配色 / 留白和 uTerm 的终端底色对得上（M16 反馈过：底色、光标颜色不对，左右露出两条）。
     /// 照 `TerminalSessionBody` 的排法：外层 8pt 左右边距铺 uTerm 终端底色，里面是终端视图；深 / 浅各截一张整窗图
     ///（上半是纯 UIView 铺的底色当参照，终端在下半），并核终端区角上与留白条的像素都等于参照。
