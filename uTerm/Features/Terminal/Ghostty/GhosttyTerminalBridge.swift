@@ -288,6 +288,8 @@ final class GhosttySurfaceView: AppTerminalView {
         onScrollActivity?()
     }
     var pasteboard: NSPasteboard = .general
+    /// ⌘ 组合先交给主菜单试一次，返回 true = 菜单接了。测试里换掉（真的主菜单会把 ⌘Q、⌘W 执行掉）。
+    var performMenuKeyEquivalent: @MainActor (NSEvent) -> Bool = { NSApp.mainMenu?.performKeyEquivalent(with: $0) ?? false }
     /// 这次右键按下弹了我们的菜单（没报给程序）：松开时也不报。
     private var rightClickShowedMenu = false
 
@@ -312,6 +314,14 @@ final class GhosttySurfaceView: AppTerminalView {
         // ⌃↩：Ghostty 自己接的话按 modifyOtherKeys 发 `CSI 27;5;13~`，没开 kitty 协议的程序（shell、Claude）不认。
         // macOS 15 起系统还把 ⌃↩ 绑成「显示上下文菜单」，所以只能在 key equivalent 这一层截（同 `CopyableTerminalView`）。
         if event.type == .keyDown, window?.firstResponder === self, Self.isControlReturn(event), onControlReturn?() == true {
+            return true
+        }
+        // ⌘ 组合先问主菜单。key equivalent 是先问视图层级、没人要才轮到菜单；而 Ghostty 自带一套默认按键绑定
+        // （⌘T 新标签、⌘W 关闭、⌘N、⌘D 分屏、⌘K 清屏、⌘,、⌘Q……），GhosttyKit 的视图认了绑定就返回 true——
+        // 终端有焦点时 uTerm 自己的菜单快捷键全被吞掉，⌘K 还会只清 surface 的屏（影子终端不知道）。
+        // 官方 Ghostty 的 macOS 视图也是先试菜单；菜单不要的组合再交回 Ghostty（⌘C / ⌘V 没有菜单项可用时、⌘←/→ 这些）。
+        if event.type == .keyDown, window?.firstResponder === self, event.modifierFlags.contains(.command),
+           performMenuKeyEquivalent(event) {
             return true
         }
         return super.performKeyEquivalent(with: event)
