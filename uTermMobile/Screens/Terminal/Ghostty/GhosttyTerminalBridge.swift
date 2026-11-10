@@ -136,6 +136,10 @@ final class GhosttyTerminalBridge {
             builder.withCustom("faint-opacity", "0.5")
             // 回滚上限：与影子终端同一份（见 `scrollback`）。不设的话是 Ghostty 的默认 50 MB、不限行数。
             for item in scrollback.ghosttyConfiguration { builder.withCustom(item.key, item.value) }
+            // 按键绑定（两端共用）：清掉 Ghostty 给自己 App 定的默认绑定（⌘K 只清 surface 的屏、⌘+ / ⌘- 只改这一个终端的字号……），
+            // 只加回拷贝 / 粘贴 / 全选、自然文本编辑、翻回滚。硬件键盘、键盘条、`sendKey` 都经 `ghostty_surface_key`，都过这张表。
+            // 其中 `macos-option-as-alt` 在 iOS 上不起作用，引擎照收。
+            for item in TerminalKeyBindings.ghosttyConfiguration { builder.withCustom(item.key, item.value) }
             // 生产不传；用例拿它在同一份配置上改一两项做对照（换字体、换字重）。
             overrides(&builder)
         }
@@ -207,6 +211,8 @@ final class GhosttyTerminalBridge {
         view.uTermOnSurfaceAttached = { [weak self] in self?.surfaceAttached() }
         view.uTermOnSurfaceDetached = { [weak self] in self?.surfaceDetached() }
         view.uTermSetGridExpectedHandler { [weak self] cols, rows in self?.surfaceGridExpected(cols: cols, rows: rows) }
+        // 硬件键盘上没有绑定接的 ⌘ 组合：程序开了 kitty 键盘协议才发（见 `MGhosttyTerminalView.dropsCommandChord`）。
+        view.sendsCommandChords = { [weak self] in (self?.shadow.kittyKeyboardFlags ?? 0) != 0 }
         // surface 不吃字节时查询由影子答（DA、DSR、光标位置、颜色查询……），和 surface 的应答走同一条路回后端。
         shadow.setReplyHandler { data in
             Task { @MainActor in box.bridge?.userInput(data) }
