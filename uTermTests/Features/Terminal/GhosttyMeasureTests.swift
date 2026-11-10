@@ -1022,7 +1022,7 @@ final class GhosttyMeasureTests: XCTestCase {
         let withSelection = view.menu(for: rightDown)?.items.map(\.title).filter { !$0.isEmpty } ?? []
         await click(30, 5, count: 1)
         let noSelection = view.menu(for: RealEvents.mouse(.rightMouseDown, window: window, at: cellPoint(30, 5)))?.items.map(\.title).filter { !$0.isEmpty } ?? []
-        let wantMenu = ["复制", "粘贴", "全选"]
+        let wantMenu = ["拷贝", "粘贴", "全选"]
         record("右键菜单", withSelection == wantMenu && noSelection == wantMenu,
                "有选区=\(withSelection) 无选区=\(noSelection)（现状：复制/粘贴/全选）")
 

@@ -138,7 +138,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// menu — `Cmd+C` was the only copy affordance. Items target the terminal
     /// view directly so a right-click acts on this pane's selection regardless
     /// of which view currently holds first responder.
-    private static func makeContextMenu(for terminalView: SwiftTerm.TerminalView) -> NSMenu {
+    static func makeContextMenu(for terminalView: NSView) -> NSMenu {
         let menu = NSMenu()
         let copyItem = NSMenuItem(title: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         let pasteItem = NSMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")

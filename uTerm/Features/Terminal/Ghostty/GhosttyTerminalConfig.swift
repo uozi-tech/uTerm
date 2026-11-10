@@ -49,6 +49,13 @@ enum GhosttyTerminalConfig {
             b.withCustom("shell-integration", "none")
             b.withCustom("cursor-click-to-move", "true")
             b.withCustom("mouse-hide-while-typing", "false")
+            // 以下四项对齐 SwiftTerm 的着色规则（iOS 试用第二轮逐格对比查出来的，见 docs/ghostty-eval/measure-ios.md M16）：
+            // 256 色的 16–255 由 16 色按 CIELAB 生成（同 SwiftTerm 的 `.base16Lab`）；粗体的 0–7 号色用亮色；
+            // dim 按 sRGB 和底色五五开混合。
+            b.withCustom("palette-generate", "true")
+            b.withCustom("bold-color", "bright")
+            b.withCustom("alpha-blending", "native")
+            b.withCustom("faint-opacity", "0.5")
         }
     }
 
@@ -62,14 +69,15 @@ enum GhosttyTerminalConfig {
             b.withBackground(hex(scheme.backgroundColor))
             b.withForeground(hex(scheme.foregroundColor))
             b.withSelectionBackground(hex(scheme.selectionColor))
+            b.withSelectionForeground(hex(scheme.foregroundColor))
             b.withCursorColor(hex(scheme.cursorColor))
             // 块光标下的字用终端底色（与 `TerminalAppearance.applyCaretColors` 一致）。
             b.withCursorText(hex(scheme.backgroundColor))
             for (index, color) in scheme.ansiColors.enumerated() {
                 b.withPalette(index, color: hex(color))
             }
-            // Ghostty 原生的 minimum-contrast。注意算法不同：Ghostty 达不到目标比时把前景换成纯黑或纯白，
-            // uTerm 补丁 #1 是保色相（OKLCH 调明度），见报告「最低对比度」一节。
+            // minimum-contrast：官方 Ghostty 达不到目标比时把前景换成纯黑或纯白；我们编的引擎带补丁 0022，
+            // 和 SwiftTerm 补丁 #1 一样保色相、只调明度（OKLCH），块字符也不豁免。
             b.withMinimumContrast(Double(TerminalColorScheme.minimumContrastRatio))
         }
     }

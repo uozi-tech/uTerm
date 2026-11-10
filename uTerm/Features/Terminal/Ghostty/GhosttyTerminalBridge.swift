@@ -60,6 +60,13 @@ final class GhosttyTerminalBridge {
         view.onFocusGained = { [weak self] in self?.owner?.acknowledgeProgramStatus() }
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
+        view.onControlReturn = { [weak self] in
+            // 程序没开 kitty 键盘协议时发回车（同 `CopyableTerminalView`）；开了就让 Ghostty 自己编带修饰键的序列。
+            // 协议开没开看影子 SwiftTerm（吃的是同一份字节）。
+            guard let owner = self?.owner, owner.terminalView.getTerminal().keyboardEnhancementFlags.isEmpty else { return false }
+            owner.sendHostBytes(Data(EscapeSequences.cmdRet))
+            return true
+        }
     }
 
     /// 用户此刻在看这个终端：同 SwiftTerm 路径的 `isUserLooking`，只是焦点看 Ghostty 视图。
@@ -177,12 +184,16 @@ final class GhosttyTerminalBridge {
     }
 }
 
-/// uTerm 的 Ghostty 视图子类：焦点回到终端、只有图片的剪贴板（⌘V / ⌃V），与 `CopyableTerminalView` 同语义。
+/// uTerm 的 Ghostty 视图子类：焦点回到终端、只有图片的剪贴板（⌘V / ⌃V）、⌃↩、右键菜单，与 `CopyableTerminalView` 同语义。
 final class GhosttySurfaceView: AppTerminalView {
     var onFocusGained: (@MainActor () -> Void)?
     var onPasteImage: (@MainActor (TerminalImage) -> Bool)?
     var onControlVImage: (@MainActor (TerminalImage) -> Bool)?
+    /// ⌃↩。返回 true = 已经替程序发了回车；false = 交回 Ghostty 自己编码。
+    var onControlReturn: (@MainActor () -> Bool)?
     var pasteboard: NSPasteboard = .general
+    /// 这次右键按下弹了我们的菜单（没报给程序）：松开时也不报。
+    private var rightClickShowedMenu = false
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
@@ -202,7 +213,48 @@ final class GhosttySurfaceView: AppTerminalView {
             if mods == .command, onPasteImage?(image) == true { return true }
             if mods == .control, onControlVImage?(image) == true { return true }
         }
+        // ⌃↩：Ghostty 自己接的话按 modifyOtherKeys 发 `CSI 27;5;13~`，没开 kitty 协议的程序（shell、Claude）不认。
+        // macOS 15 起系统还把 ⌃↩ 绑成「显示上下文菜单」，所以只能在 key equivalent 这一层截（同 `CopyableTerminalView`）。
+        if event.type == .keyDown, window?.firstResponder === self, Self.isControlReturn(event), onControlReturn?() == true {
+            return true
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    private static func isControlReturn(_ event: NSEvent) -> Bool {
+        let isReturnKey = event.keyCode == kVK_Return || event.keyCode == kVK_ANSI_KeypadEnter
+        return isReturnKey && event.modifierFlags.contains(.control) && !event.modifierFlags.contains(.command)
+    }
+
+    // MARK: 右键菜单
+
+    /// 拷贝 / 粘贴 / 全选，和 SwiftTerm 路径同一份（GhosttyKit 自带的只在有选区时给一个「Copy」）。没有选区时「拷贝」置灰。
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = TerminalSession.makeContextMenu(for: self)
+        menu.autoenablesItems = false
+        menu.items.first { $0.action == #selector(NSText.copy(_:)) }?.isEnabled = selectionRegion != nil
+        return menu
+    }
+
+    /// 程序抓着鼠标（vim / tmux 开 mouse、Claude 全屏界面）时右键报给程序；否则弹菜单。
+    /// GhosttyKit 的 `rightMouseDown` 不调 super，AppKit 不会自己来问 `menu(for:)`，所以在这里弹。
+    override func rightMouseDown(with event: NSEvent) {
+        guard !isMouseCaptured, let menu = menu(for: event) else {
+            rightClickShowedMenu = false
+            super.rightMouseDown(with: event)
+            return
+        }
+        rightClickShowedMenu = true
+        window?.makeFirstResponder(self)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        if rightClickShowedMenu {
+            rightClickShowedMenu = false
+            return
+        }
+        super.rightMouseUp(with: event)
     }
 }
 
