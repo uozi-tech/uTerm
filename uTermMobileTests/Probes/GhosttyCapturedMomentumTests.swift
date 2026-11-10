@@ -203,10 +203,10 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
         try await checkFling(alternateScreen: false)
     }
 
-    /// 诊断页的三档：远（和普通滚动一样远）、近（四分之一），条数各自对得上。
+    /// 距离跟着 `programMomentumTravel` 走：和普通滚动一样远、一半（默认的四分之一由上面两条核），条数各自对得上。
     func testTravelSettingScalesDistance() async throws {
         try await checkFling(alternateScreen: true, travel: 1)
-        try await checkFling(alternateScreen: true, travel: 0.25)
+        try await checkFling(alternateScreen: true, travel: 0.5)
     }
 
     /// 慢慢抬手（比「停」那条线还慢）：不起惯性，一条滚轮都不多报。

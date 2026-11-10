@@ -139,8 +139,6 @@ nonisolated enum DefaultsKey {
     static let debugGhosttyFreeRenderer = "debug.ghosttyFreeRenderer"
     /// 同上，M16 第十轮 A/B：打开 = 第九轮的自写拖动 / 惯性 / 回弹；关（默认）= 单指滚动交给 UIScrollView（系统滚动）。
     static let debugGhosttyOwnScrollPhysics = "debug.ghosttyOwnScrollPhysics"
-    /// 同上：程序抓着鼠标（Claude 全屏界面）时松手后的惯性滑多远，百分数，相对普通滚动（25 / 50 / 100；没设 = 50）。
-    static let debugGhosttyProgramMomentum = "debug.ghosttyProgramMomentum"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）
 

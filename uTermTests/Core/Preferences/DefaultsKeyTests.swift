@@ -91,7 +91,6 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.debugGhosttyInputLog, "debug.ghosttyInputLog"),
         (DefaultsKey.debugGhosttyFreeRenderer, "debug.ghosttyFreeRenderer"),
         (DefaultsKey.debugGhosttyOwnScrollPhysics, "debug.ghosttyOwnScrollPhysics"),
-        (DefaultsKey.debugGhosttyProgramMomentum, "debug.ghosttyProgramMomentum"),
         // 系统定义
         (DefaultsKey.appleActionOnDoubleClick, "AppleActionOnDoubleClick"),
         (DefaultsKey.screenLayoutAdjustOnWindowMove, "NSScreenLayoutAdjustOnWindowMove"),

@@ -536,7 +536,7 @@
             var stopSpeed: CGFloat = 50
             // uTerm 本地补丁（抓鼠标的程序松手后的惯性）：位移交给引擎，引擎每攒够一格就给程序报一次滚轮，画面由程序自己
             // 一行一行地重画，和 Mac 触控板的惯性滚动是一回事。和普通滚动的惯性有三处不同：
-            // - 滑得近：距离是 UIScrollView `.normal` 的 `UTermScrollTrace.programMomentumTravel` 倍（默认一半，见 momentumScrollFrame）。
+            // - 滑得近：距离是 UIScrollView `.normal` 的 `UTermScrollTrace.programMomentumTravel` 倍（四分之一，见 momentumScrollFrame）。
             //   照 `.normal` 滑时 user 觉得太远：整行整行跳的画面跟不住眼睛，程序一次滚轮也可能不止滚一行；
             // - 只留主方向：横向那点速度攒够一格会被报成横向滚轮；
             // - 慢到两行相隔 0.15 s 以上就停：一行一跳的画面，收尾那几下零星的跳比早点停难看

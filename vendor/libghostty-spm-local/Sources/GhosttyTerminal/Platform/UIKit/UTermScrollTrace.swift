@@ -89,8 +89,9 @@ public enum UTermScrollTrace {
     nonisolated(unsafe) public static var usesSystemScrolling = true
 
     /// 程序抓着鼠标时，松手后的惯性滑多远，相对 UIScrollView `.normal`（1 = 和普通滚动一样远；减速率按它的倒数放大）。
-    /// 起因：照 `.normal` 滑，user 在 Claude 的全屏界面里觉得滑得太远。宿主的诊断页可调，下一帧惯性起生效。
-    public static let defaultProgramMomentumTravel = 0.5
+    /// user 在 Duo 上的 Claude 全屏界面里比过三档（1 / 0.5 / 0.25）：照 `.normal` 滑得太远，定四分之一。
+    /// 留成变量是给测试核「距离跟着它走」，宿主不改它；下一帧惯性起生效。
+    public static let defaultProgramMomentumTravel = 0.25
     nonisolated(unsafe) public static var programMomentumTravel = defaultProgramMomentumTravel
 
     /// 触摸的阶段（signpost `touch` 的第二个数）：0 按下、1 开始拖、2 抬起 / 取消。
