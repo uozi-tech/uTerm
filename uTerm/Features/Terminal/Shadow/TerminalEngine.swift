@@ -5,7 +5,8 @@ import Foundation
 /// 快照就不能互认：远控拒绝镜像并提示更新，holder 检查点直接丢弃。
 ///
 /// vt 自己报的版本串（`ShadowTerminal.buildVersion`）这个版本只有「0.1.0-dev」，区分不了提交和补丁，所以这里手写。
-/// **换 `vendor/libghostty-spm-local` 里的任何一个 xcframework（换 Ghostty 提交、加减引擎补丁）时必须改这个串。**
+/// **换引擎的任何一个二进制（换 Ghostty 提交、加减引擎补丁）时必须改这个串**，并且和 `vendor/libghostty-spm/ENGINE.lock` 的
+/// `engine_version` 一字不差——`TerminalEngineLockTests` 读那份清单来核，忘了改会失败。步骤见 `vendor/libghostty-spm/UTERM-PATCHES.md`。
 nonisolated enum TerminalEngineVersion {
     /// Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。
     static let current = "ghostty-042b16b6+p0023/snapshot-1"

@@ -15,6 +15,13 @@ vendor/swift-nio-ssh/.build/
 vendor/swift-nio-ssh/.swiftpm/
 vendor/Citadel/.build/
 vendor/Citadel/.swiftpm/
+vendor/libghostty-spm/.build/
+vendor/libghostty-spm/.swiftpm/
+
+# 终端引擎的二进制不进版本库：make engine 按 vendor/libghostty-spm/ENGINE.lock 取、校验、解到这里
+vendor/libghostty-spm/BinaryTarget/*.xcframework
+vendor/libghostty-spm/BinaryTarget/*.stamp
+vendor/libghostty-spm/BinaryTarget/.fetch.*
 
 # Release credentials (never commit)
 .env

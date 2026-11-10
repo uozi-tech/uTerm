@@ -1,0 +1,195 @@
+uTerm minimum contrast for GhosttyKit (libghostty-spm patch 0022)
+
+Drop this file into libghostty-spm's Patches/ghostty/ (after 0021); build.sh
+applies it with `git apply` on every target. It is cut against the tree with
+0001-0021 applied (generic.zig is also touched by 0015), Ghostty 042b16b6.
+
+What it does (matches vendor/SwiftTerm .../MinimumContrast.swift and
+UTERM-PATCHES.md §1):
+  - shaders.metal contrasted_color: hue-preserving OKLCH lightness search
+    toward the WCAG target, direction by background luminance, opposite
+    direction as fallback, chroma capped by the original and the sRGB gamut.
+    Colors are taken from Ghostty's linear Display P3 back to linear sRGB and
+    converted again afterwards.
+  - shaders.metal cell_text_vertex: the NO_MIN_CONTRAST exemption for graphics
+    elements (box drawing, blocks, Powerline) is ignored.
+  - generic.zig: with minimum-contrast > 1 the "covering glyph" swap (U+2588
+    gets its own fg as cell background) is off, so a full block is clamped
+    against the real background instead of against itself.
+
+Use with `minimum-contrast = 3` in the surface config. Measurements:
+docs/ghostty-eval/measure-build-consistency.md (M13).
+
+diff --git a/src/renderer/shaders/shaders.metal b/src/renderer/shaders/shaders.metal
+index 4e02b63..a7ae237 100644
+--- a/src/renderer/shaders/shaders.metal
++++ b/src/renderer/shaders/shaders.metal
+@@ -102,25 +102,121 @@ float contrast_ratio(float3 color1, float3 color2) {
+   return (max(l1, l2) + 0.05f) / (min(l1, l2) + 0.05f);
+ }
+ 
+-// Return the fg if the contrast ratio is greater than min, otherwise
+-// return a color that satisfies the contrast ratio. Currently, the color
+-// is always white or black, whichever has the highest contrast ratio.
++// uTerm: minimum contrast that keeps the hue (libghostty-spm patch 0022).
+ //
+-// Takes colors in linear RGB space. If your colors are gamma
+-// encoded, linearize them before using them with this function.
+-float4 contrasted_color(float min, float4 fg, float4 bg) {
+-  float ratio = contrast_ratio(fg.rgb, bg.rgb);
+-  if (ratio < min) {
+-    float white_ratio = contrast_ratio(float3(1.0f), bg.rgb);
+-    float black_ratio = contrast_ratio(float3(0.0f), bg.rgb);
+-    if (white_ratio > black_ratio) {
+-      return float4(1.0f);
+-    } else {
+-      return float4(0.0f, 0.0f, 0.0f, 1.0f);
++// Upstream jumps to white or black, which bleaches a colored prompt segment.
++// This is uTerm's algorithm (vendor/SwiftTerm .../MinimumContrast.swift,
++// TerminalContrast.ensureContrast), ported 1:1:
++//
++//   - WCAG 2.x luminance and contrast ratio, in linear sRGB;
++//   - the direction keys off the background (lighten on bg luminance < 0.5,
++//     darken otherwise), the opposite direction is tried when the preferred
++//     one cannot reach the ratio and the better result wins;
++//   - the adjustment walks OKLCH lightness toward the pole with the hue
++//     fixed and chroma capped by the original and the sRGB gamut, bisecting
++//     (18 steps) for the smallest move that reaches the WCAG target.
++//
++// The colors arrive as linear Display P3 (load_color converts sRGB input,
++// and the output is always Display P3), so they are taken back to linear
++// sRGB with the inverse of sRGB_DP3 first and the result is converted again.
++// This runs per vertex, and only for glyphs below the ratio.
++
++// Inverse of sRGB_DP3 (computed from the two matrices above).
++constant float3x3 DP3_sRGB = transpose(float3x3(
++   1.224800825f, -0.224665879f, -0.000045539f,
++  -0.042027144f,  1.041954490f,  0.000081859f,
++  -0.019719504f, -0.078620103f,  1.097902547f
++));
++
++float uterm_cbrt(float v) {
++  return v < 0.0f ? -pow(-v, 1.0f / 3.0f) : pow(v, 1.0f / 3.0f);
++}
++
++// linear sRGB -> OKLCH (L, C, h in radians)
++float3 uterm_oklch(float3 c) {
++  float l = 0.4122214708f * c.r + 0.5363325363f * c.g + 0.0514459929f * c.b;
++  float m = 0.2119034982f * c.r + 0.6806995451f * c.g + 0.1073969566f * c.b;
++  float s = 0.0883024619f * c.r + 0.2817188376f * c.g + 0.6299787005f * c.b;
++  float l3 = uterm_cbrt(l), m3 = uterm_cbrt(m), s3 = uterm_cbrt(s);
++  float L = 0.2104542553f * l3 + 0.7936177850f * m3 - 0.0040720468f * s3;
++  float a = 1.9779984951f * l3 - 2.4285922050f * m3 + 0.4505937099f * s3;
++  float b = 0.0259040371f * l3 + 0.7827717662f * m3 - 0.8086757660f * s3;
++  return float3(L, sqrt(a * a + b * b), atan2(b, a));
++}
++
++// OKLCH -> linear sRGB, unclamped.
++float3 uterm_linear_srgb(float L, float C, float h) {
++  float a = C * cos(h);
++  float b = C * sin(h);
++  float l3 = L + 0.3963377774f * a + 0.2158037573f * b;
++  float m3 = L - 0.1055613458f * a - 0.0638541728f * b;
++  float s3 = L - 0.0894841775f * a - 1.2914855480f * b;
++  float l = l3 * l3 * l3, m = m3 * m3 * m3, s = s3 * s3 * s3;
++  return float3(
++    4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s,
++    -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * s,
++    -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * s
++  );
++}
++
++bool uterm_in_gamut(float3 c) {
++  const float eps = 0.0005f;
++  return all(c >= -eps) && all(c <= 1.0f + eps);
++}
++
++// (L, h) with the largest chroma <= max_c inside the sRGB gamut, clamped.
++float3 uterm_fit_chroma(float L, float h, float max_c) {
++  float3 rgb = uterm_linear_srgb(L, max_c, h);
++  if (!uterm_in_gamut(rgb)) {
++    float lo = 0.0f, hi = max_c;
++    for (int i = 0; i < 12; i++) {
++      float mid = (lo + hi) * 0.5f;
++      if (uterm_in_gamut(uterm_linear_srgb(L, mid, h))) lo = mid; else hi = mid;
++    }
++    rgb = uterm_linear_srgb(L, lo, h);
++  }
++  return clamp(rgb, 0.0f, 1.0f);
++}
++
++bool uterm_on_target_side(float y, float target, bool lighten) {
++  return lighten ? y >= target : y <= target;
++}
++
++// One direction: rgb (linear sRGB) and the contrast it achieves in .w.
++float4 uterm_attempt(float3 base, float bg_y, float ratio, bool lighten) {
++  float target = lighten ? min(ratio * (bg_y + 0.05f) - 0.05f, 1.0f)
++                         : max((bg_y + 0.05f) / ratio - 0.05f, 0.0f);
++  float pole = lighten ? 1.0f : 0.0f;
++  float lo = 0.0f, hi = 1.0f;
++  float3 end = uterm_fit_chroma(base.x + (pole - base.x), base.z, base.y);
++  if (uterm_on_target_side(luminance(end), target, lighten)) {
++    for (int i = 0; i < 18; i++) {
++      float mid = (lo + hi) * 0.5f;
++      float3 rgb = uterm_fit_chroma(base.x + (pole - base.x) * mid, base.z, base.y);
++      if (uterm_on_target_side(luminance(rgb), target, lighten)) hi = mid; else lo = mid;
+     }
+   }
++  float3 rgb = uterm_fit_chroma(base.x + (pole - base.x) * hi, base.z, base.y);
++  float y = luminance(rgb);
++  return float4(rgb, (max(y, bg_y) + 0.05f) / (min(y, bg_y) + 0.05f));
++}
+ 
+-  return fg;
++// Takes and returns linear Display P3 colors (see load_color).
++float4 contrasted_color(float min_ratio, float4 fg, float4 bg) {
++  float3 fg_srgb = clamp(DP3_sRGB * fg.rgb, 0.0f, 1.0f);
++  float3 bg_srgb = clamp(DP3_sRGB * bg.rgb, 0.0f, 1.0f);
++  float fg_y = luminance(fg_srgb);
++  float bg_y = luminance(bg_srgb);
++  if ((max(fg_y, bg_y) + 0.05f) / (min(fg_y, bg_y) + 0.05f) >= min_ratio) return fg;
++
++  float3 base = uterm_oklch(fg_srgb);
++  bool prefer_lighten = bg_y < 0.5f;
++  float4 best = uterm_attempt(base, bg_y, min_ratio, prefer_lighten);
++  if (best.w < min_ratio - 0.01f) {
++    float4 opposite = uterm_attempt(base, bg_y, min_ratio, !prefer_lighten);
++    if (opposite.w > best.w) best = opposite;
++  }
++  return float4(srgb_to_display_p3(best.rgb), fg.a);
+ }
+ 
+ // Load a 4 byte RGBA non-premultiplied color and linearize
+@@ -650,7 +746,12 @@ vertex CellTextVertexOut cell_text_vertex(
+   // If we have a minimum contrast, we need to check if we need to
+   // change the color of the text to ensure it has enough contrast
+   // with the background.
+-  if (uniforms.min_contrast > 1.0f && (in.bools & NO_MIN_CONTRAST) == 0) {
++  //
++  // uTerm: no exemption for graphics elements (box drawing, blocks, Powerline;
++  // NO_MIN_CONTRAST is still set by the CPU side, just ignored). Prompts hard
++  // code segment separators in a gray meant for dark backgrounds, which turns
++  // into an unreadable gray block on a light one.
++  if (uniforms.min_contrast > 1.0f) {
+     // Ensure our minimum contrast
+     out.color = contrasted_color(uniforms.min_contrast, out.color, out.bg_color);
+   }
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 2e4dc84..1165df6 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -3474,7 +3474,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                     },
+ 
+                     // Not selected
+-                    .false => if (style.flags.inverse != isCovering(cell.codepoint()))
++                    // uTerm (patch 0022): with a minimum contrast the covering
++                    // swap is off. It makes a full block's cell background its
++                    // own fg, so the shader would clamp the glyph against itself
++                    // instead of against the real background (padding extension
++                    // then uses the real background for those cells).
++                    .false => if (style.flags.inverse != (isCovering(cell.codepoint()) and self.config.min_contrast <= 1.0))
+                         // Two cases cause us to invert (use the fg color as the bg)
+                         // - The "inverse" style flag.
+                         // - A "covering" glyph; we use fg for bg in that

@@ -942,7 +942,7 @@
 				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
 				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
 				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
-				4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */,
+				4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -1854,9 +1854,9 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/CodeEditTextView;
 		};
-		4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */ = {
+		4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "vendor/libghostty-spm-local";
+			relativePath = "vendor/libghostty-spm";
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -1970,17 +1970,17 @@
 /* Begin XCSwiftPackageProductDependency section */
 		474853540000000000000A01 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
 			productName = GhosttyTerminal;
 		};
 		474853540000000000000A02 /* GhosttyKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
 			productName = GhosttyKit;
 		};
 		474853540000000000000A03 /* GhosttyVt */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
 			productName = GhosttyVt;
 		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
@@ -2170,17 +2170,17 @@
 		};
 		4748535400000000000000A1 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
 			productName = GhosttyTerminal;
 		};
 		4748535400000000000000A3 /* GhosttyKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
 			productName = GhosttyKit;
 		};
 		4748535400000000000000A5 /* GhosttyVt */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
 			productName = GhosttyVt;
 		};
 /* End XCSwiftPackageProductDependency section */

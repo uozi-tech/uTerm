@@ -141,7 +141,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help test-fast test-relay-e2e test-weak-network relay-dist relay-publish test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
-	build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
+	engine check-engine build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	sync-strings sync-strings-build check-strings \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
@@ -155,6 +155,7 @@ help:
 	@printf '%s\n' '  make print-build                       Print build number (git count + Config/BuildNumberOffset)'
 	@printf '%s\n' '  make set-version VERSION=x.y.z         Set the semantic version'
 	@printf '%s\n' '  make bump-patch|bump-minor|bump-major  Increment the semantic version'
+	@printf '%s\n' '  make engine                            Put the Ghostty xcframeworks into vendor/libghostty-spm/BinaryTarget'
 	@printf '%s\n' '  make build                             Build the macOS app in Release mode'
 	@printf '%s\n' '  make archive                           Archive the app (automatic signing)'
 	@printf '%s\n' '  make export-app                        Export a Developer ID-signed app from the archive'
@@ -238,7 +239,18 @@ bump-minor-mobile:
 bump-major-mobile:
 	@scripts/bump-version.sh --mobile major
 
-build:
+# 终端引擎（GhosttyKit + libghostty-vt）的两个 xcframework 不进版本库：按 vendor/libghostty-spm/ENGINE.lock 取 zip、
+# 校验 sha256、解到 vendor/libghostty-spm/BinaryTarget/。已是清单要的那一份时什么都不做，所以挂在每个会编工程的目标前面。
+# zip 默认从 <workspace>/uTerm-ghostty-artifacts/2026-11-09 取，换地方传 UTERM_GHOSTTY_ARTIFACTS=<目录>。
+# `make clean` 只清 build/，不动 vendor/ 下的这两份。
+engine:
+	@scripts/fetch-ghostty-engine.sh
+
+# 只核不取：BinaryTarget/ 里不是清单要的那一份就非零退出。
+check-engine:
+	@scripts/fetch-ghostty-engine.sh --check
+
+build: engine
 	xcodebuild \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -250,7 +262,7 @@ build:
 
 # Archive with automatic signing (development); the Developer ID profile + re-signing
 # happen at the export-app step. Kept separate so a failed export does not waste the build.
-archive:
+archive: engine
 	rm -rf "$(ARCHIVE_PATH)"
 	xcodebuild archive \
 		-project "$(PROJECT)" \
@@ -287,7 +299,7 @@ export-app: archive
 	test -d "$(EXPORT_APP)"
 	@printf '%s\n' "Exported Developer ID app: $(EXPORT_APP)"
 
-test:
+test: engine
 	xcodebuild \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -297,7 +309,7 @@ test:
 		test
 
 # 并行全量，失败用例再串行复核一遍，见 scripts/test-parallel.sh。
-test-fast:
+test-fast: engine
 	scripts/test-parallel.sh "$(SCHEME)" "$(DESTINATION)" "$(TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
@@ -306,7 +318,7 @@ test-fast:
 		$(PACKAGE_ARGS)
 
 # 起一个真实的 uterm-relay 跑经它的端到端用例。中继自身的测试：cd relay && GOWORK=off go test ./...
-test-relay-e2e:
+test-relay-e2e: engine
 	scripts/test-relay-e2e.sh \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -316,7 +328,7 @@ test-relay-e2e:
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
 
-test-weak-network:
+test-weak-network: engine
 	scripts/test-weak-network.sh \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -353,7 +365,7 @@ relay-publish: relay-dist
 		--file "$(RELAY_DIST)/install.sh" "relay/install.sh"
 	scripts/upload-oss.sh --file "$(RELAY_DIST)/latest.json" "relay/latest.json"
 
-test-mobile-fast:
+test-mobile-fast: engine
 	scripts/test-parallel.sh "$(MOBILE_SCHEME)" "$(MOBILE_DESTINATION)" "$(MOBILE_TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
@@ -364,7 +376,7 @@ test-mobile-fast:
 # iOS/iPadOS：宿主是 uTermMobile.app，跑在模拟器上。测试 bundle 靠 TEST_HOST 取符号，
 # Frameworks 阶段是空的（见 uTermMobileTests/README.md）。
 # 不要加 CODE_SIGNING_ALLOWED=NO —— 模拟器走 ad-hoc 签名，entitlements 不挡路。
-test-mobile:
+test-mobile: engine
 	xcodebuild \
 		-project "$(PROJECT)" \
 		-scheme "$(MOBILE_SCHEME)" \
@@ -389,7 +401,7 @@ $(SYNC_STRINGS_TOOL): scripts/sync-strings.swift
 	mkdir -p "$(dir $@)"
 	swiftc -O -o "$@" "$<"
 
-sync-strings-build:
+sync-strings-build: engine
 	xcodebuild build -quiet \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -423,7 +435,7 @@ check-cli:
 # 技能构建产物闸：app 包内 Resources/Skills/ 下的文档（SKILL.md 与 references）与两份 utermctl 必须与仓库文件
 # 逐字节一致（构建阶段「Copy utermctl CLI and Skills」没漏、没坏），外加安装 / 自动对齐的
 # 行为测试 —— 只有这两个测试类挡着。发版前跑一次（release skill 已接进去）。
-check-skills: check-cli
+check-skills: check-cli engine
 	xcodebuild build-for-testing \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -569,7 +581,7 @@ staple:
 #   - 团队 TEAM_ID 下有 Apple Distribution 证书（没有时 API key 会自动签发一张）；
 #   - App ID 已开 iCloud（容器 iCloud.com.uozi.uTerm）与 Push Notifications 能力，
 #     否则 automatic signing 拉到的 profile 缺能力，export 会在重签这一步失败。
-archive-mobile:
+archive-mobile: engine
 	rm -rf "$(MOBILE_ARCHIVE_PATH)"
 	mkdir -p "$(MOBILE_BUILD_DIR)"
 	@set -e; \

@@ -1,5 +1,4 @@
-// 影子终端只在链了 libghostty-vt 的 target 里编（本地包 `vendor/libghostty-spm-local` 的 `GhosttyVt` product）。
-// 还没链它的 target（这条评估分支上的 Mac App）里整份文件是空的；Mac 接上 Ghostty、依赖了那个 product 之后自动编进来。
+// 影子终端只在链了 libghostty-vt 的 target 里编（本地包 `vendor/libghostty-spm` 的 `GhosttyVt` product，两个 App target 都依赖它）。
 #if canImport(GhosttyVt)
 import Foundation
 import GhosttyVt
@@ -10,7 +9,7 @@ import GhosttyVt
 // 都在这个类型上（事件见 `Event`，读屏见「读文字」，标记见 `Marker`）。只依赖 Foundation 与 GhosttyVt，不碰 UIKit / AppKit / GhosttyKit。
 //
 // vt 的 C API 是 Ghostty `042b16b6` 时的版本（1.0 之前）：选项一次性传结构体、没有读画笔的接口，不能照官方 vt-1.0.0 的
-// 文档写。头文件在 `build/ghostty-vt/ghostty-vt.xcframework/*/Headers/ghostty/vt/`。vt 必须和 GhosttyKit 是同一棵打过补丁的
+// 文档写。头文件在 `vendor/libghostty-spm/BinaryTarget/ghostty-vt.xcframework/*/Headers/ghostty/vt/`。vt 必须和 GhosttyKit 是同一棵打过补丁的
 // 源码树编的，影子和画面才一致（M4：576 个检查点 0 差异；前提是下面三条：默认开 mode 2027、resize 跟着 surface 的终端自己
 // 报的尺寸、回滚上限两边设成同一个值）。
 
