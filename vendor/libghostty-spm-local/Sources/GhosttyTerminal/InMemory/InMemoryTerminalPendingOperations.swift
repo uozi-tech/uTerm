@@ -9,6 +9,8 @@ import Foundation
 struct InMemoryTerminalPendingOperations {
     enum Operation {
         case write(Data)
+        /// uTerm 本地补丁：重建出来的历史（`receiveReplay`），交给 surface 时不产生应答。
+        case replay(Data)
         case processExit(exitCode: UInt32, runtimeMilliseconds: UInt64)
     }
 
@@ -24,6 +26,9 @@ struct InMemoryTerminalPendingOperations {
     private var head = 0
     private(set) var count = 0
     private(set) var writeByteCount = 0
+    /// uTerm 本地补丁：排着的回放字节。单独记：离线上限（`trimWrites`）只管实时输出，不能因为
+    /// 排着一段大回放就把后面的实时输出裁掉。
+    private(set) var replayByteCount = 0
     /// Numbers every append, so a waiter can tell when everything appended
     /// before it has left the queue — handed over or trimmed away.
     private(set) var appendedSequence = 0
@@ -34,8 +39,10 @@ struct InMemoryTerminalPendingOperations {
     }
 
     mutating func append(_ operation: Operation) {
-        if case let .write(data) = operation {
-            writeByteCount += data.count
+        switch operation {
+        case let .write(data): writeByteCount += data.count
+        case let .replay(data): replayByteCount += data.count
+        case .processExit: break
         }
         appendedSequence += 1
         storage.append(Entry(operation: operation, sequence: appendedSequence))
@@ -64,8 +71,10 @@ struct InMemoryTerminalPendingOperations {
             head += 1
             guard let entry else { continue }
             count -= 1
-            if case let .write(data) = entry.operation {
-                writeByteCount -= data.count
+            switch entry.operation {
+            case let .write(data): writeByteCount -= data.count
+            case let .replay(data): replayByteCount -= data.count
+            case .processExit: break
             }
             retiredSequence = entry.sequence
             compact()
@@ -97,6 +106,26 @@ struct InMemoryTerminalPendingOperations {
             }
             index += 1
         }
+    }
+
+    /// uTerm 本地补丁：丢掉所有还没交给 surface 的输出（实时的和回放的），进程退出留着。返回丢了多少字节。
+    mutating func removeAllOutput() -> Int {
+        var dropped = 0
+        for index in head ..< storage.count {
+            guard let entry = storage[index] else { continue }
+            switch entry.operation {
+            case let .write(data), let .replay(data):
+                dropped += data.count
+                storage[index] = nil
+                count -= 1
+                retiredSequence = max(retiredSequence, entry.sequence)
+            case .processExit:
+                break
+            }
+        }
+        writeByteCount = 0
+        replayByteCount = 0
+        return dropped
     }
 
     /// Amortized O(1): the consumed prefix is dropped only once it is at
