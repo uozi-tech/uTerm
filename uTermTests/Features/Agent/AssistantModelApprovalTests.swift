@@ -37,6 +37,40 @@ final class AssistantModelApprovalTests: XCTestCase {
         }
     }
 
+    /// 对话选了思考深度时，模型对稍复杂的命令会先吐 thinking 块。改前这里把它当坏响应抛错，
+    /// 界面上就是「命令一长就 AI 审批未完成」。审查请求也不该带思考参数。
+    func testReviewSkipsThinkingBlocksAndDropsReasoning() async throws {
+        let verdict = #"{"requestID":"r","decision":"approve","reason":"ok"}"#
+        let client = MockLLMClient(events: [
+            .thinking(LLMThinkingBlock(thinking: "先想一想这条命令…", signature: "sig")),
+            .text(verdict),
+        ])
+        var config = LLMRequestConfig(model: "claude-opus-4-7", baseURL: URL(string: "https://example.com")!, apiKey: "test")
+        config.tools = [.runCommand]
+        config.reasoning = AgentReasoningRequest.make(protocol: .anthropic, modelID: "claude-opus-4-7", effort: .high)
+        XCTAssertNotNil(config.reasoning, "夹具失效：这个型号应当支持思考深度")
+
+        let reply = try await reviewToolApproval(client: client, config: config, system: "review", prompt: "test")
+
+        XCTAssertEqual(reply, verdict)
+        XCTAssertNil(client.captured.config?.reasoning)
+        XCTAssertEqual(client.captured.config?.tools.isEmpty, true)
+    }
+
+    /// 没给工具还要调工具，不是审查结论。
+    func testReviewRejectsToolCalls() async {
+        let client = MockLLMClient(events: [
+            .toolCall(LLMToolCall(id: "c", name: "run_command", argumentsJSON: "{}")),
+        ])
+        let config = LLMRequestConfig(model: "test", baseURL: URL(string: "https://example.com")!, apiKey: "test")
+        do {
+            _ = try await reviewToolApproval(client: client, config: config, system: "review", prompt: "test")
+            XCTFail("工具调用不能当成审查结论")
+        } catch {
+            XCTAssertEqual(error as? LLMClientError, .invalidResponse)
+        }
+    }
+
     func testAIApprovalExecutesOnceAndContinuesWithoutToolsInReview() async throws {
         let (model, client, executor) = setup()
         await model.send(serverContext: "test server")
