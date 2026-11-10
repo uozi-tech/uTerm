@@ -65,6 +65,7 @@ final class GhosttyTerminalBridge {
         view.delegate = delegate
         view.controller = GhosttyTerminalConfig.controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
+        view.onResizeSettled = { [weak self] in self?.resizeDidSettle() }
         view.onFocusGained = { [weak self] in self?.owner?.acknowledgeProgramStatus() }
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
@@ -119,10 +120,11 @@ final class GhosttyTerminalBridge {
         // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以一律以 surface 此刻的网格为准：之后那次报告到达时
         // 值相同，不会重复发。影子终端在回调里是按报来的值改的，过时的话一并拉回来。
         var cols = reportedCols, rows = reportedRows
-        if let current = io.surfaceGrid, current.columns > 0, current.rows > 0,
-           Int(current.columns) != cols || Int(current.rows) != rows {
+        if let current = io.surfaceGrid, current.columns > 0, current.rows > 0 {
             cols = Int(current.columns)
             rows = Int(current.rows)
+            // 影子终端一并对齐到这个值：回调里按过时的值改过的拉回来；容器提交尺寸后主动补报的这一次
+            // （`resizeDidSettle`）回调还没到，也在这里跟上，影子和发给 PTY 的尺寸不差出一次。
             owner?.shadow.resize(cols: current.columns, rows: current.rows,
                                  cellWidth: current.cellWidthPixels, cellHeight: current.cellHeightPixels)
         }
@@ -130,9 +132,20 @@ final class GhosttyTerminalBridge {
         let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
         if changed { owner?.shadowGridDidChange() }
-        owner?.ghosttyGridDidChange(cols: cols, rows: rows)
+        // 容器还在等尺寸停稳（首次挂载、接回、窗口在定尺寸）：这时的网格是中间态，不发给 PTY；停稳后
+        // `resizeDidSettle` 再发最终那一次。远控钉住的尺寸是确定的目标，照发。
+        if !view.holdsGridReports || view.pinnedFrameSize != nil {
+            owner?.ghosttyGridDidChange(cols: cols, rows: rows)
+        }
         // surface 还没建好时就来了接管：现在有格子尺寸了，补上。
         if let pending = pendingPin, view.pinnedFrameSize == nil { pinGrid(cols: pending.cols, rows: pending.rows) }
+    }
+
+    /// 容器把视图尺寸提交了（停稳了）：把 surface 此刻的网格发给 PTY。网格没变时引擎不会再报一次，所以这里主动补；
+    /// 变了的话引擎随后报来的值相同，输入通道去重。surface 还没建时什么也不做，它建好后报的第一次照常走。
+    private func resizeDidSettle() {
+        guard let current = io.surfaceGrid, current.columns > 0, current.rows > 0 else { return }
+        ghosttyDidResize(cols: Int(current.columns), rows: Int(current.rows))
     }
 
     // MARK: 远控接管尺寸
@@ -159,7 +172,12 @@ final class GhosttyTerminalBridge {
         view.pinnedFrameSize = NSSize(width: CGFloat(cols) * cell.width / scale, height: CGFloat(rows) * cell.height / scale)
         view.pinnedCursorRow = cursorRow
         owner?.tracksCursorForPinnedGrid = true
-        view.superview?.needsLayout = true
+        if view.superview == nil, let pinned = view.pinnedFrameSize {
+            // 窗格此刻不在视图层级里（藏在别的标签后面）：没有容器来摆，直接把视图设成钉住的尺寸。
+            view.setFrameSize(pinned)
+        } else {
+            view.superview?.needsLayout = true
+        }
     }
 
     func unpinGrid() {
@@ -275,6 +293,17 @@ final class GhosttySurfaceView: AppTerminalView {
     var onControlVImage: (@MainActor (TerminalImage) -> Bool)?
     /// ⌃↩。返回 true = 已经替程序发了回车；false = 交回 Ghostty 自己编码。
     var onControlReturn: (@MainActor () -> Bool)?
+    /// 容器还在等尺寸停稳：这期间报来的网格不发给 PTY（见 `GhosttyContainerView.syncSurfaceFrame`）。
+    var holdsGridReports = false
+    /// 容器提交了尺寸。
+    var onResizeSettled: (@MainActor () -> Void)?
+
+    /// 容器在提交尺寸（或确认尺寸没变）之后调：放开网格上报，并把此刻的网格发出去。
+    func resizeDidSettle() {
+        holdsGridReports = false
+        onResizeSettled?()
+    }
+
     /// 远控接管尺寸时钉住的视图尺寸（对端行列数 × 格子）。非 nil 时 `GhosttyContainerView` 按它摆放而不是铺满。
     var pinnedFrameSize: NSSize?
     /// 钉住期间上一次摆放时光标在第几行（比窗格高时跟着光标走，规则同 `TerminalContainerView.pinnedFrame`）。

@@ -3,7 +3,7 @@ import Foundation
 /// 一条终端会话的程序状态：收 OSC 7501（状态报告）与 OSC 133 A（新提示符）后怎么改状态、要不要回答、
 /// 要不要提醒人。消息来自影子终端的事件（`ShadowTerminal.Event.programStatus` / `.promptStarted`）。两端共用：Mac 的 `TerminalSession` 与 iOS 的 `MobileTerminalController` 各持一份，
 /// 只有「此刻有没有人在看」「怎么提醒」由各自平台决定。
-nonisolated struct ProgramStatusTracker: Equatable, Sendable {
+nonisolated struct ProgramStatusTracker: Equatable, Sendable, Codable {
     private(set) var board = ProgramStatusBoard()
 
     /// 收到一条消息后调用方要做的事。
@@ -116,5 +116,43 @@ extension ProgramStatusRecord {
         case .error: .failed
         case .idle: .idle
         }
+    }
+}
+
+/// 程序状态的记账副本，给检查点用（两端共用）。在影子终端的事件回调里——喂字节的那条线程上、解析到那个序列时——
+/// 同步更新，所以它和字节流的位置严格对应：拍检查点的那一刻（泵的锁在手上）读它，正好是「到这个字节为止」的状态。
+/// 界面用的那份 `ProgramStatusTracker` 在主线程上，事件要排队才到，会晚一点。
+///
+/// 为什么要存：程序跨重启一直在 `working` 时不会再报一次，接回之后标签上的状态只能从检查点里来。
+nonisolated final class ProgramStatusJournal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tracker = ProgramStatusTracker()
+
+    /// 影子终端的事件：只认状态上报与新提示符。
+    func receive(_ event: ShadowTerminal.Event) {
+        lock.lock()
+        defer { lock.unlock() }
+        switch event {
+        case .programStatus(let message): _ = tracker.receive(message, isLooking: false)
+        case .promptStarted: tracker.promptStarted()
+        default: break
+        }
+    }
+
+    /// 用户看过结果了。
+    func acknowledgeResults() {
+        lock.withLock { tracker.acknowledgeResults() }
+    }
+
+    var current: ProgramStatusTracker {
+        get { lock.withLock { tracker } }
+        set { lock.withLock { tracker = newValue } }
+    }
+
+    /// 存进检查点的样子。
+    var encoded: Data? { try? JSONEncoder().encode(current) }
+
+    static func decode(_ data: Data) -> ProgramStatusTracker? {
+        try? JSONDecoder().decode(ProgramStatusTracker.self, from: data)
     }
 }

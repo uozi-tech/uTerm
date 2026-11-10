@@ -5,8 +5,7 @@ import SwiftUI
 /// 把会话的 Ghostty 视图（`TerminalSession.ghostty.view`，会话持有、不随 SwiftUI 重建）挂进 SwiftUI。
 ///
 /// 接了：挂载、焦点、内边距、深浅色、光标 / 历史 / 选中即复制设置、远控钉尺寸（`pinnedFrameSize`）、
-/// 滚动时浮现的滚动条。没接：「停稳再提交」的尺寸判定（Ghostty 自己有 `resizeThrottleMilliseconds`）、
-/// 滚动转发给外层 ScrollView、拖动滚动条。
+/// 「停稳再提交」的尺寸判定、滚动时浮现的滚动条。没接：滚动转发给外层 ScrollView、拖动滚动条。
 struct GhosttyHostView: NSViewRepresentable {
     let session: TerminalSession
     var isActive = true
@@ -58,6 +57,8 @@ final class GhosttyContainerView: NSView {
     /// 滚动条：Ghostty 自己不画，按它报的总行数 / 视口位置自绘。只在用户滚动、且确有历史可滚时浮现，
     /// 停手约 1 s 后淡出。只显示，不能拖。
     let scrollIndicator = GhosttyScrollIndicator()
+    /// 「停稳再提交」的判定与顺延计时（与 iOS 的容器共用）。
+    private let settler = TerminalResizeSettler()
     private var lastScrollbar: TerminalScrollbar?
     private var hideIndicatorWork: DispatchWorkItem?
 
@@ -81,6 +82,9 @@ final class GhosttyContainerView: NSView {
         self.surface?.onScrollActivity = nil
         surface.removeFromSuperview()
         self.surface = surface
+        settler.cancel()
+        // 进窗口的那一刻 surface 可能当场建好并按视图此刻的尺寸报网格；容器还没量过，先不让它发给 PTY。
+        surface.holdsGridReports = true
         addSubview(surface)
         addSubview(scrollIndicator, positioned: .above, relativeTo: surface)
         surface.onScrollbar = { [weak self] in self?.scrollbarDidChange($0) }
@@ -92,25 +96,63 @@ final class GhosttyContainerView: NSView {
     func detachSurface() {
         if surface?.superview === self { surface?.removeFromSuperview() }
         surface = nil
+        settler.cancel()
     }
 
     override func layout() {
         super.layout()
+        syncSurfaceFrame(settled: false)
+    }
+
+    /// 把 Ghostty 视图的尺寸对齐到容器。视图尺寸一变 Ghostty 就立刻按新网格重排，而程序要等 SIGWINCH 才知道；
+    /// 首次挂载、重启接回、窗口还在定尺寸、分屏还在排的时候，量到的常常只是中间态——把它发给 PTY，正在跑的全屏程序
+    /// （接回的 Claude Code）就按一个很窄的列宽把历史重排一遍，之后尺寸对了也只重画活动区。所以尺寸停稳才提交
+    /// （判定在共享的 `TerminalResizeSettler`）：等待期间视图保持旧尺寸、网格不动，提交时 Ghostty 的网格、影子终端、
+    /// PTY 一起变。等待期间 surface 自己报来的网格（刚建好时按当时的视图尺寸报的那一次）也不发给 PTY
+    /// （`GhosttySurfaceView.holdsGridReports`），提交之后只发最终那一次。
+    private func syncSurfaceFrame(settled: Bool) {
+        // SwiftUI 可能晚于新容器才拆掉旧容器；已被接走的视图不归这里摆放。
         guard let surface, surface.superview === self else { return }
         let i = Self.insets
-        var frame = NSRect(x: i.left, y: i.bottom,
-                           width: max(0, bounds.width - i.left - i.right),
-                           height: max(0, bounds.height - i.top - i.bottom))
-        // 远控接管尺寸：按对端的行列数钉住，不缩放，放不下的部分裁掉；比窗格高时跟着光标走。
+        // 远控接管尺寸：按对端的行列数钉住，不缩放，放不下的部分裁掉；比窗格高时跟着光标走。目标是确定的，直接提交。
         if let pinned = surface.pinnedFrameSize {
+            settler.cancel()
             layer?.masksToBounds = true
             let rows = pinned.height > 0 ? Int((pinned.height / max(1, cellHeightPoints(surface))).rounded()) : 0
-            frame = Self.pinnedFrame(pinned, in: bounds, insets: i,
-                                                      cursorRow: surface.pinnedCursorRow, rows: rows)
-        } else {
-            layer?.masksToBounds = false
+            let frame = Self.pinnedFrame(pinned, in: bounds, insets: i, cursorRow: surface.pinnedCursorRow, rows: rows)
+            if surface.frame != frame { surface.frame = frame }
+            surface.resizeDidSettle()
+            layoutScrollIndicator()
+            return
         }
-        if surface.frame != frame { surface.frame = frame }
+        let width = bounds.width - i.left - i.right
+        let height = bounds.height - i.top - i.bottom
+        // 窗格被收起时没有可用空间：保持原有行列数，等它再露出来。
+        guard width > 0, height > 0 else {
+            settler.cancel()
+            return
+        }
+        let target = NSRect(x: i.left, y: i.bottom, width: width, height: height)
+        let decision = settler.decide(
+            target: TerminalResizeSettler.Target(size: target.size),
+            current: TerminalResizeSettler.Target(size: surface.frame.size),
+            // 挂上时 pty 已经有尺寸、程序已经在画（接回的 Claude Code 等），首次挂载也是一次尺寸变化，和平时一样等停稳。
+            isFirstMount: false,
+            settled: settled,
+            onSettled: { [weak self] in self?.syncSurfaceFrame(settled: true) })
+        switch decision {
+        case .cancel:
+            return  // 只在没有目标时出现，上面已经处理过
+        case .commit:
+            layer?.masksToBounds = false
+            if surface.frame != target { surface.frame = target }
+            surface.resizeDidSettle()
+        case .hold:
+            // 等待期间保持旧尺寸，贴左上角摆放，放不下的部分裁掉；这期间报来的网格先不发给 PTY。
+            surface.holdsGridReports = true
+            layer?.masksToBounds = true
+            surface.setFrameOrigin(Self.pinnedFrame(surface.frame.size, in: bounds, insets: i).origin)
+        }
         layoutScrollIndicator()
     }
 

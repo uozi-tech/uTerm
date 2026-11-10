@@ -10,7 +10,9 @@ extension TerminalSession {
     /// 事件在喂字节的那条线程上、解析到那个序列时同步发出。在主线程上喂（测试、接回时的回放）就当场处理；
     /// 否则排到主线程，先后顺序不变。
     func installShadowEventHandler() {
-        shadow.setEventHandler { [weak self] event in
+        shadow.setEventHandler { [weak self, statusJournal] event in
+            // 记账副本当场更新（和字节位置对应，检查点要用）；界面那份在主线程上处理。
+            statusJournal.receive(event)
             if Thread.isMainThread {
                 MainActor.assumeIsolated { self?.handleShadowEvent(event) }
             } else {
@@ -20,9 +22,16 @@ extension TerminalSession {
     }
 
     private func handleShadowEvent(_ event: ShadowTerminal.Event) {
-        // 回放是重启前的事：不回答、不发通知、不认标记。检查点里也没有状态，标签等程序下次上报。
-        //（回放期间影子终端的事件本来就关着，这里再挡一次排在主线程队列里晚到的。）
-        guard !isReplayingHeldOutput else { return }
+        // 回放是重启前的事：不回答、不发通知、不认标记。但程序状态要跟上——检查点之后、重启之前的状态变化就在这段
+        // 字节里，程序之后不会再报一次（一直 working 的程序接回后就指望这里）。回放完由 `restoreHeldScreen` 统一发布。
+        if isReplayingHeldOutput {
+            switch event {
+            case .programStatus(let message): _ = programStatusTracker.receive(message, isLooking: false)
+            case .promptStarted: programStatusTracker.promptStarted()
+            default: break
+            }
+            return
+        }
         switch event {
         case .programStatus(let message):
             // 远控镜像：那台 Mac 自己解析状态、经远控协议推过来，这里不再解析一遍。
@@ -60,12 +69,15 @@ extension TerminalSession {
         case .reply: sendHostBytes(Data(ProgramStatusTracker.queryReply))
         case .attention(let record): attentionSink?(record.attention)
         }
+        // 用户正看着：结果当场算看过了，记账副本同步。
+        if isLooking, case .report = message { statusJournal.acknowledgeResults() }
         publishProgramStatus()
     }
 
     /// 用户回到这条会话：结果算看过了，通知中心里的旧通知也收掉。
     func acknowledgeProgramStatus() {
         programStatusTracker.acknowledgeResults()
+        statusJournal.acknowledgeResults()
         publishProgramStatus()
         TerminalAttentionCenter.shared.withdraw(from: self)
         // 远控镜像的状态是那台 Mac 推来的，看过与否记在连接上。
@@ -77,6 +89,7 @@ extension TerminalSession {
     /// 连接没了，上面跑的程序也不再有状态可言；标签改由连接状态说话。
     func resetProgramStatus() {
         programStatusTracker.reset()
+        statusJournal.current = ProgramStatusTracker()
         publishProgramStatus()
     }
 
@@ -90,7 +103,7 @@ extension TerminalSession {
         attentionSink?(attention)
     }
 
-    private func publishProgramStatus() {
+    func publishProgramStatus() {
         let report = programStatusTracker.board.summary
         if report != programReport { programReport = report }
         let next = programStatusTracker.display
