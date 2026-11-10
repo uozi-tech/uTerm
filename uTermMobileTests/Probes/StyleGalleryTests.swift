@@ -204,7 +204,7 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    // MARK: - 终端会话（假传输，真 SwiftTerm）
+    // MARK: - 终端会话（假传输，真终端视图）
 
     func testTerminalSession() async throws {
         defer { MobileProbeWindow.closeAll() }

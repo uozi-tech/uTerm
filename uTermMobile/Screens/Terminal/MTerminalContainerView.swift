@@ -1,49 +1,55 @@
-import SwiftTerm
 import UIKit
 
 /// 终端视图的容器：SwiftUI 只改容器的尺寸，终端等尺寸和字号都停稳才跟上。
 ///
-/// SwiftTerm 一见到新尺寸就重排缓冲区，全屏程序（vim、Claude Code）却要等 SIGWINCH 才知道，这段时间差里
-/// 它照旧按旧尺寸增量绘制。尺寸变过去又变回来时 PTY 尺寸没变，连 SIGWINCH 都没有，屏幕就一直错位。
-/// 停稳才提交之后，重排和 SIGWINCH 同时发生，键盘升降、切分屏途中的尺寸都不碰缓冲区。
+/// 终端一见到新尺寸就重排网格并给远端发 SIGWINCH，全屏程序（vim、Claude Code）收到就整屏重画。键盘升降、转屏、
+/// 切分屏途中会连着经过一串中间尺寸，每个都重排 + 重画一遍既费又闪；尺寸变过去又变回来时还会白白折腾两次。
+/// 停稳才提交之后，一次变化只重排一次、只发一次 SIGWINCH。
 final class MTerminalContainerView: UIView {
     /// 尺寸或字号停止变化多久后才提交给终端。连续变化期间不断顺延（判定在共享的 `TerminalResizeSettler`）。
     static let settleDelay: Duration = TerminalResizeSettler.settleDelay
 
-    let terminalView: SwiftTerm.TerminalView
+    let terminal: GhosttyTerminalBridge
+    var terminalView: MGhosttyTerminalView { terminal.view }
     private var fontSize: CGFloat
     /// 「停稳再提交」的判定与顺延计时（与 mac `TerminalContainerView` 共用）。
     private let settler = TerminalResizeSettler()
     private var commitsOnNextLayout = false
 
-    /// 这个终端在不在屏上。不在屏上时不跟尺寸，转屏才不会让每个隐藏标签都重排一次、再让里面的程序
-    /// 重发一遍内容。切回来时立刻提交（和 Mac 一样：隐藏的终端露出来才改尺寸）。
-    var isOnScreen = true {
+    /// 这个终端在不在屏上。不在屏上时不跟尺寸、不画（隔一阵还会放掉 surface，见 `GhosttyTerminalBridge.setOnScreen`），
+    /// 转屏才不会让每个隐藏标签都重排一次、再让里面的程序重发一遍内容。切回来时立刻提交（和 Mac 一样：隐藏的终端
+    /// 露出来才改尺寸）。
+    var isOnScreen: Bool {
         didSet {
             guard isOnScreen != oldValue else { return }
             // 外壳切换时新容器接走了同一个终端视图：旧容器之后的状态变化（它最后一次刷新常常是「不在屏上」）
             // 不能再写进视图，否则视图停画、画面永远停在那一刻。和 `syncTerminal` 的守卫同一条规则。
             guard terminalView.superview === self else { return }
-            (terminalView as? MTerminalView)?.isOffScreen = !isOnScreen
             if isOnScreen {
+                // 先把攒着的尺寸提交了再让画面回来：surface 放掉过的话，直接按新尺寸重建，不用先建再改。
                 commitsOnNextLayout = true
                 setNeedsLayout()
+                layoutIfNeeded()
+                terminal.setOnScreen(true)
             } else {
                 cancelHold()
+                terminal.setOnScreen(false)
             }
         }
     }
 
-    init(terminalView: SwiftTerm.TerminalView, fontSize: CGFloat) {
-        self.terminalView = terminalView
+    init(terminal: GhosttyTerminalBridge, fontSize: CGFloat, isOnScreen: Bool = true) {
+        self.terminal = terminal
         self.fontSize = fontSize
+        self.isOnScreen = isOnScreen
         super.init(frame: .zero)
         clipsToBounds = true
-        terminalView.translatesAutoresizingMaskIntoConstraints = true
-        terminalView.autoresizingMask = []
-        addSubview(terminalView)
+        let view = terminal.view
+        view.translatesAutoresizingMaskIntoConstraints = true
+        view.autoresizingMask = []
+        addSubview(view)
         // 外壳切换时新容器接走旧视图：以新容器的状态为准，别沿用上一个容器留下的「不在屏上」。
-        (terminalView as? MTerminalView)?.isOffScreen = !isOnScreen
+        terminal.setOnScreen(isOnScreen)
     }
 
     @available(*, unavailable)
@@ -69,6 +75,7 @@ final class MTerminalContainerView: UIView {
     }
 
     private func syncTerminal(settled: Bool) {
+        let terminalView = terminalView
         // 外壳切换时新容器会接走同一个终端视图，旧容器不再摆放它。
         guard terminalView.superview === self else {
             cancelHold()
@@ -79,14 +86,13 @@ final class MTerminalContainerView: UIView {
             cancelHold()
             return
         }
-        let fontChanged = abs(terminalView.font.pointSize - fontSize) > 0.1
-        let isFirstMount = (terminalView as? MTerminalView)?.hasHostedLayout == false
+        let isFirstMount = !terminalView.hasHostedLayout
         // 不在屏上不跟尺寸（首挂除外：总得先按真实尺寸排一次版）。
         let tracks = isOnScreen || isFirstMount
         let decision = settler.decide(
             target: tracks ? TerminalResizeSettler.Target(size: bounds.size, fontSize: fontSize) : nil,
             current: TerminalResizeSettler.Target(size: terminalView.frame.size,
-                                                  fontSize: terminalView.font.pointSize),
+                                                  fontSize: terminalView.terminalFontSize),
             isFirstMount: isFirstMount,
             settled: settled,
             onSettled: { [weak self] in self?.syncTerminal(settled: true) })
@@ -94,20 +100,21 @@ final class MTerminalContainerView: UIView {
         case .cancel:
             return
         case .commit:
-            (terminalView as? MTerminalView)?.hasHostedLayout = true
-            commit(fontChanged: fontChanged)
+            terminalView.hasHostedLayout = true
+            commit()
         case .hold:
             // 等待期间保持旧尺寸：比容器矮时贴顶，比容器高时贴底（键盘升起时提示符和光标留在屏上）。
             terminalView.frame.origin = CGPoint(x: 0, y: min(0, bounds.height - terminalView.frame.height))
         }
     }
 
-    /// 先改尺寸再换字号：换字号时按新尺寸算行列数，缓冲区只重排一次。
-    private func commit(fontChanged: Bool) {
+    /// 尺寸和字号一起提交：GhosttyKit 的 IO 线程把挨着的两次 resize 合成一次（25 ms 窗口），远端只收到一次 SIGWINCH。
+    private func commit() {
+        let terminalView = terminalView
         terminalView.frame = bounds
-        if fontChanged {
-            terminalView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        }
+        terminalView.setTerminalFontSize(fontSize)
         terminalView.layoutIfNeeded()
+        // 不在屏上的终端不建 surface，没有网格可报：先估一个给远端（见 `estimateGridIfNeverSized`）。
+        if !isOnScreen { terminal.estimateGridIfNeverSized(for: bounds.size) }
     }
 }

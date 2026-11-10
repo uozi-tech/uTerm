@@ -1,142 +1,112 @@
-import ObjectiveC
-import SwiftTerm
+import GhosttyTerminal
+import QuartzCore
 import UIKit
 import XCTest
 @testable import uTermMobile
 
 /// 终端在什么时候画、画几次。挂在真实 scene 的窗口上：没有 scene 的窗口一次都不画，读数全是 0。
+///
+/// 换引擎之前这里数的是 SwiftTerm 的 `draw(_:)`（主线程 CoreGraphics），核的是几条本地补丁：滚动的输出每拍只画一次、
+/// 有积压时跳过中间帧、手动滚动当场重绘。GhosttyKit 的画面由渲染线程按 vsync 交帧，解析也不在主线程上，
+/// 那几条的前提（主线程一拍喂多少、画不画由 `setNeedsDisplay` 的节流决定）不存在了；留下来、新引擎上仍然成立的
+/// 是「有输出才画、画得不比屏幕刷新更勤、不在屏上不画」。数的是 `GhosttyPresentLog`（引擎每交一帧记一次）。
 @MainActor
 final class TerminalDrawCountTests: XCTestCase {
-    private nonisolated(unsafe) static var draws = 0
-    private var restoreDraw: (() -> Void)?
     private var window: UIWindow?
-
-    override func setUp() async throws {
-        let method = class_getInstanceMethod(SwiftTerm.TerminalView.self, #selector(UIView.draw(_:)))!
-        typealias Draw = @convention(c) (AnyObject, Selector, CGRect) -> Void
-        let original = method_getImplementation(method)
-        let call = unsafeBitCast(original, to: Draw.self)
-        let counting: @convention(block) (AnyObject, CGRect) -> Void = { view, rect in
-            Self.draws += 1
-            call(view, #selector(UIView.draw(_:)), rect)
-        }
-        method_setImplementation(method, imp_implementationWithBlock(counting))
-        restoreDraw = { method_setImplementation(method, original) }
-    }
+    private static let controller = GhosttyTerminalBridge.makeController(
+        fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
 
     override func tearDown() async throws {
-        restoreDraw?()
+        window?.subviews.forEach { $0.removeFromSuperview() }
         window?.isHidden = true
         window = nil
     }
 
-    private func hostedTerminal() async throws -> (MTerminalView, MTerminalContainerView) {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 400, height: 600)
-        window.windowLevel = .alert
-        window.isHidden = false
+    private func hostedTerminal() async throws -> (GhosttyTerminalBridge, MTerminalContainerView) {
+        let window = try makeSpikeWindow(size: CGSize(width: 400, height: 600))
         self.window = window
-        let view = MTerminalView(frame: .zero, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-        let container = MTerminalContainerView(terminalView: view, fontSize: 11)
+        let bridge = GhosttyTerminalBridge(controller: Self.controller)
+        let container = MTerminalContainerView(terminal: bridge, fontSize: 11)
         container.frame = window.bounds
         window.addSubview(container)
         container.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(100))
-        return (view, container)
+        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
+        }
+        XCTAssertTrue(ready, "surface 没就绪")
+        GhosttyPresentLog.installIfPossible()
+        // 等首帧、尺寸同步那几帧过去。
+        try await Task.sleep(for: .milliseconds(400))
+        return (bridge, container)
     }
 
-    /// 喂若干拍，每拍之间留够绘制时间，返回期间画了几次。
-    private func drawsWhileFeeding(_ view: MTerminalView, ticks: Int) async throws -> Int {
-        Self.draws = 0
+    /// 喂若干拍，每拍之间留够出帧时间，返回期间交了几帧、用了多久。
+    private func presentsWhileFeeding(_ bridge: GhosttyTerminalBridge, ticks: Int) async throws -> (count: Int, seconds: Double) {
+        GhosttyPresentLog.reset()
+        let started = CACurrentMediaTime()
         for tick in 0..<ticks {
-            view.feed(text: String(repeating: "line \(tick)\r\n", count: 80))
+            bridge.feed(Data(String(repeating: "line \(tick)\r\n", count: 80).utf8))
             try await Task.sleep(for: .milliseconds(40))
         }
-        return Self.draws
+        return (GhosttyPresentLog.read().times.count, CACurrentMediaTime() - started)
     }
 
-    /// 滚动的输出每拍只画一次。上游会多画一次（滚动位置变化又触发一次）。
-    func testScrollingOutputDrawsOncePerTick() async throws {
-        let (view, _) = try await hostedTerminal()
+    /// 滚动的输出会画，而且交帧不比屏幕刷新更勤（每个 vsync 最多一帧）。
+    func testScrollingOutputPresentsNoFasterThanTheDisplay() async throws {
+        let (bridge, _) = try await hostedTerminal()
 
-        let draws = try await drawsWhileFeeding(view, ticks: 10)
+        let (count, seconds) = try await presentsWhileFeeding(bridge, ticks: 10)
 
-        XCTAssertGreaterThan(draws, 0)
-        XCTAssertLessThanOrEqual(draws, 12)
+        let refresh = Double(window?.screen.maximumFramesPerSecond ?? 120)
+        print("DRAWCOUNT scrolling presents=\(count) seconds=\(String(format: "%.2f", seconds)) refresh=\(refresh)")
+        XCTAssertGreaterThan(count, 0)
+        XCTAssertLessThanOrEqual(Double(count), seconds * refresh + 4)
     }
 
-    /// 还有积压时不画中间帧，喂完立刻画最后一帧。
-    func testBacklogSkipsFramesAndPaintsWhenDrained() async throws {
-        let (view, _) = try await hostedTerminal()
-        let chunk = ArraySlice(Array(String(repeating: "backlog\r\n", count: 200).utf8))
+    /// 没有输出、光标不闪时不交帧：安静的终端不该占着渲染。
+    func testQuietTerminalStopsPresenting() async throws {
+        let (bridge, _) = try await hostedTerminal()
+        // 稳定块光标（DECSCUSR 2），之后不再有输出。
+        bridge.feed(Data("\u{1B}[2 q$ ".utf8))
+        try await Task.sleep(for: .milliseconds(600))
 
-        Self.draws = 0
-        for _ in 0..<10 {
-            view.feedPaced(chunk, backlogged: true)
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        let duringBacklog = Self.draws
-        view.feedPaced(chunk, backlogged: false)
-        try await Task.sleep(for: .milliseconds(40))
+        GhosttyPresentLog.reset()
+        try await Task.sleep(for: .seconds(1))
+        let quiet = GhosttyPresentLog.read().times.count
 
-        XCTAssertLessThanOrEqual(duringBacklog, 2)
-        XCTAssertGreaterThan(Self.draws, duringBacklog, "喂完必须把最后一帧画出来")
-        XCTAssertEqual(view.displayThrottleNanoseconds, SwiftTerm.TerminalView.defaultDisplayThrottleNanoseconds)
+        print("DRAWCOUNT quiet presents=\(quiet)")
+        XCTAssertLessThanOrEqual(quiet, 2, "安静的终端一秒里还在交帧")
     }
 
-    func testOffScreenTerminalDoesNotDraw() async throws {
-        let (view, container) = try await hostedTerminal()
+    func testOffScreenTerminalDoesNotPresent() async throws {
+        let (bridge, container) = try await hostedTerminal()
         container.isOnScreen = false
 
-        let draws = try await drawsWhileFeeding(view, ticks: 5)
+        let (count, _) = try await presentsWhileFeeding(bridge, ticks: 5)
 
-        XCTAssertEqual(draws, 0)
+        XCTAssertEqual(count, 0)
     }
 
     /// 隐藏期间的输出在露出来时补上。
     func testShowingTerminalPaintsWhatItMissed() async throws {
-        let (view, container) = try await hostedTerminal()
+        let (bridge, container) = try await hostedTerminal()
         container.isOnScreen = false
-        _ = try await drawsWhileFeeding(view, ticks: 2)
+        _ = try await presentsWhileFeeding(bridge, ticks: 2)
 
-        Self.draws = 0
+        GhosttyPresentLog.reset()
         container.isOnScreen = true
-        try await Task.sleep(for: .milliseconds(60))
+        try await Task.sleep(for: .milliseconds(120))
 
-        XCTAssertGreaterThan(Self.draws, 0)
+        XCTAssertGreaterThan(GhosttyPresentLog.read().times.count, 0)
+        bridge.session.waitForPendingOutput()
+        XCTAssertTrue(bridge.session.readViewportText()?.contains("line 1") == true)
     }
 
-    /// 滚回历史时不能因为这条优化留下旧画面：手动滚动要照常重绘。
-    func testUserScrollRedraws() async throws {
-        let (view, _) = try await hostedTerminal()
-        _ = try await drawsWhileFeeding(view, ticks: 3)
-        try await Task.sleep(for: .milliseconds(60))
-
-        Self.draws = 0
-        view.contentOffset.y = max(0, view.contentOffset.y - 200)
-        try await Task.sleep(for: .milliseconds(60))
-
-        XCTAssertGreaterThan(Self.draws, 0)
-    }
-
-    /// 手指滚动的那一帧里正好有输出在排队等节流（Claude Code 思考时每秒约 10 次）：这一帧要当场画，
-    /// 不能等排队的那次——否则画面停在原地一两帧再跳过去。排队的那次到点后也不该再画一遍。
-    func testUserScrollWithQueuedOutputPaintsInTheSameFrame() async throws {
-        let (view, _) = try await hostedTerminal()
-        _ = try await drawsWhileFeeding(view, ticks: 3)
-        try await Task.sleep(for: .milliseconds(60))
-        // 节流拉长到半秒，下面滚动时输出一定还在排队（不改的话这一帧一次都不画）。
-        view.displayThrottleNanoseconds = 500_000_000
-        view.feed(text: "\u{1B}[?2026h\u{1B}[1;1H\u{1B}[2Kspinner\u{1B}[?2026l")
-
-        Self.draws = 0
-        view.contentOffset.y = max(0, view.contentOffset.y - 200)
-        view.layoutIfNeeded()
-        CATransaction.flush()
-
-        XCTAssertEqual(Self.draws, 1, "滚动这一帧没画")
-        try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(Self.draws, 1, "排队的那次到点后又画了一遍")
+    /// 换引擎之前的三条：「还有积压时不画中间帧，喂完立刻画最后一帧」（`feedPaced(backlogged:)`）、
+    /// 「手动滚动照常重绘」、「滚动那一帧里有输出排队时当场画、不重复画」（SwiftTerm 补丁 #14 / #21 的显示节流）。
+    /// 它们测的是 SwiftTerm 主线程绘制的节流逻辑，GhosttyKit 没有这层（渲染线程每个 vsync 看一次有没有变化）。
+    /// 新引擎上「边输出边滚不丢帧、不跳」由 `TerminalScrollWhileOutputProbeTests` 与 `GhosttyScrollEdgeTests` 核。
+    func testDisplayThrottleCasesAreGoneWithSwiftTerm() throws {
+        throw XCTSkip("SwiftTerm 的显示节流（feedPaced / displayThrottle）随引擎一起删了；见用例注释里指向的等价用例")
     }
 }

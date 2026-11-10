@@ -1,7 +1,7 @@
 //
 //  UTermScrollTrace.swift
-//  uTerm 本地补丁（不在上游）：滚动 / 惯性 / 吸附 / 回弹每一步发出了什么，给真机回归测试逐帧读。
-//  关着时（默认）`record` 直接返回，不占开销。
+//  uTerm 本地补丁（不在上游）：滚动每一步发出了什么（拖动 / 减速的像素、越界平移、视口行号、主线程 tick 的耗时），
+//  给回归测试逐帧读。关着时（默认）`record` 直接返回，不占开销。
 //
 
 import Foundation
@@ -12,9 +12,11 @@ public enum UTermScrollTrace {
     public struct Event: Sendable {
         /// `CACurrentMediaTime()`。
         public let time: Double
-        /// momentum / snap / overscroll / drag / row
+        /// drag / momentum / overscroll / row，系统滚动的 sv-write / sv-phase / sv-scroll，
+        /// 以及耗时类的 tick-app / tick-refresh / tick-draw / wakeup-tick（见 `span`）。
         public let kind: String
-        /// momentum、snap、drag：这一步发出的像素；overscroll：显示的回弹像素；row：视口首行行号。
+        /// drag、momentum：这一步发给引擎的像素（手指跟着 / 松手之后）；overscroll：越界时画面层平移的像素；
+        /// row：视口首行行号；sv-*：见各自的 signpost 函数；耗时类：毫秒。
         public let value: Double
     }
 
@@ -50,43 +52,25 @@ public enum UTermScrollTrace {
 
     // MARK: 给 Instruments 的 signpost（M16 第八轮：按「上玻璃」打分）
     //
-    // 惯性每一拍（目标 vsync 时刻、累计位移）和每次换画面的 CA 提交各发一条 signpost；外面用 xctrace 录的时候，
-    // trace 里就能把「这一拍想显示的位置」对到「它哪个 vsync 上的玻璃」，user 真手甩的时候也能录。
-    // 由宿主打开（uTerm 的 Ghostty 试用入口打开；本来想用 `.dynamicTracing` 自动判断有没有人在录，实测在
+    // 滚动位置（`scroll-offset`）、触摸阶段（`touch`）和系统滚动的排查打点（`sv-*`、`engine-bar`）各发一条 signpost；
+    // 外面用 xctrace 录的时候，trace 里就能把「这一刻想显示的位置」对到「它哪个 vsync 上的玻璃」，user 真手甩的时候也能录。
+    // 要录的一方自己打开（真机回归用例 / 排查时临时打开；本来想用 `.dynamicTracing` 自动判断有没有人在录，实测在
     // Animation Hitches 模板下探不到）。每条 signpost 约 1 µs，每秒最多一两百条。
+    // 自写惯性那几条（`glide-start` / `glide` / `surface-commit`）随自写滚动物理一起删了。
     nonisolated(unsafe) public static var emitsSignposts = false
     private static let glassSignposter = OSSignposter(subsystem: "com.uozi.uTerm.glass", category: .pointsOfInterest)
 
     static var isInstrumentsRecording: Bool { emitsSignposts && glassSignposter.isEnabled }
 
-    /// 惯性开始：初速（px/s）、总位移（px）、时长（s）。
-    static func signpostGlideStart(velocity: Double, total: Double, duration: Double) {
-        guard isInstrumentsRecording else { return }
-        // 数值拼成字符串再发：Instruments 显示数值会加千分位、只留 4 位小数，脚本没法读。
-        let text = String(format: "%.6f %.0f %.0f %.4f", CACurrentMediaTime(), velocity, total, duration)
-        glassSignposter.emitEvent("glide-start", "\(text, privacy: .public)")
-    }
-
-    /// 惯性的一拍：这一拍瞄准的 vsync 时刻、到这一拍为止累计发出的位移（px）。
-    static func signpostGlideTick(target: Double, cumulative: Double) {
-        guard isInstrumentsRecording else { return }
-        let text = String(format: "%.6f %.6f %.0f", CACurrentMediaTime(), target, cumulative)
-        glassSignposter.emitEvent("glide", "\(text, privacy: .public)")
-    }
-
-    /// 画面层换了一张新画面，并且这次 CA 事务已经提交。
-    static func signpostCommit() {
-        guard isInstrumentsRecording else { return }
-        let text = String(format: "%.6f", CACurrentMediaTime())
-        glassSignposter.emitEvent("surface-commit", "\(text, privacy: .public)")
-    }
-
-    /// 测试用 A/B 开关：true = 回到第五轮的行为（引擎 wakeup 也让协调器在主线程同步整帧重画）。默认 false。
-    nonisolated(unsafe) public static var legacyWakeupSyncDraw = false
-
-    /// M16 第十轮：单指滚动的手势和物理交给 UIScrollView（`UITerminalView+SystemScroll.swift`）。false = 第九轮的自写
-    /// 拖动 / 惯性 / 回弹。按手势生效（下一次按下起）。宿主的诊断页有开关，默认开。
-    nonisolated(unsafe) public static var usesSystemScrolling = true
+    /// 引擎 wakeup（app 邮箱里来了标题、滚动条这类消息）触发的 tick 要不要在主线程同步整帧重画。按平台定死，不是开关：
+    /// - iOS：要。M16 第六轮试过不画（渲染线程自己会画这些变化），user 在真机上说滚动时发糊，第七轮起回到同步重画，
+    ///   并按这个取值验收了滚动手感。
+    /// - Mac：不要。主线程白画一帧还拿着 draw_mutex 挡渲染线程，Mac 上没有 iOS 那个观感问题。
+    #if os(macOS)
+        public static let wakeupDrawsSynchronously = false
+    #else
+        public static let wakeupDrawsSynchronously = true
+    #endif
 
     /// 程序抓着鼠标时，松手后的惯性滑多远，相对 UIScrollView `.normal`（1 = 和普通滚动一样远；减速率按它的倒数放大）。
     /// user 在 Duo 上的 Claude 全屏界面里比过三档（1 / 0.5 / 0.25）：照 `.normal` 滑得太远，定四分之一。
@@ -163,10 +147,10 @@ public enum UTermScrollTrace {
         glassSignposter.emitEvent("engine-bar", "\(text, privacy: .public)")
     }
 
-    /// 和 SwiftTerm 标签同款：视口位置（物理像素）、在不在减速、手指按没按着。第五个数是谁发的：SwiftTerm 0、
-    /// Ghostty 系统滚动 1、Ghostty 自写物理 2（自写物理的甩动由 glide-start / glide 切段，打分脚本不再按这个切）。
-    /// 第六个数是哪条代码路径动的位置（1 系统滚动的 didScroll、2 自写拖动 / 惯性、3 对齐时只动引擎、4 当场对齐、5 滚轮），
-    /// 第七个数是终端视图的编号（同一进程里第几个建出来的），用来分清多个标签。
+    /// 视口位置（物理像素）、在不在减速、手指按没按着。第五个数是这一刻视口归谁：1 系统滚动（UIScrollView）、
+    /// 2 不归系统滚动（没有回滚 / 备用屏 / 程序抓鼠标时的自写拖动；0 是换引擎之前的终端标签用的，老录制里才有）。
+    /// 第六个数是哪条代码路径动的位置（1 系统滚动的 didScroll、2 自写拖动 / 惯性、3 对齐时只动引擎、
+    /// 4 当场对齐（只有 Catalyst）、5 滚轮），第七个数是终端视图的编号（同一进程里第几个建出来的），用来分清多个标签。
     static func signpostScrollOffset(px: Double, decelerating: Bool, tracking: Bool, systemPhysics: Bool, source: Int, view: Int) {
         guard isInstrumentsRecording else { return }
         let text = String(format: "%.6f %.1f %d %d %d %d %d", CACurrentMediaTime(), px, decelerating ? 1 : 0, tracking ? 1 : 0,
@@ -193,7 +177,7 @@ public enum UTermScrollTrace {
             return CGSize(width: Int(metrics.cellWidthPixels), height: Int(metrics.cellHeightPixels))
         }
 
-        /// uTerm 测试用：惯性途中手指落下（`touchesBegan` / `gestureRecognizer(_:shouldReceive:)` 里停惯性的那一句）。
+        /// uTerm 测试用：惯性 / 系统减速途中手指落下（`touchesBegan` / `gestureRecognizer(_:shouldReceive:)` 里停住它的那一句）。
         func uTermTouchDownDuringMomentum() {
             stopMomentumForTouchDown()
         }
@@ -203,17 +187,20 @@ public enum UTermScrollTrace {
             /// 本地镜像：视口首行行号、首行顶边之上滚出去的像素（见 `MomentumScrollState.modelRow`）。
             public let row: Int
             public let fractionPixels: Int
-            /// 手指还按在回弹里时，拖过头的像素（未衰减）。
+            /// 系统滚动越界了多少像素（UIScrollView 的橡皮筋，画面层按它平移）：正 = 拉过了顶，负 = 推过了底。
             public let overscrollPixels: Double
+            /// 有东西在自己动视口 / 往程序发滚轮：自写的惯性（抓鼠标、备用屏、双指）或系统滚动的减速 / 回弹 / 对齐动画。
             public let isGliding: Bool
+            /// 越界着、手指又没按着：系统滚动的回弹还没走完。
             public let isBouncing: Bool
-            /// 没有惯性、没有回弹、没有拖过头，视口在整行上。
+            /// 没有惯性、没有回弹、没有越界，视口在整行上。
             public var isAtRest: Bool { fractionPixels == 0 && overscrollPixels == 0 && !isGliding && !isBouncing }
         }
 
         var uTermScrollState: UTermScrollState {
-            var over = Double(momentumScroll.overscrollRaw)
+            var over = 0.0
             var gliding = momentumScroll.displayLink != nil
+            var bouncing = false
             #if !targetEnvironment(macCatalyst)
                 if let driver = systemScroll.driver, let g = systemScrollGeometry() {
                     let offsetPx = Double(driver.contentOffset.y * g.scale)
@@ -222,10 +209,11 @@ public enum UTermScrollTrace {
                     // 停在底上也可能差零点几个物理像素，不到 1 px 不算越界。
                     if offsetPx < -1 { over = -offsetPx } else if offsetPx > maxPx + 1 { over = maxPx - offsetPx }
                     gliding = gliding || systemScrollInMotion
+                    bouncing = over != 0 && !(driver.isTracking || driver.isDragging || momentumScroll.panActive)
                 }
             #endif
             return UTermScrollState(row: momentumScroll.modelRow, fractionPixels: momentumScroll.modelFrac,
-                                    overscrollPixels: over, isGliding: gliding, isBouncing: momentumScroll.bounceLink != nil)
+                                    overscrollPixels: over, isGliding: gliding, isBouncing: bouncing)
         }
 
         #if !targetEnvironment(macCatalyst)
@@ -234,89 +222,5 @@ public enum UTermScrollTrace {
             /// uTerm 测试用：现在一下单指拖动会不会归系统滚动。
             var uTermSystemPanWouldBegin: Bool { systemPanWouldBegin }
         #endif
-    }
-
-    /// 惯性期间「画面哪一刻真正提交给 Core Animation」：在主 runloop 上 CA 提交之后（order 排在 CA 的 2000000 之后）
-    /// 看 Ghostty 那个 IOSurfaceLayer 的 contents 换没换，换了就记一笔（trace 的 commit，和打开输入日志时的
-    /// `uterm-commit` 行）。同一帧里惯性发出位移的时刻、那一帧的 targetTimestamp 也记着（`uterm-glide`），两者一对就知道
-    /// 每一步有没有赶在它该显示的 vsync 之前上屏。只在测试打开 trace 或排查时打开输入日志时装，平时零开销。
-    @MainActor
-    enum UTermCommitWatch {
-        nonisolated(unsafe) private static var observer: CFRunLoopObserver?
-        nonisolated(unsafe) private static weak var layer: CALayer?
-        nonisolated(unsafe) private static var lastContents: ObjectIdentifier?
-        nonisolated(unsafe) private static var until: CFTimeInterval = 0
-        /// 一次性的「画面层换了 IOSurface 就告诉我」：惯性交接用（见 glideFrame），不受 isWanted 限制。
-        nonisolated(unsafe) private static var oneShot: (layer: CALayer?, baseline: ObjectIdentifier?, until: CFTimeInterval,
-                                                         handler: @MainActor (CFTimeInterval) -> Void)?
-
-        static var isWanted: Bool {
-            UTermScrollTrace.isEnabled || TerminalDebugLog.isEnabled || UTermScrollTrace.isInstrumentsRecording
-        }
-
-        /// 从现在起再看 `seconds` 秒（每个惯性帧续一次）。
-        static func watch(_ view: UIView, seconds: CFTimeInterval = 0.25) {
-            guard isWanted else { return }
-            until = CACurrentMediaTime() + seconds
-            layer = surfaceLayer(in: view.layer)   // 每次重找：多个标签各有各的 layer，层级很浅
-            installObserver()
-        }
-
-        /// `seconds` 秒内画面层的 contents 一离开 `baseline` 就（在那次 CA 提交之后）调一次 `handler(提交时刻)`；超时不调。
-        static func onContentsChange(of view: UIView, from baseline: ObjectIdentifier?, within seconds: CFTimeInterval,
-                                     _ handler: @escaping @MainActor (CFTimeInterval) -> Void) {
-            oneShot = (surfaceLayer(in: view.layer), baseline, CACurrentMediaTime() + seconds, handler)
-            installObserver()
-        }
-
-        private static func installObserver() {
-            guard observer == nil else { return }
-            let observer = CFRunLoopObserverCreateWithHandler(
-                nil, CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.exit.rawValue, true, 2_000_001
-            ) { _, _ in
-                MainActor.assumeIsolated { UTermCommitWatch.afterCommit() }
-            }
-            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
-            self.observer = observer
-        }
-
-        private static func afterCommit() {
-            let now = CACurrentMediaTime()
-            if let shot = oneShot {
-                let current = shot.layer?.contents.map { ObjectIdentifier($0 as AnyObject) }
-                if now > shot.until {
-                    oneShot = nil
-                } else if current != shot.baseline {
-                    oneShot = nil
-                    shot.handler(now)
-                }
-            }
-            if isWanted, let contents = layer?.contents {
-                let id = ObjectIdentifier(contents as AnyObject)
-                if id != lastContents {
-                    lastContents = id
-                    UTermScrollTrace.record("commit", now)
-                    UTermScrollTrace.signpostCommit()
-                    TerminalDebugLog.log(.input, "uterm-commit t=\(String(format: "%.5f", now))")
-                }
-            }
-            if now > until, oneShot == nil, let observer {
-                CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
-                self.observer = nil
-            }
-        }
-
-        /// 视图里 Ghostty 画面层当前挂着的 IOSurface 的身份（每交一帧换一个）。
-        static func contentsIdentity(of view: UIView) -> ObjectIdentifier? {
-            surfaceLayer(in: view.layer)?.contents.map { ObjectIdentifier($0 as AnyObject) }
-        }
-
-        private static func surfaceLayer(in root: CALayer) -> CALayer? {
-            if NSStringFromClass(type(of: root)).contains("IOSurface") { return root }
-            for sub in root.sublayers ?? [] {
-                if let found = surfaceLayer(in: sub) { return found }
-            }
-            return nil
-        }
     }
 #endif

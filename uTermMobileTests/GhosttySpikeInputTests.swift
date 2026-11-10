@@ -46,7 +46,7 @@ final class GhosttySpikeInputTests: XCTestCase {
                        "UIKit 按 ObjC 读 traits 时也拿到 .asciiCapable")
     }
 
-    /// 和 `MTerminalView` 同一套：默认英文。
+    /// 默认英文（`MGhosttyTerminalView.textInputMode`，和换引擎之前同一套规则）。
     func testInputModeDefaultsToEnglish() async throws {
         guard UITextInputMode.activeInputModes.contains(where: { $0.primaryLanguage?.hasPrefix("en") == true }) else {
             throw XCTSkip("模拟器没开英文键盘")

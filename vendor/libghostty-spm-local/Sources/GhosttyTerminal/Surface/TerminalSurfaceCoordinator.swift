@@ -59,6 +59,12 @@ final class TerminalSurfaceCoordinator {
     var onMetricsUpdate: (() -> Void)?
     var onCellSizeDidChange: (() -> Void)?
     var onMouseShape: ((ghostty_action_mouse_shape_e) -> Void)?
+    /// uTerm 本地补丁：surface 建好 / 拆掉、视图按自己的尺寸算出了新网格。和 `TerminalSurfaceLifecycleDelegate` /
+    /// `TerminalSurfaceGridResizeDelegate` 同一时刻发出，但不经 delegate：宿主靠它们决定什么时候往 surface 里灌字节，
+    /// 不能因为 delegate 被换成别的对象（只关心滚动条、标题的）就收不到。
+    var onSurfaceAttached: (() -> Void)?
+    var onSurfaceDetached: (() -> Void)?
+    var onGridMetrics: ((TerminalGridMetrics) -> Void)?
 
     /// Called after every display-link render (`tick`).
     ///
@@ -157,7 +163,7 @@ final class TerminalSurfaceCoordinator {
 
     func requestImmediateTick(syncDraw: Bool = true) {
         pendingImmediateTick = true
-        if syncDraw || UTermScrollTrace.legacyWakeupSyncDraw { pendingSyncDraw = true }
+        if syncDraw || UTermScrollTrace.wakeupDrawsSynchronously { pendingSyncDraw = true }
         ensureDisplayLink()
     }
 
@@ -257,6 +263,7 @@ final class TerminalSurfaceCoordinator {
         startFontSizeTracking(on: newSurface, controller: controller)
         (delegate as? any TerminalSurfaceLifecycleDelegate)?
             .terminalDidAttachSurface(newSurface)
+        onSurfaceAttached?()
         synchronizeMetrics()
         requestImmediateTick()
     }
@@ -447,6 +454,7 @@ final class TerminalSurfaceCoordinator {
         // stock Ghostty, where pty.setSize runs only inside Termio.resize.
         // Local UI metrics still flow via the delegate below and
         // onMetricsUpdate.
+        onGridMetrics?(surfaceSize)
         if let delegate = delegate as? any TerminalSurfaceGridResizeDelegate {
             delegate.terminalDidResize(surfaceSize)
         } else if let delegate = delegate as? any TerminalSurfaceResizeDelegate {
@@ -665,6 +673,7 @@ final class TerminalSurfaceCoordinator {
             controller?.tick()
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
                 .terminalDidDetachSurface()
+            onSurfaceDetached?()
         }
     }
 

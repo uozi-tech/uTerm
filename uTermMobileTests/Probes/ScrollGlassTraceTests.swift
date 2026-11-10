@@ -1,10 +1,8 @@
 import GhosttyTerminal
 import IOSurface
-import ObjectiveC
 import os
 import QuartzCore
 import SwiftData
-import SwiftTerm
 import SwiftUI
 import UIKit
 import XCTest
@@ -19,14 +17,18 @@ import XCTest
 ///
 /// 一次只跑一个被测对象（环境变量 `UTERM_GLASS_SUBJECT`），每个对象同一套动作：
 /// 6k / 12k / 20k px/s 各甩一次，无输出、有 Claude 式输出（每 100 ms 一帧）各一遍，方向交替。
-/// - `ghostty-sync`：整个工作区界面里的 Ghostty 标签，默认行为（引擎 wakeup 也在主线程同步重画，第五轮）；
-/// - `ghostty-free`：同上，「渲染不同步」打开（第六轮）；
-/// - `swiftterm`：整个工作区界面里的 SwiftTerm 标签（UIScrollView 子类，自己在 `draw(_:)` 里画字）；
-/// - `uiscrollview`：一个普通 UIScrollView（400 行 UILabel），内容由合成器平移——「满分」基准。
-/// Ghostty 的惯性是它自己的（伪造 pan 调 `handleTouchScrollGesture:`，之后全是 display link 驱动的真实代码）。
-/// 后两个没有手指起不了 UIKit 的减速（伪造 pan 调 `handlePan:` 试过不行），改由 display link 每拍按**同一条**
+/// - `ghostty-sync`：Ghostty 终端，iOS 上唯一的行为（引擎 wakeup 也在主线程同步重画，
+///   `UTermScrollTrace.wakeupDrawsSynchronously`）；
+/// - `uiscrollview`：一个普通 UIScrollView（1200 行 UILabel），内容由合成器平移——「满分」基准。
+/// 原来还有两个被测对象，现在传进来会跳过（XCTSkip）：
+/// - `ghostty-free`（「渲染不同步」，第六轮）：本地包里那个 A/B 开关已经拿掉，iOS 定死同步重画；
+/// - `swiftterm`（换引擎之前的终端标签）：旧引擎已经从 App 里拿掉。
+/// 两个对象都没有手指、起不了 UIKit 的减速（伪造 pan 调 `handlePan:` 试过不行），都由 display link 每拍按**同一条**
 /// 三次缓出曲线设 contentOffset（按物理像素取整）：和 UIScrollView 自己减速是同一个机制（主线程 display link 回调里改
-/// bounds，本轮 runloop 末尾 CA 提交），而且四个对象走的是同一条位移曲线，可以直接叠着比。
+/// bounds，本轮 runloop 末尾 CA 提交），而且两个对象走的是同一条位移曲线，可以直接叠着比。
+/// Ghostty 那边写的是 GhosttyKit 借来的那个 UIScrollView（单指滚回滚区恒走系统滚动那条路径），前后照 UIKit 的顺序调它的
+/// 代理方法；落点交给 GhosttyKit 取整到行。原来 Ghostty 走的是本地包里自写的惯性（伪造 pan 调 `handleTouchScrollGesture:`，
+/// 按 `glide-target` 打点取每拍的位置），那套自写物理已经整套删掉。**改完之后这条没有配合 xctrace 重录过**（要真机）。
 ///
 /// 输出（stdout，由脚本解析）：
 /// - `GLASS-META …`：屏幕倍率、格高等；
@@ -47,9 +49,8 @@ final class ScrollGlassTraceTests: XCTestCase {
 
     override func tearDown() async throws {
         UTermScrollTrace.isEnabled = false
-        UTermScrollTrace.legacyWakeupSyncDraw = false
-        restoreDraw?()
-        restoreDraw = nil
+        // signpost 是这条用例自己打开的（App 平时不开），跑完关掉。
+        UTermScrollTrace.emitsSignposts = false
     }
 
     // MARK: - App 侧的账
@@ -89,7 +90,7 @@ final class ScrollGlassTraceTests: XCTestCase {
         }
     }
 
-    /// 四个对象共用的位移曲线：和本地包里的惯性一样——总位移取整到整行，时长 3·total/v，三次缓出。
+    /// 两个对象共用的位移曲线：总位移 = UIScrollView `.normal` 的投影距离取整到整行，时长 3·total/v（初速度 = 抬手速度），三次缓出。
     struct Glide {
         let total: Double
         let duration: Double
@@ -98,6 +99,11 @@ final class ScrollGlassTraceTests: XCTestCase {
             let projected = velocityPx / 1000 / -log(0.998)
             var total = (projected / cellPx).rounded() * cellPx
             if total * velocityPx <= 0 { total += velocityPx > 0 ? cellPx : -cellPx }
+            self.init(total: total, velocityPx: velocityPx)
+        }
+
+        /// 落点已经定好（Ghostty：GhosttyKit 在 willEndDragging 里取整到行）。
+        init(total: Double, velocityPx: Double) {
             self.total = total
             duration = min(max(3 * total / velocityPx, 0.12), 3.0)
         }
@@ -112,7 +118,7 @@ final class ScrollGlassTraceTests: XCTestCase {
     ///（实测头三帧挤在同一次换屏里），量到的是屏幕提速而不是滚动。所以每次甩之前先按同样的速度「拖」这么久。
     static let dragLead = 0.2
 
-    /// 每个显示帧调一次闭包（给 Ghostty 的拖动阶段用），跑够时长后返回。
+    /// 每个显示帧调一次闭包（给 Ghostty 的拖动阶段用：这一段要等它跑完再松手），跑够时长后返回。
     @MainActor
     final class FrameTicker: NSObject {
         private var link: CADisplayLink?
@@ -143,8 +149,8 @@ final class ScrollGlassTraceTests: XCTestCase {
         }
     }
 
-    /// display link 每拍推一个位置（给 SwiftTerm、UIScrollView 用）：先按初速匀速「拖」`dragLead` 秒，再按曲线滑行。
-    /// 只有滑行阶段记进 ticks（打分只看惯性）。
+    /// display link 每拍推一个位置：先按初速匀速「拖」`lead` 秒（UIScrollView 基准用；Ghostty 的拖动阶段另走 FrameTicker，
+    /// 这里给 0），再按曲线滑行，滑完调 `finished`。只有滑行阶段记进 ticks（打分只看惯性）。
     @MainActor
     final class LinkDriver: NSObject {
         private(set) var ticks: [(target: Double, position: Double)] = []
@@ -155,12 +161,17 @@ final class ScrollGlassTraceTests: XCTestCase {
         private var glideStart = 0.0
         private var origin = 0.0
         private var apply: (@MainActor (Double) -> Void)?
+        private var finished: (@MainActor () -> Void)?
+        private var lead = 0.0
 
-        func run(_ glide: Glide, velocity: Double, from origin: Double, apply: @escaping @MainActor (Double) -> Void) {
+        func run(_ glide: Glide, velocity: Double, from origin: Double, lead: Double = ScrollGlassTraceTests.dragLead,
+                 apply: @escaping @MainActor (Double) -> Void, finished: (@MainActor () -> Void)? = nil) {
             self.glide = glide
             self.velocity = velocity
             self.origin = origin
+            self.lead = lead
             self.apply = apply
+            self.finished = finished
             start = 0
             glideStart = 0
             ticks.removeAll()
@@ -173,7 +184,7 @@ final class ScrollGlassTraceTests: XCTestCase {
         @objc private func frame(_ link: CADisplayLink) {
             guard let glide else { return }
             if start == 0 { start = link.timestamp }
-            if glideStart == 0, link.timestamp - start < ScrollGlassTraceTests.dragLead {
+            if glideStart == 0, link.timestamp - start < lead {
                 apply?((origin + velocity * (link.targetTimestamp - start)).rounded())
                 return
             }
@@ -188,6 +199,9 @@ final class ScrollGlassTraceTests: XCTestCase {
             if elapsed >= glide.duration {
                 link.invalidate()
                 self.link = nil
+                let done = finished
+                finished = nil
+                done?()
             }
         }
     }
@@ -219,22 +233,7 @@ final class ScrollGlassTraceTests: XCTestCase {
         (6000, true), (-6000, true), (12000, true), (-12000, true), (20000, true), (-20000, true),
     ]
 
-    // MARK: - Ghostty（整个工作区界面）
-
-    private final class Pan: UIPanGestureRecognizer {
-        var fakeState: UIGestureRecognizer.State = .possible
-        var fakeTranslation: CGPoint = .zero
-        var fakeVelocity: CGPoint = .zero
-        override var state: UIGestureRecognizer.State {
-            get { fakeState }
-            set { fakeState = newValue }
-        }
-        override var numberOfTouches: Int { 1 }
-        override func translation(in view: UIView?) -> CGPoint { fakeTranslation }
-        override func setTranslation(_ translation: CGPoint, in view: UIView?) { fakeTranslation = translation }
-        override func velocity(in view: UIView?) -> CGPoint { fakeVelocity }
-        override func location(in view: UIView?) -> CGPoint { CGPoint(x: 200, y: 300) }
-    }
+    // MARK: - Ghostty
 
     /// 这次是在哪块屏上跑的（折叠屏两块屏尺寸不同，分开打分）。
     private static func screenLine(_ scene: UIWindowScene) -> String {
@@ -244,13 +243,12 @@ final class ScrollGlassTraceTests: XCTestCase {
 
     /// 单独一扇真的可见的全屏窗口（和 UIScrollView 基准同一种窗口）。
     /// 没放进整个工作区界面：探针里的工作区窗口默认是透明的（alpha 0，合成器不画，玻璃上什么都没换）；
-    /// 强制成可见后 Ghostty 标签又不出帧了（没查原因），所以这一轮三个对象都用单独窗口。
-    private func runGhostty(subject: String, freeRenderer: Bool) async throws {
+    /// 强制成可见后 Ghostty 标签又不出帧了（没查原因），所以被测对象都用单独窗口。
+    private func runGhostty(subject: String) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let host = try GhosttyProbeHost(size: scene.screen.bounds.size)
         defer { host.close() }
         try await host.waitUntilReady()
-        UTermScrollTrace.legacyWakeupSyncDraw = !freeRenderer
         UTermScrollTrace.emitsSignposts = true
         let cols = host.grid.cols
         host.feedAndWait(OnScreen.barcodeHistory(lines: 1500, cols: cols) + TerminalSpikeCorpus.claudeFrame(0, cols: cols))
@@ -263,19 +261,31 @@ final class ScrollGlassTraceTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(500))
         print("GLASS-META subject=\(subject) \(Self.screenLine(scene)) cellPx=\(Int(cell.height)) viewPt=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
 
-        let pan = Pan()
-        let selector = NSSelectorFromString("handleTouchScrollGesture:")
+        let scrollView = try XCTUnwrap(view.uTermSystemScrollView, "终端视图里没有借来的 UIScrollView")
+        XCTAssertTrue(view.uTermSystemPanWouldBegin, "有回滚的普通屏：单指拖动应当归系统滚动")
         let ticker = FrameTicker()
+        let driver = LinkDriver()
+        /// `velocityPx` 正 = 手指往下 = 往回滚区走（contentOffset 变小）。
         func fling(_ velocityPx: Double) async {
-            let v = CGFloat(velocityPx / scale)
-            pan.fakeState = .began; pan.fakeTranslation = .zero; _ = view.perform(selector, with: pan)
-            // 手指先拖 dragLead 秒：每个显示帧一个 .changed，位移 = 速度 × 这一帧的时长。
+            view.scrollViewWillBeginDragging(scrollView)
+            // 手指先拖 dragLead 秒：每个显示帧挪一次 contentOffset，位移 = 速度 × 这一帧的时长。
             await ticker.run(seconds: Self.dragLead) { dt in
-                pan.fakeState = .changed; pan.fakeTranslation = CGPoint(x: 0, y: v * dt)
-                _ = view.perform(selector, with: pan)
+                scrollView.contentOffset.y -= CGFloat(velocityPx * dt / scale)
             }
-            pan.fakeState = .ended; pan.fakeTranslation = .zero; pan.fakeVelocity = CGPoint(x: 0, y: v)
-            _ = view.perform(selector, with: pan)
+            // 松手：落点照 UIScrollView 的投影（`.normal`），交给 GhosttyKit 取整到行；之后按那条三次缓出曲线走到落点。
+            let from = Double(scrollView.contentOffset.y) * scale
+            let maxOffset = max(0, Double(scrollView.contentSize.height - scrollView.bounds.height)) * scale
+            // 0.998 / 0.002 ms：`.normal` 减速率的投影距离系数（这个函数里 `log` 是下面那个 CommitLog，不写对数）。
+            let projected = velocityPx / 1000 * 0.998 / 0.002
+            var target = CGPoint(x: 0, y: min(max(0, from - projected), maxOffset) / scale)
+            view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -velocityPx / scale / 1000), targetContentOffset: &target)
+            view.scrollViewDidEndDragging(scrollView, willDecelerate: true)
+            let glide = Glide(total: Double(target.y) * scale - from, velocityPx: -velocityPx)
+            driver.run(glide, velocity: -velocityPx, from: from, lead: 0) { position in
+                scrollView.contentOffset = CGPoint(x: 0, y: position / scale)
+            } finished: {
+                view.scrollViewDidEndDecelerating(scrollView)
+            }
         }
         // 预热。
         await fling(3000); try await Task.sleep(for: .milliseconds(1900))
@@ -317,133 +327,17 @@ final class ScrollGlassTraceTests: XCTestCase {
             } : nil
             try await Task.sleep(for: .milliseconds(250))
             log.reset()
-            UTermScrollTrace.isEnabled = true
             await fling(step.velocity)
             try await Task.sleep(for: .milliseconds(1800))
-            let trace = UTermScrollTrace.drain()
-            UTermScrollTrace.isEnabled = false
             feeder?.cancel()
-            // 每拍想显示的位置：手指往下（发出的像素为正）= 往回滚区走 = 条码位置变小。
-            // 原点 = 这次惯性结束时画面里的位置 + 整次惯性发出的像素（惯性停在整行上，画面和发出的是对得上的），
+            // 每拍想显示的位置：减速那条曲线每拍写给滚动视图的 contentOffset（px），换到条码坐标上。
+            // 两个坐标只差一个常数（往回滚区走，contentOffset 和条码位置都变小）：停稳之后画面里的位置 − 滚动视图的位置。
             // 这样拖动阶段发了多少、画没画完都不影响。
-            let glideTotal = trace.filter { $0.kind == "momentum" }.reduce(0) { $0 + $1.value }
-            let origin = try XCTUnwrap(decoder.position(of: layer)) + glideTotal
-            var sent = 0.0
-            var ticks: [(target: Double, position: Double)] = []
-            var target: Double?
-            for event in trace {
-                switch event.kind {
-                case "glide-target":
-                    target = event.value
-                    ticks.append((event.value, origin - sent))
-                case "momentum":
-                    sent += event.value
-                    if let target, !ticks.isEmpty, ticks[ticks.count - 1].target == target {
-                        ticks[ticks.count - 1].position = origin - sent
-                    }
-                default: break
-                }
-            }
+            let settled = try XCTUnwrap(decoder.position(of: layer)) - Double(scrollView.contentOffset.y) * scale
+            let ticks = driver.ticks.map { (target: $0.target, position: $0.position + settled) }
             emit(subject: subject, index: index, velocity: step.velocity, output: step.output, ticks: ticks, commits: log.commits)
         }
         print("GLASS-INUSE subject=\(subject) 刚挂上的那张 in-use=\(inUse.current)/\(inUse.currentTotal) 刚换下的那张 in-use=\(inUse.previous)/\(inUse.previousTotal)")
-        print("GLASS-DONE subject=\(subject)")
-        try await Task.sleep(for: .milliseconds(500))
-    }
-
-    // MARK: - SwiftTerm（整个工作区界面）
-
-    private var restoreDraw: (() -> Void)?
-    nonisolated(unsafe) private static var drawnOffset: Double?
-    nonisolated(unsafe) private static var drawTarget: ObjectIdentifier?
-    nonisolated(unsafe) private static var fakeTracking = false
-
-    /// 代码设 contentOffset 时 UIKit 的 isTracking 恒为假，SwiftTerm 来了输出就把视图拽回底部；这个实例的 isTracking 由测试给。
-    private static func overrideTracking(_ view: UIScrollView) -> AnyClass {
-        let base: AnyClass = object_getClass(view)!
-        let name = "UTermGlassTracking_\(NSStringFromClass(base))"
-        if let existing = NSClassFromString(name) {
-            object_setClass(view, existing)
-            return base
-        }
-        let cls: AnyClass = objc_allocateClassPair(base, name, 0)!
-        let tracking: @convention(block) (AnyObject) -> Bool = { _ in Self.fakeTracking }
-        let selector = #selector(getter: UIScrollView.isTracking)
-        class_addMethod(cls, selector, imp_implementationWithBlock(tracking),
-                        method_getTypeEncoding(class_getInstanceMethod(base, selector)!))
-        objc_registerClassPair(cls)
-        object_setClass(view, cls)
-        return base
-    }
-
-    private func runSwiftTerm(subject: String) async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let host = try SwiftTermProbeHost(size: scene.screen.bounds.size)
-        defer { host.close() }
-        let view = host.view
-        let cols = host.grid.cols
-        view.feed(text: TerminalSpikeCorpus.history(lines: 1500, cols: cols) + TerminalSpikeCorpus.claudeFrame(0, cols: cols))
-        host.container.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(500))
-        XCTAssertGreaterThan(view.contentSize.height, view.bounds.height * 10, "回滚区没填起来")
-        let scale = Double(scene.screen.nativeScale)
-        let cellPx = (Double(view.bounds.height) / Double(max(1, view.getTerminal().rows)) * scale).rounded()
-        print("GLASS-META subject=\(subject) \(Self.screenLine(scene)) cellPx=\(Int(cellPx)) viewPt=\(Int(view.bounds.width))x\(Int(view.bounds.height)) contentPt=\(Int(view.contentSize.height))")
-
-        let base = Self.overrideTracking(view)
-        defer { object_setClass(view, base); Self.fakeTracking = false }
-        Self.fakeTracking = true
-        let method = class_getInstanceMethod(SwiftTerm.TerminalView.self, #selector(UIView.draw(_:)))!
-        typealias Draw = @convention(c) (AnyObject, Selector, CGRect) -> Void
-        let original = method_getImplementation(method)
-        let call = unsafeBitCast(original, to: Draw.self)
-        let hooked: @convention(block) (AnyObject, CGRect) -> Void = { object, rect in
-            if ObjectIdentifier(object) == Self.drawTarget, let scroll = object as? UIScrollView {
-                Self.drawnOffset = Double(scroll.contentOffset.y) * scale
-            }
-            call(object, #selector(UIView.draw(_:)), rect)
-        }
-        method_setImplementation(method, imp_implementationWithBlock(hooked))
-        restoreDraw = { method_setImplementation(method, original) }
-        Self.drawTarget = ObjectIdentifier(view)
-
-        let middle = (view.contentSize.height - view.bounds.height) / 2
-        view.setContentOffset(CGPoint(x: 0, y: (middle * scale).rounded() / scale), animated: false)
-        try await Task.sleep(for: .milliseconds(400))
-        let driver = LinkDriver()
-        func fling(_ velocityPx: Double) {
-            // 手指往下（速度为正）= 往回滚区走 = contentOffset 变小。
-            let glide = Glide(velocityPx: -velocityPx, cellPx: cellPx)
-            driver.run(glide, velocity: -velocityPx, from: Double(view.contentOffset.y) * scale) { position in
-                view.contentOffset = CGPoint(x: 0, y: position / scale)
-            }
-        }
-        fling(3000); try await Task.sleep(for: .milliseconds(2100))
-        fling(-3000); try await Task.sleep(for: .milliseconds(2100))
-
-        let log = CommitLog()
-        // 字画在滚动视图自己的 layer 上：bounds 动了但没重画时字不动，所以画面里的位置 = 最近一次 draw 时的 contentOffset。
-        log.read = { Self.drawnOffset }
-        log.start()
-        defer { log.stop() }
-        try await waitForTracing(subject: subject)
-
-        for (index, step) in Self.plan.enumerated() {
-            let feeder = step.output ? Task { @MainActor in
-                var n = 1
-                while !Task.isCancelled {
-                    view.feed(text: TerminalSpikeCorpus.claudeFrame(n, cols: cols))
-                    n += 1
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-            } : nil
-            try await Task.sleep(for: .milliseconds(250))
-            log.reset()
-            fling(step.velocity)
-            try await Task.sleep(for: .milliseconds(2000))
-            feeder?.cancel()
-            emit(subject: subject, index: index, velocity: step.velocity, output: step.output, ticks: driver.ticks, commits: log.commits)
-        }
         print("GLASS-DONE subject=\(subject)")
         try await Task.sleep(for: .milliseconds(500))
     }
@@ -526,9 +420,12 @@ final class ScrollGlassTraceTests: XCTestCase {
             throw XCTSkip("没设 UTERM_GLASS_SUBJECT：这条只配合 scratchpad/ios-measure/r8/glass-record.sh 录 xctrace 用")
         }
         switch subject {
-        case "ghostty-sync": try await runGhostty(subject: subject, freeRenderer: false)
-        case "ghostty-free": try await runGhostty(subject: subject, freeRenderer: true)
-        case "swiftterm": try await runSwiftTerm(subject: subject)
+        case "ghostty-sync": try await runGhostty(subject: subject)
+        case "ghostty-free":
+            throw XCTSkip("ghostty-free（「渲染不同步」，引擎 wakeup 不在主线程同步重画）量不了了：本地包里的 A/B 开关已删，"
+                + "iOS 定死同步重画（UTermScrollTrace.wakeupDrawsSynchronously = true），只剩 ghostty-sync")
+        case "swiftterm":
+            throw XCTSkip("swiftterm 量不了了：旧终端引擎已经从 App 里拿掉，iOS 终端只剩 Ghostty（参照基准用 uiscrollview）")
         case "uiscrollview": try await runScrollView(subject: subject)
         default: XCTFail("不认识的被测对象：\(subject)")
         }

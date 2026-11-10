@@ -1,87 +1,15 @@
-import SwiftTerm
-import SwiftUI
-import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// 收起键盘后用户还在看同一个终端：光标要继续是实心块，不能变成 SwiftTerm 表示失焦的空心框。
-/// Claude Code 用的就是终端真光标，所以这里看的是真实画出来的像素。
+/// 收起键盘后用户还在看同一个终端：换引擎之前（SwiftTerm）这里核的是「光标继续是实心块，不变成表示失焦的空心框」，
+/// 靠的是 SwiftTerm 本地补丁给的 `caretViewTracksFocus = false`。
+///
+/// 换成 GhosttyKit 之后这条行为没有了：光标由引擎画，视图不是第一响应者时引擎一律画空心框，宿主没有开关
+///（迁移计划 `docs/ghostty-migration-plan.md` §7「会丢的」第一条，user 已知情）。要找回来得改引擎或提给上游
+///（计划 §6 的可选项「iOS 收键盘仍画实心光标」）。那之前这条用例没有可核的对应物，留着文件和说明，跳过。
 @MainActor
 final class MobileTerminalCaretTests: XCTestCase {
-    func testCaretStaysSolidAfterTheKeyboardCollapses() async throws {
-        defer { MobileProbeWindow.closeAll() }
-        let container = try MobileFixtures.modelContainer(seed: .smoke)
-        let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
-        let (controller, _) = MobileFakeTerminal.controller(.idle)
-        _ = MobileProbeWindow.make(
-            size: CGSize(width: 390, height: 844),
-            placement: .visibleOnScreen,
-            isolateHost: true,
-            rootView: SwiftTermView(controller: controller, autoFocus: false)
-                .frame(width: 390, height: 500)
-        )
-        try await Task.sleep(for: .milliseconds(300))
-        controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
-        let connected = await MobileFakeTerminal.waitUntilConnected(controller)
-        XCTAssertTrue(connected)
-        let terminal = try XCTUnwrap(controller.terminalView)
-
-        controller.ownsKeyboard = true
-        controller.focusKeyboard()
-        XCTAssertTrue(terminal.isFirstResponder)
-        try await Task.sleep(for: .milliseconds(200))
-        XCTAssertTrue(caretCenterIsFilled(in: terminal), "聚焦时是实心块")
-
-        controller.collapseKeyboard()
-        XCTAssertFalse(terminal.isFirstResponder)
-        try await Task.sleep(for: .milliseconds(200))
-        XCTAssertTrue(caretCenterIsFilled(in: terminal), "收起键盘后仍是实心块")
-
-        controller.close()
-    }
-
-    /// 实心块的中心是光标色；空心框只描边，中心露出终端底色。
-    private func caretCenterIsFilled(in terminal: SwiftTerm.TerminalView) -> Bool {
-        guard let caret = terminal.textInputCaretFrame else {
-            XCTFail("光标没有显示")
-            return false
-        }
-        let center = CGPoint(x: caret.midX, y: caret.midY)
-        let pixel = renderedPixel(of: terminal, at: center)
-        let traits = terminal.traitCollection
-        let toCaret = distance(pixel, terminal.caretColor.resolvedColor(with: traits))
-        let toBackground = distance(pixel, terminal.nativeBackgroundColor.resolvedColor(with: traits))
-        return toCaret < toBackground
-    }
-
-    private func renderedPixel(of view: UIView, at point: CGPoint) -> [CGFloat] {
-        var bytes = [UInt8](repeating: 0, count: 4)
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-        bytes.withUnsafeMutableBytes { buffer in
-            let context = CGContext(
-                data: buffer.baseAddress,
-                width: 1,
-                height: 1,
-                bitsPerComponent: 8,
-                bytesPerRow: 4,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            )!
-            // 把目标点移到这 1×1 位图上，并翻到 UIKit 的左上原点。终端是滚动视图，图层按 bounds 原点偏移。
-            context.translateBy(x: view.bounds.minX - point.x, y: point.y - view.bounds.minY + 1)
-            context.scaleBy(x: 1, y: -1)
-            view.layer.render(in: context)
-        }
-        return bytes.prefix(3).map { CGFloat($0) / 255 }
-    }
-
-    private func distance(_ pixel: [CGFloat], _ color: UIColor) -> CGFloat {
-        let srgb = color.cgColor.converted(
-            to: CGColorSpace(name: CGColorSpace.sRGB)!,
-            intent: .defaultIntent,
-            options: nil
-        )
-        let components = srgb?.components ?? [0, 0, 0]
-        return zip(pixel, components).reduce(0) { $0 + abs($1.0 - $1.1) }
+    func testCaretStaysSolidAfterTheKeyboardCollapses() throws {
+        throw XCTSkip("GhosttyKit 失焦时画空心光标，宿主改不了（迁移计划 §7）；引擎支持之后再恢复这条用例")
     }
 }

@@ -1,97 +1,92 @@
-import SwiftTerm
 import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// iOS 终端一次整屏重画的开销（SwiftTerm 补丁 #20：按行缓存排版结果）。
-///
-/// iOS 上 `setNeedsDisplay(rect)` 只标一小块也没用：`draw` 拿到的永远是整个视图，位图整块重画，滚动时每一帧也是。
-/// 能省的是「没变的行别再排一遍版」：建属性串、建 CTLine 约占一次重画的四成（uTerm 配色、54×58 的屏、优化构建采样）。
-/// 三种情形在同一次运行里比：
-/// - 每行都变：缓存全部失效，等于没缓存；
-/// - 什么都没变：滚动、回弹时的每一帧；
+/// iOS 终端重画一帧的开销，按「这一帧变了多少」分三种情形在同一次运行里比：
+/// - 每行都变：全屏 TUI 重绘；
+/// - 什么都没变：不该交帧；
 /// - 只变一行：Claude Code 思考时每帧只改转圈那一行。
+///
+/// 来历：这个探针原来量的是旧引擎（CPU 栅格）的 `draw(_:)`——iOS 上 `draw` 拿到的永远是整个视图、位图整块重画，
+/// 能省的只有「没变的行别再排一遍版」（当时的本地补丁 #20：按行缓存排版结果），闸门是「没变 / 只变一行的整屏重画
+/// 比每行都变便宜 25% 以上」。旧引擎的视图类删掉之后，那个 `draw(_:)` 没有了。
+///
+/// 新引擎上的对应物：GhosttyKit 的渲染器只重建脏行的格子、内容没变不交帧，iOS 上重画在主线程同步做
+///（`UTermScrollTrace.wakeupDrawsSynchronously`）。所以这里量的是每交一帧（`IOSurfaceLayer.setContents:`）摊到的
+/// 主线程 CPU 与全部线程 CPU（解析在 GhosttyKit 的串行队列、帧数据在渲染线程，只量主线程会漏账），扣掉「什么都没变」
+/// 那一档量到的宿主基线。
+///
+/// 闸门只放结构判据（有输出时真的交了帧、没输出时不跟着 10 fps 交帧）；三种情形的相对开销只打印成 `DRAWCOST …` 行——
+/// 原来那条 25% 的时间闸门是给旧引擎的排版缓存定的，新引擎上的比例要先在真机上读过几轮才定得出闸门。
 /// 只比同一次运行里的相对值，不看绝对毫秒数（模拟器和真机、负载高低都差很多）。
-/// 准备步骤只喂字节、不画：在计时外画一次，缓存就在计时前重建好了，三组会一样快（踩过）。
 @MainActor
 final class TerminalDrawCostProbeTests: XCTestCase {
-    private var window: UIWindow?
-
-    override func tearDown() async throws {
-        window?.isHidden = true
-        window = nil
+    private struct Reading {
+        let frames: Int
+        let mainMS: Double
+        let totalMS: Double
     }
 
-    /// 像 Claude Code 跑了一阵之后的屏幕：带色的 diff、路径、中文、界面符号，每行接近铺满但不溢出。
-    /// Claude Code（Ink）按终端宽度自己断行、输出硬换行；行要是溢出折到下一行，整屏会连成一个软折行段落，
-    /// 段落里一行变了整段都要重排（双向文字按段落排版），量的就不是 Claude 的情形了（踩过）。
-    private static func screen(rows: Int, salt: Int) -> String {
-        let colors = ["32", "31", "36", "33", "38;2;215;119;87", "90"]
-        return (0..<rows).map { index in
-            "\u{1B}[\(index + 1);1H\u{1B}[2K\u{1B}[\(colors[(index + salt) % colors.count])m\(index % 2 == 0 ? "+" : "⎿")"
-                + " let v\(salt % 10) = f(\(index % 100))\u{1B}[0m \u{1B}[2m// 说明\u{1B}[0m"
-                + " \u{1B}[1mApp/File\(index % 100).swift\u{1B}[0m"
-        }.joined()
-    }
-
-    /// 和 `SwiftTermView` 一样装上 uTerm 的配色：背景是实色（SwiftTerm 默认是 `.clear`、靠图层底色显示，
-    /// 那种配置下背景填充走逐像素混合、量出来的账完全不同）。
-    private func configuredTerminal() throws -> SwiftTerm.TerminalView {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 393, height: 760)
-        window.isHidden = false
-        self.window = window
-        let terminal = SwiftTerm.TerminalView(frame: window.bounds,
-                                              font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-        window.addSubview(terminal)
-        terminal.layoutIfNeeded()
-        let scheme = MTerminalColors.resolve(dark: true)
-        TerminalAppearance.applyColors(to: terminal, scheme: scheme)
-        TerminalAppearance.applyCaretColors(to: terminal, scheme: scheme, shape: .block)
-        terminal.backgroundColor = scheme.backgroundColor
-        feedFrame(terminal, Self.screen(rows: terminal.getTerminal().rows, salt: 0) + "\u{1B}[?25l")
-        return terminal
-    }
-
-    /// 喂一帧（同步输出包起来），把排队的显示更新做掉，但不画。
-    private func feedFrame(_ terminal: SwiftTerm.TerminalView, _ text: String) {
-        terminal.feed(text: "\u{1B}[?2026h" + text + "\u{1B}[?2026l")
-        terminal.flushPendingDisplay()
-    }
-
-    /// 一次整屏重画的耗时中位数（毫秒）。`prepare` 在计时外改内容，不画。
-    private func redrawCost(_ terminal: SwiftTerm.TerminalView, samples: Int = 30,
-                            prepare: (Int) -> Void) -> Double {
-        var times: [Double] = []
-        for sample in 0..<samples {
-            prepare(sample)
-            terminal.setNeedsDisplay(terminal.bounds)
-            let start = CFAbsoluteTimeGetCurrent()
-            terminal.layer.displayIfNeeded()
-            times.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
+    /// 量 `seconds` 秒：每 100 ms 调一次 `emit`（nil = 不喂），数交出去的帧与各线程 CPU。
+    private func measure(seconds: Double, emit: (@MainActor (Int) -> Void)?) async throws -> Reading {
+        GhosttyPresentLog.reset()
+        let mainID = ThreadCPU.currentThreadID()
+        let start = ThreadCPU.snapshot()
+        let t0 = CACurrentMediaTime()
+        var beat = 0
+        while CACurrentMediaTime() - t0 < seconds {
+            emit?(beat)
+            beat += 1
+            try await Task.sleep(for: .milliseconds(100))
         }
-        return ProbeMetrics.percentile(times, 0.5)
+        // 最后一拍喂的那一帧也让它交出去。
+        try await Task.sleep(for: .milliseconds(50))
+        let cpu = ThreadCPU.delta(from: start, to: ThreadCPU.snapshot(), mainID: mainID)
+        return Reading(frames: GhosttyPresentLog.read().times.count, mainMS: cpu.mainMS, totalMS: cpu.totalMS)
     }
 
-    func testUnchangedRowsAreNotLaidOutAgain() throws {
-        let terminal = try configuredTerminal()
-        let rows = terminal.getTerminal().rows
-        XCTAssertLessThan(Self.screen(rows: 1, salt: 0).count, terminal.getTerminal().cols * 2)
-        // 热身：字体回退、属性缓存都建好，三组都在同样的热状态下比。
-        _ = redrawCost(terminal, samples: 5) { self.feedFrame(terminal, Self.screen(rows: rows, salt: $0)) }
+    func testFrameCostFollowsHowMuchChanged() async throws {
+        let host = try GhosttyProbeHost()
+        defer { host.close() }
+        try await host.waitUntilReady()
+        let rows = host.grid.rows, cols = host.grid.cols
+        // 像 Claude Code 跑了一阵之后的屏幕：每行接近铺满但不溢出（溢出折行的话整屏连成一个软折行段落，量的就不是
+        // Claude 的情形了）。光标藏起来，免得闪烁的那两帧混进「什么都没变」。
+        XCTAssertLessThan(TerminalSpikeCorpus.screen(rows: 1, salt: 0).count, cols * 2)
+        func feedFrame(_ text: String) {
+            host.bridge.feed(Data(("\u{1B}[?2026h" + text + "\u{1B}[?2026l").utf8))
+        }
+        feedFrame(TerminalSpikeCorpus.screen(rows: rows, salt: 0) + "\u{1B}[?25l")
+        // 热身：字体回退、字形图集都建好，三组在同样的热状态下比。
+        _ = try await measure(seconds: 1) { feedFrame(TerminalSpikeCorpus.screen(rows: rows, salt: $0)) }
+        host.bridge.session.waitForPendingOutput()
+        try await Task.sleep(for: .milliseconds(300))
 
-        let everyRow = redrawCost(terminal) { self.feedFrame(terminal, Self.screen(rows: rows, salt: 100 + $0)) }
-        let unchanged = redrawCost(terminal) { _ in }
-        let spinner = redrawCost(terminal) { sample in
+        let seconds = 3.0
+        let unchanged = try await measure(seconds: seconds, emit: nil)
+        let everyRow = try await measure(seconds: seconds) { feedFrame(TerminalSpikeCorpus.screen(rows: rows, salt: 100 + $0)) }
+        let spinner = try await measure(seconds: seconds) { sample in
             let glyph = ["✢", "✳", "✶", "✻", "✽"][sample % 5]
-            self.feedFrame(terminal, "\u{1B}[\(rows - 4);1H\u{1B}[2K\u{1B}[38;2;215;119;87m\(glyph)"
-                + " Thinking… (\(sample)s)\u{1B}[0m")
+            feedFrame("\u{1B}[\(rows - 4);1H\u{1B}[2K\u{1B}[38;2;215;119;87m\(glyph) Thinking… (\(sample)s)\u{1B}[0m")
         }
-        print("DRAWCOST rows=\(rows) cols=\(terminal.getTerminal().cols) everyRow=\(everyRow)ms "
-            + "unchanged=\(unchanged)ms spinner=\(spinner)ms")
+        host.bridge.session.waitForPendingOutput()
 
-        XCTAssertLessThan(unchanged, everyRow * 0.75, "内容没变的整屏重画不该和每行都变一样贵")
-        XCTAssertLessThan(spinner, everyRow * 0.75, "只变一行时其余行应该直接用缓存")
+        /// 每帧摊到的开销，扣掉同样时长里「什么都没变」的基线（宿主自己的开销 + 探针循环）。
+        func perFrame(_ reading: Reading) -> String {
+            guard reading.frames > 0 else { return "main=-/frame total=-/frame" }
+            return String(format: "main=%.3fms/frame total=%.3fms/frame",
+                          max(0, reading.mainMS - unchanged.mainMS) / Double(reading.frames),
+                          max(0, reading.totalMS - unchanged.totalMS) / Double(reading.frames))
+        }
+        print(String(format: "DRAWCOST rows=%d cols=%d secs=%.0f unchanged: frames=%d main=%.1fms total=%.1fms",
+                     rows, cols, seconds, unchanged.frames, unchanged.mainMS, unchanged.totalMS))
+        print("DRAWCOST everyRow: frames=\(everyRow.frames) \(perFrame(everyRow))")
+        print("DRAWCOST spinner: frames=\(spinner.frames) \(perFrame(spinner))")
+
+        // 3 秒、每 100 ms 一帧：该交 30 帧上下。
+        XCTAssertGreaterThanOrEqual(everyRow.frames, 15, "每行都变时没交够帧")
+        XCTAssertGreaterThanOrEqual(spinner.frames, 15, "只变一行时没交够帧")
+        XCTAssertLessThan(unchanged.frames, 15, "内容没变也在按输出的节拍交帧")
+        XCTAssertTrue(host.viewportText.contains("Thinking…"), "转圈那一行没落到屏上：\(host.viewportText.suffix(200))")
     }
 }

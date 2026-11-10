@@ -17,7 +17,7 @@ final class MobileTerminalKeyboardFlowTests: XCTestCase {
     }
 
     /// 已连接、各自挂在同一个真窗口里的终端（不在窗口里的视图当不了第一响应者）。
-    private func connected(_ count: Int) async throws -> [(controller: MobileTerminalController, view: MTerminalView)] {
+    private func connected(_ count: Int) async throws -> [(controller: MobileTerminalController, view: MGhosttyTerminalView)] {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
         let scene = try XCTUnwrap(MobileProbeWindow.activeScene())
@@ -26,13 +26,11 @@ final class MobileTerminalKeyboardFlowTests: XCTestCase {
         win.rootViewController = root
         win.makeKeyAndVisible()
         window = win
-        var result: [(MobileTerminalController, MTerminalView)] = []
+        var result: [(MobileTerminalController, MGhosttyTerminalView)] = []
         for i in 0..<count {
             let (controller, _) = MobileFakeTerminal.controller(.idle)
-            let view = MTerminalView(frame: CGRect(x: 0, y: CGFloat(i) * 200, width: 390, height: 200),
-                                     font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-            view.controller = controller
-            controller.attach(view)
+            let view = controller.terminal.view
+            view.frame = CGRect(x: 0, y: CGFloat(i) * 200, width: 390, height: 200)
             root.view.addSubview(view)
             controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
             let isConnected = await MobileFakeTerminal.waitUntilConnected(controller)

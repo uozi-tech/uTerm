@@ -14,6 +14,8 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private let resizeLock = NSLock()
     private let surfaceAccess: InMemoryTerminalSurfaceAccess
     private var lastResize: InMemoryTerminalViewport?
+    /// uTerm 本地补丁：新挂上一个 surface 之后，它的终端报来的第一次尺寸不去重（见 `setSurface`）。
+    private var forcesNextResize = false
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
 
@@ -73,6 +75,14 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     // MARK: - Surface Lifecycle
 
     func setSurface(_ surface: ghostty_surface_t?) {
+        // uTerm 本地补丁：新 surface 的终端出生时是默认网格，要等 IO 线程处理完第一条 resize 才到真实尺寸，
+        // 而 resize 回调正好在那之前发出。宿主靠这次回调知道「可以往新 surface 里灌回放了」；网格和上一个 surface
+        // 一样时回调会被下面的去重吞掉，所以对新 surface 的第一次回调放行。
+        if surface != nil {
+            resizeLock.lock()
+            forcesNextResize = true
+            resizeLock.unlock()
+        }
         surfaceAccess.setSurface(surface)
         TerminalDebugLog.log(
             .lifecycle,
@@ -327,7 +337,9 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private func dispatchResize(_ resize: InMemoryTerminalViewport) {
         resizeLock.lock()
         let mergedResize = mergedResize(resize)
-        guard mergedResize != lastResize else {
+        let forced = forcesNextResize
+        forcesNextResize = false
+        guard forced || mergedResize != lastResize else {
             resizeLock.unlock()
             TerminalDebugLog.log(
                 .metrics,
@@ -345,7 +357,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             $0.columns != mergedResize.columns || $0.rows != mergedResize.rows
         } ?? true
         lastResize = mergedResize
-        if suppressesPixelOnlyResizes, !gridChanged {
+        if suppressesPixelOnlyResizes, !gridChanged, !forced {
             resizeLock.unlock()
             TerminalDebugLog.log(
                 .metrics,

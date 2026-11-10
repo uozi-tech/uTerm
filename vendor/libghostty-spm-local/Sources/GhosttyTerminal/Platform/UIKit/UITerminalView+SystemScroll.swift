@@ -7,7 +7,8 @@
 //  UIScrollView 在减速中被按住直接续上跟踪，松手的减速、到头的回弹、落点都是系统的。这里只借它这些：
 //  一个藏在终端视图里、不画东西、不接触摸的 UIScrollView，把它的 panGestureRecognizer 挂到终端视图上，
 //  contentOffset 的变化换成整数物理像素发给引擎（视口位置的镜像见 UITerminalView+Scroll.swift）。
-//  双指整行滚动、选区拖动、备用屏 / 程序抓鼠标、没有回滚可滚的情况仍走原来的自写路径（它们本来就不需要物理）。
+//  双指整行滚动、选区拖动、备用屏 / 程序抓鼠标、没有回滚可滚的情况仍走自写的拖动（UITerminalView+Scroll.swift，
+//  它们不需要到顶 / 到底的物理）。评估期那套自写的橡皮筋、弹簧回弹、落点惯性已经删掉，回滚区的滚动物理只有这一份。
 //
 
 #if canImport(UIKit) && !targetEnvironment(macCatalyst)
@@ -15,7 +16,7 @@
 
     /// 藏在终端视图里的 UIScrollView：只借手势识别器、减速、回弹和落点。
     final class UTermScrollDriverView: UIScrollView {
-        /// 这一下单指拖动归不归它。不归时它的 pan 不开始，原来的自写 pan 接手。
+        /// 这一下单指拖动归不归它。不归时它的 pan 不开始，自写的 pan 接手。
         var shouldBeginPan: (() -> Bool)?
 
         override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -73,9 +74,9 @@
     }
 
     extension UITerminalView: UIScrollViewDelegate {
-        /// 系统滚动这条路径现在用不用得上：开关开着、驱动器在、有回滚可滚、程序没抓鼠标。
+        /// 系统滚动这条路径现在用不用得上：驱动器在、有回滚可滚、程序没抓鼠标。
         var systemScrollIsActive: Bool {
-            guard UTermScrollTrace.usesSystemScrolling, systemScroll.driver != nil,
+            guard systemScroll.driver != nil,
                   surface?.isMouseCaptured != true,
                   let bar = core.bridge.scrollbar, bar.total > bar.len else { return false }
             return true
@@ -190,6 +191,20 @@
             systemScroll.healedEdge = 0
         }
 
+        /// 越界（UIScrollView 的橡皮筋）靠平移图层显示，和 UIScrollView 移内容层同一个思路，不让渲染器为它出帧：
+        /// 有输出时渲染器同一帧还要重建格子，走 0023 的 overscroll uniform 会跟着它的出帧节奏抖。露出来的那条是视图后面的终端底色。
+        /// 平移量取整到物理像素：画面层平移半个像素会被重采样，回弹途中整屏字发虚、行与行的交界多出一条混色线。
+        func applyOverscroll(_ shown: CGFloat) {
+            UTermScrollTrace.record("overscroll", Double(shown))
+            let pixels = shown.rounded()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.sublayerTransform = pixels == 0
+                ? CATransform3DIdentity
+                : CATransform3DMakeTranslation(0, pixels / resolvedDisplayScale(), 0)
+            CATransaction.commit()
+        }
+
         /// 停住减速 / 回弹 / 对齐动画，原地不动。返回有没有停掉什么。
         @discardableResult
         func systemScrollStop() -> Bool {
@@ -272,7 +287,7 @@
                   let extent = scrollExtent() else { return }
             systemScroll.lastDidScroll = CACurrentMediaTime()
             let offsetPx = scrollView.contentOffset.y * g.scale
-            // 越界的部分是系统的橡皮筋，平移画面层显示（和自写路径同一个办法）。越界按滚动视图自己的范围算。
+            // 越界的部分是系统的橡皮筋，平移画面层显示（applyOverscroll）。越界按滚动视图自己的范围算。
             let over: CGFloat = offsetPx < 0 ? -offsetPx : (offsetPx > g.viewMax ? g.viewMax - offsetPx : 0)
             applyOverscroll(over)
             let inView = min(max(0, offsetPx), g.viewMax)
@@ -318,7 +333,6 @@
             TerminalDebugLog.log(.input, "sysscroll drag began")
             // 自写路径的惯性（双指整行滚动的）要是还在跑，停掉；系统自己的减速它已经按住了。
             if momentumScroll.displayLink != nil { stopMomentumScrolling(settle: .none) }
-            if momentumScroll.bounceLink != nil { stopBounce(resetting: true) }
             // 我们的对齐动画还在跑：停在原地，交给手指。UIKit 自己的减速它会自己停。
             if systemScroll.alignLink != nil {
                 let px = Double(scrollView.contentOffset.y * resolvedDisplayScale())

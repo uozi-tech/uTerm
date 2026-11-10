@@ -132,7 +132,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
     func testSizeReportedBeforeConnectReachesTransport() async throws {
         let (c, h, relay) = try host()
         let (controller, handles) = MobileFakeTerminal.controller(.idle)
-        controller.resize(cols: 57, rows: 23)
+        controller.terminal.input.reportSize(cols: 57, rows: 23)
         controller.start(profile: h, container: c, relay: relay)
         let connected = await MobileFakeTerminal.waitUntilConnected(controller)
         XCTAssertTrue(connected)
@@ -151,9 +151,9 @@ final class MobileFixturesTerminalTests: XCTestCase {
         let connected = await MobileFakeTerminal.waitUntilConnected(controller)
         XCTAssertTrue(connected)
         for cols in stride(from: UInt16(98), through: 55, by: -4) {
-            controller.resize(cols: cols, rows: 70)
+            controller.terminal.input.reportSize(cols: cols, rows: 70)
         }
-        controller.resize(cols: 55, rows: 81)
+        controller.terminal.input.reportSize(cols: 55, rows: 81)
         _ = await MobileFakeTerminal.waitUntil(timeout: .seconds(1)) { false }
         let ledger = await handles.latest!.ledger
         XCTAssertEqual(ledger.resizeCount, 1)
@@ -169,7 +169,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
         controller.start(profile: h, container: c, relay: relay)
         let probeOK3 = await MobileFakeTerminal.waitUntilConnected(controller)
         XCTAssertTrue(probeOK3)
-        controller.resize(cols: 132, rows: 43)
+        controller.terminal.input.reportSize(cols: 132, rows: 43)
         let transport = handles.latest!
         _ = await MobileFakeTerminal.waitUntil(timeout: .seconds(1)) { false }
         let ledger = await transport.ledger
@@ -264,9 +264,10 @@ final class MobileFixturesTerminalTests: XCTestCase {
         XCTAssertTrue(message.contains("钥匙串里没有这把密钥"))
     }
 
-    // MARK: 字节真的进了 SwiftTerm
+    // MARK: 字节真的进了终端
 
-    /// 端到端：假传输吐的字节，经有界缓冲与 16ms 合并 `feed`，真的进了终端屏幕缓冲。
+    /// 端到端：假传输吐的字节，经入站任务与 `TerminalOutputPump` 的分流，真的进了终端——
+    /// 影子终端（永远在吃、当场同步解析）里读得到语料的文字；画面的 surface 就绪了的话，它的视口里也读得到。
     func testBytesReachTerminalBuffer() async throws {
         defer { MobileProbeWindow.closeAll() }
         let (c, h, relay) = try host()
@@ -281,15 +282,35 @@ final class MobileFixturesTerminalTests: XCTestCase {
         let probeOK8 = await MobileFakeTerminal.waitUntilConnected(tab.controller)
         XCTAssertTrue(probeOK8)
 
+        let terminal = tab.controller.terminal
         let before = MobileTerminalConsumption.read(tab.controller)
         try await Task.sleep(for: .seconds(3))
         rig.layout()
         let after = MobileTerminalConsumption.read(tab.controller)
         let ledger = await handles.latest!.ledger
-        print("[fake-term-e2e] emitted=\(ledger.linesEmitted) advance=\(after.advanced - before.advanced) top=\(after.topRow)")
+        print("[fake-term-e2e] emitted=\(ledger.linesEmitted) advance=\(after.advanced - before.advanced) "
+            + "top=\(after.topRow) fed=\(after.fedBytes - before.fedBytes)B")
         XCTAssertGreaterThan(ledger.linesEmitted, 400, "脚本没吐够")
-        XCTAssertGreaterThan(after.advanced, before.advanced,
-                             "字节没进 SwiftTerm —— feed 链路断了")
+        XCTAssertGreaterThan(after.fedBytes, before.fedBytes, "字节没进影子终端 —— 入站链路断了")
+        XCTAssertGreaterThan(after.advanced, before.advanced, "影子终端吃了字节却没有推进行数")
+        // 语料每行都带「处理批次 #<序号>」：解析出来的文字里要读得到（不只是字节数在涨）。
+        let marker = "处理批次 #"
+        let recent = terminal.shadow.recentLines(40).lines.joined(separator: "\n")
+        XCTAssertTrue(recent.contains(marker), "影子终端最近 40 行里没有语料：\(recent.suffix(200))")
+        XCTAssertTrue(terminal.shadow.viewportText().contains(marker), "影子终端的视口里没有语料")
+
+        // 画面：surface 建好并接上实时字节之后，它的视口里也该有语料（就绪之前的字节由一次回放补上）。
+        let surfaceReady = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
+            terminal.isSurfaceReady && terminal.outputPump.isFeedingSurface
+        }
+        XCTAssertTrue(surfaceReady, "终端挂在窗口里 3 秒了 surface 还没接上实时字节："
+            + "ready=\(terminal.isSurfaceReady) feeding=\(terminal.outputPump.isFeedingSurface)")
+        if surfaceReady {
+            let reached = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) {
+                terminal.session.readViewportText()?.contains(marker) == true
+            }
+            XCTAssertTrue(reached, "字节没进画面（surface 的视口里没有语料）")
+        }
         tab.controller.close()
         await rig.close()
     }

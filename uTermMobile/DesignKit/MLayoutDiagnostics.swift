@@ -1,11 +1,10 @@
 #if DEBUG
 import SwiftUI
 import UIKit
-import class SwiftTerm.TerminalView
 
 /// 布局诊断浮层（仅 Debug 构建）：在真机上把系统给的几何原样显示出来，供截图排查。
 ///
-/// iPhone Duo 的状态栏保留区、容器边距、终端 UIScrollView 的内容内边距在真机与 vphone 上
+/// iPhone Duo 的状态栏保留区、容器边距、终端视图的安全区在真机与 vphone 上
 /// 不一定一致，只按 VM 实测写的布局在真机上可能不生效（2026-11-03：真机竖屏标签条没进
 /// 状态栏那一行、右格终端内容右移约 100pt）。打开方式：设置 › 长按「版本」一行。
 enum MLayoutDiagnostics {
@@ -45,11 +44,11 @@ struct MLayoutDiagnosticsOverlay: View {
         lines.append("cornerSafeH \(chrome.cornerSafeArea.map(r) ?? "nil")")
         lines.append("unfolded \(chrome.isUnfoldedPhone)  row \(chrome.statusRowHeight.map { "\($0)" } ?? "nil")  column \(chrome.statusColumn.map { "\($0.width)/\($0.statusBottom)" } ?? "nil")")
         for (i, tab) in workspace.terminalTabs.enumerated() {
-            guard let view = tab.controller.terminalView else { continue }
+            let view = tab.controller.terminal.view
             let frame = view.window.map { view.convert(view.bounds, to: $0) } ?? .zero
             lines.append("term\(i) frame \(r(frame))")
-            lines.append("  inset \(u(view.contentInset)) adj \(u(view.adjustedContentInset))")
-            lines.append("  safe \(u(view.safeAreaInsets)) offset (\(Int(view.contentOffset.x)),\(Int(view.contentOffset.y)))")
+            let grid = tab.controller.terminal.grid
+            lines.append("  safe \(u(view.safeAreaInsets)) grid \(grid.map { "\($0.cols)×\($0.rows)" } ?? "nil") surface \(tab.controller.terminal.isSurfaceReady)")
             // 模型层与正在显示的（presentation）层位置：两者不同 = 位移动画没收尾，画面停在半路。
             let shown = view.layer.presentation()?.frame ?? view.layer.frame
             lines.append("  layer \(r(view.layer.frame)) shown \(r(shown)) anim \(view.layer.animationKeys()?.count ?? 0)")

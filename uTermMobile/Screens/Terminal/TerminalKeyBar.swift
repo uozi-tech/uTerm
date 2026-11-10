@@ -2,7 +2,8 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// 键盘条上的一个键：`label` 显示文本、`send` 发给终端的字节序列。
+/// 键盘条上的一个键：`label` 显示文本、`send` 是它在普通模式下的字节序列——既是这个键的身份（`GhosttyKeyBarMapping`
+/// 按它对到终端按键，由终端按当前模式编码），也是没有 surface 可编码时的退路。
 struct TerminalKey: Identifiable, Hashable {
     let label: String
     let send: String
@@ -165,7 +166,7 @@ struct TerminalKeyBar: View {
         keyButtons(TerminalKeyCatalog.shellSymbols)
     }
 
-    /// 粘滞修饰只作用于系统键盘的下一个字符，所以上膛时键盘必须在。
+    /// 上膛之后多半是要接着在系统键盘上打一个字符（Ctrl+C），所以顺手把键盘弹出来；接着点键盘条上的键也行（Ctrl+←）。
     private func modifierKey(_ label: String, armed: Bool, toggle: @escaping () -> Void) -> some View {
         MKeyButton(label: label, active: armed) {
             toggle()
@@ -193,9 +194,8 @@ struct TerminalKeyBar: View {
         .accessibilityLabel("粘贴图片")
     }
 
-    /// 发送一个键：先清掉粘滞修饰（修饰只作用于系统软键盘字符），再发字节序列。
+    /// 发送一个键。上膛的 Ctrl / Alt 作用在这个键上（Ctrl 上膛后点 ← 发 Ctrl+←），用完自己复位。
     private func send(_ key: TerminalKey) {
-        controller.clearStickyModifiers()
         controller.sendKey(key)
     }
 

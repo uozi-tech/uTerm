@@ -1,10 +1,16 @@
+import GhosttyTerminal
 import SwiftUI
-import SwiftTerm
 import UIKit
 import XCTest
 @testable import uTermMobile
 
 /// 点分屏按钮时终端经历了几轮尺寸变化。逐帧记录，变化时打印一行。
+///
+/// 读的都是 Ghostty 这条终端自己的状态（`MobileTerminalController.terminal`）：
+/// - 网格 = surface 的终端最近一次报来的行列数（`GhosttyTerminalBridge.grid`，也就是会发给远端的那个尺寸）；
+///   报过几次看 `resizeReports`（每次都会给远端一个 SIGWINCH，相同尺寸在输入通道里去重）；
+/// - 字号 = 视图的 `terminalFontSize`（uTerm 点数）；
+/// - 滚动位置 = 系统滚动那条路径借的隐藏 UIScrollView 的 `contentOffset`（`uTermSystemScrollView`）。
 @MainActor
 final class SplitResizeProbeTests: XCTestCase {
     /// App 不在前台时不布局、不弹键盘，读数全是假的（真机息屏或被切走时就这样），必须判失败而不是空跑通过。
@@ -35,22 +41,25 @@ final class SplitResizeProbeTests: XCTestCase {
         _ = MobileProbeWindow.make(placement: .visibleOnScreen, isolateHost: true, rootView: root)
         _ = await MobileFakeTerminal.waitUntilConnected(term.controller)
         try await Task.sleep(for: .seconds(4))
-        let view = try XCTUnwrap(term.controller.terminalView)
+        let terminal = term.controller.terminal
+        let view = terminal.view
         term.controller.ownsKeyboard = true
         term.controller.focusKeyboard()
         try await Task.sleep(for: .seconds(2))
         print("SPLITPROBE ready first=\(view.isFirstResponder) kbOwner=\(term.controller.ownsKeyboard)")
+        XCTAssertNotNil(terminal.grid, "surface 还没报过网格，读数无效")
 
         let t0 = CACurrentMediaTime()
         var last = ""
         var sizes: [String] = []
         var changes = 0
+        let reportsBefore = terminal.resizeReports
         func sample() {
-            let t = view.getTerminal()
             let p = view.layer.presentation()?.frame ?? .zero
-            let gridNow = "\(t.cols)x\(t.rows)"
+            let gridNow = terminal.grid.map { "\($0.cols)x\($0.rows)" } ?? "-"
             if sizes.last != gridNow { sizes.append(gridNow) }
-            let line = "grid=\(gridNow) font=\(String(format: "%.2f", view.font.pointSize)) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)) offY=\(Int(view.contentOffset.y)) pres=\(Int(p.width))x\(Int(p.height))@\(Int(p.minX)),\(Int(p.minY)) kb=\(view.isFirstResponder)"
+            let offY = view.uTermSystemScrollView?.contentOffset.y ?? 0
+            let line = "grid=\(gridNow) font=\(String(format: "%.2f", view.terminalFontSize)) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)) offY=\(Int(offY)) pres=\(Int(p.width))x\(Int(p.height))@\(Int(p.minX)),\(Int(p.minY)) kb=\(view.isFirstResponder)"
             if line != last {
                 last = line
                 changes += 1
@@ -66,7 +75,7 @@ final class SplitResizeProbeTests: XCTestCase {
             sample()
             try await Task.sleep(for: .milliseconds(8))
         }
-        print("SPLITPROBE grids=\(sizes) changes=\(changes)")
+        print("SPLITPROBE grids=\(sizes) changes=\(changes) resize-reports=\(terminal.resizeReports - reportsBefore)")
         // 宽度 + 字号最多两轮（键盘收起再加一轮）；回到逐帧缩放时这里是十几次。
         XCTAssertLessThanOrEqual(sizes.count, 4, "\(sizes)")
         term.controller.close()
@@ -93,7 +102,9 @@ final class SplitResizeProbeTests: XCTestCase {
         defer { win.isHidden = true }
         _ = await MobileFakeTerminal.waitUntilConnected(term.controller)
         try await Task.sleep(for: .seconds(2))
-        let view = try XCTUnwrap(term.controller.terminalView)
+        let terminal = term.controller.terminal
+        let view = terminal.view
+        let nativeScale = win.screen.nativeScale
         // 通知闭包是 @Sendable，不能直接改捕获的 var；交给主 actor 上的盒子（队列就是 .main）。
         let kbBox = KeyboardFrameBox()
         var kb: CGRect { kbBox.rect }
@@ -106,18 +117,20 @@ final class SplitResizeProbeTests: XCTestCase {
         term.controller.focusKeyboard()
         func report(_ tag: String) {
             let f = view.convert(view.bounds, to: nil)
-            let t = view.getTerminal()
-            let cell = view.bounds.height / max(CGFloat(t.rows), 1)
-            let lastRowBottom = f.minY + CGFloat(t.rows) * floor(cell)
-            print("KBPROBE \(tag): mode=\(view.textInputMode?.primaryLanguage ?? "nil") first=\(view.isFirstResponder) kb=\(Int(kb.minY))..\(Int(kb.maxY)) h=\(Int(kb.height)) term=\(Int(f.minY))..\(Int(f.maxY)) rows=\(t.rows) overlap=\(Int(f.maxY - kb.minY)) lastRowBottom=\(Int(lastRowBottom)) offY=\(Int(view.contentOffset.y)) yDisp=\(t.buffer.yDisp) cursorRow=\(t.getCursorLocation().y)/\(t.rows) contentH=\(Int(view.contentSize.height)) boundsH=\(Int(view.bounds.height)) keyW=\(Int(win.bounds.width))x\(Int(win.bounds.height)) safeB=\(Int(host.view.safeAreaInsets.bottom)) cellH=\(String(format: "%.1f", cell))")
+            let rows = terminal.grid?.rows ?? 0
+            // 格高以引擎实报为准（物理像素 → pt）；网格从视图顶边排起，余量在底下。
+            let cell = (view.uTermCellPixels?.height ?? 0) / nativeScale
+            let lastRowBottom = f.minY + CGFloat(rows) * cell
+            let scroll = view.uTermSystemScrollView
+            // yDisp = 视口首行行号（滚动镜像）；cursorRow = 影子终端里光标在活动区的第几行。
+            print("KBPROBE \(tag): mode=\(view.textInputMode?.primaryLanguage ?? "nil") first=\(view.isFirstResponder) kb=\(Int(kb.minY))..\(Int(kb.maxY)) h=\(Int(kb.height)) term=\(Int(f.minY))..\(Int(f.maxY)) rows=\(rows) overlap=\(Int(f.maxY - kb.minY)) lastRowBottom=\(Int(lastRowBottom)) offY=\(Int(scroll?.contentOffset.y ?? 0)) yDisp=\(view.uTermScrollState.row) cursorRow=\(terminal.shadow.cursor.y)/\(rows) contentH=\(Int(scroll?.contentSize.height ?? 0)) boundsH=\(Int(view.bounds.height)) keyW=\(Int(win.bounds.width))x\(Int(win.bounds.height)) safeB=\(Int(host.view.safeAreaInsets.bottom)) cellH=\(String(format: "%.1f", cell))")
         }
         /// 等 `seconds` 秒，逐帧记下网格变了几次。
         func watchGrid(_ seconds: Double) async throws -> [String] {
             var grids: [String] = []
             let end = CACurrentMediaTime() + seconds
             while CACurrentMediaTime() < end {
-                let t = view.getTerminal()
-                let g = "\(t.cols)x\(t.rows)"
+                let g = terminal.grid.map { "\($0.cols)x\($0.rows)" } ?? "-"
                 if grids.last != g { grids.append(g) }
                 try await Task.sleep(for: .milliseconds(8))
             }

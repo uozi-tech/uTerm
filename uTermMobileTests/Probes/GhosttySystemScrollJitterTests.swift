@@ -23,7 +23,6 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        UTermScrollTrace.usesSystemScrolling = true
         UTermScrollTrace.isEnabled = false
     }
 
@@ -126,7 +125,6 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         window.overrideUserInterfaceStyle = .dark
         window.isHidden = false
         defer { window.isHidden = true }
-        UTermScrollTrace.usesSystemScrolling = true
 
         func mount() -> GhosttyTerminalBridge {
             let bridge = GhosttyTerminalBridge(controller: GhosttyProbeHost.controller, frame: CGRect(origin: .zero, size: size))
@@ -136,7 +134,9 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         }
         func ready(_ bridge: GhosttyTerminalBridge) async throws {
             let deadline = CACurrentMediaTime() + 5
-            while CACurrentMediaTime() < deadline, bridge.view.surface == nil || bridge.grid == nil {
+            // 等到画面开始吃字节（surface 建好、网格到位）：就绪之前喂的只进影子，要等一次回放才上屏。
+            while CACurrentMediaTime() < deadline,
+                  bridge.view.surface == nil || bridge.grid == nil || !bridge.isSurfaceReady || !bridge.outputPump.isFeedingSurface {
                 try await Task.sleep(for: .milliseconds(20))
             }
             try await Task.sleep(for: .milliseconds(300))
@@ -249,7 +249,6 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         host.window.overrideUserInterfaceStyle = .dark
         defer { host.close() }
         try await host.waitUntilReady()
-        UTermScrollTrace.usesSystemScrolling = true
         host.feedAndWait(GhosttyOnScreenScrollTests.barcodeHistory(lines: 600, cols: host.grid.cols))
         try await Task.sleep(for: .milliseconds(400))
         let view = host.view

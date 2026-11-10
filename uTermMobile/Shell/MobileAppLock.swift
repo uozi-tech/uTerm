@@ -44,7 +44,7 @@ private struct MobileAppLockGate: ViewModifier {
         // 文件标签全没了；那条路径也不经过 close()，SSH 连接与 host-key 等待都悬在半空。
         //
         // 安全边界不靠卸载：锁屏画在独立的高层窗口里（`MobileLockWindow`），盖住本窗口的
-        // 一切，包括已弹出的抽屉 / 全屏覆盖；内容同时置透明、去掉触摸与无障碍（SwiftTerm 的
+        // 一切，包括已弹出的抽屉 / 全屏覆盖；内容同时置透明、去掉触摸与无障碍（终端的
         // UIView 不守 ZStack 顺序，只靠叠一层盖不住它），窗口建好之前的那一帧也看不到底下。
         ZStack {
             content

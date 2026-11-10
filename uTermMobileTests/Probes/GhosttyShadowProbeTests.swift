@@ -8,9 +8,10 @@ import XCTest
 
 /// 测量门 M3：影子终端（libghostty-vt，与 GhosttyKit 同一个 Ghostty commit 编）的真机开销。
 ///
-/// vt 的 xcframework 不进仓库，也不进 pbxproj：只在命令行给测试构建加搜索路径与链接参数时才编进来
-///（`canImport(GhosttyVt)`），App 本身不引用它。跑法见 docs/ghostty-eval/measure-ios.md 的 M3 一节。
-/// 同样挂在 `UTERM_MEASURE=1` 后面。
+/// 这份探针写在影子终端进 App 之前：当时 vt 的 xcframework 只在命令行给测试构建加搜索路径时才编进来，所以整个文件
+/// 包在 `canImport(GhosttyVt)` 里、前两条用例直接调 vt 的 C 接口（文件内的 `Shadow`）。现在 App 自己带影子终端
+///（`ShadowTerminal`，每条 `GhosttyTerminalBridge` 一个），第三条用例量的就是生产的那一个。
+/// 跑法见 docs/ghostty-eval/measure-ios.md 的 M3 一节。同样挂在 `UTERM_MEASURE=1` 后面。
 @MainActor
 final class GhosttyShadowProbeTests: XCTestCase {
     override func setUp() async throws {
@@ -18,7 +19,6 @@ final class GhosttyShadowProbeTests: XCTestCase {
             throw XCTSkip("测量门探针：设 UTERM_MEASURE=1 才跑（真机、单独跑）")
         }
         UIApplication.shared.isIdleTimerDisabled = true
-        SwiftTermDrawLog.install()
     }
 
     /// 一个 vt 终端。回滚上限按行设（10k 行时页粒度会多留几十到上百行）。
@@ -115,72 +115,69 @@ final class GhosttyShadowProbeTests: XCTestCase {
 
     // MARK: Claude 输出时的额外 CPU
 
-    /// 一个整屏终端每 100 ms 来一个 Claude 同步帧，8 s 一档，A B C A B C：
-    /// A = SwiftTerm（生产的 feedPaced），B = Ghostty 画面，C = Ghostty 画面 + 同一份字节同步喂影子终端（在调用 receive 的同一线程上）。
-    /// 过线：C − B < (A − B) 的一成。
+    /// 一个整屏终端每 100 ms 来一个 Claude 同步帧，8 s 一档，B C B C B C：
+    /// B = 只喂画面（绕过分流直接 `session.receive`，影子不吃），C = 生产的路径（`GhosttyTerminalBridge.feed`：
+    /// 影子在喂的这条线程上同步解析 + 画面）。C − B 就是带着影子多出来的 CPU；另量 `feed` 这一下调用本身占的线程 CPU。
+    ///
+    /// 换引擎之前还有 A 档（旧引擎），过线条件是「C − B < (A − B) 的一成」；A 的读数留在 measure-ios.md 的 M3 一节，
+    /// 要核这条就拿这里的 C − B 去比那份文档里的 (A − B)。
+    /// B 档里影子没吃到这些帧，和画面的状态会差几帧（都是原地重画的同步帧，不影响读数；这个探针里没有回放）。
     func testM3ShadowCPUDuringClaude() async throws {
         let screen = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.bounds.size
             ?? CGSize(width: 440, height: 956)
-        let st = try SwiftTermProbeHost(size: screen)
         let gh = try GhosttyProbeHost(size: screen)
-        defer { st.close(); gh.close() }
+        defer { gh.close() }
         try await gh.waitUntilReady()
-        let ghCols = gh.grid.cols, stCols = st.grid.cols
-        let shadow = Shadow(cols: UInt16(ghCols), rows: UInt16(gh.grid.rows), scrollbackLines: 10_000)
-        let history = TerminalSpikeCorpus.history(lines: 300, cols: ghCols)
-        gh.feedAndWait(history)
-        shadow.write(Data(history.utf8))
-        st.view.feed(text: TerminalSpikeCorpus.history(lines: 300, cols: stCols))
+        let cols = gh.grid.cols
+        gh.feedAndWait(TerminalSpikeCorpus.history(lines: 300, cols: cols))
         try await Task.sleep(for: .milliseconds(500))
 
-        enum Arm: String { case swiftterm, ghostty, ghosttyShadow = "ghostty+shadow" }
+        enum Arm: String { case ghostty, ghosttyShadow = "ghostty+shadow" }
         var totals: [Arm: [Double]] = [:]
-        var shadowOnly: [Double] = []
+        var feedCalls: [Arm: [Double]] = [:]
+        let shadowFed0 = gh.bridge.shadow.totalFedBytes
+        var shadowArmBytes = 0
         for round in 0..<3 {
-            for arm in [Arm.swiftterm, .ghostty, .ghosttyShadow] {
-                st.window.windowLevel = arm == .swiftterm ? .alert + 2 : .alert + 1
-                gh.window.windowLevel = arm == .swiftterm ? .alert + 1 : .alert + 2
-                st.container.isOnScreen = arm == .swiftterm
-                gh.view.setSurfaceVisible(arm != .swiftterm)
+            for arm in [Arm.ghostty, .ghosttyShadow] {
                 try await Task.sleep(for: .milliseconds(500))
                 let mainID = ThreadCPU.currentThreadID()
                 let start = ThreadCPU.snapshot()
-                var shadowCPU = 0.0
+                var feedCPU = 0.0
                 let t0 = CACurrentMediaTime()
                 var beat = 0
                 while CACurrentMediaTime() - t0 < 8 {
+                    let data = Data(TerminalSpikeCorpus.claudeFrame(beat + 1, cols: cols).utf8)
+                    let c0 = ThreadCPU.current()
                     switch arm {
-                    case .swiftterm:
-                        st.view.feedPaced(ArraySlice(Array(TerminalSpikeCorpus.claudeFrame(beat + 1, cols: stCols).utf8)), backlogged: false)
                     case .ghostty:
-                        gh.bridge.feed(Data(TerminalSpikeCorpus.claudeFrame(beat + 1, cols: ghCols).utf8))
+                        gh.bridge.session.receive(data)
                     case .ghosttyShadow:
-                        let data = Data(TerminalSpikeCorpus.claudeFrame(beat + 1, cols: ghCols).utf8)
-                        let c0 = ThreadCPU.current()
-                        shadow.write(data)
-                        shadowCPU += ThreadCPU.current() - c0
                         gh.bridge.feed(data)
+                        shadowArmBytes += data.count
                     }
+                    feedCPU += ThreadCPU.current() - c0
                     beat += 1
                     let next = t0 + Double(beat) * 0.1
                     try await Task.sleep(for: .milliseconds(Int(max(0, next - CACurrentMediaTime()) * 1000)))
                 }
                 let delta = ThreadCPU.delta(from: start, to: ThreadCPU.snapshot(), mainID: mainID)
                 let seconds = CACurrentMediaTime() - t0
-                totals[arm, default: []].append(delta.totalMS / seconds * 1000 / 1000)  // ms CPU / s
-                if arm == .ghosttyShadow { shadowOnly.append(shadowCPU * 1000 / seconds) }
-                print(String(format: "MEASURE m3 claude %@#%d cpu=%.1fms/s main=%.1fms/s shadow-write=%.3fms/s | %@",
+                totals[arm, default: []].append(delta.totalMS / seconds)  // ms CPU / s
+                feedCalls[arm, default: []].append(feedCPU * 1000 / seconds)
+                print(String(format: "MEASURE m3 claude %@#%d cpu=%.1fms/s main=%.1fms/s feed-call=%.3fms/s | %@",
                              arm.rawValue, round, delta.totalMS / seconds, delta.mainMS / seconds,
-                             arm == .ghosttyShadow ? shadowCPU * 1000 / seconds : 0.0, delta.line))
+                             feedCPU * 1000 / seconds, delta.line))
             }
         }
-        let a = ProbeMetrics.percentile(totals[.swiftterm] ?? [], 0.5)
         let b = ProbeMetrics.percentile(totals[.ghostty] ?? [], 0.5)
         let c = ProbeMetrics.percentile(totals[.ghosttyShadow] ?? [], 0.5)
-        let direct = ProbeMetrics.percentile(shadowOnly, 0.5)
-        print(String(format: "MEASURE m3 claude summary swiftterm=%.1f ghostty=%.1f ghostty+shadow=%.1f ms/s | saved=%.1f increment(process)=%.1f increment(shadow-write)=%.3f ms/s | budget(10%%)=%.2f",
-                     a, b, c, a - b, c - b, direct, (a - b) / 10))
-        XCTAssertGreaterThan(shadow.totalRows, 300)
+        let callB = ProbeMetrics.percentile(feedCalls[.ghostty] ?? [], 0.5)
+        let callC = ProbeMetrics.percentile(feedCalls[.ghosttyShadow] ?? [], 0.5)
+        print(String(format: "MEASURE m3 claude summary ghostty=%.1f ghostty+shadow=%.1f ms/s | increment(process)=%.1f increment(feed-call)=%.3f ms/s",
+                     b, c, c - b, callC - callB))
+        // 结构判据：影子只在 C 档吃字节，而且吃全了；历史进了回滚。
+        XCTAssertEqual(gh.bridge.shadow.totalFedBytes - shadowFed0, shadowArmBytes, "影子吃到的字节数和 C 档喂的不一样")
+        XCTAssertGreaterThan(gh.bridge.shadow.totalRows, 300)
     }
 }
 #endif

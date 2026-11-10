@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 设置 › 终端。光标形状 / 闪烁与 Mac 同步、iOS 终端照读（`SwiftTermView`，默认值在共享的
+/// 设置 › 终端。光标形状 / 闪烁与 Mac 同步、iOS 终端照读（`MTerminalHostView`，默认值在共享的
 /// `TerminalCursorPreference`）；字体与字号固定只读；历史行数 / 选中即复制不接入 iOS
 /// （理由见 `SettingsCatalog.syncedKeyExemptions`）。
 struct SettingsTerminalSection: View {

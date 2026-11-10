@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D1 /* SwiftTerm */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
@@ -505,7 +504,6 @@
 				851030E33047167600A370DF /* UDesignKit in Frameworks */,
 				555353484B49540000000012 /* USSHKit in Frameworks */,
 				4147454E544B495400000012 /* AgentKit in Frameworks */,
-				10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */,
 				4A55494345000000000000A4 /* CJuice in Frameworks */,
 				4B43500000000000000000A4 /* CKCP in Frameworks */,
 				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
@@ -693,7 +691,6 @@
 				5544455349474E0000000002 /* UDesignKit */,
 				555353484B49540000000002 /* USSHKit */,
 				4147454E544B495400000002 /* AgentKit */,
-				10C0DE0000000000000000D1 /* SwiftTerm */,
 				4A55494345000000000000A2 /* CJuice */,
 				4B43500000000000000000A2 /* CKCP */,
 				10C0DE0000000000000000D2 /* Citadel */,
@@ -1995,11 +1992,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterPython;
-		};
-		10C0DE0000000000000000D1 /* SwiftTerm */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */;
-			productName = SwiftTerm;
 		};
 		10C0DE0000000000000000D2 /* Citadel */ = {
 			isa = XCSwiftPackageProductDependency;

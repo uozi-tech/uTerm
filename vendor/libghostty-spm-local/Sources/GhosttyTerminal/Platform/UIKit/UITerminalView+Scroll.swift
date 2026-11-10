@@ -37,9 +37,9 @@
         // uTerm 本地补丁（配合 GhosttyKit 0023 的像素级平滑滚动）：视口位置的本地镜像。0023 让视口停在「第几行 + 往下多少像素」，
         // C 接口只报行号（滚动条回报，晚一帧）、不报那半行小数，所以 Swift 侧照引擎 `smoothScrollViewport` 的算法自己记一份：
         // `modelRow` = 视口首行行号，`modelFrac` = 首行顶边之上被滚出去的像素（0 ..< 行高，到顶 / 回到活动区时引擎清零）。
-        // 发给引擎的位移一律是整数像素，两边都是整数运算，镜像不会和引擎差出小数。用它做三件事：
-        // 到顶 / 到底的判定（行号到 0 不等于到顶，还差 `modelFrac` 像素）、停下时吸附整行、惯性落点取整行。
-        // Ghostty 与 GhosttyKit 的点击、选区命中都按整数视口算，停在半行会差一行。
+        // 发给引擎的位移一律是整数像素，两边都是整数运算，镜像不会和引擎差出小数。系统滚动那条路径（+SystemScroll）靠它
+        // 把 UIScrollView 的 contentOffset 换成发给引擎的位移、判到顶 / 到底、停下时对齐整行（行号到 0 不等于到顶，
+        // 还差 `modelFrac` 像素）。Ghostty 与 GhosttyKit 的点击、选区命中都按整数视口算，停在半行会差一行。
         var modelRow = 0
         var modelFrac = 0
         var modelValid = false
@@ -48,25 +48,10 @@
         var lastScrollSend: CFTimeInterval = 0
         /// 手指位移里不足一像素的零头，留到下一步。
         var dragCarry: CGFloat = 0
-        /// 手指正拖着（began 之后、ended / cancelled 之前）。
+        /// 手指正拖着（began 之后、ended / cancelled 之前；系统滚动的拖动也记在这里）。
         var panActive = false
-        /// 「稍后吸附」的凭据：之后又有新的手势 / 惯性就作废。
+        /// 「稍后对齐」的凭据：之后又有新的手势 / 惯性就作废。
         var settleToken = 0
-        /// 这次自写路径的拖动开始时发过 drag-began 的 signpost 没有（触摸阶段 signpost 见 UTermScrollTrace）。
-        // uTerm 本地补丁（回弹）：拖过顶 / 底时手指走了多少像素（未衰减），以及松手 / 惯性撞边后的弹簧状态。
-        var overscrollRaw: CGFloat = 0
-        var bounceLink: CADisplayLink?
-        var bounceStart: CFTimeInterval = 0
-        var bounceFrom: CGFloat = 0
-        var bounceVelocity: CGFloat = 0
-        // uTerm 本地补丁（落点取整的惯性）：一次滑行要走的总像素、指数速率（1/s）、起点时刻、已发出的整像素。
-        var glideTotal: CGFloat = 0
-        var glideDuration: CGFloat = 0
-        var glideStart: CFTimeInterval = 0
-        var glideSent: CGFloat = 0
-        /// 最近一次手指拖动发出位移的时刻，和那一刻 Ghostty 画面层上挂着的 IOSurface（用来判断拖动那一步画出来没有）。
-        var lastDragTime: CFTimeInterval = 0
-        var contentsAtLastDrag: ObjectIdentifier?
         // uTerm 本地补丁（抓鼠标的程序松手后的惯性）：这段按速度衰减的惯性，位移是不是按行报给程序的（起惯性那一刻定），
         // 以及它慢到多少 pt/s 就停（见 startMomentumScrolling）。
         var reportsToProgram = false
@@ -79,7 +64,7 @@
             switch gesture.state {
             case .began:
                 dismissTouchSelection(restoringViewport: false)
-                // uTerm 本地补丁：滚轮不吸附整行（一格可能不到半行，对齐会把它退回去），所以这里也不对齐。
+                // uTerm 本地补丁：滚轮不对齐整行（一格可能不到半行，对齐会把它退回去），所以这里也不对齐。
                 stopMomentumScrolling(settle: .none)
                 momentumScroll.dragCarry = 0
             case .changed, .ended:
@@ -114,7 +99,7 @@
                 displayScale: resolvedDisplayScale(),
             )
             // uTerm 本地补丁：和手指拖动一样只发整数像素、记进视口位置的镜像（见 MomentumScrollState），
-            // 之后手指再滚时镜像才对得上。滚轮没有回弹；引擎自己停在顶 / 底。
+            // 之后手指再滚时镜像才对得上。滚轮不回弹，引擎自己停在顶 / 底。
             if surface?.isMouseCaptured == true {
                 momentumScroll.modelValid = false
             } else if pixels.y != 0 {
@@ -158,9 +143,8 @@
                 }
                 TerminalDebugLog.log(.input, "touch scroll began")
                 UTermScrollTrace.signpostTouch(.dragBegan)
-                // 接住惯性 / 回弹继续拖：不吸附（双指整行滚动除外，那条路径按整行算，先对齐）。
+                // 接住惯性继续拖：不对齐（双指整行滚动除外，那条路径按整行算，先对齐）。
                 stopMomentumScrolling(settle: momentumScroll.scrollsLocally ? .now : .none)
-                if momentumScroll.bounceLink != nil { stopBounce(resetting: true) }
                 momentumScroll.panActive = true
                 momentumScroll.dragCarry = 0
                 momentumScroll.settleToken += 1
@@ -187,20 +171,19 @@
                     .input,
                     "touch scroll ended velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))",
                 )
-                if releaseOverscroll() { return }
                 // uTerm 本地补丁：程序抓着鼠标（Claude 的全屏界面、tmux / vim 开 mouse）时松手也起惯性。上游加内联选区那次
                 //（a667344）把「内联选区开着、程序抓着鼠标、单指」拦在了外面，没写原因；拦掉之后手指一离开屏幕就停。
                 // 惯性途中手指落下由点按识别器那条路停（`gestureRecognizer(_:shouldReceive:)`），那一下不算点击。
                 startMomentumScrolling(velocity: velocity)
-                // 没起惯性（抬手时几乎不动）就当场吸附；起了惯性的等惯性停下再吸附。
+                // 没起惯性（抬手时几乎不动）就当场对齐；起了惯性的等惯性停下再对齐。
                 if momentumScroll.displayLink == nil, surface?.isMouseCaptured != true { snapScrollToRow() }
 
             case .cancelled, .failed:
                 TerminalDebugLog.log(.input, "touch scroll cancelled")
                 momentumScroll.panActive = false
                 stopMomentumScrolling(settle: .none)
-                // 被系统手势打断也要收尾：回弹弹回去，否则把停在半行的视口吸附回整行。
-                if !releaseOverscroll(), surface?.isMouseCaptured != true { snapScrollToRow() }
+                // 被系统手势打断也要收尾：把停在半行的视口对齐回整行。
+                if surface?.isMouseCaptured != true { snapScrollToRow() }
 
             default:
                 break
@@ -223,35 +206,23 @@
                 return
             }
             var pixels = TerminalScrollDistance.scrollPixels(for: delta, displayScale: resolvedDisplayScale())
-            // 这一步视口真正走了多少像素（给 trace 记）：撞边时发给引擎的比这多（见 absorbOverscroll）。
-            var travelled = pixels.y
             if surface?.isMouseCaptured == true {
                 // 程序抓了鼠标：位移按行报给程序，不滚视口，镜像不管这段。
                 momentumScroll.modelValid = false
             } else if delta.y != 0 {
-                // 只发整数像素，零头留到下一步：引擎那半行小数永远是整数，停下来吸附后正好是 0（见 MomentumScrollState）。
+                // 只发整数像素，零头留到下一步：引擎那半行小数永远是整数（见 MomentumScrollState）。
+                // 到顶 / 到底不拦：引擎自己停在边上（镜像照样夹住），备用屏里引擎把位移换成方向键发给程序。
                 let exact = pixels.y + momentumScroll.dragCarry
                 let whole = exact.rounded()
                 momentumScroll.dragCarry = exact - whole
                 pixels.y = whole
-                travelled = whole
-                if whole != 0, let extent = syncScrollModel() {
-                    let before = momentumScroll.modelRow * extent.cell + momentumScroll.modelFrac
-                    let forwarded = absorbOverscroll(Int(whole), momentum: momentum, extent: extent)
-                    applyToScrollModel(forwarded, extent, source: .ownDrag)
-                    pixels.y = CGFloat(forwarded)
-                    travelled = CGFloat(before - (momentumScroll.modelRow * extent.cell + momentumScroll.modelFrac))
-                }
-                // 这一步全进了回弹，或者还不够一像素：没有要发给引擎的。
+                if whole != 0, let extent = syncScrollModel() { applyToScrollModel(Int(whole), extent, source: .ownDrag) }
+                // 还不够一像素：没有要发给引擎的。
                 if pixels.x == 0, pixels.y == 0 { return }
             }
             let mods = TerminalScrollModifiers(precision: true, momentum: momentum)
             surface?.sendMouseScroll(x: Double(pixels.x), y: Double(pixels.y), mods: mods.rawValue)
-            if momentum == .none, pixels.y != 0 {
-                momentumScroll.lastDragTime = CACurrentMediaTime()
-                momentumScroll.contentsAtLastDrag = UTermCommitWatch.contentsIdentity(of: self)
-                UTermScrollTrace.record("drag", Double(travelled))
-            }
+            if momentum == .none, pixels.y != 0 { UTermScrollTrace.record("drag", Double(pixels.y)) }
             if let bar = core.bridge.scrollbar { UTermScrollTrace.record("row", Double(bar.offset)) }
             // uTerm 排查用（M16 第三轮）：每次发出的像素、视口行号、程序有没有抓鼠标（抓了就按行报给程序，不会平滑）。
             TerminalDebugLog.log(
@@ -279,8 +250,8 @@
         /// 用镜像之前先和引擎对一下。
         ///
         /// 滚动条回报是渲染线程那一帧发的，要等主线程的下一次 tick 才到我们手里，比发出去的位移晚一帧上下，
-        /// 所以连着发位移时信镜像、不信它（旧实现拿它判「到顶了没有」和清零头，行号刚到 0 就当到顶，引擎其实还差半行，
-        /// 见 absorbOverscroll）。回报确实是「发完位移之后」的才以它的行号为准（见 scrollbarReflectsLastSend）：
+        /// 所以连着发位移时信镜像、不信它（拿它判「到顶了没有」的话，行号刚到 0 就当到顶，引擎其实还差半行）。
+        /// 回报确实是「发完位移之后」的才以它的行号为准（见 scrollbarReflectsLastSend）：
         /// 别的途径也会动视口（新输出、打字回到底部、键盘翻页、双指整行滚动）。
         /// 小数照旧留着：引擎的规则是「行号没变小数就还作数」；在活动区（底部）引擎不留小数。
         ///
@@ -328,12 +299,13 @@
             return core.controller?.wakeupGate.isPending != true
         }
 
-        /// 引擎 `smoothScrollViewport` 的镜像：往回滚方向滚 `pixels`（负 = 往活动区）。滚过顶 / 回到活动区，引擎停在边上、不留小数。
-        /// 谁动的镜像（signpost `scroll-offset` 的第六个数）。
+        /// 谁动的镜像（signpost `scroll-offset` 的第六个数）：系统滚动的 didScroll、自写的拖动 / 惯性（不归系统滚动的那几种）、
+        /// 对齐时只动引擎、当场对齐（只有 Catalyst 走得到）、滚轮。
         enum ScrollModelSource: Int {
             case systemDidScroll = 1, ownDrag = 2, alignEngineOnly = 3, settleNow = 4, wheel = 5
         }
 
+        /// 引擎 `smoothScrollViewport` 的镜像：往回滚方向滚 `pixels`（负 = 往活动区）。滚过顶 / 回到活动区，引擎停在边上、不留小数。
         func applyToScrollModel(_ pixels: Int, _ extent: ScrollExtent, source: ScrollModelSource) {
             guard pixels != 0 else { return }
             let limit = extent.maxRow * extent.cell
@@ -343,7 +315,7 @@
             momentumScroll.modelFrac = momentumScroll.modelAtBottom ? 0 : position % extent.cell
             momentumScroll.lastScrollSend = CACurrentMediaTime()
             #if !targetEnvironment(macCatalyst)
-                // 和 SwiftTerm 标签同款的 scroll-offset signpost：位置、在不在减速、手指按没按着。
+                // scroll-offset signpost：位置、在不在减速、手指按没按着。
                 let driver = systemScroll.driver
                 UTermScrollTrace.signpostScrollOffset(
                     px: Double(position),
@@ -357,57 +329,46 @@
             #endif
         }
 
-        // MARK: uTerm 本地补丁：停下时吸附整行
+        // MARK: uTerm 本地补丁：停下时对齐整行
 
-        /// 离最近的整行差多少像素（正 = 往回滚方向补）；已经在整行上、或者不该吸附时为 nil。
-        private func snapDistance() -> Int? {
-            guard surface?.isMouseCaptured != true, let extent = syncScrollModel() else { return nil }
-            let frac = momentumScroll.modelFrac
-            guard frac != 0 else { return nil }
-            return frac * 2 <= extent.cell ? frac : frac - extent.cell
-        }
+        // 单指滚回滚区的手势、减速、回弹、落点都归系统的 UIScrollView（+SystemScroll），停在半行上的视口也由那条路径
+        // 对齐（`systemScrollAlign`）。这里原来还有一套自写的滚动物理（到顶 / 到底的橡皮筋与弹簧、一次算好落点的惯性、
+        // 拖动 → 惯性交接对齐上屏、自写的吸附动画），评估期攒下的，已经整套删掉：user 定的，单指滚动不需要自写物理。
+        // 留在这个文件里的自写路径只有不归系统滚动的那几种：程序抓着鼠标、备用屏 / 没有回滚可滚（位移原样交给引擎，
+        // 松手后按速度衰减，见 momentumScrollFrame）、双指的本地整行滚动、滚轮 / 触控板。
 
-        /// 把半行补成整行：离哪边近往哪边走，同一条减速曲线 0.28 s 落定（起步每帧不到 2 px，不会「先停再挪」）。
+        /// 把停在半行上的视口缓动回整行（没有手指、没有惯性在动它的时候）。
         func snapScrollToRow() {
             guard !momentumScroll.scrollsLocally else { return }
             #if !targetEnvironment(macCatalyst)
-                // 系统滚动那条路径：对齐也交给 UIScrollView 的动画。
-                if systemScrollIsActive {
-                    systemScrollAlign(animated: true)
-                    return
-                }
+                if systemScrollIsActive { systemScrollAlign(animated: true) }
             #endif
-            guard let delta = snapDistance() else { return }
-            startGlide(total: CGFloat(delta), duration: 0.28)
         }
 
-        /// 当场对齐整行、收掉回弹，不做动画：接下来要按整数视口算命中（选区、菜单、捏合）或者视图要离屏时用。
+        /// 当场对齐整行，不做动画：接下来要按整数视口算命中（选区、菜单、捏合）或者视图要离屏时用。
         func settleScrollNow() {
             momentumScroll.settleToken += 1
-            if momentumScroll.overscrollRaw != 0 || momentumScroll.bounceLink != nil {
-                momentumScroll.overscrollRaw = 0
-                stopBounce(resetting: true)
-            }
-            #if !targetEnvironment(macCatalyst)
+            #if targetEnvironment(macCatalyst)
+                // Catalyst 没有系统滚动那条路径（也没有触摸滚动），只有滚轮 / 触控板会把视口留在半行上：直接让引擎补到整行。
+                guard surface?.isMouseCaptured != true, let extent = syncScrollModel() else { return }
+                let frac = momentumScroll.modelFrac
+                guard frac != 0 else { return }
+                let delta = frac * 2 <= extent.cell ? frac : frac - extent.cell
+                surface?.sendMouseScroll(x: 0, y: Double(delta), mods: TerminalScrollModifiers(precision: true).rawValue)
+                applyToScrollModel(delta, extent, source: .settleNow)
+            #else
                 systemScrollStop()
-                if systemScrollIsActive {
-                    systemScrollAlign(animated: false)
-                    return
-                }
+                if systemScrollIsActive { systemScrollAlign(animated: false) }
             #endif
-            guard let delta = snapDistance(), let extent = scrollExtent() else { return }
-            surface?.sendMouseScroll(x: 0, y: Double(delta), mods: TerminalScrollModifiers(precision: true).rawValue)
-            applyToScrollModel(delta, extent, source: .settleNow)
         }
 
-        /// 惯性途中手指落下把它停住：先原地停着（和 UIScrollView 一样），0.12 s 后要是没接着拖（只是点一下），再吸附回整行。
+        /// 惯性途中手指落下把它停住：先原地停着（和 UIScrollView 一样），0.12 s 后要是没接着拖（只是点一下），再对齐回整行。
         func settleScrollSoon() {
             momentumScroll.settleToken += 1
             let token = momentumScroll.settleToken
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                 guard let self, token == momentumScroll.settleToken, !momentumScroll.panActive,
-                      momentumScroll.displayLink == nil, momentumScroll.overscrollRaw == 0,
-                      momentumScroll.bounceLink == nil else { return }
+                      momentumScroll.displayLink == nil else { return }
                 #if !targetEnvironment(macCatalyst)
                     // 点停那一下刚停住滚动视图，「最近有 didScroll」不算在动，不然这次对齐就被拦掉了，停在半行或界外。
                     // 回弹途中被按住、没拖就松手：我们在按下时停住了 UIKit 的回弹，停在界外的那一段也要在这里拉回来。
@@ -417,114 +378,7 @@
             }
         }
 
-        // MARK: uTerm 本地补丁：到顶 / 到底回弹（照 UIScrollView）
-
-        /// UIScrollView 的橡皮筋公式：拖出 x，显示 (1 − 1 / (x·0.55 / d + 1))·d，d = 视图高度。
-        private func rubberBand(_ raw: CGFloat) -> CGFloat {
-            let d = max(1, bounds.height * resolvedDisplayScale())
-            return (1 - 1 / (abs(raw) * 0.55 / d + 1)) * d * (raw < 0 ? -1 : 1)
-        }
-
-        /// 回弹由宿主平移图层完成（和 UIScrollView 移内容层同一个思路），不让渲染器为它出帧：有输出时渲染器同一帧还要重建格子，
-        /// 走 0023 的 overscroll uniform 会跟着它的出帧节奏抖。露出来的那条是视图后面的终端底色。
-        /// 平移量取整到物理像素：画面层平移半个像素会被重采样，回弹途中整屏字发虚、行与行的交界多出一条混色线。
-        /// 系统滚动那条路径（+SystemScroll）越界时也用它显示 UIScrollView 的橡皮筋。
-        func applyOverscroll(_ shown: CGFloat) {
-            UTermScrollTrace.record("overscroll", Double(shown))
-            let pixels = shown.rounded()
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            layer.sublayerTransform = pixels == 0
-                ? CATransform3DIdentity
-                : CATransform3DMakeTranslation(0, pixels / resolvedDisplayScale(), 0)
-            CATransaction.commit()
-        }
-
-        /// 这一步位移（整数像素，正 = 往回滚方向、内容下移）里有多少真去滚视口：返回要发给引擎的像素，其余进回弹。
-        /// 在顶上还往下拉、在底下还往上推时进回弹；回弹中往回推先把回弹收回去。
-        ///
-        /// 「到头」按镜像里离顶 / 离底还剩多少像素算，不是看滚动条行号：行号到 0 时引擎多半还差半行（`modelFrac`），
-        /// 那时就进回弹的话，真正的第一行永远拉不下来，松手后停在「第一行被切掉一截、底下多露半行」的位置上
-        ///（user 截图里顶上那条细线就是被切剩的上一行）。
-        func absorbOverscroll(_ pixels: Int, momentum: TerminalScrollModifiers.Momentum, extent: ScrollExtent) -> Int {
-            var y = pixels
-            let raw = momentumScroll.overscrollRaw
-            if raw != 0 {
-                let next = raw + CGFloat(y)
-                if next != 0, (next > 0) == (raw > 0) {
-                    momentumScroll.overscrollRaw = next
-                    applyOverscroll(rubberBand(next))
-                    return 0
-                }
-                momentumScroll.overscrollRaw = 0
-                applyOverscroll(0)
-                y = Int(next)
-            }
-            // 没有回滚可滚（内容不满一屏、备用屏）：不回弹，原样交给引擎。UIScrollView 内容不满时也不回弹；
-            // 备用屏里引擎把滚动换成方向键发给程序（less、vim），吃掉就滚不动了。
-            guard y != 0, extent.maxRow > 0 else { return y }
-            let position = momentumScroll.modelRow * extent.cell + momentumScroll.modelFrac
-            let room = y > 0 ? position : extent.maxRow * extent.cell - position
-            guard abs(y) > room else { return y }
-            let over = y > 0 ? y - room : y + room
-            if momentum == .changed {
-                // 惯性撞边：剩下的速度变成一次回弹（先冲出去再弹回来），惯性到此为止。
-                let velocity = momentumScroll.velocity.y * resolvedDisplayScale()
-                stopMomentumScrolling(sendTerminalEndEvent: false, settle: .none)
-                startBounce(from: 0, velocity: velocity)
-            } else {
-                momentumScroll.overscrollRaw = CGFloat(over)
-                applyOverscroll(rubberBand(CGFloat(over)))
-            }
-            // 剩下的那段先让引擎走完，再多给一屏：引擎自己夹在边上并把小数清零，回弹期间它一定正好在顶 / 底。
-            // 镜像和引擎差出几行的情况也在这里收掉：输出正涨着的时候，滚动条报的总行数比引擎晚一两帧，
-            // 镜像以为到底了、引擎其实还差刚来的那几行。
-            let extra = extent.cell * extent.screenRows
-            return y > 0 ? room + extra : -(room + extra)
-        }
-
-        /// 松手时还在回弹里：弹回去，不起惯性。返回是否接管了。
-        func releaseOverscroll() -> Bool {
-            guard momentumScroll.overscrollRaw != 0 else { return false }
-            let shown = rubberBand(momentumScroll.overscrollRaw)
-            momentumScroll.overscrollRaw = 0
-            startBounce(from: shown, velocity: 0)
-            return true
-        }
-
-        /// 临界阻尼弹簧回到 0：x(t) = (x0 + (v0 + ω·x0)·t)·e^(−ω·t)，ω = 12/s（约 0.45 s 停稳，和 UIScrollView 回弹的观感相近）。
-        func startBounce(from shown: CGFloat, velocity: CGFloat) {
-            stopBounce(resetting: false)
-            momentumScroll.bounceFrom = shown
-            momentumScroll.bounceVelocity = velocity
-            momentumScroll.bounceStart = CACurrentMediaTime()
-            let link = CADisplayLink(target: self, selector: #selector(bounceFrame(_:)))
-            link.preferredFrameRateRange = Self.scrollFrameRateRange
-            link.add(to: .main, forMode: .common)
-            momentumScroll.bounceLink = link
-        }
-
-        @objc func bounceFrame(_ link: CADisplayLink) {
-            let omega: CGFloat = 12
-            let t = CGFloat(link.targetTimestamp - momentumScroll.bounceStart)
-            let x0 = momentumScroll.bounceFrom, v0 = momentumScroll.bounceVelocity
-            var x = (x0 + (v0 + omega * x0) * t) * exp(-omega * t)
-            // 冲出去的那段也按橡皮筋衰减，甩得再快也冲不出半屏。
-            if x0 == 0 { x = rubberBand(x) }
-            if t > 0.25, abs(x) < 0.5 {
-                stopBounce(resetting: true)
-                // 回弹期间视口应当正好在顶 / 底；万一不是（镜像和引擎差了整行，停手后才对上），补一次吸附。
-                if !momentumScroll.panActive { snapScrollToRow() }
-                return
-            }
-            applyOverscroll(x)
-        }
-
-        func stopBounce(resetting: Bool) {
-            momentumScroll.bounceLink?.invalidate()
-            momentumScroll.bounceLink = nil
-            if resetting { applyOverscroll(0) }
-        }
+        // MARK: 自写的惯性（按速度衰减）：只给不归系统滚动的那几种拖动
 
         /// 现在的位移是不是按行报给程序（程序抓着鼠标，且不是双指的本地整行滚动）。
         private var scrollReportsToProgram: Bool {
@@ -535,7 +389,7 @@
             var velocity = velocity
             var stopSpeed: CGFloat = 50
             // uTerm 本地补丁（抓鼠标的程序松手后的惯性）：位移交给引擎，引擎每攒够一格就给程序报一次滚轮，画面由程序自己
-            // 一行一行地重画，和 Mac 触控板的惯性滚动是一回事。和普通滚动的惯性有三处不同：
+            // 一行一行地重画，和 Mac 触控板的惯性滚动是一回事。和别的惯性（备用屏、没有回滚、双指本地滚动）有三处不同：
             // - 滑得近：距离是 UIScrollView `.normal` 的 `UTermScrollTrace.programMomentumTravel` 倍（四分之一，见 momentumScrollFrame）。
             //   照 `.normal` 滑时 user 觉得太远：整行整行跳的画面跟不住眼睛，程序一次滚轮也可能不止滚一行；
             // - 只留主方向：横向那点速度攒够一格会被报成横向滚轮；
@@ -551,25 +405,6 @@
                 }
             }
             guard abs(velocity.x) > stopSpeed || abs(velocity.y) > stopSpeed else { return }
-            // uTerm 本地补丁：普通滚动（程序没抓鼠标、不是双指本地滚动）改成「先算落点再滑」，照 UIScrollView 的
-            // targetContentOffset：按 `.normal` 减速率算出能滑多远，取整到最近的整行，再用一条指数曲线正好停在那一行上，
-            // 速度一路连续降到 0，不再惯性停下后另起一段吸附。
-            if abs(velocity.y) > 50, !momentumScroll.scrollsLocally, surface?.isMouseCaptured != true,
-               let extent = syncScrollModel() {
-                let scale = resolvedDisplayScale()
-                let cell = CGFloat(extent.cell)
-                let v = velocity.y * scale                                   // px/s
-                let projected = v / 1000 / CGFloat(-log(0.998))              // UIScrollView .normal 滑到停的距离（px）
-                // 落点 = 现在离回滚顶部的像素 − 滑行距离，取最近的整行；滑过顶 / 底的由回弹接手（absorbOverscroll）。
-                let position = CGFloat(momentumScroll.modelRow * extent.cell + momentumScroll.modelFrac)
-                var total = position - ((position - projected) / cell).rounded() * cell
-                if total * v <= 0 { total += v > 0 ? cell : -cell }
-                TerminalDebugLog.log(.input, "glide start v=\(Int(v))px/s projected=\(Int(projected)) total=\(Int(total))")
-                // 三次缓出 p = total·(1 − (1 − t/D)³) 的初速度是 3·total/D，让它等于抬手速度。
-                UTermScrollTrace.signpostGlideStart(velocity: Double(v), total: Double(total), duration: Double(3 * total / v))
-                startGlide(total: total, duration: 3 * total / v)
-                return
-            }
 
             momentumScroll.velocity = velocity
             momentumScroll.reportsToProgram = reports
@@ -592,110 +427,21 @@
             momentumScroll.displayLink = link
         }
 
-        /// 沿三次缓出 p(t) = total·(1 − (1 − t/D)³) 滑完 `total` 像素：速度连续降到 0、正好在 D 秒时落在 total 上。
-        /// 不用纯指数衰减：那样最后几个像素要拖上一两秒、每隔几帧才挪 1 px，看着就是收尾卡（第四轮真机读数）。
-        /// 每帧只发整像素（零头留到下一帧），慢下来时文字不会停在子像素位置上闪。
-        func startGlide(total: CGFloat, duration: CGFloat) {
-            stopMomentumScrolling(sendTerminalEndEvent: false, settle: .none)
-            momentumScroll.settleToken += 1
-            momentumScroll.dragCarry = 0
-            momentumScroll.glideTotal = total
-            momentumScroll.glideDuration = min(max(duration, 0.12), 3.0)
-            // 起点在第一次回调时按那一帧的 timestamp 定（见 glideFrame），这样第一帧正好走一帧的量。按调用时刻算的话，
-            // 第一次回调的 targetTimestamp 离调用时刻差不多两帧，第一帧一下走两帧的量（上屏实测：…18, 52, 24, 24…）。
-            momentumScroll.glideStart = 0
-            momentumScroll.glideSent = 0
-            momentumScroll.velocity = .zero
-            scrollTouchContent(by: .zero, momentum: .began)
-            let link = CADisplayLink(target: self, selector: #selector(glideFrame(_:)))
-            link.preferredFrameRateRange = Self.scrollFrameRateRange
-            link.add(to: .main, forMode: .common)
-            momentumScroll.displayLink = link
-        }
-
-        @objc func glideFrame(_ link: CADisplayLink) {
-            if momentumScroll.glideStart == 0 {
-                startGlideTimeline(link)
-                if momentumScroll.glideStart != link.timestamp { return }
-            }
-            advanceGlide(link, target: link.targetTimestamp)
-        }
-
-        /// 定惯性的起点。正常情况起点 = 这一帧的 timestamp，第一帧正好走一帧的量。
-        ///
-        /// 交接那一帧要防「一帧走两步」：惯性回调在它这一拍的 vsync（timestamp）之前约 1 ms 就来，手指最后一下拖动若刚
-        /// 发生在它前面一点，拖动那一步还没画上画面层。它要是在 vsync 之后才上画面层，就和惯性第一步同一拍上屏（上屏实测：
-        /// 交接那一拍 43 = 18 + 25 px、117 = 18 + 99 px，前一拍不动）。所以拖动还没上画面层时，这一帧先不走（起点挪到下一帧），
-        /// 等它画上来：赶在 vsync 之前画上来的，说明它落在这一拍，惯性第一步立刻补上（落在下一拍），不空一帧；
-        /// 赶不上的，它自己占下一拍，惯性从再下一拍起走。
-        func startGlideTimeline(_ link: CADisplayLink) {
-            // 拖动后画面层没换过 IOSurface = 拖动那一步还没画上来。拖动才过去不到 1 ms 时，即使换过也是更早那一帧
-            //（Ghostty 画一帧要 1.5 ms 上下），一样当作还没画上来，等下一次换。
-            let sinceDrag = CACurrentMediaTime() - momentumScroll.lastDragTime
-            let current = UTermCommitWatch.contentsIdentity(of: self)
-            let dragPending = sinceDrag < 2 * link.duration && momentumScroll.contentsAtLastDrag != nil
-                && (current == momentumScroll.contentsAtLastDrag || sinceDrag < 0.001)
-            let baseline = current
-            guard dragPending else {
-                momentumScroll.glideStart = link.timestamp
-                UTermScrollTrace.record("glide-first", 0)
-                return
-            }
-            momentumScroll.glideStart = link.targetTimestamp
-            UTermScrollTrace.record("glide-first", 1)
-            let vsync = link.timestamp, target = link.targetTimestamp
-            UTermCommitWatch.onContentsChange(of: self, from: baseline, within: 2 * link.duration) { [weak self] committedAt in
-                guard let self, committedAt < vsync, self.momentumScroll.displayLink === link,
-                      self.momentumScroll.glideSent == 0 else { return }
-                self.momentumScroll.glideStart = vsync
-                UTermScrollTrace.record("glide-first", 2)
-                self.advanceGlide(link, target: target)
-            }
-        }
-
-        /// 把惯性推进到 `target` 这一拍该在的位置（只发整像素，零头留到下一帧）。
-        func advanceGlide(_ link: CADisplayLink, target: CFTimeInterval) {
-            let callbackMark = UTermScrollTrace.mark()
-            defer { UTermScrollTrace.span("glide-cb", since: callbackMark) }
-            let total = momentumScroll.glideTotal, duration = momentumScroll.glideDuration
-            let u = min(1, CGFloat(target - momentumScroll.glideStart) / duration)
-            let rest = pow(1 - u, 3)
-            let position = u >= 1 ? total : total * (1 - rest)
-            let delta = position.rounded() - momentumScroll.glideSent
-            UTermScrollTrace.record("glide-target", target)
-            if UTermCommitWatch.isWanted {
-                UTermCommitWatch.watch(self)
-                TerminalDebugLog.log(.input, "uterm-glide t=\(String(format: "%.5f", CACurrentMediaTime())) target=\(String(format: "%.5f", target)) sent=\(Int(delta))")
-            }
-            // 撞边转回弹要用当前速度（pt/s）：v = 3·total/D·(1 − u)²。
-            momentumScroll.velocity = CGPoint(x: 0, y: 3 * total / duration * pow(1 - u, 2) / resolvedDisplayScale())
-            if delta != 0 {
-                momentumScroll.glideSent += delta
-                UTermScrollTrace.record("momentum", Double(delta))
-                let sendMark = UTermScrollTrace.mark()
-                scrollTouchContent(by: CGPoint(x: 0, y: delta / resolvedDisplayScale()), momentum: .changed)
-                UTermScrollTrace.span("glide-send", since: sendMark)
-            }
-            UTermScrollTrace.signpostGlideTick(target: target, cumulative: Double(momentumScroll.glideSent))
-            // 撞边时 scrollTouchContent 已经把 link 停了、交给回弹。
-            if u >= 1, momentumScroll.displayLink === link { stopMomentumScrolling() }
-        }
-
         static var scrollFrameRateRange: CAFrameRateRange {
             CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         }
 
         @objc func momentumScrollFrame(_ link: CADisplayLink) {
             // uTerm 本地补丁：位移的去向途中变了（起的时候程序抓着鼠标，现在它放开了，比如退出了全屏界面；或者反过来），
-            // 惯性到此为止。接着走的话，本来报给程序的速度会拿去滚视口（系统滚动打开时视口归 UIScrollView 管，
-            // 这里再动它两边就对不上了），或者本来滚视口的速度变成一串滚轮报给刚起来的程序。
+            // 惯性到此为止。接着走的话，本来报给程序的速度会拿去滚视口（视口归 UIScrollView 管，这里再动它两边就对不上了），
+            // 或者本来滚视口的速度变成一串滚轮报给刚起来的程序。
             if momentumScroll.reportsToProgram != scrollReportsToProgram {
                 stopMomentumScrolling()
                 return
             }
             let dt = link.targetTimestamp - link.timestamp
-            // uTerm 本地补丁：减速按 UIScrollView 的 `.normal`（每毫秒 0.998），和 SwiftTerm 标签（UIScrollView）
-            // 甩出去的距离、收尾一致。上游是每 1/60 s 0.92，摩擦大得多，甩一下就停。按帧时长缩放，60 / 120 Hz 一样远。
+            // uTerm 本地补丁：减速按 UIScrollView 的 `.normal`（每毫秒 0.998），和系统滚动甩出去的距离、收尾一致。
+            // 上游是每 1/60 s 0.92，摩擦大得多，甩一下就停。按帧时长缩放，60 / 120 Hz 一样远。
             // 报给程序的那种惯性再按 `programMomentumTravel` 缩短距离（距离和减速率成反比）。
             let travel = momentumScroll.reportsToProgram ? max(0.05, UTermScrollTrace.programMomentumTravel) : 1
             let decay = CGFloat(pow(0.998, dt * 1000 / travel))
@@ -726,13 +472,13 @@
         enum ScrollSettle {
             /// 不管：紧接着还有位移（手指接着拖、另起一段惯性）。
             case none
-            /// 先原地停着，稍后没人接手再吸附回整行（惯性途中手指落下）。
+            /// 先原地停着，稍后没人接手再对齐回整行（惯性途中手指落下）。
             case later
-            /// 当场对齐整行并收掉回弹（要按整数视口算命中、视图离屏、进后台）。
+            /// 当场对齐整行（要按整数视口算命中、视图离屏、进后台）。
             case now
         }
 
-        /// 惯性途中手指落下（`touchesBegan` / 点按识别器收到触摸）：停住，稍后没接着拖再吸附。
+        /// 惯性 / 系统减速途中手指落下（`touchesBegan` / 点按识别器收到触摸）：停住，稍后没接着拖再对齐。
         func stopMomentumForTouchDown() {
             #if !targetEnvironment(macCatalyst)
                 systemScrollStop()
@@ -740,7 +486,7 @@
             stopMomentumScrolling(settle: .later)
         }
 
-        /// 默认 `.now`：调用方大多是「接下来要按格子算位置」或「视图不显示了」，惯性停在半行、回弹停在半路都不行。
+        /// 默认 `.now`：调用方大多是「接下来要按格子算位置」或「视图不显示了」，视口停在半行不行。
         func stopMomentumScrolling(sendTerminalEndEvent: Bool = true, settle: ScrollSettle = .now) {
             #if !targetEnvironment(macCatalyst)
                 if settle != ScrollSettle.none { systemScrollStop() }

@@ -18,8 +18,8 @@ enum M {
     /// 底栏都铺同一个面，区块之间只靠 1pt `divider` 分开（「线或底色差，二选一」，对齐 macOS
     /// v3.3 分区规则）；不要再给条子单独上 `overlay` / `panel` 色。
     static let surface = UD.panel
-    /// 真实 SwiftTerm 终端的底色 = `surface`：暗夜 #141414 / 日间 #FFFFFF，与
-    /// `MTerminalColors` 两套配色的 background 逐值一致（macOS 08f3b111 同改：纯黑终端在卡面里
+    /// 真实终端的底色 = `surface`：暗夜 #141414 / 日间 #FFFFFF，与
+    /// `TerminalColorScheme` 两套配色的 background 逐值一致（macOS 08f3b111 同改：纯黑终端在卡面里
     /// 成一块黑洞）。命令块 / Shell 网格用 `cmdSurface`。
     static let terminalBg = UD.panel
     /// 命令块 / Shell 网格的「终端面」底色——**随主题翻**：暗夜 #000000 / 日间 #FFFFFF（对齐 macOS
