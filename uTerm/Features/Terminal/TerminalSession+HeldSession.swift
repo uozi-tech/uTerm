@@ -54,6 +54,8 @@ extension TerminalSession {
         mirrorTap.invalidateAll()
         // 检查点里的状态 + 回放那段字节里的状态变化：接回的那一刻标签上就是对的，不等程序下一次上报。
         publishProgramStatus()
+        // 都没有的话，状态是丢了还是本来就没有程序，这时分不出来（检查点是别的引擎版本存的、存的时候还不带状态……）。
+        programStatusUnknown = replay.isReattach && !programStatusTracker.hasRecords
 
         heldCheckpoints = TerminalHeldCheckpoints(link: backend.holderLink, pump: outputPump, baseOffset: replay.endOffset,
                                                   programStatus: { [statusJournal] in statusJournal.encoded })

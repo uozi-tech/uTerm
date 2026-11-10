@@ -34,10 +34,26 @@ extension TerminalSession {
     /// ⌘V 粘贴只有图片的剪贴板。返回 false = 没接管，走普通粘贴。
     ///
     /// 本机 shell 没有 Agent 时不接管：贴图靠替用户按 Ctrl+V，而 Ctrl+V 在 shell 里是转义输入。
+    /// 接回的会话没拿到程序状态时（`programStatusUnknown`）先把按键收下，再问前台是谁：是 shell 以外的程序就当它是
+    /// 重启前就在跑的 Agent。剪贴板里只有图片，普通粘贴本来就贴不出东西，收下按键不会吃掉什么。
     func pasteImage(_ image: TerminalImage) -> Bool {
-        guard let receiver = backend as? any TerminalImageReceiving,
-              !receiver.programsCanReadMacClipboard || hasRunningAgent else { return false }
-        deliver(image, to: receiver)
+        guard let receiver = backend as? any TerminalImageReceiving else { return false }
+        if !receiver.programsCanReadMacClipboard || hasRunningAgent {
+            deliver(image, to: receiver)
+            return true
+        }
+        guard programStatusUnknown else { return false }
+        let generation = feedGeneration
+        Task { [weak self] in
+            let activity = await receiver.foregroundActivity()
+            guard let self, self.feedGeneration == generation, self.programStatusUnknown else { return }
+            switch activity {
+            case .running: self.deliver(image, to: receiver)
+            // 回到了 shell：重启前跑着的那个程序已经结束，之后的程序要报状态才算 Agent。
+            case .idle: self.programStatusUnknown = false
+            case .unknown: break
+            }
+        }
         return true
     }
 

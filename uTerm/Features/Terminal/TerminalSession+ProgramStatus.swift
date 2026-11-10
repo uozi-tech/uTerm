@@ -34,15 +34,19 @@ extension TerminalSession {
         }
         switch event {
         case .programStatus(let message):
+            // 程序开口了（下同：回到了 shell 提示符）：接回时丢掉的状态不用再猜。
+            programStatusUnknown = false
             // 远控镜像：那台 Mac 自己解析状态、经远控协议推过来，这里不再解析一遍。
             guard !(backend is RemoteTerminalBackend) else { return }
             applyProgramStatus(message, isLooking: isUserLooking)
         case .programStatusQuery:
+            programStatusUnknown = false
             // 远控镜像：那台 Mac 自己回答查询，这里再答一遍就成了程序收到的多余输入。
             // 应答用 uTerm 自己那条最短的（`ProgramStatusTracker.queryReply`，缺省即全部支持），不用引擎拟的那条。
             guard !(backend is RemoteTerminalBackend) else { return }
             applyProgramStatus(.query, isLooking: isUserLooking)
         case .promptStarted:
+            programStatusUnknown = false
             programDidEnd()
         case .unknownOSC(let payload, let cursor):
             handleUnknownOSC(payload, cursor: cursor)
@@ -90,6 +94,7 @@ extension TerminalSession {
     func resetProgramStatus() {
         programStatusTracker.reset()
         statusJournal.current = ProgramStatusTracker()
+        programStatusUnknown = false
         publishProgramStatus()
     }
 
