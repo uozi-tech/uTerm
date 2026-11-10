@@ -20,8 +20,12 @@ final class TerminalOutputPumpTests: XCTestCase {
         private var log: [Entry] = []
         private var pending = 0
         private var backlogHandler: (@Sendable (Bool) -> Void)?
+        private var grid: (cols: Int, rows: Int)?
 
         var entries: [Entry] { lock.withLock { log } }
+        /// surface 的网格（主控端等网格对齐时读）；nil = 没有。
+        func setGrid(cols: Int, rows: Int) { lock.withLock { grid = (cols, rows) } }
+        var surfaceGridSize: (cols: Int, rows: Int)? { lock.withLock { grid } }
         var liveBytes: Data { entries.reduce(into: Data()) { if case .live(let data) = $1 { $0.append(data) } } }
         var replays: [Data] { entries.compactMap { if case .replay(let data) = $0 { return data } else { return nil } } }
 
@@ -62,8 +66,8 @@ final class TerminalOutputPumpTests: XCTestCase {
     }
 
     /// 把影子读到的画面和「把 surface 收到的东西按顺序喂进另一个终端」比：两边应当一样。
-    private func screen(replaying entries: [FakeSurface.Entry]) -> String {
-        let terminal = makeShadow()
+    private func screen(replaying entries: [FakeSurface.Entry], cols: UInt16 = 40, rows: UInt16 = 6) -> String {
+        let terminal = makeShadow(cols: cols, rows: rows)
         for entry in entries {
             switch entry {
             case .live(let data), .replay(let data): terminal.feed(data)
@@ -201,6 +205,68 @@ final class TerminalOutputPumpTests: XCTestCase {
         for case .live(let data) in fromReplay.dropFirst() { mirror.feed(data) }
         XCTAssertEqual(mirror.viewportText(), mac.viewportText())
         pump.reset()
+    }
+
+    // MARK: 主控端等网格对齐（`followsSnapshotGrid`）
+
+    private func snapshot(cols: UInt16, rows: UInt16, text: String) throws -> Data {
+        let mac = makeShadow(cols: cols, rows: rows)
+        mac.feed(Data(text.utf8))
+        return try mac.snapshot()
+    }
+
+    /// 快照是被控端的网格、本地 surface 是另一个网格：画面停着（不回放、实时字节不进 surface），
+    /// 等来同网格的快照再回放；停着期间的字节都在影子里。
+    func testMismatchedSnapshotHoldsTheSurfaceUntilAnAlignedOneArrives() throws {
+        let (pump, shadow, surface) = makePump()
+        pump.followsSnapshotGrid = true
+        surface.setGrid(cols: 50, rows: 8)
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+
+        pump.applySnapshot(try snapshot(cols: 30, rows: 5, text: "mac at 30x5"))
+        XCTAssertTrue(pump.isHoldingForGrid)
+        pump.route(Data("\r\nmore".utf8))
+        XCTAssertTrue(surface.entries.isEmpty, "网格没对齐：不回放、不进实时字节")
+        XCTAssertEqual(shadow.size.cols, 30, "影子跟着被控端的网格")
+
+        let aligned = try snapshot(cols: 50, rows: 8, text: "mac at 50x8")
+        pump.applySnapshot(aligned)
+        XCTAssertFalse(pump.isHoldingForGrid)
+        XCTAssertEqual(surface.replays.count, 1)
+        pump.route(Data(" live".utf8))
+        XCTAssertEqual(surface.liveBytes, Data(" live".utf8))
+        XCTAssertEqual(screen(replaying: surface.entries, cols: 50, rows: 8), shadow.viewportText())
+        XCTAssertEqual(pump.currentStats.gridHolds, 1)
+    }
+
+    /// 等不到同网格的快照（对端没钉成）：超时后照常回放，同样的错位不再停第二次。
+    func testGridHoldTimesOutAndReplaysAnyway() async throws {
+        let (pump, _, surface) = makePump()
+        pump.followsSnapshotGrid = true
+        surface.setGrid(cols: 50, rows: 8)
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        pump.applySnapshot(try snapshot(cols: 30, rows: 5, text: "never aligned"))
+        XCTAssertTrue(pump.isHoldingForGrid)
+
+        let released = await waitUntil(TerminalOutputPump.gridAlignmentTimeout + 2) { surface.replays.count == 1 }
+        XCTAssertTrue(released, "超时后要回放")
+        XCTAssertFalse(pump.isHoldingForGrid)
+        XCTAssertEqual(pump.currentStats.gridHoldTimeouts, 1)
+        pump.route(Data("x".utf8))
+        XCTAssertEqual(surface.liveBytes, Data("x".utf8), "同样的错位不再停")
+    }
+
+    /// 本机会话（默认不跟快照网格）：网格不一样也照常回放（影子本来就跟着 surface）。
+    func testLocalSessionsNeverHoldForGrid() throws {
+        let (pump, _, surface) = makePump()
+        surface.setGrid(cols: 50, rows: 8)
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        pump.applySnapshot(try snapshot(cols: 30, rows: 5, text: "local"))
+        XCTAssertFalse(pump.isHoldingForGrid)
+        XCTAssertEqual(surface.replays.count, 1)
     }
 
     /// 解不开的快照丢掉，影子原样不动。

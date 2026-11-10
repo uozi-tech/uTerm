@@ -14,9 +14,20 @@ nonisolated protocol TerminalSurfaceSink: AnyObject, Sendable {
     func receiveReplay(_ data: Data)
     @discardableResult func discardPendingOutput() -> Int
     func setOutputBacklogHandler(highWater: Int, lowWater: Int, _ handler: (@Sendable (_ isBacklogged: Bool) -> Void)?)
+    /// surface 的终端在用的网格（IO 线程上报过的那个，不是主线程刚设下、终端还没改过去的尺寸）；没有时 nil。
+    /// 只在 `followsSnapshotGrid` 时读。
+    var surfaceGridSize: (cols: Int, rows: Int)? { get }
 }
 
-extension InMemoryTerminalSession: TerminalSurfaceSink {}
+extension TerminalSurfaceSink {
+    nonisolated var surfaceGridSize: (cols: Int, rows: Int)? { nil }
+}
+
+extension InMemoryTerminalSession: TerminalSurfaceSink {
+    nonisolated var surfaceGridSize: (cols: Int, rows: Int)? {
+        reportedGrid.map { (Int($0.columns), Int($0.rows)) }
+    }
+}
 
 /// 后端输出 → 影子终端 + 画面的泵。mac `TerminalSession` 与 iOS `MobileTerminalController` 共用这一份
 /// （迁移计划 docs/ghostty-migration-plan.md §2）：
@@ -44,6 +55,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     /// 大块输出切成这么大再喂：每片之间看一次闸门，surface 的积压最多超出 `highWater` 一片；
     /// 读影子的一方（主线程）最多等一片的解析（约 0.1 ms）。
     static let sliceBytes = 64 << 10
+    /// 主控端画面停着等「同网格的快照」最多等这么久（见 `followsSnapshotGrid`）；过了就照常回放，错位也比画面不动好。
+    static let gridAlignmentTimeout: TimeInterval = 1.0
 
     /// 读数与测试用。
     nonisolated struct Stats: Sendable {
@@ -68,6 +81,9 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         var backpressureWaits = 0
         /// 收到的整屏快照（远控镜像）里解不开的张数。
         var rejectedSnapshots = 0
+        /// 主控端因为影子与 surface 网格不一致而停画的次数、等不到对齐超时放行的次数。
+        var gridHolds = 0
+        var gridHoldTimeouts = 0
     }
 
     let shadow: ShadowTerminal
@@ -85,6 +101,14 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     private var ingressTask: Task<Void, Never>?
     private var fedHandler: (@Sendable (Data) -> Void)?
     private var replayedHandler: (@Sendable () -> Void)?
+    /// 见 `followsSnapshotGrid`。
+    private var followsSnapshotGridValue = false
+    /// 画面停着等网格对齐（影子是被控端的网格、surface 是本地的网格）。
+    private var heldForGrid = false
+    private var heldSince: UInt64 = 0
+    private var holdToken = 0
+    /// 超时放行过的那一对网格（影子、surface）：同样的错位不再停第二次，等网格变了再说。
+    private var waivedMismatch: [Int]?
 
     /// 保护闸门。surface 的 backlog 回调可能就在 `surface.receive` 里同步回来（那时 `stateLock` 在手上），
     /// 所以闸门另用一把锁，并且拿着它时不调 surface、不拿 `stateLock`（顺序只能是 stateLock → gateLock）。
@@ -135,6 +159,26 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         get { stateLock.withLock { replayedHandler } }
         set { stateLock.withLock { replayedHandler = newValue } }
     }
+
+    /// 主控端（远控镜像：Mac 的远控窗口、iOS 的远控标签）打开。影子的网格跟着被控端走（快照带来），不跟本地 surface；
+    /// 两边网格不一样时——刚接入、本地刚改了尺寸，被控端还没按本地尺寸钉好再发快照——按被控端网格排好的内容灌进本地
+    /// 网格的 surface 只会错位，所以画面先停在上一帧（字节照样进影子），等来同网格的快照再回放，最多等
+    /// `gridAlignmentTimeout`。默认关：本机会话的影子本来就跟着 surface 走。
+    var followsSnapshotGrid: Bool {
+        get { stateLock.withLock { followsSnapshotGridValue } }
+        set {
+            stateLock.withLock {
+                followsSnapshotGridValue = newValue
+                if !newValue, heldForGrid {
+                    heldForGrid = false
+                    if feedsSurface, surfaceIsStale { replayLocked() }
+                }
+            }
+        }
+    }
+
+    /// 画面此刻停着等网格对齐（测试用）。
+    var isHoldingForGrid: Bool { stateLock.withLock { heldForGrid } }
 
     // MARK: 入站
 
@@ -204,12 +248,72 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         if let generation, generation != currentGeneration { return }
         shadow.feed(slice)
         fedHandler?(slice)
-        if feedsSurface {
-            surface.receive(slice)
+        if feedsSurface, !holdIfGridMismatchedLocked() {
+            // 刚放行时回放已经带上了这一片。
+            if surfaceIsStale { replayLocked() } else { surface.receive(slice) }
         } else {
             surfaceIsStale = true
             stats.shadowOnlyBytes += slice.count
         }
+    }
+
+    // MARK: 主控端等网格对齐
+
+    /// 调用方持 `stateLock`，且 surface 在吃字节。该停画就停（返回 true，surface 队列里排着的丢掉、记为落后）；
+    /// 网格对齐了或者等超时了就放行（返回 false，由调用方回放）。
+    private func holdIfGridMismatchedLocked() -> Bool {
+        guard followsSnapshotGridValue, let grid = surface.surfaceGridSize else {
+            heldForGrid = false
+            return false
+        }
+        let current = shadow.size
+        let pair = [current.cols, current.rows, grid.cols, grid.rows]
+        if current.cols == grid.cols, current.rows == grid.rows {
+            waivedMismatch = nil
+            heldForGrid = false
+            return false
+        }
+        if pair == waivedMismatch { return false }
+        if heldForGrid {
+            let waited = Double(DispatchTime.now().uptimeNanoseconds - heldSince) / 1e9
+            guard waited >= Self.gridAlignmentTimeout else { return true }
+            heldForGrid = false
+            waivedMismatch = pair
+            stats.gridHoldTimeouts += 1
+            surfaceIsStale = true
+            return false
+        }
+        heldForGrid = true
+        heldSince = DispatchTime.now().uptimeNanoseconds
+        holdToken &+= 1
+        stats.gridHolds += 1
+        stats.droppedSurfaceBytes += surface.discardPendingOutput()
+        surfaceIsStale = true
+        // 没有新字节、也没有新快照时由它来放行。
+        let token = holdToken
+        catchUpQueue.asyncAfter(deadline: .now() + Self.gridAlignmentTimeout + 0.01) { [weak self] in
+            self?.gridHoldTimerFired(token)
+        }
+        return true
+    }
+
+    /// surface 的终端报来了新网格（IO 线程在改网格之前报的；之后排进去的回放按新网格解析）。停着等对齐的画面
+    /// 这时可能对上了：在后台队列上再看一次。任何线程可调。
+    func surfaceGridDidChange() {
+        catchUpQueue.async { [weak self] in
+            guard let self else { return }
+            self.stateLock.lock()
+            defer { self.stateLock.unlock() }
+            guard self.heldForGrid, self.feedsSurface else { return }
+            if !self.holdIfGridMismatchedLocked(), self.surfaceIsStale { self.replayLocked() }
+        }
+    }
+
+    private func gridHoldTimerFired(_ token: Int) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard heldForGrid, holdToken == token, feedsSurface else { return }
+        if !holdIfGridMismatchedLocked(), surfaceIsStale { replayLocked() }
     }
 
     /// 整屏快照（远控镜像）：影子就地换成快照里的终端，再把它回放进 surface。两端共用的入口——
@@ -229,7 +333,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
             return
         }
         surfaceIsStale = true
-        if feedsSurface { replayLocked() }
+        if feedsSurface, !holdIfGridMismatchedLocked() { replayLocked() }
     }
 
     /// 影子被不经过泵的方式改过（从检查点还原、直接喂了历史）：surface 要重新对齐。正在吃字节就当场回放，
@@ -238,7 +342,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         surfaceIsStale = true
-        if feedsSurface { replayLocked() }
+        if feedsSurface, !holdIfGridMismatchedLocked() { replayLocked() }
     }
 
     /// 在「没有字节正在喂」的状态下跑 `body`：里面读影子（拍快照、读光标）对应的是字节流上一个确定的位置，
@@ -315,6 +419,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         wantsSurface = feeding
         if !feeding, feedsSurface {
             feedsSurface = false
+            heldForGrid = false
             let dropped = surface.discardPendingOutput()
             if dropped > 0 {
                 surfaceIsStale = true
@@ -340,8 +445,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         defer { stateLock.unlock() }
         guard wantsSurface, !feedsSurface else { return }
         shadow.setRepliesEnabled(false)
-        if surfaceIsStale { replayLocked() }
         feedsSurface = true
+        if !holdIfGridMismatchedLocked(), surfaceIsStale { replayLocked() }
         setGateFollowsBacklog(true)
     }
 

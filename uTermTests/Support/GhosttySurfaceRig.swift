@@ -9,7 +9,7 @@ import XCTest
 /// 只读影子终端就够的用例不要用它（慢，而且测试窗口被完全遮挡时显示节拍会停）。
 @MainActor
 final class GhosttySurfaceRig {
-    let session = TerminalSession()
+    let session: TerminalSession
     let backend = MockBackend()
     let container: GhosttyContainerView
     let window: NSWindow
@@ -18,7 +18,10 @@ final class GhosttySurfaceRig {
     var bridge: GhosttyTerminalBridge { session.ghostty }
 
     /// 建好并等到 surface 在吃实时字节、网格停稳、后端已连上。
-    init(size: NSSize = NSSize(width: 800, height: 500), file: StaticString = #filePath, line: UInt = #line) async {
+    /// `session` / `connectsBackend`：用别人建的会话（例如远控窗口的标签），不接假后端时由调用方自己接。
+    init(size: NSSize = NSSize(width: 800, height: 500), session: TerminalSession = TerminalSession(),
+         connectsBackend: Bool = true, file: StaticString = #filePath, line: UInt = #line) async {
+        self.session = session
         session.attentionSink = { _ in }
         let rect = NSRect(origin: .zero, size: size)
         container = GhosttyContainerView(surface: session.ghostty.view)
@@ -28,7 +31,7 @@ final class GhosttySurfaceRig {
         container.layoutSubtreeIfNeeded()
         // 真的主菜单会把 ⌘Q、⌘W 执行掉：测试里一律不问它。
         view.performMenuKeyEquivalent = { _ in false }
-        let live = await waitUntil(10) { self.bridge.isLive && self.bridge.grid != nil }
+        let live = await waitUntil(10) { (self.bridge.isLive || !connectsBackend) && self.bridge.grid != nil }
         XCTAssertTrue(live, "Ghostty surface 没就绪", file: file, line: line)
         var last = bridge.grid.map { "\($0)" } ?? ""
         var stableSince = Date()
@@ -37,7 +40,7 @@ final class GhosttySurfaceRig {
             let now = bridge.grid.map { "\($0)" } ?? ""
             if now != last { last = now; stableSince = Date() }
         }
-        await session.connect(using: backend)
+        if connectsBackend { await session.connect(using: backend) }
         window.makeFirstResponder(view)
     }
 

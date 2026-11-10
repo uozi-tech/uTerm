@@ -4,6 +4,26 @@ import XCTest
 @MainActor
 final class TerminalSessionTests: XCTestCase {
 
+    /// 换连接 / 重连后，上一条连接上的程序设过的光标形状（DECSCUSR）复位成设置里的：复位序列 `CSI 0 q` 经泵进了
+    /// 影子、画面和镜像同一条字节流（镜像订阅者收得到，说明画面那边也收到了）。全新的会话不发。
+    func testReconnectResetsTheCursorShapeAProgramSet() async {
+        let session = TerminalSession()
+        session.attentionSink = { _ in }
+        defer { session.dispose() }
+        let subscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        await session.connect(using: MockBackend())
+        var first = Data()
+        while let chunk = subscriber.take(maxBytes: 1 << 20) { if case .output(let bytes) = chunk { first.append(bytes) } }
+        XCTAssertNil(first.range(of: TerminalSession.resetCursorShape), "全新的会话不用复位")
+
+        session.feedOutput(text: "\u{1B}[6 q$ ")
+        while subscriber.take(maxBytes: 1 << 20) != nil {}
+        await session.connect(using: MockBackend())
+        var after = Data()
+        while let chunk = subscriber.take(maxBytes: 1 << 20) { if case .output(let bytes) = chunk { after.append(bytes) } }
+        XCTAssertNotNil(after.range(of: TerminalSession.resetCursorShape), "重连后要复位光标形状")
+    }
+
     func testInitialStateIsIdle() {
         let session = TerminalSession()
         XCTAssertEqual(session.connectionState, .idle)

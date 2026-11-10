@@ -84,6 +84,8 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     private var wasRestored = false
     /// 事件出口，见 `Event`。在 `feed` 里同步调用。
     private var eventHandler: (@Sendable (Event) -> Void)?
+    /// 程序写剪贴板（OSC 52 / OSC 1337 Copy / OSC 5522）。见 `setClipboardWriteHandler`。
+    private var clipboardWriteHandler: (@Sendable (String) -> Void)?
     /// 回放历史时关掉事件（里面的状态上报、通知、标记都是过去的事）。
     private var eventsSuppressed = false
 
@@ -730,6 +732,15 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// 程序要写剪贴板（OSC 52 等）：参数是要写的文字（vt 已解好 base64；只取纯文本那一份，清空剪贴板的请求不转）。
+    /// 和事件一样在 `feed` 里同步调用、回放历史时不调。读剪贴板（OSC 52 `?`）不接：vt 不答，程序读不到。
+    /// 单独一个回调而不是 `Event` 的一种：两端按 `Event` 穷举分发，加一种会让没接的那一端编不过。
+    func setClipboardWriteHandler(_ handler: (@Sendable (String) -> Void)?) {
+        lock.lock()
+        clipboardWriteHandler = handler
+        lock.unlock()
+    }
+
     func setEventsSuppressed(_ suppressed: Bool) {
         lock.lock()
         eventsSuppressed = suppressed
@@ -822,6 +833,27 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
                 .titleChanged(ShadowTerminal.string(terminal, GHOSTTY_TERMINAL_DATA_TITLE)))
         }
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, unsafeBitCast(title, to: UnsafeRawPointer.self))
+
+        let clipboardWrite: GhosttyTerminalClipboardWriteFn = { _, userdata, request in
+            guard let userdata, let request else { return }
+            let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
+            var result = GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
+            if !shadow.eventsSuppressed, let handler = shadow.clipboardWriteHandler,
+               request.pointee.location == GHOSTTY_CLIPBOARD_LOCATION_STANDARD,
+               let contents = request.pointee.contents, request.pointee.contents_len > 0 {
+                let items = UnsafeBufferPointer(start: contents, count: request.pointee.contents_len)
+                let text = items.first { ShadowTerminal.string($0.mime).hasPrefix("text/plain") } ?? items.first
+                if let text {
+                    handler(ShadowTerminal.string(text.data))
+                    result = GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
+                }
+            }
+            var reply = GhosttyClipboardWriteReply(size: MemoryLayout<GhosttyClipboardWriteReply>.size,
+                                                   result: result, remember: false)
+            request.pointee.reply?(request, &reply)
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+                             unsafeBitCast(clipboardWrite, to: UnsafeRawPointer.self))
 
         let bell: GhosttyTerminalBellFn = { _, userdata in
             guard let userdata else { return }

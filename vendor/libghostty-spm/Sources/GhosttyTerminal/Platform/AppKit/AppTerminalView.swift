@@ -26,6 +26,8 @@
         var drop: DropState = .init()
         // uTerm 本地补丁：触控板平滑滚动的镜像与吸附（见 AppTerminalView+SmoothScroll.swift）。
         var smoothScroll: SmoothScrollState = .init()
+        /// uTerm 本地补丁：宿主放掉了 surface（`uTermReleaseSurface()`），回窗口、布局都不自己重建。
+        var uTermSurfaceReleased = false
 
         open weak var delegate: (any TerminalSurfaceViewDelegate)? {
             get { core.delegate }
@@ -86,7 +88,11 @@
             setupTrackingArea()
             setupDropInput()
 
-            core.isAttached = { [weak self] in self?.window != nil }
+            // uTerm 本地补丁：放掉 surface 期间不算挂着（不自己重建）。
+            core.isAttached = { [weak self] in
+                guard let self else { return false }
+                return window != nil && !uTermSurfaceReleased
+            }
             core.displayLinkContext = .view(self)
             core.scaleFactor = { [weak self] in
                 self?.currentScaleFactor() ?? 2.0

@@ -21,6 +21,25 @@ extension TerminalSession {
         }
     }
 
+    /// 程序写剪贴板（OSC 52）：以影子终端为准——标签藏着、surface 没建或放掉了时照样生效（surface 那边配置成 deny，
+    /// 不会写两遍）。读剪贴板一律不答。
+    func installShadowClipboardHandler() {
+        shadow.setClipboardWriteHandler { [weak self] text in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.programWroteClipboard(text) }
+            } else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.programWroteClipboard(text) } }
+            }
+        }
+    }
+
+    private func programWroteClipboard(_ text: String) {
+        guard !isReplayingHeldOutput else { return }
+        let pasteboard = ghostty.view.pasteboard
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
     private func handleShadowEvent(_ event: ShadowTerminal.Event) {
         // 回放是重启前的事：不回答、不发通知、不认标记。但程序状态要跟上——检查点之后、重启之前的状态变化就在这段
         // 字节里，程序之后不会再报一次（一直 working 的程序接回后就指望这里）。回放完由 `restoreHeldScreen` 统一发布。

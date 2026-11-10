@@ -4,15 +4,20 @@ import Foundation
 ///（与 SSH 同一个 `TerminalBackend` 抽象，终端视图与键盘条零改动）。
 ///
 /// - 输出：先是 Mac 发来的整屏快照（影子终端的二进制快照，输出泵把它还原进本地影子终端、再回放进画面），
-///   之后是原始字节。两种都按到达顺序进 `outputItems`；`outputStream` 不用（留着只为满足协议）。
+///   之后是原始字节。两种都按到达顺序进 `outputItems`；`outputStream` 读了会断言（协议要求它，这个后端拆不出纯字节流）。
 /// - 输入 / 尺寸：直接交给连接发出去，不经过主线程。手机的行列数就是终端的行列数（接管尺寸），
 ///   每次变化 Mac 都会调整 PTY 并重发一份快照。
 /// - 断线：在后端内部按退避重连并重新接入，快照到了屏幕自然对齐。控制器看到的是一条不断的流；
 ///   只有 Mac 明确结束了这个终端（关闭、被别的设备接管）才当作会话结束。
 actor RemoteTerminalBackend: TerminalImageReceiving {
-    /// 不产出任何东西：这个后端的输出走 `outputItems`。
-    nonisolated let outputStream: AsyncStream<Data>
+    /// 这个后端的输出只走 `outputItems`（字节之间夹着快照，拆不成纯字节流）。读它是写错了：调试构建里断言，
+    /// 正式构建里给一条立刻结束的空流。
+    nonisolated var outputStream: AsyncStream<Data> {
+        assertionFailure("RemoteTerminalBackend 的输出走 outputItems，不要读 outputStream")
+        return AsyncStream { $0.finish() }
+    }
     nonisolated let outputItems: AsyncStream<TerminalOutputItem>
+    nonisolated var mirrorsRemoteGrid: Bool { true }
     nonisolated let exitStream: AsyncStream<Void>
     /// 断线重连的进度：true = 断了正在重连（这期间的输入发不出去），false = 接回了。界面据此提示。
     nonisolated let reconnecting: AsyncStream<Bool>
@@ -37,7 +42,6 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     init(client: RemoteMacClient, sessionID: UUID) {
         self.client = client
         self.sessionID = sessionID
-        outputStream = AsyncStream { $0.finish() }
         (outputItems, outputContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))

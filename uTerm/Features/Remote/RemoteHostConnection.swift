@@ -417,7 +417,7 @@ final class RemoteHostConnection {
             sendAttachResult(channel, request.sessionID, error: RemoteTerminalEngine.mismatchMessage)
             return
         }
-        // 先钉尺寸再订阅：第一份快照就是手机的行列数。
+        // 先钉尺寸再订阅：第一份快照就是手机的行列数（订阅里等钉好）。
         server.claim(sessionID: request.sessionID, connection: self, channel: channel)
         session.pinRemoteGrid(cols: Int(request.cols), rows: Int(request.rows), controller: peerName)
         session.remoteDisconnect = { [weak self] in
@@ -427,7 +427,13 @@ final class RemoteHostConnection {
         sendAttachResult(channel, request.sessionID, error: nil)
         let subscriberID = UUID()
         let pump = self.pump
-        let subscriber = session.mirrorTap.subscribe(id: subscriberID) { pump.requestDrain() }
+        // 第一张快照等终端按手机的尺寸钉好再拍（钉尺寸要等视图改完、引擎改好网格）。
+        let shadow = session.shadow
+        let target = (cols: Int(request.cols), rows: Int(request.rows))
+        let subscriber = session.mirrorTap.subscribe(
+            id: subscriberID,
+            firstSnapshotWhen: { shadow.size == target },
+            timeout: RemoteConstants.attachGridSettleTimeout) { pump.requestDrain() }
         attachments[channel] = Attachment(sessionID: request.sessionID, session: session, subscriberID: subscriberID)
         pump.add(channel: channel, subscriber: subscriber)
         let device = peerName

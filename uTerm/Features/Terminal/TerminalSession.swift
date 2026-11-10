@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import GhosttyTerminal
+import os
 
 /// 一条终端会话：Ghostty 的画面（`ghostty`）+ 影子终端（`shadow`）+ 后端。窗格的 SwiftUI 视图重建（最大化 / 还原、
 /// 切标签）时会话不重建，画面与回滚随之保留。键盘输入、终端应答、网格尺寸从 Ghostty 来，经有序输入通道发往后端。
@@ -17,6 +18,11 @@ final class TerminalSession: NSObject {
     @ObservationIgnored let outputPump: TerminalOutputPump
     /// 画面：Ghostty 的视图（见 `GhosttyTerminalBridge`）。surface 等视图第一次进窗口才建。
     @ObservationIgnored private(set) lazy var ghostty = GhosttyTerminalBridge(owner: self)
+    /// 远控主控端（后端 `mirrorsRemoteGrid`）：影子终端的网格跟着对端的快照走，本地 surface 报来的网格不改影子
+    /// （只发给对端，对端钉好后发来新网格的快照）。surface 的 resize 回调在 IO 线程上读它。
+    @ObservationIgnored let shadowFollowsRemoteGrid: OSAllocatedUnfairLock<Bool>
+    /// 新 surface 的网格报告认不认（见 `TerminalSurfaceGridGate`）。resize 回调在 IO 线程上读它。
+    @ObservationIgnored let surfaceGridGate: TerminalSurfaceGridGate
     /// 键盘 / 粘贴 / 远端输入与尺寸变化发往后端的有序通道（两端共用，见 `TerminalInputChannel`）。
     @ObservationIgnored let inputChannel = TerminalInputChannel()
     /// 当前绑定的代次：`connect` / `detach` / `dispose` / `close` 都会递增，旧绑定的在途结果据此作废。
@@ -96,13 +102,21 @@ final class TerminalSession: NSObject {
         self.shadow = shadow
         // write / resize 由 Ghostty 在任意线程回调，都转给 `GhosttyTerminalBridge`（它建好之后把自己挂进这个盒子）。
         let relay = GhosttyTerminalBridge.Relay()
+        let followsRemote = OSAllocatedUnfairLock(initialState: false)
+        shadowFollowsRemoteGrid = followsRemote
+        let gridGate = TerminalSurfaceGridGate()
+        surfaceGridGate = gridGate
         surfaceIORelay = relay
         surfaceIO = InMemoryTerminalSession(
             write: { relay.write($0) },
             resize: { viewport in
+                // 新 surface 先按出生时的默认网格报一次，再报真实的：那一次不认（见 `TerminalSurfaceGridGate`）。
+                guard gridGate.admits(viewport) else { return }
                 // 影子终端只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。
-                shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                              cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+                if !followsRemote.withLock({ $0 }) {
+                    shadow.resize(cols: viewport.columns, rows: viewport.rows,
+                                  cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+                }
                 relay.resize(viewport)
             },
             // 只有行列数要发给远端（SIGWINCH）；像素级变化不用。
@@ -120,6 +134,7 @@ final class TerminalSession: NSObject {
         feedTaps.onPinnedFeed = { [weak self] in self?.repositionPinnedGridIfCursorMoved() }
         _ = ghostty
         installShadowEventHandler()
+        installShadowClipboardHandler()
         installShadowReplyHandler()
         updateShadowColors(dark: NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         attentionSink = { [weak self] attention in
@@ -220,6 +235,11 @@ final class TerminalSession: NSObject {
     /// 失败置 failed，远端结束置 disconnected。
     func connect(using backend: any TerminalBackend) async {
         resetFeedAndResizeState()
+        // 新连接上的程序不知道上一条连接上的程序把光标改成了什么形状（DECSCUSR，vim 插入模式的竖线、Claude 的块……）：
+        // 复位成设置里的那一种（`CSI 0 q` = 配置的默认形状与闪烁）。影子、画面、镜像、检查点经同一条泵看到它。
+        // 接回 holder（程序还在跑）、远控镜像时影子随后整个换成快照，这一下被盖掉，程序设的形状保留。
+        // 全新的会话不用（光标本来就是默认的，也免得空终端被当成有内容、surface 挂上时白回放一次）。
+        if shadow.hasContent { outputPump.route(Self.resetCursorShape) }
         // `resetFeedAndResizeState()` just bumped `feedGeneration`; snapshot it
         // as this call's identity token. `backend.connect()` below suspends and
         // frees the MainActor — a second `connect(using:)`, `dispose()`, or
@@ -227,6 +247,15 @@ final class TerminalSession: NSObject {
         // When this call resumes it must not clobber the newer binding's state.
         let myGen = feedGeneration
         self.backend = backend
+        // 远控主控端：影子的网格由对端的快照定，画面等网格对齐再跟（见 `TerminalBackend.mirrorsRemoteGrid`）。
+        let mirrorsRemote = backend.mirrorsRemoteGrid
+        shadowFollowsRemoteGrid.withLock { $0 = mirrorsRemote }
+        outputPump.followsSnapshotGrid = mirrorsRemote
+        if mirrorsRemote, let size = inputChannel.latestSize {
+            // 接入请求就带上本地尺寸：对端钉好这个尺寸再拍第一张快照，不必先按默认的 80×24 接入再改一次。
+            await backend.resize(cols: size.cols, rows: size.rows)
+            guard feedGeneration == myGen, self.backend === backend else { return }
+        }
         // 建连期间的键入照样排进这条后端（与改前一样）；尺寸等连上之后再补发。
         inputChannel.bind(to: backend, sendingLatestSize: false)
         connectionState = .connecting
@@ -311,6 +340,9 @@ final class TerminalSession: NSObject {
     }
 
     /// 代次 +1，停掉在途的入站任务、输入通道与退出监听：上一条连接残留的输出随之作废。
+    /// DECSCUSR 0：光标形状、闪烁回到配置的默认值。
+    static let resetCursorShape = Data("\u{1B}[0 q".utf8)
+
     private func resetFeedAndResizeState() {
         outputPump.reset()
         inputChannel.unbind()

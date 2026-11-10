@@ -163,6 +163,15 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         } ?? nil
     }
 
+    /// uTerm 本地补丁：surface 的终端最近一次报来的网格（resize 回调里的那个值，IO 线程在改终端网格之前报）。
+    /// 和 `surfaceGrid` 不同：`surfaceGrid` 是主线程刚设下的尺寸，IO 线程上的终端可能还没改过去；这个是终端
+    /// 已经（或马上就要）用的网格——此后排进去的字节和回放都按它解析。还没报过时 nil。
+    public var reportedGrid: InMemoryTerminalViewport? {
+        resizeLock.lock()
+        defer { resizeLock.unlock() }
+        return lastResize
+    }
+
     /// uTerm 本地补丁：surface 的终端此刻的网格（行列数与格子像素）；没挂 surface 时 nil。
     /// 宿主在 surface 刚建好时读它：往里回放一段重建出来的历史之前，要先知道接收端现在是多大
     /// （resize 回调只在尺寸变化时才来，重新挂上同样大小的 surface 不会再报）。

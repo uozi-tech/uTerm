@@ -33,11 +33,37 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         private var snapshotWanted = true
         private let limit: Int
         private let onReadable: @Sendable () -> Void
+        /// 第一张快照要等它成立才拍（接入时等终端按对端的尺寸钉好）；过了 `readyDeadline` 不再等。之后的快照不等。
+        private var firstSnapshotReady: (@Sendable () -> Bool)?
+        private var readyDeadline: UInt64 = 0
 
         init(id: UUID, limit: Int, onReadable: @escaping @Sendable () -> Void) {
             self.id = id
             self.limit = limit
             self.onReadable = onReadable
+        }
+
+        fileprivate func waitForFirstSnapshot(until ready: @escaping @Sendable () -> Bool, timeout: TimeInterval) {
+            lock.withLock {
+                firstSnapshotReady = ready
+                readyDeadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(0, timeout) * 1e9)
+            }
+        }
+
+        /// 此刻能不能给它拍快照。调用方已经借到泵的锁。
+        fileprivate var canTakeSnapshot: Bool {
+            let check = lock.withLock { () -> (@Sendable () -> Bool)? in
+                guard let ready = firstSnapshotReady else { return nil }
+                if DispatchTime.now().uptimeNanoseconds >= readyDeadline {
+                    firstSnapshotReady = nil
+                    return nil
+                }
+                return ready
+            }
+            guard let check else { return true }
+            guard check() else { return false }
+            lock.withLock { firstSnapshotReady = nil }
+            return true
         }
 
         /// 取走最多 `maxBytes` 字节；没有则 nil。快照没发完之前先发快照。
@@ -129,10 +155,23 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
     var hasSubscribers: Bool { lock.withLock { !subscribers.isEmpty } }
 
     /// 新订阅者从一张快照开始。
+    ///
+    /// `firstSnapshotWhen`：第一张快照等它成立才拍（远控接入：终端按对端的尺寸钉好、影子终端报出那个网格之后），
+    /// 最多等 `timeout`。这期间的字节不攒（第一张快照里都有）。钉尺寸是异步的（视图改尺寸 → 引擎在 IO 线程上改网格），
+    /// 不等的话第一张快照是旧网格的，紧接着因为网格变了再发一张，对端先按错的网格画一下。
     @discardableResult
     func subscribe(id: UUID, limit: Int = RemoteConstants.maxPendingOutputBytes,
+                   firstSnapshotWhen ready: (@Sendable () -> Bool)? = nil, timeout: TimeInterval = 1,
                    onReadable: @escaping @Sendable () -> Void) -> Subscriber {
         let subscriber = Subscriber(id: id, limit: limit, onReadable: onReadable)
+        if let ready {
+            subscriber.waitForFirstSnapshot(until: ready, timeout: timeout)
+            // 等到超时也没成立（也没有字节、没有网格变化来叫醒）：到点自己拍。
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout + 0.01) { [weak self] in
+                guard let self else { return }
+                self.exclusively { self.serviceSnapshots() }
+            }
+        }
         exclusively {
             self.lock.withLock { self.subscribers[id] = subscriber }
             self.serviceSnapshots()
@@ -163,7 +202,8 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
                 subscriber.notify()
                 continue
             }
-            // 等快照的订阅者：这批字节的效果已经在快照里了。
+            // 等快照的订阅者：这批字节的效果已经在（之后拍的）快照里了。
+            guard subscriber.canTakeSnapshot else { continue }
             if snapshot == nil { snapshot = makeSnapshot() }
             guard let snapshot else { continue }
             subscriber.replace(with: snapshot)
@@ -175,7 +215,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
 
     /// 调用方已经借到泵的锁。
     private func serviceSnapshots() {
-        let waiting = currentSubscribers.filter(\.needsSnapshot)
+        let waiting = currentSubscribers.filter { $0.needsSnapshot && $0.canTakeSnapshot }
         guard !waiting.isEmpty, let snapshot = makeSnapshot() else { return }
         for subscriber in waiting {
             subscriber.replace(with: snapshot)

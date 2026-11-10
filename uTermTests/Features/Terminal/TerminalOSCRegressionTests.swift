@@ -43,19 +43,26 @@ final class TerminalOSCRegressionTests: XCTestCase {
         XCTAssertNil(session.shadow.hyperlink(column: 4, row: 0))
     }
 
-    /// OSC 52 现在由 Ghostty 的 surface 自己处理（配置 `clipboard-write = allow`、`clipboard-read = deny`），写的是系统剪贴板，
-    /// 而且要有真的 surface；这里的私有剪贴板接不上。等价行为（surface 上的 OSC 52 写入）待在带窗口的用例里补。
+    /// OSC 52 由影子终端处理（标签藏着、surface 没建也生效），写进终端视图的剪贴板（测试里换成私有的）。
     func testOSC52WritesToTheTerminalsPasteboard() throws {
-        throw XCTSkip("OSC 52 改由 Ghostty surface 处理，写系统剪贴板；见上面的说明")
         feed("\u{1b}]52;c;\(Data("hello 世界".utf8).base64EncodedString())\u{07}")
         XCTAssertEqual(pasteboard.string(forType: .string), "hello 世界")
     }
 
     func testOSC52WithInvalidBase64LeavesPasteboardAlone() throws {
-        throw XCTSkip("OSC 52 改由 Ghostty surface 处理，写系统剪贴板；见 testOSC52WritesToTheTerminalsPasteboard 的说明")
         pasteboard.clearContents()
         pasteboard.setString("原来的", forType: .string)
         feed("\u{1b}]52;c;@@@not-base64@@@\u{07}")
+        XCTAssertEqual(pasteboard.string(forType: .string), "原来的")
+    }
+
+    /// 回放接回的历史（holder 检查点之后那段字节）时不写剪贴板：那是重启之前的事。
+    func testOSC52IsIgnoredWhileReplayingHeldOutput() {
+        pasteboard.clearContents()
+        pasteboard.setString("原来的", forType: .string)
+        session.isReplayingHeldOutput = true
+        feed("\u{1b}]52;c;\(Data("old".utf8).base64EncodedString())\u{07}")
+        session.isReplayingHeldOutput = false
         XCTAssertEqual(pasteboard.string(forType: .string), "原来的")
     }
 

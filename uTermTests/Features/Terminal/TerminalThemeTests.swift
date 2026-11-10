@@ -148,7 +148,7 @@ final class TerminalThemeTests: XCTestCase {
     func testFixedConfigurationThatUTermReliesOn() {
         let config = entries(GhosttyTerminalConfig.base(settings: settings()))
         XCTAssertEqual(config["clipboard-read"], ["deny"], "远端程序不能读走 Mac 的剪贴板")
-        XCTAssertEqual(config["clipboard-write"], ["allow"])
+        XCTAssertEqual(config["clipboard-write"], ["deny"], "OSC 52 由影子终端写剪贴板，surface 不再写一遍")
         XCTAssertEqual(config["desktop-notifications"], ["false"], "通知由影子终端的事件发，Ghostty 不重复发")
         XCTAssertEqual(config["shell-integration"], ["none"])
         XCTAssertEqual(config["confirm-close-surface"], ["false"])

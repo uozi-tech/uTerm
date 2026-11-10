@@ -3,8 +3,15 @@ import Foundation
 /// 终端层（`TerminalSession`）所依赖的抽象后端。形态对齐 uService 的
 /// `ProcessRunning`，去掉本地进程语义，改为连接语义。SSH 是 M1 唯一实现。
 protocol TerminalBackend: Actor {
-    /// 入站字节（远端 stdout/stderr）。
+    /// 入站字节（远端 stdout/stderr）。会话不读它，读 `outputItems`；一般的后端只实现这一条，`outputItems` 有默认实现。
     nonisolated var outputStream: AsyncStream<Data> { get }
+    /// 会话读的输出流（字节，或远控镜像夹在字节之间的整屏快照，见 `TerminalOutputItem`）。默认 = `outputStream` 逐块包一层；
+    /// 远控镜像（`RemoteTerminalBackend`）自己实现。**必须是协议要求**：只写在扩展里的话，经 `any TerminalBackend`
+    /// 调到的永远是默认实现，远控后端的快照和字节一个都到不了会话。
+    nonisolated var outputItems: AsyncStream<TerminalOutputItem> { get }
+    /// 画面的网格由对端定（远控镜像的主控端）：影子终端跟着对端发来的快照走、不跟本地 surface，网格对齐之前画面不跟
+    /// （`TerminalOutputPump.followsSnapshotGrid`）。默认 false。
+    nonisolated var mirrorsRemoteGrid: Bool { get }
     /// 远端会话结束时产出一个元素后结束。
     nonisolated var exitStream: AsyncStream<Void> { get }
 
@@ -25,8 +32,9 @@ protocol TerminalBackend: Actor {
 }
 
 extension TerminalBackend {
-    /// 输出流，带整屏快照的那种（见 `TerminalOutputItem`）。一般的后端只有字节，就是 `outputStream` 逐块包一层；
-    /// 远控镜像（`RemoteTerminalBackend`）自己实现它，字节之间夹着被控的 Mac 发来的快照。会话只读这一条。
+    nonisolated var mirrorsRemoteGrid: Bool { false }
+
+    /// `outputItems` 的默认实现：`outputStream` 逐块包成 `.bytes`。
     nonisolated var outputItems: AsyncStream<TerminalOutputItem> {
         let output = outputStream
         return AsyncStream { continuation in

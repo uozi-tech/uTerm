@@ -275,18 +275,18 @@ final class GhosttyFontRenderingTests: XCTestCase {
         }
     }
 
-    /// 回退链里放 Menlo 的用意：系统等宽取不到时，拉丁字符落到 Menlo（等宽），而不是苹方的比例字形。
-    /// 这里拿掉系统等宽模拟「取不到」，核格子宽度仍是等宽字体的宽度（约 0.6 个字号；苹方当主字体时格子宽一整个字号）。
-    ///
-    /// **现在不成立，标成预期失败，断言没放宽**：`font-style = Medium` 对回退链里每一个族名都生效，而 Menlo 只有
-    /// Regular / Bold / Italic / Bold Italic，没有 Medium，按「Menlo + Medium」找不到字体，这一格被跳过。实测
-    /// 「Menlo → PingFang SC」+ Medium 的格子是 24×34 px，和只写 PingFang SC 逐项相同（中文 14.60% / 英文 10.39%）；
-    /// font-style 换成 Regular 或不写时才是 Menlo 的 14×28。系统等宽在 macOS 上总是取得到，所以正式配置的画面不受影响，
-    /// 只是 Menlo 这一格目前不起兜底作用。怎么处理（比如接受、或换一种不依赖 font-style 的写法）等主会话定。
-    func test_latin_falls_back_to_menlo_when_system_monospace_is_missing() async throws {
-        XCTExpectFailure("font-style = Medium 下回退链里的 Menlo 匹配不到（Menlo 没有 Medium 这一款），拉丁字符会落到苹方",
-                         options: .nonStrict())
-        let frame = try await render(production(families: ["Menlo", "PingFang SC"]))
+    /// 回退链里的 Menlo 只是占位，不起兜底作用：`font-style = Medium` 对链里每个族名都生效，Menlo 没有 Medium 这一款
+    /// （只有 Regular / Bold / Italic / Bold Italic），按「Menlo + Medium」找不到，这一格被跳过。实测拿掉系统等宽后
+    /// 「Menlo → PingFang SC」+ Medium 的格子是 24×34 px，和只写 PingFang SC 逐项相同（苹方成了主字体）。
+    /// 这没有关系：系统等宽（`.AppleSystemUIFontMonospaced`）在 macOS 上总取得到、而且有 Medium，链的第一格从不落空。
+    /// 这里核的就是这件事：链的第一格是系统等宽、取得到 Medium，正式配置画出来的格子是等宽字体的宽度。
+    func test_system_monospace_is_always_available_so_menlo_is_only_a_placeholder() async throws {
+        let families = GhosttyTerminalConfig.fontFamilies()
+        let system = try XCTUnwrap(TerminalSettings.textFont().familyName, "系统等宽字体取不到")
+        XCTAssertEqual(families.first, system, "链的第一格是系统等宽")
+        let members = NSFontManager.shared.availableMembers(ofFontFamily: system) ?? []
+        XCTAssertTrue(members.contains { ($0[1] as? String) == "Medium" }, "系统等宽有 Medium 这一款：\(members.map { $0[1] })")
+        let frame = try await render(production)
         let em = TerminalSettings.fontSize * 2
         XCTAssertLessThan(Double(frame.cellWidth), 0.75 * em, "格子宽应是等宽字体的宽度。\(describe(frame))")
     }

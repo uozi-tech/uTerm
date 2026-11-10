@@ -47,9 +47,10 @@ enum GhosttyTerminalConfig {
             for item in TerminalScrollbackLimits(lines: settings.scrollback).ghosttyConfiguration {
                 b.withCustom(item.key, item.value)
             }
-            // OSC 52 只允许写、不允许读：远端程序不能读走 Mac 的剪贴板。
+            // OSC 52 由影子终端处理（`TerminalSession.installShadowClipboardHandler`：标签藏着、surface 没建时也要生效），
+            // surface 这边写、读都关掉，免得写两遍；远端程序不能读走 Mac 的剪贴板。
             b.withCustom("clipboard-read", "deny")
-            b.withCustom("clipboard-write", "allow")
+            b.withCustom("clipboard-write", "deny")
             // 取值是 none / clipboard（`false` 按文档是 none 的别名，但这个版本报 InvalidValue）。
             b.withCustom("copy-on-select", settings.copyOnSelect ? "clipboard" : "none")
             // 桌面通知（OSC 9 / 777）由影子终端的事件发（带「用户是否在看」的过滤，标签藏着时也收得到），
@@ -110,10 +111,9 @@ enum GhosttyTerminalConfig {
     /// - PingFang SC 必须显式写上。不写时汉字走 Ghostty 的自动回退（按字去 CoreText 里找），落到哪一款、什么字重
     ///   不同次运行不稳定（同一份配置重启后中文时粗时细），落到 UI Text 变体时全角标点还贴在格子左边；
     ///   写上以后汉字固定用苹方、跟着 font-style 取 Medium，全角标点按苹方的排法（「 的墨迹在两格的右半边）。
-    /// - Menlo 放在苹方前面：系统等宽取不到时拉丁字符落到 Menlo，而不是苹方的比例字形。Menlo 没有汉字，
-    ///   汉字照样落到苹方（有没有 Menlo 画出来逐像素相同）。
-    ///   注意这一格目前不起兜底作用：`font-style = Medium` 对链里每个族名都生效，Menlo 没有 Medium 这一款，
-    ///   按「Menlo + Medium」找不到（`GhosttyFontRenderingTests` 里有一条标成预期失败的用例记着）。
+    /// - Menlo 只是占位，不起兜底作用：`font-style = Medium` 对链里每个族名都生效，Menlo 没有 Medium 这一款，
+    ///   按「Menlo + Medium」找不到、这一格被跳过。不要紧：系统等宽在 macOS 上总取得到（有 Medium），链的第一格从不落空
+    ///   （`GhosttyFontRenderingTests` 核着）。留着它不影响画面（有没有 Menlo 逐像素相同）。
     /// - 不写 SF Mono：它不是系统自带的（要单独装），没装的机器上取不到，白占一格回退。
     static func fontFamilies() -> [String] {
         var out: [String] = []

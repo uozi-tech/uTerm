@@ -72,7 +72,7 @@ final class RemoteReconnectTests: XCTestCase {
         let backend = RemoteTerminalBackend(client: fixture.client, sessionID: fixture.sessionID)
         await backend.resize(cols: 64, rows: 20)
         try await backend.connect()
-        let drain = Task { for await _ in backend.outputStream {} }
+        let drain = Task { for await _ in backend.outputItems {} }
         defer { drain.cancel() }
 
         var ended = false
@@ -115,7 +115,7 @@ final class RemoteReconnectTests: XCTestCase {
         let backend = RemoteTerminalBackend(client: fixture.client, sessionID: fixture.sessionID)
         await backend.resize(cols: 64, rows: 20)
         try await backend.connect()
-        let drain = Task { for await _ in backend.outputStream {} }
+        let drain = Task { for await _ in backend.outputItems {} }
         defer { drain.cancel() }
         XCTAssertNotNil(fixture.session.remoteController)
 

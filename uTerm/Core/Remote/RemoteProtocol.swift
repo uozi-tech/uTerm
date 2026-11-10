@@ -29,6 +29,8 @@ nonisolated enum RemoteConstants {
     /// 镜像快照里带多少行回滚（`ShadowTerminal.snapshot(scrollbackLines:)`，引擎按页裁，实际略少）。整段回滚 3000 行
     /// 逐字换色的历史一张 2.7 MB、10 万行几十 MB，积压上限只有 1 MB，窄链路上追不上。holder 检查点不受它限制、带全量。
     static let snapshotScrollback = 1000
+    /// 接入时第一张镜像快照最多等终端按对端尺寸钉好多久（`TerminalMirrorTap.subscribe(firstSnapshotWhen:)`）。
+    static let attachGridSettleTimeout: TimeInterval = 1
     /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
