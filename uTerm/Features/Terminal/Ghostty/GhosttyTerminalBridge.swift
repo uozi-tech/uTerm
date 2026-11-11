@@ -184,6 +184,9 @@ final class GhosttyTerminalBridge {
             notifiedShadowSize = shadowSize
             owner?.shadowGridDidChange()
         }
+        // 钉着，网格却不是钉的行列数：钉住的视图尺寸是按旧格子算的，按此刻的格子重钉（见 `repinIfStale`）。
+        // 这次的网格是错的，不发给 PTY，重钉之后 surface 报来的那一次才发。
+        if repinIfStale(cols: cols, rows: rows) { return }
         // 容器还在等尺寸停稳（首次挂载、接回、窗口在定尺寸）：这时的网格是中间态，不发给 PTY；停稳后
         // `resizeDidSettle` 再发最终那一次。远控钉住的尺寸是确定的目标，照发。
         if !view.holdsGridReports || view.pinnedFrameSize != nil, let pty = ptyGrid(surfaceGrid: (cols, rows)) {
@@ -194,6 +197,20 @@ final class GhosttyTerminalBridge {
         repositionPinnedGridIfCursorMoved()
         // surface 还没建好时就来了接管：现在有格子尺寸了，补上。
         if let pending = pendingPin, view.pinnedFrameSize == nil { pinGrid(cols: pending.cols, rows: pending.rows) }
+    }
+
+    /// 钉住的视图尺寸 = 行列数 × 格子（`pinGrid` 那一刻的格子）。两种情况下它和 surface 此刻的格子对不上，网格就不是
+    /// 手机的行列数（手机按 32 行画、PTY 却是 33 行，Claude Code 的画面在手机上错位）：
+    /// - 标签藏久了 surface 被放掉、切回来重建：新 surface 的行高调整归 0（按行填满调过的格子变回自然高度），
+    ///   按旧格子算的高度多出一行；
+    /// - 藏着（surface 放掉了、量不到格子）时手机又钉了新尺寸：只改了影子和 PTY（`pendingPin`），视图还是上一次钉的尺寸。
+    /// 这时按 `pendingPin` 和此刻的格子重钉。重钉后的尺寸和原来一样（格子的取整怎么都凑不出那个行列数）时不算，照常发。
+    /// 返回重钉了没有。
+    private func repinIfStale(cols: Int, rows: Int) -> Bool {
+        guard let pending = pendingPin, let pinned = view.pinnedFrameSize,
+              pending.cols != cols || pending.rows != rows else { return false }
+        pinGrid(cols: pending.cols, rows: pending.rows)
+        return view.pinnedFrameSize != pinned
     }
 
     /// 发给 PTY 的网格：影子终端已经换上了的才发；还没换上（主线程上刚设下、引擎 IO 线程还没处理到）返回 nil，不发。
