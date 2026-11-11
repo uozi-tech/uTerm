@@ -28,6 +28,8 @@
         var smoothScroll: SmoothScrollState = .init()
         /// uTerm 本地补丁：宿主放掉了 surface（`uTermReleaseSurface()`），回窗口、布局都不自己重建。
         var uTermSurfaceReleased = false
+        /// uTerm 本地补丁：把所在显示器报给引擎的记录（见 AppTerminalView+DisplayID.swift）。
+        var displayReport: DisplayReportState = .init()
 
         open weak var delegate: (any TerminalSurfaceViewDelegate)? {
             get { core.delegate }

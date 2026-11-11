@@ -284,6 +284,15 @@ public final class TerminalSurface {
         ghostty_surface_draw(s)
     }
 
+    #if os(macOS)
+        /// uTerm 本地补丁：把视图所在的显示器报给引擎。渲染器按它绑定 CVDisplayLink；link 当初没建成（建 surface 时
+        /// 没有活动显示器）的话，这次调用就是它重试的机会（见 AppTerminalView+DisplayID.swift）。
+        func setDisplayID(_ id: UInt32) {
+            guard let s = surface else { return }
+            ghostty_surface_set_display_id(s, id)
+        }
+    #endif
+
     func refresh() {
         guard let s = surface else { return }
         TerminalDebugLog.log(.render, "surface refresh")

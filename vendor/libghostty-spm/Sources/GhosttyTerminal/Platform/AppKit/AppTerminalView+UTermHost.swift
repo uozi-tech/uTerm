@@ -83,6 +83,7 @@
             core.fitToSize()
             updateMetalLayerMetrics()
             updateColorScheme()
+            reportDisplayID()
         }
     }
 #endif

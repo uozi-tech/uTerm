@@ -70,6 +70,9 @@
                 updateMetalLayerMetrics()
                 updateColorScheme()
                 core.requestImmediateTick()
+                // uTerm 本地补丁：见 AppTerminalView+DisplayID.swift。
+                reportDisplayID()
+                observeScreenWake()
 
                 NotificationCenter.default.addObserver(
                     self,
@@ -139,6 +142,7 @@
             let focused = window?.isKeyWindow == true
                 && window?.firstResponder === self
             core.setFocus(focused)
+            reportDisplayID(force: true)
         }
 
         @objc func windowDidResignKey(_: Notification) {
@@ -147,10 +151,12 @@
 
         @objc func windowDidChangeScreen(_: Notification) {
             refreshScreenMetrics()
+            reportDisplayID(force: true)
         }
 
         @objc func screenParametersDidChange(_: Notification) {
             refreshScreenMetrics()
+            reportDisplayID(force: true)
         }
 
         /// Re-derives scale and size now, so the next frame already uses
@@ -192,10 +198,13 @@
 
         @objc func windowDidChangeOcclusionState(_: Notification) {
             guard let window else { return }
-            core.setWindowVisible(window.occlusionState.contains(.visible))
+            let visible = window.occlusionState.contains(.visible)
+            core.setWindowVisible(visible)
+            if visible { reportDisplayID(force: true) }
         }
 
         private func removeWindowObservers() {
+            stopObservingScreenWake()
             // Remove any existing key-window observers before registering for the
             // current window. AppKit can move the view directly between windows
             // without an intermediate nil attachment.
@@ -230,12 +239,14 @@
             super.setFrameSize(newSize)
             core.fitToSize()
             core.requestImmediateTick()
+            reportDisplayID()
         }
 
         override open func layout() {
             super.layout()
             core.fitToSize()
             core.requestImmediateTick()
+            reportDisplayID()
         }
 
         override open func viewDidChangeBackingProperties() {
