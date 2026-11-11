@@ -116,7 +116,8 @@ final class GhosttyTerminalBridge {
             for family in fontFamilies { builder.withFontFamily(family) }
             builder.withFontSize(fontSize)
             builder.withBackgroundOpacity(1)
-            // 余下的不到一格留在右 / 下边，由外层 8pt 边距同色铺底。
+            // 余下的不到一格：右边的留着，下边的由按行填满摊进行距、零头上下均分（`TerminalRowFill`）；留白处按最近一格的
+            // 底色铺，外层 8pt 边距同色。
             builder.withCustom("window-padding-color", "extend")
             // 硬件键盘、键盘条、`sendKey` 都经 `ghostty_surface_key`，都过共用的按键绑定表；其中 `macos-option-as-alt`
             // 在 iOS 上不起作用，引擎照收。
@@ -165,6 +166,8 @@ final class GhosttyTerminalBridge {
             self?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
         }
         link.platformAllowsFeeding = { [weak self] in !(self?.isAppInBackground ?? true) }
+        // 按行填满（规则与接线两端共用，见 `TerminalSurfaceLink.refitRowFill`）：零头的上半份由容器把视图往下挪。
+        link.onRowFillOffsetChanged = { [weak self] in self?.view.superview?.setNeedsLayout() }
         // surface 没了：查询改由影子答，配色要是当前的。
         link.onSurfaceDetached = { [weak self] in self?.syncShadowColors() }
         // 没有绑定接的 ⌘ 组合：程序开了 kitty 键盘协议才发（本地包里丢，见 `TerminalSurface.sendsCommandChords`）。

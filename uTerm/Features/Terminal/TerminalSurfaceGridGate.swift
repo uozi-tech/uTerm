@@ -18,6 +18,8 @@ nonisolated final class TerminalSurfaceGridGate: @unchecked Sendable {
     private var settled = false
     private var expected: (cols: UInt16, rows: UInt16)?
     private var held: InMemoryTerminalViewport?
+    /// 这个 surface 上次交给平台的行列数（`forwardsGridReport`）；surface 换了就清。
+    private var forwarded: (cols: UInt16, rows: UInt16)?
 
     /// surface 拆掉了：从这一刻起不认任何报告。
     func surfaceDetached() {
@@ -25,6 +27,7 @@ nonisolated final class TerminalSurfaceGridGate: @unchecked Sendable {
             settled = false
             expected = nil
             held = nil
+            forwarded = nil
         }
     }
 
@@ -33,6 +36,17 @@ nonisolated final class TerminalSurfaceGridGate: @unchecked Sendable {
         lock.withLock {
             settled = false
             expected = nil
+            forwarded = nil
+        }
+    }
+
+    /// 认下的这次报告要不要交给平台（发给 PTY、开闸、通知镜像）。行列数和这个 surface 上次交出去的相同 = 只是格子像素变了
+    /// （按行填满调了行高，`TerminalRowFill`）：影子跟上就够了，PTY 的尺寸没变。surface 建好后的第一次一律交。
+    func forwardsGridReport(_ viewport: InMemoryTerminalViewport) -> Bool {
+        lock.withLock {
+            if let forwarded, forwarded.cols == viewport.columns, forwarded.rows == viewport.rows { return false }
+            forwarded = (viewport.columns, viewport.rows)
+            return true
         }
     }
 

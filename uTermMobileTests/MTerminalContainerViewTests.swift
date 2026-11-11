@@ -107,6 +107,16 @@ class MTerminalContainerTestCase: XCTestCase {
     func feed(_ bridge: GhosttyTerminalBridge, _ text: String) {
         bridge.feed(Data(text.utf8))
     }
+
+    /// 提交后终端视图该在哪：铺满容器，再按「按行填满」往下挪零头的上半份（`TerminalSurfaceLink.rowFillOffset`，
+    /// 尺寸不变；没有 surface 时是 0）。UIKit 存 frame 时有浮点误差，纵向位置按容差比。
+    func assertCommitted(_ bridge: GhosttyTerminalBridge, _ size: CGSize, _ message: String = "",
+                         file: StaticString = #filePath, line: UInt = #line) {
+        let frame = bridge.view.frame
+        XCTAssertEqual(frame.size, size, message, file: file, line: line)
+        XCTAssertEqual(frame.minX, 0, message, file: file, line: line)
+        XCTAssertEqual(frame.minY, bridge.link.rowFillOffset, accuracy: 0.001, message, file: file, line: line)
+    }
 }
 
 /// 终端尺寸停稳才提交：中途的尺寸不碰终端，提交时才通知程序。
@@ -139,7 +149,7 @@ final class MTerminalContainerViewTests: MTerminalContainerTestCase {
 
         let after = await reported(bridge)
         XCTAssertEqual(after, before, "没停住就不该通知程序")
-        XCTAssertEqual(bridge.view.frame, CGRect(origin: .zero, size: mounted))
+        assertCommitted(bridge, mounted)
         XCTAssertEqual(surfaceText(bridge), screen)
         XCTAssertEqual(bridge.shadow.viewportText(), shadow)
         XCTAssertEqual(bridge.shadow.cursor, cursor)
@@ -155,7 +165,7 @@ final class MTerminalContainerViewTests: MTerminalContainerTestCase {
         }
         await settle()
 
-        XCTAssertEqual(bridge.view.frame, CGRect(x: 0, y: 0, width: 400, height: 320))
+        assertCommitted(bridge, CGSize(width: 400, height: 320))
         let after = await reported(bridge)
         XCTAssertEqual(after.cols, before.cols)
         XCTAssertLessThan(after.rows, before.rows)
@@ -217,7 +227,7 @@ final class MTerminalContainerViewTests: MTerminalContainerTestCase {
 
         let after = await reported(bridge)
         XCTAssertEqual(after, before)
-        XCTAssertEqual(bridge.view.frame, CGRect(origin: .zero, size: mounted))
+        assertCommitted(bridge, mounted)
     }
 
     // MARK: 隐藏标签
@@ -247,7 +257,7 @@ final class MTerminalContainerViewTests: MTerminalContainerTestCase {
         container.isOnScreen = true
         container.layoutIfNeeded()
 
-        XCTAssertEqual(bridge.view.frame, CGRect(x: 0, y: 0, width: 200, height: 300), "露出来的那一拍就提交")
+        assertCommitted(bridge, CGSize(width: 200, height: 300), "露出来的那一拍就提交")
         XCTAssertTrue(bridge.isOnScreen)
         let after = await reported(bridge)
         XCTAssertNotEqual(after.grid, before.grid)

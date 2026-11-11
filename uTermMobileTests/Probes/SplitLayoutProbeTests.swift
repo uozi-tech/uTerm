@@ -45,7 +45,8 @@ final class SplitLayoutProbeTests: XCTestCase {
             // 视图现在由控制器自己建、恒在；从没挂过的（换引擎之前是「控制器上还没有视图」）照旧跳过。
             guard view.superview != nil || view.hasHostedLayout else { continue }
             let slot = layout.rects[min(index, layout.rects.count - 1)]
-            let rect = view.convert(view.bounds, to: win)
+            // 按行填满会把视图往下挪零头的上半份（尺寸不变、露出容器底边的那截裁掉）：挪回来再比，比的是容器给它的位置。
+            let rect = view.convert(view.bounds, to: win).offsetBy(dx: 0, dy: -term.controller.terminal.link.rowFillOffset)
             print("SPLITLAYOUT \(step) pane\(index) slot=\(slot.integral) term=\(rect.integral)")
             if view.window == nil { problems.append("\(step) pane\(index): 不在窗口里"); continue }
             if rect.minX < slot.minX - 1 || rect.maxX > slot.maxX + 1
@@ -246,10 +247,12 @@ final class SplitLayoutProbeTests: XCTestCase {
         host.safeAreaRegions = .all
         try await Task.sleep(for: .seconds(3))
 
-        let term = try XCTUnwrap(work.terminalTabs.first?.controller.terminal.view)
+        let terminal = try XCTUnwrap(work.terminalTabs.first?.controller.terminal)
+        let term = terminal.view
         let top = host.view.safeAreaInsets.top
         XCTAssertGreaterThan(top, 0, "这台模拟器竖屏要有顶部安全区")
-        let termTop = term.convert(term.bounds, to: win).minY
+        // 按行填满会把视图往下挪零头的上半份：减掉它，比的是容器给终端的位置。
+        let termTop = term.convert(term.bounds, to: win).minY - terminal.link.rowFillOffset
         let expected = top + WorkspaceTabStrip.height + TerminalSessionBody.terminalInset.vertical
         XCTAssertEqual(termTop, expected, accuracy: 1, "标签条（48pt）要完整排在状态栏下面，且不被撑高")
     }

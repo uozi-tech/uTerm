@@ -65,6 +65,13 @@ final class GhosttyTerminalBridge {
         // 从这一刻起尺寸归 surface 管：没有 surface 时钉的尺寸不用再还原（钉着的目标还在 `pendingPin` 里，
         // surface 报来格子尺寸后照常钉到视图上）。
         link.onSurfaceAttached = { [weak self] in self?.gridBeforeSurfacelessPin = nil }
+        // 按行填满（两端共用的规则与接线在 `TerminalSurfaceLink`）：钉着远控尺寸时不调；零头的上半份由容器把视图往下挪。
+        link.rowFillSuspended = { [weak view] in view?.pinnedFrameSize != nil }
+        link.onRowFillOffsetChanged = { [weak view] in view?.superview?.needsLayout = true }
+        view.refitRowFill = { [weak link] in
+            link?.refitRowFill()
+            return link?.rowFillOffset ?? 0
+        }
         delegate.bridge = self
         view.delegate = delegate
         view.controller = GhosttyTerminalConfig.controller
@@ -321,6 +328,8 @@ final class GhosttySurfaceView: AppTerminalView {
     var holdsGridReports = false
     /// 容器提交了尺寸。
     var onResizeSettled: (@MainActor () -> Void)?
+    /// 容器提交尺寸之后调：按行填满重算（可能给 surface 换行高），返回网格要往下挪的点数（见 `TerminalSurfaceLink.refitRowFill`）。
+    var refitRowFill: (@MainActor () -> CGFloat)?
 
     /// 容器在提交尺寸（或确认尺寸没变）之后调：放开网格上报，并把此刻的网格发出去。
     func resizeDidSettle() {

@@ -1,7 +1,7 @@
 //
 //  UITerminalView+UTermHost.swift
 //  uTerm 本地补丁（不在上游）：宿主要的几个入口——surface 生灭与网格的回调、放掉 / 重建 surface、按点数设字号、
-//  没有绑定接的 ⌘ 组合发不发。
+//  没有绑定接的 ⌘ 组合发不发、单个 surface 的行高调整。
 //
 
 #if canImport(UIKit)
@@ -56,6 +56,19 @@
 
             /// 引擎最近一次报来的滚动条（总行数、视口首行、一屏行数）；没有 surface 或还没报过时 nil。
             var uTermScrollbar: TerminalScrollbar? { core.bridge.scrollbar }
+
+            /// uTerm 本地补丁：这个 surface 自己的格子高调整（物理像素，0 = 跟 app 的配置）。surface 重建、app 的配置
+            /// 整份推下来时归 0。见 `TerminalSurfaceCoordinator.setCellHeightAdjustment`。
+            var uTermCellHeightAdjustment: Int { core.cellHeightAdjustment }
+
+            /// uTerm 本地补丁：把这个 surface 的格子高调成「自然高度 + `pixels`」。没有 surface 或配置解析失败时返回 false。
+            @discardableResult
+            func uTermSetCellHeightAdjustment(_ pixels: Int) -> Bool {
+                core.setCellHeightAdjustment(pixels)
+            }
+
+            /// uTerm 本地补丁：surface 用的屏幕倍率（视图点 × 它 = 引擎的物理像素）。
+            var uTermScaleFactor: Double { core.scaleFactor() }
 
             /// 清掉选区（程序清了屏、擦掉了选中的内容）：触摸选区（本包自己画的高亮）和 Ghostty 自己的选区（指针拖出来的）
             /// 都算。`onlyIfBlank`：Ghostty 的选区只在里面只剩空白时清；触摸选区照它自己的规则当场复核一次（选中的

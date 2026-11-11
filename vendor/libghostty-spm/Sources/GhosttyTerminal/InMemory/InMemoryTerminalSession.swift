@@ -16,6 +16,11 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private var lastResize: InMemoryTerminalViewport?
     /// uTerm 本地补丁：新挂上一个 surface 之后，它的终端报来的第一次尺寸不去重（见 `setSurface`）。
     private var forcesNextResize = false
+    /// uTerm 本地补丁：resize 回调（IO 线程）读格子像素用的 surface。和 `surfaceAccess` 里那份分开、单独一把只做赋值的锁：
+    /// IO 线程报 resize 时拿着引擎的终端锁，要是去等 `surfaceAccess` 的锁（主线程可能拿着它等一次正在解析、等着同一把
+    /// 终端锁的写入），就死锁了。surface 拆掉之前先在这里清空（`clearSurface`），读的时候拿着锁，读到的 surface 不会被放掉。
+    private let cellSourceLock = NSLock()
+    private var cellSource: ghostty_surface_t?
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
 
@@ -83,6 +88,9 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             forcesNextResize = true
             resizeLock.unlock()
         }
+        cellSourceLock.lock()
+        cellSource = surface
+        cellSourceLock.unlock()
         surfaceAccess.setSurface(surface)
         TerminalDebugLog.log(
             .lifecycle,
@@ -91,6 +99,9 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     }
 
     func clearSurface(ifMatches expectedSurface: ghostty_surface_t?) {
+        cellSourceLock.lock()
+        if cellSource == expectedSurface { cellSource = nil }
+        cellSourceLock.unlock()
         guard surfaceAccess.clearSurface(ifMatches: expectedSurface) else {
             TerminalDebugLog.log(
                 .lifecycle,
@@ -351,12 +362,31 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             .metrics,
             "receive resize cols=\(cols) rows=\(rows) pixels=\(widthPx)x\(heightPx)",
         )
+        let cell = session.currentCellPixels()
         session.dispatchResize(InMemoryTerminalViewport(
             columns: cols,
             rows: rows,
             widthPixels: widthPx,
             heightPixels: heightPx,
+            cellWidthPixels: cell?.width ?? 0,
+            cellHeightPixels: cell?.height ?? 0,
         ))
+    }
+
+    /// uTerm 本地补丁：surface 此刻的格子像素，给 resize 回调带上（引擎的回调只给行列数和终端区的像素尺寸，
+    /// 没留白时终端区像素 = 视图像素，推不出格子）。宿主的影子终端要在这个回调里同时跟上行列数和格子像素
+    /// （尺寸查询、图片协议按格子像素算），宿主按行填满时只改格子高、不改行列数，没有这个就收不到那次变化。
+    ///
+    /// 在 IO 线程上读主线程维护的 surface 尺寸（同 `readViewportText` 在任意线程读 `ghostty_surface_size`）：读到的
+    /// 不会比这次回调旧——主线程每次改尺寸 / 格子都会再排一条 resize，引擎处理到最后那条时读到的就是最终值。
+    /// 没挂 surface 时 nil（合并时沿用上一次的）。
+    private func currentCellPixels() -> (width: UInt32, height: UInt32)? {
+        cellSourceLock.lock()
+        defer { cellSourceLock.unlock() }
+        guard let cellSource else { return nil }
+        let size = ghostty_surface_size(cellSource)
+        guard size.cell_width_px > 0, size.cell_height_px > 0 else { return nil }
+        return (size.cell_width_px, size.cell_height_px)
     }
 
     private func dispatchResize(_ resize: InMemoryTerminalViewport) {
@@ -381,8 +411,14 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         let gridChanged = lastResize.map {
             $0.columns != mergedResize.columns || $0.rows != mergedResize.rows
         } ?? true
+        // uTerm 本地补丁：格子像素变了也要报（宿主按行填满时只调格子高、行列数不变）。拖分隔条那种「视图像素变了、
+        // 格子没变」的照旧不报。
+        let cellChanged = lastResize.map {
+            $0.cellWidthPixels != mergedResize.cellWidthPixels
+                || $0.cellHeightPixels != mergedResize.cellHeightPixels
+        } ?? true
         lastResize = mergedResize
-        if suppressesPixelOnlyResizes, !gridChanged, !forced {
+        if suppressesPixelOnlyResizes, !gridChanged, !cellChanged, !forced {
             resizeLock.unlock()
             TerminalDebugLog.log(
                 .metrics,
