@@ -163,8 +163,8 @@ final class GhosttyTerminalBridge {
     fileprivate func ghosttyDidResize(cols reportedCols: Int, rows reportedRows: Int, fromTerminal: Bool = true) {
         // 报来的网格是 Ghostty 的 IO 线程在某一刻量的，转到主线程时可能已经过时。最常见的一次：surface 刚建好时先按
         // 引擎默认的 800×600 px 报一个约 53×21，紧接着才是视图的真实尺寸；把过时的那个发给 PTY，正在跑的全屏程序
-        // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以发给 PTY 的一律以 surface 此刻的网格为准：之后那次报告
-        // 到达时值相同，不会重复发。
+        // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以发给 PTY 的以 surface 此刻的网格为准，并且要等影子已经
+        // 换上它（`ptyGrid`；那次默认网格的报告影子不认）：之后的报告到达时值相同，不会重复发。
         // 影子终端不在这里改：它只跟 surface 的终端自己报的网格走（IO 线程的 resize 回调里当场改，M4 的前提——按主线程上
         // 的网格改，两边会在不同的字节位置换宽度，折行就对不上了）。主线程上的 `surfaceGrid` 可能比终端先变，这一刻
         // 按它改影子就早了。
@@ -186,8 +186,8 @@ final class GhosttyTerminalBridge {
         }
         // 容器还在等尺寸停稳（首次挂载、接回、窗口在定尺寸）：这时的网格是中间态，不发给 PTY；停稳后
         // `resizeDidSettle` 再发最终那一次。远控钉住的尺寸是确定的目标，照发。
-        if !view.holdsGridReports || view.pinnedFrameSize != nil {
-            owner?.ghosttyGridDidChange(cols: cols, rows: rows)
+        if !view.holdsGridReports || view.pinnedFrameSize != nil, let pty = ptyGrid(surfaceGrid: (cols, rows)) {
+            owner?.ghosttyGridDidChange(cols: pty.cols, rows: pty.rows)
         }
         // 钉住时网格变了（手机软键盘升降）：Ghostty 放大行数会把回滚的行拉回屏幕、缩小则往上顶，光标行跟着挪，
         // 这期间没有新输出，`repositionPinnedGridIfCursorMoved` 不会被输出触发——在这里按新网格下的光标行重摆。
@@ -196,8 +196,25 @@ final class GhosttyTerminalBridge {
         if let pending = pendingPin, view.pinnedFrameSize == nil { pinGrid(cols: pending.cols, rows: pending.rows) }
     }
 
-    /// 容器把视图尺寸提交了（停稳了）：把 surface 此刻的网格发给 PTY。网格没变时引擎不会再报一次，所以这里主动补；
-    /// 变了的话引擎随后报来的值相同，输入通道去重。surface 还没建时什么也不做，它建好后报的第一次照常走。
+    /// 发给 PTY 的网格：影子终端已经换上了的才发；还没换上（主线程上刚设下、引擎 IO 线程还没处理到）返回 nil，不发。
+    ///
+    /// 程序一收到 SIGWINCH 就按新尺寸整帧重画（Claude Code：从左上角逐行擦一屏再写整帧，之后全靠相对移动改行）。
+    /// 影子在引擎 IO 线程处理到这次 resize 时才换网格（引擎还会把连着的几次 resize 合并、隔一小会儿才处理），
+    /// 要是 PTY 先知道了新尺寸，程序按新尺寸画的那一帧就先进了旧网格的影子、随后被重新折行——影子从此和程序以为的屏幕
+    /// 错开几行，之后每次相对移动都落错地方。远控镜像、holder 检查点都是影子的快照，手机上看到的就是这个：字打到屏幕
+    /// 左上角、擦行擦不到该擦的地方（`400k5`）、状态行出现两遍（真机回归，`RemoteMirrorClaudeRedrawTests`）。
+    /// 所以 PTY 只跟影子：影子换上这个网格的那一次报告（IO 线程的 resize 回调）转到主线程时再发，程序之后写的字节一定
+    /// 落在新网格上；中途还没换上的尺寸（容器提交尺寸后主动补报的那一次、引擎还没处理的下一次）一律不发，等它的报告。
+    /// 远控主控端的影子跟着对端的快照走，这里发的是本地画面的网格（就是要对端按它钉尺寸），照旧。
+    private func ptyGrid(surfaceGrid: (cols: Int, rows: Int)) -> (cols: Int, rows: Int)? {
+        guard let owner else { return nil }
+        if link.pump.followsSnapshotGrid { return surfaceGrid }
+        return owner.shadow.size == surfaceGrid ? surfaceGrid : nil
+    }
+
+    /// 容器把视图尺寸提交了（停稳了）：把网格发给 PTY。网格没变时引擎不会再报一次，所以这里主动补（等待期间报来、
+    /// 影子已经换上的那个）；变了的话影子还没换上，这次不发，等引擎报来、影子换上时再发（`ptyGrid`）。
+    /// surface 还没建时什么也不做，它建好后报的第一次照常走。
     private func resizeDidSettle() {
         guard let current = io.surfaceGrid, current.columns > 0, current.rows > 0 else { return }
         ghosttyDidResize(cols: Int(current.columns), rows: Int(current.rows), fromTerminal: false)
