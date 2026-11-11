@@ -91,6 +91,17 @@ final class TerminalRowFillMobileTests: MTerminalContainerTestCase {
         }
     }
 
+    /// 转屏（宽高对调）、分屏（变窄）：每次停稳后都填满，行数是自然行数。
+    func testRotationAndSplitKeepFilling() async throws {
+        let (bridge, container) = try await hostedInWindow()
+        for size in [CGSize(width: 600, height: 380), CGSize(width: 195, height: 600), CGSize(width: 400, height: 311),
+                     CGSize(width: 400, height: 600)] {
+            lay(container, size)
+            await settleFill(bridge)
+            assertFilled(fill(bridge, container))
+        }
+    }
+
     /// 一串中间尺寸（键盘动画、拖分隔条）：不逐帧给 surface 换行高，远端只收到一次尺寸通知。
     func testResizingDoesNotSwapCellHeightPerFrame() async throws {
         let (bridge, container) = try await hostedInWindow()

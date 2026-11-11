@@ -146,6 +146,25 @@ final class TerminalRowFillSurfaceTests: XCTestCase {
         }
     }
 
+    /// 多窗格：每个窗格按自己的高度各调各的（行高调整只推给那一个 surface），互不影响。
+    func testPanesFillIndependently() async {
+        let (first, _, firstContainer, window) = await hosted()
+        let (second, _, secondContainer, _) = await hosted()
+        guard let natural = fill(first, firstContainer)?.natural else { return XCTFail("读不到格子") }
+        lay(firstContainer, NSSize(width: 816, height: containerHeight(rows: 5, rest: natural - 2, natural: natural, window: window)))
+        lay(secondContainer, NSSize(width: 500, height: containerHeight(rows: 18, rest: 4, natural: natural, window: window)))
+        await settle(first)
+        await settle(second)
+        let a = fill(first, firstContainer)
+        let b = fill(second, secondContainer)
+        assertFilled(a)
+        assertFilled(b)
+        XCTAssertEqual(a?.rows, 5)
+        XCTAssertEqual(b?.rows, 18)
+        XCTAssertNotEqual(a?.cell, b?.cell, "两个窗格的行高各是各的：\(String(describing: a)) / \(String(describing: b))")
+        XCTAssertEqual(second.ghostty.view.uTermCellHeightAdjustment, 0, "第二个窗格的余量不够每行拉 1 像素")
+    }
+
     /// 拖动（一串中间尺寸，每个都在停稳之前就换掉）：不逐帧给 surface 换行高，停稳后最多换一次；PTY 只收到最终网格一次。
     func testDraggingDoesNotSwapCellHeightPerFrame() async {
         let (session, backend, container, window) = await hosted()
