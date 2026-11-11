@@ -135,13 +135,7 @@ struct TerminalKeyBar: View {
 
     @ViewBuilder private var imageNote: some View {
         if let note = controller.imageNote {
-            Text(note)
-                .font(M.sans(12, weight: .medium))
-                .foregroundStyle(M.text)
-                .lineLimit(2)
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(M.button)
-                .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
+            MKeyBarNote(text: note)
                 .padding(.horizontal, 10)
                 .transition(.opacity)
         }
@@ -236,3 +230,24 @@ struct TerminalKeyBar: View {
         controller.showKeyboard()
     }
 }
+
+/// 浮在键盘条上方的一条提示（贴图的进度 / 结果）。它压在终端的字上面，底必须不透明：`M.button` 只是一层
+/// 白 8% / 黑 4% 的淡色，单用它字会从下面透上来（1090 实测）。所以先垫工作面的底色，再叠键帽那层淡色，
+/// 外加一圈分区线把它和同色的终端分开。
+struct MKeyBarNote: View {
+    let text: String
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: MRadius.sm)
+        Text(text)
+            .font(M.sans(12, weight: .medium))
+            .foregroundStyle(M.text)
+            .lineLimit(2)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(M.button)
+            .background(M.surface)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(M.divider, lineWidth: 1))
+    }
+}
+
