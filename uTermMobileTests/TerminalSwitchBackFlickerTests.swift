@@ -20,12 +20,26 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
         var firstInk: Int
         var lastInk: Int
         var text: Bool
-    var covered = false
-    var hash: UInt64 = 0
-    var cellPx: Int = 0
-    var layerID: Int = 0
+        var covered = false
+        var hash: UInt64 = 0
+        var cellPx: Int = 0
+        var layerID: Int = 0
+        /// 用户看到的那张画面的几何：行距（相邻文字带起点的中位数，像素）、文字带高、墨迹右缘（像素）、
+        /// 层在视图里的矩形（点）、层的像素宽高，以及视图当前字号。
+        var pitch: Int = 0
+        var bandH: Int = 0
+        var inkRight: Int = 0
+        var layerRect = ""
+        var pixels = ""
+        var fontSize: Double = 0
+        /// 用户实际看到的尺度（点）：行距、文字带高、墨迹右缘。contents 被拉伸（gravity = resize）时按层的矩形折算。
+        var pitchPt: Double = 0
+        var bandHPt: Double = 0
+        var rightPt: Double = 0
+        var gravity = ""
+        var bands = 0
         var description: String {
-            "cover=\(covered) y=\(frameY) surface=\(hasSurface) adj=\(adjustment) contents=\(layerContents) ink=\(inkRows)[\(firstInk)...\(lastInk)] hash=\(hash % 100000) cell=\(cellPx) layer=\(layerID)"
+            "cover=\(covered) y=\(frameY) surface=\(hasSurface) adj=\(adjustment) contents=\(layerContents) ink=\(inkRows)[\(firstInk)...\(lastInk)] hash=\(hash % 100000) cell=\(cellPx) pitch=\(pitch) bandH=\(bandH) right=\(inkRight) rect=\(layerRect) px=\(pixels) font=\(fontSize) pt=[pitch \(String(format: "%.2f", pitchPt)) band \(String(format: "%.2f", bandHPt)) right \(String(format: "%.1f", rightPt))] gravity=\(gravity) bands=\(bands) layer=\(layerID)"
         }
     }
 
@@ -58,11 +72,12 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
         }
     }
 
-    private var inkCache: (key: UInt32, value: (rows: Int, first: Int, last: Int, has: Bool, hash: UInt64))?
+    typealias Ink = (rows: Int, first: Int, last: Int, has: Bool, hash: UInt64, pitch: Int, bandH: Int, right: Int, w: Int, h: Int, bands: Int)
+    private var inkCache: (key: UInt32, value: Ink)?
 
-    private func ink(_ layer: CALayer?) -> (rows: Int, first: Int, last: Int, has: Bool, hash: UInt64) {
+    private func ink(_ layer: CALayer?) -> Ink {
         guard let layer, let contents = layer.contents, CFGetTypeID(contents as CFTypeRef) == IOSurfaceGetTypeID() else {
-            return (0, -1, -1, false, 0)
+            return (0, -1, -1, false, 0, 0, 0, 0, 0, 0, 0)
         }
         let surface = unsafeBitCast(contents as AnyObject, to: IOSurfaceRef.self)
         // 同一张 IOSurface 在同一个 seed 下不重读。
@@ -76,17 +91,30 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
         let bg = px(w - 1, 0)
         var rows = 0, first = -1, last = -1
         var hash: UInt64 = 1469598103934665603
+        var starts: [Int] = [], heights: [Int] = []
+        var run = 0
+        var right = 0
         for y in 0..<h {
             var has = false
             var x = 0
             while x < w - 1 {
                 let v = px(x, y)
-                if v != bg { has = true; hash = (hash ^ UInt64(v) ^ UInt64(x &* 7 &+ y)) &* 1099511628211 }
-                x += 2
+                if v != bg { has = true; right = max(right, x); hash = (hash ^ UInt64(v) ^ UInt64(x &* 7 &+ y)) &* 1099511628211 }
+                x += 1
             }
             if has { rows += 1; if first < 0 { first = y }; last = y }
+            if has { if run == 0 { starts.append(y) }; run += 1 } else if run > 0 { heights.append(run); run = 0 }
         }
-        let result = (rows: rows, first: first, last: last, has: true, hash: hash)
+        if run > 0 { heights.append(run) }
+        // 众数：光标那一行（整块高）和被截的行是少数，不该带偏读数。
+        func mode(_ a: [Int]) -> Int {
+            var counts: [Int: Int] = [:]
+            for v in a { counts[v, default: 0] += 1 }
+            return counts.max { ($0.value, -$0.key) < ($1.value, -$1.key) }?.key ?? 0
+        }
+        let diffs = zip(starts.dropFirst(), starts).map { $0 - $1 }
+        let result: Ink = (rows: rows, first: first, last: last, has: true, hash: hash, pitch: mode(diffs),
+                           bandH: mode(heights), right: right, w: w, h: h, bands: starts.count)
         inkCache = (key, result)
         return result
     }
@@ -104,25 +132,41 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
             let view = bridge.view
             let layers = Self.allSurfaceLayers(view.layer)
             // 用户看到的：盖着旧帧（`GhosttySwitchBackCover`）就是它，否则是最新的 surface 层。
-            let cover = view.layer.sublayers?.first { $0.name == GhosttySwitchBackCover.layerName }
-            let info = self.ink(cover ?? layers.last)
+            let host = view.layer
+            let cover = host.sublayers?.first { $0.name == GhosttySwitchBackCover.layerName }
+            let shown = cover ?? layers.last
+            let info = self.ink(shown)
+            let rect = shown.map { host.convert($0.bounds, from: $0) } ?? .zero
+            let gravity = shown?.contentsGravity.rawValue ?? ""
+            // 每个像素在屏上占多少点：gravity = resize 时 contents 被拉到整个层，其余按 contentsScale 原样铺。
+            let ptPerPxY = (gravity == "resize" && info.h > 0) ? Double(rect.height) / Double(info.h) : 1 / Double(shown?.contentsScale ?? 3)
+            let ptPerPxX = (gravity == "resize" && info.w > 0) ? Double(rect.width) / Double(info.w) : 1 / Double(shown?.contentsScale ?? 3)
             return Sample(frameY: Double(view.frame.minY), hasSurface: view.surface != nil && !view.uTermIsSurfaceReleased,
                           adjustment: view.uTermCellHeightAdjustment, layerContents: info.has, inkRows: info.rows,
                           firstInk: info.first, lastInk: info.last, text: false, covered: cover != nil, hash: info.hash,
                           cellPx: Int(bridge.session.surfaceGrid?.cellHeightPixels ?? 0),
-                          layerID: layers.count * 1000 + (layers.last.map { abs(ObjectIdentifier($0).hashValue) % 1000 } ?? 0))
+                          layerID: layers.count * 1000 + (layers.last.map { abs(ObjectIdentifier($0).hashValue) % 1000 } ?? 0),
+                          pitch: info.pitch, bandH: info.bandH, inkRight: info.right,
+                          layerRect: String(format: "%.2f,%.2f,%.2fx%.2f", rect.minX, rect.minY, rect.width, rect.height),
+                          pixels: "\(info.w)x\(info.h)", fontSize: Double(view.terminalFontSize),
+                          pitchPt: Double(info.pitch) * ptPerPxY, bandHPt: Double(info.bandH) * ptPerPxY,
+                          rightPt: Double(info.right) * ptPerPxX, gravity: gravity, bands: info.bands)
+
         }
     }
 
     enum Case: String { case quick, tail, released, releasedTail }
 
-    private func run(_ kase: Case, newContainer: Bool) async throws {
-        let (bridge, container) = try await hostedInWindow()
+    /// 藏着期间容器变了：键盘升起（矮一截）、变窄（字号跟着宽度变小）。切回来时终端要按新的尺寸 / 字号重排。
+    enum Change: String { case none, keyboard, narrower }
+
+    private func run(_ kase: Case, newContainer: Bool, fontSize: CGFloat = 11, change: Change = .none) async throws {
+        let (bridge, container) = try await hostedInWindow(fontSize: fontSize)
         // 容器高度除不尽一行：按行填满有下移量。
         await settleAll(bridge)
         guard let natural = bridge.session.surfaceGrid.map({ Int($0.cellHeightPixels) - bridge.view.uTermCellHeightAdjustment }) else { return XCTFail("没有网格") }
         let scale = bridge.view.uTermScaleFactor
-        lay(container, CGSize(width: 400, height: CGFloat((Double(natural * 8 + natural - 2) + 0.25) / scale)))
+        lay(container, CGSize(width: 400, height: CGFloat((Double(natural * 12 + natural - 2) + 0.25) / scale)))
         for i in 0..<60 { bridge.feed(Data("line \(i) abcdefghijklmnopqrstuvwxyz 0123456789\r\n".utf8)) }
         await settleAll(bridge)
         let offsetBefore = bridge.link.rowFillOffset
@@ -131,28 +175,62 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
         if kase == .released || kase == .releasedTail { bridge.hiddenReleaseDelay = .milliseconds(100) }
         container.isOnScreen = false
         try await Task.sleep(for: .milliseconds((kase == .released || kase == .releasedTail) ? 500 : 300))
-        if kase == .tail || kase == .releasedTail { for i in 0..<20 { bridge.feed(Data("tail \(i) new output\r\n".utf8)) } }
+        if kase == .tail || kase == .releasedTail { for i in 0..<20 { bridge.feed(Data("tail \(i) abcdefghijklmnopqrstuvwxyz 0123456789\r\n".utf8)) } }
         if kase == .released || kase == .releasedTail { XCTAssertTrue(bridge.view.uTermIsSurfaceReleased, "自证：surface 放掉了") }
         try await Task.sleep(for: .milliseconds(100))
 
         let recorder = Recorder()
         recorder.read = sampler(bridge)
+        // 前提：切回前，藏着的终端留在视图上的旧画面是有内容的。并行跑（负载高）时偶尔读成纯底色，那是切回之前就有的状态，
+        // 不是这条用例要查的切回过程，等一等；等不到就跳过，别当成切回出了空白帧。
+        let hadPicture = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) { recorder.read?().inkRows ?? 0 > 0 }
+        try XCTSkipUnless(hadPicture, "切回前旧层已是空白（并行负载下偶发）")
         recorder.begin()
+        var newSize = container.bounds.size
+        var newFont = fontSize
+        switch change {
+        case .none: break
+        case .keyboard: newSize.height -= 70
+        case .narrower: newSize.width = 340; newFont = 9.6
+        }
         var live = container
         if newContainer {
-            live = MTerminalContainerView(terminal: bridge, fontSize: 11, isOnScreen: true)
+            live = MTerminalContainerView(terminal: bridge, fontSize: newFont, isOnScreen: true)
             try mount(live)
-            lay(live, container.bounds.size)
+            lay(live, newSize)
         } else {
+            lay(container, newSize)
+            container.setFontSize(newFont)
             container.isOnScreen = true
         }
         _ = live
         try await Task.sleep(for: .milliseconds(900))
         recorder.end()
         for (ms, sample) in recorder.log { print("SWITCHBACK[\(kase.rawValue) new=\(newContainer)] +\(Int(ms))ms \(sample)") }
-        let verdict = analyze(recorder.log.map(\.sample), offset: offsetBefore)
-        print("SWITCHBACK[\(kase.rawValue) new=\(newContainer)] 判定 \(verdict)")
-        assertNoFlicker(verdict, kase: kase)
+        let samples = recorder.log.map(\.sample)
+        if change == .none {
+            let verdict = analyze(samples, offset: offsetBefore)
+            print("SWITCHBACK[\(kase.rawValue) new=\(newContainer)] 判定 \(verdict)")
+            assertNoFlicker(verdict, kase: kase)
+        }
+        // 盖子期间：旧帧原样（不被裁、不被拉）——层矩形就是切回前那张活层的矩形。
+        if let live = samples.first, !live.covered {
+            for c in samples where c.covered { XCTAssertEqual(c.layerRect, live.layerRect, "盖子被裁 / 拉伸 / 挪位") }
+        }
+        let states = geometryStates(samples)
+        print("SWITCHBACK[\(kase.rawValue) new=\(newContainer) \(change.rawValue)] 用户看到的几何 \(states.count) 种：\(states)")
+        XCTAssertLessThanOrEqual(states.count, 2, "用户看到的行距 / 字形尺寸出现了旧画面和最终画面之外的第三种：\(states)")
+        XCTAssertEqual(samples.filter { $0.inkRows == 0 }.count, 0, "出现空白帧")
+    }
+
+    /// 用户看到的几何（行距、字形高、墨迹右缘，单位点，取到 0.1）依次出现了哪几种（连续相同的合并）。
+    private func geometryStates(_ samples: [Sample]) -> [String] {
+        var out: [String] = []
+        for s in samples where s.inkRows > 0 {
+            let key = String(format: "pitch %.1f band %.1f right %.1f", s.pitchPt, s.bandHPt, s.rightPt)
+            if out.last != key { out.append(key) }
+        }
+        return out
     }
 
     struct Verdict: CustomStringConvertible {
@@ -192,6 +270,24 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
         _ = await reported(bridge)
         try? await Task.sleep(for: .milliseconds(300))
     }
+
+    /// 生产里字号随宽度走（390pt 以下按比例，不是整数），和 ghostty 控制器启动时的 11 不一样。
+    func testReleasedFractionalFontSameContainer() async throws { try await run(.released, newContainer: false, fontSize: 10.63) }
+    func testReleasedFractionalFontNewContainer() async throws { try await run(.released, newContainer: true, fontSize: 10.63) }
+    func testQuickFractionalFont() async throws { try await run(.quick, newContainer: false, fontSize: 10.63) }
+
+    func testQuickKeyboardSame() async throws { try await run(.quick, newContainer: false, fontSize: 10.63, change: .keyboard) }
+    func testQuickKeyboardNew() async throws { try await run(.quick, newContainer: true, fontSize: 10.63, change: .keyboard) }
+    func testQuickNarrowerSame() async throws { try await run(.quick, newContainer: false, fontSize: 10.63, change: .narrower) }
+    func testQuickNarrowerNew() async throws { try await run(.quick, newContainer: true, fontSize: 10.63, change: .narrower) }
+    func testReleasedKeyboardSame() async throws { try await run(.released, newContainer: false, fontSize: 10.63, change: .keyboard) }
+    func testReleasedKeyboardNew() async throws { try await run(.released, newContainer: true, fontSize: 10.63, change: .keyboard) }
+    func testReleasedNarrowerSame() async throws { try await run(.released, newContainer: false, fontSize: 10.63, change: .narrower) }
+    func testReleasedNarrowerNew() async throws { try await run(.released, newContainer: true, fontSize: 10.63, change: .narrower) }
+    func testReleasedTailKeyboardSame() async throws { try await run(.releasedTail, newContainer: false, fontSize: 10.63, change: .keyboard) }
+    func testReleasedTailKeyboardNew() async throws { try await run(.releasedTail, newContainer: true, fontSize: 10.63, change: .keyboard) }
+    func testReleasedTailNarrowerSame() async throws { try await run(.releasedTail, newContainer: false, fontSize: 10.63, change: .narrower) }
+    func testReleasedTailNarrowerNew() async throws { try await run(.releasedTail, newContainer: true, fontSize: 10.63, change: .narrower) }
 
     func testQuickSameContainer() async throws { try await run(.quick, newContainer: false) }
     func testQuickNewContainer() async throws { try await run(.quick, newContainer: true) }

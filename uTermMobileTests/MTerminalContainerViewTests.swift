@@ -48,10 +48,10 @@ class MTerminalContainerTestCase: XCTestCase {
 
     /// 已按 `mounted` 排过版、挂在真窗口里、surface 已就绪（网格到位、画面在吃字节）的终端。
     /// 基线用 `reported(_:)` 取：它会等网格停稳。
-    func hostedInWindow(file: StaticString = #filePath, line: UInt = #line) async throws
+    func hostedInWindow(fontSize: CGFloat = 11, file: StaticString = #filePath, line: UInt = #line) async throws
         -> (GhosttyTerminalBridge, MTerminalContainerView) {
         let bridge = makeTerminal()
-        let container = MTerminalContainerView(terminal: bridge, fontSize: 11)
+        let container = MTerminalContainerView(terminal: bridge, fontSize: fontSize)
         try mount(container)
         lay(container, mounted)
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {

@@ -65,6 +65,8 @@ final class GhosttyTerminalBridge {
     private let delegateProxy: SurfaceDelegate
     /// 切回标签、surface 重建期间盖着的旧帧（见 `GhosttySwitchBackCover`）。
     private var switchBackCover: GhosttySwitchBackCover?
+    /// 容器还有没落地的布局（等停稳、尺寸 / 字号没跟上）。容器接上，盖子撤之前问。
+    var geometryPending: () -> Bool = { false }
     /// surface 放掉时的行高调整与当时的视图尺寸、字号、倍率，重建后尺寸没变就直接补上，不先按自然行高画一帧。
     private var releasedRowFill: (adjustment: Int, size: CGSize, fontSize: CGFloat, scale: Double)?
 
@@ -284,14 +286,10 @@ final class GhosttyTerminalBridge {
     private func restoreSurfaceIfReleased() {
         guard view.uTermIsSurfaceReleased else {
             // 没放掉：surface 重新被允许出帧时第一张常是只有底色的（实测几 ms 内出现，随后才是内容），也盖一下。
-            if view.surface != nil {
-                switchBackCover?.remove()
-                switchBackCover = GhosttySwitchBackCover.install(on: self)
-            }
+            if view.surface != nil { installSwitchBackCoverIfNeeded() }
             return
         }
-        switchBackCover?.remove()
-        switchBackCover = GhosttySwitchBackCover.install(on: self)
+        installSwitchBackCoverIfNeeded()
         view.uTermRestoreSurface()
         if let released = releasedRowFill, released.adjustment != 0, view.surface != nil,
            released.size == view.bounds.size, released.fontSize == view.terminalFontSize,
@@ -299,6 +297,17 @@ final class GhosttyTerminalBridge {
             view.uTermSetCellHeightAdjustment(released.adjustment)
         }
         releasedRowFill = nil
+    }
+
+    /// 容器在提交新尺寸 / 字号之前先盖上旧帧（提交会改层的 frame）。已经盖着就不动。
+    func prepareSwitchBack() {
+        guard !isOnScreen else { return }
+        installSwitchBackCoverIfNeeded()
+    }
+
+    private func installSwitchBackCoverIfNeeded() {
+        guard switchBackCover == nil else { return }
+        switchBackCover = GhosttySwitchBackCover.install(on: self)
     }
 
     func coverRemoved(_ cover: GhosttySwitchBackCover) {

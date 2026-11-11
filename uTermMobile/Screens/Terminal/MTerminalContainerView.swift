@@ -26,6 +26,8 @@ final class MTerminalContainerView: UIView {
             // 不能再写进视图，否则视图停画、画面永远停在那一刻。和 `syncTerminal` 的守卫同一条规则。
             guard terminalView.superview === self else { return }
             if isOnScreen {
+                // 在尺寸提交之前把旧帧盖上：提交会改视图（和里面的层）的 frame，晚了盖子量到的就是新 frame、旧帧被裁 / 挪位。
+                terminal.prepareSwitchBack()
                 // 先把攒着的尺寸提交了再让画面回来：surface 放掉过的话，直接按新尺寸重建，不用先建再改。
                 commitsOnNextLayout = true
                 setNeedsLayout()
@@ -43,6 +45,8 @@ final class MTerminalContainerView: UIView {
         self.fontSize = fontSize
         self.isOnScreen = isOnScreen
         super.init(frame: .zero)
+        // 盖子（`GhosttySwitchBackCover`）撤之前问：这个容器还有没落地的布局吗。要在下面 `setOnScreen` 建盖子之前接上。
+        terminal.geometryPending = { [weak self] in self?.hasPendingGeometry ?? false }
         clipsToBounds = true
         let view = terminal.view
         view.translatesAutoresizingMaskIntoConstraints = true
@@ -68,6 +72,16 @@ final class MTerminalContainerView: UIView {
         guard abs(fontSize - size) > 0.1 else { return }
         fontSize = size
         syncTerminal(settled: false)
+    }
+
+    /// 终端还没跟上容器：在等停稳（`hold`），或视图的尺寸 / 字号和容器此刻的目标不一样，或容器还没排过版。
+    /// 不在屏上不跟尺寸，不算没落地。
+    var hasPendingGeometry: Bool {
+        guard isOnScreen, terminalView.superview === self else { return false }
+        if bounds.width <= 0 || bounds.height <= 0 { return true }
+        if settler.held != nil { return true }
+        let current = TerminalResizeSettler.Target(size: terminalView.frame.size, fontSize: terminalView.terminalFontSize)
+        return !current.matches(TerminalResizeSettler.Target(size: bounds.size, fontSize: fontSize))
     }
 
     func cancelHold() {

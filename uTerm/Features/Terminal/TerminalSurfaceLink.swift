@@ -256,6 +256,8 @@ final class TerminalSurfaceLink {
     /// 给 surface 推过几次行高配置（测试读：拖动、转屏途中不该逐帧推）。
     private(set) var rowFillAdjustments = 0
     private var rowFillRefitScheduled = false
+    /// 有一次按行填满重算已经排上了、还没跑（视图的网格或格子刚变过）：此刻的行高调整还不是最终值。
+    var rowFillRefitPending: Bool { rowFillRefitScheduled }
     /// 退回过自然行高的那次（视图高、自然格子高）：同样的尺寸不再试，免得「推 → 退 → 网格回报又触发重算」打转。
     private var rowFillGaveUp: (viewHeight: Int, natural: Int)?
 
