@@ -103,8 +103,9 @@ final class MTerminalContainerView: UIView {
             terminalView.hasHostedLayout = true
             commit()
         case .hold:
-            // 等待期间保持旧尺寸：比容器矮时贴顶，比容器高时贴底（键盘升起时提示符和光标留在屏上）。
-            terminalView.frame.origin = CGPoint(x: 0, y: min(0, bounds.height - terminalView.frame.height))
+            // 等待期间保持旧尺寸：比容器矮时留在按行填满的下移位置（别先跳到 0 再回来），比容器高时贴底（键盘升起时提示符和光标留在屏上）。
+            let room = bounds.height - terminalView.frame.height
+            terminalView.frame.origin = CGPoint(x: 0, y: room < 0 ? room : terminal.link.rowFillOffset)
         }
     }
 

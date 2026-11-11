@@ -63,6 +63,10 @@ final class GhosttyTerminalBridge {
     /// 擦屏后清选区、整屏回放后找回视口（两端共用）。
     var keeper: TerminalSurfaceKeeper { link.keeper }
     private let delegateProxy: SurfaceDelegate
+    /// 切回标签、surface 重建期间盖着的旧帧（见 `GhosttySwitchBackCover`）。
+    private var switchBackCover: GhosttySwitchBackCover?
+    /// surface 放掉时的行高调整与当时的视图尺寸、字号、倍率，重建后尺寸没变就直接补上，不先按自然行高画一帧。
+    private var releasedRowFill: (adjustment: Int, size: CGSize, fontSize: CGFloat, scale: Double)?
 
     /// 回滚上限，surface 与影子用同一份（两端共用的 `TerminalScrollbackLimits` 按行数算出两边的值；不一样的话回放进
     /// surface 的历史长度和它自己攒的不同，M4 的前提）。iOS 固定 1 万行。
@@ -247,9 +251,10 @@ final class GhosttyTerminalBridge {
         view.setSurfaceVisible(onScreen)
         retention.cancel()
         if onScreen {
-            view.uTermRestoreSurface()
+            restoreSurfaceIfReleased()
             return
         }
+        switchBackCover?.remove()
         guard view.surface != nil else {
             // 还没建过 surface：先不建，等露出来。
             releaseSurface()
@@ -273,8 +278,36 @@ final class GhosttyTerminalBridge {
         input.reportSize(cols: cols, rows: rows)
     }
 
+    /// 切回来：surface 放掉过就重建。重建的 surface 头几帧是空终端、行高调整也是 0，所以先把旧帧盖在上面
+    ///（`GhosttySwitchBackCover`），行高调整按放掉前的值当场补上（尺寸没变的话；变了交给网格回报后的按行填满重算），
+    /// 等回放追平、画面就绪才撤盖。
+    private func restoreSurfaceIfReleased() {
+        guard view.uTermIsSurfaceReleased else {
+            // 没放掉：surface 重新被允许出帧时第一张常是只有底色的（实测几 ms 内出现，随后才是内容），也盖一下。
+            if view.surface != nil {
+                switchBackCover?.remove()
+                switchBackCover = GhosttySwitchBackCover.install(on: self)
+            }
+            return
+        }
+        switchBackCover?.remove()
+        switchBackCover = GhosttySwitchBackCover.install(on: self)
+        view.uTermRestoreSurface()
+        if let released = releasedRowFill, released.adjustment != 0, view.surface != nil,
+           released.size == view.bounds.size, released.fontSize == view.terminalFontSize,
+           released.scale == view.uTermScaleFactor, !link.rowFillSuspended() {
+            view.uTermSetCellHeightAdjustment(released.adjustment)
+        }
+        releasedRowFill = nil
+    }
+
+    func coverRemoved(_ cover: GhosttySwitchBackCover) {
+        if switchBackCover === cover { switchBackCover = nil }
+    }
+
     private func releaseSurface() {
         guard !isOnScreen else { return }
+        releasedRowFill = (view.uTermCellHeightAdjustment, view.bounds.size, view.terminalFontSize, view.uTermScaleFactor)
         // 放掉之前记下视口：重建后整屏回放（视口回到底部），按它找回原处。
         link.rememberViewport()
         view.uTermReleaseSurface()
