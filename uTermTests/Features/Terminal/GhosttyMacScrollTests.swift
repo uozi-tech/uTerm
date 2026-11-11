@@ -204,21 +204,26 @@ final class GhosttyMacScrollTests: XCTestCase {
 
     // MARK: 用例
 
-    /// 手指拨 `tenths / 10` 行的距离后抬起、没有惯性：途中停在半行上，抬手后吸附到最近的整行。
-    private func checkLift(tenths: Int, landsOn expectedRows: Int) async throws {
+    /// 手指拨 `tenths / 10` 行的距离后抬起、没有惯性：途中停在半行上，抬手后吸附到整行。
+    /// `slowStop`：最后两步只挪 1 pt（手指基本停住了才抬）——离哪边近往哪边走；否则抬手时还在走——顺着方向补。
+    private func checkLift(tenths: Int, landsOn expectedRows: Int, slowStop: Bool) async throws {
         let rig = try await makeRig()
         defer { rig.close() }
         let start = try XCTUnwrap(rig.firstLine)
         assertAligned(rig, firstLine: start, "滚动之前")
 
         let total = rig.rowPoints * tenths / 10
+        let fast = slowStop ? total - 2 : total
         let steps = 8
         try rig.scroll(0, phase: began)
         for step in 0 ..< steps {
-            try rig.scroll(total * (step + 1) / steps - total * step / steps, phase: changed)
+            try rig.scroll(fast * (step + 1) / steps - fast * step / steps, phase: changed)
             await sleep(0.012)
         }
-        XCTAssertEqual(rig.rowsScrolled, expectedRows, "用例凑的位移不对：\(rig.sentPoints) pt，行高 \(rig.rowPoints) pt")
+        if slowStop {
+            for _ in 0 ..< 2 { try rig.scroll(1, phase: changed); await sleep(0.012) }
+            XCTAssertEqual(rig.rowsScrolled, expectedRows, "用例凑的位移不对：\(rig.sentPoints) pt，行高 \(rig.rowPoints) pt")
+        }
         // 途中：镜像带着小数，画面上第一行被切了一截（确实是按像素滚的）。
         await sleep(0.05)
         let midBands = rig.bands().filter { $0.key >= 0 }
@@ -235,12 +240,18 @@ final class GhosttyMacScrollTests: XCTestCase {
         assertAligned(rig, firstLine: start - expectedRows, "停稳 0.4 s 后")
     }
 
-    func testLiftSnapsBackToNearerRow() async throws {
-        try await checkLift(tenths: 33, landsOn: 3)
+    /// 手指基本停住了才抬：离哪边近往哪边走。
+    func testSlowLiftSnapsBackToNearerRow() async throws {
+        try await checkLift(tenths: 33, landsOn: 3, slowStop: true)
     }
 
-    func testLiftSnapsForwardToNearerRow() async throws {
-        try await checkLift(tenths: 37, landsOn: 4)
+    func testSlowLiftSnapsForwardToNearerRow() async throws {
+        try await checkLift(tenths: 37, landsOn: 4, slowStop: true)
+    }
+
+    /// 抬手那一刻还在走：顺着方向补到下一行，不往回退（往回退就是用户看到的「来回跳」）。
+    func testLiftWhileMovingSnapsInTheDirectionOfTravel() async throws {
+        try await checkLift(tenths: 33, landsOn: 4, slowStop: false)
     }
 
     /// 抬手后系统接着发惯性：惯性途中不吸附，惯性结束那一刻吸附。

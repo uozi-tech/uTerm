@@ -141,6 +141,9 @@ final class TerminalSurfaceCoordinator {
     /// 实测每次 1.4–2.2 ms、最长 5.5 ms，还要等 GPU，GPU 一忙就把主线程拖过一拍（user 日志里的晚交帧和惯性 link 跳拍）。
     private var pendingSyncDraw = true
 
+    /// uTerm 本地补丁：建过几个 surface。新对象可能落在刚释放的那个的地址上，按对象认「是不是换了 surface」不可靠。
+    private(set) var surfaceGeneration = 0
+
     /// uTerm 本地补丁：引擎 wakeup（app 邮箱里来了标题、滚动条这类消息）触发的 tick 要不要也在主线程同步整帧重画。
     /// 按平台定死，不是开关：
     /// - iOS：要。不画的话（渲染线程自己会画这些变化）真机上滚动发糊；滚动手感是按同步重画验收的。
@@ -271,6 +274,7 @@ final class TerminalSurfaceCoordinator {
         let newSurface = TerminalSurface(rawSurface)
         newSurface.sendsCommandChords = sendsCommandChords
         surface = newSurface
+        surfaceGeneration += 1
         surfaceSession = configuration.inMemorySession
         newSurface.setOcclusion(effectiveSurfaceVisible)
         // Wakeups must keep draining while the surface is merely occluded:

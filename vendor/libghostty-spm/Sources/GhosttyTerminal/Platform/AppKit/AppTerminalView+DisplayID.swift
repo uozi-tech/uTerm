@@ -22,7 +22,8 @@
 
     /// 上次报给引擎的显示器，和一共报了几次（测试读）。
     struct DisplayReportState {
-        var surface: ObjectIdentifier?
+        /// 上次报的时候是第几个 surface（`TerminalSurfaceCoordinator.surfaceGeneration`）。
+        var surfaceGeneration: Int?
         var displayID: UInt32?
         var count = 0
         var observingWake = false
@@ -40,9 +41,9 @@
         /// 把显示器报给引擎。`force` = false 时同一个 surface、同一个显示器不重复报。
         func reportDisplayID(force: Bool = false) {
             guard let surface, let id = currentDisplayID else { return }
-            let identity = ObjectIdentifier(surface)
-            guard force || displayReport.surface != identity || displayReport.displayID != id else { return }
-            displayReport.surface = identity
+            let generation = core.surfaceGeneration
+            guard force || displayReport.surfaceGeneration != generation || displayReport.displayID != id else { return }
+            displayReport.surfaceGeneration = generation
             displayReport.displayID = id
             displayReport.count += 1
             surface.setDisplayID(id)

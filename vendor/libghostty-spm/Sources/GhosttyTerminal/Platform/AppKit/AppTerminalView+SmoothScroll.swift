@@ -2,7 +2,7 @@
 //  AppTerminalView+SmoothScroll.swift
 //  uTerm 本地补丁（上游没有这个文件）
 //
-//  配合 GhosttyKit 0023 的逐像素平滑滚动：触控板停手后把视口吸附回整行。
+//  配合 GhosttyKit 0023 的逐像素平滑滚动：触控板 / Magic Mouse 停手后把视口吸附回整行。
 //
 //  0023 让精确滚动（触控板）按像素滚，视口可以停在「第几行 + 往下多少像素」。Ghostty 的点击、选区命中都按整数视口算，
 //  停在半行会差一行；字也停在被切了一截的位置上。iOS 那边在 `UITerminalView+Scroll.swift` 里做了同样的事，
@@ -27,6 +27,10 @@
         var lastSend: CFTimeInterval = 0
         /// 位移里不足一像素的零头，留到下一个事件。
         var carry: CGFloat = 0
+        /// 用户最近一次滚动事件发给引擎的位移（整数像素，正 = 往回滚）。停手吸附时看它的方向和大小。
+        var lastUserDelta = 0
+        /// 这次吸附顺着滚动方向补（true）还是离哪边近往哪边走（false）；排吸附的时候定（见 `snapDistance`）。
+        var snapFollowsDirection = false
         /// 「稍后吸附」的凭据：之后又来了滚动事件就作废。
         var settleToken = 0
         /// 吸附动画：要走的总像素、已发出的、起点时刻。
@@ -80,6 +84,7 @@
             let whole = exact.rounded()
             smoothScroll.carry = exact - whole
             if whole != 0 {
+                smoothScroll.lastUserDelta = Int(whole)
                 syncSmoothScrollModel(extent)
                 applyToSmoothScrollModel(Int(whole), extent)
                 surface?.sendMouseScroll(x: 0, y: Double(whole), mods: mods.rawValue)
@@ -87,8 +92,11 @@
 
             // 收尾：惯性走完当场吸附；手指抬起后稍等一下，系统接着发惯性的话会把这次作废。
             if event.momentumPhase == .ended || event.momentumPhase == .cancelled {
+                // 惯性不会是误触：不管是自己走完还是被下一次触碰掐断，都顺着方向补。
+                smoothScroll.snapFollowsDirection = smoothScroll.lastUserDelta != 0
                 settleScrollSoon(after: 0)
             } else if event.phase == .ended || event.phase == .cancelled {
+                smoothScroll.snapFollowsDirection = abs(smoothScroll.lastUserDelta) >= Self.snapFollowsDirectionAbove
                 settleScrollSoon(after: 0.08)
             }
         }
@@ -160,7 +168,27 @@
             }
         }
 
-        /// 把半行补成整行：离哪边近往哪边走，三次缓出 0.18 s 落定，每一步只发整像素。
+        /// 手指抬起时最后一个事件的位移到这个数（物理像素）就算「还在走」，吸附顺着它的方向；不到就算停住了。
+        /// 2x 屏上 1 pt = 2 px：手指搭在 Magic Mouse 上蹭出来的 1 pt 不算在走（不然碰一下就滚一整行）。
+        static let snapFollowsDirectionAbove = 3
+
+        /// 半行往哪边补（返回要发给引擎的像素，正 = 往回滚）。
+        ///
+        /// 顺着方向（`followsDirection`）：往刚才滚动的方向补到整行，绝不往回。用在惯性结束、以及抬手那一刻画面还在走的
+        /// 时候。Magic Mouse 连续拨动时下一次手指碰上去会把上一次的惯性掐断，那一刻每个事件还在走几十上百像素；
+        /// 「离哪边近往哪边走」会先往回退最多半行，50–70 ms 后新的一拨又往前——用户看到的就是上下来回跳
+        ///（回放真实录制：36 拨里 14 拨往回走，`GhosttyMagicMouseScrollTests`）。触控板连着甩也是同一回事。
+        /// 不顺着方向：画面基本停住了（慢慢拖到一半松手），离哪边近往哪边走，手指摆在哪就留在哪附近。
+        static func snapDistance(fraction frac: Int, cell: Int, lastUserDelta: Int, followsDirection: Bool) -> Int {
+            guard frac != 0 else { return 0 }
+            if followsDirection, lastUserDelta != 0 {
+                // 往回滚（位移为正）：位置在变小，补到本行行首；往活动区：补到下一行。
+                return lastUserDelta > 0 ? frac : frac - cell
+            }
+            return frac * 2 <= cell ? frac : frac - cell
+        }
+
+        /// 把半行补成整行（方向见 `snapDistance`），三次缓出 0.18 s 落定，每一步只发整像素。
         func snapScrollToRow() {
             smoothScroll.snapTimer?.invalidate()
             smoothScroll.snapTimer = nil
@@ -168,7 +196,9 @@
             syncSmoothScrollModel(extent)
             let frac = smoothScroll.modelFrac
             guard frac != 0 else { return }
-            smoothScroll.snapTotal = frac * 2 <= extent.cell ? frac : frac - extent.cell
+            smoothScroll.snapTotal = Self.snapDistance(fraction: frac, cell: extent.cell,
+                                                       lastUserDelta: smoothScroll.lastUserDelta,
+                                                       followsDirection: smoothScroll.snapFollowsDirection)
             smoothScroll.snapSent = 0
             smoothScroll.snapStart = CACurrentMediaTime()
             let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
