@@ -14,6 +14,8 @@ nonisolated enum HostHolder {
     static let protocolVersion: UInt32 = 1
     /// 没有客户端接着超过这么久，主机上的会话自己结束。App 被系统杀掉之后没人会回来接它，不能永远占着主机。
     static let detachedTimeoutSeconds = 24 * 60 * 60
+    /// 存到主机上的检查点带多少行回滚。经手机网络上传，整段回滚一张能有几 MB；App 重新打开后能翻回这么多行。
+    static let checkpointScrollbackLines = 2000
 
     /// `uterm-holder` 自己的退出码，加上启动脚本用的两个。
     enum ExitCode {

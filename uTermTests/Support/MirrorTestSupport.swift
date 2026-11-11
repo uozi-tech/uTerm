@@ -79,7 +79,8 @@ nonisolated final class MirrorPhone: @unchecked Sendable {
         lock.withLock {
             switch item {
             case .snapshot: snapshotCount += 1
-            case .bytes(let bytes): byteCount += bytes.count
+            case .bytes(let bytes), .history(let bytes): byteCount += bytes.count
+            case .afterFed: break
             }
         }
     }

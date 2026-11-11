@@ -117,6 +117,17 @@ final class TerminalEventRouter {
         journal.current = status
     }
 
+    /// 接回时检查点里存着的程序状态（`ProgramStatusJournal.encoded`）。在喂字节的那条线程上调，排在检查点之后的历史字节
+    /// 之前：记账副本当场换，界面那份排进主队列（和随后历史字节里的状态事件同一个先后）。
+    nonisolated func restoreFromCheckpoint(_ data: Data) {
+        guard let status = ProgramStatusJournal.decode(data) else { return }
+        journal.current = status
+        TerminalMainHop.run { [weak self] in
+            self?.tracker = status
+            self?.onStatusChanged()
+        }
+    }
+
     /// 接回时问到前台在跑 `name`，而检查点里没有状态（见 `ProgramStatusTracker.presumedProgram`）。
     func presumeRunningProgram(_ name: String) {
         tracker.presumeRunningProgram(name)

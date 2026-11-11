@@ -28,6 +28,20 @@ struct MobileTerminalTransportRequest {
     let profile: ServerProfile
     let container: ModelContainer
     let relay: HostKeyChallengeRelay
+    /// 主机上那个会话的 id（`PersistentSSHConnection`）。同一个 id 再连一次接回同一个 shell：
+    /// App 被系统结束后重新打开、建连失败后重试都用原来的。别的后端不看它。
+    let sessionID: UUID
+    /// `sessionID` 是上次运行留下的：主机上多半还有这个会话。没连上就关标签时，后端凭它去把会话结束掉。
+    let resumesSession: Bool
+
+    init(profile: ServerProfile, container: ModelContainer, relay: HostKeyChallengeRelay,
+         sessionID: UUID = UUID(), resumesSession: Bool = false) {
+        self.profile = profile
+        self.container = container
+        self.relay = relay
+        self.sessionID = sessionID
+        self.resumesSession = resumesSession
+    }
 }
 
 /// 造终端后端的工厂。`MobileTerminalController` 的唯一后端来源。
@@ -52,7 +66,8 @@ struct MobileTerminalTransportFactory {
     /// 自己重连接回。主机上用不了保持进程时它内部退回 `SSHConnection`。凭据解析同 `SSHConnection.make`：
     /// 钥匙串读取离开主线程，跳板机凭据缺了直接报错。首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
     private static func makeLive(_ request: MobileTerminalTransportRequest) async throws -> any TerminalBackend {
-        try await PersistentSSHConnection.make(profile: request.profile, container: request.container,
+        try await PersistentSSHConnection.make(sessionID: request.sessionID, resumesSession: request.resumesSession,
+                                               profile: request.profile, container: request.container,
                                                approver: request.relay.makeApprover())
     }
 }

@@ -28,11 +28,12 @@ final class TermTab: Identifiable {
     var mode: MTerminalMode = .terminal
     /// `transportFactory` 默认真 SSH——生产侧一律用 `TermTab(host:)`，行为不变；
     /// 探针注入假传输，从而在不发起任何真实连接的前提下把整屏挂起来。
-    init(host: ServerProfile, transportFactory: MobileTerminalTransportFactory = .live) {
+    /// `hostSessionID`：App 重新打开后恢复的标签带着上次的会话 id，凭它接回主机上还在跑的那个 shell。
+    init(host: ServerProfile, transportFactory: MobileTerminalTransportFactory = .live, hostSessionID: UUID? = nil) {
         self.host = host
         self.hostName = host.name
         self.remote = nil
-        self.controller = MobileTerminalController(transportFactory: transportFactory)
+        self.controller = MobileTerminalController(transportFactory: transportFactory, hostSessionID: hostSessionID)
     }
 
     /// 远控标签：经 Mac 接入它上面的终端。
@@ -130,12 +131,22 @@ struct TerminalSessionBody: View {
                     // 底色（同 M.surface）则铺满安全区。
                     .padding(.horizontal, Self.terminalInset.horizontal)
                     .background(terminalBg, ignoresSafeAreaEdges: .mSessionBody)
-                    .overlay(alignment: .top) {
-                        if tab.controller.isReconnecting { MTerminalReconnectBanner(notice: tab.controller.reconnectNotice) }
-                    }
+                    .overlay(alignment: .top) { statusBanner }
                     TerminalKeyBar(controller: tab.controller)
                 }
             }
+        }
+    }
+
+    /// 终端顶上的一条状态：正在重连、已断开（可以点重新连接）、正在连接（没有连接中页盖着时，例如 App 重新打开后恢复的标签）。
+    @ViewBuilder private var statusBanner: some View {
+        let controller = tab.controller
+        if controller.isReconnecting {
+            MTerminalReconnectBanner(notice: controller.reconnectNotice)
+        } else if tab.remote == nil, controller.canReconnect {
+            MTerminalDisconnectedBanner { controller.restart() }
+        } else if controller.state == .connecting, store.connecting?.tabID != tab.id {
+            MTerminalReconnectBanner(notice: "正在连接…")
         }
     }
 
@@ -174,7 +185,12 @@ struct TerminalSessionBody: View {
                     MBtn(title: "拷贝错误", icon: "copy", kind: .secondary, height: 44) {
                         UIPasteboard.general.string = msg
                     }.fixedSize()
-                    MBtn(title: "关闭", kind: .tinted, height: 44, action: onClose).fixedSize()
+                    if tab.controller.canReconnect {
+                        MBtn(title: "关闭", kind: .secondary, height: 44, action: onClose).fixedSize()
+                        MBtn(title: "重试", kind: .tinted, height: 44) { tab.controller.restart() }.fixedSize()
+                    } else {
+                        MBtn(title: "关闭", kind: .tinted, height: 44, action: onClose).fixedSize()
+                    }
                 }
                 .padding(.top, 6)
             }

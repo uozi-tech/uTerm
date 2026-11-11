@@ -82,6 +82,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     private var fedBytes = 0
     /// 从快照还原过（`restore(snapshot:)` / `init(snapshot:options:)`）：没喂过字节也有内容。
     private var wasRestored = false
+    private var resized = false
     /// 事件出口，见 `Event`。在 `feed` 里同步调用。
     private var eventHandler: (@Sendable (Event, _ isHistory: Bool) -> Void)?
     /// 程序写剪贴板（OSC 52 / OSC 1337 Copy / OSC 5522）。见 `setClipboardWriteHandler`。
@@ -155,6 +156,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         guard cols > 0, rows > 0 else { return }
         lock.lock()
         defer { lock.unlock() }
+        resized = true
         let cellChanged = (cellWidth > 0 && cellWidth != self.cellWidth) || (cellHeight > 0 && cellHeight != self.cellHeight)
         if cellWidth > 0 { self.cellWidth = cellWidth }
         if cellHeight > 0 { self.cellHeight = cellHeight }
@@ -176,6 +178,13 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return (Int(Self.cols(handle)), Int(Self.rows(handle)))
+    }
+
+    /// 有人给过它尺寸（跟过本地的网格）；false = 还是建出来时的默认尺寸。
+    var wasSized: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return resized
     }
 
     var totalFedBytes: Int {

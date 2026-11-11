@@ -47,9 +47,9 @@ final class PersistentSSHConnectionLiveTests: XCTestCase {
 
     // MARK: - 夹具
 
-    private func makeBackend(sessionID: UUID = UUID()) -> PersistentSSHConnection {
+    private func makeBackend(sessionID: UUID = UUID(), resumesSession: Bool = false) -> PersistentSSHConnection {
         let backend = PersistentSSHConnection(
-            sessionID: sessionID, profile: profile, auth: auth, jumpHostAuth: nil,
+            sessionID: sessionID, resumesSession: resumesSession, profile: profile, auth: auth, jumpHostAuth: nil,
             hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in true })
         opened.append(backend)
         return backend
@@ -71,7 +71,10 @@ final class PersistentSSHConnectionLiveTests: XCTestCase {
         init(_ backend: PersistentSSHConnection) {
             Task {
                 for await item in backend.outputItems {
-                    if case .bytes(let data) = item { self.collected.withLock { $0.append(data) } }
+                    switch item {
+                    case .bytes(let data), .history(let data): self.collected.withLock { $0.append(data) }
+                    case .snapshot, .afterFed: break
+                    }
                 }
             }
         }
@@ -193,6 +196,139 @@ final class PersistentSSHConnectionLiveTests: XCTestCase {
         await fulfillment(of: [ended], timeout: 10)
         let sessions = try await run("~/.local/share/uterm/bin/uterm-holder-\(HostHolder.version) list; echo CHECKED")
         XCTAssertFalse(sessions.contains(backend.sessionID.uuidString), sessions)
+    }
+
+    // MARK: - App 重新打开后接回
+
+    /// 一个「终端」：影子终端 + 输出泵吃后端的输出，检查点从它身上拍（和 iOS 的 `MobileTerminalController` 同一个接法）。
+    private final class DataLog: Sendable {
+        private let collected = Mutex<[Data]>([])
+        var values: [Data] { collected.withLock { $0 } }
+        var isEmpty: Bool { values.isEmpty }
+        func append(_ data: Data) { collected.withLock { $0.append(data) } }
+    }
+
+    private final class Terminal: Sendable {
+        let phone: MirrorPhone
+        let restoredStatus = DataLog()
+
+        init(_ backend: PersistentSSHConnection, cols: Int = 80, rows: Int = 24) {
+            let phone = MirrorPhone(cols: cols, rows: rows, scrollbackLines: 5000)
+            self.phone = phone
+            let restoredStatus = restoredStatus
+            backend.setCheckpointHooks(TerminalCheckpointHooks(
+                capture: { phone.pump.makeCheckpoint(scrollbackLines: 2000, programStatus: Data("status-v1".utf8)) },
+                restoreProgramStatus: { status in restoredStatus.append(status) }))
+            phone.start(backend.outputItems)
+        }
+
+        var text: String { phone.shadow.viewportText() }
+
+        func wait(for needle: String, timeout: Duration = .seconds(20),
+                  file: StaticString = #filePath, line: UInt = #line) async {
+            let deadline = ContinuousClock.now + timeout
+            while !text.contains(needle) {
+                guard ContinuousClock.now < deadline else {
+                    XCTFail("屏幕上等不到「\(needle)」：\(text)", file: file, line: line)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+    }
+
+    private func storedCheckpointExists(_ sessionID: UUID) async throws -> Bool {
+        // 检查点只在保持进程的内存里：从外面看不到，用「再接一次能不能拿回画面」来验。这里只确认会话还在。
+        let listing = try await run("~/.local/share/uterm/bin/uterm-holder-\(HostHolder.version) list; echo CHECKED")
+        return listing.contains(sessionID.uuidString)
+    }
+
+    /// App 被系统结束（后端直接丢下，没告诉主机）之后用同一个会话 id 再连：画面从存在主机上的检查点回来，
+    /// 检查点之后、App 不在期间的输出按历史补上，shell 还是原来那个。
+    func testReopeningWithTheSameSessionRestoresTheScreenFromTheCheckpoint() async throws {
+        let sessionID = UUID()
+        let first = makeBackend(sessionID: sessionID)
+        let firstTerminal = Terminal(first)
+        try await first.connect()
+        await first.write(Data("stty -echo; clear; echo PID=$$; echo first-run-line\n".utf8))
+        await firstTerminal.wait(for: "first-run-line")
+        let pid = try XCTUnwrap(shellPID(in: firstTerminal.text, marker: "PID"))
+
+        // 进后台：存一张检查点。
+        await first.saveCheckpoint()
+        // 检查点之后、App 被结束之前又来了一些输出；被结束之后主机上接着跑。里面夹一个查询（历史里的不该再答）。
+        await first.write(Data("echo after-checkpoint; (sleep 1; printf '\\033[c'; echo while-away) &\n".utf8))
+        await firstTerminal.wait(for: "after-checkpoint")
+        await first.abandonForTesting()
+        let alive = try await storedCheckpointExists(sessionID)
+        XCTAssertTrue(alive, "App 没了，会话应当留在主机上")
+        try await Task.sleep(for: .milliseconds(1500))
+
+        // App 重新打开：新的后端、空的终端，同一个会话 id。
+        let second = makeBackend(sessionID: sessionID, resumesSession: true)
+        let secondTerminal = Terminal(second)
+        let replies = DataLog()
+        secondTerminal.phone.shadow.setReplyHandler { reply in replies.append(reply) }
+        try await second.connect()
+
+        await secondTerminal.wait(for: "while-away")
+        let screen = secondTerminal.text
+        XCTAssertTrue(screen.contains("first-run-line"), "检查点里的内容：\(screen)")
+        XCTAssertTrue(screen.contains("after-checkpoint"), "检查点之后的输出：\(screen)")
+        XCTAssertEqual(secondTerminal.phone.snapshots, 1, "画面从检查点还原，不是从头重放")
+        XCTAssertEqual(secondTerminal.restoredStatus.values, [Data("status-v1".utf8)])
+        XCTAssertTrue(replies.isEmpty, "App 不在期间的查询不该再答")
+
+        await second.write(Data("echo AGAIN=$$\n".utf8))
+        await secondTerminal.wait(for: "AGAIN=\(pid)")
+        // 接回之后是实时输出：查询照答。
+        await second.write(Data("printf '\\033[c'; echo asked\n".utf8))
+        await secondTerminal.wait(for: "asked")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while replies.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(replies.isEmpty, "接回之后的查询要答")
+    }
+
+    /// 没存过检查点（App 还没进过后台就没了）：主机上留着的输出整段按历史补上，画面照样回来。
+    func testReopeningWithoutACheckpointReplaysWhatTheHostKept() async throws {
+        let sessionID = UUID()
+        let first = makeBackend(sessionID: sessionID)
+        let firstTerminal = Terminal(first)
+        try await first.connect()
+        await first.write(Data("stty -echo; clear; echo never-checkpointed\n".utf8))
+        await firstTerminal.wait(for: "never-checkpointed")
+        await first.abandonForTesting()
+
+        let second = makeBackend(sessionID: sessionID, resumesSession: true)
+        let secondTerminal = Terminal(second)
+        try await second.connect()
+        await secondTerminal.wait(for: "never-checkpointed")
+        XCTAssertEqual(secondTerminal.phone.snapshots, 0)
+    }
+
+    /// 恢复的标签没连上就被关掉：主机上的会话也要结束，不留到 24 小时后。
+    func testClosingAResumedSessionThatNeverAttachedStillEndsItOnTheHost() async throws {
+        let sessionID = UUID()
+        let first = makeBackend(sessionID: sessionID)
+        let terminal = Terminal(first)
+        try await first.connect()
+        await first.write(Data("echo up\n".utf8))
+        await terminal.wait(for: "up")
+        await first.abandonForTesting()
+
+        let second = makeBackend(sessionID: sessionID, resumesSession: true)
+        await second.close()
+
+        let deadline = ContinuousClock.now + .seconds(20)
+        var listing = ""
+        repeat {
+            listing = try await run("~/.local/share/uterm/bin/uterm-holder-\(HostHolder.version) list; echo CHECKED")
+            if !listing.contains(sessionID.uuidString) { break }
+            try await Task.sleep(for: .milliseconds(200))
+        } while ContinuousClock.now < deadline
+        XCTAssertFalse(listing.contains(sessionID.uuidString), listing)
     }
 
     /// 主机上留了「用不了」的标记：不装、不用保持进程，退回普通的 PTY 通道，照样能用。

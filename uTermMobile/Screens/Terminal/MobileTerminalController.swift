@@ -75,6 +75,13 @@ final class MobileTerminalController {
     var reconnectNotice: LocalizedStringKey {
         connection is RemoteTerminalBackend ? "与 Mac 的连接已断开，正在重新连接…" : "连接已断开，正在重新连接…"
     }
+    /// 主机上那个会话的 id（见 `MobileTerminalTransportRequest.sessionID`）。会话结束（shell 退出、被结束）就换一个：
+    /// 之后重新连接开的是新会话。工作区把它记下来，App 重新打开后凭它接回。
+    private(set) var hostSessionID: UUID
+    /// `hostSessionID` 是上次运行留下的（App 重新打开后恢复的标签）：主机上多半还有这个会话。
+    @ObservationIgnored private var resumesHostSession: Bool
+    /// 标签已经关了（`close()`）：不再重连。
+    @ObservationIgnored private var isClosed = false
     /// 唯一的后端来源。默认 `.live` = 原来内联在 `start()` 里的真 SSH 组装。
     @ObservationIgnored private let transportFactory: MobileTerminalTransportFactory
     @ObservationIgnored private var exitTask: Task<Void, Never>?
@@ -119,6 +126,15 @@ final class MobileTerminalController {
            let backend = connection as? any ReconnectingTerminalBackend, backend.probesOnForeground {
             Task { _ = await backend.verifyConnectionAlive() }
         }
+        if returned { MobileBackgroundGrace.shared.end() }
+        // 进后台：连着的会话再留一小段时间（切出去看一眼别的 App 再回来，连接不断）；会话留在主机上的，
+        // 把终端此刻的状态存过去——之后 App 被系统结束的话，重新打开凭它接回画面。
+        if inBackground, !returned, state == .connected, let connection {
+            MobileBackgroundGrace.shared.begin()
+            if let backend = connection as? any CheckpointingTerminalBackend {
+                Task { await backend.saveCheckpoint() }
+            }
+        }
     }
 
     /// 远控标签：告诉后端此刻有没有人看着它。Mac 长时间离线时，没人看的标签
@@ -144,8 +160,11 @@ final class MobileTerminalController {
 
     /// `transportFactory` 默认真 SSH——生产侧调用点（`TermTab`）不用改。
     /// `terminal` 默认新建一条接在 App 共用的 ghostty app 上的终端；探针注入自己配好的。
-    init(transportFactory: MobileTerminalTransportFactory = .live, terminal: GhosttyTerminalBridge? = nil) {
+    init(transportFactory: MobileTerminalTransportFactory = .live, terminal: GhosttyTerminalBridge? = nil,
+         hostSessionID: UUID? = nil) {
         self.transportFactory = transportFactory
+        self.hostSessionID = hostSessionID ?? UUID()
+        resumesHostSession = hostSessionID != nil
         self.terminal = terminal ?? GhosttyTerminalBridge()
         installAppVisibilityObservers()
         adoptTerminal()
@@ -277,7 +296,8 @@ final class MobileTerminalController {
         let attempt = connectGeneration
         // 不在库里的主机（Mac 本机 shell 的临时主机）不记「最近连接」：拿临时 id 去库里取会取到故障对象。
         let pid: PersistentIdentifier? = profile.modelContext == nil ? nil : profile.persistentModelID
-        let request = MobileTerminalTransportRequest(profile: profile, container: container, relay: relay)
+        let request = MobileTerminalTransportRequest(profile: profile, container: container, relay: relay,
+                                                     sessionID: hostSessionID, resumesSession: resumesHostSession)
 
         let factory = transportFactory
         // 全程弱引用：握手最长要等到登录超时，不能让一个已关掉的标签被这段等待拖住。
@@ -342,12 +362,24 @@ final class MobileTerminalController {
         }
         syncRemoteWatch()
         acceptsImages = conn is any TerminalImageReceiving
+        if let backend = conn as? any CheckpointingTerminalBackend {
+            let pump = terminal.outputPump, events = terminal.events
+            backend.setCheckpointHooks(TerminalCheckpointHooks(
+                capture: {
+                    pump.makeCheckpoint(scrollbackLines: HostHolder.checkpointScrollbackLines,
+                                        programStatus: events.journal.encoded)
+                },
+                restoreProgramStatus: { events.restoreFromCheckpoint($0) }))
+        }
         let exitStream = conn.exitStream
         // 输出进终端（影子同步解析，画面在 GhosttyKit 自己的串行队列上解析、按 vsync 画）；击键 / 尺寸变化走终端的
         // 同一条 FIFO。尺寸可能早于传输就绪（首次排布、重连），接上时先补发。
         terminal.bind(conn)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
+                // 主机上的会话没了：之后重新连接开的是新会话。
+                self?.hostSessionID = UUID()
+                self?.resumesHostSession = false
                 if case .failed = self?.state { } else { self?.state = .disconnected }
                 break
             }
@@ -431,6 +463,7 @@ final class MobileTerminalController {
     }
 
     func close() {
+        isClosed = true
         teardownConnection()
         state = .disconnected
     }
@@ -442,10 +475,20 @@ final class MobileTerminalController {
         }
     }
 
-    /// 失败后在同一控制器 / 同一终端视图上重连（连接中页「重试」）。终端视图仍挂着，
-    /// 新连接的输出接着喂给它；只有处于失败态时才生效。
+    /// 能不能在这个标签上重新连接：建连失败了，或者连上之后断开了（shell 退出、连接断了）。
+    var canReconnect: Bool {
+        guard !isClosed else { return false }
+        switch state {
+        case .failed: return lastProfile != nil
+        case .disconnected: return hadConnected && lastProfile != nil
+        case .idle, .connecting, .connected: return false
+        }
+    }
+
+    /// 失败 / 断开后在同一控制器 / 同一终端视图上重连（连接中页「重试」、断开提示上的「重新连接」）。
+    /// 终端视图仍挂着，新连接的输出接着喂给它。
     func restart() {
-        guard case .failed = state,
+        guard canReconnect,
               let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
         teardownConnection()
         started = false

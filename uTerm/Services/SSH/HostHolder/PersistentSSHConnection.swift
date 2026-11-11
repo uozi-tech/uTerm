@@ -26,9 +26,12 @@ extension RemoteTerminalBackend: ReconnectingTerminalBackend {}
 ///   断开期间的输出补上。终端这头什么都不用做：字节流是连续的，影子终端和画面照常往下吃。
 /// - shell 退出、会话在主机上没了（主机重启过）、被另一台设备接走，才算结束（`exitStream`）。
 /// - 关标签（`close()`）连同主机上的 shell 一起结束；App 被系统杀掉不走 `close()`，会话留在主机上。
+/// - App 重新打开后用同一个 `sessionID` 再建一个后端就接回来了：第一次接入从主机存着的检查点开始
+///   （`saveCheckpoint`，App 进后台时存），检查点还原进影子终端，之后的输出按历史补上。主机上没有这个会话就新建一个。
 ///
 /// 主机上用不了保持进程时（不是 Linux、装不上、退出登录会清进程）退回 `SSHConnection`，行为与之前相同。
-actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring, ReconnectingTerminalBackend {
+actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring, ReconnectingTerminalBackend,
+                               CheckpointingTerminalBackend {
     // MARK: - TerminalBackend
 
     nonisolated let outputItems: AsyncStream<TerminalOutputItem>
@@ -51,6 +54,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     private let hostKeyVerifier: HostKeyVerifier
     private let hostKeyApprover: @Sendable (HostKeyChallenge) async -> Bool
     private let bundle: Bundle
+    /// `sessionID` 是上次运行留下的，主机上多半还有这个会话：没接上就被关掉时也要去结束它。
+    private let resumesSession: Bool
 
     // MARK: - 运行时状态
 
@@ -73,7 +78,17 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     private var phase = Phase.idle
     private var isClosed = false
     private var didFinishStreams = false
-    private let position = HostHolderStreamPosition()
+    private let position: HostHolderStreamPosition
+    private let checkpoints = CheckpointState()
+    /// 拍好了但当时没接着会话、还没发出去的检查点：接回后补发。
+    private var pendingCheckpoint: HolderFrame?
+
+    /// 检查点那几样要在 actor 外面（收帧的线程、建连之前）读写的东西。
+    private final class CheckpointState: Sendable {
+        let hooks = Mutex<TerminalCheckpointHooks?>(nil)
+        /// 第一次接入时主机回的检查点用不了（别的引擎版本存的）：之后的字节接不上，按缺了一块处理。
+        let restoredUnusable = Mutex(false)
+    }
     private var link: HostHolderLink?
     private var client: ConnectedClient?
     private var supervisor: Task<Void, Never>?
@@ -89,6 +104,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     private var fallback: SSHConnection?
 
     init(sessionID: UUID = UUID(),
+         resumesSession: Bool = false,
          profile: SSHConnection.ProfileSnapshot,
          auth: ResolvedAuth,
          jumpHostAuth: ResolvedAuth?,
@@ -96,6 +112,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
          hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
          bundle: Bundle = .main) {
         self.sessionID = sessionID
+        self.resumesSession = resumesSession
         self.profile = profile
         self.auth = auth
         self.jumpHostAuth = jumpHostAuth
@@ -103,6 +120,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         self.hostKeyApprover = hostKeyApprover
         self.bundle = bundle
         (outputItems, itemContinuation) = AsyncStream.makeStream(of: TerminalOutputItem.self)
+        position = HostHolderStreamPosition(items: itemContinuation, markInterval: Self.checkpointIntervalBytes)
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
@@ -112,6 +130,9 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     func connect() async throws {
         guard phase == .idle, !isClosed else { throw SSHConnection.SSHConnectionError.alreadyClosed }
         phase = .connecting
+        position.setOnMarkDue { [weak self] in
+            Task { await self?.saveCheckpoint() }
+        }
         let connected: ConnectedClient
         do {
             connected = try await openConnection()
@@ -210,10 +231,16 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         let command = HostHolder.attachCommand(
             sessionID: sessionID, create: !hasAttached, cols: cols, rows: rows,
             environment: RemoteTrueColor.terminalEnvironment)
-        let items = itemContinuation
-        let events = link.start(on: connected, command: command,
-                                attachPayload: HostHolderAttach.fromOffset(position.value),
-                                position: position) { items.yield(.bytes($0)) }
+        // 这个后端第一次接入：影子终端是空的（新会话，或者 App 重新打开后接回），从主机存着的检查点开始。
+        // 之后的重连影子里有状态，只要断开之后的字节。
+        let restoring = !hasAttached
+        let payload = restoring ? HostHolderAttach.fromStoredCheckpoint : HostHolderAttach.fromOffset(position.value)
+        let events = link.start(on: connected, command: command, attachPayload: payload, position: position,
+                                replayIsHistory: hasAttached || resumesSession) {
+            [position, checkpoints] checkpoint in
+            guard restoring else { return }
+            Self.restore(checkpoint, into: position, state: checkpoints)
+        }
         var end = HostHolderLink.End.transport
         for await event in events {
             switch event {
@@ -238,13 +265,39 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         reconnectDelay = Self.initialReconnectDelay
         // 断开期间可能转过屏；尺寸没变的话主机那头什么都不会发生。
         link.send(Self.resizeFrame(cols: cols, rows: rows))
-        if hadGap {
-            // 离开期间的输出超过了主机上留着的那段：中间缺了一块，全屏程序靠重画恢复。
+        let unusable = checkpoints.restoredUnusable.withLock { value -> Bool in
+            defer { value = false }
+            return value
+        }
+        if hadGap || unusable {
+            // 离开期间的输出超过了主机上留着的那段（或者检查点用不了）：中间缺了一块，全屏程序靠重画恢复。
             let notice = String(localized: "断开期间输出过多，较早内容已丢弃")
-            itemContinuation.yield(.bytes(Data("\r\n\u{1b}[2m[\(notice)]\u{1b}[0m\r\n".utf8)))
+            position.deliverAside(.history(Data("\r\n\u{1b}[2m[\(notice)]\u{1b}[0m\r\n".utf8)))
             link.send(HolderFrame(.redraw))
         }
+        if let pendingCheckpoint {
+            link.send(pendingCheckpoint)
+            self.pendingCheckpoint = nil
+        }
         resolveFirstAttach(.attached)
+    }
+
+    /// 第一次接入时主机回的检查点：还原进影子终端（排在它之后的历史字节之前），位置跟到检查点那里。
+    /// 在收帧的那条线程上调。主机上没存过检查点时 `blob` 是空的、位置是 0，什么都不用做。
+    private nonisolated static func restore(_ checkpoint: HolderCheckpoint, into position: HostHolderStreamPosition,
+                                            state: CheckpointState) {
+        position.set(checkpoint.offset)
+        guard !checkpoint.blob.isEmpty else { return }
+        if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
+            position.deliverAside(.snapshot(snapshot))
+        } else {
+            state.restoredUnusable.withLock { $0 = true }
+        }
+        // 程序状态和快照格式无关，快照用不了也照用。
+        if let hooks = state.hooks.withLock({ $0 }),
+           let status = TerminalCheckpointBlob.decodeProgramStatus(checkpoint.blob) {
+            position.deliverAside(.afterFed { hooks.restoreProgramStatus(status) })
+        }
     }
 
     /// 一直试到连上，或者这个后端被关掉（返回 nil）。
@@ -270,6 +323,38 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         backoffTask = waiting
         await waiting.value
         backoffTask = nil
+    }
+
+    // MARK: - 检查点
+
+    /// 收到这么多输出就存一张：主机上留着 16 MiB，检查点不能落到它外面。
+    private static let checkpointIntervalBytes = 8 * 1024 * 1024
+
+    nonisolated func setCheckpointHooks(_ hooks: TerminalCheckpointHooks) {
+        checkpoints.hooks.withLock { $0 = hooks }
+    }
+
+    /// 把终端此刻的状态存到主机上（App 进后台时、每收到一段输出）。App 被系统结束后重新打开，从它接回画面。
+    func saveCheckpoint() async {
+        guard fallback == nil, !isClosed, hasAttached, position.bytesSinceMark > 0,
+              let hooks = checkpoints.hooks.withLock({ $0 }) else { return }
+        // 同步点排在已经交出去的输出后面：影子解析到那里时拍，位置正好是这里读到的。
+        position.mark { [weak self] offset in
+            guard let checkpoint = hooks.capture() else { return }
+            let frame = HolderFrame(.checkpoint, payload: HolderCheckpoint(
+                offset: offset, cols: checkpoint.cols, rows: checkpoint.rows, hasGap: false,
+                blob: checkpoint.blob).encoded())
+            Task { await self?.send(checkpoint: frame) }
+        }
+    }
+
+    private func send(checkpoint frame: HolderFrame) {
+        guard !isClosed else { return }
+        if phase == .attached, let link {
+            link.send(frame)
+        } else {
+            pendingCheckpoint = frame
+        }
     }
 
     // MARK: - 退回普通连接
@@ -339,7 +424,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         } else {
             link?.close()
             // 连不上的时候没法告诉主机结束会话：另起一条连接去结束它，成不成都不等。
-            if hasAttached { endSessionInBackground() }
+            if hasAttached || resumesSession { endSessionInBackground() }
         }
         resolveFirstAttach(.closed)
         finishStreams()
@@ -405,6 +490,16 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         await client?.closeTransport()
     }
 
+    /// 测试用：像 App 被系统结束了一样丢下这个后端。不告诉主机结束会话，也不再重连。
+    func abandonForTesting() async {
+        guard !isClosed else { return }
+        isClosed = true
+        backoffTask?.cancel()
+        link?.close()
+        await supervisor?.value
+        finishStreams()
+    }
+
     // MARK: - 前台进程、图片、真彩
 
     func foregroundActivity() async -> TerminalActivity {
@@ -454,6 +549,7 @@ extension PersistentSSHConnection {
     @MainActor
     static func make(
         sessionID: UUID = UUID(),
+        resumesSession: Bool = false,
         profile: ServerProfile,
         container: ModelContainer,
         approver: @escaping @Sendable (HostKeyChallenge) async -> Bool
@@ -462,7 +558,8 @@ extension PersistentSSHConnection {
         let resolved = try await SSHAuthResolver.resolveForConnect(
             SSHAuthResolver.Lookup(profile),
             jump: profile.jumpHost.map(SSHAuthResolver.Lookup.init))
-        return PersistentSSHConnection(sessionID: sessionID, profile: snapshot, auth: resolved.auth,
+        return PersistentSSHConnection(sessionID: sessionID, resumesSession: resumesSession,
+                                       profile: snapshot, auth: resolved.auth,
                                        jumpHostAuth: resolved.jump,
                                        hostKeyVerifier: HostKeyVerifier(modelContainer: container),
                                        hostKeyApprover: approver)

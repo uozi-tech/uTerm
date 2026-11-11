@@ -2,11 +2,19 @@ import Foundation
 import GhosttyTerminal
 import os
 
-/// 后端输出里的一项：原样字节，或者一张整屏的二进制快照（远控镜像：被控的 Mac 在接入、改尺寸、积压过多时发）。
+/// 后端输出里的一项：原样字节，或者一张整屏的二进制快照（远控镜像：被控的 Mac 在接入、改尺寸、积压过多时发；
+/// 接回留在主机上的会话时还原检查点）。
 nonisolated enum TerminalOutputItem: Sendable {
     case bytes(Data)
     /// `ShadowTerminal.snapshot()` 的产物。两端引擎版本一致才会发（握手时核过）。
     case snapshot(Data)
+    /// 过去的输出（接回留在主机上的会话时，客户端不在期间的那段）。照常解析进影子和画面，但里面的查询当时已经
+    /// 没人答或者答过了：不应答、不写剪贴板、不发通知（`ShadowTerminal.feed(_:asHistory:)`），否则回答会打进
+    /// 现在正在跑的程序的输入。程序状态照收。
+    case history(Data)
+    /// 同步点：排在它前面的输出都进了影子之后调一次，拿着泵的锁（同 `performWhileFeedingPaused`）。
+    /// 后端用它在字节流上一个自己知道的位置拍检查点；别在里面做重活，也别反过来调泵的 `start` / `reset`。
+    case afterFed(@Sendable () -> Void)
 }
 
 /// 画面那一侧要的接口（`InMemoryTerminalSession`）。单独成协议是为了单测能换成假的。
@@ -308,9 +316,25 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
                 route(chunk[start..<end], generation: generation)
                 start = end
             }
+        case .history(let chunk):
+            // 不等闸门：历史补得越快越好，surface 排队多了自己会整屏回放。
+            var start = chunk.startIndex
+            while start < chunk.endIndex {
+                let end = min(chunk.endIndex, start + Self.sliceBytes)
+                route(chunk[start..<end], generation: generation, asHistory: true)
+                start = end
+            }
         case .snapshot(let snapshot):
             applySnapshot(snapshot, generation: generation)
+        case .afterFed(let body):
+            runSyncPoint(body, generation: generation)
         }
+    }
+
+    private func runSyncPoint(_ body: @Sendable () -> Void, generation: Int) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if generation == currentGeneration { body() }
     }
 
     /// 不经闸门直接分流一片字节（测试直接喂字节、`clearOutput` 这类不走后端的字节用）。
@@ -318,14 +342,14 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         route(slice, generation: nil)
     }
 
-    private func route(_ slice: Data, generation: Int?) {
+    private func route(_ slice: Data, generation: Int?, asHistory: Bool = false) {
         guard !slice.isEmpty else { return }
         stateLock.lock()
         defer { stateLock.unlock() }
         // 换了连接之后，上一条连接的入站任务手上还攥着的那一片不要了。
         if let generation, generation != currentGeneration { return }
         let erase = scanner.scan(slice)
-        shadow.feed(slice)
+        shadow.feed(slice, asHistory: asHistory)
         fedHandler?(slice)
         if feedsSurface, !holdIfGridMismatchedLocked() {
             // 刚放行时回放已经带上了这一片。
@@ -333,7 +357,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
                 noteErase(erase)
                 replayLocked()
             } else {
-                surface.receive(slice)
+                // 历史字节 surface 也不答（`receiveReplay`）。
+                if asHistory { surface.receiveReplay(slice) } else { surface.receive(slice) }
                 if let erase { deliverEraseAfterSurface(erase) }
             }
         } else {
@@ -465,11 +490,16 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         if let generation, generation != currentGeneration { return }
+        let localGrid = shadow.wasSized && !followsSnapshotGrid ? shadow.size : nil
         do {
             try shadow.restore(snapshot: snapshot)
         } catch {
             stats.rejectedSnapshots += 1
             return
+        }
+        // 本机会话（影子跟本地网格走）还原检查点：快照是按存它时的尺寸拍的，回到本地的网格。
+        if let localGrid {
+            shadow.resize(cols: UInt16(clamping: localGrid.cols), rows: UInt16(clamping: localGrid.rows))
         }
         surfaceIsStale = true
         tail = nil

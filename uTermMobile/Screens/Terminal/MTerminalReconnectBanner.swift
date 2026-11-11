@@ -19,3 +19,27 @@ struct MTerminalReconnectBanner: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+/// 终端顶部的「已断开」提示：会话结束了（shell 退出、连接断了又接不回），画面停在最后的样子。点一下在这个标签上重新连接。
+struct MTerminalDisconnectedBanner: View {
+    let onReconnect: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("连接已断开")
+                .font(.footnote)
+                .foregroundStyle(M.text2)
+            Button(action: onReconnect) {
+                Text("重新连接")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(M.accent)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .background(.regularMaterial, in: Capsule())
+        .padding(.top, 8)
+    }
+}
