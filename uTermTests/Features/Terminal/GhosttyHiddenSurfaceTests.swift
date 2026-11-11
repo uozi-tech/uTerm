@@ -99,6 +99,43 @@ final class GhosttyHiddenSurfaceTests: XCTestCase {
                       "重建 surface 不该把别的网格发给远端：\(resizes)")
     }
 
+    /// 切标签的真实路径：SwiftUI 拆掉旧容器、露出来时新建一个容器接走视图；藏着期间 surface 被放掉、窗口还改了大小。
+    /// 整个过程 PTY 只该收到一次新尺寸（真实尺寸变了），影子只在旧网格和新网格上（闲置后画面错位的排查）。
+    func testTabSwitchThroughANewContainerAfterReleaseOnlyEverShowsRealGrids() async throws {
+        rig.bridge.hiddenReleaseDelay = .milliseconds(100)
+        await rig.feed("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1Hfull screen app")
+        let shadow = rig.session.shadow
+        let old = [shadow.size.cols, shadow.size.rows]
+        let resizesBefore = await rig.backend.resizes.count
+
+        rig.container.detachSurface()
+        hide()
+        let released = await rig.waitUntil(5) { self.rig.bridge.isSurfaceReleased }
+        XCTAssertTrue(released)
+        rig.window.setContentSize(NSSize(width: 1100, height: 650))
+
+        let container = GhosttyContainerView(surface: rig.view)
+        container.isActive = true
+        rig.window.contentView = container
+        container.frame = rig.window.contentView?.bounds ?? container.frame
+        container.layoutSubtreeIfNeeded()
+        var seen: [[Int]] = []
+        var stableSince = Date()
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            let size = [shadow.size.cols, shadow.size.rows]
+            if seen.last != size { seen.append(size); stableSince = Date() }
+            if rig.bridge.isLive, Date().timeIntervalSince(stableSince) > 0.5 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let new = [shadow.size.cols, shadow.size.rows]
+        XCTAssertGreaterThan(new[0], old[0], "用例前提：窗口拉宽了")
+        XCTAssertEqual(seen.filter { $0 != old && $0 != new }, [], "影子只该在旧网格和新网格上：\(seen)")
+        let resizes = await rig.backend.resizes.dropFirst(resizesBefore).map { [Int($0.cols), Int($0.rows)] }
+        XCTAssertEqual(resizes, [new], "PTY 只该收到新的真实尺寸：\(resizes)")
+        XCTAssertTrue(shadow.viewportText().contains("full screen app"))
+    }
+
     /// 放掉之后来了输出，露出来同样对得上；之后的实时字节照常进画面。
     func testReleasedSurfaceCatchesUpWithOutputThatArrivedMeanwhile() async {
         rig.bridge.hiddenReleaseDelay = .milliseconds(100)

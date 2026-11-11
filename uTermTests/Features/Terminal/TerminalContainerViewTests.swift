@@ -358,6 +358,77 @@ final class TerminalContainerViewTests: XCTestCase {
         XCTAssertEqual(sent, [final], "只发最终尺寸，中间的窄尺寸不碰 pty")
     }
 
+    /// 量出 `size` 这个窗格里 Ghostty 排出的网格（用另一条会话量，量完收掉）。
+    private func measuredGrid(for size: NSSize) async -> [Int] {
+        let probe = makeSession()
+        let container = GhosttyContainerView(surface: probe.ghostty.view)
+        surfaceWindow().contentView?.addSubview(container)
+        lay(container, size)
+        _ = await waitUntil(10) { probe.ghostty.isLive && probe.ghostty.grid != nil }
+        await settle(probe)
+        let measured = grid(probe)
+        container.removeFromSuperview()
+        return measured
+    }
+
+    /// 影子终端的网格记录器：后台线程每 0.5 ms 读一次（影子的读写持锁，任何线程都能读），记下每一次变化。
+    /// 影子由 surface 的 IO 线程当场改，主线程上轮询可能整段错过。
+    private final class ShadowSizeRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var sizes: [[Int]] = []
+        private var running = true
+
+        init(_ shadow: ShadowTerminal) {
+            let thread = Thread { [self] in
+                while lock.withLock({ running }) {
+                    let size = shadow.size
+                    lock.withLock { if sizes.last != [size.cols, size.rows] { sizes.append([size.cols, size.rows]) } }
+                    usleep(500)
+                }
+            }
+            thread.start()
+        }
+
+        func stop() -> [[Int]] {
+            lock.withLock {
+                running = false
+                return sizes
+            }
+        }
+    }
+
+    /// 重启接回后第一次露出的标签（闲置后画面错位的排查，迁移日志「网格不漏中间尺寸」一节）：PTY 与影子都已经是
+    /// 窗格的网格（holder 里的尺寸、检查点还原的影子）。视图出生时是 800×500，挂进窗口那一刻 surface 当场按它建好、
+    /// 报出一个窄网格；容器要停稳 80 ms 才把真实尺寸提交给视图。这一段里影子不能跟着窄网格走——PTY 不知道（程序不重画），
+    /// 备用屏被裁掉的右下角就再也回不来，这段时间到的输出也会按窄网格排进去。
+    func testFirstMountNeverMovesTheShadowOffThePTYGrid() async {
+        let pane = NSSize(width: 1100, height: 650)
+        let real = await measuredGrid(for: pane)
+        XCTAssertGreaterThan(real[0], 120, "用例前提：窗格比视图出生时的 800pt 宽得多")
+
+        let session = makeSession()
+        let backend = MockBackend()
+        session.shadow.resize(cols: UInt16(real[0]), rows: UInt16(real[1]))
+        await session.connect(using: backend)
+        // 全屏程序的一帧：右下角有字。
+        session.feedOutput(text: "\u{1b}[?1049h\u{1b}[2J\u{1b}[1;1Htop left\u{1b}[\(real[1]);\(real[0] - 12)HBOTTOM-RIGHT")
+        XCTAssertTrue(session.shadow.viewportText().contains("BOTTOM-RIGHT"), "自证：右下角写上了")
+
+        let recorder = ShadowSizeRecorder(session.shadow)
+        let container = GhosttyContainerView(surface: session.ghostty.view)
+        surfaceWindow().contentView?.addSubview(container)
+        lay(container, pane)
+        _ = await waitUntil(10) { session.ghostty.isLive && session.ghostty.grid != nil }
+        await settle(session)
+        let shadowSizes = recorder.stop()
+
+        XCTAssertEqual(grid(session), real)
+        XCTAssertEqual(shadowSizes, [real], "影子终端只该在 PTY 的网格上：\(shadowSizes)")
+        XCTAssertTrue(session.shadow.viewportText().contains("BOTTOM-RIGHT"), "备用屏右下角不能被裁：\n\(session.shadow.viewportText())")
+        let sent = await forwarded(backend)
+        XCTAssertTrue(sent.allSatisfy { $0 == real }, "PTY 只该见到真实网格：\(sent)")
+    }
+
     /// 回归点：尺寸变过去又变回来（同一轮布局里），缓冲区不能被碰、PTY 不能收到通知。否则程序不知情、屏幕一直错位。
     func testRoundTripLeavesBufferAndBackendUntouched() async {
         let (session, backend, container) = await hostedSession()

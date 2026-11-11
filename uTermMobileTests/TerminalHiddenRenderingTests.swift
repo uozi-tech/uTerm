@@ -211,6 +211,74 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         XCTAssertEqual(bridge.grid?.rows, grid.rows)
     }
 
+    /// 藏着期间 surface 被放掉、窗格还变了尺寸（转屏）：露出来时远端只该收到一次新尺寸，影子只在旧网格和新网格上
+    ///（Mac 上闲置后画面错位的排查，迁移日志「网格不漏中间尺寸」一节；iOS 走同一套共享接线）。
+    func testRestoreAfterRotationWhileHiddenOnlyEverShowsRealGrids() async throws {
+        let (bridge, container) = try await hostedTerminal()
+        bridge.hiddenReleaseDelay = .milliseconds(100)
+        let backend = ResizeLedger()
+        bridge.bind(backend)
+        let old = try XCTUnwrap(bridge.grid)
+        bridge.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1Hfull screen app".utf8))
+        var tries = 0
+        while await backend.sizes.isEmpty, tries < 100 {
+            tries += 1
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let sentBefore = await backend.sizes.count
+
+        container.isOnScreen = false
+        let released = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) { bridge.view.uTermIsSurfaceReleased }
+        XCTAssertTrue(released)
+        container.frame = CGRect(x: 0, y: 0, width: 600, height: 400)
+        container.layoutIfNeeded()
+
+        let recorder = ShadowGridRecorder(bridge.shadow)
+        container.isOnScreen = true
+        try await waitUntilFed(bridge)
+        bridge.outputPump.waitForCatchUp()
+        try await Task.sleep(for: .milliseconds(400))
+        let seen = recorder.stop()
+        let new = try XCTUnwrap(bridge.grid)
+
+        XCTAssertGreaterThan(new.cols, old.cols, "用例前提：转成横屏更宽")
+        let real = [[old.cols, old.rows], [new.cols, new.rows]]
+        XCTAssertEqual(seen.filter { !real.contains($0) }, [], "影子只该在旧网格和新网格上：\(seen)")
+        let sent = await backend.sizes.dropFirst(sentBefore).map { [Int($0.cols), Int($0.rows)] }
+        XCTAssertEqual(sent, [[new.cols, new.rows]], "远端只该收到新的真实尺寸：\(sent)")
+        XCTAssertTrue(bridge.shadow.viewportText().contains("full screen app"))
+        backend.finish()
+    }
+
+    /// 第一次露出的标签，影子已经是窗格的网格（重连接回、远控快照还原后）：挂上建 surface 的整个过程中影子不能离开这个
+    /// 网格（Mac 上视图出生时带着 800×500 的临时尺寸，影子曾经缩到它再放回来、备用屏被清空；iOS 的视图出生时零尺寸、
+    /// 首挂当场按真实尺寸提交，这条钉住它）。
+    func testFirstMountNeverMovesTheShadowOffItsGrid() async throws {
+        let (probe, probeContainer) = try await hostedTerminal()
+        let real = try XCTUnwrap(probe.grid)
+        probeContainer.removeFromSuperview()
+        window?.isHidden = true
+        window = nil
+
+        let window = try makeWindow()
+        let bridge = GhosttyTerminalBridge(controller: Self.controller)
+        bridge.shadow.resize(cols: UInt16(real.cols), rows: UInt16(real.rows))
+        bridge.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1Htop left\u{1B}[\(real.rows);\(real.cols - 12)HBOTTOM-RIGHT".utf8))
+        let recorder = ShadowGridRecorder(bridge.shadow)
+        let container = MTerminalContainerView(terminal: bridge, fontSize: 11)
+        container.frame = window.bounds
+        window.addSubview(container)
+        container.layoutIfNeeded()
+        try await waitUntilFed(bridge)
+        try await Task.sleep(for: .milliseconds(300))
+        let seen = recorder.stop()
+
+        XCTAssertEqual(bridge.grid?.cols, real.cols)
+        XCTAssertEqual(bridge.grid?.rows, real.rows)
+        XCTAssertEqual(seen, [[real.cols, real.rows]], "影子只该在窗格的网格上：\(seen)")
+        XCTAssertTrue(bridge.shadow.viewportText().contains("BOTTOM-RIGHT"), "备用屏右下角不能被清掉")
+    }
+
     /// 很快切回来：不放 surface，不重建。
     func testQuickReturnKeepsTheSurface() async throws {
         let (bridge, container) = try await hostedTerminal()
@@ -308,5 +376,52 @@ final class TerminalHiddenRenderingTests: XCTestCase {
             releasedView == nil && releasedBridge == nil && releasedController == nil
         }
         XCTAssertTrue(gone, "view=\(releasedView == nil) bridge=\(releasedBridge == nil) controller=\(releasedController == nil)")
+    }
+}
+
+/// 记下收到的每一次 resize 的后端（输出由用例直接喂给终端，不经它）。
+private actor ResizeLedger: TerminalBackend {
+    nonisolated let outputItems: AsyncStream<TerminalOutputItem>
+    nonisolated let exitStream: AsyncStream<Void>
+    private nonisolated let output: AsyncStream<TerminalOutputItem>.Continuation
+    private(set) var sizes: [(cols: UInt16, rows: UInt16)] = []
+
+    init() {
+        var out: AsyncStream<TerminalOutputItem>.Continuation!
+        outputItems = AsyncStream { out = $0 }
+        output = out
+        exitStream = AsyncStream { _ in }
+    }
+
+    nonisolated func finish() { output.finish() }
+    func connect() async throws {}
+    func write(_ data: Data) async {}
+    func resize(cols: UInt16, rows: UInt16) async { sizes.append((cols, rows)) }
+    func close() async { output.finish() }
+}
+
+/// 影子终端的网格记录器：后台线程每 0.5 ms 读一次（影子的读写持锁，任何线程都能读），记下每一次变化。
+/// 影子由 surface 的 IO 线程当场改，主线程上轮询可能整段错过。
+private final class ShadowGridRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sizes: [[Int]] = []
+    private var running = true
+
+    init(_ shadow: ShadowTerminal) {
+        let thread = Thread { [self] in
+            while lock.withLock({ running }) {
+                let size = shadow.size
+                lock.withLock { if sizes.last != [size.cols, size.rows] { sizes.append([size.cols, size.rows]) } }
+                usleep(500)
+            }
+        }
+        thread.start()
+    }
+
+    func stop() -> [[Int]] {
+        lock.withLock {
+            running = false
+            return sizes
+        }
     }
 }

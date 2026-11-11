@@ -51,7 +51,11 @@ final class GhosttyTerminalBridge {
         self.owner = owner
         link = owner.link
         io = owner.surfaceIO
-        view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        // 出生时零尺寸：surface 要等容器把真实尺寸提交给视图（停稳之后）才建。给个临时尺寸的话，视图第一次进窗口那一刻
+        // surface 就按它建好、报出一个对不上 PTY 的网格，影子跟着缩过去再放回来——备用屏被清空、这段时间到的输出按错的
+        // 宽度排，而 PTY 尺寸始终没变、程序不会重画（800×500 时实测影子 144×46 → 106×35 → 144×46，
+        // `TerminalContainerViewTests.testFirstMountNeverMovesTheShadowOffThePTYGrid`）。
+        view = GhosttySurfaceView(frame: .zero)
         link.attach(view)
         link.onSurfaceInput = { [weak self] in self?.ghosttyDidWrite($0) }
         link.onGridReported = { [weak self] viewport in
