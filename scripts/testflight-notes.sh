@@ -83,7 +83,7 @@ No App Store Connect API key (ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH), so the
 TestFlight "What to Test" was NOT written automatically.
 
 手动粘贴：App Store Connect → App「uTerm」→ TestFlight → iOS 构建 $version ($build)
-→ 测试信息 / What to Test（语言 $locale），内容如下（也在 $notes_file）：
+→ 测试信息 / What to Test（语言 ${locale}），内容如下（也在 ${notes_file}）：
 
 --- 8< --- What to Test ($chars/$max_chars chars) --- 8< ---
 TXT
@@ -185,8 +185,8 @@ PY
 if [ "$dry_run" -eq 1 ]; then
 	echo "dry-run: 会用 key $ASC_KEY_ID 在 $ASC_API 上"
 	echo "  1) 按 bundle id $bundle_id 找 App"
-	echo "  2) 找 build $build（版本字串 $version），等 processingState=VALID（上限 ${timeout}s）"
-	echo "  3) 写 locale $locale 的 whatsNew（$chars/$max_chars chars，来自 $notes_file）"
+	echo "  2) 找 build ${build}（版本字串 ${version}），等 processingState=VALID（上限 ${timeout}s）"
+	echo "  3) 写 locale $locale 的 whatsNew（$chars/$max_chars chars，来自 ${notes_file}）"
 	exit 0
 fi
 
@@ -211,17 +211,17 @@ while :; do
 	case "$state" in
 		VALID) echo "  build $build_id 已就绪（VALID）"; break ;;
 		FAILED|INVALID)
-			echo "ERROR: 构建 $build 的处理状态是 $state，不能写测试信息。去 App Store Connect 看具体原因。" >&2
+			echo "ERROR: 构建 $build 的处理状态是 ${state}，不能写测试信息。去 App Store Connect 看具体原因。" >&2
 			exit 1 ;;
 	esac
 	if [ "$(date +%s)" -ge "$deadline" ]; then
 		if [ -z "$build_id" ]; then
-			echo "ERROR: 等了 ${timeout}s 仍找不到 build $build。" >&2
+			echo "ERROR: 等了 ${timeout}s 仍找不到 build ${build}。" >&2
 			echo "  常见原因：上传后 ASC 还没收完（再等等重跑）；或 build 号对不上——" >&2
-			echo "  ASC 上 App Store 版本字串是「1.0」而我们的 MOBILE_VERSION 是「$version」，" >&2
-			echo "  TestFlight 只认 build 号，所以真正要核的是 CFBundleVersion == $build。" >&2
+			echo "  ASC 上 App Store 版本字串是「1.0」而我们的 MOBILE_VERSION 是「${version}」，" >&2
+			echo "  TestFlight 只认 build 号，所以真正要核的是 CFBundleVersion == ${build}。" >&2
 		else
-			echo "ERROR: 等了 ${timeout}s，构建 $build 仍是 $state。稍后用同样的命令重跑即可。" >&2
+			echo "ERROR: 等了 ${timeout}s，构建 $build 仍是 ${state}。稍后用同样的命令重跑即可。" >&2
 		fi
 		exit 1
 	fi
@@ -229,7 +229,7 @@ while :; do
 	sleep "$poll"
 done
 
-echo "写 What to Test（locale $locale）…"
+echo "写 What to Test（locale ${locale}）…"
 code="$(asc GET "/v1/builds/$build_id/betaBuildLocalizations?limit=50&fields%5BbetaBuildLocalizations%5D=locale,whatsNew")"
 [ "$code" = "200" ] || die_http "$code" "betaBuildLocalizations lookup"
 loc_id="$(jq_get "print(next((x['id'] for x in d.get('data',[]) if x['attributes'].get('locale')=='$locale'), ''))")"
@@ -252,7 +252,7 @@ PY
 if [ -n "$loc_id" ]; then
 	code="$(asc PATCH "/v1/betaBuildLocalizations/$loc_id" "$req")"
 	[ "$code" = "200" ] || die_http "$code" "betaBuildLocalizations update"
-	echo "已更新 $locale 的 What to Test（betaBuildLocalization $loc_id）。"
+	echo "已更新 $locale 的 What to Test（betaBuildLocalization ${loc_id}）。"
 else
 	code="$(asc POST "/v1/betaBuildLocalizations" "$req")"
 	[ "$code" = "201" ] || die_http "$code" "betaBuildLocalizations create"
