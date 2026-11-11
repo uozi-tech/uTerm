@@ -123,6 +123,9 @@ final class GhosttyTerminalBridge {
         if onScreen {
             if view.uTermIsSurfaceReleased {
                 // 重建：建好后走 surface 就绪 → 网格到位 → 回放 → 由 `keeper` 找回切走前的视口。
+                // 先把「可见」声明回来：切走时声明过不可见，这个状态记在视图上、不随 surface 放掉而清；新 surface 出生时
+                // 就带着它，引擎对不可见的 surface 整个跳过绘制——窗格白着，要等再切一次（走下面 else 的 `true`）才好。
+                view.setSurfaceVisible(true)
                 view.uTermRestoreSurface()
             } else {
                 view.setSurfaceVisible(true)
