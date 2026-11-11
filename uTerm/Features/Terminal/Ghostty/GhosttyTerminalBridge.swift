@@ -68,6 +68,7 @@ final class GhosttyTerminalBridge {
         // 按行填满（两端共用的规则与接线在 `TerminalSurfaceLink`）：钉着远控尺寸时不调；零头的上半份由容器把视图往下挪。
         link.rowFillSuspended = { [weak view] in view?.pinnedFrameSize != nil }
         link.onRowFillOffsetChanged = { [weak view] in view?.superview?.needsLayout = true }
+        view.cursorRowProvider = { [weak self] in self?.cursorRow }
         view.refitRowFill = { [weak link] in
             link?.refitRowFill()
             return link?.rowFillOffset ?? 0
@@ -152,7 +153,11 @@ final class GhosttyTerminalBridge {
         owner?.sendHostBytes(data)
     }
 
-    fileprivate func ghosttyDidResize(cols reportedCols: Int, rows reportedRows: Int) {
+    /// `fromTerminal`：这是 surface 的终端自己报来的网格（resize 回调）。容器提交尺寸后主动补报的那次（`resizeDidSettle`）
+    /// 读的是主线程上刚设下的尺寸，IO 线程上的终端可能还在出生时的默认网格——那一次不能算「终端报来了真实网格」，
+    /// 否则 surface 刚建好就在提交尺寸的同一调用里开闸，回放按默认网格（约 53×21）灌进去，影子比它高的行被顶进回滚区，
+    /// 随后终端改到真实尺寸也拉不回来：窗格一片空白。
+    fileprivate func ghosttyDidResize(cols reportedCols: Int, rows reportedRows: Int, fromTerminal: Bool = true) {
         // 报来的网格是 Ghostty 的 IO 线程在某一刻量的，转到主线程时可能已经过时。最常见的一次：surface 刚建好时先按
         // 引擎默认的 800×600 px 报一个约 53×21，紧接着才是视图的真实尺寸；把过时的那个发给 PTY，正在跑的全屏程序
         // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以发给 PTY 的一律以 surface 此刻的网格为准：之后那次报告
@@ -167,7 +172,7 @@ final class GhosttyTerminalBridge {
         }
         guard cols > 0, rows > 0 else { return }
         // 远控主控端停着画面等网格对齐的话，现在可能对上了；surface 刚建好的话看闸能不能开。
-        link.gridReported(cols: cols, rows: rows)
+        if fromTerminal { link.gridReported(cols: reportedCols, rows: reportedRows) } else { link.pump.surfaceGridDidChange() }
         let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
         // 镜像端重发快照、检查点重存，要等影子真的换了网格：主线程上的 `surfaceGrid` 可能比终端先变（容器提交尺寸后
@@ -181,6 +186,9 @@ final class GhosttyTerminalBridge {
         if !view.holdsGridReports || view.pinnedFrameSize != nil {
             owner?.ghosttyGridDidChange(cols: cols, rows: rows)
         }
+        // 钉住时网格变了（手机软键盘升降）：Ghostty 放大行数会把回滚的行拉回屏幕、缩小则往上顶，光标行跟着挪，
+        // 这期间没有新输出，`repositionPinnedGridIfCursorMoved` 不会被输出触发——在这里按新网格下的光标行重摆。
+        repositionPinnedGridIfCursorMoved()
         // surface 还没建好时就来了接管：现在有格子尺寸了，补上。
         if let pending = pendingPin, view.pinnedFrameSize == nil { pinGrid(cols: pending.cols, rows: pending.rows) }
     }
@@ -189,7 +197,7 @@ final class GhosttyTerminalBridge {
     /// 变了的话引擎随后报来的值相同，输入通道去重。surface 还没建时什么也不做，它建好后报的第一次照常走。
     private func resizeDidSettle() {
         guard let current = io.surfaceGrid, current.columns > 0, current.rows > 0 else { return }
-        ghosttyDidResize(cols: Int(current.columns), rows: Int(current.rows))
+        ghosttyDidResize(cols: Int(current.columns), rows: Int(current.rows), fromTerminal: false)
     }
 
     // MARK: 远控接管尺寸
@@ -212,7 +220,8 @@ final class GhosttyTerminalBridge {
         }
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         view.pinnedFrameSize = NSSize(width: CGFloat(cols) * cell.width / scale, height: CGFloat(rows) * cell.height / scale)
-        view.pinnedCursorRow = cursorRow
+        // 光标行不在这里定：容器每次摆放时现读（`cursorRowProvider`），并记下用的是哪一行。
+        view.pinnedCursorRow = nil
         owner?.tracksCursorForPinnedGrid = true
         if view.superview == nil, let pinned = view.pinnedFrameSize {
             // 窗格此刻不在视图层级里（藏在别的标签后面）：没有容器来摆，直接把视图设成钉住的尺寸。
@@ -254,9 +263,9 @@ final class GhosttyTerminalBridge {
     private var cursorRow: Int? { owner?.shadow.cursor.y }
 
     /// 钉住期间来了新输出：光标换了行就让容器重新摆一次（比窗格高的终端跟着光标走）。
+    /// 只比较、请求重摆，不写 `pinnedCursorRow`：它记的是容器上一次摆放实际用的那一行，由容器自己写。
     func repositionPinnedGridIfCursorMoved() {
         guard view.pinnedFrameSize != nil, let row = cursorRow, row != view.pinnedCursorRow else { return }
-        view.pinnedCursorRow = row
         view.superview?.needsLayout = true
     }
 
@@ -341,6 +350,9 @@ final class GhosttySurfaceView: AppTerminalView {
     var pinnedFrameSize: NSSize?
     /// 钉住期间上一次摆放时光标在第几行（比窗格高时跟着光标走，见 `GhosttyContainerView.pinnedFrame`）。
     var pinnedCursorRow: Int?
+    /// 光标此刻在屏幕第几行（影子终端读）。容器钉住尺寸摆放时现读，不用缓存的值——网格变了光标行会跟着挪（手机软键盘升降），
+    /// 那期间没有新输出触发更新。
+    var cursorRowProvider: (@MainActor () -> Int?)?
     /// 引擎报来的滚动条（总行数、视口首行、一屏行数），和用户刚滚了一下：容器据此画滚动条。
     var onScrollbar: (@MainActor (TerminalScrollbar) -> Void)?
     var onScrollActivity: (@MainActor () -> Void)?

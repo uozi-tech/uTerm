@@ -285,11 +285,11 @@ final class TerminalMirrorTapTests: XCTestCase {
     // MARK: 接管尺寸——窗格里（真的 surface）
 
     /// 800×500 的窗口里挂着 `RemoteControlledTerminal`（窗格用的那个 SwiftUI 视图），等 Ghostty 的网格停稳。
-    private func hostedSession() async throws -> (session: TerminalSession, backend: MockBackend,
+    private func hostedSession(height: CGFloat = 500) async throws -> (session: TerminalSession, backend: MockBackend,
                                                  host: NSHostingView<RemoteControlledTerminal>, window: NSWindow) {
         let session = TerminalSession()
         session.attentionSink = { _ in }
-        let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let rect = NSRect(x: 0, y: 0, width: 800, height: height)
         let host = NSHostingView(rootView: RemoteControlledTerminal(session: session))
         host.frame = rect
         let window = ProbeWindow.make(contentRect: rect, contentView: host, placement: .transparentOnScreen)
@@ -373,6 +373,44 @@ final class TerminalMirrorTapTests: XCTestCase {
         XCTAssertTrue(atTop)
         let again = try await settle()
         XCTAssertEqual(again.view.maxY, again.container.height, accuracy: 0.5, "清屏后光标回到顶上：窗格跟回顶上")
+    }
+
+    /// 真实链路：接管前窗格里已有历史，手机比窗格高，状态条随后出现；shell 里 `seq 1 300` 之后，第 300 行和提示符所在的行
+    /// 都要落在窗格里（回归：最底下几行被裁到窗格底边外，滚动条已在底也看不到）。窗格高度取几种，让按行填满拉高过行距。
+    func test_pinned_terminal_keeps_the_last_lines_visible_after_seq() async throws {
+        for height in [500, 523, 537, 561, 609] as [CGFloat] {
+            let rig = try await hostedSession(height: height)
+            let session = rig.session
+            defer { session.dispose(); rig.window.orderOut(nil) }
+            let view = session.ghostty.view
+            await emit(Data(((1...120).map { "old \($0)\r\n" }.joined() + "$ ").utf8), to: rig.backend)
+            let phoneRows = 60
+            session.pinRemoteGrid(cols: 57, rows: phoneRows, controller: "测试 iPhone")
+            _ = await waitUntil(3) { session.ghostty.grid?.rows == phoneRows && session.shadow.size.rows == phoneRows }
+            try? await Task.sleep(for: .milliseconds(150))
+            await emit(Data("seq 1 300\r\n".utf8), to: rig.backend)
+            for chunk in stride(from: 1, through: 300, by: 7) {
+                await emit(Data((chunk...min(300, chunk + 6)).map { "\($0)\r\n" }.joined().utf8), to: rig.backend)
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            await emit(Data("$ ".utf8), to: rig.backend)
+            _ = await waitUntil(3) { session.shadow.cursor.y == phoneRows - 1 }
+            try? await Task.sleep(for: .milliseconds(250))
+            rig.host.layoutSubtreeIfNeeded()
+            let container = try XCTUnwrap(view.superview)
+            container.layoutSubtreeIfNeeded()
+            let rowHeight = view.frame.height / CGFloat(phoneRows)
+            func visible(_ row: Int) -> Bool {
+                let top = view.frame.maxY - CGFloat(row) * rowHeight
+                return top - rowHeight >= -0.5 && top <= container.bounds.height + 0.5
+            }
+            let tag = "窗格 \(height)pt（行高调整 \(view.uTermCellHeightAdjustment)），视图 \(view.frame)，容器 \(container.bounds)，网格 \(String(describing: session.ghostty.grid))"
+            let lines = (session.ghostty.viewportText() ?? "").components(separatedBy: "\n")
+            let cursorRow = try XCTUnwrap(lines.lastIndex { $0.hasPrefix("$ ") }, "画面上没有提示符：\(tag)")
+            let row300 = try XCTUnwrap(lines.firstIndex { $0.trimmingCharacters(in: .whitespaces) == "300" }, "画面上没有 300：\(tag)")
+            XCTAssertTrue(visible(cursorRow), "光标行 \(cursorRow) 被裁掉：\(tag)")
+            XCTAssertTrue(visible(row300), "第 300 行（第 \(row300) 行）被裁掉：\(tag)")
+        }
     }
 
     /// 有画面的会话被接管：镜像端最后拿到的是新尺寸下的快照，之后的输出两边一致。

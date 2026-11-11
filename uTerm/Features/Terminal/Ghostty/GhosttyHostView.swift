@@ -119,7 +119,10 @@ final class GhosttyContainerView: NSView {
             settler.cancel()
             layer?.masksToBounds = true
             let rows = pinned.height > 0 ? Int((pinned.height / max(1, cellHeightPoints(surface))).rounded()) : 0
-            let frame = Self.pinnedFrame(pinned, in: bounds, insets: i, cursorRow: surface.pinnedCursorRow, rows: rows)
+            // 光标行现读，并记下这次摆放用的是哪一行：输出之后只要光标行和它不同就请求重摆（`repositionPinnedGridIfCursorMoved`）。
+            let cursorRow = surface.cursorRowProvider?() ?? surface.pinnedCursorRow
+            surface.pinnedCursorRow = cursorRow
+            let frame = Self.pinnedFrame(pinned, in: bounds, insets: i, cursorRow: cursorRow, rows: rows)
             if surface.frame != frame { surface.frame = frame }
             surface.resizeDidSettle()
             layoutScrollIndicator()
