@@ -413,6 +413,56 @@ final class TerminalMirrorTapTests: XCTestCase {
         }
     }
 
+    /// 真实链路：接管 + 状态条 + `seq 1 300`，手机的行数比窗格多 / 刚好 / 比窗格少。用户把滚动条拖到最顶上，
+    /// 回滚的第 1 行要看得到（回归：顶上按光标裁掉的几行，往回滚也永远看不到，像被状态条挡住）；回到底部，最后一行和提示符要看得到。
+    func test_pinned_terminal_shows_the_scrollback_top_and_bottom_after_seq() async throws {
+        for phoneRows in [60, 31, 20] {
+            let rig = try await hostedSession()
+            let session = rig.session
+            defer { session.dispose(); rig.window.orderOut(nil) }
+            let view = session.ghostty.view
+            await emit(Data("$ ".utf8), to: rig.backend)
+            session.pinRemoteGrid(cols: 57, rows: phoneRows, controller: "测试 iPhone")
+            _ = await waitUntil(3) { session.ghostty.grid?.rows == phoneRows && session.shadow.size.rows == phoneRows }
+            try? await Task.sleep(for: .milliseconds(150))
+            await emit(Data("seq 1 300\r\n".utf8), to: rig.backend)
+            for chunk in stride(from: 1, through: 300, by: 7) {
+                await emit(Data((chunk...min(300, chunk + 6)).map { "\($0)\r\n" }.joined().utf8), to: rig.backend)
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            await emit(Data("$ ".utf8), to: rig.backend)
+            _ = await waitUntil(3) { session.shadow.cursor.y == phoneRows - 1 }
+            func settle() async throws -> NSView {
+                try? await Task.sleep(for: .milliseconds(300))
+                rig.host.layoutSubtreeIfNeeded()
+                let container = try XCTUnwrap(view.superview)
+                container.layoutSubtreeIfNeeded()
+                return container
+            }
+            func visible(_ row: Int, in container: NSView) -> Bool {
+                let rowHeight = view.frame.height / CGFloat(phoneRows)
+                let top = view.frame.maxY - CGFloat(row) * rowHeight
+                return top - rowHeight >= -0.5 && top <= container.bounds.height + 0.5
+            }
+            var container = try await settle()
+            let tag = { "手机 \(phoneRows) 行，视图 \(view.frame)，容器 \(container.bounds)，滚动条 \(String(describing: view.uTermScrollbar))" }
+
+            XCTAssertTrue(view.performBindingAction("scroll_to_top"))
+            _ = await waitUntil(3) { view.uTermScrollbar?.offset == 0 }
+            container = try await settle()
+            XCTAssertTrue(visible(0, in: container), "滚到最顶：回滚的第 1 行被裁掉：\(tag())")
+            XCTAssertLessThanOrEqual(view.frame.maxY, container.bounds.height + 0.5, "滚到最顶：视图顶边不该高出窗格：\(tag())")
+
+            XCTAssertTrue(view.performBindingAction("scroll_to_bottom"))
+            _ = await waitUntil(3) { view.uTermScrollbar.map { $0.offset + $0.len >= $0.total } ?? false }
+            container = try await settle()
+            let lines = (session.ghostty.viewportText() ?? "").components(separatedBy: "\n")
+            let prompt = try XCTUnwrap(lines.lastIndex { $0.hasPrefix("$ ") }, "画面上没有提示符：\(tag())")
+            XCTAssertTrue(visible(prompt, in: container), "回到底部：提示符行被裁掉：\(tag())")
+            XCTAssertTrue(visible(prompt - 1, in: container), "回到底部：最后一行输出被裁掉：\(tag())")
+        }
+    }
+
     /// 有画面的会话被接管：镜像端最后拿到的是新尺寸下的快照，之后的输出两边一致。
     func test_pin_with_a_live_surface_resends_the_snapshot_at_the_phone_size() async throws {
         let rig = try await hostedSession()

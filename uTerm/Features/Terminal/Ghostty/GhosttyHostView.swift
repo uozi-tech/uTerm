@@ -122,7 +122,8 @@ final class GhosttyContainerView: NSView {
             // 光标行现读，并记下这次摆放用的是哪一行：输出之后只要光标行和它不同就请求重摆（`repositionPinnedGridIfCursorMoved`）。
             let cursorRow = surface.cursorRowProvider?() ?? surface.pinnedCursorRow
             surface.pinnedCursorRow = cursorRow
-            let frame = Self.pinnedFrame(pinned, in: bounds, insets: i, cursorRow: cursorRow, rows: rows)
+            let frame = Self.pinnedFrame(pinned, in: bounds, insets: i, cursorRow: cursorRow, rows: rows,
+                                         scrollProgress: scrollProgress)
             if surface.frame != frame { surface.frame = frame }
             surface.resizeDidSettle()
             layoutScrollIndicator()
@@ -164,6 +165,14 @@ final class GhosttyContainerView: NSView {
         layoutScrollIndicator()
     }
 
+    /// 视口在回滚里的位置：1 = 活动区（贴底），0 = 回滚最顶。没有回滚、还没收到滚动条时按贴底算。
+    private var scrollProgress: CGFloat { Self.scrollProgress(of: lastScrollbar) }
+
+    static func scrollProgress(of bar: TerminalScrollbar?) -> CGFloat {
+        guard let bar, bar.total > bar.len else { return 1 }
+        return min(1, max(0, CGFloat(bar.offset) / CGFloat(bar.total - bar.len)))
+    }
+
     private func cellHeightPoints(_ surface: GhosttySurfaceView) -> CGFloat {
         guard let cell = surface.uTermCellPixels else { return 1 }
         return cell.height / (window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
@@ -172,7 +181,10 @@ final class GhosttyContainerView: NSView {
     // MARK: 滚动条
 
     private func scrollbarDidChange(_ scrollbar: TerminalScrollbar) {
+        let moved = scrollProgress != Self.scrollProgress(of: scrollbar)
         lastScrollbar = scrollbar
+        // 钉住比窗格高时，被裁掉的行数跟着视口位置走（见 `pinnedFrame`）：视口挪了就重摆。
+        if moved, surface?.pinnedFrameSize != nil { needsLayout = true }
         layoutScrollIndicator()
     }
 
@@ -224,9 +236,12 @@ final class GhosttyContainerView: NSView {
     /// 屏幕没写满时裁错地方：程序刚起来、刚清过屏，内容都在屏幕顶上、下面是空行，留在窗格里的反而是一屏空白，
     /// 看着像被接管状态条挡住了。裁掉的量取整到整行，窗格顶上不留半行。
     ///
+    /// 跟光标裁掉的量只适用于视口在底部（活动区）。往回滚时按视口在回滚里的位置（`scrollProgress`，1 = 底，0 = 最顶）
+    /// 把裁掉的行数等比例减少，滚到最顶一行不裁，回滚的每一行都能露出来；Mac 不能改远端网格，只能这样挪视图。
+    ///
     /// 不传 `cursorRow` 时按光标在最后一行算（贴底）。
     static func pinnedFrame(_ pinned: NSSize, in bounds: NSRect, insets: NSEdgeInsets,
-                            cursorRow: Int? = nil, rows: Int = 0) -> NSRect {
+                            cursorRow: Int? = nil, rows: Int = 0, scrollProgress: CGFloat = 1) -> NSRect {
         let available = bounds.height - insets.top - insets.bottom
         // 贴顶时的位置（容器不翻转，y 往上）。
         var y = bounds.height - insets.top - pinned.height
@@ -237,6 +252,10 @@ final class GhosttyContainerView: NSView {
                 let rowHeight = pinned.height / CGFloat(rows)
                 let keepBottom = min(pinned.height, CGFloat(cursorRow + 1 + pinnedRowsKeptBelowCursor) * rowHeight)
                 cut = min(maxCut, (max(0, keepBottom - available) / rowHeight).rounded(.up) * rowHeight)
+            }
+            if scrollProgress < 1, rows > 0 {
+                let rowHeight = pinned.height / CGFloat(rows)
+                cut = (cut / rowHeight * scrollProgress).rounded() * rowHeight
             }
             y += cut
         }
