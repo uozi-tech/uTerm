@@ -280,6 +280,27 @@ final class GhosttyTerminalBridge {
         input.reportSize(cols: cols, rows: rows)
     }
 
+    /// 一屏里有内容的行占到第几行（光标所在行，或它下面还有字的行；从 1 数），以及一屏共几行。读影子：它永远在吃字节。
+    /// 行数变少时终端先裁掉这之后的空行、不够才把上面的行推进回滚——容器等停稳的那一小段按同一条规则摆画面
+    ///（`MTerminalContainerView` 的 `heldOriginY`）。
+    var occupiedRows: (used: Int, total: Int) {
+        let cursorRow = shadow.cursor.y
+        return shadow.readScreen { size, rowText in
+            let rows = max(size.rows, 1)
+            let top = size.totalRows - size.rows
+            var last = min(max(cursorRow, 0), rows - 1)
+            var row = rows - 1
+            while row > last {
+                if let text = rowText(top + row), !text.isEmpty {
+                    last = row
+                    break
+                }
+                row -= 1
+            }
+            return (last + 1, rows)
+        }
+    }
+
     /// 切回来：surface 放掉过就重建。重建的 surface 头几帧是空终端、行高调整也是 0，所以先把旧帧盖在上面
     ///（`GhosttySwitchBackCover`），行高调整按放掉前的值当场补上（尺寸没变的话；变了交给网格回报后的按行填满重算），
     /// 等回放追平、画面就绪才撤盖。

@@ -268,11 +268,11 @@ struct WorkspaceScreen: View {
     }
 
     /// 键盘只归一个标签：先把归属逐会话下发（立即生效，丢了归属的终端当场收键盘、
-    /// 也拒绝 UIKit 的自动恢复），再在布局落定后让归属者聚焦——它没连上时 `focusKeyboard`
+    /// 也拒绝 UIKit 的自动恢复；键盘正在别的终端标签上时直接换主，不先收起，见 `handKeyboard`），
+    /// 再在布局落定后让归属者聚焦——它没连上时 `focusKeyboard`
     /// 什么也不做。没有归属者（文件浏览 / Agent / 连接中）就全局收起，否则击键会落到另一格。
     private func syncKeyboard() {
-        let owner = keyboardOwner
-        for term in workspace.terminalTabs { term.controller.ownsKeyboard = term === owner }
+        workspace.handKeyboard(to: keyboardOwner)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             // 连接中页 / 收起态不做全局收起：上面可能叠着要输入的弹层；终端已按归属各自收了。
             guard store.connecting == nil, store.showWorkspace else { return }

@@ -159,6 +159,118 @@ final class MobileTerminalKeyboardFlowTests: XCTestCase {
         terms.forEach { $0.controller.close() }
     }
 
+    // MARK: - 切标签
+
+    /// 一个已连接的终端标签，终端视图挂在测试窗口里（不在窗口里的视图当不了第一响应者）。
+    private func connectedTab() async throws -> TermTab {
+        let container = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
+        if window == nil {
+            let win = UIWindow(windowScene: try XCTUnwrap(MobileProbeWindow.activeScene()))
+            win.rootViewController = UIViewController()
+            win.makeKeyAndVisible()
+            window = win
+        }
+        let root = try XCTUnwrap(window?.rootViewController?.view)
+        let (tab, _) = MobileFakeTerminal.tab(host: host, .idle)
+        let view = tab.controller.terminal.view
+        view.frame = CGRect(x: 0, y: CGFloat(root.subviews.count) * 200, width: 390, height: 200)
+        root.addSubview(view)
+        tab.controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
+        let isConnected = await MobileFakeTerminal.waitUntilConnected(tab.controller)
+        XCTAssertTrue(isConnected)
+        return tab
+    }
+
+    /// 同一个工作区同一格里的几个已连接终端标签。
+    private func workspace(tabs count: Int) async throws -> (MobileWorkspace, [TermTab]) {
+        let ws = MobileWorkspace()
+        var tabs: [TermTab] = []
+        for _ in 0..<count {
+            let tab = try await connectedTab()
+            ws.open(.terminal(tab))
+            tabs.append(tab)
+        }
+        return (ws, tabs)
+    }
+
+    /// 工作区屏的 `syncKeyboard`：先交接，再补一次聚焦（没有键盘可交接时靠它弹）。
+    private func sync(_ ws: MobileWorkspace) {
+        let owner = ws.activeTab?.terminal
+        if !ws.handKeyboard(to: owner) { owner?.controller.focusKeyboard() }
+    }
+
+    /// 键盘在别的标签上时切标签：第一响应者当场换主，中间没有「谁都不是第一响应者」的一刻——那一刻键盘会收起，
+    /// 50 ms 后再弹回来，新旧两个终端各跟着改一次尺寸（实机反馈：切 session 时键盘和画面来回跳）。
+    func testSwitchingTabsHandsTheKeyboardOverWithoutDroppingIt() async throws {
+        let (ws, tabs) = try await workspace(tabs: 2)
+        let (first, second) = (tabs[0], tabs[1])
+        ws.activate(first.id)
+        sync(ws)
+        XCTAssertTrue(first.controller.terminal.view.isFirstResponder)
+
+        ws.activate(second.id)
+        XCTAssertTrue(ws.handKeyboard(to: second), "交接当场完成，不等之后那次补聚焦")
+
+        XCTAssertTrue(second.controller.terminal.view.isFirstResponder)
+        XCTAssertTrue(second.controller.keyboardShown)
+        XCTAssertFalse(first.controller.keyboardShown)
+        XCTAssertFalse(first.controller.ownsKeyboard)
+        tabs.forEach { $0.controller.close() }
+    }
+
+    /// 同一格里切标签，键盘的收放跟着格走：在一个标签上收起，切到另一个不弹；在另一个上要回来，切回去也还在。
+    func testKeyboardStaysAsTheUserLeftItAcrossTabsOfOnePane() async throws {
+        let (ws, tabs) = try await workspace(tabs: 2)
+        let (first, second) = (tabs[0], tabs[1])
+        ws.activate(first.id)
+        sync(ws)
+        first.controller.collapseKeyboard()
+
+        ws.activate(second.id)
+        sync(ws)
+        XCTAssertFalse(second.controller.terminal.view.isFirstResponder, "收起的键盘不因为切标签弹回来")
+
+        second.controller.showKeyboard()
+        XCTAssertTrue(second.controller.terminal.view.isFirstResponder)
+        ws.activate(first.id)
+        sync(ws)
+        XCTAssertTrue(first.controller.terminal.view.isFirstResponder, "要回来的键盘切标签也不丢")
+        tabs.forEach { $0.controller.close() }
+    }
+
+    /// 分屏的两格各记各的：一格收起，不影响另一格。
+    func testEachPaneKeepsItsOwnKeyboardIntent() async throws {
+        let (ws, tabs) = try await workspace(tabs: 2)
+        let (first, second) = (tabs[0], tabs[1])
+        ws.moveToOtherPane(second.id)
+        sync(ws)
+        second.controller.collapseKeyboard()
+
+        ws.activate(first.id)
+        sync(ws)
+
+        XCTAssertTrue(first.controller.terminal.view.isFirstResponder)
+        ws.activate(second.id)
+        sync(ws)
+        XCTAssertFalse(second.controller.terminal.view.isFirstResponder, "切回来还是收起的")
+        tabs.forEach { $0.controller.close() }
+    }
+
+    /// 在收起过键盘的格里新开一个终端：用户是来打字的，照常弹。
+    func testOpeningANewTerminalBringsTheKeyboardBack() async throws {
+        let (ws, tabs) = try await workspace(tabs: 1)
+        sync(ws)
+        tabs[0].controller.collapseKeyboard()
+
+        let fresh = try await connectedTab()
+        ws.open(.terminal(fresh))
+        sync(ws)
+
+        XCTAssertTrue(fresh.controller.terminal.view.isFirstResponder)
+        (tabs + [fresh]).forEach { $0.controller.close() }
+    }
+
     // MARK: - 面板与键盘
 
     private func mountBar(panel: TerminalKeyBar.Panel?) async throws -> UIHostingController<TerminalKeyBar> {

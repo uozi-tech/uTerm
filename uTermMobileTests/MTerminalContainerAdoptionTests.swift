@@ -95,13 +95,52 @@ final class MTerminalContainerAdoptionTests: MTerminalContainerTestCase {
     /// 键盘升起又收起：贴底的偏移要还原，不能留下错位的终端。
     func testRoundTripRestoresPosition() async {
         let (bridge, container) = await hosted()
+        fillScreen(bridge)
 
         lay(container, CGSize(width: 400, height: 300))
-        XCTAssertEqual(bridge.view.frame.minY, -300)
+        XCTAssertEqual(bridge.view.frame.minY, -300, "内容占满一屏：贴底，提示符和光标留在屏上")
         lay(container, mounted)
 
         XCTAssertEqual(bridge.view.frame, CGRect(origin: .zero, size: mounted))
     }
+
+    /// 内容只占上面几行（刚登录的 shell）：键盘升起的等待期间原地不动。贴底的话那几行被推出屏幕，
+    /// 等提交才回来，中间整片空白（实机反馈：切标签、弹键盘时终端闪一下白）。
+    func testHeldTerminalKeepsTopContentOnScreenWhenKeyboardRises() async {
+        let (bridge, container) = await hosted()
+        feed(bridge, "Last login: Wed Nov 11\r\nuser@host:~$ ")
+        XCTAssertEqual(bridge.occupiedRows.used, 2)
+
+        lay(container, CGSize(width: 400, height: 300))
+
+        XCTAssertEqual(bridge.view.frame.minY, 0, "提示符在容器里放得下，不用挪")
+        XCTAssertEqual(bridge.view.frame.height, mounted.height, "等停稳期间不改尺寸")
+    }
+
+    /// 内容比键盘升起后的容器多、又没占满一屏：只往上挪到最后一行有字的行贴着容器底，不多挪。
+    func testHeldTerminalShiftsOnlyUntilTheLastOccupiedRowShows() async {
+        let (bridge, container) = await hosted()
+        let rows = bridge.occupiedRows.total
+        let used = rows * 3 / 4
+        feed(bridge, (1..<used).map { "line \($0)\r\n" }.joined() + "$ ")
+        XCTAssertEqual(bridge.occupiedRows.used, used)
+
+        lay(container, CGSize(width: 400, height: 300))
+
+        let usedHeight = mounted.height * CGFloat(used) / CGFloat(rows)
+        XCTAssertEqual(bridge.view.frame.minY, 300 - usedHeight, accuracy: 0.001)
+        XCTAssertGreaterThan(bridge.view.frame.minY, -300, "没到贴底的程度")
+    }
+
+    /// 光标下面还有字（Codex / Claude Code 输入框下面的状态行）：那几行也算内容，不能被键盘挡在外面。
+    func testOccupiedRowsCountTextBelowTheCursor() async {
+        let (bridge, _) = await hosted()
+        feed(bridge, "prompt\r\n\r\nstatus line\u{1B}[1;1H")
+
+        XCTAssertEqual(bridge.shadow.cursor.y, 0)
+        XCTAssertEqual(bridge.occupiedRows.used, 3)
+    }
+
 
     /// 容器变高（键盘收起）的等待期间贴顶，下面留白而不是跑到中间。
     func testHeldTerminalStaysAtTopWhenShorterThanContainer() async {

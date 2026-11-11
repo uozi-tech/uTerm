@@ -3,6 +3,15 @@ import SwiftData
 import Observation
 import UIKit
 
+/// 用户要不要键盘：亲手收起过就是不要，直到点键盘按钮或点终端要回来。
+///
+/// 工作区里一格的终端标签共用一份（`MobileWorkspace.keyboardIntent(forPane:)` 下发），所以切标签不改变键盘的收放，
+/// 终端也不用跟着改尺寸；分屏的两格各记各的。没接进工作区的控制器（探针、测试）各用各的。
+@MainActor
+final class MTerminalKeyboardIntent {
+    var collapsed = false
+}
+
 /// 一个 iOS 终端会话的运行时控制器：持有后端（`TerminalBackend`，生产是 `SSHConnection`）和这条会话的终端
 ///（`GhosttyTerminalBridge`：GhosttyKit 画面 + 影子终端），把入站字节交给终端、把键盘输入 / 尺寸变化回送后端。
 /// `@MainActor` —— 直接安全触碰 SwiftData 模型与 UI。
@@ -34,8 +43,9 @@ final class MobileTerminalController {
     var canTakeKeyboard: Bool { state == .connected && ownsKeyboard }
     /// 键盘此刻在这个会话上（终端是第一响应者）。键盘条的收起 / 弹出按钮按它显示。
     private(set) var keyboardShown = false
-    /// 用户亲手收起了键盘：切标签、关抽屉、转屏都不再自动弹回，直到用户点按钮或点终端。
-    @ObservationIgnored private var keyboardCollapsed = false
+    /// 用户亲手收起了键盘（`collapsed`）：切标签、关抽屉、转屏都不再自动弹回，直到用户点按钮或点终端。
+    /// 同一格的标签共用一份，见 `MTerminalKeyboardIntent`。
+    @ObservationIgnored var keyboardIntent = MTerminalKeyboardIntent()
     /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil（标签退回主机名）。
     var shellTitle: String?
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
@@ -223,26 +233,26 @@ final class MobileTerminalController {
 
     /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。未连上、或用户收起了键盘时不弹。
     func focusKeyboard() {
-        guard canTakeKeyboard, !keyboardCollapsed else { return }
+        guard canTakeKeyboard, !keyboardIntent.collapsed else { return }
         _ = terminal.view.becomeFirstResponder()
     }
 
     /// 用户点了「收起键盘」。
     func collapseKeyboard() {
-        keyboardCollapsed = true
+        keyboardIntent.collapsed = true
         resignKeyboard()
     }
 
     /// 用户点了「弹出键盘」。分屏时这一格可能还没拿到归属，工作区把焦点切过来后会再聚焦一次。
     func showKeyboard() {
-        keyboardCollapsed = false
+        keyboardIntent.collapsed = false
         focusKeyboard()
     }
 
     /// 终端视图报告第一响应者变化。点终端（视图自己聚焦）也走这里，等于用户要回了键盘。
     func keyboardFocusChanged(_ focused: Bool) {
         keyboardShown = focused
-        if focused { keyboardCollapsed = false }
+        if focused { keyboardIntent.collapsed = false }
     }
 
     /// 用一台主机建连并开 PTY。重复调用无副作用（已建连过则忽略）。

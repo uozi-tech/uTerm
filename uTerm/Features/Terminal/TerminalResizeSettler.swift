@@ -7,7 +7,7 @@ import Foundation
 /// 它照旧按旧尺寸增量绘制；尺寸变过去又变回来时 PTY 尺寸没变、连 SIGWINCH 都没有，屏幕就一直错位。
 /// 所以尺寸（iOS 还有字号）停稳 `settleDelay` 才提交：重排和 SIGWINCH 同时发生，中途的尺寸不碰缓冲区。
 ///
-/// 这里只管「现在提交 / 先等着 / 不跟了」与顺延计时；终端 frame 怎么摆（等待期间 mac 贴左上、iOS 贴底，
+/// 这里只管「现在提交 / 先等着 / 不跟了」与顺延计时；终端 frame 怎么摆（等待期间 mac 贴左上、iOS 往上挪到光标留在屏上，
 /// mac 的远控钉住尺寸与内边距、iOS 不在屏上不跟尺寸）留在各端容器。
 @MainActor
 final class TerminalResizeSettler {

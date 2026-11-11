@@ -108,6 +108,13 @@ class MTerminalContainerTestCase: XCTestCase {
         bridge.feed(Data(text.utf8))
     }
 
+    /// 把一屏写满（提示符和光标落在最后一行）。
+    func fillScreen(_ bridge: GhosttyTerminalBridge, file: StaticString = #filePath, line: UInt = #line) {
+        let rows = bridge.occupiedRows.total
+        feed(bridge, (1..<rows).map { "line \($0)\r\n" }.joined() + "$ ")
+        XCTAssertEqual(bridge.occupiedRows.used, rows, file: file, line: line)
+    }
+
     /// 提交后终端视图该在哪：铺满容器，再按「按行填满」往下挪零头的上半份（`TerminalSurfaceLink.rowFillOffset`，
     /// 尺寸不变；没有 surface 时是 0）。UIKit 存 frame 时有浮点误差，纵向位置按容差比。
     func assertCommitted(_ bridge: GhosttyTerminalBridge, _ size: CGSize, _ message: String = "",
@@ -174,9 +181,11 @@ final class MTerminalContainerViewTests: MTerminalContainerTestCase {
         XCTAssertEqual([shadow.cols, shadow.rows], after.grid, "影子终端跟着同一次通知改尺寸")
     }
 
-    /// 键盘升起的等待期间，终端底部（提示符和光标）要留在屏上。
+    /// 键盘升起的等待期间，终端底部（提示符和光标）要留在屏上。内容没占满一屏时怎么摆见
+    /// `MTerminalContainerAdoptionTests` 的「等待期间的摆放」。
     func testHeldTerminalKeepsBottomVisibleWhenTallerThanContainer() async {
         let (bridge, container) = await hosted()
+        fillScreen(bridge)
 
         lay(container, CGSize(width: 400, height: 300))
 

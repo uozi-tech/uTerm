@@ -138,6 +138,8 @@ final class MobileWorkspace {
     /// 这是**偏好**而不是结果：转屏后放不下时 `effectiveAxis` 临时改用另一个方向，
     /// 偏好本身不动，转回来就恢复原样（见 `effectiveAxis(preferred:size:)`）。
     private(set) var splitAxis: Axis?
+    /// 每一格的键盘意愿，按格 id 记（见 `keyboardIntent(forPane:)`）。
+    @ObservationIgnored private var keyboardIntents: [UUID: MTerminalKeyboardIntent] = [:]
 
     /// 左右并排至少要这么宽（每格约 280pt，放得下一屏可用的终端）。
     nonisolated static let sideBySideMinWidth: CGFloat = 560
@@ -290,6 +292,37 @@ final class MobileWorkspace {
         return changes
     }
 
+    // MARK: - 键盘
+
+    /// 这一格的键盘意愿：用户在这一格里收起过键盘没有。格里的终端标签共用一份——切标签时键盘该在就在、
+    /// 该收着就收着，终端不用因为键盘升降改尺寸（每改一次，里面的程序就整屏重画一遍）。分屏的两格各记各的。
+    func keyboardIntent(forPane id: UUID) -> MTerminalKeyboardIntent {
+        if let intent = keyboardIntents[id] { return intent }
+        let intent = MTerminalKeyboardIntent()
+        keyboardIntents[id] = intent
+        return intent
+    }
+
+    /// 把键盘交给 `owner`（nil = 谁都不该拿），返回键盘是不是已经在它手上。
+    ///
+    /// 键盘正在别的终端标签上时，先让新归属者接手、再收回其他标签的归属：第一响应者直接换主，键盘不经过
+    /// 「收起 → 再弹出」（中间那一下会让新旧两个终端各改一次尺寸、各重画一遍）。新归属者接不了（它那一格的键盘
+    /// 是收着的、没连上、视图还没进窗口）就和以前一样：别的标签当场收键盘，之后由调用方再聚焦一次。
+    @discardableResult
+    func handKeyboard(to owner: TermTab?) -> Bool {
+        let terminals = terminalTabs
+        for term in terminals {
+            guard let pane = paneIndex(containing: term.id) else { continue }
+            term.controller.keyboardIntent = keyboardIntent(forPane: panes[pane].id)
+        }
+        if let owner, terminals.contains(where: { $0 !== owner && $0.controller.keyboardShown }) {
+            owner.controller.ownsKeyboard = true
+            owner.controller.focusKeyboard()
+        }
+        for term in terminals { term.controller.ownsKeyboard = term === owner }
+        return owner?.controller.keyboardShown ?? false
+    }
+
     // MARK: - 布局
 
     /// 分屏实际用的方向：偏好放得下就用偏好，放不下换另一个；没偏好时宽够就左右并排。
@@ -323,6 +356,8 @@ final class MobileWorkspace {
         guard activate || panes[i].activeID == nil else { return }
         panes[i].activeID = tab.id
         focusedPaneID = panes[i].id
+        // 新开到前台的终端默认弹键盘（用户是来打字的），哪怕这一格之前收起过。
+        if tab.terminal != nil { keyboardIntent(forPane: panes[i].id).collapsed = false }
     }
 
     /// 切到某个标签：设为所在格的前台，并聚焦该格。
@@ -392,6 +427,7 @@ final class MobileWorkspace {
         merged.activeID = keepActive
         panes = [merged]
         focusedPaneID = merged.id
+        keyboardIntents = keyboardIntents.filter { $0.key == merged.id }
     }
 
     /// 用户亲手把这个标签排到了某个位置：它若是远控标签，这台 Mac 推来的顺序从此不再覆盖手机上的排法，
@@ -490,6 +526,7 @@ final class MobileWorkspace {
     private func removePane(at index: Int) {
         let removedID = panes[index].id
         panes.remove(at: index)
+        keyboardIntents[removedID] = nil
         if !isSplit { splitAxis = nil }
         if focusedPaneID == removedID { focusedPaneID = panes[0].id }
     }

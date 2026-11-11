@@ -117,10 +117,20 @@ final class MTerminalContainerView: UIView {
             terminalView.hasHostedLayout = true
             commit()
         case .hold:
-            // 等待期间保持旧尺寸：比容器矮时留在按行填满的下移位置（别先跳到 0 再回来），比容器高时贴底（键盘升起时提示符和光标留在屏上）。
+            // 等待期间保持旧尺寸：比容器矮时留在按行填满的下移位置（别先跳到 0 再回来），比容器高时往上挪到提示符和光标
+            // 留在屏上为止（`heldOriginY`）。
             let room = bounds.height - terminalView.frame.height
-            terminalView.frame.origin = CGPoint(x: 0, y: room < 0 ? room : terminal.link.rowFillOffset)
+            terminalView.frame.origin = CGPoint(x: 0, y: room < 0 ? heldOriginY(room: room) : terminal.link.rowFillOffset)
         }
+    }
+
+    /// 终端比容器高（键盘升起）、还在等停稳时放在哪：往上挪到有内容的最后一行刚好留在屏上，最多贴底。
+    /// 内容占满一屏时等于贴底；只占上面几行（刚登录的 shell）时原地不动——一律贴底的话那几行会被推出屏幕，
+    /// 等提交才回来，中间整片空白。提交之后终端也是这么收行的（先裁光标下面的空行），所以前后画面对得上。
+    private func heldOriginY(room: CGFloat) -> CGFloat {
+        let rows = terminal.occupiedRows
+        let used = terminalView.frame.height * CGFloat(rows.used) / CGFloat(rows.total)
+        return max(room, min(terminal.link.rowFillOffset, bounds.height - used))
     }
 
     /// 尺寸和字号一起提交：GhosttyKit 的 IO 线程把挨着的两次 resize 合成一次（25 ms 窗口），远端只收到一次 SIGWINCH。
