@@ -25,6 +25,7 @@ final class GhosttyMacHostTests: XCTestCase {
         }
 
         var view: GhosttySurfaceView { bridge.view }
+        var surfaceTextLines: [String] { (bridge.viewportText() ?? "").components(separatedBy: "\n") }
         var grid: String { bridge.grid.map { "\($0.cols)×\($0.rows)" } ?? "-" }
 
         func layout() { container.needsLayout = true; container.layoutSubtreeIfNeeded() }
@@ -49,8 +50,8 @@ final class GhosttyMacHostTests: XCTestCase {
     }
 
     /// 800×500 的 Ghostty 窗格，连着一个假后端；等网格停稳（第一次报上来的常常是中间态）。
-    private func makeRig() async throws -> Rig {
-        let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
+    private func makeRig(height: CGFloat = 500) async throws -> Rig {
+        let rect = NSRect(x: 0, y: 0, width: 800, height: height)
         let session = TerminalSession()
         let backend = MockBackend()
         let bridge = session.ghostty
@@ -135,6 +136,100 @@ final class GhosttyMacHostTests: XCTestCase {
         await sleep(0.1)
         rig.container.layoutSubtreeIfNeeded()
         XCTAssertEqual(rig.view.frame.maxY, rig.container.bounds.height, accuracy: 0.5, "清屏后光标回到顶上：窗格跟回顶上")
+    }
+
+    /// 钉住的终端第 `row` 行（0 起）整行落在窗格里吗（容器不翻转，y 往上）。
+    private func rowIsVisible(_ row: Int, in rig: Rig, rows: Int) -> Bool {
+        let rowHeight = rig.view.frame.height / CGFloat(rows)
+        let top = rig.view.frame.maxY - CGFloat(row) * rowHeight
+        let bottom = top - rowHeight
+        return bottom >= -0.5 && top <= rig.container.bounds.height + 0.5
+    }
+
+    /// 手机接管后在 shell 里 `seq 1 300`：最后一行（300）和提示符所在的光标行都要落在窗格里，不能被裁到窗格底边外。
+    /// 窗格高度除不尽一行时，接管前按行填满已经把行高拉过（`adjusted`）；各种余量都要对。
+    func testPinnedGridTallerThanThePaneKeepsTheLastLinesVisibleAfterSeq() async throws {
+        for (paneRows, rest) in [(0, 0), (8, -2), (12, -1), (9, 3)] {
+            try await checkLastLinesVisibleAfterSeq(paneRows: paneRows, rest: rest)
+        }
+    }
+
+    /// `paneRows` > 0：把窗格改成「paneRows 个自然行 + (自然行高 + rest) 像素」高，让按行填满拉高行距。
+    private func checkLastLinesVisibleAfterSeq(paneRows: Int, rest: Int) async throws {
+        let rig = try await makeRig()
+        defer { rig.close() }
+        if paneRows > 0 {
+            let scale = rig.window.backingScaleFactor
+            let cell = try XCTUnwrap(rig.view.uTermCellPixels).height - CGFloat(rig.view.uTermCellHeightAdjustment)
+            let px = cell * CGFloat(paneRows) + (rest < 0 ? cell + CGFloat(rest) * scale : CGFloat(rest) * scale)
+            let size = NSSize(width: 816, height: px / scale + GhosttyContainerView.insets.top + GhosttyContainerView.insets.bottom)
+            rig.container.setFrameSize(size)
+            rig.layout()
+            await sleep(0.5)
+        }
+        let adjustment = rig.view.uTermCellHeightAdjustment
+        let paneHeight = rig.container.bounds.height - 30
+        let phoneRows = max(60, (rig.bridge.grid?.rows ?? 0) + 15)
+        // 接管前窗格里已经有一屏多的历史（回滚区有内容）：Ghostty 放大行数时会把回滚的行拉回屏幕，光标跟着往下挪。
+        await emit((1...120).map { "old \($0)\r\n" }.joined() + "$ ", to: rig.backend)
+        rig.session.pinRemoteGrid(cols: 57, rows: phoneRows, controller: "测试 iPhone")
+        rig.layout()
+        let pinned = await waitUntil(3) { rig.bridge.grid?.rows == phoneRows && rig.session.shadow.size.rows == phoneRows }
+        XCTAssertTrue(pinned, "钉 57×\(phoneRows)，Ghostty 的网格是 \(rig.grid)，影子 \(rig.session.shadow.size)")
+        rig.layout()
+        XCTAssertGreaterThan(rig.view.frame.height, rig.container.bounds.height, "用例前提：钉住的终端比窗格高")
+        // 接管状态条随后才出现，占掉窗格顶上一截高度（`RemoteControlledTerminal`）。
+        rig.container.setFrameSize(NSSize(width: rig.container.frame.width, height: rig.container.frame.height - 30))
+        rig.layout()
+
+        await emit("seq 1 300\r\n", to: rig.backend)
+        // 真实输出是一片一片到的，光标一路往下走。
+        for chunk in stride(from: 1, through: 300, by: 7) {
+            await emit((chunk...min(300, chunk + 6)).map { "\($0)\r\n" }.joined(), to: rig.backend)
+            await sleep(0.01)
+        }
+        await emit("$ ", to: rig.backend)
+        let atBottom = await waitUntil(3) { rig.session.shadow.cursor.y == phoneRows - 1 }
+        XCTAssertTrue(atBottom, "输出后光标应当在最后一行：\(rig.session.shadow.cursor.y)")
+        await sleep(0.2)
+        rig.container.layoutSubtreeIfNeeded()
+        let tag = "窗格 \(paneHeight)pt、行高调整 \(adjustment)"
+        // 光标行取画面（Ghostty）上提示符所在的行；影子终端的光标行要和它一致。
+        let cursorRow = try XCTUnwrap(rig.surfaceTextLines.lastIndex { $0.hasPrefix("$ ") }, "画面上没有提示符")
+        XCTAssertEqual(rig.session.shadow.cursor.y, cursorRow, "影子与画面的光标行不一致")
+        XCTAssertTrue(rowIsVisible(cursorRow, in: rig, rows: phoneRows), "\(tag)：光标行 \(cursorRow) 被裁掉了：视图 \(rig.view.frame)，窗格 \(rig.container.bounds)")
+        let lines = rig.surfaceTextLines
+        let row300 = try XCTUnwrap(lines.firstIndex { $0.trimmingCharacters(in: .whitespaces) == "300" }, "屏幕上没有 300：\(lines.suffix(5))")
+        XCTAssertTrue(rowIsVisible(row300, in: rig, rows: phoneRows), "\(tag)：第 300 行（屏幕第 \(row300) 行）被裁掉了：视图 \(rig.view.frame)，窗格 \(rig.container.bounds)")
+    }
+
+    /// 手机的软键盘升降会让接管的行数来回变（键盘起来 35 行、收起 60 行）：行数变大时 Ghostty 把回滚的行拉回屏幕，
+    /// 光标行随之下移，但这期间没有新输出——光标行要在网格变了之后重新量，不能停在改尺寸前量到的那一行。
+    func testPinnedGridFollowsTheCursorWhenThePhoneKeyboardTogglesWithoutOutput() async throws {
+        let rig = try await makeRig()
+        defer { rig.close() }
+        await emit((1...120).map { "old \($0)\r\n" }.joined() + "$ seq 1 300\r\n", to: rig.backend)
+        // 键盘起来：手机只有 30 行，比窗格矮。
+        rig.session.pinRemoteGrid(cols: 57, rows: 30, controller: "测试 iPhone")
+        rig.layout()
+        _ = await waitUntil(3) { rig.bridge.grid?.rows == 30 && rig.session.shadow.size.rows == 30 }
+        await emit((1...300).map { "\($0)\r\n" }.joined() + "$ ", to: rig.backend)
+        await sleep(0.2)
+        // 键盘收起：行数变大，没有新输出。
+        for phoneRows in [60, 45, 70] {
+            rig.session.pinRemoteGrid(cols: 57, rows: phoneRows, controller: "测试 iPhone")
+            rig.layout()
+            let grown = await waitUntil(3) { rig.bridge.grid?.rows == phoneRows && rig.session.shadow.size.rows == phoneRows }
+            XCTAssertTrue(grown, "钉 57×\(phoneRows)，Ghostty 的网格是 \(rig.grid)，影子 \(rig.session.shadow.size)")
+            await sleep(0.3)
+            rig.container.layoutSubtreeIfNeeded()
+            let lines = rig.surfaceTextLines
+            let cursorRow = try XCTUnwrap(lines.lastIndex { $0.hasPrefix("$ ") }, "画面上没有提示符")
+            let row300 = try XCTUnwrap(lines.firstIndex { $0.trimmingCharacters(in: .whitespaces) == "300" })
+            let tag = "手机 \(phoneRows) 行：视图 \(rig.view.frame)，窗格 \(rig.container.bounds)，影子光标 \(rig.session.shadow.cursor.y)，画面光标 \(cursorRow)"
+            XCTAssertTrue(rowIsVisible(cursorRow, in: rig, rows: phoneRows), "光标行被裁掉：\(tag)")
+            XCTAssertTrue(rowIsVisible(row300, in: rig, rows: phoneRows), "第 300 行被裁掉：\(tag)")
+        }
     }
 
     // MARK: 滚动条
