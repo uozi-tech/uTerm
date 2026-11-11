@@ -415,7 +415,8 @@ sync-strings-build: engine
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "generic/platform=iOS Simulator" \
 		-derivedDataPath "$(DERIVED_DATA)" \
-		$(MOBILE_PACKAGE_ARGS)
+		$(MOBILE_PACKAGE_ARGS) \
+		ARCHS=arm64
 
 sync-strings: sync-strings-build $(SYNC_STRINGS_TOOL)
 	"$(SYNC_STRINGS_TOOL)" --catalog "$(STRINGS_CATALOG)" \
