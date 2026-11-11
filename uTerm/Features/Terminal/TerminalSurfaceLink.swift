@@ -256,6 +256,8 @@ final class TerminalSurfaceLink {
     /// 给 surface 推过几次行高配置（测试读：拖动、转屏途中不该逐帧推）。
     private(set) var rowFillAdjustments = 0
     private var rowFillRefitScheduled = false
+    /// 退回过自然行高的那次（视图高、自然格子高）：同样的尺寸不再试，免得「推 → 退 → 网格回报又触发重算」打转。
+    private var rowFillGaveUp: (viewHeight: Int, natural: Int)?
 
     /// 按 surface 此刻的尺寸重算行高调整和零头（规则见 `TerminalRowFill`），要换行高就给 surface 推配置。
     /// 平台容器在提交尺寸之后同步调一次（之后读 `rowFillOffset` 摆视图；Mac 接着把网格发给 PTY，读到的已是最终行列数）；
@@ -272,13 +274,15 @@ final class TerminalSurfaceLink {
         let natural = Int(grid.cellHeightPixels) - applied
         let plan = TerminalRowFill(viewHeight: Int(grid.heightPixels), naturalCellHeight: natural)
         var current = grid
-        if plan.adjustment != applied, view.uTermSetCellHeightAdjustment(plan.adjustment) {
+        let gaveUp = rowFillGaveUp.map { $0 == (Int(grid.heightPixels), natural) } ?? false
+        if plan.adjustment != applied, !gaveUp, view.uTermSetCellHeightAdjustment(plan.adjustment) {
             rowFillAdjustments += 1
             current = io.surfaceGrid ?? grid
             // 保险：调完之后的行数应当就是自然行高下的行数（`TerminalRowFill` 证过）。万一引擎取整和这里算的不一样，
-            // 宁可不拉伸也不能让用户少看一行：退回自然行高。
+            // 宁可不拉伸也不能让用户少看一行：退回自然行高，这个尺寸不再试。
             if plan.rows > 0, Int(current.rows) != plan.rows, view.uTermSetCellHeightAdjustment(0) {
                 rowFillAdjustments += 1
+                rowFillGaveUp = (Int(grid.heightPixels), natural)
                 current = io.surfaceGrid ?? grid
             }
         }
