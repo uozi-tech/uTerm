@@ -752,7 +752,7 @@ final class TerminalSurfaceCoordinator {
         isDisplayVisible && isWindowVisible && isApplicationActive
     }
 
-    private var canRenderFrame: Bool {
+    var canRenderFrame: Bool {
         effectiveSurfaceVisible && isAttached()
     }
 

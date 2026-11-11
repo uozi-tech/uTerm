@@ -46,6 +46,10 @@
             core.freeSurface()
         }
 
+        /// 引擎现在会不会出帧（surface 建着、视图在窗口里、宿主没声明不可见、窗口没被遮挡）。false = 画面停着，
+        /// 新建的 surface 出生就带着这个状态（被遮挡的 surface 整个跳过绘制，窗格是空白）。测试 / 诊断用。
+        var uTermCanRenderFrame: Bool { core.canRenderFrame && surface != nil }
+
         /// 引擎最近一次报来的滚动条（总行数、视口首行、一屏行数）；没有 surface 或还没报过时 nil。
         var uTermScrollbar: TerminalScrollbar? { core.bridge.scrollbar }
 

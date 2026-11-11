@@ -70,6 +70,7 @@ final class GhosttyTabSwitchTests: XCTestCase {
         if abs(view.frame.width - expected.width) > 0.5 || view.frame.height < expected.height - 0.5 || view.frame.height > expected.height + 0.5 {
             return "视图尺寸 \(view.frame.size) ≠ 窗格 \(expected)"
         }
+        if !view.uTermCanRenderFrame { return "surface 建着但引擎不出帧（被标成不可见 / 被遮挡）" }
         guard session.ghostty.grid != nil else { return "surface 还没报过网格" }
         if !(session.ghostty.viewportText() ?? "").contains(tag) {
             return "画面上没有 \(tag)（影子里有：\(session.shadow.viewportText().contains(tag))，surface 在吃字节：\(session.outputPump.isFeedingSurface)，在屏上：\(session.ghostty.isOnScreen)，surface 网格 \(String(describing: session.surfaceIO.surfaceGrid))，泵 \(session.outputPump.currentStats)）"
