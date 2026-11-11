@@ -150,17 +150,26 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     }
 
     /// 跟着 surface 的终端 resize（挂在 `InMemoryTerminalSession` 的 resize 回调上，M4 的前提：不按视图尺寸算）。
+    /// 格子像素（0 = 沿用）给尺寸查询（`CSI 14 / 16 t`）与图片协议用：按行填满只调格子高、行列数不变，这时也要换。
     func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
         guard cols > 0, rows > 0 else { return }
         lock.lock()
         defer { lock.unlock() }
+        let cellChanged = (cellWidth > 0 && cellWidth != self.cellWidth) || (cellHeight > 0 && cellHeight != self.cellHeight)
         if cellWidth > 0 { self.cellWidth = cellWidth }
         if cellHeight > 0 { self.cellHeight = cellHeight }
         var size = (cols: UInt16(0), rows: UInt16(0))
         ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &size.cols)
         ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ROWS, &size.rows)
-        guard size.cols != cols || size.rows != rows else { return }
+        guard size.cols != cols || size.rows != rows || cellChanged else { return }
         _ = ghostty_terminal_resize(handle, cols, rows, self.cellWidth, self.cellHeight)
+    }
+
+    /// 最近一次跟上的格子像素（0 = 还没有 surface 报过）。
+    var cellPixels: (width: UInt32, height: UInt32) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (cellWidth, cellHeight)
     }
 
     var size: (cols: Int, rows: Int) {

@@ -1,6 +1,6 @@
 //
 //  AppTerminalView+UTermHost.swift
-//  uTerm 本地补丁（不在上游）：Mac 宿主要的几个入口——surface 生灭与网格的回调、放掉 / 重建 surface。
+//  uTerm 本地补丁（不在上游）：Mac 宿主要的几个入口——surface 生灭与网格的回调、放掉 / 重建 surface、单个 surface 的行高调整。
 //  和 `Platform/UIKit/UITerminalView+UTermHost.swift` 同名同义。
 //
 
@@ -48,6 +48,19 @@
 
         /// 引擎最近一次报来的滚动条（总行数、视口首行、一屏行数）；没有 surface 或还没报过时 nil。
         var uTermScrollbar: TerminalScrollbar? { core.bridge.scrollbar }
+
+        /// uTerm 本地补丁：这个 surface 自己的格子高调整（物理像素，0 = 跟 app 的配置）。surface 重建、app 的配置
+        /// 整份推下来时归 0。见 `TerminalSurfaceCoordinator.setCellHeightAdjustment`。
+        var uTermCellHeightAdjustment: Int { core.cellHeightAdjustment }
+
+        /// uTerm 本地补丁：把这个 surface 的格子高调成「自然高度 + `pixels`」。没有 surface 或配置解析失败时返回 false。
+        @discardableResult
+        func uTermSetCellHeightAdjustment(_ pixels: Int) -> Bool {
+            core.setCellHeightAdjustment(pixels)
+        }
+
+        /// uTerm 本地补丁：surface 用的屏幕倍率（视图点 × 它 = 引擎的物理像素）。
+        var uTermScaleFactor: Double { core.scaleFactor() }
 
         /// 清掉选区（程序清了屏、擦掉了选中的内容）。`onlyIfBlank`：只在选区里只剩空白时清。输入法正在组字时不动
         /// （清选区的入口会连预编辑一起清掉，见 `TerminalSurface.clearSelectionWithoutInput`）。返回清没清。

@@ -81,6 +81,8 @@ final class TerminalSurfaceLink {
                     shadow.resize(cols: viewport.columns, rows: viewport.rows,
                                   cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
                 }
+                // 行列数没变、只是格子像素变了（按行填满调了行高）：影子跟上就够了，PTY 的尺寸没变。
+                guard gridGate.forwardsGridReport(viewport) else { return }
                 relay.surfaceResized(viewport)
             },
             // 只有行列数要发给远端（SIGWINCH）；像素级变化（拖分隔条时绝大多数）不用。
@@ -196,6 +198,9 @@ final class TerminalSurfaceLink {
         // 终端的报告先到、当时还对不上被拦下了：现在对上了就认它。
         if let held = gridGate.expect(cols: cols, rows: rows) { adopt(held) }
         openGateIfGridSettled()
+        // 视图的网格或格子变了（停稳后提交的尺寸、字号、屏幕倍率、app 配置整份推下来把行高调整清掉了）：按行填满重算。
+        // 这里在引擎量尺寸的调用栈里，推配置会再进同一段代码，所以隔一轮主线程再算。
+        scheduleRowFillRefit()
     }
 
     /// 认下一次被拦过的网格报告（和 resize 回调里放行的那条路做同样的事）。
@@ -204,6 +209,7 @@ final class TerminalSurfaceLink {
             shadow.resize(cols: viewport.columns, rows: viewport.rows,
                           cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
         }
+        _ = gridGate.forwardsGridReport(viewport)
         onGridReported(viewport)
     }
 
@@ -235,6 +241,66 @@ final class TerminalSurfaceLink {
     /// 重新成立时输出泵让 surface 追上影子再接实时字节。重复调用无害。
     func syncSurfaceFeeding() {
         pump.setSurfaceFeeding(platformAllowsFeeding() && isSurfaceReady)
+    }
+
+    // MARK: 按行填满
+
+    /// 现在不按行填满（Mac 的远控被控端钉着尺寸时：钉住的视图就是对端的行列数 × 格子，没有余量，调了行高反而对不上）。
+    /// 平台给。
+    var rowFillSuspended: () -> Bool = { false }
+    /// 网格要往下挪多少点：拉高行距之后还剩的零头的上半份（`TerminalRowFill.margins` 的 top），下半份留在 surface 底部。
+    /// 平台容器提交尺寸时把 surface 视图往下挪这么多（视图尺寸不变，网格因此不变）。
+    private(set) var rowFillOffset: CGFloat = 0
+    /// `rowFillOffset` 变了：平台让容器重新摆一次 surface。
+    var onRowFillOffsetChanged: () -> Void = {}
+    /// 给 surface 推过几次行高配置（测试读：拖动、转屏途中不该逐帧推）。
+    private(set) var rowFillAdjustments = 0
+    private var rowFillRefitScheduled = false
+
+    /// 按 surface 此刻的尺寸重算行高调整和零头（规则见 `TerminalRowFill`），要换行高就给 surface 推配置。
+    /// 平台容器在提交尺寸之后同步调一次（之后读 `rowFillOffset` 摆视图；Mac 接着把网格发给 PTY，读到的已是最终行列数）；
+    /// 其余时机（字号、屏幕倍率、app 配置）由视图的网格回报触发，隔一轮主线程调。没有 surface、尺寸没变时不推。
+    func refitRowFill() {
+        rowFillRefitScheduled = false
+        guard let view, hasSurface, !view.uTermIsSurfaceReleased, let grid = io.surfaceGrid,
+              grid.rows > 0, grid.heightPixels > 0, grid.cellHeightPixels > 0 else { return }
+        guard !rowFillSuspended() else {
+            setRowFillOffset(0)
+            return
+        }
+        let applied = view.uTermCellHeightAdjustment
+        let natural = Int(grid.cellHeightPixels) - applied
+        let plan = TerminalRowFill(viewHeight: Int(grid.heightPixels), naturalCellHeight: natural)
+        var current = grid
+        if plan.adjustment != applied, view.uTermSetCellHeightAdjustment(plan.adjustment) {
+            rowFillAdjustments += 1
+            current = io.surfaceGrid ?? grid
+            // 保险：调完之后的行数应当就是自然行高下的行数（`TerminalRowFill` 证过）。万一引擎取整和这里算的不一样，
+            // 宁可不拉伸也不能让用户少看一行：退回自然行高。
+            if plan.rows > 0, Int(current.rows) != plan.rows, view.uTermSetCellHeightAdjustment(0) {
+                rowFillAdjustments += 1
+                current = io.surfaceGrid ?? grid
+            }
+        }
+        let margins = TerminalRowFill.margins(viewHeight: Int(current.heightPixels), rows: Int(current.rows),
+                                              cellHeight: Int(current.cellHeightPixels))
+        let scale = view.uTermScaleFactor
+        setRowFillOffset(scale > 0 ? CGFloat(margins.top) / CGFloat(scale) : 0)
+    }
+
+    private func scheduleRowFillRefit() {
+        guard !rowFillRefitScheduled else { return }
+        rowFillRefitScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.rowFillRefitScheduled else { return }
+            self.refitRowFill()
+        }
+    }
+
+    private func setRowFillOffset(_ offset: CGFloat) {
+        guard offset != rowFillOffset else { return }
+        rowFillOffset = offset
+        onRowFillOffsetChanged()
     }
 
     // MARK: 视口

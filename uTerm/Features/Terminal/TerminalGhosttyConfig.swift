@@ -11,7 +11,8 @@ nonisolated enum TerminalGhosttyConfig {
                             cursorShape: TerminalCursorShape, cursorBlink: Bool, scrollback: TerminalScrollbackLimits) {
         b.withCursorStyle(cursorStyle(cursorShape))
         b.withCursorStyleBlink(cursorBlink)
-        // 不要内留白：网格从左上角排起（容器自己留边距，余下的不到一格留在右 / 下边）。远控钉尺寸按「行列数 × 格子」算视图大小，
+        // 不要内留白：网格从视图左上角排起（容器自己留边距）。横向余下的不到一格留在右边；纵向的由宿主按行填满
+        // （`TerminalRowFill`：拉高行距、零头上下均分，视图往下挪上半份）。远控钉尺寸按「行列数 × 格子」算视图大小，
         // 也靠这一条。
         b.withWindowPaddingX(0)
         b.withWindowPaddingY(0)

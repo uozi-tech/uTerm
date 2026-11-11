@@ -69,6 +69,11 @@ final class TerminalSurfaceCoordinator {
     var sendsCommandChords: (() -> Bool)? {
         didSet { surface?.sendsCommandChords = sendsCommandChords }
     }
+    /// uTerm 本地补丁：这个 surface 自己的 `adjust-cell-height`（物理像素），0 = 跟 app 的配置。见
+    /// `TerminalSurfaceCoordinator+CellHeight.swift`。surface 重建、app 的配置整份推下来时归 0（新配置里没有这一项）。
+    var cellHeightAdjustment = 0
+    /// 正在把这个 surface 自己的配置推给它（`ghostty_surface_update_config` 里同步发的 CONFIG_CHANGE 是自己引起的）。
+    var isApplyingSurfaceConfig = false
 
     /// Called after every display-link render (`tick`).
     ///
@@ -171,7 +176,10 @@ final class TerminalSurfaceCoordinator {
             self?.onMouseShape?(shape)
         }
         bridge.onConfigChange = { [weak self] in
-            self?.reloadFontSizeConfiguration()
+            guard let self else { return }
+            // uTerm 本地补丁：不是自己推的配置 = app 的配置整份推下来了，里面没有这个 surface 的行高调整。
+            if !isApplyingSurfaceConfig { cellHeightAdjustment = 0 }
+            reloadFontSizeConfiguration()
         }
     }
 
@@ -667,6 +675,8 @@ final class TerminalSurfaceCoordinator {
         surface?.free()
         surface = nil
         fontSize = nil
+        // uTerm 本地补丁：新 surface 从 app 的配置起步。
+        cellHeightAdjustment = 0
         lastMetrics = nil
         syncedViewSize = nil
         syncedScale = nil

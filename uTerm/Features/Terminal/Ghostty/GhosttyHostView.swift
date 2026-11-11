@@ -144,8 +144,13 @@ final class GhosttyContainerView: NSView {
         case .cancel:
             return  // 只在没有目标时出现，上面已经处理过
         case .commit:
-            layer?.masksToBounds = false
-            if surface.frame != target { surface.frame = target }
+            if surface.frame.size != target.size { surface.frame = target }
+            // 按行填满（`TerminalRowFill`）：尺寸提交后重算行高，拉不完的零头上下均分——视图往下挪上半份，尺寸不变
+            // （网格不变），露在窗格底边外的下半份裁掉。要在把网格发给 PTY 之前算：行高换完行列数仍是自然行高下的那个。
+            let offset = surface.refitRowFill?() ?? 0
+            let placed = target.offsetBy(dx: 0, dy: -offset)
+            if surface.frame != placed { surface.frame = placed }
+            layer?.masksToBounds = offset > 0
             surface.resizeDidSettle()
         case .hold:
             // 等待期间保持旧尺寸，贴左上角摆放，放不下的部分裁掉；这期间报来的网格先不发给 PTY。

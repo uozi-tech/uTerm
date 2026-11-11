@@ -21,7 +21,7 @@ final class MTerminalContainerAdoptionTests: MTerminalContainerTestCase {
         XCTAssertEqual(bridge.view.frame.size, mounted, "已经排布过的终端也要等停稳")
         await settle()
 
-        XCTAssertEqual(bridge.view.frame, CGRect(x: 0, y: 0, width: 300, height: 500))
+        assertCommitted(bridge, CGSize(width: 300, height: 500))
         let after = await reported(bridge)
         XCTAssertNotEqual(after.grid, before.grid)
         XCTAssertEqual(after.count, before.count + 1)
@@ -55,7 +55,7 @@ final class MTerminalContainerAdoptionTests: MTerminalContainerTestCase {
 
         await settle()
 
-        XCTAssertEqual(bridge.view.frame, CGRect(origin: .zero, size: mounted))
+        assertCommitted(bridge, mounted)
         let after = await reported(bridge)
         XCTAssertEqual(after, before)
     }
@@ -211,7 +211,7 @@ final class MTerminalContainerAdoptionTests: MTerminalContainerTestCase {
         XCTAssertTrue(view.surface === surface, "复用同一个视图、同一个 surface")
         XCTAssertTrue(surfaceText(terminal).contains("保留的内容"), "画面上的内容不丢")
         XCTAssertTrue(terminal.shadow.viewportText().contains("保留的内容"))
-        XCTAssertEqual(view.frame, CGRect(x: 0, y: 0, width: 300, height: 400))
+        assertCommitted(terminal, CGSize(width: 300, height: 400))
         XCTAssertEqual(controller.state, .connected)
         let narrow = await reported(terminal)
         XCTAssertNotEqual(narrow.grid, wide.grid)

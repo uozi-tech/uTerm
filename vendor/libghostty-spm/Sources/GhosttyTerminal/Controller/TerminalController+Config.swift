@@ -38,6 +38,23 @@ extension TerminalController {
         }
     }
 
+    /// uTerm 本地补丁：给单个 surface 的配置（`ghostty_surface_update_config`）：app 此刻生效的那份（`renderedConfig`，
+    /// 含当前日夜的配色）末尾再追加几行，同一个键后写的生效。和 app 的配置走同一条解析路径；生成的临时文件读完就删。
+    /// 校验不过返回 nil。调用方用完 `ghostty_config_free`（surface 会自己拷一份）。
+    func uTermSurfaceConfig(appending extra: String) -> ghostty_config_t? {
+        let contents = renderedConfigContents + "\n" + extra + "\n"
+        switch Self.prepareConfig(source: .generated(contents)) {
+        case let .success(prepared):
+            if let url = prepared.managedConfigURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+            return prepared.rawValue
+        case let .failure(issue):
+            Self.reportConfigurationIssue(issue.description)
+            return nil
+        }
+    }
+
     func applyResolvedConfig(
         _ resolved: (source: ConfigSource, contents: String),
         willChange: (() -> Void)?,
