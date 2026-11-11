@@ -276,6 +276,7 @@
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteHostConnection.swift,
 				Features/Remote/RemoteHostServer.swift,
+				Features/Remote/RemoteHostOpener.swift,
 				Features/Remote/RemoteLocalShellOpener.swift,
 				Features/Remote/RemotePairingPanel.swift,
 				Features/Remote/RemotePasteboard.swift,

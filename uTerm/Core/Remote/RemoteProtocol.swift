@@ -43,7 +43,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
                                           RemoteFeature.desktopUnlockOutcomes,
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
-                                          RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus]
+                                          RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus,
+                                          RemoteFeature.openHost]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -115,6 +116,9 @@ nonisolated enum RemoteFeature {
     /// 终端里程序（Claude Code、Codex……）的状态：认得 `programStatus`。Mac 只给声明了的设备推；
     /// 老 Mac 不推，设备上的标签照旧只显示连接状态。
     static let programStatus = "program-status"
+    /// 能让 Mac 连一台它保存着的主机、新开一个终端：认得 `openHost`。老 Mac 收到会当未知消息断开整条连接，
+    /// 所以设备只对声明了这一项的 Mac 发。
+    static let openHost = "open-host"
     /// 链路层的端到端计量与分片（见 `RemoteLinkFlow`）：认得 `linkAck` / `linkFragment`。两端都声明才启用，
     /// 否则照旧整条消息直接交给 TCP。
     static let linkFlow = "link-flow"
@@ -252,6 +256,12 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 负载 = 1 字节标志（`RemoteTerminalSnapshotPiece`）+ 影子终端二进制快照的一段。快照可以很大，切成多条发。
         /// 只有两端终端引擎版本相同（握手里的 `terminalEngine`）才会接入成功，所以设备一定解得开。
         case terminalSnapshot = 47
+        /// 让 Mac 连一台它保存着的主机、新开一个终端（通道 0，设备 → Mac）。负载 = `RemoteOpenHostRequest`（JSON）。
+        /// Mac 开出终端窗口、会话登记好之后回 `.hostOpened`，设备再按会话 id 走正常的 `.attach`：SSH 连接在 Mac 上，
+        /// 设备断开、退到后台都不影响它。只发给 `features` 带 `open-host` 的 Mac。
+        case openHost = 48
+        /// 主机的终端开好了（或没开成）（通道 0，Mac → 设备）。负载 = `RemoteOpenHostResult`（JSON）。
+        case hostOpened = 49
     }
 
     var kind: Kind
@@ -492,6 +502,21 @@ nonisolated struct RemoteLocalWorkspaces: Codable, Equatable, Sendable {
 }
 
 nonisolated struct RemoteOpenLocalShellResult: Codable, Equatable, Sendable {
+    var requestID: UUID
+    /// 开好的会话（之后按它 `.attach`）；失败时 nil。
+    var sessionID: UUID?
+    /// 失败原因（给人看的），成功时 nil。
+    var error: String?
+}
+
+nonisolated struct RemoteOpenHostRequest: Codable, Equatable, Sendable {
+    /// 回复里原样带回，设备据此认出是哪一次请求。
+    var requestID: UUID
+    /// 主机的 id（`ServerProfile.id`，两端经 iCloud 同步的是同一个）。
+    var serverID: UUID
+}
+
+nonisolated struct RemoteOpenHostResult: Codable, Equatable, Sendable {
     var requestID: UUID
     /// 开好的会话（之后按它 `.attach`）；失败时 nil。
     var sessionID: UUID?

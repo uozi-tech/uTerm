@@ -147,6 +147,8 @@ struct uTermApp: App {
                 relay: launchRelay
             )
             remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
+            remoteServer.hostOpener = .live(settings: remoteSettings, registry: terminalRegistry,
+                                            container: modelContainer)
             remoteServer.sessionRestoration = {
                 await LocalShellRestorer.shared.finished()
                 await SSHSessionRestorer.shared.finished()

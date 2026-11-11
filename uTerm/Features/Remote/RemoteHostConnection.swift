@@ -332,6 +332,9 @@ final class RemoteHostConnection {
         case .openLocalShell:
             guard let request = try? RemoteJSON.decode(RemoteOpenLocalShellRequest.self, from: message.payload) else { return }
             openLocalShell(request)
+        case .openHost:
+            guard let request = try? RemoteJSON.decode(RemoteOpenHostRequest.self, from: message.payload) else { return }
+            openHost(request)
         case .listLocalWorkspaces:
             guard let request = try? RemoteJSON.decode(RemoteLocalWorkspacesRequest.self, from: message.payload) else { return }
             let reply = RemoteLocalWorkspaces(requestID: request.requestID, home: LocalShellWorkspaces.home,
@@ -372,7 +375,7 @@ final class RemoteHostConnection {
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
-             .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
+             .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .hostOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
              .linkAck, .linkFragment, .programStatus, .terminalSnapshot:
             break
@@ -482,6 +485,27 @@ final class RemoteHostConnection {
                 reply = RemoteOpenLocalShellResult(requestID: request.requestID, sessionID: nil, error: failure.message)
             }
             self.link.send(RemoteMessage(.localShellOpened, payload: RemoteJSON.encode(reply)))
+        }
+    }
+
+    /// 设备要 Mac 代开一台保存着的主机：交给 `hostOpener`（开终端窗口、等会话登记），把会话 id 或失败原因回过去。
+    /// 设备拿到 id 后自己发 `.attach`。
+    private func openHost(_ request: RemoteOpenHostRequest) {
+        let device = peerName
+        AppLogger.info("远控：\(device) 请求打开主机 \(request.serverID)", category: RemoteLog.category)
+        Task { [weak self] in
+            guard let opener = self?.server.hostOpener else { return }
+            let result = await opener.open(request.serverID)
+            guard let self, !self.isClosed else { return }
+            let reply: RemoteOpenHostResult
+            switch result {
+            case .success(let sessionID):
+                reply = RemoteOpenHostResult(requestID: request.requestID, sessionID: sessionID, error: nil)
+            case .failure(let failure):
+                AppLogger.info("远控：主机没开成：\(failure.message)", category: RemoteLog.category)
+                reply = RemoteOpenHostResult(requestID: request.requestID, sessionID: nil, error: failure.message)
+            }
+            self.link.send(RemoteMessage(.hostOpened, payload: RemoteJSON.encode(reply)))
         }
     }
 

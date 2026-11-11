@@ -74,6 +74,8 @@ nonisolated enum DefaultsKey {
     /// iOS：看桌面时要声音的 Mac（设备 ID）。
     static let remoteDesktopAudioMacs = "remote.desktopAudioMacs"
     static let remoteLocalShellEnabled = "remote.localShellEnabled"
+    /// macOS：允许配对过的设备让这台 Mac 连它保存着的主机、新开终端。
+    static let remoteOpenHostEnabled = "remote.openHostEnabled"
     static let remoteDeviceID = "remote.deviceID"
     /// macOS：允许经公网（中继 / 打洞）接入。
     static let remoteInternetEnabled = "remote.internetEnabled"

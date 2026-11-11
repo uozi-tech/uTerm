@@ -106,7 +106,14 @@ struct HostsScreen: View {
                       onConnect: { inspecting = nil; store.openTerminal(host) },
                       onSFTP: { inspecting = nil; store.openSFTP(host) },
                       onEdit: { inspecting = nil; let h = host
-                          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editing = h } })
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editing = h } },
+                      onOpenedOnMac: { client, sessionID in
+                          inspecting = nil
+                          // 等面板收起再接管，避免连接中页与收起动画叠在一起（同「我的 Mac」面板）。
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                              store.takeOver(client, focus: sessionID)
+                          }
+                      })
         }
         .sheet(isPresented: $creating) {
             // 新建主机保存后自动连接（sftpOnly → 文件浏览，否则 → 终端），走连接中页。

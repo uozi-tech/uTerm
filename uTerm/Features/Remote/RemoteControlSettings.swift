@@ -14,6 +14,7 @@ final class RemoteControlSettings {
         static let desktopUnlockEnabled = DefaultsKey.remoteDesktopUnlockEnabled
         static let desktopAudioEnabled = DefaultsKey.remoteDesktopAudioEnabled
         static let localShellEnabled = DefaultsKey.remoteLocalShellEnabled
+        static let openHostEnabled = DefaultsKey.remoteOpenHostEnabled
         static let internetEnabled = DefaultsKey.remoteInternetEnabled
         static let internetDevices = DefaultsKey.remoteInternetDevices
         static let keepAwakeForInternet = DefaultsKey.remoteKeepAwakeForInternet
@@ -70,6 +71,16 @@ final class RemoteControlSettings {
         }
     }
 
+    /// 「允许打开已保存的主机」（默认关）：设备能让这台 Mac 用它保存的凭据连一台主机、新开一个终端。
+    /// 和本机终端一样，比接管已经开着的终端权限更大，单独开一次。
+    var isOpenHostEnabled: Bool {
+        didSet {
+            guard isOpenHostEnabled != oldValue else { return }
+            defaults.set(isOpenHostEnabled, forKey: Keys.openHostEnabled)
+            onChange?(self)
+        }
+    }
+
     /// 「允许经公网接入」（默认关）：Mac 注册到中继，勾选过的设备不在同一局域网也能连。
     var isInternetEnabled: Bool {
         didSet {
@@ -108,6 +119,7 @@ final class RemoteControlSettings {
         isDesktopUnlockEnabled = defaults.object(forKey: Keys.desktopUnlockEnabled) as? Bool ?? false
         isDesktopAudioEnabled = defaults.object(forKey: Keys.desktopAudioEnabled) as? Bool ?? true
         isLocalShellEnabled = defaults.object(forKey: Keys.localShellEnabled) as? Bool ?? false
+        isOpenHostEnabled = defaults.object(forKey: Keys.openHostEnabled) as? Bool ?? false
         isInternetEnabled = defaults.object(forKey: Keys.internetEnabled) as? Bool ?? false
         internetDevices = Set((defaults.stringArray(forKey: Keys.internetDevices) ?? []).compactMap(UUID.init(uuidString:)))
         keepsAwakeForInternet = defaults.object(forKey: Keys.keepAwakeForInternet) as? Bool ?? false
