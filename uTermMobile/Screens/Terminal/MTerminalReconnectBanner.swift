@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// 远控终端顶部的断线提示。画面还停在断线前，这时按键发不出去，不说的话看起来就像卡住了。
+/// 终端顶部的断线提示。画面还停在断线前，这时按键发不出去，不说的话看起来就像卡住了。
 struct MTerminalReconnectBanner: View {
+    let notice: LocalizedStringKey
+
     var body: some View {
         HStack(spacing: 6) {
             ProgressView().controlSize(.mini)
-            Text("与 Mac 的连接已断开，正在重新连接…")
+            Text(notice)
                 .font(.footnote)
                 .foregroundStyle(M.text)
         }

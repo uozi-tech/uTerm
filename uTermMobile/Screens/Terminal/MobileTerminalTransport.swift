@@ -48,10 +48,11 @@ struct MobileTerminalTransportFactory {
     /// 生产实现：真 SSH。
     static let live = MobileTerminalTransportFactory(make: makeLive)
 
-    /// 组装与 mac 进程内连接同一份（`SSHConnection.make`）：钥匙串读取离开主线程，跳板机凭据缺了直接报错。
-    /// 首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
+    /// 断线不丢会话的 SSH（`PersistentSSHConnection`）：shell 由主机上的保持进程持有，App 退后台被挂起、换网络之后
+    /// 自己重连接回。主机上用不了保持进程时它内部退回 `SSHConnection`。凭据解析同 `SSHConnection.make`：
+    /// 钥匙串读取离开主线程，跳板机凭据缺了直接报错。首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
     private static func makeLive(_ request: MobileTerminalTransportRequest) async throws -> any TerminalBackend {
-        try await SSHConnection.make(profile: request.profile, container: request.container,
-                                     approver: request.relay.makeApprover())
+        try await PersistentSSHConnection.make(profile: request.profile, container: request.container,
+                                               approver: request.relay.makeApprover())
     }
 }

@@ -34,3 +34,6 @@ build/
 
 # Xcode/SwiftPM per-user 状态
 xcuserdata/
+
+# 主机上的会话保持进程的二进制不进版本库：make holder 从 holder/ 编出来放到这里
+uTerm/Services/SSH/HostHolder/Binaries/

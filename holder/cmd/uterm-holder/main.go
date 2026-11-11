@@ -1,7 +1,8 @@
 // uterm-holder：主机上的会话保持进程。uTerm 经 SSH 的 exec 通道调用它，用户不直接用。
 //
-//	uterm-holder attach --id ID [--create --cols N --rows N --term T --env K=V…]
+//	uterm-holder attach --id ID [--create --cols N --rows N --term T --detached-timeout 24h --env K=V…]
 //	    接入会话（--create：没有就新建），之后标准输入输出上走帧协议。
+//	    --detached-timeout：这么久没有客户端接着就结束会话（0 = 不限）。
 //	uterm-holder list        每行一个会话（JSON）。
 //	uterm-holder kill --id ID
 //	uterm-holder version
@@ -135,6 +136,7 @@ func attach(arguments []string) {
 	cols := flags.Uint("cols", 80, "")
 	rows := flags.Uint("rows", 24, "")
 	term := flags.String("term", "xterm-256color", "")
+	detachedTimeout := flags.Duration("detached-timeout", 0, "")
 	var environment environmentFlag
 	flags.Var(&environment, "env", "")
 	_ = flags.Parse(arguments)
@@ -143,7 +145,7 @@ func attach(arguments []string) {
 
 	conn, err := holder.Dial(socketName(*id))
 	if errors.Is(err, holder.ErrNoSession) && *create {
-		conn, err = createSession(*id, *cols, *rows, *term, environment)
+		conn, err = createSession(*id, *cols, *rows, *term, *detachedTimeout, environment)
 	}
 	if errors.Is(err, holder.ErrNoSession) {
 		fail(exitNoSession, "没有这个会话")
@@ -167,12 +169,14 @@ func attach(arguments []string) {
 }
 
 // 起会话进程并连上它。
-func createSession(id string, cols, rows uint, term string, environment []string) (*net.UnixConn, error) {
+func createSession(id string, cols, rows uint, term string, detachedTimeout time.Duration,
+	environment []string) (*net.UnixConn, error) {
 	self, err := os.Executable()
 	if err != nil {
 		fail(exitFailure, "找不到自己的路径：%v", err)
 	}
-	arguments := []string{"serve", "--id", id, "--cols", fmt.Sprint(cols), "--rows", fmt.Sprint(rows), "--term", term}
+	arguments := []string{"serve", "--id", id, "--cols", fmt.Sprint(cols), "--rows", fmt.Sprint(rows), "--term", term,
+		"--detached-timeout", detachedTimeout.String()}
 	for _, entry := range environment {
 		arguments = append(arguments, "--env", entry)
 	}
@@ -219,6 +223,7 @@ func serve(arguments []string) {
 	cols := flags.Uint("cols", 80, "")
 	rows := flags.Uint("rows", 24, "")
 	term := flags.String("term", "xterm-256color", "")
+	detachedTimeout := flags.Duration("detached-timeout", 0, "")
 	var environment environmentFlag
 	flags.Var(&environment, "env", "")
 	_ = flags.Parse(arguments)
@@ -239,9 +244,10 @@ func serve(arguments []string) {
 		Rows:       uint16(*rows),
 		Shell:      shell,
 		// 登录 shell：argv0 以 - 开头。
-		Args:    []string{"-" + filepath.Base(shell)},
-		Env:     env,
-		WorkDir: workDir,
+		Args:            []string{"-" + filepath.Base(shell)},
+		Env:             env,
+		WorkDir:         workDir,
+		DetachedTimeout: *detachedTimeout,
 	})
 	if err := server.Start(); err != nil {
 		fail(exitFailure, "起不了会话：%v", err)

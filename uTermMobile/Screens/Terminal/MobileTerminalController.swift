@@ -69,8 +69,12 @@ final class MobileTerminalController {
     /// 生产是 `SSHConnection`，测试注入假传输。控制器本身不知道底下是谁。
     @ObservationIgnored private var connection: (any TerminalBackend)?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
-    /// 远控标签与 Mac 的连接断了，正在重连。这期间按键发不出去，界面要明说。
+    /// 连接断了，后端正在自己重连（远控标签连 Mac、直连主机接回主机上的会话）。这期间按键发不出去，界面要明说。
     private(set) var isReconnecting = false
+    /// 重连提示的文案：连的是 Mac 还是主机。
+    var reconnectNotice: LocalizedStringKey {
+        connection is RemoteTerminalBackend ? "与 Mac 的连接已断开，正在重新连接…" : "连接已断开，正在重新连接…"
+    }
     /// 唯一的后端来源。默认 `.live` = 原来内联在 `start()` 里的真 SSH 组装。
     @ObservationIgnored private let transportFactory: MobileTerminalTransportFactory
     @ObservationIgnored private var exitTask: Task<Void, Never>?
@@ -107,7 +111,14 @@ final class MobileTerminalController {
 
     /// 进出后台由通知驱动；测试直接调它。
     func appVisibilityChanged(inBackground: Bool) {
+        let returned = isAppInBackground && !inBackground
         isAppInBackground = inBackground
+        // 回前台：会话在主机上留着的连接立刻探一次，不等看门狗那 3 秒。后台挂久了连接多半已经死了，
+        // 判错了也只是多重连一次（画面不动）；普通连接判错就是断开，所以仍然等网络稳了再探。
+        if returned, state == .connected,
+           let backend = connection as? any ReconnectingTerminalBackend, backend.probesOnForeground {
+            Task { _ = await backend.verifyConnectionAlive() }
+        }
     }
 
     /// 远控标签：告诉后端此刻有没有人看着它。Mac 长时间离线时，没人看的标签
@@ -320,9 +331,9 @@ final class MobileTerminalController {
         connection = conn
         isReconnecting = false
         reconnectTask?.cancel()
-        reconnectTask = (conn as? RemoteTerminalBackend).map { remote in
+        reconnectTask = (conn as? any ReconnectingTerminalBackend).map { backend in
             Task { [weak self] in
-                for await reconnecting in remote.reconnecting { self?.isReconnecting = reconnecting }
+                for await reconnecting in backend.reconnecting { self?.isReconnecting = reconnecting }
                 self?.isReconnecting = false
             }
         }

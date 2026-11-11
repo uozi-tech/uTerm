@@ -366,24 +366,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
     /// 登录 shell 的 rc 可能卡住，所以限时；超时后连接不受影响。
     private func runSetupCommand(_ command: String) async throws -> String {
         guard !isClosed, let connected = connectedClient else { throw RemoteTrueColorError.notConnected }
-        let client = connected.target
-        return try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask {
-                var output = Data()
-                let stream = try await client.executeCommandStream(command, environment: Self.ptyEnvironment)
-                for try await chunk in stream {
-                    if case .stdout(let buffer) = chunk { output.append(contentsOf: buffer.readableBytesView) }
-                }
-                return String(decoding: output, as: UTF8.self)
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(10))
-                throw RemoteTrueColorError.timedOut
-            }
-            defer { group.cancelAll() }
-            guard let output = try await group.next() else { throw RemoteTrueColorError.timedOut }
-            return output
-        }
+        return try await connected.runTerminalSetupCommand(command)
     }
 
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
@@ -435,7 +418,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
     }
 
     private func probeForeground(on connected: ConnectedClient) async -> TerminalActivity {
-        guard let output = try? await Self.runCollecting(RemoteProcessTable.command, on: connected),
+        guard let output = try? await connected.collectOutput(of: RemoteProcessTable.command),
               let table = RemoteProcessTable(output: output) else { return .unknown }
         let shells = table.shells
         if shells.count == 1 { return table.activity(of: shells[0]) }
@@ -462,15 +445,6 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
         return nil
     }
 
-    /// `exec` 的输出上限是 64 000 字节，进程多的机器上 `ps -A` 会超。
-    private static func runCollecting(_ command: String, on connected: ConnectedClient) async throws -> String {
-        let collected = Mutex(Data())
-        try await connected.execStreaming(command) { chunk in
-            collected.withLock { $0.append(chunk) }
-        }
-        return collected.withLock { String(decoding: $0, as: UTF8.self) }
-    }
-
     // MARK: - 私有
 
     /// 会话 Task 自然结束（远端 shell 退出，或 withPTY 异常）时调用。
@@ -493,6 +467,41 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
 }
 
 nonisolated extension ConnectedClient {
+    /// 跑一条命令并取全部输出。`exec` 的输出上限是 64 000 字节，进程多的机器上 `ps -A` 会超，所以走流式的。
+    func collectOutput(of command: String) async throws -> String {
+        let collected = Mutex(Data())
+        try await execStreaming(command) { chunk in
+            collected.withLock { $0.append(chunk) }
+        }
+        return collected.withLock { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// 跑一条短命令并取标准输出，带上和交互 shell 相同的环境变量，这样才能看出服务器放行了哪些。
+    /// 登录 shell 的 rc 可能卡住，所以限时；超时后连接不受影响。
+    func runTerminalSetupCommand(_ command: String) async throws -> String {
+        let client = target
+        let environment = RemoteTrueColor.terminalEnvironment.map {
+            SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: $0.name, value: $0.value)
+        }
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                var output = Data()
+                let stream = try await client.executeCommandStream(command, environment: environment)
+                for try await chunk in stream {
+                    if case .stdout(let buffer) = chunk { output.append(contentsOf: buffer.readableBytesView) }
+                }
+                return String(decoding: output, as: UTF8.self)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                throw RemoteTrueColorError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let output = try await group.next() else { throw RemoteTrueColorError.timedOut }
+            return output
+        }
+    }
+
     /// 把图片传成这台机器 `/tmp` 下的一个文件。SFTP 开在这条连接上（另开一个通道），不另建连接，也不重新认证。
     func uploadTerminalImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         let path = image.temporaryRemotePath()

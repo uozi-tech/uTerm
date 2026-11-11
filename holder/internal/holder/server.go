@@ -44,6 +44,8 @@ type Config struct {
 	ExitedLinger time.Duration
 	// 结束会话时先发 SIGHUP，过这么久还没退出再发 SIGKILL。
 	KillGrace time.Duration
+	// 这么久没有客户端接着就结束会话：App 被系统杀掉后没人会回来接它，不能永远占着主机。0 = 不限。
+	DetachedTimeout time.Duration
 }
 
 func (c *Config) applyDefaults() {
@@ -99,6 +101,8 @@ type Server struct {
 
 	clients  map[*client]struct{}
 	attached *client
+	// 每次接入、断开都加一：没人接着的计时器到点时，这个数没变才算一直没人。
+	attachGeneration uint64
 }
 
 // 一条客户端连接。字段都在 Server.mu 下读写。
@@ -148,7 +152,26 @@ func (s *Server) Start() error {
 	go s.acceptLoop()
 	go s.outputReader()
 	go s.inputWriter()
+	s.mu.Lock()
+	s.armDetachedTimeoutLocked()
+	s.mu.Unlock()
 	return nil
+}
+
+// 没人接着的时候开始计时。期间有人接入过（哪怕又断开了）就作废，由那次断开重新计。
+func (s *Server) armDetachedTimeoutLocked() {
+	if s.config.DetachedTimeout <= 0 || s.attached != nil {
+		return
+	}
+	s.attachGeneration++
+	generation := s.attachGeneration
+	time.AfterFunc(s.config.DetachedTimeout, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.attached == nil && s.attachGeneration == generation {
+			s.terminateLocked()
+		}
+	})
 }
 
 // Done 在会话结束（shell 退出并交代完，或被结束）时关闭。
@@ -315,6 +338,7 @@ func (s *Server) closeClientLocked(c *client) {
 	if s.attached == c {
 		// 没人看了也要继续读：不读 shell 就会卡在写输出上。outputReader 被 Broadcast 叫醒后接着读。
 		s.attached = nil
+		s.armDetachedTimeoutLocked()
 	}
 	s.cond.Broadcast()
 	// 最后一屏已经交出去了，这个进程没有别的用处了。
@@ -368,6 +392,7 @@ func (s *Server) attachLocked(c *client, payload []byte) {
 		s.closeAfterFlushLocked(previous)
 	}
 	s.attached = c
+	s.attachGeneration++
 	reply := Checkpoint{Cols: s.cols, Rows: s.rows}
 	if offset, ok := decodeAttachOffset(payload); ok {
 		// 客户端自己留着终端状态，只补它之后的字节。位置比这条流还靠后，说明它手里的不是这个会话的状态。

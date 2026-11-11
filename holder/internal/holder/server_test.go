@@ -537,3 +537,43 @@ func TestUnknownFramesAreIgnored(t *testing.T) {
 	client.send(KindInput, []byte("still here\n"))
 	client.outputUntil(nil, contains("still here"))
 }
+
+// App 被系统杀掉后没人回来接：过了时限会话自己结束。期间有人接着就不算。
+func TestSessionEndsAfterStayingDetachedTooLong(t *testing.T) {
+	server, socket, _ := startSession(t, `stty -echo; cat`,
+		func(config *Config) { config.DetachedTimeout = 400 * time.Millisecond })
+
+	// 接着的时候不计时。
+	client := dialSession(t, socket)
+	client.attach(nil)
+	select {
+	case <-server.Done():
+		t.Fatal("session ended while a client was attached")
+	case <-time.After(700 * time.Millisecond):
+	}
+	client.send(KindInput, []byte("alive\n"))
+	client.outputUntil(nil, contains("alive"))
+
+	// 断开后重新计：没到时限前接回来，计时作废。
+	client.conn.Close()
+	time.Sleep(200 * time.Millisecond)
+	again := dialSession(t, socket)
+	again.attach(nil)
+	select {
+	case <-server.Done():
+		t.Fatal("session ended although a client came back in time")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	again.conn.Close()
+	waitDone(t, server)
+	if _, err := os.Stat(socket); !os.IsNotExist(err) {
+		t.Fatalf("socket still there: %v", err)
+	}
+}
+
+func TestSessionNobodyEverAttachedToEndsAfterTheTimeout(t *testing.T) {
+	server, _, _ := startSession(t, `sleep 30`,
+		func(config *Config) { config.DetachedTimeout = 300 * time.Millisecond })
+	waitDone(t, server)
+}

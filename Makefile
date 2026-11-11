@@ -141,7 +141,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help test-fast test-relay-e2e test-weak-network relay-dist relay-publish test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
-	engine check-engine build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
+	engine check-engine holder test-holder test-holder-e2e build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	sync-strings sync-strings-build check-strings \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
@@ -163,6 +163,9 @@ help:
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
 	@printf '%s\n' '  make test-fast                         Run tests in parallel, recheck failures serially'
 	@printf '%s\n' '  make test-mobile-fast                  Same for uTermMobileTests'
+	@printf '%s\n' '  make holder                            Build the host session holder (holder/, Go) into the app resources'
+	@printf '%s\n' '  make test-holder                       Run the session holder tests (unit + real PTY)'
+	@printf '%s\n' '  make test-holder-e2e                   Run the session holder end-to-end tests through a real sshd (docker)'
 	@printf '%s\n' '  make test-relay-e2e                    Run end-to-end tests through a real uterm-relay'
 	@printf '%s\n' '  make test-weak-network                 Run the remote weak-network matrix, write docs/remote-weak-network-baseline.md'
 	@printf '%s\n' '  make relay-dist                        Build uterm-relay for linux amd64/arm64 into build/relay'
@@ -250,7 +253,20 @@ engine:
 check-engine:
 	@scripts/fetch-ghostty-engine.sh --check
 
-build: engine
+# 主机上的会话保持进程（holder/，Go）：编出 linux amd64 / arm64，压好放进 App 的资源目录（不进版本库）。
+# 源码没变时什么都不做，所以和 engine 一样挂在每个会编工程的目标前面。需要 Go。
+holder:
+	@scripts/build-host-holder.sh
+
+# 保持进程自己的测试（单元 + 真 PTY，本机）。
+test-holder:
+	cd holder && GOWORK=off go vet ./... && GOWORK=off go test -race -count=1 ./...
+
+# 经真实 sshd（docker 容器）的端到端用例；测量延迟 / 吞吐加 UTERM_HOLDER_MEASURE=1。
+test-holder-e2e:
+	holder/scripts/e2e.sh
+
+build: engine holder
 	xcodebuild \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -262,7 +278,7 @@ build: engine
 
 # Archive with automatic signing (development); the Developer ID profile + re-signing
 # happen at the export-app step. Kept separate so a failed export does not waste the build.
-archive: engine
+archive: engine holder
 	rm -rf "$(ARCHIVE_PATH)"
 	xcodebuild archive \
 		-project "$(PROJECT)" \
@@ -299,7 +315,7 @@ export-app: archive
 	test -d "$(EXPORT_APP)"
 	@printf '%s\n' "Exported Developer ID app: $(EXPORT_APP)"
 
-test: engine
+test: engine holder
 	xcodebuild \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -309,7 +325,7 @@ test: engine
 		test
 
 # 并行全量，失败用例再串行复核一遍，见 scripts/test-parallel.sh。
-test-fast: engine
+test-fast: engine holder
 	scripts/test-parallel.sh "$(SCHEME)" "$(DESTINATION)" "$(TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
@@ -318,7 +334,7 @@ test-fast: engine
 		$(PACKAGE_ARGS)
 
 # 起一个真实的 uterm-relay 跑经它的端到端用例。中继自身的测试：cd relay && GOWORK=off go test ./...
-test-relay-e2e: engine
+test-relay-e2e: engine holder
 	scripts/test-relay-e2e.sh \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -328,7 +344,7 @@ test-relay-e2e: engine
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
 
-test-weak-network: engine
+test-weak-network: engine holder
 	scripts/test-weak-network.sh \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -365,7 +381,7 @@ relay-publish: relay-dist
 		--file "$(RELAY_DIST)/install.sh" "relay/install.sh"
 	scripts/upload-oss.sh --file "$(RELAY_DIST)/latest.json" "relay/latest.json"
 
-test-mobile-fast: engine
+test-mobile-fast: engine holder
 	scripts/test-parallel.sh "$(MOBILE_SCHEME)" "$(MOBILE_DESTINATION)" "$(MOBILE_TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
@@ -376,7 +392,7 @@ test-mobile-fast: engine
 # iOS/iPadOS：宿主是 uTermMobile.app，跑在模拟器上。测试 bundle 靠 TEST_HOST 取符号，
 # Frameworks 阶段是空的（见 uTermMobileTests/README.md）。
 # 不要加 CODE_SIGNING_ALLOWED=NO —— 模拟器走 ad-hoc 签名，entitlements 不挡路。
-test-mobile: engine
+test-mobile: engine holder
 	xcodebuild \
 		-project "$(PROJECT)" \
 		-scheme "$(MOBILE_SCHEME)" \
@@ -401,7 +417,7 @@ $(SYNC_STRINGS_TOOL): scripts/sync-strings.swift
 	mkdir -p "$(dir $@)"
 	swiftc -O -o "$@" "$<"
 
-sync-strings-build: engine
+sync-strings-build: engine holder
 	xcodebuild build -quiet \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -436,7 +452,7 @@ check-cli:
 # 技能构建产物闸：app 包内 Resources/Skills/ 下的文档（SKILL.md 与 references）与两份 utermctl 必须与仓库文件
 # 逐字节一致（构建阶段「Copy utermctl CLI and Skills」没漏、没坏），外加安装 / 自动对齐的
 # 行为测试 —— 只有这两个测试类挡着。发版前跑一次（release skill 已接进去）。
-check-skills: check-cli engine
+check-skills: check-cli engine holder
 	xcodebuild build-for-testing \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -582,7 +598,7 @@ staple:
 #   - 团队 TEAM_ID 下有 Apple Distribution 证书（没有时 API key 会自动签发一张）；
 #   - App ID 已开 iCloud（容器 iCloud.com.uozi.uTerm）与 Push Notifications 能力，
 #     否则 automatic signing 拉到的 profile 缺能力，export 会在重签这一步失败。
-archive-mobile: engine
+archive-mobile: engine holder
 	rm -rf "$(MOBILE_ARCHIVE_PATH)"
 	mkdir -p "$(MOBILE_BUILD_DIR)"
 	@set -e; \
