@@ -237,8 +237,8 @@ final class PersistentSSHConnectionLiveTests: XCTestCase {
         }
     }
 
-    private func storedCheckpointExists(_ sessionID: UUID) async throws -> Bool {
-        // 检查点只在保持进程的内存里：从外面看不到，用「再接一次能不能拿回画面」来验。这里只确认会话还在。
+    /// 主机上还有没有这个会话。
+    private func sessionIsOnHost(_ sessionID: UUID) async throws -> Bool {
         let listing = try await run("~/.local/share/uterm/bin/uterm-holder-\(HostHolder.version) list; echo CHECKED")
         return listing.contains(sessionID.uuidString)
     }
@@ -260,7 +260,7 @@ final class PersistentSSHConnectionLiveTests: XCTestCase {
         await first.write(Data("echo after-checkpoint; (sleep 1; printf '\\033[c'; echo while-away) &\n".utf8))
         await firstTerminal.wait(for: "after-checkpoint")
         await first.abandonForTesting()
-        let alive = try await storedCheckpointExists(sessionID)
+        let alive = try await sessionIsOnHost(sessionID)
         XCTAssertTrue(alive, "App 没了，会话应当留在主机上")
         try await Task.sleep(for: .milliseconds(1500))
 

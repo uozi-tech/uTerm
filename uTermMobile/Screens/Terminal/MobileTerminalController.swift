@@ -127,9 +127,10 @@ final class MobileTerminalController {
             Task { _ = await backend.verifyConnectionAlive() }
         }
         if returned { MobileBackgroundGrace.shared.end() }
-        // 进后台：连着的会话再留一小段时间（切出去看一眼别的 App 再回来，连接不断）；会话留在主机上的，
-        // 把终端此刻的状态存过去——之后 App 被系统结束的话，重新打开凭它接回画面。
-        if inBackground, !returned, state == .connected, let connection {
+        // 进后台：直连主机的会话再留一小段时间（切出去看一眼别的 App 再回来，连接不断）；会话留在主机上的，
+        // 把终端此刻的状态存过去——之后 App 被系统结束的话，重新打开凭它接回画面。远控标签不留：
+        // 终端在 Mac 上，回来重新接入就是了。
+        if inBackground, !returned, state == .connected, let connection, !(connection is RemoteTerminalBackend) {
             MobileBackgroundGrace.shared.begin()
             if let backend = connection as? any CheckpointingTerminalBackend {
                 Task { await backend.saveCheckpoint() }
