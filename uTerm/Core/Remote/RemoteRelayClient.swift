@@ -82,11 +82,11 @@ actor RemoteRelayClient {
             signalWaiters[session] = continuation
             Task {
                 try? await Task.sleep(until: deadline, clock: .continuous)
-                await self.signalTimedOut(session, connection: connection)
+                self.signalTimedOut(session, connection: connection)
             }
             Task {
                 await self.sendOrFail(connection, message)
-                await self.markSent(session)
+                self.markSent(session)
             }
         }
     }
@@ -201,7 +201,7 @@ actor RemoteRelayClient {
             Task {
                 await self.sendOrFail(connection, RemoteRelayMessage(type: "ping"))
                 try? await Task.sleep(for: Self.pingTimeout)
-                await self.expirePong(token)
+                self.expirePong(token)
             }
         }
         return control === connection && lastHeard != before
