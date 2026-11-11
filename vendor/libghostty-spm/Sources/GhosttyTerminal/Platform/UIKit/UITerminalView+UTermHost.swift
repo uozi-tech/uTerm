@@ -30,6 +30,14 @@
                 }
             }
 
+            /// surface 一直保持聚焦：光标不因为视图不是第一响应者就画成空心框，也不由引擎给开了 DEC 1004 的程序报
+            /// focus in / out（视图放弃第一响应者、拆 surface 都不报）。宿主要照自己的规则报 1004；程序开 1004 时引擎
+            /// 仍会当场报一次「聚焦」（`CSI I`）。见 `TerminalSurfaceCoordinator.keepsSurfaceFocused`。
+            var uTermKeepsSurfaceFocused: Bool {
+                get { core.keepsSurfaceFocused }
+                set { core.keepsSurfaceFocused = newValue }
+            }
+
             /// surface 被宿主放掉了没有。
             var uTermIsSurfaceReleased: Bool { uTermSurfaceReleased }
 

@@ -45,6 +45,8 @@ final class GhosttyTerminalBridge {
     var inputLog: [Data]?
     /// 程序用 OSC 52 写剪贴板时写到哪（测试换成私有的，别动模拟器那块与 Mac 同步的系统剪贴板）。
     var pasteboard: UIPasteboard = .general
+    /// 给开了 DEC 1004 的程序报的焦点状态（见 `focusReportChanged`）：起初算聚焦，放弃第一响应者后算失焦。
+    private var reportsFocused = true
     /// App 在不在后台（`MobileTerminalController` 听 `didEnterBackground` / `willEnterForeground` 转过来，测试直接调）。
     private(set) var isAppInBackground = false
     /// surface 建好了、它的终端也报过尺寸了：可以往里灌字节（见 `TerminalSurfaceLink`）。
@@ -150,8 +152,11 @@ final class GhosttyTerminalBridge {
             fontSize: Self.ghosttyFontSize(points: MGhosttyTerminalView.defaultFontSize))
         view.delegate = delegateProxy
         link.attach(view)
+        // 收起键盘后用户还在看这个终端，光标不该变成表示失焦的空心框：surface 一直聚焦，1004 由这里报（`focusReportChanged`）。
+        view.uTermKeepsSurfaceFocused = true
+        view.onFocusReport = { [weak self] in self?.focusReportChanged($0) }
         // surface 写出的（击键、它答的查询）和影子替它答的走同一条路回后端。
-        link.onSurfaceInput = { [weak self] in self?.userInput($0) }
+        link.onSurfaceInput = { [weak self] in self?.surfaceInput($0) }
         link.onShadowReply = { [weak self] in self?.userInput($0) }
         // 程序写剪贴板（OSC 52）：以影子为准。影子从快照还原时不解析字节、喂历史时不调，都不会再写。
         link.onClipboardWrite = { [weak self] in self?.pasteboard.string = $0 }
@@ -283,6 +288,31 @@ final class GhosttyTerminalBridge {
     private func userInput(_ data: Data) {
         inputLog?.append(data)
         input.write(data)
+    }
+
+    // MARK: 焦点报告（DEC 1004）
+
+    private static let focusIn = Data([0x1B, 0x5B, 0x49])    // CSI I
+    private static let focusOut = Data([0x1B, 0x5B, 0x4F])   // CSI O
+
+    /// 照换引擎之前（旧引擎 iOS 视图）的规则报焦点：成为第一响应者报 `CSI I`、放弃报 `CSI O`，只在程序开着 1004 时报
+    ///（模式读影子，surface 在不在都一样）；进出后台、标签藏起来不动第一响应者，也就不报。和旧引擎不同的一点：状态没变不重报
+    ///（已经是第一响应者时再聚焦一次，旧引擎会再发一个 `CSI I`）。
+    private func focusReportChanged(_ focused: Bool) {
+        guard focused != reportsFocused else { return }
+        reportsFocused = focused
+        if shadow.isModeSet(1004) { userInput(focused ? Self.focusIn : Self.focusOut) }
+    }
+
+    /// surface 写出来的字节。surface 一直聚焦（`uTermKeepsSurfaceFocused`），引擎只在程序开 1004 的那一刻报一次焦点，
+    /// 报的永远是 `CSI I`；换成这里记着的状态（没有焦点时开 1004 要报 `CSI O`，同旧引擎）。恰好是这三个字节的一次写出
+    /// 就当焦点报告：没有按键编码成 `CSI I` / `CSI O`；长按菜单粘贴的内容恰好是这三个字节（带 ESC）的情况不管。
+    private func surfaceInput(_ data: Data) {
+        if data == Self.focusIn || data == Self.focusOut {
+            userInput(reportsFocused ? Self.focusIn : Self.focusOut)
+            return
+        }
+        userInput(data)
     }
 
     private func gridChanged(cols: Int, rows: Int) {

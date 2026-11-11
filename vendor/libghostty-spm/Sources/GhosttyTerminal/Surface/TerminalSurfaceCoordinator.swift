@@ -69,6 +69,13 @@ final class TerminalSurfaceCoordinator {
     var sendsCommandChords: (() -> Bool)? {
         didSet { surface?.sendsCommandChords = sendsCommandChords }
     }
+    /// uTerm 本地补丁：surface 一直保持聚焦，不跟着视图的焦点走。Ghostty 的 surface 焦点同时管两件事——失焦时光标画成
+    /// 空心框（`renderer/cursor.zig`），以及给开了 DEC 1004 的程序报 focus in / out；iOS 上收起键盘后用户还在看这个终端，
+    /// 光标不该变空心（换引擎之前的行为），所以 surface 一直聚焦（新 surface 出生就是聚焦的），1004 由宿主照自己的规则报。
+    /// 视图焦点变化仍照常通知 delegate；拆 surface 时也不再先报失焦。默认关（Mac 失焦画空心是对的）。
+    var keepsSurfaceFocused = false {
+        didSet { if keepsSurfaceFocused { surface?.setFocus(true) } }
+    }
 
     /// Called after every display-link render (`tick`).
     ///
@@ -586,7 +593,8 @@ final class TerminalSurfaceCoordinator {
     func setFocus(_ focused: Bool) {
         requestImmediateTick()
         TerminalDebugLog.log(.lifecycle, "focus=\(focused)")
-        surface?.setFocus(focused)
+        // uTerm 本地补丁：见 `keepsSurfaceFocused`。
+        surface?.setFocus(focused || keepsSurfaceFocused)
         (delegate as? any TerminalSurfaceFocusDelegate)?
             .terminalDidChangeFocus(focused)
     }
@@ -663,7 +671,8 @@ final class TerminalSurfaceCoordinator {
         bridge.rawSurface = nil
         bridge.scrollbar = nil
         let hadSurface = surface != nil
-        surface?.setFocus(false)
+        // uTerm 本地补丁：一直聚焦的 surface 拆掉时不报失焦（见 `keepsSurfaceFocused`）。
+        if !keepsSurfaceFocused { surface?.setFocus(false) }
         surface?.free()
         surface = nil
         fontSize = nil

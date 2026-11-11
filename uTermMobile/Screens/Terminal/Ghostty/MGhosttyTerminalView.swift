@@ -12,6 +12,8 @@ final class MGhosttyTerminalView: UITerminalView {
     var canTakeKeyboard: (() -> Bool)?
     /// 第一响应者变化（宿主据此同步「键盘在不在这个会话上」）。
     var onFocusChanged: ((Bool) -> Void)?
+    /// 第一响应者变化，给开了 DEC 1004 的程序报 focus in / out 用（`GhosttyTerminalBridge` 接）。surface 一直聚焦，引擎不报。
+    var onFocusReport: ((Bool) -> Void)?
     /// 剪贴板里只有图片时的粘贴交给宿主（传到远端再把路径粘进来）。
     var onPasteImage: (() -> Void)?
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，见 `MTerminalContainerView`。
@@ -99,7 +101,10 @@ final class MGhosttyTerminalView: UITerminalView {
     @discardableResult
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
-        if became { onFocusChanged?(true) }
+        if became {
+            onFocusReport?(true)
+            onFocusChanged?(true)
+        }
         if became, !observesInputMode {
             observesInputMode = true
             NotificationCenter.default.addObserver(self, selector: #selector(inputModeDidChange),
@@ -112,7 +117,10 @@ final class MGhosttyTerminalView: UITerminalView {
     @discardableResult
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { onFocusChanged?(false) }
+        if resigned {
+            onFocusReport?(false)
+            onFocusChanged?(false)
+        }
         return resigned
     }
 
