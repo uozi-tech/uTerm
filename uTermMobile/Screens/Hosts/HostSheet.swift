@@ -7,8 +7,6 @@ struct HostSheet: View {
     var onConnect: () -> Void
     var onSFTP: () -> Void
     var onEdit: () -> Void
-    /// 终端经某台 Mac 开好了（`HostOpenOnMacRows`）。nil = 不提供这个入口。
-    var onOpenedOnMac: ((RemoteMacClient, UUID) -> Void)? = nil
 
     private var lastText: String { UTermFormat.relative(host.lastConnectedAt) }
 
@@ -39,10 +37,6 @@ struct HostSheet: View {
                 actionTile("edit", "编辑", action: onEdit)
             }
             .padding(.top, 10)
-            if let onOpenedOnMac {
-                HostOpenOnMacRows(host: host, onOpened: onOpenedOnMac)
-                    .padding(.top, 14)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .watchesReachability(of: host)

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UDesignKit
 
-/// 设置 › 远程控制 › 能力：允许打开本机终端（及辅助程序检查）、允许打开已保存的主机、允许远程桌面（及屏幕录制 / 辅助功能
+/// 设置 › 远程控制 › 能力：允许打开本机终端（及辅助程序检查）、允许远程桌面（及屏幕录制 / 辅助功能
 /// 两项系统授权、当前观看者）。两个开关各带缩进一级的子项，放在同一张卡片里。
 struct RemoteCapabilitiesGroup: View {
     @Environment(RemoteControlSettings.self) private var settings
@@ -29,11 +29,6 @@ struct RemoteCapabilitiesGroup: View {
                     }
                 }
                 .settingsNested()
-            }
-
-            SettingsRow(label: "允许打开已保存的主机",
-                        hint: "配对过的设备可以让这台 Mac 连接你保存的主机并新开终端；设备断开后会话留在这台 Mac 上") {
-                UDToggle(Binding(get: { settings.isOpenHostEnabled }, set: { settings.isOpenHostEnabled = $0 }))
             }
 
             SettingsRow(label: "允许远程桌面",

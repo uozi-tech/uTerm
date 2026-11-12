@@ -217,7 +217,6 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
     @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
-    @ObservationIgnored private var hostWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
     @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var peer: RemoteHello?
@@ -650,8 +649,6 @@ final class RemoteMacClient: Identifiable {
         desktopWaiters.removeAll()
         for (_, waiter) in localShellWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         localShellWaiters.removeAll()
-        for (_, waiter) in hostWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
-        hostWaiters.removeAll()
         for (_, waiter) in workspaceWaiters { waiter.resume(returning: nil) }
         workspaceWaiters.removeAll()
         for (_, waiter) in imageWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
@@ -744,14 +741,6 @@ final class RemoteMacClient: Identifiable {
                 waiter.resume(returning: sessionID)
             } else {
                 waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 无法打开本机终端"))
-            }
-        case .hostOpened:
-            guard let result = try? RemoteJSON.decode(RemoteOpenHostResult.self, from: message.payload),
-                  let waiter = hostWaiters.removeValue(forKey: result.requestID) else { return }
-            if let sessionID = result.sessionID {
-                waiter.resume(returning: sessionID)
-            } else {
-                waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 无法打开这台主机"))
             }
         case .localWorkspaces:
             guard let workspaces = try? RemoteJSON.decode(RemoteLocalWorkspaces.self, from: message.payload),
@@ -858,28 +847,6 @@ final class RemoteMacClient: Identifiable {
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
             localShellWaiters[requestID] = continuation
             link.send(RemoteMessage(.openLocalShell, payload: RemoteJSON.encode(RemoteOpenLocalShellRequest(requestID: requestID, directory: directory))))
-        }
-    }
-
-    /// 这台 Mac 能不能代开已保存的主机（老 Mac 收到 `openHost` 会断开整条连接）。连上之后才知道。
-    var supportsOpenHost: Bool { macFeatures.contains(RemoteFeature.openHost) }
-
-    /// 请 Mac 连一台它保存着的主机、新开一个终端（Mac 上同时弹出它的终端窗口），返回会话 id；之后照常接管。
-    /// SSH 连接在 Mac 上：设备退到后台、断网都不影响它，回来接着看。Mac 上没开「允许打开已保存的主机」、
-    /// 那台 Mac 上没有这台主机、连不上主机等情况抛 `RemoteAttachError.rejected`，带给人看的原因。
-    func openHost(serverID: UUID) async throws -> UUID {
-        await connect()
-        guard state == .connected, let link else {
-            throw connectionFailure
-        }
-        guard supportsOpenHost else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能代为打开主机。把 Mac 上的 uTerm 更新到最新版后再试")
-        }
-        let requestID = UUID()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
-            hostWaiters[requestID] = continuation
-            link.send(RemoteMessage(.openHost, payload: RemoteJSON.encode(
-                RemoteOpenHostRequest(requestID: requestID, serverID: serverID))))
         }
     }
 

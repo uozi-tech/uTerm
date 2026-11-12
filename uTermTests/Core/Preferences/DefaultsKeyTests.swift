@@ -53,7 +53,6 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteCurtainMutedOutputs, "remote.curtainMutedOutputs"),
         (DefaultsKey.remoteDesktopAudioMacs, "remote.desktopAudioMacs"),
         (DefaultsKey.remoteLocalShellEnabled, "remote.localShellEnabled"),
-        (DefaultsKey.remoteOpenHostEnabled, "remote.openHostEnabled"),
         (DefaultsKey.remoteDeviceID, "remote.deviceID"),
         (DefaultsKey.remoteInternetEnabled, "remote.internetEnabled"),
         (DefaultsKey.remoteInternetDevices, "remote.internetDevices"),

@@ -126,8 +126,6 @@ nonisolated enum SettingsCatalog {
              kind: .toggle, key: DefaultsKey.remoteEnabled, syncScope: .local, platforms: .macOS),
         Item(id: "remote.localShell", section: .remote, group: "本机终端", title: "允许打开本机终端",
              kind: .toggle, key: DefaultsKey.remoteLocalShellEnabled, syncScope: .local, platforms: .macOS),
-        Item(id: "remote.openHost", section: .remote, group: "已保存的主机", title: "允许打开已保存的主机",
-             kind: .toggle, key: DefaultsKey.remoteOpenHostEnabled, syncScope: .local, platforms: .macOS),
         Item(id: "remote.desktop", section: .remote, group: "远程桌面", title: "允许远程桌面",
              kind: .toggle, key: DefaultsKey.remoteDesktopEnabled, syncScope: .local, platforms: .macOS),
         Item(id: "remote.relayConfig", section: .remote, group: "公网接入", title: "中继",
