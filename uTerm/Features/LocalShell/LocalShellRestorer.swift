@@ -37,6 +37,8 @@ final class LocalShellRestorer {
     private var isDone = false
     private var pending: [UUID: PendingWindow] = [:]
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    /// 等开窗口入口装好的（`finished` 来得比 Scene 环境早，例如后台唤起时远控进程马上来要会话）。
+    private var installWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(client: LocalShellAgentClient = LocalShellService.shared.client, namespace: String = LocalShellNamespace.current,
          gateTimeout: Duration = .seconds(15), reopenDelay: Duration = .milliseconds(500)) {
@@ -48,6 +50,8 @@ final class LocalShellRestorer {
 
     func install(openWindow: @escaping @MainActor (_ windowID: UUID, _ firstPaneID: UUID) -> Void) {
         self.openWindow = openWindow
+        for waiter in installWaiters { waiter.resume() }
+        installWaiters = []
     }
 
     /// 幂等。在 Scene 环境还没好（`install` 之前）时不开始，装好之后会再调一次。
@@ -65,9 +69,25 @@ final class LocalShellRestorer {
     /// 接回完成（或确定没有要接回的）后返回。手机接入前等它，否则会看到一份缺了本机终端的列表。
     func finished() async {
         guard !isDone else { return }
+        // 入口还没装好不等于「没有要接回的」：等它装好（最多 `gateTimeout`），否则会把还没接回的会话当成已经没了。
+        if openWindow == nil, !BackgroundLaunchMode.isRunningInTestHost { await waitForInstall() }
         if isRunningWithoutRestoration { return }
         restoreIfNeeded()
         await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func waitForInstall() async {
+        let timeout = gateTimeout
+        let timer = Task { [weak self] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            guard let self else { return }
+            for waiter in self.installWaiters { waiter.resume() }
+            self.installWaiters = []
+        }
+        await withCheckedContinuation { continuation in
+            if openWindow != nil { continuation.resume() } else { installWaiters.append(continuation) }
+        }
+        timer.cancel()
     }
 
     private var isRunningWithoutRestoration: Bool {

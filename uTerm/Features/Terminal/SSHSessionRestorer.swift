@@ -33,6 +33,8 @@ final class SSHSessionRestorer {
     /// 已清点、还没走完接回的会话。手机接入前等它们。
     private var unsettled: Set<UUID> = []
     private var didOpenWindows = false
+    /// 等开窗口入口装好的（见 `LocalShellRestorer.finished`）。
+    private var installWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(client: LocalShellAgentClient = LocalShellService.shared.client, namespace: String = SSHSessionNamespace.current,
          gateTimeout: Duration = .seconds(15), reopenDelay: Duration = .milliseconds(500)) {
@@ -46,6 +48,8 @@ final class SSHSessionRestorer {
                  openWindow: @escaping @MainActor (_ kind: String, _ windowID: UUID, _ serverID: UUID) -> Void) {
         self.knownServerIDs = knownServerIDs
         self.openWindow = openWindow
+        for waiter in installWaiters { waiter.resume() }
+        installWaiters = []
     }
 
     /// 幂等。`install` 之前不开窗口，装好之后再调一次。
@@ -84,7 +88,22 @@ final class SSHSessionRestorer {
 
     /// 接回完成后返回。手机接入前等它，否则会看到一份缺了终端的列表。
     func finished() async {
-        guard !BackgroundLaunchMode.isRunningInTestHost, openWindow != nil else { return }
+        guard !BackgroundLaunchMode.isRunningInTestHost else { return }
+        // 入口还没装好不等于「没有要接回的」：等它装好（最多 `gateTimeout`）。
+        if openWindow == nil {
+            let timeout = gateTimeout
+            let timer = Task { [weak self] in
+                guard (try? await Task.sleep(for: timeout)) != nil else { return }
+                guard let self else { return }
+                for waiter in self.installWaiters { waiter.resume() }
+                self.installWaiters = []
+            }
+            await withCheckedContinuation { continuation in
+                if openWindow != nil { continuation.resume() } else { installWaiters.append(continuation) }
+            }
+            timer.cancel()
+        }
+        guard openWindow != nil else { return }
         restoreIfNeeded()
         await takeInventory()
         let deadline = ContinuousClock.now + gateTimeout

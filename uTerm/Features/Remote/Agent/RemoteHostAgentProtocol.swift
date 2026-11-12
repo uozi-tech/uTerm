@@ -239,6 +239,9 @@ nonisolated enum RemoteHostAppRequest: Codable, Sendable {
     case persistRelayConfig(Data?)
     /// 凭邀请经公网配上的设备：替它勾上「允许经公网接入」。
     case grantInternetAccess(UUID)
+    /// 有设备要用终端了（要会话列表、要接入、或 App 回来时还有暂停着的接入）：请 App 把上次留下的终端接回来，
+    /// 接完再报 `restored`。后台唤起的 App 平时不接回（接回要开窗口），等这条请求。
+    case restoreSessions
 }
 
 nonisolated struct RemoteHostAppReply: Codable, Sendable {

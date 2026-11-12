@@ -15,6 +15,8 @@ final class RemoteForwardedSessions: RemoteHostSessions {
     private var attachments: [String: ForwardedAttachment] = [:]
     private var attachWaiters: [String: CheckedContinuation<String?, Never>] = [:]
     private var requestTimeout: Duration
+    /// 这一次 App 连接上已经请它接回过终端。
+    private var restoreRequested = false
 
     /// 此刻连着的 App（nil = App 不在）。
     private(set) var app: (any RemoteHostAppXPC)?
@@ -29,6 +31,16 @@ final class RemoteForwardedSessions: RemoteHostSessions {
     /// App 连上了（或换了一条连接）。会话等它报「接回完成」再用。
     func appConnected(_ app: any RemoteHostAppXPC) {
         self.app = app
+        restoreRequested = false
+        // 有暂停着的接入（App 重启前有设备在用终端）：马上请 App 接回，不等设备再来要。
+        if !attachments.isEmpty { requestRestore() }
+    }
+
+    /// 请 App 把终端接回来（每条连接一次）。App 接完会报 `restored`。
+    private func requestRestore() {
+        guard let app, !isRestored, !restoreRequested else { return }
+        restoreRequested = true
+        app.request(RemoteHostAgentJSON.encode(RemoteHostAppRequest.restoreSessions)) { _ in }
     }
 
     /// App 走了：暂停所有接入，在途的接入请求按失败处理。
@@ -91,8 +103,10 @@ final class RemoteForwardedSessions: RemoteHostSessions {
 
     func waitUntilRestored() async {
         guard !isRestored else { return }
+        requestRestore()
         let id = UUID()
-        let timeout = requestTimeout
+        // App 在：接回要开窗口、回放 holder 里的字节，给足时间；App 不在：等它回来的时间。
+        let timeout = app != nil ? requestTimeout * 3 : requestTimeout
         // App 迟迟不回来：到点放行，接入随后以「App 不在」失败，对端可以重试。
         let timer = Task { [weak self] in
             guard (try? await Task.sleep(for: timeout)) != nil else { return }

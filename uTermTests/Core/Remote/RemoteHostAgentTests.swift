@@ -76,12 +76,12 @@ final class RemoteHostAgentTests: XCTestCase {
         }
 
         /// 起一个 App 侧的桥（App 启动 / 重启）。
-        func startApp() {
+        func startApp(restoration: (@MainActor () async -> Void)? = nil, restoresEagerly: Bool = true) {
             let endpoint = listener.endpoint
             let bridge = RemoteHostAgentBridge(
-                server: appServer, registry: registry, settings: settings, restoration: nil,
+                server: appServer, registry: registry, settings: settings, restoration: restoration,
                 transport: .init(makeConnection: { NSXPCConnection(listenerEndpoint: endpoint) }, serverRequirement: nil),
-                appBuild: "agent-test")
+                restoresEagerly: restoresEagerly, appBuild: "agent-test")
             self.bridge = bridge
             bridge.start()
             bridge.settingsChanged()
@@ -164,6 +164,78 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertTrue(synced, "回来之后的输出照常同步")
         XCTAssertEqual(phone.pump.currentStats.rejectedSnapshots, 0)
         client.disconnect()
+    }
+
+    /// 2.1.1 实测（17:17）：`kill -9` 之后被命令行在后台唤起的 App 先连上远控进程，那时它还没把终端接回来
+    /// （后台唤起不开窗口、不接回），报了一份空的「已接回」列表，远控进程据此把手机上的终端关掉了。现在后台唤起的 App
+    /// 等远控进程来要再接回，接回之前远控进程照旧用上一份列表，接回之后画面续上。
+    func test_background_app_restores_on_request_and_phone_terminal_resumes() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(rig.agentServer?.port)
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !rig.appServer.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        rig.appServer.approvePairing(try XCTUnwrap(rig.appServer.pairingRequests.first?.id))
+        await connecting.value
+        defer { client.disconnect() }
+        let listed = await waitUntil { client.sessions.map(\.id) == [rig.sessionID] }
+        XCTAssertTrue(listed)
+        let backend = RemoteTerminalBackend(client: client, sessionID: rig.sessionID)
+        let phone = MirrorPhone(cols: 64, rows: 20)
+        await backend.resize(cols: 64, rows: 20)
+        try await backend.connect()
+        phone.start(backend.outputItems)
+        defer { phone.stop() }
+        let mac = rig.session.shadow
+        let mixed = try TerminalCorpus.bytes("mixed")
+        await emit(mixed, to: rig.macBackend)
+        let mirrored = await waitUntil { mac.mirrorDifferences(from: phone.shadow).isEmpty && mac.totalFedBytes >= mixed.count }
+        XCTAssertTrue(mirrored)
+        let exitStream = backend.exitStream
+        let ended = Task { () -> Bool in
+            for await _ in exitStream { return true }
+            return false
+        }
+
+        // App 被结束；新的 App 在后台起来，注册表里还没有这个会话（还没接回）。
+        rig.bridge?.simulateAppTermination()
+        let entry = try XCTUnwrap(rig.registry.entries.first { $0.id == rig.sessionID })
+        rig.registry.unregister(id: rig.sessionID)
+        let shell = try TerminalCorpus.bytes("shell")
+        await emit(shell, to: rig.macBackend)
+        let requested = Recorder()
+        let release = AsyncGate()
+        let registry = rig.registry, session = rig.session
+        rig.startApp(restoration: {
+            requested.append("restore")
+            await release.wait()
+            registry.register(entry, session: session)
+        }, restoresEagerly: false)
+
+        let asksToRestore = await waitUntil(5) { !requested.items.isEmpty }
+        XCTAssertTrue(asksToRestore, "有暂停着的接入：远控进程应请后台唤起的 App 把终端接回来")
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(client.sessions.map(\.id), [rig.sessionID], "接回之前远控进程照旧用上一份列表，不报会话没了")
+        XCTAssertEqual(client.state, .connected)
+
+        let snapshotsBefore = phone.snapshots
+        release.open()
+        let resumed = await waitUntil(10) {
+            phone.snapshots > snapshotsBefore && mac.mirrorDifferences(from: phone.shadow).isEmpty
+                && mac.totalFedBytes >= mixed.count + shell.count
+        }
+        XCTAssertTrue(resumed, "接回之后画面续上：\(mac.mirrorDifferences(from: phone.shadow))")
+        ended.cancel()
+        XCTAssertEqual(client.state, .connected, "手机的终端没有结束")
+        let didEnd = await ended.value
+        XCTAssertFalse(didEnd, "手机的终端没有结束")
     }
 
     func test_service_stops_after_grace_when_app_does_not_return() async throws {
@@ -250,4 +322,22 @@ private final class Recorder: @unchecked Sendable {
     private var list: [String] = []
     func append(_ s: String) { lock.withLock { list.append(s) } }
     var items: [String] { lock.withLock { list } }
+}
+
+/// 测试里手动放行的闸门。
+@MainActor
+private final class AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        for waiter in waiters { waiter.resume() }
+        waiters = []
+    }
 }

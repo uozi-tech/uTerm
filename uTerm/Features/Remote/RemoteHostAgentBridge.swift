@@ -28,6 +28,10 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     private var agent: (any RemoteHostAgentXPC)?
     private var attachments: [String: AppSideAttachment] = [:]
     private var restored = false
+    private var restoration: Task<Void, Never>?
+    /// 一启动就接回终端（正常打开的 App 本来就在接回）。后台唤起的 App 等远控进程来要（`restoreSessions`）：
+    /// 接回要开窗口，没有设备要用终端时不该把窗口弹出来。
+    private let restoresEagerly: Bool
     private var sessionsPushScheduled = false
     private var reconnect: Task<Void, Never>?
     private var reconnectDelay: Duration = .milliseconds(250)
@@ -48,7 +52,9 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     init(server: RemoteHostServer, registry: TerminalSessionRegistry, settings: RemoteControlSettings,
          restoration: (@MainActor () async -> Void)?, transport: Transport,
+         restoresEagerly: Bool = !BackgroundLaunchMode.shouldStartHidden,
          appBuild: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") {
+        self.restoresEagerly = restoresEagerly
         self.server = server
         sessions = RemoteRegistrySessions(registry: registry, restoration: restoration)
         self.settings = settings
@@ -112,7 +118,13 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             orderChanged: { [weak self] in self?.scheduleSessionsPush() }))
         // 远控关着时不拉起远控进程：没必要让一个空闲的进程常驻。
         if settings.isEnabled { connect() }
-        Task { [weak self] in
+        if restoresEagerly { beginRestoration() }
+    }
+
+    /// 接回上次留下的终端，接完报 `restored`。只做一次。
+    private func beginRestoration() {
+        guard restoration == nil else { return }
+        restoration = Task { [weak self] in
             await self?.sessions.waitUntilRestored()
             guard let self else { return }
             self.restored = true
@@ -397,6 +409,9 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             return RemoteHostAppReply()
         case .grantInternetAccess(let id):
             server.grantInternetAccess(id)
+            return RemoteHostAppReply()
+        case .restoreSessions:
+            beginRestoration()
             return RemoteHostAppReply()
         }
     }
