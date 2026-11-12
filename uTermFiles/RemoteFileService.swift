@@ -251,8 +251,7 @@ nonisolated enum RemoteFileService {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
         let count = readlink(path, &buffer, Int(PATH_MAX))
         guard count >= 0 else { return nil }
-        buffer[count] = 0
-        return String(cString: buffer)
+        return String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     static func fileSize(_ path: String) throws -> Int64 {

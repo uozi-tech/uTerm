@@ -46,7 +46,7 @@ nonisolated extension RemoteFileService {
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_adddup2(&actions, writeEnd, 1)
         posix_spawn_file_actions_adddup2(&actions, writeEnd, 2)
-        if let directory { posix_spawn_file_actions_addchdir_np(&actions, directory) }
+        if let directory { posix_spawn_file_actions_addchdir(&actions, directory) }
 
         let cArguments = arguments.map { strdup($0) } + [nil]
         let cEnvironment = (environment ?? defaultEnvironment()).map { strdup($0) } + [nil]

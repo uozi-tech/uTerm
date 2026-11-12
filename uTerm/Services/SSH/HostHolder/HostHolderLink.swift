@@ -51,7 +51,7 @@ nonisolated final class HostHolderStreamPosition: Sendable {
 
     /// 交一项不属于会话输出的东西（还原检查点的快照、本端加的提示），位置不动。
     func deliverAside(_ item: TerminalOutputItem) {
-        state.withLock { _ in items.yield(item) }
+        state.withLock { _ in _ = items.yield(item) }
     }
 
     func set(_ value: UInt64) {
