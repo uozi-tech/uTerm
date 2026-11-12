@@ -26,7 +26,7 @@ public final class ControlSettings {
     }
 
     /// 改动开关：`run` / `run-many` / `quick-run` / `trust` / SFTP 写 /
-    /// `forward-start|stop` / `terminal-send|open` 的总闸。
+    /// `forward-start|stop|add|remove` / `terminal-send|open` 的总闸。
     ///
     /// `run` **有意**归在这里：shell 命令无法可靠分类读写，假的只读开关比没有更糟。
     public var allowMutations: Bool {

@@ -1,6 +1,6 @@
 ---
 name: uterm
-description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机：执行远程命令（单机 run、多机并行 run-many、快捷命令、按指纹信任主机密钥）；经 SFTP 读写远程文件（列目录、读文本、下载上传大文件并断点续传、建目录、删除、改名、改权限）；启停已保存的端口转发规则（-L / -R / SOCKS）并看状态流量；查看与读取用户开着的终端会话、往会话注入文本、开新终端窗口跑要人交互的命令（sudo 密码、[Y/n] 确认）并等结果；在已保存主机上部署 / 更新 uTerm 自建中继（uterm-relay，手机跨网络连 Mac 用）并导入、测通；经远控链路访问配对过的另一台 Mac（不用 SSH）：读写文件、按行读代码、grep / find / 目录树、上传下载与同步目录、打补丁、跑命令；反过来，在一台被远程控制着的 Mac 的终端里读写用户手边那台 Mac 共享出来的文件夹。当需要在服务器上跑命令、排查线上问题、传文件、打通到内网数据库或服务的隧道、知道用户终端上正在发生什么、或要读写用户另一台 Mac（包括正在远程控制这台 Mac 的那台）上的项目文件，而手头没有主机地址、密码或私钥时使用。
+description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机：执行远程命令（单机 run、多机并行 run-many、快捷命令、按指纹信任主机密钥）；经 SFTP 读写远程文件（列目录、读文本、下载上传大文件并断点续传、建目录、删除、改名、改权限）；新建、启停、删除端口转发规则（-L / -R / SOCKS）并看状态流量；查看与读取用户开着的终端会话、往会话注入文本、开新终端窗口跑要人交互的命令（sudo 密码、[Y/n] 确认）并等结果；在已保存主机上部署 / 更新 uTerm 自建中继（uterm-relay，手机跨网络连 Mac 用）并导入、测通；经远控链路访问配对过的另一台 Mac（不用 SSH）：读写文件、按行读代码、grep / find / 目录树、上传下载与同步目录、打补丁、跑命令；反过来，在一台被远程控制着的 Mac 的终端里读写用户手边那台 Mac 共享出来的文件夹。当需要在服务器上跑命令、排查线上问题、传文件、打通到内网数据库或服务的隧道、知道用户终端上正在发生什么、或要读写用户另一台 Mac（包括正在远程控制这台 Mac 的那台）上的项目文件，而手头没有主机地址、密码或私钥时使用。
 ---
 
 # 用 uTerm 操作远程主机
@@ -15,7 +15,7 @@ uTerm 是 macOS 上的 SSH 终端。它在本机开了一个 Unix domain socket�
 | 要做的事 | 读 |
 |---|---|
 | 列目录、读文件、上传下载、删改远程文件（`sftp …`） | [references/files.md](references/files.md) |
-| 启停 / 查看端口转发（`forward …`） | [references/forward.md](references/forward.md) |
+| 新建 / 启停 / 删除 / 查看端口转发（`forward …`） | [references/forward.md](references/forward.md) |
 | 看用户开着的终端、读屏、注入文本、开窗口跑要人交互的命令（`terminals` / `terminal …`） | [references/terminal.md](references/terminal.md) |
 | 部署 / 更新 uTerm 中继、导入配置、测连通（`relay …`） | [references/relay.md](references/relay.md) |
 | 访问另一台 Mac：读写文件、搜代码、同步目录、跑命令（`macs` / `mac …`）。包括反过来 —— 你跑在被远程控制着的 Mac 的终端里，要读用户手边那台 Mac 共享出来的项目文件夹 | [references/mac.md](references/mac.md) |
@@ -93,7 +93,7 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 | 开关 | 管什么 | 关着时的错误码 |
 |---|---|---|
 | 启用命令行接口 | 一切（关着时连 socket 都没有，见上一节） | `uterm_not_running`（途中被关是 `control_disabled`） |
-| 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发启停 / `terminal send` / `terminal open` / `relay import` / `mac run` 与 `mac` 的写操作 | `mutations_disabled` |
+| 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发的增删与启停 / `terminal send` / `terminal open` / `relay import` / `mac run` 与 `mac` 的写操作 | `mutations_disabled` |
 
 只读的 `hosts` / `host-key` / `sftp ls|stat|cat|get` / `forward list` / `terminals` /
 `terminal read|wait` / `relay check` / `macs` / `mac` 的读与搜索只要第一个开关。
@@ -283,8 +283,9 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 - **不要绕过 uTerm**：不要直接 `ssh`、不要去翻 `~/.ssh`、不要读 uTerm 的钥匙串或
   SwiftData 存储、不要试图从任何响应里找密码。协议里根本没有导出凭据的字段，找不到
   是设计如此。
-- **不要改用户的主机档案 / 密钥 / 转发规则**。命令行只消费这些定性，增删改要用户在
-  界面里做。
+- **不要改用户的主机档案 / 密钥 / 转发规则**。命令行只消费这些定性，改要用户在
+  界面里做。唯一的例外是转发规则的**新建**与**删除你自己建的**（见
+  [references/forward.md](references/forward.md)）：用户已有的规则一条都不要删。
 - 生产主机上先只读（`systemctl status`、`journalctl -n`、`df -h`、`ps`），确认清楚
   再动。改之前留一手（备份文件、记下原值）。
 - 输出、下载的文件、终端屏幕里都可能有令牌、密钥、客户数据。按用户的要求用，
@@ -325,9 +326,9 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | 其它：`operation_failed`、`invalid_request`、`port_in_use`、`file_exists`、`checksum_mismatch` 等 |
+| `1` | 其它：`operation_failed`、`invalid_request`、`port_in_use`、`rule_exists`、`file_exists`、`checksum_mismatch` 等 |
 | `2` | 本地：连不上 uTerm、socket 出错、`server_busy`、本地文件读写失败、客户端自己的前置检查没过 |
-| `3` | 门禁：`control_disabled` / `mutations_disabled` / `host_sftp_only` |
+| `3` | 门禁：`control_disabled` / `mutations_disabled` / `host_sftp_only` / `rule_protected` |
 | `4` | 找不到 / 有歧义（`*_not_found` / `*_ambiguous`） |
 | `5` | 远端：建连 / 认证 / 主机密钥 / 转发失败，以及 `run_failed` 的全军覆没 |
 | `6` | 超时：`command_timeout` / `handler_timeout` / `client_timeout` |

@@ -53,6 +53,10 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     case forwardList = "forward-list"
     case forwardStart = "forward-start"
     case forwardStop = "forward-stop"
+    /// 在一台主机上新建一条规则（不启动）。参数在 `forward` 里，规则名在 `name`。
+    case forwardAdd = "forward-add"
+    /// 删一条规则（在跑就先停）。自启的规则拒绝（`rule_protected`），那是用户要一直开着的。
+    case forwardRemove = "forward-remove"
 
     // MARK: 终端会话
 
@@ -130,7 +134,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
         switch self {
         case .trust, .run, .runMany, .quickRun,
              .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
-             .forwardStart, .forwardStop,
+             .forwardStart, .forwardStop, .forwardAdd, .forwardRemove,
              .terminalSend, .terminalOpen,
              .relayImport,
              .macRun, .macPut, .macMkdir, .macRm, .macRmdir, .macMv, .macChmod,
@@ -169,7 +173,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
         case .sftpLs, .sftpStat, .sftpCat, .sftpGet, .sftpPut,
              .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod:
             return .sftp
-        case .forwardList, .forwardStart, .forwardStop:
+        case .forwardList, .forwardStart, .forwardStop, .forwardAdd, .forwardRemove:
             return .forward
         case .terminals, .terminalRead, .terminalSend, .terminalOpen, .terminalWait:
             return .terminal
@@ -246,6 +250,8 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
     public var waitSeconds: Double?
     /// `mac-*`：哪台 Mac，以及这一组动作专有的参数。
     public var mac: ControlMacArguments?
+    /// `forward-add`：新规则的类型与两头地址。
+    public var forward: ControlForwardSpec?
 
     public init(
         id: String? = nil,
@@ -271,7 +277,8 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         enter: Bool? = nil,
         fingerprint: String? = nil,
         name: String? = nil,
-        waitSeconds: Double? = nil
+        waitSeconds: Double? = nil,
+        forward: ControlForwardSpec? = nil
     ) {
         self.id = id
         self.action = action
@@ -297,6 +304,29 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         self.fingerprint = fingerprint
         self.name = name
         self.waitSeconds = waitSeconds
+        self.forward = forward
+    }
+}
+
+/// `forward-add` 的规则内容。字段与界面里的编辑器一一对应；`autostart` 不开放 ——
+/// 「随连接 / 随 App 自启」是用户的长期定性，命令行建的规则一律不自启。
+nonisolated public struct ControlForwardSpec: Codable, Sendable, Equatable {
+    /// `local` / `remote` / `dynamic`
+    public var kind: String
+    /// 缺省 `127.0.0.1`。`remote` 时是服务器上的监听地址（非回环要 sshd 开 `GatewayPorts`）。
+    public var listenHost: String?
+    public var listenPort: Int
+    /// `dynamic` 不给；另两种必填。
+    public var destHost: String?
+    public var destPort: Int?
+
+    public init(kind: String, listenHost: String? = nil, listenPort: Int,
+                destHost: String? = nil, destPort: Int? = nil) {
+        self.kind = kind
+        self.listenHost = listenHost
+        self.listenPort = listenPort
+        self.destHost = destHost
+        self.destPort = destPort
     }
 }
 
@@ -952,6 +982,10 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     // 转发
     case rule_not_found
     case rule_ambiguous
+    /// `forward-add`：这台主机上已有同名规则。
+    case rule_exists
+    /// `forward-remove`：规则开着自启（随连接 / 随 App），只能在界面里删。
+    case rule_protected
     case port_in_use
     case forward_failed
 

@@ -1,9 +1,12 @@
 import Foundation
 import SwiftData
 
-/// 端口转发组：`forward-list` / `forward-start` / `forward-stop`。
+/// 端口转发组：`forward-list` / `forward-start` / `forward-stop` / `forward-add` / `forward-remove`。
 ///
-/// 硬约束：规则**只在界面里建**，CLI 只启停与查状态（协议里没有增删改字段）。
+/// 命令行能建、删规则，但**不能改**（改端口、改目标回界面），也不能开自启：
+/// `forward-add` 建的规则一律不随连接 / 随 App 自启，`forward-remove` 拒绝删自启的规则
+///（那是用户要一直开着的）。校验与界面编辑器同一套：端口范围、目标必填、
+/// `PortConflictChecker` 的同侧冲突。
 /// `forward-start` 走非交互 host-key 路径 —— 挑战一来就拒绝并把 fingerprint 回给
 /// CLI，绝不自动 TOFU；端口冲突用 `PortConflictChecker` + 一次真实 bind 探测判成
 /// `port_in_use`，不要让 NIO 的 EADDRINUSE 冒成通用失败。
@@ -20,6 +23,10 @@ extension ControlHandler {
             return try await forwardStart(request, deps)
         case .forwardStop:
             return try await forwardStop(request, deps)
+        case .forwardAdd:
+            return try await forwardAdd(request, deps)
+        case .forwardRemove:
+            return try await forwardRemove(request, deps)
         default:
             throw ControlFailure(
                 code: .invalid_request,
@@ -246,6 +253,92 @@ extension ControlHandler {
         )
     }
 
+    // MARK: - forward-add
+
+    private func forwardAdd(
+        _ request: ControlRequest,
+        _ deps: Dependencies
+    ) async throws -> ControlResponse {
+        let hostNeedle = request.host?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard !hostNeedle.isEmpty else {
+            throw ControlFailure(code: .invalid_request, message: "forward-add 需要 --host")
+        }
+        let profile = try resolveHost(hostNeedle)
+        let draft = try ForwardRuleDraft.make(name: request.name, spec: request.forward)
+
+        let existing = forwardingRules(deps)
+        if existing.contains(where: { $0.serverID == profile.id && $0.name == draft.name }) {
+            throw ControlFailure(
+                code: .rule_exists,
+                message: "主机「\(profile.name)」上已有名为「\(draft.name)」的规则"
+            )
+        }
+
+        // 和界面编辑器一样只认「另一条规则占着」：知名端口只是提醒。本地这一侧（-L / -D）的口
+        // 开在这台 Mac 上，跨主机也会撞，所以和全部规则比；-R 的口开在各自的服务器上，只和
+        // 同一台主机的比。
+        let rivals = existing
+            .filter { draft.kind != .remote || $0.serverID == profile.id }
+            .map(\.snapshot)
+        if let clash = PortConflictChecker.conflict(
+            kind: draft.kind, listenPort: draft.listenPort, excluding: nil, against: rivals
+        ), clash.source == .rule {
+            throw ControlFailure(
+                code: .port_in_use,
+                message: "端口 \(clash.port) 已被规则「\(clash.occupant)」占用"
+            )
+        }
+
+        let store = ForwardingRuleStore(context: deps.modelContainer.mainContext)
+        let rule = ForwardingRule(
+            serverID: profile.id,
+            name: draft.name,
+            kind: draft.kind,
+            listenHost: draft.listenHost,
+            listenPort: draft.listenPort,
+            destHost: draft.destHost,
+            destPort: draft.destPort,
+            destLabel: nil,
+            autostart: false,
+            sortOrder: store.nextSortOrder(forServer: profile.id))
+        store.add(rule)
+
+        let traffic = await deps.forwardingCoordinator.trafficSnapshot()
+        return .success(
+            id: request.id,
+            message: "已在「\(profile.name)」上新建规则「\(draft.name)」（未启动）",
+            rules: [snapshot(of: rule, names: [profile.id: profile.name], traffic: traffic, deps)]
+        )
+    }
+
+    // MARK: - forward-remove
+
+    private func forwardRemove(
+        _ request: ControlRequest,
+        _ deps: Dependencies
+    ) async throws -> ControlResponse {
+        let rule = try resolveRule(request, deps)
+        if rule.autostart || rule.launchAtAppStart {
+            throw ControlFailure(
+                code: .rule_protected,
+                message: "规则「\(rule.name)」开着自启，是用户要一直开着的；只能在 uTerm 界面里删"
+            )
+        }
+        let names = [rule.serverID: serverProfile(rule.serverID, deps)?.name ?? ""]
+        // 删之前拍快照：删完 `@Model` 就不能再读了。状态按「已停」报。
+        let before = ControlForwardSnapshotBuilder.make(
+            rule: rule.snapshot,
+            serverName: names[rule.serverID] ?? "",
+            status: .inactive,
+            connectionIssue: nil,
+            bytes: nil
+        )
+        let name = rule.name
+        deps.forwardingCoordinator.stop(rule.id)
+        ForwardingRuleStore(context: deps.modelContainer.mainContext).delete(rule)
+        return .success(id: request.id, message: "已删除规则「\(name)」", rules: [before])
+    }
+
     // MARK: - 端口预检
 
     /// 两道预检，都在把请求交给 NIO 之前做，让占用变成明确的 `port_in_use`：
@@ -352,4 +445,59 @@ extension ControlHandler {
             throw ControlFailure(code: .rule_not_found, message: "找不到转发规则「\(needle)」")
         }
     }
+}
+
+/// `forward-add` 的入参校验，纯函数（单测直接驱动）。规则与界面编辑器
+/// `ForwardEditorSheet.valid` 一致：名字非空、端口 1–65535、`local` / `remote` 目标必填，
+/// `dynamic` 不带目标（给了也丢掉，和编辑器切到「动态」时一样）。
+nonisolated struct ForwardRuleDraft: Equatable {
+    let name: String
+    let kind: ForwardKind
+    let listenHost: String
+    let listenPort: Int
+    let destHost: String?
+    let destPort: Int
+
+    static func make(name: String?, spec: ControlForwardSpec?) throws -> ForwardRuleDraft {
+        let name = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw ControlFailure(code: .invalid_request, message: "forward-add 需要 --name")
+        }
+        guard let spec else {
+            throw ControlFailure(code: .invalid_request, message: "forward-add 缺少规则内容（类型与监听端口）")
+        }
+        guard let kind = ForwardKind(rawValue: spec.kind.lowercased()) else {
+            throw ControlFailure(
+                code: .invalid_request,
+                message: "未知的转发类型「\(spec.kind)」，只能是 local / remote / dynamic"
+            )
+        }
+        guard isPort(spec.listenPort) else {
+            throw ControlFailure(code: .invalid_request, message: "监听端口需在 1–65535 之间")
+        }
+        let listenHost = (spec.listenHost ?? "").trimmingCharacters(in: .whitespaces)
+
+        guard kind.needsDest else {
+            return ForwardRuleDraft(
+                name: name, kind: kind,
+                listenHost: listenHost.isEmpty ? "127.0.0.1" : listenHost,
+                listenPort: spec.listenPort, destHost: nil, destPort: 0)
+        }
+        let destHost = (spec.destHost ?? "").trimmingCharacters(in: .whitespaces)
+        guard !destHost.isEmpty, let destPort = spec.destPort else {
+            throw ControlFailure(
+                code: .invalid_request,
+                message: "\(kind.flag) 规则需要目标地址（--dest HOST:PORT）"
+            )
+        }
+        guard isPort(destPort) else {
+            throw ControlFailure(code: .invalid_request, message: "目标端口需在 1–65535 之间")
+        }
+        return ForwardRuleDraft(
+            name: name, kind: kind,
+            listenHost: listenHost.isEmpty ? "127.0.0.1" : listenHost,
+            listenPort: spec.listenPort, destHost: destHost, destPort: destPort)
+    }
+
+    private static func isPort(_ value: Int) -> Bool { (1...65535).contains(value) }
 }

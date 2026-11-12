@@ -288,12 +288,28 @@ def build_parser():
     p.add_argument("mode", help="八进制，如 644")
 
     # --- forward ---
-    forward = sub.add_parser("forward", parents=[shared], help="端口转发规则的启停")
+    forward = sub.add_parser("forward", parents=[shared], help="端口转发规则的增删与启停")
     forward_sub = forward.add_subparsers(dest="forward_action", required=True)
-    forward_sub.add_parser("list", parents=[shared], help="列出规则与运行状态")
-    for name, help_text in (("start", "启动一条规则"), ("stop", "停掉一条规则")):
+    p = forward_sub.add_parser("list", parents=[shared], help="列出规则与运行状态")
+    p.add_argument("--host", "-H", help="只列这台主机的规则")
+    for name, help_text in (
+        ("start", "启动一条规则"),
+        ("stop", "停掉一条规则"),
+        ("remove", "删一条规则（在跑就先停；自启的规则拒绝）"),
+    ):
         p = forward_sub.add_parser(name, parents=[shared], help=help_text)
         p.add_argument("--rule", "-r", required=True, help="规则名或 UUID")
+        p.add_argument("--host", "-H", help="只在这台主机的规则里找（同名规则跨主机时用）")
+
+    p = forward_sub.add_parser("add", parents=[shared], help="在一台主机上新建一条规则（不启动）")
+    p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+    p.add_argument("--name", "-n", required=True, help="规则名（同一台主机上不能重名）")
+    p.add_argument("--kind", "-k", required=True, choices=("local", "remote", "dynamic"),
+                   help="local = -L，remote = -R，dynamic = -D（SOCKS5）")
+    p.add_argument("--listen", "-l", required=True, metavar="[HOST:]PORT",
+                   help="监听地址。local / dynamic 开在本机，remote 开在服务器上；HOST 缺省 127.0.0.1")
+    p.add_argument("--dest", "-d", metavar="HOST:PORT",
+                   help="目标地址：local 是服务器能到的地址，remote 是本机能到的地址；dynamic 不给")
 
     # --- terminal ---
     add("terminals", "列出所有窗口里的终端会话")
@@ -527,6 +543,44 @@ def transfer_options(p, force_help):
     return p
 
 
+def parse_endpoint(text, flag, need_host):
+    """`PORT` / `HOST:PORT` / `[IPv6]:PORT` → (host 或 None, port)。"""
+    text = (text or "").strip()
+    host = None
+    port_text = text
+    if text.startswith("["):
+        close = text.find("]")
+        if close < 0 or text[close + 1:close + 2] != ":":
+            fail("%s 写成 [IPv6]:PORT：%s" % (flag, text))
+        host, port_text = text[1:close], text[close + 2:]
+    elif ":" in text:
+        if text.count(":") > 1:
+            fail("%s 里的 IPv6 地址要加方括号，如 [::1]:8080：%s" % (flag, text))
+        host, port_text = text.rsplit(":", 1)
+    if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+        fail("%s 的端口需在 1–65535 之间：%s" % (flag, text))
+    if need_host and not host:
+        fail("%s 要写成 HOST:PORT：%s" % (flag, text))
+    return host or None, int(port_text)
+
+
+def forward_spec(args):
+    listen_host, listen_port = parse_endpoint(args.listen, "--listen", need_host=False)
+    spec = {"kind": args.kind, "listenPort": listen_port}
+    if listen_host:
+        spec["listenHost"] = listen_host
+    if args.kind == "dynamic":
+        if args.dest:
+            fail("dynamic（SOCKS5）规则没有固定目标，不要给 --dest")
+        return spec
+    if not args.dest:
+        fail("%s 规则需要 --dest HOST:PORT" % args.kind)
+    dest_host, dest_port = parse_endpoint(args.dest, "--dest", need_host=True)
+    spec["destHost"] = dest_host
+    spec["destPort"] = dest_port
+    return spec
+
+
 def resolved_action(args):
     """把 `sftp ls` / `forward list` / `terminal read` 拼成协议里的 kebab action。"""
     for group in ("sftp", "forward", "terminal", "relay", "mac"):
@@ -577,6 +631,9 @@ def make_request(args):
         command = command_string(args, optional=True)
         if command is not None:
             request["command"] = command
+    if action == "forward-add":
+        request["name"] = args.name
+        request["forward"] = forward_spec(args)
     if action == "quick-run":
         # 协议里 `name` 是按名字指定的显式入口，`command` 也接受「快捷命令的名字 / id」。
         # 两个都填，服务端读哪个都对。
@@ -792,7 +849,7 @@ def exit_code_for(response):
                 "server_busy", "local_read_failed", "local_write_failed",
                 "local_failure"):
         return EXIT_LOCAL
-    if code in ("control_disabled", "mutations_disabled", "host_sftp_only"):
+    if code in ("control_disabled", "mutations_disabled", "host_sftp_only", "rule_protected"):
         return EXIT_GATED
     if code.endswith("_not_found") or code.endswith("_ambiguous"):
         return EXIT_NOT_FOUND

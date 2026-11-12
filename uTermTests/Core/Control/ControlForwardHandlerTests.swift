@@ -271,6 +271,193 @@ final class ControlForwardHandlerTests: XCTestCase {
         }
     }
 
+    // MARK: - forward-add
+
+    private func addRequest(
+        host: String? = "prod-db",
+        name: String? = "k3s-to-mac",
+        kind: String = "remote",
+        listenHost: String? = "192.168.31.122",
+        listenPort: Int = 18_443,
+        destHost: String? = "127.0.0.1",
+        destPort: Int? = 18_443
+    ) -> ControlRequest {
+        ControlRequest(
+            action: .forwardAdd, host: host, name: name,
+            forward: ControlForwardSpec(
+                kind: kind, listenHost: listenHost, listenPort: listenPort,
+                destHost: destHost, destPort: destPort))
+    }
+
+    func testAddCreatesInactiveRuleWithoutAutostart() async throws {
+        let response = await handler.handle(addRequest())
+
+        XCTAssertTrue(response.ok, response.message)
+        let rules = ForwardingRuleStore(context: container.mainContext).rules(forServer: server.id)
+        XCTAssertEqual(rules.count, 1)
+        let rule = try XCTUnwrap(rules.first)
+        XCTAssertEqual(rule.name, "k3s-to-mac")
+        XCTAssertEqual(rule.kind, .remote)
+        XCTAssertEqual(rule.listenHost, "192.168.31.122")
+        XCTAssertEqual(rule.listenPort, 18_443)
+        XCTAssertEqual(rule.destHost, "127.0.0.1")
+        XCTAssertEqual(rule.destPort, 18_443)
+        XCTAssertFalse(rule.autostart, "命令行建的规则不自启")
+        XCTAssertFalse(rule.launchAtAppStart)
+        XCTAssertEqual(coordinator.status(rule.id), .inactive, "只建不启")
+
+        let snap = try XCTUnwrap(response.rules?.first)
+        XCTAssertEqual(snap.id, rule.id.uuidString)
+        XCTAssertEqual(snap.serverName, "prod-db")
+        XCTAssertEqual(snap.status, "inactive")
+    }
+
+    func testAddAppendsAfterExistingRules() async throws {
+        try makeRule(name: "pg", listenPort: 15_432, sortOrder: 4)
+
+        let response = await handler.handle(addRequest())
+
+        XCTAssertTrue(response.ok, response.message)
+        let rules = ForwardingRuleStore(context: container.mainContext).rules(forServer: server.id)
+        XCTAssertEqual(rules.map(\.name), ["pg", "k3s-to-mac"])
+        XCTAssertEqual(rules.last?.sortOrder, 5)
+    }
+
+    func testAddDefaultsListenHostToLoopbackAndDropsDynamicDest() async throws {
+        let response = await handler.handle(addRequest(
+            name: "socks", kind: "dynamic", listenHost: nil, listenPort: 11_080,
+            destHost: "ignored", destPort: 1))
+
+        XCTAssertTrue(response.ok, response.message)
+        let rule = try XCTUnwrap(
+            ForwardingRuleStore(context: container.mainContext).rules(forServer: server.id).first)
+        XCTAssertEqual(rule.listenHost, "127.0.0.1")
+        XCTAssertNil(rule.destHost)
+        XCTAssertEqual(rule.destPort, 0)
+    }
+
+    func testAddNeedsMutations() async throws {
+        settings.allowMutations = false
+        let response = await handler.handle(addRequest())
+        XCTAssertEqual(response.code, ControlErrorCode.mutations_disabled.rawValue)
+        XCTAssertTrue(ForwardingRuleStore(context: container.mainContext).allRules().isEmpty)
+    }
+
+    func testAddRejectsInvalidInput() async throws {
+        let cases: [(ControlRequest, String)] = [
+            (addRequest(host: nil), "缺主机"),
+            (addRequest(name: "  "), "缺名字"),
+            (ControlRequest(action: .forwardAdd, host: "prod-db", name: "x"), "缺规则内容"),
+            (addRequest(kind: "sideways"), "未知类型"),
+            (addRequest(listenPort: 0), "监听端口越界"),
+            (addRequest(listenPort: 70_000), "监听端口越界"),
+            (addRequest(destHost: nil), "缺目标"),
+            (addRequest(destPort: nil), "缺目标端口"),
+            (addRequest(destPort: 65_536), "目标端口越界"),
+        ]
+        for (request, label) in cases {
+            let response = await handler.handle(request)
+            XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue, label)
+        }
+        XCTAssertTrue(ForwardingRuleStore(context: container.mainContext).allRules().isEmpty)
+    }
+
+    func testAddUnknownHostIsHostNotFound() async throws {
+        let response = await handler.handle(addRequest(host: "nope"))
+        XCTAssertEqual(response.code, ControlErrorCode.host_not_found.rawValue)
+    }
+
+    func testAddRejectsDuplicateNameOnSameHostOnly() async throws {
+        try makeRule(name: "k3s-to-mac", listenPort: 15_432)
+        let other = ServerProfile()
+        other.name = "staging-db"
+        other.host = "192.0.2.21"
+        container.mainContext.insert(other)
+        try container.mainContext.save()
+
+        let clash = await handler.handle(addRequest())
+        XCTAssertEqual(clash.code, ControlErrorCode.rule_exists.rawValue)
+
+        let elsewhere = await handler.handle(addRequest(host: "staging-db"))
+        XCTAssertTrue(elsewhere.ok, "别的主机上可以同名：\(elsewhere.message)")
+    }
+
+    /// 本机这一侧（-L / -D）开在这台 Mac 上，跨主机也撞；服务器那一侧（-R）只和同一台主机比。
+    func testAddPortConflictFollowsTheBindingSide() async throws {
+        let other = ServerProfile()
+        other.name = "staging-db"
+        other.host = "192.0.2.21"
+        container.mainContext.insert(other)
+        try container.mainContext.save()
+        try makeRule(name: "pg", kind: .local, listenPort: 15_432, serverID: other.id)
+        try makeRule(name: "r-other", kind: .remote, listenPort: 18_443, serverID: other.id,
+                     sortOrder: 1)
+
+        let local = await handler.handle(addRequest(
+            name: "pg2", kind: "local", listenHost: nil, listenPort: 15_432,
+            destHost: "10.0.0.2", destPort: 5432))
+        XCTAssertEqual(local.code, ControlErrorCode.port_in_use.rawValue, local.message)
+
+        let remote = await handler.handle(addRequest())
+        XCTAssertTrue(remote.ok, "别的服务器上的 -R 不冲突：\(remote.message)")
+
+        let sameServer = await handler.handle(addRequest(name: "again"))
+        XCTAssertEqual(sameServer.code, ControlErrorCode.port_in_use.rawValue)
+    }
+
+    /// 知名端口只是提醒，和界面编辑器一样不拦。
+    func testAddAllowsWellKnownPort() async throws {
+        let response = await handler.handle(addRequest(
+            name: "airplay", kind: "local", listenHost: nil, listenPort: 5000,
+            destHost: "10.0.0.2", destPort: 5000))
+        XCTAssertTrue(response.ok, response.message)
+    }
+
+    // MARK: - forward-remove
+
+    func testRemoveStopsAndDeletesRule() async throws {
+        let rule = try makeRule(name: "pg", listenPort: 15_432)
+        let id = rule.id
+        coordinator.setStatusForTesting(.active, for: id)
+
+        let response = await handler.handle(
+            ControlRequest(action: .forwardRemove, rule: "pg"))
+
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(coordinator.status(id), .inactive)
+        XCTAssertTrue(ForwardingRuleStore(context: container.mainContext).allRules().isEmpty)
+        XCTAssertEqual(response.rules?.first?.id, id.uuidString)
+        XCTAssertEqual(response.rules?.first?.name, "pg")
+    }
+
+    func testRemoveRefusesAutostartRules() async throws {
+        let connection = try makeRule(name: "on-connect", listenPort: 15_432)
+        connection.autostart = true
+        let app = try makeRule(name: "on-launch", listenPort: 15_433, sortOrder: 1)
+        app.launchAtAppStart = true
+        try container.mainContext.save()
+
+        for name in ["on-connect", "on-launch"] {
+            let response = await handler.handle(
+                ControlRequest(action: .forwardRemove, rule: name))
+            XCTAssertEqual(response.code, ControlErrorCode.rule_protected.rawValue, name)
+        }
+        XCTAssertEqual(ForwardingRuleStore(context: container.mainContext).allRules().count, 2)
+    }
+
+    func testRemoveNeedsMutationsAndAKnownRule() async throws {
+        let missing = await handler.handle(
+            ControlRequest(action: .forwardRemove, rule: "nope"))
+        XCTAssertEqual(missing.code, ControlErrorCode.rule_not_found.rawValue)
+
+        try makeRule(name: "pg", listenPort: 15_432)
+        settings.allowMutations = false
+        let gated = await handler.handle(
+            ControlRequest(action: .forwardRemove, rule: "pg"))
+        XCTAssertEqual(gated.code, ControlErrorCode.mutations_disabled.rawValue)
+        XCTAssertEqual(ForwardingRuleStore(context: container.mainContext).allRules().count, 1)
+    }
+
     // MARK: - forward-stop
 
     func testStopIsIdempotentWhenRuleIsNotRunning() async throws {

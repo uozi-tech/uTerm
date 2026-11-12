@@ -251,7 +251,7 @@ final class ControlProtocolTests: XCTestCase {
         let mutating: Set<ControlAction> = [
             .trust, .run, .runMany, .quickRun,
             .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
-            .forwardStart, .forwardStop,
+            .forwardStart, .forwardStop, .forwardAdd, .forwardRemove,
             .terminalSend, .terminalOpen,
             .relayImport,
             // 远程 Mac：跑命令与一切写操作。`mac-xattr` 读写共用一个动作，写在 handler 里补判。

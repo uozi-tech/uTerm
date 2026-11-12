@@ -113,7 +113,7 @@ DEFAULT_PAYLOADS = {
                                 "destHost": "10.0.0.9", "destPort": 5432,
                                 "autostart": True, "status": "active",
                                 "bytesIn": 100, "bytesOut": 200}]},
-    "forward-start": {}, "forward-stop": {},
+    "forward-start": {}, "forward-stop": {}, "forward-add": {}, "forward-remove": {},
     "terminals": {"terminals": [{"id": "7A2B", "serverID": HOST["id"],
                                  "serverName": "prod-web", "windowKind": "workspace",
                                  "title": "~ — deploy@prod-web",
@@ -778,6 +778,33 @@ def exercise(server, root, rejecting):
     equal(last(server)["rule"], "pg", "forward-start 用 rule")
     run_cli(server, ["forward", "stop", "-r", "pg"])
     equal(last(server)["action"], "forward-stop", "forward-stop")
+    run_cli(server, ["forward", "stop", "-r", "pg", "-H", "prod-web"])
+    equal(last(server)["host"], "prod-web", "forward-stop 可按主机收窄")
+    run_cli(server, ["forward", "add", "-H", "prod-web", "-n", "k3s", "--kind", "remote",
+                     "--listen", "192.168.31.122:18443", "--dest", "127.0.0.1:18443"])
+    equal(last(server)["action"], "forward-add", "forward-add")
+    equal(last(server)["name"], "k3s", "forward-add 用 name")
+    equal(last(server)["forward"], {"kind": "remote", "listenHost": "192.168.31.122",
+                                    "listenPort": 18443, "destHost": "127.0.0.1",
+                                    "destPort": 18443}, "forward-add 的规则内容")
+    run_cli(server, ["forward", "add", "-H", "prod-web", "-n", "pg", "--kind", "local",
+                     "--listen", "15432", "--dest", "[fd00::9]:5432"])
+    equal(last(server)["forward"], {"kind": "local", "listenPort": 15432,
+                                    "destHost": "fd00::9", "destPort": 5432},
+          "监听只给端口、目标 IPv6 加方括号")
+    run_cli(server, ["forward", "add", "-H", "prod-web", "-n", "s", "--kind", "dynamic",
+                     "--listen", "1080"])
+    equal(last(server)["forward"], {"kind": "dynamic", "listenPort": 1080}, "dynamic 无目标")
+    before = len(server.requests)
+    for bad in (["--kind", "local", "--listen", "15432"],
+                ["--kind", "dynamic", "--listen", "1080", "--dest", "a:1"],
+                ["--kind", "local", "--listen", "99999", "--dest", "a:1"],
+                ["--kind", "local", "--listen", "1", "--dest", "5432"],
+                ["--kind", "local", "--listen", "::1:80", "--dest", "a:1"]):
+        run_cli(server, ["forward", "add", "-H", "prod-web", "-n", "x"] + bad, expect_exit=2)
+    equal(len(server.requests), before, "参数不对的 add 不发请求")
+    run_cli(server, ["forward", "remove", "-r", "k3s"])
+    equal(last(server)["action"], "forward-remove", "forward-remove")
 
     run_cli(server, ["terminals", "--format", "table"])
     equal(last(server)["action"], "terminals", "terminals")
