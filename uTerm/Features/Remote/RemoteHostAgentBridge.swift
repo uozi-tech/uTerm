@@ -323,7 +323,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     func attach(_ id: String, _ request: RemoteHostAgentAttach) {
         guard let agent, attachments[id] == nil else { return }
         let pump = AppSidePump(id: id, agent: agent)
-        Task {
+        let sessions = sessions
+        Task { [weak self] in
             let result = await sessions.attach(RemoteHostAttachRequest(
                 sessionID: request.sessionID, cols: request.cols, rows: request.rows, controller: request.controller,
                 settleTimeout: request.settleTimeout, onReadable: { pump.drain() }))
@@ -331,7 +332,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             case .failure(let error):
                 agent.terminalAttached(id, error: error.message)
             case .success(let handle):
-                guard let current = self.agent, current === agent else {
+                guard let self, let current = self.agent, current === agent else {
                     handle.detach()
                     return
                 }
