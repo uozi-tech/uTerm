@@ -95,6 +95,12 @@ enum ReopenWindowPicker {
         let candidates = windows.filter { !($0 is NSPanel) }
         return candidates.first(where: \.isVisible) ?? candidates.first(where: \.isMiniaturized)
     }
+
+    /// 后台唤起时窗口在视图出现之前就被藏起来了（`hideAll` 早于 SwiftUI 第一次布局），开窗入口因此一直没装上。
+    /// 这时没有入口可调，只能把 SwiftUI 已经建好、藏着的窗口拿出来：它的视图一出现就会装上入口。
+    static func pickHidden(_ windows: [NSWindow]) -> NSWindow? {
+        windows.first { !($0 is NSPanel) && $0.styleMask.contains(.titled) }
+    }
 }
 
 /// 转入后台时藏起来的窗口。`orderOut` 后的窗口和已关闭的窗口外观上分不开，只能自己记。
@@ -186,7 +192,11 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// 后台唤起的实例已经被要求露出界面（用户打开了 uTerm，或远控要用终端）。之后装好开窗入口时要接回终端。
+    private(set) static var hasShownGUI = false
+
     static func showGUI() {
+        hasShownGUI = true
         LocalShellRestorer.shared.restoreIfNeeded()
         SSHSessionRestorer.shared.restoreIfNeeded()
         NSApp.setActivationPolicy(.regular)
@@ -194,8 +204,10 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
         backgroundedWindows.restore()
         if let window = ReopenWindowPicker.pick(frontToBack: NSApp.orderedWindows) {
             window.makeKeyAndOrderFront(nil)
+        } else if let openWelcome {
+            openWelcome()
         } else {
-            openWelcome?()
+            ReopenWindowPicker.pickHidden(NSApp.windows)?.makeKeyAndOrderFront(nil)
         }
     }
 

@@ -159,6 +159,11 @@ struct uTermApp: App {
             remoteMacs.fileSharing = { [remoteFileSharing] macID in remoteFileSharing.access(for: macID) }
             remoteMacs.onForget = { [remoteFileSharing] macID in remoteFileSharing.removeAll(for: macID) }
             let restoration: @MainActor () async -> Void = {
+                // 后台唤起、开窗入口还没装上（窗口在视图出现前就藏起来了）：先露出界面，入口装上后才接得回终端。
+                // 装上了的话不必：接回时有会话才开窗口（开窗口时会露出界面）。
+                if BackgroundLaunchMode.shouldStartHidden, !LocalShellRestorer.shared.isInstalled {
+                    UTermLifecycleDelegate.showGUI()
+                }
                 await LocalShellRestorer.shared.finished()
                 await SSHSessionRestorer.shared.finished()
             }
@@ -278,7 +283,8 @@ struct uTermApp: App {
                     open(value: TerminalWindowID(id: windowID, serverID: serverID))
                 }
             })
-        if !BackgroundLaunchMode.shouldStartHidden {
+        // 后台唤起时等界面露出来再接回；如果入口装上之前界面已经被要求露出（用户打开了 uTerm、远控要终端），现在就接回。
+        if !BackgroundLaunchMode.shouldStartHidden || UTermLifecycleDelegate.hasShownGUI {
             LocalShellRestorer.shared.restoreIfNeeded()
             SSHSessionRestorer.shared.restoreIfNeeded()
         }

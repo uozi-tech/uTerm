@@ -48,6 +48,9 @@ final class LocalShellRestorer {
         self.gateTimeout = gateTimeout
     }
 
+    /// 开窗口入口已经装好（Scene 环境就绪）。
+    var isInstalled: Bool { openWindow != nil }
+
     func install(openWindow: @escaping @MainActor (_ windowID: UUID, _ firstPaneID: UUID) -> Void) {
         self.openWindow = openWindow
         for waiter in installWaiters { waiter.resume() }
