@@ -191,6 +191,20 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertTrue(stopped, "用户退出 uTerm 时远控随之结束")
     }
 
+    func test_turning_remote_off_shuts_the_agent_down() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil && rig.bridge?.isConnected == true }
+        XCTAssertTrue(listening)
+        rig.settings.isEnabled = false
+        rig.bridge?.settingsChanged()
+        let stopped = await waitUntil(3) { rig.service.isShutDown }
+        XCTAssertTrue(stopped, "关掉远控时远控进程停服务并退出，不常驻")
+        let quiet = await waitUntil(1) { rig.bridge?.isConnected == true }
+        XCTAssertFalse(quiet, "远控关着时 App 不再去连远控进程")
+    }
+
     func test_chunk_kind_round_trips_and_feed_splits_without_losing_snapshot_flags() {
         let chunks: [RemoteTerminalChunk] = [.output(Data([1, 2])), .snapshot(Data([3]), isFirst: true, isLast: false),
                                              .snapshot(Data([4]), isFirst: false, isLast: false),

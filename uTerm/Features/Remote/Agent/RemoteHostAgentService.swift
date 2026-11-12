@@ -61,6 +61,13 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
         relayStorage.onChange = { [weak self] data in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.persist(.persistRelayConfig(data)) } }
         }
+        // launchd 在崩溃后会把远控进程拉起来，但 App 未必还在：等不到 App 就自己退出，下次连接时再按需启动。
+        let idle = environment.defaultGrace
+        grace = Task { [weak self] in
+            guard (try? await Task.sleep(for: idle)) != nil else { return }
+            guard let self, self.server == nil else { return }
+            self.shutdown(reason: "没有等到 App")
+        }
     }
 
     // MARK: - XPC

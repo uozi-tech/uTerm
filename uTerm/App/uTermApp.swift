@@ -166,10 +166,12 @@ struct uTermApp: App {
             let hostBridge = usesRemoteHostAgent ? RemoteHostAgentBridge(
                 server: remoteServer, registry: terminalRegistry, settings: remoteSettings, restoration: restoration,
                 transport: RemoteHostAgentBridge.production) : nil
-            hostBridge?.start()
-            RemoteHostAgentBridge.current = hostBridge
-            remoteSettings.observe { settings in
-                hostBridge?.settingsChanged()
+            let applyRemoteSettings: @MainActor (RemoteControlSettings) -> Void = { settings in
+                // 远控进程在服务时设置整份推给它；下面这些在 App 里的服务端上是空操作或转发。
+                if let bridge = RemoteHostAgentBridge.current {
+                    bridge.settingsChanged()
+                    return
+                }
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 remoteServer.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
                                                   keepAwake: settings.keepsAwakeForInternet)
@@ -177,6 +179,16 @@ struct uTermApp: App {
                 remoteServer.desktopSettingsChanged()
                 if !settings.isDesktopAudioEnabled { remoteServer.endDesktopAudio(reason: "Mac 上关闭了「允许传输声音」") }
             }
+            // 用户在系统设置里关掉了远控进程的后台运行：远控服务改回在 App 里跑（审批框与指示条也由 App 显示）。
+            hostBridge?.onFallback = { [remoteServer, remoteSettings] in
+                RemoteHostAgentBridge.current = nil
+                RemoteHostAgentBridge.fallbackPanels = [RemotePairingPrompt(server: remoteServer),
+                                                        RemoteDesktopIndicator(server: remoteServer)]
+                applyRemoteSettings(remoteSettings)
+            }
+            RemoteHostAgentBridge.current = hostBridge
+            hostBridge?.start()
+            remoteSettings.observe(applyRemoteSettings)
             let server = controlServer
             NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification,

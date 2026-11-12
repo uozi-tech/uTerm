@@ -15,6 +15,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         var makeConnection: @MainActor () -> NSXPCConnection
         /// 只认同团队签名的远控进程（测试里不设）。
         var serverRequirement: String?
+        /// 断开时查一下 launchd 任务还在不在（用户可能在系统设置里关了它的后台运行）。测试里不查。
+        var checksRegistration = false
     }
 
     private let server: RemoteHostServer
@@ -36,6 +38,10 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     private var isStopped = false
     /// 正在用的桥（App 进程里至多一个；没用远控进程时为 nil）。
     static var current: RemoteHostAgentBridge?
+    /// 远控进程用不了了（后台运行被关掉）：远控服务改回在 App 里跑。App 接线时设。
+    var onFallback: (@MainActor () -> Void)?
+    /// 退回 App 内服务之后 App 显示的配对审批框与被控指示条。
+    static var fallbackPanels: [AnyObject] = []
     /// 连上远控进程并握过手（测试用）。
     var onConnected: (@MainActor (RemoteHostAgentInfo) -> Void)?
 
@@ -91,7 +97,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     static let production = Transport(makeConnection: {
         NSXPCConnection(machServiceName: RemoteHostAgent.machServiceName, options: [])
-    }, serverRequirement: RemoteHostAgent.agentRequirement)
+    }, serverRequirement: RemoteHostAgent.agentRequirement, checksRegistration: true)
 
     // MARK: - 起停
 
@@ -103,7 +109,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             titlesChanged: { [weak self] in self?.scheduleSessionsPush(delay: RemoteConstants.tabTitlePushInterval) },
             programStatusChanged: { [weak self] in self?.scheduleSessionsPush() },
             orderChanged: { [weak self] in self?.scheduleSessionsPush() }))
-        connect()
+        // 远控关着时不拉起远控进程：没必要让一个空闲的进程常驻。
+        if settings.isEnabled { connect() }
         Task { [weak self] in
             await self?.sessions.waitUntilRestored()
             guard let self else { return }
@@ -114,8 +121,19 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     /// 远控设置变了（App 里 `RemoteControlSettings.observe` 的回调转到这里）。
     func settingsChanged() {
-        agent?.configure(RemoteHostAgentJSON.encode(settings.agentSnapshot))
-        if !settings.isEnabled { scheduleUpgradeCheck() }
+        guard !isStopped else { return }
+        if settings.isEnabled {
+            if connection == nil {
+                reconnectDelay = .milliseconds(250)
+                connect()
+            } else {
+                agent?.configure(RemoteHostAgentJSON.encode(settings.agentSnapshot))
+            }
+        } else if connection != nil {
+            // 关掉远控：远控进程停服务、退出（`connectionLost` 看到远控关着就不重连）。
+            agent?.configure(RemoteHostAgentJSON.encode(settings.agentSnapshot))
+            post(.shutdown)
+        }
     }
 
     /// 测试用：像 App 被结束那样断开（不告诉远控进程原因、不再重连）。
@@ -184,7 +202,16 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         attachments.removeAll()
         server.agentDisconnected()
         guard !isStopped else { return }
-        // 远控进程没了（被换新版本、崩溃）：launchd 在下一次连接时按需拉起。
+        if transport.checksRegistration, SMAppService.agent(plistName: RemoteHostAgent.plistName).status != .enabled {
+            AppLogger.notice("远控进程的后台运行被关掉了，远控服务改回在 App 里跑", category: RemoteLog.category)
+            isStopped = true
+            sessions.stopObserving()
+            server.agent = nil
+            onFallback?()
+            return
+        }
+        // 远控进程没了（被换新版本、崩溃）：launchd 在下一次连接时按需拉起。远控关着就不连。
+        guard settings.isEnabled else { return }
         let delay = reconnectDelay
         reconnectDelay = min(reconnectDelay * 2, .seconds(5))
         reconnect?.cancel()

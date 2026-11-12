@@ -546,7 +546,7 @@ verify-distribution-signing:
 	test -d "$(EXPORT_APP)"
 	python3 scripts/verify-background-launcher.py "$(EXPORT_APP)" "uTermBackgroundLauncher"
 	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
-	@for helper in Helpers/uterm-holder Helpers/uterm-ssh XPCServices/uTermShellAgent.xpc; do \
+	@for helper in Helpers/uterm-holder Helpers/uterm-ssh XPCServices/uTermShellAgent.xpc Helpers/uTermRemoteHost.app Helpers/uTermRemoteHost.app/Contents/XPCServices/uTermShellAgent.xpc; do \
 		path="$(EXPORT_APP)/Contents/$$helper"; \
 		info=$$(codesign -dv --verbose=4 "$$path" 2>&1) || { printf '%s\n' "ERROR: $$path is missing or unsigned."; exit 1; }; \
 		if ! printf '%s\n' "$$info" | grep -q 'Authority=Developer ID Application' \
@@ -555,6 +555,17 @@ verify-distribution-signing:
 			exit 1; \
 		fi; \
 	done
+	@# 远控进程：沙盒 LaunchAgent（沙盒 App 注册的 agent 必须带沙盒），不能带调试权限，launchd plist 要在，
+	@# 不能链接包内的动态库（Sparkle 换包之后它再加载到的是新版本）。
+	@agent="$(EXPORT_APP)/Contents/Helpers/uTermRemoteHost.app"; \
+	ents=$$(codesign -d --entitlements - --xml "$$agent" 2>/dev/null); \
+	if ! printf '%s' "$$ents" | grep -q 'com.apple.security.app-sandbox' || printf '%s' "$$ents" | grep -q 'get-task-allow'; then \
+		printf '%s\n' 'ERROR: uTermRemoteHost must be sandboxed and must not carry get-task-allow.'; exit 1; \
+	fi; \
+	test -f "$(EXPORT_APP)/Contents/Library/LaunchAgents/com.uozi.uTerm.RemoteHost.plist" || { printf '%s\n' 'ERROR: LaunchAgent plist for uTermRemoteHost is missing.'; exit 1; }; \
+	if otool -L "$$agent/Contents/MacOS/uTermRemoteHost" | grep -q '@rpath'; then \
+		printf '%s\n' 'ERROR: uTermRemoteHost links a bundled dylib. Link its packages statically.'; exit 1; \
+	fi
 	@if ! otool -X -s __TEXT __info_plist "$(EXPORT_APP)/Contents/Helpers/uterm-holder" | grep -q .; then \
 		printf '%s\n' 'ERROR: uterm-holder has no embedded Info.plist (local network access to SSH hosts would be denied).'; \
 		exit 1; \
