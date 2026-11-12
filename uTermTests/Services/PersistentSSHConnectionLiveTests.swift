@@ -157,6 +157,38 @@ final class PersistentSSHConnectionLiveTests: XCTestCase {
         XCTAssertFalse(ended.withLock { $0 })
     }
 
+    /// 网络刚变。连接还通（连上了 Wi-Fi、蜂窝也还在）：查一下就过，不重连。原来那块网卡没了：不探、直接重连接回，
+    /// 用时就是建一条新连接的时间，不带探活的等待。
+    func testNetworkChangeReconnectsRightAwayOnlyWhenTheInterfaceIsGone() async throws {
+        let backend = makeBackend()
+        let transcript = Transcript(backend)
+        try await backend.connect()
+        let reconnects = Mutex<[Bool]>([])
+        Task { for await value in backend.reconnecting { reconnects.withLock { $0.append(value) } } }
+        await backend.write(Data("stty -echo; echo BEFORE=$$\n".utf8))
+        let before = try await waitForShellPID(transcript, marker: "BEFORE")
+
+        await backend.recheckAfterDisruption(lostInterface: false)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(reconnects.withLock { $0 }, [], "连接是通的，不该重连")
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        await backend.recheckAfterDisruption(lostInterface: true)
+        while reconnects.withLock({ $0 }) != [true, false], clock.now - started < .seconds(10) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let took = clock.now - started
+        XCTAssertEqual(reconnects.withLock { $0 }, [true, false])
+        print("network change: back on the session \(took) after the interface went away")
+        XCTAssertLessThan(took, .seconds(2), "本机的 sshd 上接回不该超过建一条连接的时间")
+
+        await backend.write(Data("echo AFTER=$$\n".utf8))
+        let after = try await waitForShellPID(transcript, marker: "AFTER")
+        XCTAssertEqual(after, before)
+        await backend.close()
+    }
+
     /// 看门狗判死（探活失败会强关连接）之后同样接回。连接正常时探活不打断会话。
     func testHealthProbeKeepsALiveSessionUntouched() async throws {
         let backend = makeBackend()

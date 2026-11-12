@@ -15,6 +15,14 @@ import Network
 @MainActor
 protocol ConnectionHealthProbing: AnyObject, Sendable {
     func probeConnectionHealth() async
+    /// 网络路径刚变，不等网络稳定就通知。断了能自己接回的连接（判错只是多重连一次）借此立刻处置；
+    /// 其余的不用实现，仍然等稳定后的 `probeConnectionHealth`。
+    /// `lostInterface`：变之前走的那块网卡没了（Wi-Fi 关了改走蜂窝），上面的连接不可能再通。
+    func networkPathChanged(lostInterface: Bool)
+}
+
+extension ConnectionHealthProbing {
+    func networkPathChanged(lostInterface: Bool) {}
 }
 
 /// 连接看门狗。
@@ -60,6 +68,8 @@ final class ConnectionWatchdog {
     private var entries: [ObjectIdentifier: WeakEntry] = [:]
     private var pathMonitor: NWPathMonitor?
     private var hasSeenPathUpdate = false
+    /// 上一次网络可用时排在最前的网卡（新连接走它）。
+    private var lastPrimaryInterface: String?
     private var pendingSweep: Task<Void, Never>?
     private var periodicTask: Task<Void, Never>?
     private var observersInstalled = false
@@ -135,8 +145,9 @@ final class ConnectionWatchdog {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { @Sendable path in
             let satisfied = path.status == .satisfied
+            let interfaces = path.availableInterfaces.map(\.name)
             Task { @MainActor in
-                ConnectionWatchdog.shared.handlePathUpdate(satisfied: satisfied)
+                ConnectionWatchdog.shared.handlePathUpdate(satisfied: satisfied, interfaces: interfaces)
             }
         }
         monitor.start(queue: DispatchQueue(label: "uTerm.ConnectionWatchdog.path"))
@@ -170,13 +181,21 @@ final class ConnectionWatchdog {
     /// 网络路径更新时触发：除「断 → 通」外，Wi-Fi / 热点 / VPN 切换经常表现为
     /// satisfied → satisfied，既有 TCP 连接同样高度可疑。监视器启动时的首次回调
     /// 只记录状态，不扫描，避免应用带网启动立刻做一次无谓探测。
-    func handlePathUpdate(satisfied: Bool) {
+    ///
+    /// `interfaces`：此刻可用的网卡名，按系统的优先顺序。扫描要等网络稳定；在那之前先把「网络变了」
+    /// 告诉每个对象（`networkPathChanged`），能自己接回的连接不用等。
+    func handlePathUpdate(satisfied: Bool, interfaces: [String] = []) {
         defer {
             hasSeenPathUpdate = true
         }
+        guard satisfied else { return }
+        let previous = lastPrimaryInterface
+        lastPrimaryInterface = interfaces.first
         guard hasSeenPathUpdate else { return }
-        if satisfied {
-            scheduleSweep()
+        let lostInterface = previous.map { !interfaces.contains($0) } ?? false
+        for probe in entries.values.compactMap(\.value) {
+            probe.networkPathChanged(lostInterface: lostInterface)
         }
+        scheduleSweep()
     }
 }

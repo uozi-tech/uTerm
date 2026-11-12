@@ -94,6 +94,64 @@ final class ConnectionWatchdogTests: XCTestCase {
         XCTAssertEqual(a.probeCount, 1)
     }
 
+    // MARK: 网络刚变的即时通知
+
+    private final class PathSpy: ConnectionHealthProbing {
+        private(set) var changes: [Bool] = []
+        private(set) var probeCount = 0
+        func probeConnectionHealth() async { probeCount += 1 }
+        func networkPathChanged(lostInterface: Bool) { changes.append(lostInterface) }
+    }
+
+    /// 启动时的第一次回调只记下当前网卡，不通知。之后每次可用的路径更新都立刻通知——不等 settle、也不等扫描。
+    func testPathChangeIsAnnouncedBeforeTheSettleWindow() {
+        let dog = ConnectionWatchdog(observingSystemEvents: false)
+        dog.settleDelay = .seconds(60)
+        let spy = PathSpy()
+        dog.register(spy)
+
+        dog.handlePathUpdate(satisfied: true, interfaces: ["en0", "pdp_ip0"])
+        XCTAssertEqual(spy.changes, [])
+
+        dog.handlePathUpdate(satisfied: true, interfaces: ["en0", "pdp_ip0"])
+        XCTAssertEqual(spy.changes, [false])
+        XCTAssertEqual(spy.probeCount, 0, "扫描还在等网络稳定")
+    }
+
+    /// Wi-Fi 关了改走蜂窝：原来排在最前的网卡没了。
+    func testLosingThePrimaryInterfaceIsReported() {
+        let dog = ConnectionWatchdog(observingSystemEvents: false)
+        dog.settleDelay = .seconds(60)
+        let spy = PathSpy()
+        dog.register(spy)
+
+        dog.handlePathUpdate(satisfied: true, interfaces: ["en0", "pdp_ip0"])
+        dog.handlePathUpdate(satisfied: true, interfaces: ["pdp_ip0"])
+        XCTAssertEqual(spy.changes, [true])
+
+        // 连上 Wi-Fi：蜂窝还在，原来的连接不一定断。
+        dog.handlePathUpdate(satisfied: true, interfaces: ["en0", "pdp_ip0"])
+        XCTAssertEqual(spy.changes, [true, false])
+    }
+
+    /// 中间断过网：不可用的那一下不通知；恢复时按断网之前的网卡判断。
+    func testInterfaceIsComparedAcrossAnOutage() {
+        let dog = ConnectionWatchdog(observingSystemEvents: false)
+        dog.settleDelay = .seconds(60)
+        let spy = PathSpy()
+        dog.register(spy)
+
+        dog.handlePathUpdate(satisfied: true, interfaces: ["en0"])
+        dog.handlePathUpdate(satisfied: false, interfaces: [])
+        XCTAssertEqual(spy.changes, [])
+        dog.handlePathUpdate(satisfied: true, interfaces: ["en0"])
+        XCTAssertEqual(spy.changes, [false])
+
+        dog.handlePathUpdate(satisfied: false, interfaces: [])
+        dog.handlePathUpdate(satisfied: true, interfaces: ["pdp_ip0"])
+        XCTAssertEqual(spy.changes, [false, true])
+    }
+
     func testUnsatisfiedToSatisfiedPathUpdateSchedulesSweep() async {
         let dog = ConnectionWatchdog(observingSystemEvents: false)
         dog.settleDelay = .milliseconds(50)

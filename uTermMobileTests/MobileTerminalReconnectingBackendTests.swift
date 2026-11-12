@@ -3,21 +3,21 @@ import XCTest
 @testable import uTermMobile
 
 /// 断线自己重连的后端（`ReconnectingTerminalBackend`：远控连 Mac、直连主机接回主机上的会话）接进控制器之后：
-/// 重连期间界面有提示、会话不算断开；App 回前台立刻探一次连接。
+/// 重连期间界面有提示、会话不算断开；App 回前台、网络刚变时立刻让后端查一次连接。
 @MainActor
 final class MobileTerminalReconnectingBackendTests: XCTestCase {
 
-    /// 能由测试拨动重连状态、记探测次数的后端。
+    /// 能由测试拨动重连状态、记「查一次连接」次数的后端。
     actor ReconnectingBackend: ReconnectingTerminalBackend {
         nonisolated let outputItems = AsyncStream<TerminalOutputItem> { _ in }
         nonisolated let exitStream = AsyncStream<Void> { _ in }
         nonisolated let reconnecting: AsyncStream<Bool>
         private nonisolated let reconnectingContinuation: AsyncStream<Bool>.Continuation
-        nonisolated let probesOnForeground: Bool
+        /// 每次 `recheckAfterDisruption` 收到的 `lostInterface`。
+        private(set) var rechecks: [Bool] = []
         private(set) var probeCount = 0
 
-        init(probesOnForeground: Bool) {
-            self.probesOnForeground = probesOnForeground
+        init() {
             (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream()
         }
 
@@ -29,6 +29,7 @@ final class MobileTerminalReconnectingBackendTests: XCTestCase {
             probeCount += 1
             return true
         }
+        func recheckAfterDisruption(lostInterface: Bool) async { rechecks.append(lostInterface) }
 
         nonisolated func setReconnecting(_ value: Bool) { reconnectingContinuation.yield(value) }
     }
@@ -45,7 +46,7 @@ final class MobileTerminalReconnectingBackendTests: XCTestCase {
 
     /// 重连期间：标记亮着，会话仍然是「已连接」（不进断开页、不丢终端）。接回后标记灭掉。
     func testReconnectingIsShownWithoutDroppingTheSession() async throws {
-        let backend = ReconnectingBackend(probesOnForeground: true)
+        let backend = ReconnectingBackend()
         let controller = try await connectedController(backend)
         XCTAssertFalse(controller.isReconnecting)
 
@@ -63,7 +64,7 @@ final class MobileTerminalReconnectingBackendTests: XCTestCase {
 
     /// 关掉会话后，后端迟到的重连状态不再点亮标记。
     func testCloseClearsTheReconnectingMark() async throws {
-        let backend = ReconnectingBackend(probesOnForeground: true)
+        let backend = ReconnectingBackend()
         let controller = try await connectedController(backend)
         backend.setReconnecting(true)
         let shown = await MobileFakeTerminal.waitUntil { controller.isReconnecting }
@@ -73,38 +74,57 @@ final class MobileTerminalReconnectingBackendTests: XCTestCase {
         XCTAssertFalse(controller.isReconnecting)
     }
 
-    /// 从后台回来立刻探一次；进后台、已经在前台时再报一次前台都不探。
-    func testReturningToForegroundProbesTheConnectionOnce() async throws {
-        let backend = ReconnectingBackend(probesOnForeground: true)
-        let controller = try await connectedController(backend)
-
-        controller.appVisibilityChanged(inBackground: false)
-        controller.appVisibilityChanged(inBackground: true)
-        try await Task.sleep(for: .milliseconds(100))
-        var count = await backend.probeCount
-        XCTAssertEqual(count, 0)
-
-        controller.appVisibilityChanged(inBackground: false)
+    private func waitForRechecks(_ backend: ReconnectingBackend, count: Int) async throws -> [Bool] {
         let deadline = ContinuousClock.now + .seconds(2)
-        while await backend.probeCount == 0, ContinuousClock.now < deadline {
+        while await backend.rechecks.count < count, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         try await Task.sleep(for: .milliseconds(100))
-        count = await backend.probeCount
-        XCTAssertEqual(count, 1)
+        return await backend.rechecks
+    }
+
+    /// 从后台回来立刻查一次；进后台、已经在前台时再报一次前台都不查。
+    func testReturningToForegroundRechecksTheConnectionOnce() async throws {
+        let backend = ReconnectingBackend()
+        let controller = try await connectedController(backend)
+
+        controller.appVisibilityChanged(inBackground: false)
+        controller.appVisibilityChanged(inBackground: true)
+        try await Task.sleep(for: .milliseconds(100))
+        var rechecks = await backend.rechecks
+        XCTAssertEqual(rechecks, [])
+
+        controller.appVisibilityChanged(inBackground: false)
+        rechecks = try await waitForRechecks(backend, count: 1)
+        XCTAssertEqual(rechecks, [false])
         controller.close()
     }
 
-    /// 判错就等于断开的后端（不声明 `probesOnForeground`）回前台不探，仍然等看门狗在网络稳了之后探。
-    func testBackendsThatDoNotAskForItAreNotProbedOnForeground() async throws {
-        let backend = ReconnectingBackend(probesOnForeground: false)
+    /// 网络刚变：不等看门狗的稳定期，立刻转给后端，网卡没了这件事原样带到。
+    func testNetworkPathChangeGoesStraightToTheBackend() async throws {
+        let backend = ReconnectingBackend()
         let controller = try await connectedController(backend)
 
-        controller.appVisibilityChanged(inBackground: true)
-        controller.appVisibilityChanged(inBackground: false)
-        try await Task.sleep(for: .milliseconds(200))
-        let count = await backend.probeCount
-        XCTAssertEqual(count, 0)
+        controller.networkPathChanged(lostInterface: true)
+        let first = try await waitForRechecks(backend, count: 1)
+        XCTAssertEqual(first, [true])
+        controller.networkPathChanged(lostInterface: false)
+        let second = try await waitForRechecks(backend, count: 2)
+        XCTAssertEqual(second, [true, false])
+        let probes = await backend.probeCount
+        XCTAssertEqual(probes, 0, "这条路不走看门狗的探活")
         controller.close()
+    }
+
+    /// 会话已经关了：网络变化不再转给后端。
+    func testNetworkPathChangeIsIgnoredOnceClosed() async throws {
+        let backend = ReconnectingBackend()
+        let controller = try await connectedController(backend)
+        controller.close()
+
+        controller.networkPathChanged(lostInterface: true)
+        try await Task.sleep(for: .milliseconds(200))
+        let rechecks = await backend.rechecks
+        XCTAssertEqual(rechecks, [])
     }
 }

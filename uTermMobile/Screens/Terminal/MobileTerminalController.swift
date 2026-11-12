@@ -120,12 +120,9 @@ final class MobileTerminalController {
     func appVisibilityChanged(inBackground: Bool) {
         let returned = isAppInBackground && !inBackground
         isAppInBackground = inBackground
-        // 回前台：会话在主机上留着的连接立刻探一次，不等看门狗那 3 秒。后台挂久了连接多半已经死了，
+        // 回前台：会话在主机上留着的连接立刻查一次，不等看门狗那 3 秒。后台挂久了连接多半已经死了，
         // 判错了也只是多重连一次（画面不动）；普通连接判错就是断开，所以仍然等网络稳了再探。
-        if returned, state == .connected,
-           let backend = connection as? any ReconnectingTerminalBackend, backend.probesOnForeground {
-            Task { _ = await backend.verifyConnectionAlive() }
-        }
+        if returned { recheckConnection(lostInterface: false) }
         if returned { MobileBackgroundGrace.shared.end() }
         // 进后台：直连主机的会话再留一小段时间（切出去看一眼别的 App 再回来，连接不断）；会话留在主机上的，
         // 把终端此刻的状态存过去——之后 App 被系统结束的话，重新打开凭它接回画面。远控标签不留：
@@ -526,5 +523,15 @@ final class MobileTerminalController {
 extension MobileTerminalController: ConnectionHealthProbing {
     func probeConnectionHealth() async {
         await state.probeHealth(of: connection)
+    }
+
+    /// 网络刚变（Wi-Fi ↔ 蜂窝）：能自己接回的连接立刻处置，不等看门狗的稳定期和探活时限。
+    func networkPathChanged(lostInterface: Bool) {
+        recheckConnection(lostInterface: lostInterface)
+    }
+
+    private func recheckConnection(lostInterface: Bool) {
+        guard state == .connected, let backend = connection as? any ReconnectingTerminalBackend else { return }
+        Task { await backend.recheckAfterDisruption(lostInterface: lostInterface) }
     }
 }

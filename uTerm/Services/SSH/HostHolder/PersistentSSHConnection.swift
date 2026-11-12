@@ -8,13 +8,14 @@ import NIOSSH
 /// 连接断了自己重连、不结束会话的后端。重连期间在 `reconnecting` 上报 true，接回后报 false。
 protocol ReconnectingTerminalBackend: TerminalBackend {
     nonisolated var reconnecting: AsyncStream<Bool> { get }
-    /// App 回到前台时要不要立刻探一次连接（`verifyConnectionAlive`），不等看门狗。
-    /// 判错的代价只是多重连一次的后端才开；判错就等于断开的不开。
-    nonisolated var probesOnForeground: Bool { get }
+    /// 连接多半已经断了的时刻（App 回到前台、网络刚变）：立刻处置，不等看门狗（它要等网络稳定 3 秒、再探活）。
+    /// `lostInterface`：变之前走的那块网卡没了，上面的连接不可能再通。
+    /// 判错的代价只是多重连一次的后端才实现；判错就等于断开的不实现，仍然等看门狗。
+    func recheckAfterDisruption(lostInterface: Bool) async
 }
 
 extension ReconnectingTerminalBackend {
-    nonisolated var probesOnForeground: Bool { false }
+    func recheckAfterDisruption(lostInterface: Bool) async {}
 }
 
 extension RemoteTerminalBackend: ReconnectingTerminalBackend {}
@@ -37,8 +38,6 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
     nonisolated let reconnecting: AsyncStream<Bool>
-    /// 后台挂久了连接多半已经死了；判错了也只是多重连一次，画面不动。
-    nonisolated var probesOnForeground: Bool { true }
 
     private let itemContinuation: AsyncStream<TerminalOutputItem>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
@@ -74,6 +73,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     private static let maxReconnectDelay = Duration.seconds(15)
     /// 探活的时限比 `SSHConnection` 短：判错了只是多重连一次，画面不受影响。
     private static let probeTimeout = Duration.seconds(5)
+    /// 回前台、网络刚变时的探活时限：这种时刻连接多半已经死了，等得越久画面停得越久。
+    private static let disruptionProbeTimeout = Duration.seconds(2)
 
     private var phase = Phase.idle
     private var isClosed = false
@@ -93,6 +94,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
     private var client: ConnectedClient?
     private var supervisor: Task<Void, Never>?
     private var backoffTask: Task<Void, Never>?
+    private var isRechecking = false
     private var reconnectDelay = PersistentSSHConnection.initialReconnectDelay
     private var firstAttach: CheckedContinuation<InitialOutcome, Never>?
     private var hasAttached = false
@@ -464,7 +466,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
 
     // MARK: - 存活探测
 
-    /// 回前台、网络变化、每 30 秒各探一次。判死就强关连接，重连由 `supervise` 接手；正在重连时让它立刻再试一次。
+    /// 看门狗每 30 秒、以及网络稳定后各探一次（回前台、网络刚变的那一下走 `recheckAfterDisruption`）。判死就强关连接，重连由 `supervise` 接手；正在重连时让它立刻再试一次。
     func verifyConnectionAlive() async -> Bool {
         if let fallback { return await fallback.verifyConnectionAlive() }
         guard !isClosed else { return false }
@@ -472,7 +474,32 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
             backoffTask?.cancel()
             return true
         }
-        let alive = await BoundedTask.run(timeout: Self.probeTimeout) {
+        return await probe(client, timeout: Self.probeTimeout)
+    }
+
+    /// 回前台、网络刚变：后台挂久了、换了网络，连接多半已经死了；判错了也只是多重连一次，画面不动。
+    /// 原来那块网卡没了就不用探，直接断开重连；正在重连的话别等退避，马上再试。
+    func recheckAfterDisruption(lostInterface: Bool) async {
+        guard fallback == nil, !isClosed else { return }
+        guard phase == .attached, let client else {
+            reconnectDelay = Self.initialReconnectDelay
+            backoffTask?.cancel()
+            return
+        }
+        if lostInterface {
+            await client.closeTransport()
+            return
+        }
+        // 路径接连变几次时只留一次在途的探测。
+        guard !isRechecking else { return }
+        isRechecking = true
+        _ = await probe(client, timeout: Self.disruptionProbeTimeout)
+        isRechecking = false
+    }
+
+    /// 发一笔要对端应答的流量；时限内没回就强关连接，重连由 `supervise` 接手。
+    private func probe(_ client: ConnectedClient, timeout: Duration) async -> Bool {
+        let alive = await BoundedTask.run(timeout: timeout) {
             do {
                 _ = try await client.exec("true")
                 return true
