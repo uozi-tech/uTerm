@@ -51,7 +51,7 @@ struct RemoteInternetGroup: View {
                     }
                 }
                 if server.relayConfig != nil, settings.isInternetEnabled, server.relayRegistrationBlock == nil {
-                    let relayState = server.relayLink?.state
+                    let relayState = server.relayState
                     SettingsRow(label: "中继状态", hint: RemoteControlPresentation.relayStatusHint(relayState)) {
                         let status = RemoteControlPresentation.relayStatus(relayState)
                         HStack(spacing: 10) {

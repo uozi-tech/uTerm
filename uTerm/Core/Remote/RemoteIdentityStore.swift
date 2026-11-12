@@ -123,6 +123,21 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         return key
     }
 
+    /// 原样读一条存储（远控进程的镜像：App 把这些交过去）。
+    func rawValue(account: String) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return try? storage.load(account)
+    }
+
+    /// 原样写一条存储（远控进程写回来的）。写的是本机长期密钥时连缓存一起换掉。
+    func saveRaw(_ data: Data, account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try storage.save(data, account: account)
+        if account == Self.identityAccount { cachedIdentity = nil }
+    }
+
     func trustedPeers() -> [RemotePeer] {
         lock.lock()
         defer { lock.unlock() }

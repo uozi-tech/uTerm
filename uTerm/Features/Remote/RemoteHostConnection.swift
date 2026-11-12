@@ -588,6 +588,14 @@ extension RemoteHostConnection {
         var request = request
         request.acceptsCompression = true
         let payload = RemoteFileCodec.packRequest(request, body: body, compress: true)
+        let raw = try await exchangeFile(payload, id: request.id, timeout: timeout ?? RemoteFileTimeouts.limit(for: request))
+        let (reply, data) = try RemoteFileCodec.unpackReply(raw)
+        if let error = reply.error { throw error }
+        return (reply, data)
+    }
+
+    /// 发一条打包好的文件请求，等打包好的应答（远控进程替 App 转命令行的请求时用：打包、解包都在 App 那头）。
+    nonisolated func exchangeFile(_ payload: Data, id: UUID, timeout: Duration) async throws -> Data {
         let (link, name) = try await MainActor.run { () throws -> (RemoteLink, String) in
             guard !isClosed, isAuthorized else {
                 throw RemoteFileError(.unreachable, "「\(peerName)」已经不连着这台 Mac 了")
@@ -597,14 +605,9 @@ extension RemoteHostConnection {
             }
             return (self.link, peerName)
         }
-        let raw = try await fileWaiters.exchange(payload, id: request.id,
-                                                 timeout: timeout ?? RemoteFileTimeouts.limit(for: request),
-                                                 peer: "「\(name)」") { payload in
+        return try await fileWaiters.exchange(payload, id: id, timeout: timeout, peer: "「\(name)」") { payload in
             link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
         }
-        let (reply, data) = try RemoteFileCodec.unpackReply(raw)
-        if let error = reply.error { throw error }
-        return (reply, data)
     }
 }
 

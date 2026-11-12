@@ -17,8 +17,8 @@ protocol ControlRelayManaging: AnyObject {
 }
 
 extension RemoteHostServer: ControlRelayManaging {
-    var isRelayLinkActive: Bool { relayLink != nil }
-    var isRelayRegistered: Bool { relayLink?.state == .registered }
+    var isRelayLinkActive: Bool { relayState != nil }
+    var isRelayRegistered: Bool { relayState == .registered }
     var relayManagedHosts: RemoteRelayManagedHosts { RemoteRelayManagedHosts() }
 }
 

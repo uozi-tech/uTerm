@@ -65,6 +65,19 @@ final class RemoteHostServer {
     private(set) var desktopViewer: DesktopViewer?
     /// 在中继上的注册（打开公网接入且导入过配置时才有）。
     private(set) var relayLink: RemoteRelayHostLink?
+    /// 远控服务跑在远控进程里时（App 侧）：经它转发操作，自己只镜像状态给界面与命令行（见 `applyAgentState`）。
+    @ObservationIgnored var agent: (any RemoteHostAgentLink)?
+    /// 远控进程报来的中继注册状态（App 侧，`agent` 不为 nil 时才有）。
+    private(set) var mirroredRelayState: RemoteRelayHostLink.State?
+    @ObservationIgnored private var mirroredControllers: [Controller] = []
+    @ObservationIgnored private var mirroredSessionControllers: [UUID: UUID] = [:]
+    /// 连接、接管关系变了（远控进程据此把状态推给 App）。
+    @ObservationIgnored var onStateChange: (@MainActor () -> Void)?
+
+    /// 中继注册状态：本进程里的注册，或远控进程报来的。
+    var relayState: RemoteRelayHostLink.State? {
+        agent != nil ? mirroredRelayState : relayLink?.state
+    }
     /// 这个进程为什么不注册中继（nil = 照常注册）。开发构建与测试宿主和正式版同身份，注册了就会把它顶掉。
     let relayRegistrationBlock: RemoteRelayRegistrationBlock?
     /// 被顶替后的退避（测试里调短）。
@@ -167,6 +180,8 @@ final class RemoteHostServer {
     // MARK: - 起停
 
     func start() {
+        // 远控进程在服务：设置变化由 App 侧的桥接推过去，这里不监听。
+        guard agent == nil else { return }
         guard listener == nil else { return }
         isRunning = true
         do {
@@ -199,6 +214,7 @@ final class RemoteHostServer {
     }
 
     func stop() {
+        guard agent == nil else { return }
         isRunning = false
         // 连接的关闭是异步的，退出 uTerm 时等不到它们各自收尾：帘幕还挂着就在这里先锁屏、再撤帘幕，
         // 免得进程一退、gamma 一恢复就把已解锁的桌面露出来。
@@ -289,6 +305,7 @@ final class RemoteHostServer {
     func updateInternetAccess(enabled: Bool, keepAwake: Bool) {
         keepsAwakeForInternet = keepAwake
         relayConfig = relayStore?.load() ?? relayConfig
+        guard agent == nil else { return }
         if enabled, let relayConfig, relayRegistrationBlock == nil {
             if relayLink?.config != relayConfig {
                 relayLink?.stop()
@@ -306,6 +323,7 @@ final class RemoteHostServer {
 
     /// 设置里的「重新连接」：被顶替后不等退避，立刻再注册。
     func reconnectRelay() {
+        if let agent { return agent.post(.reconnectRelay) }
         relayLink?.reconnect()
     }
 
@@ -329,6 +347,10 @@ final class RemoteHostServer {
         }
         if relayConfig?.relayID != config.relayID { relayUpdates.reset() }
         relayConfig = config
+        if let agent {
+            agent.post(.relayConfigChanged(RemoteHostAgentJSON.encode(config)))
+            return true
+        }
         // 开着公网接入时立刻换到新中继上（设置页之外的入口——命令行——不会再去调 updateInternetAccess）。
         if relayLink != nil { updateInternetAccess(enabled: true, keepAwake: keepsAwakeForInternet) }
         return true
@@ -338,6 +360,18 @@ final class RemoteHostServer {
         relayStore?.clear()
         relayConfig = nil
         relayUpdates.reset()
+        agent?.post(.relayConfigChanged(nil))
+    }
+
+    /// 远控进程写回来的中继配置（App 侧落盘，不再转回去）。
+    func persistRelayConfigFromAgent(_ data: Data?) {
+        if let data, let config = RemoteHostAgentJSON.decode(RemoteRelayConfig.self, from: data) {
+            try? relayStore?.save(config)
+            relayConfig = config
+        } else {
+            relayStore?.clear()
+            relayConfig = nil
+        }
     }
 
     /// App Nap 会把心跳拖到几分钟一次，中继就把这台 Mac 摘掉了。只有用户选了「保持唤醒」才阻止闲置睡眠。
@@ -363,6 +397,9 @@ final class RemoteHostServer {
         refreshConnectedDevices()
     }
 
+    /// 此刻通过认证的连接数（远控进程据此判断能不能马上换新版本）。
+    var authorizedConnectionCount: Int { connections.values.filter(\.isAuthorized).count }
+
     func connectionClosed(_ connection: RemoteHostConnection) {
         connections.removeValue(forKey: connection.id)
         resolvePairing(connection.id, approved: false)
@@ -386,6 +423,7 @@ final class RemoteHostServer {
 
     /// 此刻通过认证、连着的主控设备，按名字排。
     func connectedControllers() -> [Controller] {
+        if agent != nil { return mirroredControllers }
         var newest: [UUID: RemoteHostConnection] = [:]
         for connection in connections.values where connection.isAuthorized {
             guard let peerID = connection.peerID else { continue }
@@ -405,6 +443,10 @@ final class RemoteHostServer {
 
     /// 此刻接管着这个终端的设备。没人接管回 nil。
     func controller(ofSession sessionID: UUID) -> Controller? {
+        if agent != nil {
+            guard let device = mirroredSessionControllers[sessionID] else { return nil }
+            return mirroredControllers.first { $0.deviceID == device }
+        }
         guard let holder = controllers[sessionID], let peerID = connections[holder.connection]?.peerID else { return nil }
         return connectedControllers().first { $0.deviceID == peerID }
     }
@@ -419,6 +461,34 @@ final class RemoteHostServer {
         let authorized = connections.values.filter(\.isAuthorized)
         connectedDevices = authorized.map(\.peerName).sorted()
         connectedPeerIDs = Set(authorized.compactMap(\.peerID))
+        onStateChange?()
+    }
+
+    /// 命令行反过来读写某台主控端的文件：找它此刻的连接发请求；远控服务在远控进程里时经它转发。
+    func performSharedFile(toDevice deviceID: UUID, name: String, request: RemoteFileRequest, body: Data,
+                           timeout: Duration?) async throws -> (reply: RemoteFileReply, body: Data) {
+        guard let agent else {
+            guard let connection = fileConnection(toDevice: deviceID) else {
+                throw RemoteFileError(.unreachable, "「\(name)」已经不连着这台 Mac 了")
+            }
+            return try await connection.performFile(request, body: body, timeout: timeout)
+        }
+        var request = request
+        request.acceptsCompression = true
+        let payload = RemoteFileCodec.packRequest(request, body: body, compress: true)
+        let limit = timeout ?? RemoteFileTimeouts.limit(for: request)
+        let millis = Int(limit.components.seconds * 1000) + Int(limit.components.attoseconds / 1_000_000_000_000_000)
+        guard let reply = await agent.send(.performFile(device: deviceID, payload: payload, requestID: request.id,
+                                                        timeoutMilliseconds: millis)) else {
+            throw RemoteFileError(.unreachable, "Mac 上的远控进程没有响应")
+        }
+        guard reply.ok, let raw = reply.data else {
+            throw reply.data.flatMap { RemoteHostAgentJSON.decode(RemoteFileError.self, from: $0) }
+                ?? RemoteFileError(.unreachable, reply.error ?? "远控进程没有转出这条请求")
+        }
+        let (fileReply, data) = try RemoteFileCodec.unpackReply(raw)
+        if let error = fileReply.error { throw error }
+        return (fileReply, data)
     }
 
     // MARK: - 配对
@@ -433,6 +503,12 @@ final class RemoteHostServer {
                 self?.resolvePairing(connectionID, approved: false)
             }
         }
+    }
+
+    /// 设置页的「显示二维码」：出示一张邀请。远控进程在服务时由它出示（它要核销），这里等状态推回来再显示。
+    func showPairingInvitation() {
+        if let agent { return agent.post(.makePairingInvitation) }
+        _ = try? makePairingInvitation()
     }
 
     /// 出示一张新的扫码邀请（旧的作废），`RemoteConstants.invitationLifetime` 后自动作废。
@@ -458,6 +534,10 @@ final class RemoteHostServer {
 
     /// 收回正在出示的邀请。没用掉的邀请里带的成员证书一并吊销：链接可能已经发出去了。
     func cancelPairingInvitation() {
+        if let agent {
+            pairingInvitation = nil
+            return agent.post(.cancelPairingInvitation)
+        }
         invitationExpiry?.cancel()
         invitationExpiry = nil
         pairingInvitation = nil
@@ -545,8 +625,15 @@ final class RemoteHostServer {
         for connection in connections.values { connection.sendRelayConfigIfAllowed() }
     }
 
-    func approvePairing(_ id: UUID) { resolvePairing(id, approved: true) }
-    func rejectPairing(_ id: UUID) { resolvePairing(id, approved: false) }
+    func approvePairing(_ id: UUID) {
+        if let agent { return agent.post(.approvePairing(id)) }
+        resolvePairing(id, approved: true)
+    }
+
+    func rejectPairing(_ id: UUID) {
+        if let agent { return agent.post(.rejectPairing(id)) }
+        resolvePairing(id, approved: false)
+    }
 
     private func resolvePairing(_ id: UUID, approved: Bool) {
         pairingRequests.removeAll { $0.id == id }
@@ -560,6 +647,7 @@ final class RemoteHostServer {
 
     /// 在 Mac 上给已配对的设备改名（只存本机，不告诉对方）。传空或与设备报的名字相同 = 恢复跟着设备报的名字走。
     func rename(_ peerID: UUID, to name: String) throws {
+        if let agent { return agent.post(.rename(peerID, name)) }
         guard let peer = identity.peer(id: peerID) else { return }
         let renamed = peer.renamed(name)
         guard renamed != peer else { return }
@@ -575,6 +663,7 @@ final class RemoteHostServer {
 
     /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。发给它的中继证书一并吊销。
     func revoke(_ peerID: UUID) {
+        if let agent { return agent.post(.revoke(peerID)) }
         if let grant = identity.peer(id: peerID)?.relayGrant { revokeRelayGrant(grant) }
         try? identity.revoke(id: peerID)
         trustedPeers = identity.trustedPeers()
@@ -636,6 +725,7 @@ final class RemoteHostServer {
     private func controllersChanged() {
         updateActivity()
         for connection in connections.values { connection.sendSessions() }
+        onStateChange?()
     }
 
     /// 手机发来了输入，或刚接入一个终端。
@@ -716,6 +806,7 @@ final class RemoteHostServer {
 
     /// 远控设置变了（如打开 / 关闭「允许远程解锁」）：把最新的锁屏状态推给正在看屏幕的手机，解锁入口立刻随之变化。
     func desktopSettingsChanged() {
+        if let agent { return agent.post(.desktopSettingsChanged) }
         guard let viewer = desktopViewer else { return }
         connections[viewer.connection]?.sendScreenState()
     }
@@ -728,12 +819,14 @@ final class RemoteHostServer {
 
     /// Mac 上关了「允许传输声音」：正在送的声音停掉（画面不受影响）。
     func endDesktopAudio(reason: String) {
+        if let agent { return agent.post(.endDesktopAudio(reason)) }
         guard let viewer = desktopViewer, let holder = connections[viewer.connection] else { return }
         holder.stopAudio(notify: reason)
     }
 
     /// 在 Mac 上结束桌面流（指示条上的「断开」、关掉开关）。
     func endDesktop(reason: String) {
+        if let agent { return agent.post(.endDesktop(reason)) }
         guard let viewer = desktopViewer, let holder = connections[viewer.connection] else {
             desktopViewer = nil
             updateActivity()
@@ -807,8 +900,120 @@ final class RemoteHostServer {
     }
 }
 
+// MARK: - 远控进程
+
+/// App 侧到远控进程的一条连接（`RemoteHostAgentBridge`）。
+@MainActor
+protocol RemoteHostAgentLink: AnyObject {
+    /// 发一个操作，不等结果。
+    func post(_ command: RemoteHostAgentCommand)
+    /// 发一个操作，等它的结果。远控进程不在时回 nil。
+    func send(_ command: RemoteHostAgentCommand) async -> RemoteHostAgentCommandReply?
+}
+
+extension RemoteHostServer {
+    /// 远控进程里：把此刻的状态打包给 App。
+    func agentState() -> RemoteHostAgentState {
+        var state = RemoteHostAgentState()
+        switch status {
+        case .stopped: state.status = .stopped
+        case .listening: state.status = .listening
+        case .failed(let message): state.status = .failed(message)
+        }
+        state.port = port
+        state.connectedDevices = connectedDevices
+        state.connectedPeerIDs = connectedPeerIDs.sorted { $0.uuidString < $1.uuidString }
+        state.pairingRequests = pairingRequests.map { .init(id: $0.id, deviceName: $0.deviceName, code: $0.code) }
+        state.pairingInvitation = pairingInvitation?.url.absoluteString
+        state.desktopViewer = desktopViewer.map {
+            .init(connection: $0.connection, channel: $0.channel, deviceName: $0.deviceName, canControl: $0.canControl,
+                  isControlling: $0.isControlling, hasAudio: $0.hasAudio)
+        }
+        state.relayState = relayLink.map { link in
+            switch link.state {
+            case .connecting: .connecting
+            case .registered: .registered
+            case .failed(let message): .failed(message)
+            case .superseded: .superseded
+            case .stopped: .stopped
+            }
+        }
+        state.relayRunningVersion = relayUpdates.runningVersion
+        let controllers = connectedControllers()
+        state.controllers = controllers.map {
+            .init(deviceID: $0.deviceID, name: $0.name, platform: $0.platform, sharesFiles: $0.sharesFiles, sessions: $0.sessions)
+        }
+        for controller in controllers {
+            for session in controller.sessions { state.sessionControllers[session] = controller.deviceID }
+        }
+        return state
+    }
+
+    /// App 侧：照远控进程报来的状态显示。
+    func applyAgentState(_ state: RemoteHostAgentState) {
+        switch state.status {
+        case .stopped: status = .stopped
+        case .listening: status = .listening
+        case .failed(let message): status = .failed(message)
+        }
+        port = state.port
+        if connectedDevices != state.connectedDevices { connectedDevices = state.connectedDevices }
+        let peers = Set(state.connectedPeerIDs)
+        if connectedPeerIDs != peers { connectedPeerIDs = peers }
+        let requests = state.pairingRequests.map { PairingRequest(id: $0.id, deviceName: $0.deviceName, code: $0.code) }
+        if pairingRequests != requests { pairingRequests = requests }
+        let invitation = state.pairingInvitation.flatMap(RemotePairingInvitation.init(scanned:))
+        if pairingInvitation != invitation { pairingInvitation = invitation }
+        let viewer = state.desktopViewer.map {
+            DesktopViewer(connection: $0.connection, channel: $0.channel, deviceName: $0.deviceName, canControl: $0.canControl,
+                          isControlling: $0.isControlling, hasAudio: $0.hasAudio)
+        }
+        if desktopViewer != viewer { desktopViewer = viewer }
+        let relay: RemoteRelayHostLink.State? = state.relayState.map {
+            switch $0 {
+            case .connecting: .connecting
+            case .registered: .registered
+            case .failed(let message): .failed(message)
+            case .superseded: .superseded
+            case .stopped: .stopped
+            }
+        }
+        if mirroredRelayState != relay { mirroredRelayState = relay }
+        if relayUpdates.runningVersion != state.relayRunningVersion, let version = state.relayRunningVersion {
+            relayUpdates.noteRunning(version)
+        }
+        mirroredControllers = state.controllers.map {
+            Controller(deviceID: $0.deviceID, name: $0.name, platform: $0.platform, sharesFiles: $0.sharesFiles,
+                       sessions: $0.sessions)
+        }
+        mirroredSessionControllers = state.sessionControllers
+        // 配对、改名、撤销都由远控进程写回到 App 的钥匙串，这里跟着读一遍。
+        let peersNow = identity.trustedPeers()
+        if trustedPeers != peersNow { trustedPeers = peersNow }
+    }
+
+    /// App 侧：远控进程写回的一条身份存储（配对、改名、撤销、中继证书）。
+    func agentPersistedIdentity() {
+        let peersNow = identity.trustedPeers()
+        if trustedPeers != peersNow { trustedPeers = peersNow }
+    }
+
+    /// App 侧：远控进程断开了（宽限期之外、或进程没了），状态回到未开启，等桥接重连或退回进程内服务。
+    func agentDisconnected() {
+        status = .stopped
+        connectedDevices = []
+        connectedPeerIDs = []
+        pairingRequests = []
+        pairingInvitation = nil
+        desktopViewer = nil
+        mirroredRelayState = nil
+        mirroredControllers = []
+        mirroredSessionControllers = [:]
+    }
+}
+
 /// 这个进程不注册中继的原因。
-nonisolated enum RemoteRelayRegistrationBlock: Equatable, Sendable {
+nonisolated enum RemoteRelayRegistrationBlock: String, Equatable, Sendable {
     /// 不在 /Applications 或 ~/Applications 里的开发构建（启动参数 `-RemoteRelayAllowDevBuild YES` 可放开）。
     case developmentBuild
     /// 跑测试的宿主进程。

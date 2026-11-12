@@ -71,6 +71,8 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteRelayManagedHosts, "remote.relay.managedHosts"),
         (DefaultsKey.remoteRelayLatestVersion, "remote.relay.latestVersion"),
         (DefaultsKey.remoteRelayPendingRevocations, "remote.relay.pendingRevocations"),
+        (DefaultsKey.remoteHostAgentDisabled, "remote.hostAgent.disabled"),
+        (DefaultsKey.remoteHostAgentPlistDigest, "remote.hostAgent.plistDigest"),
         (DefaultsKey.remoteRelayLatestCheckedAt, "remote.relay.latestCheckedAt"),
         (DefaultsKey.remoteRelayNotifiedVersion, "remote.relay.notifiedVersion"),
         (DefaultsKey.lanSyncDeviceID, "lanSync.deviceID"),

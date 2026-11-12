@@ -110,6 +110,10 @@ nonisolated enum DefaultsKey {
     static let remoteRelayNotifiedVersion = "remote.relay.notifiedVersion"
     /// macOS：还没被中继确认的成员证书吊销（中继 ID → 成员公钥），注册上中继时补发。
     static let remoteRelayPendingRevocations = "remote.relay.pendingRevocations"
+    /// macOS：不用远控进程、远控服务留在 App 里（排查问题时的退路，默认没有这个键）。
+    static let remoteHostAgentDisabled = "remote.hostAgent.disabled"
+    /// macOS：上次注册远控进程时 launchd plist 的摘要。plist 变了要先注销再注册（launchd 在注册时缓存任务定义）。
+    static let remoteHostAgentPlistDigest = "remote.hostAgent.plistDigest"
 
     static let lanSyncDeviceID = "lanSync.deviceID"
     static let lanSyncHostPairingCode = "lanSync.hostPairingCode"

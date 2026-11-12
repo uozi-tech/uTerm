@@ -122,8 +122,12 @@ struct uTermApp: App {
         remoteServer.grantInternetAccess = { [remoteSettings] in remoteSettings.internetDevices.insert($0) }
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
-        remotePairingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemotePairingPrompt(server: remoteServer)
-        remoteDesktopIndicator = BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteDesktopIndicator(server: remoteServer)
+        // 远控服务跑在常驻的远控进程里（App 更新、崩溃时远控连接不断）：配对审批框与被控指示条也由它显示。
+        // 不能用时（开发构建、测试宿主、用户关了它的后台运行）照旧跑在 App 里。
+        let usesRemoteHostAgent = RemoteHostAgentBridge.isEligible() && RemoteHostAgentBridge.register()
+        let showsRemotePanels = !BackgroundLaunchMode.isRunningInTestHost && !usesRemoteHostAgent
+        remotePairingPrompt = showsRemotePanels ? RemotePairingPrompt(server: remoteServer) : nil
+        remoteDesktopIndicator = showsRemotePanels ? RemoteDesktopIndicator(server: remoteServer) : nil
 
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
@@ -153,11 +157,19 @@ struct uTermApp: App {
             remoteServer.fileAccess = .live(settings: remoteSettings)
             remoteMacs.fileSharing = { [remoteFileSharing] macID in remoteFileSharing.access(for: macID) }
             remoteMacs.onForget = { [remoteFileSharing] macID in remoteFileSharing.removeAll(for: macID) }
-            remoteServer.sessionRestoration = {
+            let restoration: @MainActor () async -> Void = {
                 await LocalShellRestorer.shared.finished()
                 await SSHSessionRestorer.shared.finished()
             }
+            remoteServer.sessionRestoration = restoration
+            // 先接上远控进程再观察设置：观察会立刻回调一次，那时 `remoteServer.agent` 必须已经设好，否则 App 里也会开一份服务。
+            let hostBridge = usesRemoteHostAgent ? RemoteHostAgentBridge(
+                server: remoteServer, registry: terminalRegistry, settings: remoteSettings, restoration: restoration,
+                transport: RemoteHostAgentBridge.production) : nil
+            hostBridge?.start()
+            RemoteHostAgentBridge.current = hostBridge
             remoteSettings.observe { settings in
+                hostBridge?.settingsChanged()
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 remoteServer.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
                                                   keepAwake: settings.keepsAwakeForInternet)
@@ -177,6 +189,8 @@ struct uTermApp: App {
                     // 扬声器的静音不会（只能等下次启动 restoreLeftovers）。
                     RemoteCurtain.shared.disable()
                     remoteServer.stop()
+                    // 远控进程：更新时继续服务（宽限期内等新版本回来），用户退出时随之结束。
+                    hostBridge?.depart(TerminalQuitPolicy.shared.isRelaunchingForUpdate ? .update : .quit)
                     TerminalQuitPolicy.shared.applicationWillTerminate()
                 }
                 Task { await ControlConnectionPool.shared.disconnectAll() }

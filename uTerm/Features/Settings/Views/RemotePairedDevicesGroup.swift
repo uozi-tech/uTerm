@@ -17,7 +17,7 @@ struct RemotePairedDevicesGroup: View {
                 SettingsListRow(icon: "qrcode", tint: UD.accent, title: String(localized: "扫码配对"),
                                 subtitle: RemoteControlPresentation.pairingHint(hasInvitation: server.pairingInvitation != nil)) {
                     if server.pairingInvitation == nil {
-                        UDButton(title: "显示二维码", style: .secondary) { _ = try? server.makePairingInvitation() }
+                        UDButton(title: "显示二维码", style: .secondary) { server.showPairingInvitation() }
                     } else {
                         HStack(spacing: 8) {
                             UDButton(title: "拷贝链接", style: .secondary) {

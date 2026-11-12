@@ -171,11 +171,11 @@ final class ControlMacSessions: ControlRemoteMacs {
         let deviceID = controller.deviceID
         let name = controller.name
         let provider = RemoteMacFileProvider(send: { [weak host] request, body, timeout in
-            let connection = await MainActor.run { host?.fileConnection(toDevice: deviceID) }
-            guard let connection else {
+            guard let host = await MainActor.run(body: { host }) else {
                 throw RemoteFileError(.unreachable, "「\(name)」已经不连着这台 Mac 了")
             }
-            return try await connection.performFile(request, body: body, timeout: timeout)
+            return try await host.performSharedFile(toDevice: deviceID, name: name, request: request, body: body,
+                                                    timeout: timeout)
         })
         return ControlMacSession(id: ControlMacRole.controllerPrefix + deviceID.uuidString, name: name,
                                  role: ControlMacRole.controller, provider: provider)
