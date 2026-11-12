@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import Citadel
 import NIOCore
+import NIOPosix
 import NIOSSH
 
 /// 一条隧道的状态（由 `ForwardingCoordinator` 观察、驱动 UI 行）。
@@ -136,28 +137,41 @@ actor ForwardingSession {
         }
     }
 
-    /// `-R` 远程：子 Task 跑 `runRemotePortForward`，`onOpen` 回报 active；
+    /// `-R` 远程：子 Task 跑 `withRemotePortForward`，`onOpen` 回报 active；
     /// Task 阻塞至取消；抛错 → 归类后报 error。
+    ///
+    /// **不要换回 Citadel 的 `runRemotePortForward`**：它不给 forwarded-tcpip 通道加
+    /// `SSHChannelData` → `ByteBuffer` 的编解码，第一份数据到达时 `NIOAsyncChannel<ByteBuffer, …>`
+    /// 在 `forceAsByteBuffer` 断言、整个 App 崩掉（2.1.2 真机实测：服务器上有人一连就崩）。
+    /// 这里自己加 `ForwardedChannelCodec`，再像 `-L` 一样用 `TunnelGlue` 双向泵（顺带有了流量计数）。
     private func startRemote(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
         let onStatus = self.onStatus
         // remote 需要本地目标地址；缺失时退化到回环（与 ssh -R 默认一致）。
         let destHost = rule.destHost ?? "127.0.0.1"
-        // -R 走 Citadel runRemotePortForward 内部转发，不经我们的粘合点 → 计数器恒 0（UI 标「不统计」）。
+        let destPort = rule.destPort
         let counter = TunnelByteCounter()
         let task = Task {
             do {
-                try await connected.target.runRemotePortForward(
+                try await connected.target.withRemotePortForward(
                     host: rule.listenHost,
                     port: rule.listenPort,
-                    forwardingTo: destHost,
-                    port: rule.destPort,
+                    inboundType: ByteBuffer.self,
+                    outboundType: ByteBuffer.self,
+                    configure: { channel in
+                        channel.pipeline.addHandler(ForwardedChannelCodec())
+                    },
                     onOpen: { _ in
                         onStatus(rule.id, .active)
                         AppLogger.info(
                             "远程转发已建立 \(rule.listenHost):\(rule.listenPort) → \(destHost):\(rule.destPort)",
                             category: ForwardingLog.category)
+                    },
+                    onAccept: { inbound in
+                        await RemoteForwardBridge.serve(
+                            inbound, destHost: destHost, destPort: destPort,
+                            ruleName: rule.name, counter: counter)
                     })
-                // 正常取消（stop）→ runRemotePortForward 返回，不报 error。
+                // 正常取消（stop）→ withRemotePortForward 返回，不报 error。
             } catch {
                 if !Task.isCancelled {
                     onStatus(rule.id, .error(ForwardingError.classify(error, rule: rule)))
@@ -239,7 +253,7 @@ actor ForwardingSession {
         handle.task.cancel()
         await handle.localListener?.close()
         await handle.socksListener?.close()
-        // remote 隧道靠取消 Task 触发 runRemotePortForward 内部的 cancellation 请求。
+        // remote 隧道靠取消 Task 触发 withRemotePortForward 内部的 cancellation 请求。
         onStatus(ruleID, .inactive)
     }
 
@@ -373,5 +387,84 @@ actor ForwardingSession {
                         category: ForwardingLog.category)
         // 通知协调器立即驱逐+按期望规则重连（不必等看门狗 30s 心跳）。
         onTransportDeath()
+    }
+}
+
+// MARK: - -R 的入站连接
+
+/// forwarded-tcpip 通道上的 `SSHChannelData` ⇄ `ByteBuffer`。Citadel 自己那份
+/// （`DataToBufferCodec`）是 internal，`runRemotePortForward` 又没加它 —— 见 `startRemote`。
+///
+/// 加上时打开 `allowRemoteHalfClosure`：服务器那头的客户端发完请求先关写（FIN）时，
+/// 只让入站结束、回给它的响应照样能写回去（和 `-L` 的本地 socket 一样）。
+nonisolated final class ForwardedChannelCodec: ChannelDuplexHandler, Sendable {
+    typealias InboundIn = SSHChannelData
+    typealias InboundOut = ByteBuffer
+    typealias OutboundIn = ByteBuffer
+    typealias OutboundOut = SSHChannelData
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        // handlerAdded 在通道的 EventLoop 上：能同步设就同步设，失败了也只是退回「不半关」。
+        if let options = context.channel.syncOptions {
+            try? options.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+        } else {
+            _ = context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+        }
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let message = unwrapInboundIn(data)
+        // 只有 channel 数据是连接里的字节；扩展数据（stderr）在 TCP 转发里不该出现，丢掉。
+        guard case .channel = message.type, case .byteBuffer(let bytes) = message.data else {
+            return
+        }
+        context.fireChannelRead(wrapInboundOut(bytes))
+    }
+
+    func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
+        let bytes = unwrapOutboundIn(data)
+        context.write(
+            wrapOutboundOut(SSHChannelData(type: .channel, data: .byteBuffer(bytes))),
+            promise: promise)
+    }
+}
+
+/// 一条 -R 入站连接：连本机目标，然后和 forwarded-tcpip 通道双向泵。
+nonisolated enum RemoteForwardBridge {
+    /// 本机目标几秒连不上就放弃这条连接（目标是本机或局域网，正常是毫秒级）。
+    static let connectTimeout: TimeAmount = .seconds(10)
+
+    static func serve(
+        _ inbound: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
+        destHost: String,
+        destPort: Int,
+        ruleName: String,
+        counter: TunnelByteCounter
+    ) async {
+        let local: NIOAsyncChannel<ByteBuffer, ByteBuffer>
+        do {
+            local = try await ClientBootstrap(group: inbound.channel.eventLoop)
+                .connectTimeout(connectTimeout)
+                .channelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+                .channelOption(ChannelOptions.socketOption(.tcp_nodelay), value: 1)
+                .connect(host: destHost, port: destPort)
+                .flatMapThrowing { channel in
+                    // flatMapThrowing 跑在 channel 的 EventLoop 上：wrappingChannelSynchronously 的前提。
+                    try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                        wrappingChannelSynchronously: channel,
+                        configuration: .init(isOutboundHalfClosureEnabled: true))
+                }
+                .get()
+        } catch {
+            AppLogger.error(
+                "远程转发 \(ruleName)：连不上本机目标 \(destHost):\(destPort)（\(error.localizedDescription)）",
+                category: ForwardingLog.category)
+            // inbound 还没被消费：必须经 executeThenClose 收尾（它会 finish 出站 writer）。
+            // 只 close 的话 writer 析构时没 finish → NIO preconditionFailure 把整个进程带走。
+            try? await inbound.executeThenClose { _, _ in }
+            return
+        }
+        // 上行 = 本机 → 远端，与 -L 的计数方向一致。
+        await TunnelGlue.pipe(local, inbound, counter: counter)
     }
 }
