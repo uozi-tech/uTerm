@@ -42,6 +42,46 @@ nonisolated final class RemoteFileWaiters: @unchecked Sendable {
     }
 }
 
+extension RemoteFileWaiters {
+    /// 登记一条请求、发出去、等它的应答。到时限没回、任务被取消都会把登记撤掉。
+    /// - Parameter peer: 对端怎么称呼（超时的提示里用）。
+    func exchange(_ payload: Data, id: UUID, timeout: Duration, peer: String,
+                  send: @escaping @Sendable (Data) -> Void) async throws -> Data {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                let watchdog = Task {
+                    try? await Task.sleep(for: timeout)
+                    guard !Task.isCancelled else { return }
+                    self.fail(id, RemoteFileError(.timeout, "\(peer) 在 \(RemoteConnectTrace.millis(timeout) / 1000) 秒内没有回应"))
+                }
+                add(id, continuation, watchdog: watchdog)
+                // 取消可能早于登记：那时取消回调已经扑空了，这里补上。
+                if Task.isCancelled {
+                    fail(id, CancellationError())
+                    return
+                }
+                send(payload)
+            }
+        } onCancel: {
+            self.fail(id, CancellationError())
+        }
+    }
+}
+
+/// 主控端把文件夹共享给被控 Mac 时，收到的文件请求交给谁。由 App 接线（只有 Mac 有，手机没有可共享的文件）。
+nonisolated struct RemoteFileSharingAccess: Sendable {
+    /// 此刻共享给这台 Mac 的范围。nil 或空 = 什么也没共享。每条请求都现问，改了共享立刻生效。
+    let scope: @MainActor @Sendable () -> RemoteFileScope?
+    /// 打包好的请求进、打包好的应答出，只放行范围里的。不抛错。
+    let perform: @Sendable (Data, RemoteFileScope) async -> Data
+
+    init(scope: @escaping @MainActor @Sendable () -> RemoteFileScope?,
+         perform: @escaping @Sendable (Data, RemoteFileScope) async -> Data) {
+        self.scope = scope
+        self.perform = perform
+    }
+}
+
 /// 一条请求最多等多久。被控端自己有时限的操作，在它的时限上再留一点余量。
 nonisolated enum RemoteFileTimeouts {
     static func limit(for request: RemoteFileRequest) -> Duration {
@@ -160,20 +200,28 @@ nonisolated enum RemoteMacTransfer {
 /// 把一台远程 Mac 的文件服务包成 `SFTPProviding`：文件面板、命令行的文件动作都只认这个协议，
 /// 接上它就不用写第二套。
 actor RemoteMacFileProvider: SFTPProviding {
-    private let client: RemoteMacClient
+    /// 发一条请求、等应答。两个方向各有一份：主控端经 `RemoteMacClient` 发给被控的 Mac，
+    /// 被控的 Mac 经 `RemoteHostConnection` 反过来发给主控端。
+    typealias Send = @Sendable (RemoteFileRequest, Data, Duration?) async throws -> (reply: RemoteFileReply, body: Data)
+
+    private let send: Send
+
+    init(send: @escaping Send) {
+        self.send = send
+    }
 
     init(client: RemoteMacClient) {
-        self.client = client
+        self.send = { request, body, timeout in try await client.performFile(request, body: body, timeout: timeout) }
     }
 
     /// 任意一条文件请求（`SFTPProviding` 之外的搜索、改文件、跑命令都从这里走）。
     nonisolated func perform(_ request: RemoteFileRequest, body: Data = Data(),
                              timeout: Duration? = nil) async throws -> (reply: RemoteFileReply, body: Data) {
-        try await client.performFile(request, body: body, timeout: timeout)
+        try await send(request, body, timeout)
     }
 
     private nonisolated var performer: RemoteMacTransfer.Perform {
-        { [client] request, body in try await client.performFile(request, body: body) }
+        { [send] request, body in try await send(request, body, nil) }
     }
 
     // MARK: - SFTPProviding

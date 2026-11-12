@@ -29,6 +29,8 @@ import time
 import uuid
 
 ENV_SOCKET = "UTERM_CONTROL_SOCKET"
+# uTerm 开本机终端时写进 shell 环境的终端编号（见 `mac_target`）。
+ENV_SESSION = "UTERM_SESSION_ID"
 BUNDLE_ID = "com.uozi.uTerm"
 ON_DEMAND_KEY = "background.allowOnDemandLaunch"
 CONTROL_ENABLED_KEY = "control.enabled"
@@ -345,7 +347,9 @@ def build_mac_parser(sub, shared):
 
     def mac_add(name, help_text):
         p = mac_sub.add_parser(name, parents=[shared], help=help_text)
-        p.add_argument("--mac", "-M", required=True, help="Mac 的名字或设备 UUID（见 utermctl macs）")
+        p.add_argument("--mac", "-M",
+                       help="Mac 的名字或 id（见 utermctl macs）。不写 = 此刻正在用这个终端的那台设备"
+                            "（只在被别的设备远程控制着的 uTerm 终端里有意义）")
         return p
 
     def walk_flags(p):
@@ -488,6 +492,8 @@ def build_mac_parser(sub, shared):
     p.add_argument("attribute", nargs="?")
     p.add_argument("value", nargs="?")
 
+    mac_add("shares", "那台设备给这台 Mac 开放了哪些目录（整台 Mac，还是几个共享文件夹）")
+
     p = mac_add("wait-change", "等一个文件或目录有变化")
     p.add_argument("path")
     p.add_argument("--wait", type=float, help="最多等几秒，默认 30，封顶 600")
@@ -554,6 +560,10 @@ def command_string(args, optional=False):
 def make_request(args):
     action = resolved_action(args)
     request = {"id": str(uuid.uuid4()), "action": action}
+
+    # `macs` 也带上「我在哪个终端里」：列表里才标得出此刻正在用这个终端的那台设备。
+    if action == "macs" and os.environ.get(ENV_SESSION):
+        request["mac"] = {"session": os.environ[ENV_SESSION]}
 
     host = getattr(args, "host", None)
     if isinstance(host, list):
@@ -1132,21 +1142,41 @@ def local_sha256(path):
     return digest.hexdigest()
 
 
+def is_mac(args):
+    """这条命令的对象是不是一台 Mac（`mac …`）。`--mac` 可以不写，所以不能拿它有没有值来判断。"""
+    return getattr(args, "mac_action", None) is not None or getattr(args, "is_mac", False)
+
+
+def mac_target(args):
+    """`mac` 字段里指明对象的那部分：点名的 Mac，加上「我在哪个终端里」。
+
+    uTerm 开本机终端时把终端的编号写进 `UTERM_SESSION_ID`。带上它，uTerm 才能在没写 `--mac` 时现查
+    「此刻是哪台设备在用这个终端」——设备会换（手机接管之后 Mac 又接管），所以环境变量里只有终端的编号，
+    没有设备名。"""
+    target = {}
+    name = getattr(args, "mac", None)
+    if name:
+        target["target"] = name
+    session = os.environ.get(ENV_SESSION)
+    if session:
+        target["session"] = session
+    return target
+
+
 def target_fields(args):
-    """这次传输 / 查询的对象：配对过的 Mac（`mac …`）或 SSH 主机（`sftp …`）。"""
-    mac = getattr(args, "mac", None)
-    if mac:
-        return {"mac": {"target": mac}}
+    """这次传输 / 查询的对象：一台 Mac（`mac …`）或 SSH 主机（`sftp …`）。"""
+    if is_mac(args):
+        return {"mac": mac_target(args)}
     return {"host": args.host}
 
 
 def transfer_action(args, verb):
-    return ("mac-" if getattr(args, "mac", None) else "sftp-") + verb
+    return ("mac-" if is_mac(args) else "sftp-") + verb
 
 
 def remote_sha256(args, path):
     """回 (十六进制, None) 或 (None, 说明)。远端两个工具都没有不算失败。"""
-    if getattr(args, "mac", None):
+    if is_mac(args):
         response = send_request(new_request("mac-hash", path=path, **target_fields(args)))
         if not response.get("ok"):
             return None, ("那台 Mac 算 sha256 没成（%s：%s），跳过校验"
@@ -1475,7 +1505,7 @@ def inline_text(args, what):
 
 def make_mac_request(args):
     leaf = args.mac_action
-    mac = {"target": args.mac}
+    mac = mac_target(args)
     request = {"id": str(uuid.uuid4()), "action": "mac-" + leaf, "mac": mac}
 
     options = []
@@ -1553,7 +1583,7 @@ def make_mac_request(args):
 
 
 def mac_call(args, action, mac=None, **fields):
-    target = {"target": args.mac}
+    target = mac_target(args)
     target.update(mac or {})
     return send_with_retry(lambda previous: send_request(new_request(action, mac=target, **fields)))
 
@@ -1628,7 +1658,7 @@ def local_tree(root, patterns):
 
 def transfer_one(args, direction, local, remote, force=True):
     """整棵目录里的一个文件。回 None（成了）或 {path, code, message}。"""
-    one = argparse.Namespace(mac=args.mac, host=None, path=remote, local=local, force=force,
+    one = argparse.Namespace(mac=args.mac, is_mac=True, host=None, path=remote, local=local, force=force,
                              resume=False, parallel=getattr(args, "parallel", DEFAULT_PARALLEL),
                              verify=False, quiet=True, in_tree=True)
     try:
@@ -1837,7 +1867,7 @@ def do_mac_sync(args):
                      "seconds": seconds}}
 
 
-MAC_COLUMNS = ["name", "onLocalNetwork", "onRelay", "connected", "path", "supportsFiles", "id"]
+MAC_COLUMNS = ["name", "role", "current", "onLocalNetwork", "onRelay", "connected", "path", "supportsFiles", "id"]
 
 
 def mac_output(response, fmt, action):
@@ -1850,6 +1880,12 @@ def mac_output(response, fmt, action):
         return render_table(MAC_COLUMNS, rows) if fmt == "table" else render_csv(MAC_COLUMNS, rows)
     if action == "mac-run":
         return run_output(response)
+    if action == "mac-shares":
+        roots = mac.get("roots")
+        if not roots:
+            return response.get("message") or ""
+        rows = [[item.get("path", ""), "读写" if item.get("writable") else "只读"] for item in roots]
+        return render_table(["path", "access"], rows) if fmt == "table" else render_csv(["path", "access"], rows)
     payload = response.get("file")
     if isinstance(payload, dict):
         if payload.get("text") is not None:

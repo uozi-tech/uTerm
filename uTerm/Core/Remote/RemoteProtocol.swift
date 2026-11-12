@@ -125,6 +125,9 @@ nonisolated enum RemoteFeature {
     /// 文件服务：认得 `fileRequest` / `fileReply`（列目录、读写、搜索、跑命令，见 `RemoteFileWire`）。
     /// 老 Mac 收到 `fileRequest` 会当未知消息断开整条连接，所以主控端只对声明了这一项的 Mac 发。
     static let files = "files"
+    /// 反过来的文件服务：主控端（Mac）答被控 Mac 发来的 `fileRequest`，范围限在主控端共享出去的文件夹里。
+    /// 只有主控端声明；被控的 Mac 只对声明了这一项的设备发（手机、老版本的 Mac 收到会当未知消息处理）。
+    static let fileSharing = "file-sharing"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -259,6 +262,7 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 负载 = 1 字节标志（`RemoteTerminalSnapshotPiece`）+ 影子终端二进制快照的一段。快照可以很大，切成多条发。
         /// 只有两端终端引擎版本相同（握手里的 `terminalEngine`）才会接入成功，所以设备一定解得开。
         case terminalSnapshot = 47
+        /// 反方向也用这一对：被控的 Mac → 声明了 `file-sharing` 的主控端发请求，主控端回应答。
         /// 主控端 → Mac：一条文件请求（`RemoteConstants.fileChannel`）。负载是 `RemoteFileCodec` 打包的
         /// `RemoteFileRequest` 加正文。只发给 `features` 带 `files` 的 Mac。
         case fileRequest = 48

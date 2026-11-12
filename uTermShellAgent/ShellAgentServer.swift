@@ -6,7 +6,7 @@ import os
 ///
 /// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
-    static let version = "6"
+    static let version = "7"
     /// 等 holder 开始监听的上限。正常几毫秒。
     private static let spawnWaitSeconds = 5.0
     /// 控制通道在 holder 和 `uterm-ssh` 里的 fd 号。0/1/2 之后第一个，holder 自己开的 fd 都排在它后面。
@@ -53,6 +53,19 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         }
     }
 
+    func scopedFileRequest(_ payload: Data, scope: Data, reply: @escaping @Sendable (Data) -> Void) {
+        // 范围解不开就什么都不放行，不能退回成「不限定」。
+        guard let scope = try? JSONDecoder().decode(RemoteFileScope.self, from: scope) else {
+            reply(RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
+                                                     RemoteFileError(.invalid, "共享范围解不开")), compress: false))
+            return
+        }
+        let isLong = RemoteFileCodec.operation(of: payload)?.isLongRunning ?? false
+        (isLong ? longFileQueue : fileQueue).addOperation {
+            reply(RemoteFileService.handle(payload, scope: scope))
+        }
+    }
+
     func openSession(namespace: String, id: String, directory shellDirectory: String?, columns: Int, rows: Int, ownsResponsibility: Bool,
                      reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
         queue.async {
@@ -67,7 +80,8 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                 let pid = try self.spawnHolder(
                     directory: directory, name: name, columns: columns, rows: rows,
                     workingDirectory: shellDirectory ?? NSHomeDirectory(), executable: shell,
-                    argv0: "-" + (shell as NSString).lastPathComponent, environment: Self.environment(shell: shell), controlFD: nil,
+                    argv0: "-" + (shell as NSString).lastPathComponent,
+                    environment: Self.environment(shell: shell, sessionID: id), controlFD: nil,
                     ownsResponsibility: ownsResponsibility)
                 reply(try self.waitForHolder(pid: pid, directory: directory, name: name), nil)
             } catch {
@@ -276,10 +290,14 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
     }
 
     /// 在 launchd 给的环境上补终端相关的几项；PATH 等由登录 shell 自己读 `/etc/zprofile`（path_helper）补全。
-    static func environment(shell: String) -> [String] {
+    ///
+    /// `sessionID`：这个终端在 uTerm 里的编号，写进 `UTERM_SESSION_ID`。终端里跑的 `utermctl` 凭它告诉 uTerm
+    /// 「我在哪个终端里」，uTerm 再现查此刻是哪台设备在用这个终端——设备会换，编号不会，所以环境变量里只放编号。
+    static func environment(shell: String, sessionID: String? = nil) -> [String] {
         var env = ProcessInfo.processInfo.environment.filter { key, _ in
             !key.hasPrefix("XPC_") && !key.hasPrefix("__CF")
         }
+        if let sessionID { env["UTERM_SESSION_ID"] = sessionID }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "uTerm"

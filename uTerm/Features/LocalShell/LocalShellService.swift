@@ -155,6 +155,19 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         }
     }
 
+    /// 同上，只放行落在 `scope` 里的请求（见 `RemoteFileService.confine`）。
+    func fileRequest(_ payload: Data, scope: RemoteFileScope) async throws -> Data {
+        let encoded = try JSONEncoder().encode(scope)
+        return try await withCheckedThrowingContinuation { continuation in
+            let once = LocalShellOnce(continuation)
+            guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
+                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                return
+            }
+            agent.scopedFileRequest(payload, scope: encoded) { once.resume(returning: $0) }
+        }
+    }
+
     func listSessions(namespace: String) async throws -> [UUID] {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)

@@ -22,7 +22,9 @@ final class LocalShellIntegrationTests: XCTestCase {
         let version = try await client.ping()
         XCTAssertFalse(version.isEmpty)
 
-        let backend = LocalShellBackend(client: client, namespace: "integration-test", columns: 80, rows: 24)
+        let sessionID = UUID()
+        let backend = LocalShellBackend(client: client, namespace: "integration-test", sessionID: sessionID,
+                                        columns: 80, rows: 24)
         try await backend.connect()
         var output = ""
         let pump = Task { @MainActor in
@@ -44,6 +46,11 @@ final class LocalShellIntegrationTests: XCTestCase {
         let listed = await waitFor("_42")
         XCTAssertTrue(listed, "shell 没有回应：\(output.suffix(400))")
         XCTAssertTrue(output.contains("HOME_OK_42"), "shell 读不到主目录（还在沙盒里？）：\(output.suffix(400))")
+
+        // 终端的编号写进了环境变量：终端里跑的 `utermctl` 凭它告诉 uTerm 自己在哪个终端里。
+        await backend.write(Data("echo SESSION_${UTERM_SESSION_ID}_END\n".utf8))
+        let identified = await waitFor("SESSION_\(sessionID.uuidString)_END")
+        XCTAssertTrue(identified, "shell 里没有 UTERM_SESSION_ID：\(output.suffix(300))")
 
         await backend.resize(cols: 99, rows: 33)
         try? await Task.sleep(for: .milliseconds(200))
@@ -99,7 +106,9 @@ final class LocalShellIntegrationTests: XCTestCase {
     func test_natural_shell_exit_is_reported_on_exit_stream() async throws {
         let client = LocalShellAgentClient()
         defer { client.invalidate() }
-        let backend = LocalShellBackend(client: client, namespace: "integration-test", columns: 80, rows: 24)
+        let sessionID = UUID()
+        let backend = LocalShellBackend(client: client, namespace: "integration-test", sessionID: sessionID,
+                                        columns: 80, rows: 24)
         try await backend.connect()
         let drain = Task { for await _ in backend.outputItems {} }
         defer { drain.cancel() }

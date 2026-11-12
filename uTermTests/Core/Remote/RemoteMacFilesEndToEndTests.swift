@@ -266,12 +266,12 @@ final class RemoteMacFilesEndToEndTests: XCTestCase {
             session = ControlMacSession(id: UUID().uuidString, name: "studio", provider: RemoteMacFileProvider(client: client))
         }
 
-        func snapshots() -> [ControlMacSnapshot] {
-            [ControlMacSnapshot(id: session.id, name: session.name, onLocalNetwork: true, onRelay: nil,
-                                connected: true, path: "局域网", supportsFiles: true)]
+        func snapshots(session caller: UUID?) -> [ControlMacSnapshot] {
+            [ControlMacSnapshot(id: session.id, name: session.name, role: ControlMacRole.host,
+                                onLocalNetwork: true, onRelay: nil, connected: true, path: "局域网", supportsFiles: true)]
         }
 
-        func provider(for needle: String) async throws(ControlFailure) -> ControlMacSession {
+        func provider(for needle: String, session caller: UUID?) async throws(ControlFailure) -> ControlMacSession {
             guard needle == session.name else {
                 throw ControlFailure(code: .host_not_found, message: "没有名为「\(needle)」的已配对 Mac")
             }

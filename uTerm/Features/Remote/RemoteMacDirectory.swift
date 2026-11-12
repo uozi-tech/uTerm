@@ -112,6 +112,11 @@ final class RemoteMacDirectory {
         .seconds(15)
         #endif
     }
+    /// 给某台 Mac 的连接配上「反过来读写本机文件」的门禁（参数是 `Mac.id`）。Mac 上由 App 接到共享文件夹的设置；
+    /// 手机不设，握手时也就不声明这项能力。
+    @ObservationIgnored var fileSharing: (@MainActor (String) -> RemoteFileSharingAccess?)?
+    /// 忘记了一台 Mac（参数是 `Mac.id`）：跟它有关的本机设置一并收回。
+    @ObservationIgnored var onForget: (@MainActor (String) -> Void)?
     /// 此刻有几处界面在显示 Mac 的在线状态（主机页「我的 Mac」、新建终端抽屉里的 Mac 行、网络诊断）。
     /// 只有它大于 0 时才按 `relayPollInterval` 一直问；没人看就不问。见 `keepLiveStatusFresh()`。
     @ObservationIgnored private var liveStatusDemand = 0
@@ -269,6 +274,7 @@ final class RemoteMacDirectory {
             let deviceID = mac.deviceID
             client.onRelayConfig = { [weak self] config in self?.receiveRelayConfig(config, from: deviceID) }
             client.onPaired = { [weak self] in self?.rebuild() }
+            client.fileSharing = fileSharing?(mac.id)
             clients[mac.id] = client
         }
         updateRoutes(client, for: mac)
@@ -729,6 +735,7 @@ final class RemoteMacDirectory {
     func forget(_ mac: Mac) {
         if let deviceID = mac.deviceID { try? identity.revoke(id: deviceID) }
         clients.removeValue(forKey: mac.id)?.disconnect()
+        onForget?(mac.id)
         refreshPaired()
     }
 }

@@ -122,7 +122,8 @@ nonisolated extension RemoteFileService {
         let respectIgnore = !request.has(RemoteFileOption.noIgnore)
         var rootInfo = Darwin.stat()
         guard stat(root, &rootInfo) == 0 else { throw posixError(root) }
-        if respectIgnore, request.depth == nil, rootInfo.st_mode & S_IFMT == S_IFDIR, let files = gitFiles(root: root) {
+        if respectIgnore, request.depth == nil, !request.has(RemoteFileOption.noGit),
+           rootInfo.st_mode & S_IFMT == S_IFDIR, let files = gitFiles(root: root) {
             for (index, relative) in files.enumerated() {
                 if index % 256 == 255, Date() > deadline { return true }
                 let path = root + "/" + relative

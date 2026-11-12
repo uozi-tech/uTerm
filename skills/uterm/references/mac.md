@@ -1,11 +1,47 @@
-# 配对过的 Mac：读写文件、搜代码、跑命令（`macs` / `mac …`）
+# 另一台 Mac：读写文件、搜代码、跑命令（`macs` / `mac …`）
 
 客户端怎么定位、探活怎么做、两个开关、错误码总表都在 `SKILL.md`，这里不重复。本文只讲
 「另一台 Mac」这一面。
 
-对象不是 SSH 主机，是用户在 uTerm 里**配对过的另一台 Mac**。请求走 uTerm 的远控链路
-（同一局域网直接连，不在一起就走打洞或用户自建的中继），那台 Mac **不用开 SSH、不用公网
-地址**，你也拿不到任何凭据。文件操作和命令由那台 Mac 上的 uTerm 以登录用户的身份执行。
+对象不是 SSH 主机，是经 uTerm 的远控链路连着的另一台 Mac（同一局域网直接连，不在一起就走
+打洞或用户自建的中继）。那台 Mac **不用开 SSH、不用公网地址**，你也拿不到任何凭据。
+文件操作由那台 Mac 上的 uTerm 以登录用户的身份执行。有两个方向，命令一样，能做的事不一样：
+
+| | 这台 Mac **控制**的 Mac（`role: host`） | **正在控制这台 Mac** 的设备（`role: controller`） |
+|---|---|---|
+| 典型场景 | 你在用户手边的 Mac 上，去操作他配对过的另一台 | 你跑在一台被远程控制着的 Mac 的终端里，要回头读用户手边那台 Mac 上的项目 |
+| 能访问哪里 | 整台 Mac（那边打开了「允许打开本机终端」） | **只有用户在那台 Mac 上共享出来的文件夹**，默认一个都没有 |
+| `mac run` / `mac patch` | 可以 | 不行，永远拒绝 |
+| 怎么指定 | `-M 名字或 UUID` | 不写 `-M`（见下面「正在控制这台 Mac 的设备」），或 `-M 名字` / `-M controller:<UUID>` |
+
+## 正在控制这台 Mac 的设备
+
+你在一台 Mac 的 uTerm 终端里，这个终端正被用户的另一台 Mac 远程接管着 —— 用户说「看一下
+我电脑上的那个项目」，指的多半是他手边那台。先看它共享了什么：
+
+```sh
+"$UTERMCTL" mac shares --format table      # 不写 -M：此刻接管着这个终端的那台设备
+"$UTERMCTL" macs --format table            # current 那一列标着「是」的就是它
+```
+
+然后照常用 `mac ls` / `cat` / `read` / `grep` / `find` / `tree` / `get` / `put` / `write` /
+`edit` …，路径写**那台 Mac 上的绝对路径**，必须落在 `shares` 列出的文件夹里。
+
+- **不写 `-M` 时用哪台**：uTerm 开终端时把终端的编号写进了环境变量 `UTERM_SESSION_ID`，
+  `utermctl` 带着它去问「此刻是谁在用这个终端」。同一时刻一个终端只归一台设备；换了设备接管，
+  同一条命令就落在新的那台上，不用你管。`-M @controller` 是同一个意思的显式写法。
+- **几台设备同时连着**：在被接管的终端里照上面的规则，不会串。认不出终端（`tmux` / `ssh` 嵌套
+  之后环境变量丢了、命令不是在 uTerm 的终端里发的）或这个终端此刻没人接管时：只连着一台肯提供
+  文件的设备就用它，否则回 `host_ambiguous` 并列出候选 —— **照 `id` 重发，不要挑一个试**。
+- **接管这个终端的是手机**：手机没有文件可共享，命令会直说，不会悄悄换成别的设备。
+- `permission_denied` +「不在共享的文件夹里」：`message` 里列着共享了哪些。要别的目录，
+  **请用户在他那台 Mac 的 uTerm「动作 › 我的 Mac」里选中这台 Mac、添加共享文件夹**，
+  这件事只能他在界面里做。不要试 `..`、符号链接这些路子绕，都会被拒。
+- `permission_denied` +「是只读共享」：文件夹共享的是只读。要改，请用户把它改成「读写」。
+- 没有共享任何文件夹：`mac shares` 回空列表，别的命令回 `permission_denied`，处理同上。
+- 写操作除了那边得是读写共享，**这台 Mac** 的「允许执行命令与写入」也得开着。
+
+下面各节的命令两个方向通用；`mac run`、`mac patch` 只对你控制的 Mac 有效。
 
 ## 先看有哪些 Mac
 
@@ -13,11 +49,14 @@
 "$UTERMCTL" macs --format table
 ```
 
-`-M/--mac` 收这里列出的**名字**或**设备 UUID**（`id`），解析规则同主机：精确 → 忽略
-大小写 → 唯一前缀；重名回 `host_ambiguous`，改用 UUID。
+`-M/--mac` 收这里列出的**名字**或 **`id`**，解析规则同主机：精确 → 忽略大小写 → 唯一前缀；
+重名回 `host_ambiguous`，改用 `id`。同一台 Mac 可能出现两行（既配对过、此刻又在控制这台 Mac），
+两行的 `id` 不一样，走的路和能访问的范围也不一样，用 `id` 点名。
 
 | 字段 | 含义 |
 |---|---|
+| `role` | `host`：配对过、由这台 Mac 控制的；`controller`：此刻正控制着这台 Mac 的设备 |
+| `current` | `controller` 才有意义：它此刻接管着发命令的这个终端（不写 `-M` 用的就是它） |
 | `onLocalNetwork` | 此刻在同一局域网里找得到 |
 | `onRelay` | 此刻在中继上（没问过中继时是 `-`，不代表不在） |
 | `connected` | 命令行已经握着到它的连接，下一条命令不用再建连 |
@@ -175,21 +214,22 @@ git diff | "$UTERMCTL" mac patch -M studio ~/Workspace/app --dry-run
 
 ## 哪些要第二个开关
 
-只读的 `macs` / `mac ls|stat|cat|read|grep|find|tree|hash|du|df|get|readlink|
+只读的 `macs` / `mac shares|ls|stat|cat|read|grep|find|tree|hash|du|df|get|readlink|
 wait-change` 和 `xattr list|get` 只要「启用命令行接口」。
 
 `mac run|put|sync up|write|edit|patch|mkdir|rm|rmdir|trash|mv|cp|chmod|ln|touch` 和
 `xattr set|remove` 要「允许执行命令与写入」，没开回 `mutations_disabled`。
 
-这两个开关是**这台** Mac 上的；那台 Mac 上还有它自己的「允许打开本机终端」，见上文。
+这两个开关是**这台** Mac 上的；那台 Mac 上还有它自己的一道：你控制的 Mac 是「允许打开本机终端」，
+正在控制这台 Mac 的设备是它共享了哪些文件夹、只读还是读写，见上文。
 
 ## 错误码
 
 | code | 含义 |
 |---|---|
-| `host_not_found` / `host_ambiguous` | 没有这个名字的已配对 Mac / 匹配到多台，改用 `id` |
+| `host_not_found` / `host_ambiguous` | 没有这个名字的 Mac / 匹配到多台，或没写 `-M` 而几台设备同时连着分不出来：改用 `message` 里列的 `id` |
 | `connect_failed` | 连不上那台 Mac，或请求途中链路断了（原因在 `message`）。读类操作可以直接重试；写和跑命令先确认做到哪了 |
-| `permission_denied` | 那台 Mac 没开「允许打开本机终端」，或系统不让读这个路径（隐私保护的目录、别的用户的文件） |
+| `permission_denied` | 那台 Mac 没开「允许打开本机终端」，或系统不让读这个路径（隐私保护的目录、别的用户的文件）；对正在控制这台 Mac 的设备：路径不在它共享的文件夹里、文件夹是只读共享、用了 `mac run` / `mac patch` |
 | `file_not_found` / `file_exists` / `is_directory` / `file_too_large` | 同 SFTP |
 | `invalid_request` | 参数不对：缺路径、坏的正则、文件不是文本 |
 | `command_timeout` | `mac run` 静默超时或撞上总时长上限，细节在 `results[0]` |

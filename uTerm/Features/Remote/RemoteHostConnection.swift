@@ -39,6 +39,10 @@ final class RemoteHostConnection {
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
     private(set) var peerID: UUID?
+    /// 对端握手时报的平台（`RemoteDevicePlatform`）。老版本不报。
+    private(set) var peerPlatform: String?
+    /// 通过认证的时刻。同一台设备连着不止一条时，用最新的那条。
+    private(set) var authorizedAt: Date?
 
     /// 在 Mac 上给这台设备改了名：正连着的这条立刻换成新名字，不用等它重连。
     func peerRenamed(to name: String) {
@@ -64,6 +68,10 @@ final class RemoteHostConnection {
     /// 从哪条路进来的。公网路径规则更严：不弹审批框，没配对过的只认邀请凭据。
     let origin: RemoteConnectionOrigin
     private var peerSupportsRelayConfig = false
+    /// 对端握手时声明了 `file-sharing`。
+    private(set) var peerSharesFilesFeature = false
+    /// 本机向这台主控端发出、还在等应答的文件请求。
+    nonisolated let fileWaiters = RemoteFileWaiters()
     private var keyConfirmed = false
     private var keyConfirmationWaiter: CheckedContinuation<Bool, Never>?
     private(set) var isAuthorized = false
@@ -94,9 +102,16 @@ final class RemoteHostConnection {
     func start() {
         let pump = self.pump
         let desktopRoute = self.desktopRoute
+        let fileWaiters = self.fileWaiters
         link.setHandlers(
             onMessage: { [weak self] message in
                 if desktopRoute.handle(message) { return }
+                // 主控端对本机发出的文件请求的应答：在连接队列上直接交付，不经主线程（传文件时一秒几十条）。
+                // 没在等的请求号（包括对端乱发的）直接丢掉。
+                if message.kind == .fileReply {
+                    fileWaiters.deliver(message.payload)
+                    return
+                }
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.handle(message) } }
             },
             onClose: { [weak self] _ in
@@ -144,6 +159,7 @@ final class RemoteHostConnection {
             let peer = established.peer
             peerName = peer.deviceName
             peerID = peer.deviceID
+            peerPlatform = peer.platform
             peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
@@ -154,6 +170,7 @@ final class RemoteHostConnection {
                 && server.localFeatures.contains(RemoteFeature.programStatus)
             peerTerminalEngine = peer.terminalEngine
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
+            peerSharesFilesFeature = peer.supports(RemoteFeature.fileSharing)
             if case .internet(let expected, _, _) = origin {
                 try await authorizeFromInternet(peer: peer, expected: expected)
                 return
@@ -268,6 +285,7 @@ final class RemoteHostConnection {
 
     private func authorize(_ state: RemotePairingState) {
         isAuthorized = true
+        authorizedAt = Date()
         // 横幅、桌面指示条、设置里的「已连接」都按这个名字显示：在 Mac 上改过名就用改过的。
         if let peerID, let known = server.identity.peer(id: peerID) { peerName = known.displayName }
         AppLogger.notice("远控：\(self.peerName) 已确认身份（\(self.origin.path.label)，接入后 "
@@ -554,6 +572,7 @@ final class RemoteHostConnection {
         guard !isClosed else { return }
         isClosed = true
         finishKeyConfirmation(false)
+        fileWaiters.failAll(RemoteFileError(.unreachable, "「\(peerName)」的连接断开了"))
         for channel in Array(attachments.keys) {
             detach(channel: channel, notify: false)
         }
@@ -561,6 +580,39 @@ final class RemoteHostConnection {
             stopDesktop(channel: desktop.channel, notify: false)
         }
         server.connectionClosed(self)
+    }
+}
+
+// MARK: - 反过来读写主控端的文件
+
+extension RemoteHostConnection {
+    /// 对端是一台肯提供文件的主控端（Mac 上的 uTerm；手机和老版本不声明）。
+    var peerSharesFiles: Bool { isAuthorized && !isClosed && peerSharesFilesFeature }
+
+    /// 向主控端发一条文件请求，等应答。它只放行用户共享给本机的那几个文件夹里的请求。
+    /// 打包、压缩、解包都不在主线程上做。
+    nonisolated func performFile(_ request: RemoteFileRequest, body: Data = Data(),
+                                 timeout: Duration? = nil) async throws -> (reply: RemoteFileReply, body: Data) {
+        var request = request
+        request.acceptsCompression = true
+        let payload = RemoteFileCodec.packRequest(request, body: body, compress: true)
+        let (link, name) = try await MainActor.run { () throws -> (RemoteLink, String) in
+            guard !isClosed, isAuthorized else {
+                throw RemoteFileError(.unreachable, "「\(peerName)」已经不连着这台 Mac 了")
+            }
+            guard peerSharesFilesFeature else {
+                throw RemoteFileError(.unsupported, "「\(peerName)」不提供文件（手机，或者那台 Mac 上的 uTerm 版本太旧）")
+            }
+            return (self.link, peerName)
+        }
+        let raw = try await fileWaiters.exchange(payload, id: request.id,
+                                                 timeout: timeout ?? RemoteFileTimeouts.limit(for: request),
+                                                 peer: "「\(name)」") { payload in
+            link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
+        }
+        let (reply, data) = try RemoteFileCodec.unpackReply(raw)
+        if let error = reply.error { throw error }
+        return (reply, data)
     }
 }
 

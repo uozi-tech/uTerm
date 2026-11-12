@@ -275,9 +275,11 @@
 				Features/Remote/Controller/RemoteMacWindow.swift,
 				Features/Remote/Controller/RemoteMacWindowModel.swift,
 				Features/Remote/Controller/RemoteMacsPane.swift,
+				Features/Remote/Controller/RemoteSharedFoldersSection.swift,
 				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteFileAccess.swift,
+				Features/Remote/RemoteFileSharingStore.swift,
 				Features/Remote/RemoteHostConnection.swift,
 				Features/Remote/RemoteHostServer.swift,
 				Features/Remote/RemoteLocalShellOpener.swift,
@@ -459,6 +461,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"RemoteFileService+Exec.swift",
+				"RemoteFileService+Scope.swift",
 				"RemoteFileService+Search.swift",
 				RemoteFileService.swift,
 			);

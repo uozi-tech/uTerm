@@ -8,8 +8,11 @@ import Foundation
 /// 全部是同步调用、无状态：一条请求进来，做完，回一条应答。调用方负责放到后台线程上。
 nonisolated enum RemoteFileService {
     /// 处理一条打包好的请求，回打包好的应答。阻塞调用线程。
-    static func handle(_ payload: Data) -> Data {
-        let request: RemoteFileRequest
+    ///
+    /// `scope` 不为 nil 时只放行落在这些目录里的请求（见 `confine`）；nil = 不限定。范围由提供文件的这一端
+    /// 自己给，不从请求里读。
+    static func handle(_ payload: Data, scope: RemoteFileScope? = nil) -> Data {
+        var request: RemoteFileRequest
         let body: Data
         do {
             (request, body) = try RemoteFileCodec.unpackRequest(payload)
@@ -21,6 +24,10 @@ nonisolated enum RemoteFileService {
         var reply = RemoteFileReply(id: request.id)
         var output = Data()
         do {
+            if let scope {
+                request = try confine(request, to: scope)
+                if request.op == .roots { reply.roots = canonicalRoots(scope) }
+            }
             try perform(request, body: body, reply: &reply, output: &output)
         } catch let error as RemoteFileError {
             reply = .failure(request.id, error)
@@ -102,6 +109,9 @@ nonisolated enum RemoteFileService {
             try waitChange(request, reply: &reply)
         case .exec:
             try exec(request, reply: &reply, output: &output)
+        case .roots:
+            // 有限定时 `handle` 已经填好了；没有限定就是整台 Mac，`roots` 留空。
+            break
         }
     }
 

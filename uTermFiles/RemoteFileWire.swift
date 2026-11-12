@@ -16,11 +16,14 @@ nonisolated enum RemoteFileOp: String, Codable, Sendable, CaseIterable {
     case copy, trash, symlink, readlink, touch, xattr, edit, patch
     // 等变化、跑命令
     case waitChange, exec
+    /// 这条链路上能访问哪些目录（`RemoteFileReply.roots`；没有限定时为 nil）。
+    case roots
 
     /// 会改被控端的东西。主控端的命令行据此过「允许执行命令与写入」那道闸。
     var isMutation: Bool {
         switch self {
-        case .realpath, .list, .stat, .read, .readText, .grep, .find, .tree, .hash, .du, .df, .readlink, .waitChange:
+        case .realpath, .list, .stat, .read, .readText, .grep, .find, .tree, .hash, .du, .df, .readlink, .waitChange,
+             .roots:
             return false
         case .write, .mkdir, .remove, .rmdir, .rename, .chmod, .createFile, .copy, .trash, .symlink, .touch, .xattr,
              .edit, .patch, .exec:
@@ -60,6 +63,8 @@ nonisolated enum RemoteFileOption {
     static let hash = "hash"
     /// `stat`：符号链接不跟过去。
     static let noFollow = "noFollow"
+    /// `grep` / `find`：不调 git 列文件（限定了目录的请求一律带上：仓库里的 git 配置能让 git 去跑别的程序）。
+    static let noGit = "noGit"
 }
 
 nonisolated struct RemoteFileRequest: Codable, Sendable, Equatable {
@@ -154,6 +159,28 @@ extension RemoteFileError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// 共享出去的一个目录。
+nonisolated struct RemoteFileRoot: Codable, Sendable, Equatable, Hashable {
+    /// 绝对路径。
+    var path: String
+    /// 允许改里面的东西。false = 只读。
+    var writable: Bool
+
+    init(path: String, writable: Bool) {
+        self.path = path
+        self.writable = writable
+    }
+}
+
+/// 一条请求能碰的范围：只有这些目录里的东西。由提供文件的这一端自己定，不从链路上收。
+nonisolated struct RemoteFileScope: Codable, Sendable, Equatable {
+    var roots: [RemoteFileRoot]
+
+    init(roots: [RemoteFileRoot]) {
+        self.roots = roots
+    }
+}
+
 nonisolated struct RemoteFileEntry: Codable, Sendable, Equatable {
     var name: String
     /// `find`：相对搜索根的路径；`stat`：解析后的绝对路径。
@@ -222,6 +249,8 @@ nonisolated struct RemoteFileReply: Codable, Sendable, Equatable {
     /// `waitChange`：等到时限也没有变化。
     var timedOut: Bool?
     var exec: RemoteFileExecResult?
+    /// `roots`：能访问的目录。nil = 没有限定（整台 Mac）。
+    var roots: [RemoteFileRoot]?
     var bodyCompression: String?
 
     init(id: UUID) {

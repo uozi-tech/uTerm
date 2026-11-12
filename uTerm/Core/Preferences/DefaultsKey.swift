@@ -74,6 +74,8 @@ nonisolated enum DefaultsKey {
     /// iOS：看桌面时要声音的 Mac（设备 ID）。
     static let remoteDesktopAudioMacs = "remote.desktopAudioMacs"
     static let remoteLocalShellEnabled = "remote.localShellEnabled"
+    /// macOS：本机（主控端）共享给各台被控 Mac 的文件夹（JSON：Mac 的 id → 路径与读写权限）。只在本机，不同步。
+    static let remoteSharedFolders = "remote.sharedFolders"
     static let remoteDeviceID = "remote.deviceID"
     /// macOS：允许经公网（中继 / 打洞）接入。
     static let remoteInternetEnabled = "remote.internetEnabled"

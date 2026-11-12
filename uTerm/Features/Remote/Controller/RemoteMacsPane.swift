@@ -256,6 +256,8 @@ private struct RemoteMacDetailPanel: View {
     let onDiagnose: () -> Void
 
     @Environment(RemoteMacDirectory.self) private var directory
+    /// 共享文件夹的设置。预览、截图用例里没有注入时这一节不显示。
+    @Environment(RemoteFileSharingStore.self) private var sharing: RemoteFileSharingStore?
     /// 开着这台 Mac 窗口时的那条连接（目录里的 `clients` 不在观察跟踪里，见 `existingClient`）。
     @State private var client: RemoteMacClient?
     @State private var pairedAt: Date?
@@ -276,6 +278,9 @@ private struct RemoteMacDetailPanel: View {
                     .padding(.top, 18)
             } else {
                 metaGrid.padding(.top, 22)
+                if let sharing {
+                    RemoteSharedFoldersSection(mac: mac, store: sharing).padding(.top, 22)
+                }
             }
             Spacer(minLength: 16)
             actions

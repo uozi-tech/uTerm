@@ -370,6 +370,52 @@ final class RemoteHostServer {
         refreshConnectedDevices()
     }
 
+    // MARK: - 正连着的主控设备（命令行反过来读写它们的文件时用）
+
+    /// 一台此刻连着这台 Mac 的主控设备。
+    struct Controller: Equatable {
+        /// 设备 ID。同一台设备连着不止一条时只算一台。
+        let deviceID: UUID
+        let name: String
+        /// `RemoteDevicePlatform` 的原始值；老版本不报。
+        let platform: String?
+        /// 它肯提供文件（Mac 上的新版 uTerm）。手机和老版本为 false。
+        let sharesFiles: Bool
+        /// 它此刻接管着的终端。
+        let sessions: [UUID]
+    }
+
+    /// 此刻通过认证、连着的主控设备，按名字排。
+    func connectedControllers() -> [Controller] {
+        var newest: [UUID: RemoteHostConnection] = [:]
+        for connection in connections.values where connection.isAuthorized {
+            guard let peerID = connection.peerID else { continue }
+            if let known = newest[peerID], (known.authorizedAt ?? .distantPast) >= (connection.authorizedAt ?? .distantPast) {
+                continue
+            }
+            newest[peerID] = connection
+        }
+        return newest.map { peerID, connection in
+            let held = controllers.filter { connections[$0.value.connection]?.peerID == peerID }.map(\.key)
+            // 同一台设备的几条连接里只要有一条肯提供文件就算。
+            let shares = connections.values.contains { $0.peerID == peerID && $0.peerSharesFiles }
+            return Controller(deviceID: peerID, name: connection.peerName, platform: connection.peerPlatform,
+                              sharesFiles: shares, sessions: held.sorted { $0.uuidString < $1.uuidString })
+        }.sorted { ($0.name, $0.deviceID.uuidString) < ($1.name, $1.deviceID.uuidString) }
+    }
+
+    /// 此刻接管着这个终端的设备。没人接管回 nil。
+    func controller(ofSession sessionID: UUID) -> Controller? {
+        guard let holder = controllers[sessionID], let peerID = connections[holder.connection]?.peerID else { return nil }
+        return connectedControllers().first { $0.deviceID == peerID }
+    }
+
+    /// 到这台设备的、能发文件请求的连接（最新的那条）。
+    func fileConnection(toDevice deviceID: UUID) -> RemoteHostConnection? {
+        connections.values.filter { $0.peerID == deviceID && $0.peerSharesFiles }
+            .max { ($0.authorizedAt ?? .distantPast) < ($1.authorizedAt ?? .distantPast) }
+    }
+
     private func refreshConnectedDevices() {
         let authorized = connections.values.filter(\.isAuthorized)
         connectedDevices = authorized.map(\.peerName).sorted()

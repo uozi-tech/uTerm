@@ -13,20 +13,25 @@ extension ControlHandler {
         guard let macs = deps.macs else {
             throw ControlFailure(code: .app_not_ready, message: "远程 Mac 的入口还没准备好，稍后重试")
         }
+        let arguments = request.mac ?? ControlMacArguments()
+        let caller = arguments.session.flatMap(UUID.init(uuidString:))
         if request.action == .macs {
-            let snapshots = macs.snapshots()
+            let snapshots = macs.snapshots(session: caller)
             var payload = ControlMacPayload()
             payload.macs = snapshots
-            return Self.macResponse(request, message: "\(snapshots.count) 台配对过的 Mac", payload)
+            let controllers = snapshots.filter { $0.role == ControlMacRole.controller }.count
+            let message = controllers == 0
+                ? "\(snapshots.count) 台配对过的 Mac"
+                : "\(snapshots.count - controllers) 台配对过的 Mac，\(controllers) 台设备正连着这台 Mac"
+            return Self.macResponse(request, message: message, payload)
         }
-        let arguments = request.mac ?? ControlMacArguments()
         // 写扩展属性也是改动，但读不是：动作级的门禁分不开，在这里补判。
         if request.action == .macXattr, ["set", "remove"].contains(arguments.attributeAction ?? "list"),
            !deps.settings.allowMutations {
             throw ControlFailure(code: .mutations_disabled,
                                  message: "写入未启用：在 uTerm「设置 › 命令行与技能」里打开「允许执行命令与写入」")
         }
-        let session = try await macs.provider(for: arguments.target ?? "")
+        let session = try await macs.provider(for: arguments.target ?? "", session: caller)
         defer { macs.finished(session) }
         do {
             return try await Self.performMac(request, arguments, session)
@@ -67,6 +72,7 @@ extension ControlHandler {
         let provider = session.provider
         var payload = ControlMacPayload()
         payload.name = session.name
+        payload.role = session.role
 
         func send(_ file: RemoteFileRequest, body: Data = Data()) async throws -> (reply: RemoteFileReply, body: Data) {
             var file = file
@@ -212,6 +218,17 @@ extension ControlHandler {
             payload.directories = reply.directories
             payload.truncated = reply.truncated
             return macResponse(request, message: "\(reply.path ?? "")：\(reply.bytes ?? 0) 字节，\(reply.files ?? 0) 个文件", payload)
+
+        case .macShares:
+            let (reply, _) = try await send(RemoteFileRequest(op: .roots))
+            guard let roots = reply.roots else {
+                return macResponse(request, message: "「\(session.name)」没有限定目录：整台 Mac 都能访问", payload)
+            }
+            payload.roots = roots.map { ControlMacRoot(path: $0.path, writable: $0.writable) }
+            let message = roots.isEmpty
+                ? "「\(session.name)」没有给这台 Mac 共享任何文件夹（得由用户在那台 Mac 的 uTerm「动作 › 我的 Mac」里添加）"
+                : "「\(session.name)」共享了 \(roots.count) 个文件夹"
+            return macResponse(request, message: message, payload)
 
         case .macDf:
             let (reply, _) = try await send(RemoteFileRequest(op: .df, path: request.path ?? "~"))

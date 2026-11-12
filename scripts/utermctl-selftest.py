@@ -103,6 +103,9 @@ DEFAULT_PAYLOADS = {
     "mac-mkdir": {}, "mac-rm": {}, "mac-mv": {}, "mac-cp": {}, "mac-chmod": {}, "mac-ln": {},
     "mac-xattr": {"mac": {"name": "studio", "names": ["com.apple.quarantine"]}},
     "mac-wait-change": {"mac": {"name": "studio", "names": ["/Users/me/app/build/out"], "timedOut": False}},
+    "mac-shares": {"mac": {"name": "laptop", "role": "controller",
+                           "roots": [{"path": "/Users/me/app", "writable": False},
+                                     {"path": "/Users/me/notes", "writable": True}]}},
     "sftp-mkdir": {}, "sftp-rm": {}, "sftp-rmdir": {}, "sftp-mv": {}, "sftp-chmod": {},
     "forward-list": {"rules": [{"id": "r-1", "serverID": HOST["id"],
                                 "serverName": "prod-web", "name": "pg", "kind": "local",
@@ -484,9 +487,13 @@ def recv_request_with_fds(conn, deadline=30.0):
 
 
 def run_cli(server, argv, expect_exit=0, socket_path=None, label=None, sleep_trace=None,
-            idle_timeout=None):
+            idle_timeout=None, session=None):
     env = dict(os.environ)
     env["UTERM_CONTROL_SOCKET"] = socket_path if socket_path else server.path
+    # 自测本身可能就跑在 uTerm 的终端里：终端编号只在点名要测的那几条里带。
+    env.pop("UTERM_SESSION_ID", None)
+    if session is not None:
+        env["UTERM_SESSION_ID"] = session
     if idle_timeout is not None:
         env["UTERMCTL_IDLE_TIMEOUT"] = str(idle_timeout)
     if sleep_trace:
@@ -666,6 +673,22 @@ def exercise(server, root, rejecting):
             label="xattr get 缺属性名")
     run_cli(server, ["mac", "wait-change", "-M", "studio", "~/app/build", "--wait", "120"])
     equal(last(server)["waitSeconds"], 120.0, "wait-change --wait")
+
+    # 反过来访问正在控制这台 Mac 的设备：不写 --mac，带上「我在哪个终端里」。
+    run_cli(server, ["mac", "ls", "/Users/me/app"])
+    equal(last(server)["mac"], {}, "不写 --mac、也不在 uTerm 的终端里：mac 里什么都不带")
+    run_cli(server, ["mac", "ls", "/Users/me/app"], session="SESSION-1")
+    equal(last(server)["mac"], {"session": "SESSION-1"}, "终端编号放在 mac.session")
+    run_cli(server, ["mac", "ls", "-M", "studio", "/Users/me/a"], session="SESSION-1")
+    equal(last(server)["mac"], {"target": "studio", "session": "SESSION-1"}, "点了名也带终端编号")
+    run_cli(server, ["macs"], session="SESSION-1")
+    equal(last(server)["mac"], {"session": "SESSION-1"}, "macs 带终端编号，好标出当前的设备")
+    run_cli(server, ["macs"])
+    check("mac" not in last(server), "不在终端里时 macs 不带 mac 字段")
+    proc = run_cli(server, ["mac", "shares", "--format", "table"], session="SESSION-1")
+    equal(last(server)["action"], "mac-shares", "mac shares action")
+    check("/Users/me/app" in proc.stdout and "只读" in proc.stdout and "读写" in proc.stdout,
+          "shares 的表格列出目录与读写权限")
 
     server.override = {"ok": False, "code": "permission_denied",
                        "message": "那台 Mac 上没有打开「允许打开本机终端」"}

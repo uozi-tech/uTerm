@@ -42,6 +42,8 @@ struct uTermApp: App {
     @State private var remoteMacs = RemoteMacDirectory(
         relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
         adoptsRelayAsDefault: false)
+    /// 本机共享给被控 Mac 的文件夹：那台 Mac 终端里的程序可以经远控链路反过来读写它们。
+    @State private var remoteFileSharing = RemoteFileSharingStore()
     /// 配对审批面板。独立 NSPanel，无窗口的后台模式下也能弹。
     private let remotePairingPrompt: RemotePairingPrompt?
     private let remoteDesktopIndicator: RemoteDesktopIndicator?
@@ -139,7 +141,7 @@ struct uTermApp: App {
                 forwardingCoordinator: forwardingCoordinator,
                 registry: terminalRegistry,
                 relay: remoteServer,
-                macs: ControlMacSessions(directory: remoteMacs)
+                macs: ControlMacSessions(directory: remoteMacs, host: remoteServer)
             )
             LaunchForwardingBootstrap.start(
                 modelContainer: modelContainer,
@@ -149,6 +151,8 @@ struct uTermApp: App {
             )
             remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
             remoteServer.fileAccess = .live(settings: remoteSettings)
+            remoteMacs.fileSharing = { [remoteFileSharing] macID in remoteFileSharing.access(for: macID) }
+            remoteMacs.onForget = { [remoteFileSharing] macID in remoteFileSharing.removeAll(for: macID) }
             remoteServer.sessionRestoration = {
                 await LocalShellRestorer.shared.finished()
                 await SSHSessionRestorer.shared.finished()
@@ -330,6 +334,7 @@ struct uTermApp: App {
                 .environment(backgroundSettings)
                 .environment(terminalRegistry)
                 .environment(remoteMacs)
+                .environment(remoteFileSharing)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)

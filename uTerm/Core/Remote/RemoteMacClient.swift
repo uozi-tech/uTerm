@@ -221,6 +221,11 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     /// 等文件应答的请求。应答在连接队列上直接交付，不经主线程（传文件时一秒几十条）。
     @ObservationIgnored nonisolated let fileWaiters = RemoteFileWaiters()
+    /// 被控的 Mac 反过来读写本机文件时的门禁与执行。nil = 本机不提供文件（手机；握手时也不声明 `file-sharing`）。
+    /// 要在连接之前设好。
+    @ObservationIgnored var fileSharing: RemoteFileSharingAccess?
+    /// 握手里报的本机身份。nil = 真实的设备 ID 与电脑名；测试里一个进程要扮几台设备时才设。
+    @ObservationIgnored var localDeviceOverride: (id: UUID, name: String)?
     @ObservationIgnored private var peer: RemoteHello?
     @ObservationIgnored private let heartbeat: RemoteHeartbeat
     /// 各个标签与桌面流的退避等待都挂在这里，网络恢复、回到前台时一起叫醒。
@@ -473,11 +478,14 @@ final class RemoteMacClient: Identifiable {
             if let pairingToken, let expectedPeer {
                 proof = RemotePairingInvitation.proof(token: pairingToken, phoneKey: phoneKey, macKey: expectedPeer.publicKey)
             }
-            let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: RemoteLocalDevice.id(),
-                                    deviceName: LANSyncCoordinator.localDeviceName(),
+            let hello = RemoteHello(version: RemoteConstants.protocolVersion,
+                                    deviceID: localDeviceOverride?.id ?? RemoteLocalDevice.id(),
+                                    deviceName: localDeviceOverride?.name ?? LANSyncCoordinator.localDeviceName(),
                                     ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                     staticKey: phoneKey,
-                                    features: RemoteConstants.localFeatures, pairingProof: proof,
+                                    features: RemoteConstants.localFeatures
+                                        + (fileSharing == nil ? [] : [RemoteFeature.fileSharing]),
+                                    pairingProof: proof,
                                     deviceModel: RemoteDeviceModel.current(),
                                     platform: RemoteDevicePlatform.current.rawValue,
                                     terminalEngine: TerminalEngineVersion.current)
@@ -689,6 +697,8 @@ final class RemoteMacClient: Identifiable {
             DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
         case .fileReply:
             client?.fileWaiters.deliver(message.payload)
+        case .fileRequest:
+            DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleSharedFileRequest(message.payload, link: link) } }
         case .pong:
             let precise = link.latestRoundTrip.map { $0 * 1000 }
             let millis = precise.map { Int($0.rounded()) }
@@ -896,24 +906,44 @@ extension RemoteMacClient {
         guard supportsFiles else {
             throw RemoteFileError(.unsupported, "这台 Mac 上的 uTerm 版本太旧，不支持远程访问文件。把 Mac 上的 uTerm 更新到最新版后再试")
         }
-        let waiters = fileWaiters
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-                let watchdog = Task {
-                    try? await Task.sleep(for: timeout)
-                    guard !Task.isCancelled else { return }
-                    waiters.fail(id, RemoteFileError(.timeout, "Mac 在 \(RemoteConnectTrace.millis(timeout) / 1000) 秒内没有回应"))
-                }
-                waiters.add(id, continuation, watchdog: watchdog)
-                // 取消可能早于登记：那时取消回调已经扑空了，这里补上。
-                if Task.isCancelled {
-                    waiters.fail(id, CancellationError())
-                    return
-                }
-                link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
+        return try await fileWaiters.exchange(payload, id: id, timeout: timeout, peer: "Mac") { payload in
+            link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
+        }
+    }
+
+    /// 被控的 Mac 反过来要读写本机的文件：只在用户给它共享了文件夹时放行，而且只放行那些文件夹里的。
+    /// 主程序不解释内容，只为了过门禁和记日志看一眼头。
+    fileprivate func handleSharedFileRequest(_ payload: Data, link: RemoteLink) {
+        let send: @Sendable (Data) -> Void = { reply in
+            link.queue.async {
+                link.sendOnQueue(RemoteMessage(.fileReply, channel: RemoteConstants.fileChannel, payload: reply),
+                                 countsTowardBackpressure: false)
             }
-        } onCancel: {
-            waiters.fail(id, CancellationError())
+        }
+        func refuse(_ error: RemoteFileError) {
+            send(RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(), error), compress: false))
+        }
+        guard let access = fileSharing else {
+            refuse(RemoteFileError(.unsupported, "那台设备不提供文件"))
+            return
+        }
+        guard let (request, _) = try? RemoteFileCodec.decode(RemoteFileRequest.self, from: payload) else {
+            refuse(RemoteFileError(.invalid, "请求解不开"))
+            return
+        }
+        let scope = access.scope() ?? RemoteFileScope(roots: [])
+        // 什么都没共享时，只有「问共享了什么」照常回（回一个空列表）。
+        if scope.roots.isEmpty, request.op != .roots {
+            refuse(RemoteFileError(.disabled, "那台 Mac 没有给这台 Mac 共享任何文件夹。要读写它上面的文件，"
+                                   + "得由用户在那台 Mac 的 uTerm「动作 › 我的 Mac」里选中这台 Mac，添加共享文件夹"))
+            return
+        }
+        if request.op.isMutation, request.op != .write {
+            AppLogger.info("远控：\(self.macName) 改共享文件夹里的东西 \(request.op.rawValue) \(request.path ?? "")",
+                           category: RemoteLog.category)
+        }
+        Task.detached {
+            send(await access.perform(payload, scope))
         }
     }
 }

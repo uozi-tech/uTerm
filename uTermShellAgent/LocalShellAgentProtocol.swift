@@ -40,4 +40,7 @@ nonisolated enum LocalShellAgent {
     /// 远控文件服务：一条打包好的请求进、一条打包好的应答出（格式见 `RemoteFileWire`，执行在 `RemoteFileService`）。
     /// 主程序在沙盒里读不到主目录，文件操作和跑命令都得在这边做。该不该放行由主程序在转发之前判断。
     func fileRequest(_ payload: Data, reply: @escaping @Sendable (Data) -> Void)
+    /// 同上，但只放行落在 `scope`（JSON 编码的 `RemoteFileScope`）里的请求：主控端把几个文件夹共享给被控的 Mac 时用。
+    /// 路径要解析掉符号链接才能判断在不在范围里，沙盒里的主程序做不了，所以检查也在这边做。
+    func scopedFileRequest(_ payload: Data, scope: Data, reply: @escaping @Sendable (Data) -> Void)
 }

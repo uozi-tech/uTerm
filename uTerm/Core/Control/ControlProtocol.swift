@@ -114,6 +114,8 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     case macXattr = "mac-xattr"
     /// 等文件或目录有变化。
     case macWaitChange = "mac-wait-change"
+    /// 那台设备给这台 Mac 开放了哪些目录（整台 Mac，还是几个共享文件夹）。
+    case macShares = "mac-shares"
 
     /// 需要主开关 `control.enabled`。只有 `ping` 不需要 —— 否则客户端连开关状态都问不到。
     public var requiresEnabled: Bool {
@@ -141,7 +143,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
              .relayCheck,
              .disconnect,
              .macs, .macLs, .macStat, .macCat, .macGet, .macRead, .macGrep, .macFind, .macTree,
-             .macHash, .macDu, .macDf, .macReadlink, .macXattr, .macWaitChange:
+             .macHash, .macDu, .macDf, .macReadlink, .macXattr, .macWaitChange, .macShares:
             return false
         }
     }
@@ -178,7 +180,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
         case .macs, .macRun, .macLs, .macStat, .macCat, .macGet, .macPut, .macMkdir, .macRm, .macRmdir,
              .macMv, .macChmod, .macRead, .macGrep, .macFind, .macTree, .macHash, .macDu, .macDf,
              .macWrite, .macEdit, .macPatch, .macCp, .macTrash, .macLn, .macReadlink, .macTouch,
-             .macXattr, .macWaitChange:
+             .macXattr, .macWaitChange, .macShares:
             return .mac
         }
     }
@@ -1173,6 +1175,9 @@ nonisolated public struct ControlMacArguments: Codable, Sendable, Equatable {
     /// `mac-find`：只要最近这么多秒内改过的。`mac-touch`：要设的修改时间（距 1970 的秒数）。
     public var seconds: Double?
     public var strip: Int?
+    /// 发命令的程序在哪个终端里（`UTERM_SESSION_ID`，uTerm 开本机终端时写进环境变量）。没给 `target` 时，
+    /// 目标就是此刻接管着这个终端的那台设备；`macs` 也凭它标出「当前」的那台。
+    public var session: String?
 
     public init(target: String? = nil) {
         self.target = target
@@ -1180,8 +1185,16 @@ nonisolated public struct ControlMacArguments: Codable, Sendable, Equatable {
 }
 
 nonisolated public struct ControlMacSnapshot: Codable, Sendable, Equatable {
+    /// 配对过的 Mac 是设备 UUID；正连着这台 Mac 的主控设备是 `controller:<设备 UUID>`（同一台 Mac 可以两样都是）。
     public var id: String
     public var name: String
+    /// `host`：配对过、由本机控制的 Mac（那边打开了「允许打开本机终端」就整台可访问）。
+    /// `controller`：此刻正控制着这台 Mac 的设备（只能访问它共享出来的文件夹）。
+    public var role: String?
+    /// `controller`：它此刻接管着发命令的那个终端 —— 不写 `--mac` 时用的就是它。
+    public var current: Bool?
+    /// `controller`：`mac` / `ios`。老版本不报。
+    public var platform: String?
     /// 局域网里此刻找得到。
     public var onLocalNetwork: Bool
     /// 此刻在中继上。没问过中继时为 nil（不代表不在）。
@@ -1192,6 +1205,11 @@ nonisolated public struct ControlMacSnapshot: Codable, Sendable, Equatable {
     public var path: String?
     /// 连着时才知道：那台 Mac 上的 uTerm 支不支持文件访问。
     public var supportsFiles: Bool?
+}
+
+nonisolated public struct ControlMacRoot: Codable, Sendable, Equatable {
+    public var path: String
+    public var writable: Bool
 }
 
 nonisolated public struct ControlMacMatch: Codable, Sendable, Equatable {
@@ -1216,6 +1234,10 @@ nonisolated public struct ControlMacPayload: Codable, Sendable, Equatable {
     public var macs: [ControlMacSnapshot]?
     /// 这次动作落在哪台 Mac 上。
     public var name: String?
+    /// 这次动作落在哪台设备上的哪条路：`host` / `controller`（见 `ControlMacSnapshot.role`）。
+    public var role: String?
+    /// `mac-shares`：能访问的目录。nil = 没有限定（整台 Mac）。
+    public var roots: [ControlMacRoot]?
     /// 解析后的绝对路径。
     public var path: String?
     public var matches: [ControlMacMatch]?
