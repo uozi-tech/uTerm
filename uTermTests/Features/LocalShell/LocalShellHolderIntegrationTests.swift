@@ -563,7 +563,7 @@ final class TerminalHeldReplayTests: XCTestCase {
         XCTAssertEqual(restored.shadow.mirrorDifferences(from: original.shadow), [:])
         XCTAssertEqual(restored.shadow.title, "build", "标题在快照里，跟着回来")
         XCTAssertFalse(restored.shadow.isOnAlternateScreen)
-        XCTAssertNil(restored.shellTitle, "回放是历史：不当成这次连接上程序刚设的标题")
+        XCTAssertEqual(restored.shellTitle, "build", "接回后标签沿用重启前的标题，不回落成默认名")
         restored.dispose()
         original.dispose()
     }
