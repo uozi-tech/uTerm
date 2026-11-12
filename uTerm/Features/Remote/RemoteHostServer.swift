@@ -88,10 +88,11 @@ final class RemoteHostServer {
     @ObservationIgnored var localShellOpener: RemoteLocalShellOpener = .unavailable
     /// 远控文件请求（列目录、读写、搜索、跑命令）的落点。和 `localShellOpener` 一样由 app 在启动时接上。
     @ObservationIgnored var fileAccess: RemoteFileAccess = .unavailable
-    /// 手机看会话列表、接入之前要等它：Mac 刚重启时本机终端还没接回来。
+    /// 手机看会话列表、接入之前要等它：Mac 刚重启时本机终端还没接回来。另见 `RemoteHostSessions.waitUntilRestored`。
     @ObservationIgnored var sessionRestoration: (@MainActor () async -> Void)?
 
-    @ObservationIgnored let registry: TerminalSessionRegistry
+    /// 终端会话从哪来：App 进程内是 `RemoteRegistrySessions`，远控进程里是 `RemoteForwardedSessions`。
+    @ObservationIgnored let sessions: any RemoteHostSessions
     @ObservationIgnored let identity: RemoteIdentityStore
     @ObservationIgnored private var invitationExpiry: Task<Void, Never>?
     @ObservationIgnored let localName: String
@@ -132,9 +133,9 @@ final class RemoteHostServer {
     /// 上次发出去的会话列表里的先后。重排之后跟它不同才重发列表：新开、关掉标签时列表已经随之发过了。
     @ObservationIgnored private var listedTabOrder: [UUID] = []
 
-    init(registry: TerminalSessionRegistry,
+    init(sessions: any RemoteHostSessions,
          identity: RemoteIdentityStore = RemoteIdentityStore(role: .controllers),
-         localName: String = LANSyncCoordinator.localDeviceName(),
+         localName: String,
          localID: UUID = RemoteLocalDevice.id(),
          advertises: Bool = true,
          localFeatures: [String] = RemoteConstants.localFeatures,
@@ -152,7 +153,7 @@ final class RemoteHostServer {
         self.localFeatures = localFeatures
         self.peerSilenceLimit = peerSilenceLimit
         self.keyConfirmationTimeout = keyConfirmationTimeout
-        self.registry = registry
+        self.sessions = sessions
         self.desktopEnvironment = desktopEnvironment
         // 被控端只认「允许来控制本机」那张表；传成主控端的表，本机去控制过的主机就能反过来免审批控制本机。
         precondition(identity.role == .controllers, "被控端必须用 controllers 方向的信任表")
@@ -189,12 +190,9 @@ final class RemoteHostServer {
             observationGeneration &+= 1
             tabTitlePush?.cancel()
             tabTitlePush = nil
-            observeRegistry(generation: observationGeneration)
-            observeTabTitles(generation: observationGeneration)
             pushedProgramReports = currentProgramReports()
-            observeProgramStatuses(generation: observationGeneration)
-            listedTabOrder = registry.orderedEntries().map(\.id)
-            observeTabOrder(generation: observationGeneration)
+            listedTabOrder = sessions.orderedSessions().map(\.id)
+            observeSessions(generation: observationGeneration)
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -216,6 +214,7 @@ final class RemoteHostServer {
         cancelPairingInvitation()
         relayLink?.stop()
         relayLink = nil
+        sessions.stopObserving()
         updateInternetActivity(active: false, keepAwake: false)
         status = .stopped
     }
@@ -588,23 +587,27 @@ final class RemoteHostServer {
 
     /// 会话列表，按 Mac 上的标签顺序排（`TerminalSessionRegistry.orderedEntries`），每条带上排位。
     func sessionInfos() -> [RemoteSessionInfo] {
-        let ordered = registry.orderedEntries()
+        let ordered = sessions.orderedSessions()
         listedTabOrder = ordered.map(\.id)
         return ordered.enumerated().map { index, entry in
             RemoteSessionInfo(id: entry.id, serverID: entry.serverID, serverName: entry.serverName, title: entry.title,
                               windowKind: entry.windowKind, connectedAt: entry.connectedAt,
                               controlledBy: controllers[entry.id].flatMap { connections[$0.connection]?.peerName },
-                              tabTitle: registry.displayTitle(of: entry), order: index)
+                              tabTitle: entry.tabTitle, order: index)
         }
     }
 
     /// 此刻有程序状态的会话（订阅时的全量快照）。
     func programStatusSnapshot() -> [RemoteProgramStatusUpdate.Entry] {
-        registry.entries.compactMap { entry in
-            registry.programReport(of: entry).map {
-                RemoteProgramStatusUpdate.Entry(sessionID: entry.id, status: RemoteProgramStatus($0))
-            }
+        sessions.orderedSessions().compactMap { entry in
+            entry.program.map { RemoteProgramStatusUpdate.Entry(sessionID: entry.id, status: RemoteProgramStatus($0)) }
         }
+    }
+
+    /// 接入、看列表之前要等的：Mac 刚重启时本机终端还没接回来。
+    func waitForSessionRestoration() async {
+        if let sessionRestoration { await sessionRestoration() }
+        await sessions.waitUntilRestored()
     }
 
     /// 某个连接接管一个会话。之前接管它的另一个连接收到「已被接管」并断开该终端。
@@ -748,70 +751,33 @@ final class RemoteHostServer {
     /// 当前这一轮观察链的代次。`start()` 每次挂新链时加一，旧链醒来对不上就自行结束。
     private var observationGeneration = 0
 
-    private func observeRegistry(generation: Int) {
-        withObservationTracking {
-            _ = registry.entries
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
-                    let alive = Set(self.registry.entries.map(\.id))
-                    for connection in self.connections.values { connection.sessionsChanged(alive: alive) }
-                    self.observeRegistry(generation: generation)
+    private func observeSessions(generation: Int) {
+        sessions.observe(RemoteHostSessionObserver(
+            sessionsChanged: { [weak self] alive in
+                guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                for connection in self.connections.values { connection.sessionsChanged(alive: alive) }
+            },
+            // 程序可能每秒改很多次标题（Claude Code 的转圈动画），所以标签名不走即时通道，
+            // 第一次变化后等一个间隔，把这段时间的变化合成一次推送。
+            titlesChanged: { [weak self] in self?.scheduleTabTitlePush(generation: generation) },
+            // 程序状态不节流：「等待确认」要马上到手机上。同一轮主线程里的多次变化由观察回调合成一次。
+            programStatusChanged: { [weak self] in
+                guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                self.pushProgramStatusChanges()
+            },
+            // Mac 上重排、拆分、跨组拖动标签：重发会话列表，设备上的标签跟着换顺序。新开、关掉标签时列表已经随之发过了。
+            orderChanged: { [weak self] in
+                guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                if self.sessions.orderedSessions().map(\.id) != self.listedTabOrder {
+                    for connection in self.connections.values { connection.sendSessions() }
                 }
-            }
-        }
-    }
-
-    /// 程序可能每秒改很多次标题（Claude Code 的转圈动画），所以标签名不走 `observeRegistry` 那条即时通道，
-    /// 第一次变化后等一个间隔，把这段时间的变化合成一次推送。
-    private func observeTabTitles(generation: Int) {
-        withObservationTracking {
-            for entry in registry.entries { _ = registry.displayTitle(of: entry) }
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.scheduleTabTitlePush(generation: generation) }
-            }
-        }
-    }
-
-    /// 程序状态不节流：「等待确认」要马上到手机上。同一轮主线程里的多次变化由观察回调合成一次。
-    private func observeProgramStatuses(generation: Int) {
-        withObservationTracking {
-            for entry in registry.entries { _ = registry.programReport(of: entry) }
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
-                    self.pushProgramStatusChanges()
-                    self.observeProgramStatuses(generation: generation)
-                }
-            }
-        }
-    }
-
-    /// Mac 上重排、拆分、跨组拖动标签：重发会话列表，设备上的标签跟着换顺序。不节流，重排本来就不频繁；
-    /// 拖分隔条也会叫醒这里，但先后没变就不发。
-    private func observeTabOrder(generation: Int) {
-        withObservationTracking {
-            _ = registry.orderedEntries()
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
-                    if self.registry.orderedEntries().map(\.id) != self.listedTabOrder {
-                        for connection in self.connections.values { connection.sendSessions() }
-                    }
-                    self.observeTabOrder(generation: generation)
-                }
-            }
-        }
+            }))
     }
 
     private func currentProgramReports() -> [UUID: ProgramStatusRecord] {
         var reports: [UUID: ProgramStatusRecord] = [:]
-        for entry in registry.entries {
-            if let report = registry.programReport(of: entry) { reports[entry.id] = report }
+        for entry in sessions.orderedSessions() {
+            if let report = entry.program { reports[entry.id] = report }
         }
         return reports
     }
@@ -837,7 +803,6 @@ final class RemoteHostServer {
             self.tabTitlePush = nil
             guard self.isRunning else { return }
             for connection in self.connections.values { connection.sendSessions() }
-            self.observeTabTitles(generation: generation)
         }
     }
 }

@@ -15,13 +15,8 @@ import Foundation
 /// （`exclusively`）。
 nonisolated final class TerminalMirrorTap: @unchecked Sendable {
 
-    /// 发给订阅者的一段数据。
-    nonisolated enum Chunk: Equatable, Sendable {
-        /// 快照的一段。`isFirst`：一张新快照的开头（接收端丢掉手上没收完的那张）；`isLast`：收齐了，可以还原。
-        case snapshot(Data, isFirst: Bool, isLast: Bool)
-        /// 快照之后的原样字节。
-        case output(Data)
-    }
+    /// 发给订阅者的一段数据（远控进程也认得这个类型，定义在 `RemoteHostSessions.swift`）。
+    typealias Chunk = RemoteTerminalChunk
 
     /// 在泵的锁里拍下、还没裁回滚的一张快照（`ShadowTerminal.untrimmedSnapshot`）。第一个要发它的订阅者在连接队列上裁，
     /// 同一刻拍给几个订阅者的共用这一份结果。
@@ -52,7 +47,7 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
     }
 
     /// 一个镜像订阅者：Mac 端替它攒着还没发出去的数据。`take` 由连接队列调用。
-    nonisolated final class Subscriber: @unchecked Sendable {
+    nonisolated final class Subscriber: RemoteTerminalFeed, @unchecked Sendable {
         let id: UUID
         private let lock = NSLock()
         private var snapshot: PendingSnapshot?

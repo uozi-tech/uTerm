@@ -13,7 +13,7 @@ final class TerminalEngineLockTests: XCTestCase {
         let lock = try Self.lock()
         XCTAssertEqual(lock["engine_version"], TerminalEngineVersion.current, """
             vendor/libghostty-spm/ENGINE.lock 的 engine_version 和 TerminalEngineVersion.current 不一致。
-            换引擎二进制时两处要一起改（uTerm/Features/Terminal/Shadow/TerminalEngine.swift）。
+            换引擎二进制时两处要一起改（uTerm/Features/Terminal/Shadow/TerminalEngineVersion.swift）。
             """)
     }
 

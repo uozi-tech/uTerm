@@ -84,8 +84,7 @@ final class RemoteHostConnection {
 
     private struct Attachment {
         let sessionID: UUID
-        weak var session: TerminalSession?
-        let subscriberID: UUID
+        let handle: any RemoteHostTerminalAttachment
     }
 
     init(link: RemoteLink, server: RemoteHostServer, origin: RemoteConnectionOrigin = .localNetwork) {
@@ -153,7 +152,7 @@ final class RemoteHostConnection {
                                     features: advertisedFeatures().isEmpty ? nil : advertisedFeatures(),
                                     deviceModel: RemoteDeviceModel.current(),
                                     platform: RemoteDevicePlatform.current.rawValue,
-                                    terminalEngine: TerminalEngineVersion.current)
+                                    terminalEngine: server.sessions.terminalEngine)
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: origin.handshakeKeys)
             let peer = established.peer
@@ -335,14 +334,19 @@ final class RemoteHostConnection {
             }
         case .attach:
             guard let request = try? RemoteJSON.decode(RemoteAttachRequest.self, from: message.payload) else { return }
-            afterSessionRestoration { [weak self] in self?.attach(request) }
+            // 通道号按请求到达的先后分配（对端靠回复里的通道号认出是哪一次接入），不等接回与 App 回话。
+            let channel = nextChannel
+            nextChannel &+= 1
+            afterSessionRestoration { [weak self] in
+                Task { await self?.attach(request, channel: channel) }
+            }
         case .input:
-            attachments[message.channel]?.session?.writeRemoteInput(message.payload)
+            attachments[message.channel]?.handle.write(message.payload)
             server.noteRemoteInput()
         case .resize:
             guard let attachment = attachments[message.channel],
                   let size = try? RemoteGridSize(decoding: message.payload) else { return }
-            attachment.session?.pinRemoteGrid(cols: Int(size.cols), rows: Int(size.rows), controller: peerName)
+            attachment.handle.resize(cols: Int(size.cols), rows: Int(size.rows), controller: peerName)
         case .detach:
             detach(channel: message.channel, notify: false)
         case .ping:
@@ -357,9 +361,12 @@ final class RemoteHostConnection {
             link.send(RemoteMessage(.localWorkspaces, payload: RemoteJSON.encode(reply)))
         case .closeSession:
             guard let request = try? RemoteJSON.decode(RemoteCloseSessionRequest.self, from: message.payload) else { return }
-            let closed = server.registry.requestClose(sessionID: request.sessionID)
-            AppLogger.info("远控：\(self.peerName) 关闭 Mac 上的会话 \(request.sessionID.uuidString.prefix(8))：\(closed ? "已关闭" : "没找到")",
-                           category: RemoteLog.category)
+            let device = peerName
+            Task { [server] in
+                let closed = await server.sessions.requestClose(sessionID: request.sessionID)
+                AppLogger.info("远控：\(device) 关闭 Mac 上的会话 \(request.sessionID.uuidString.prefix(8))：\(closed ? "已关闭" : "没找到")",
+                               category: RemoteLog.category)
+            }
         case .terminalImage:
             guard let request = try? RemoteTerminalImageRequest(decoding: message.payload) else { return }
             deliverImage(request, channel: message.channel)
@@ -435,12 +442,8 @@ final class RemoteHostConnection {
     /// Mac 刚重启、本机终端还没接回来时，手机不能看到一份缺了它们的列表（它会把「消失了」的标签关掉），
     /// 接入也不能回「已关闭」。等接回完再说；没有要接回的就是立刻执行。
     private func afterSessionRestoration(_ action: @escaping @MainActor () -> Void) {
-        guard let restoration = server.sessionRestoration else {
-            action()
-            return
-        }
-        Task { [weak self] in
-            await restoration()
+        Task { [weak self, server] in
+            await server.waitForSessionRestoration()
             guard let self, !self.isClosed else { return }
             action()
         }
@@ -457,40 +460,39 @@ final class RemoteHostConnection {
         link.send(RemoteMessage(.programStatus, payload: RemoteJSON.encode(update)))
     }
 
-    private func attach(_ request: RemoteAttachRequest) {
-        let channel = nextChannel
-        nextChannel &+= 1
-        guard let session = server.registry.session(for: request.sessionID),
-              session.connectionState == .connected else {
-            sendAttachResult(channel, request.sessionID, error: "这个终端已经关闭或断开")
-            return
-        }
+    private func attach(_ request: RemoteAttachRequest, channel: UInt32) async {
         // 快照是引擎的二进制格式：对端不是同一个引擎版本就解不开，不接入。
-        guard RemoteTerminalEngine.matches(peerTerminalEngine) else {
+        guard RemoteTerminalEngine.matches(peerTerminalEngine, local: server.sessions.terminalEngine) else {
             sendAttachResult(channel, request.sessionID, error: RemoteTerminalEngine.mismatchMessage)
             return
         }
+        let pump = self.pump
         // 先钉尺寸再订阅：第一份快照就是手机的行列数（订阅里等钉好）。
+        let result = await server.sessions.attach(RemoteHostAttachRequest(
+            sessionID: request.sessionID, cols: Int(request.cols), rows: Int(request.rows), controller: peerName,
+            settleTimeout: RemoteConstants.attachGridSettleTimeout, onReadable: { pump.requestDrain() }))
+        let attachment: any RemoteHostTerminalAttachment
+        switch result {
+        case .failure(let error):
+            guard !isClosed else { return }
+            sendAttachResult(channel, request.sessionID, error: error.message)
+            return
+        case .success(let handle):
+            attachment = handle
+        }
+        guard !isClosed else {
+            attachment.detach()
+            return
+        }
         server.claim(sessionID: request.sessionID, connection: self, channel: channel)
-        session.pinRemoteGrid(cols: Int(request.cols), rows: Int(request.rows), controller: peerName)
-        session.remoteDisconnect = { [weak self] in
+        attachment.onRemoteDisconnect = { [weak self] in
             self?.detach(channel: channel, notify: true, reason: "已在 Mac 上断开")
         }
         // 接入结果先于快照入队：连接队列先进先出，手机一定先收到「接入成功」再收到画面。
         sendAttachResult(channel, request.sessionID, error: nil)
-        let subscriberID = UUID()
-        let pump = self.pump
-        // 第一张快照等终端按手机的尺寸钉好再拍（钉尺寸要等视图改完、引擎改好网格）。
-        let shadow = session.shadow
-        let target = (cols: Int(request.cols), rows: Int(request.rows))
-        let subscriber = session.mirrorTap.subscribe(
-            id: subscriberID,
-            firstSnapshotWhen: { shadow.size == target },
-            timeout: RemoteConstants.attachGridSettleTimeout) { pump.requestDrain() }
-        attachments[channel] = Attachment(sessionID: request.sessionID, session: session, subscriberID: subscriberID)
-        pump.add(channel: channel, subscriber: subscriber)
-        let device = peerName
-        AppLogger.info("远控接入：\(device) → 会话 \(request.sessionID.uuidString.prefix(8))，\(request.cols)×\(request.rows)",
+        attachments[channel] = Attachment(sessionID: request.sessionID, handle: attachment)
+        pump.add(channel: channel, feed: attachment.feed)
+        AppLogger.info("远控接入：\(self.peerName) → 会话 \(request.sessionID.uuidString.prefix(8))，\(request.cols)×\(request.rows)",
                        category: RemoteLog.category)
     }
 
@@ -498,17 +500,13 @@ final class RemoteHostConnection {
     /// 把结果回过去。路径由手机粘进终端：粘贴要看终端开没开 bracketed paste，手机端的终端知道。
     private func deliverImage(_ request: RemoteTerminalImageRequest, channel: UInt32) {
         let device = peerName
-        let backend = attachments[channel]?.session?.backend as? any TerminalImageReceiving
+        let handle = attachments[channel]?.handle
         Task { [weak self] in
             var reply = RemoteTerminalImageResult(requestID: request.requestID)
-            if let backend {
-                do {
-                    if case .file(let path) = try await backend.deliverImage(request.image) { reply.path = path }
-                } catch {
-                    reply.error = "图片发送失败：\(error.localizedDescription)"
-                }
-            } else {
-                reply.error = "这个终端不能接收图片"
+            switch await handle?.deliverImage(request.image) {
+            case .success(let path): reply.path = path
+            case .failure(let error): reply.error = error.message
+            case nil: reply.error = "这个终端不能接收图片"
             }
             AppLogger.info("远控：\(device) 贴图 \(request.image.data.count) 字节 → \(reply.error ?? reply.path ?? "剪贴板")",
                            category: RemoteLog.category)
@@ -547,13 +545,7 @@ final class RemoteHostConnection {
     func detach(channel: UInt32, notify: Bool, reason: String = "") {
         guard let attachment = attachments.removeValue(forKey: channel) else { return }
         pump.remove(channel: channel)
-        if let session = attachment.session {
-            session.mirrorTap.unsubscribe(id: attachment.subscriberID)
-            if server.isController(sessionID: attachment.sessionID, connection: self, channel: channel) {
-                session.unpinRemoteGrid()
-                session.remoteDisconnect = nil
-            }
-        }
+        attachment.handle.detach()
         server.release(sessionID: attachment.sessionID, connection: self, channel: channel)
         if notify {
             link.send(RemoteMessage(.closed, channel: channel, payload: Data(reason.utf8)))
@@ -992,16 +984,16 @@ nonisolated final class RemoteOutputPump: @unchecked Sendable {
     private var lastOutputNote: DispatchTime?
     private let link: RemoteLink
     /// 只在 `link.queue` 上读写。
-    private var subscribers: [(channel: UInt32, subscriber: TerminalMirrorTap.Subscriber)] = []
+    private var subscribers: [(channel: UInt32, subscriber: any RemoteTerminalFeed)] = []
     private var cursor = 0
 
     init(link: RemoteLink) {
         self.link = link
     }
 
-    func add(channel: UInt32, subscriber: TerminalMirrorTap.Subscriber) {
+    func add(channel: UInt32, feed: any RemoteTerminalFeed) {
         link.queue.async {
-            self.subscribers.append((channel, subscriber))
+            self.subscribers.append((channel, feed))
             // 订阅时生成的快照可能已经在等着了，而它的唤醒早于这里的登记。
             self.drainOnQueue()
         }

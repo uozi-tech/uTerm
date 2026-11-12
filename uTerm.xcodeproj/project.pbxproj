@@ -282,6 +282,8 @@
 				Features/Remote/RemoteFileSharingStore.swift,
 				Features/Remote/RemoteHostConnection.swift,
 				Features/Remote/RemoteHostServer.swift,
+				Features/Remote/RemoteHostSessions.swift,
+				Features/Remote/RemoteRegistrySessions.swift,
 				Features/Remote/RemoteLocalShellOpener.swift,
 				Features/Remote/RemotePairingPanel.swift,
 				Features/Remote/RemotePasteboard.swift,
