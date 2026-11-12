@@ -13,7 +13,10 @@ enum RemoteHostAgentMain {
         // 常驻后台：不让系统按「没有窗口、没人用」把它挂起或自动结束（心跳被拖慢，中继就会把这台 Mac 摘掉）。
         ProcessInfo.processInfo.disableAutomaticTermination("uTerm 远程控制常驻")
         ProcessInfo.processInfo.disableSuddenTermination()
-        let service = RemoteHostAgentService(environment: production())
+        var environment = production()
+        // 实测脚本（scripts/remote-host-live-test.sh）登记的任务：不在局域网里广播，免得别的设备看到一台测试用的 Mac。
+        environment.advertises = ProcessInfo.processInfo.environment["UTERM_REMOTE_HOST_NO_BONJOUR"] == nil
+        let service = RemoteHostAgentService(environment: environment)
         let listener = NSXPCListener(machServiceName: RemoteHostAgent.machServiceName)
         listener.delegate = service
         listener.resume()
