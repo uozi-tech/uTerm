@@ -124,7 +124,8 @@ struct uTermApp: App {
         _remoteServer = State(initialValue: remoteServer)
         // 远控服务跑在常驻的远控进程里（App 更新、崩溃时远控连接不断）：配对审批框与被控指示条也由它显示。
         // 不能用时（开发构建、测试宿主、用户关了它的后台运行）照旧跑在 App 里。
-        let usesRemoteHostAgent = RemoteHostAgentBridge.isEligible() && RemoteHostAgentBridge.register()
+        // 注册放到第一次要连时（远控打开时）：系统会提示「添加了后台项目」，没开远控的人不该看到。注册不上会退回 App 内服务。
+        let usesRemoteHostAgent = RemoteHostAgentBridge.isEligible()
         let showsRemotePanels = !BackgroundLaunchMode.isRunningInTestHost && !usesRemoteHostAgent
         remotePairingPrompt = showsRemotePanels ? RemotePairingPrompt(server: remoteServer) : nil
         remoteDesktopIndicator = showsRemotePanels ? RemoteDesktopIndicator(server: remoteServer) : nil

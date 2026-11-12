@@ -36,6 +36,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     private var upgradeCheck: Task<Void, Never>?
     private(set) var isConnected = false
     private var isStopped = false
+    private var isRegistered = false
     /// 正在用的桥（App 进程里至多一个；没用远控进程时为 nil）。
     static var current: RemoteHostAgentBridge?
     /// 远控进程用不了了（后台运行被关掉）：远控服务改回在 App 里跑。App 接线时设。
@@ -159,6 +160,11 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     private func connect() {
         guard !isStopped else { return }
+        // 第一次要用时才注册（系统会提示「添加了后台项目」，没开远控的人不该看到）。注册不上就改回在 App 里服务。
+        if transport.checksRegistration, !isRegistered {
+            guard Self.register() else { return fallBack() }
+            isRegistered = true
+        }
         let connection = transport.makeConnection()
         if let requirement = transport.serverRequirement { connection.setCodeSigningRequirement(requirement) }
         connection.remoteObjectInterface = NSXPCInterface(with: RemoteHostAgentXPC.self)
@@ -204,11 +210,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         guard !isStopped else { return }
         if transport.checksRegistration, SMAppService.agent(plistName: RemoteHostAgent.plistName).status != .enabled {
             AppLogger.notice("远控进程的后台运行被关掉了，远控服务改回在 App 里跑", category: RemoteLog.category)
-            isStopped = true
-            sessions.stopObserving()
-            server.agent = nil
-            onFallback?()
-            return
+            return fallBack()
         }
         // 远控进程没了（被换新版本、崩溃）：launchd 在下一次连接时按需拉起。远控关着就不连。
         guard settings.isEnabled else { return }
@@ -219,6 +221,14 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             guard (try? await Task.sleep(for: delay)) != nil else { return }
             self?.connect()
         }
+    }
+
+    private func fallBack() {
+        isStopped = true
+        reconnect?.cancel()
+        sessions.stopObserving()
+        server.agent = nil
+        onFallback?()
     }
 
     private func makeHello() -> RemoteHostAgentHello {
