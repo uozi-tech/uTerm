@@ -14,6 +14,8 @@
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+		<!-- 远控进程（uTermRemoteHost，SMAppService.agent）的 mach 服务，见 RemoteHostAgent.machServiceName。 -->
+		<string>com.uozi.uTerm.RemoteHost</string>
 	</array>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>

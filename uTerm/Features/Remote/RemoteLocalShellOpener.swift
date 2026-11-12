@@ -26,23 +26,9 @@ nonisolated struct RemoteLocalShellOpener: Sendable {
     /// 开窗口之后等会话登记的上限：辅助程序冷启动 + 登录 shell 起来，正常一两秒。
     static let waitSeconds = 15
 
-    @MainActor
-    static func live(settings: RemoteControlSettings, registry: TerminalSessionRegistry) -> RemoteLocalShellOpener {
-        RemoteLocalShellOpener(workspaces: { [weak settings] in
-            guard settings?.isLocalShellEnabled == true else { return [] }
-            return LocalShellWorkspaces.shared.list(open: LocalShellWindowRouter.shared.openDirectories)
-        }, open: { [weak settings, weak registry] directory in
-            guard let settings, let registry else { return .failure(Failure(message: "uTerm 正在退出")) }
-            guard settings.isLocalShellEnabled else {
-                return .failure(Failure(message: "Mac 上没有打开「允许打开本机终端」。在 Mac 的 uTerm 里打开「设置 › 远程控制」。"))
-            }
-            guard let open = registry.openLocalShell, let sessionID = open(directory) else {
-                return .failure(Failure(message: "Mac 上的 uTerm 还没准备好打开窗口，稍后再试"))
-            }
-            guard let entry = await registry.waitForSession(id: sessionID, timeout: .seconds(waitSeconds)) else {
-                return .failure(Failure(message: "本机终端未能在 \(waitSeconds) 秒内启动，原因见 Mac 上的本机终端窗口"))
-            }
-            return .success(entry.id)
-        })
+    /// 用户真正的主目录（沙盒进程里 `NSHomeDirectory()` 是容器）。手机列工作目录时按它缩写路径。
+    nonisolated static var realHome: String {
+        if let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir { return String(cString: dir) }
+        return NSHomeDirectory()
     }
 }

@@ -16,9 +16,11 @@ import Foundation
 nonisolated enum LocalShellAgent {
     /// XPC 服务名 = 辅助程序的 bundle id（`NSXPCConnection(serviceName:)` 用）。
     static let serviceName = "com.uozi.uTerm.ShellAgent"
-    /// 只接受同一团队签名的 uTerm 主程序来连：起的是这个用户的登录 shell，不能谁都能要。
+    /// 只接受同一团队签名的 uTerm 主程序来连：起的是这个用户的登录 shell，不能谁都能要。远控进程（`uTermRemoteHost`）包里
+    /// 也嵌了一份这个服务，替它执行远程文件请求，所以也放行它。
     static let clientRequirement =
-        "anchor apple generic and identifier \"com.uozi.uTerm\" and certificate leaf[subject.OU] = \"ABCDE12345\""
+        "anchor apple generic and (identifier \"com.uozi.uTerm\" or identifier \"com.uozi.uTerm.RemoteHost\") "
+        + "and certificate leaf[subject.OU] = \"ABCDE12345\""
 }
 
 @objc nonisolated protocol LocalShellAgentProtocol {

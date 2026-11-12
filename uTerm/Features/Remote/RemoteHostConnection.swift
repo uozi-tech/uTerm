@@ -356,7 +356,7 @@ final class RemoteHostConnection {
             openLocalShell(request)
         case .listLocalWorkspaces:
             guard let request = try? RemoteJSON.decode(RemoteLocalWorkspacesRequest.self, from: message.payload) else { return }
-            let reply = RemoteLocalWorkspaces(requestID: request.requestID, home: LocalShellWorkspaces.home,
+            let reply = RemoteLocalWorkspaces(requestID: request.requestID, home: RemoteLocalShellOpener.realHome,
                                               directories: server.localShellOpener.workspaces())
             link.send(RemoteMessage(.localWorkspaces, payload: RemoteJSON.encode(reply)))
         case .closeSession:

@@ -2,13 +2,6 @@ import Foundation
 
 /// 连一台 Mac 时界面上的文字：配对码、邀请摘要、连接进度（两端共用，各端只管排版）。
 
-nonisolated enum RemotePairingCode {
-    /// 核对用的 6 位数字，中间空一格：「123 456」。
-    static func grouped(_ code: String) -> String {
-        "\(code.prefix(3)) \(code.suffix(3))"
-    }
-}
-
 extension RemotePairingInvitation {
     /// 收到邀请时的确认文字：配上之后能做什么、经不经中继、提醒只接受信任的人发来的。
     nonisolated var summary: String {

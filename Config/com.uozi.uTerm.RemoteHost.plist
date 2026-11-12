@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 远控进程的 launchd 任务（SMAppService.agent）。launchd 在注册时缓存这份定义，改了它 App 会先注销再注册
+	     （RemoteHostAgentBridge.register 按内容摘要判断），所以尽量别改。 -->
+	<key>Label</key>
+	<string>com.uozi.uTerm.RemoteHost</string>
+	<key>BundleProgram</key>
+	<string>Contents/Helpers/uTermRemoteHost.app/Contents/MacOS/uTermRemoteHost</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.uozi.uTerm.RemoteHost</key>
+		<true/>
+	</dict>
+	<!-- 按需启动（App 连 mach 服务时）；崩溃才自动重启，正常退出（宽限期到、换新版本）不重启。 -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.uozi.uTerm</string>
+	</array>
+</dict>
+</plist>
