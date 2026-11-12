@@ -93,6 +93,32 @@ final class TerminalSessionLifecycleTests: XCTestCase {
         XCTAssertEqual(written, [Data("k".utf8)], "回放途中的按键要发出去，历史里的查询不答")
     }
 
+    /// 重启后接回：检查点里存着的标题、回放字节里后来设的标题，接回完成时都要落到标签上（`shellTitle`），
+    /// 不能等程序下一次设标题，更不能回落成「zsh 2」这种默认名。
+    func testHeldReattachRestoresShellTitle() async throws {
+        for (checkpointTitle, replayed, expected) in [("~/Workspace", "", "~/Workspace"),
+                                                      ("~/Workspace", "\u{1B}]2;vim notes.md\u{07}", "vim notes.md")] {
+            let source = ShadowTerminal(cols: 80, rows: 24, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+            source.feed(Data("\u{1B}]2;\(checkpointTitle)\u{07}prompt$ ".utf8))
+            let blob = TerminalCheckpointBlob.encode(snapshot: try source.snapshot())
+            let output = Array(replayed.utf8)
+            let replay = HolderReplay(
+                hello: HolderHelloReply(version: 1, shellPID: 1, createdAt: 0, cols: 80, rows: 24, exitStatus: nil, attributes: []),
+                checkpoint: HolderCheckpoint(offset: 0, cols: 80, rows: 24, hasGap: false, blob: blob),
+                output: output, endOffset: UInt64(output.count))
+            let session = TerminalSession()
+            session.attentionSink = { _ in }
+            defer { session.dispose() }
+
+            await session.connect(using: HeldReplayBackend(replay: replay))
+            XCTAssertEqual(session.connectionState, .connected)
+            for _ in 0..<100 where session.shellTitle != expected {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(session.shellTitle, expected, "接回后的标签标题")
+        }
+    }
+
     /// surface 不吃字节时由影子答查询：XTVERSION（`CSI > q`）要和 surface 答的一样（「ghostty <版本>」），不是 vt 默认的
     /// 「libghostty」。原来只有 iOS 设了。
     func testShadowAnswersXTVersionLikeTheSurface() async throws {

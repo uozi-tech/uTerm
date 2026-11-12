@@ -51,6 +51,9 @@ extension TerminalSession {
         mirrorTap.invalidateAll()
         // 检查点里的状态 + 回放那段字节里的状态变化：接回的那一刻标签上就是对的，不等程序下一次上报。
         publishProgramStatus()
+        // 标题同理：快照带着它、历史里的 OSC 2 也改了影子，但都不发事件（历史不报），画面回放的回调又要等 surface
+        // 真的回放才来。不在这里对一次，重启后标签回落成「zsh 2」这种默认名，直到程序下次设标题。
+        receiveShellTitle(shadow.title)
         // 都没有的话，状态是丢了还是本来就没有程序，光看检查点分不出来（检查点是别的引擎版本存的、存的时候还不带状态……）。
         if replay.isReattach, !programStatusTracker.hasRecords { askForegroundAfterReattach(backend, generation: generation) }
 

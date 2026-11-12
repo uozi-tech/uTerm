@@ -292,6 +292,19 @@ final class ShadowTerminalReadingTests: XCTestCase {
         XCTAssertEqual(log.events.count, 1, "还原后事件回调要还在")
     }
 
+    /// 重启接回靠快照 + 按历史回放的字节还原标签标题：两条路都要把 OSC 2 设的标题留在影子里。
+    func testTitleSurvivesSnapshotRestoreAndHistoryFeed() throws {
+        let source = makeTerminal()
+        feed(source, "\u{1B}]2;~/Workspace\u{07}prompt")
+        XCTAssertEqual(source.title, "~/Workspace", "用例前提")
+        let restored = makeTerminal()
+        try restored.restore(snapshot: try source.snapshot())
+        XCTAssertEqual(restored.title, "~/Workspace", "快照要带着标题")
+
+        restored.feed(Data("\u{1B}]2;vim notes.md\u{07}".utf8), asHistory: true)
+        XCTAssertEqual(restored.title, "vim notes.md", "按历史喂的标题也要落进影子的状态")
+    }
+
     func testRestoreRejectsGarbage() {
         let terminal = makeTerminal()
         feed(terminal, "keep me")
