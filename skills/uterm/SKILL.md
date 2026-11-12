@@ -1,6 +1,6 @@
 ---
 name: uterm
-description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机：执行远程命令（单机 run、多机并行 run-many、快捷命令、按指纹信任主机密钥）；经 SFTP 读写远程文件（列目录、读文本、下载上传大文件并断点续传、建目录、删除、改名、改权限）；启停已保存的端口转发规则（-L / -R / SOCKS）并看状态流量；查看与读取用户开着的终端会话、往会话注入文本、开新终端窗口跑要人交互的命令（sudo 密码、[Y/n] 确认）并等结果；在已保存主机上部署 / 更新 uTerm 自建中继（uterm-relay，手机跨网络连 Mac 用）并导入、测通。当需要在服务器上跑命令、排查线上问题、传文件、打通到内网数据库或服务的隧道、或知道用户终端上正在发生什么，而手头没有主机地址、密码或私钥时使用。
+description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机：执行远程命令（单机 run、多机并行 run-many、快捷命令、按指纹信任主机密钥）；经 SFTP 读写远程文件（列目录、读文本、下载上传大文件并断点续传、建目录、删除、改名、改权限）；启停已保存的端口转发规则（-L / -R / SOCKS）并看状态流量；查看与读取用户开着的终端会话、往会话注入文本、开新终端窗口跑要人交互的命令（sudo 密码、[Y/n] 确认）并等结果；在已保存主机上部署 / 更新 uTerm 自建中继（uterm-relay，手机跨网络连 Mac 用）并导入、测通；经远控链路访问配对过的另一台 Mac（不用 SSH）：读写文件、按行读代码、grep / find / 目录树、上传下载与同步目录、打补丁、跑命令。当需要在服务器上跑命令、排查线上问题、传文件、打通到内网数据库或服务的隧道、知道用户终端上正在发生什么、或要读写用户另一台 Mac 上的项目文件，而手头没有主机地址、密码或私钥时使用。
 ---
 
 # 用 uTerm 操作远程主机
@@ -10,7 +10,7 @@ uTerm 是 macOS 上的 SSH 终端。它在本机开了一个 Unix domain socket�
 全程留在 uTerm 和钥匙串里，你一个字节也拿不到，也不需要。
 
 本文讲所有动作共用的部分（定位客户端、探活、开关、主机、主机密钥、错误码）和远程执行。
-另外三面按需再读，**动手之前先读完对应那份**：
+另外几面按需再读，**动手之前先读完对应那份**：
 
 | 要做的事 | 读 |
 |---|---|
@@ -18,6 +18,7 @@ uTerm 是 macOS 上的 SSH 终端。它在本机开了一个 Unix domain socket�
 | 启停 / 查看端口转发（`forward …`） | [references/forward.md](references/forward.md) |
 | 看用户开着的终端、读屏、注入文本、开窗口跑要人交互的命令（`terminals` / `terminal …`） | [references/terminal.md](references/terminal.md) |
 | 部署 / 更新 uTerm 中继、导入配置、测连通（`relay …`） | [references/relay.md](references/relay.md) |
+| 访问配对过的另一台 Mac：读写文件、搜代码、同步目录、跑命令（`macs` / `mac …`） | [references/mac.md](references/mac.md) |
 
 ## 先定位客户端
 
@@ -92,10 +93,10 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 | 开关 | 管什么 | 关着时的错误码 |
 |---|---|---|
 | 启用命令行接口 | 一切（关着时连 socket 都没有，见上一节） | `uterm_not_running`（途中被关是 `control_disabled`） |
-| 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发启停 / `terminal send` / `terminal open` / `relay import` | `mutations_disabled` |
+| 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发启停 / `terminal send` / `terminal open` / `relay import` / `mac run` 与 `mac` 的写操作 | `mutations_disabled` |
 
 只读的 `hosts` / `host-key` / `sftp ls|stat|cat|get` / `forward list` / `terminals` /
-`terminal read|wait` / `relay check` 只要第一个开关。
+`terminal read|wait` / `relay check` / `macs` / `mac` 的读与搜索只要第一个开关。
 
 `run` **有意**归在第二个开关下：shell 命令无法可靠地分成读和写（`cat` 能读密钥、
 `awk` 能写文件），假的「只读模式」比没有更糟。所以哪怕只是想看看磁盘水位，也需要
@@ -291,7 +292,7 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 
 ## 错误码
 
-文件、转发、终端、中继各自专有的错误码在对应的 reference 里。
+文件、转发、终端、中继、远程 Mac 各自专有的错误码在对应的 reference 里。
 
 | code | 含义 |
 |---|---|

@@ -143,6 +143,18 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         }
     }
 
+    /// 把一条远控文件请求交给辅助程序执行（它不在沙盒里），回打包好的应答。格式见 `RemoteFileWire`。
+    func fileRequest(_ payload: Data) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let once = LocalShellOnce(continuation)
+            guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
+                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                return
+            }
+            agent.fileRequest(payload) { once.resume(returning: $0) }
+        }
+    }
+
     func listSessions(namespace: String) async throws -> [UUID] {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)

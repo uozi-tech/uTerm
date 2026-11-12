@@ -44,6 +44,8 @@ final class ControlHandler {
         let registry: TerminalSessionRegistry
         /// 中继配置的落点（远控服务）。测试里可以不给，`relay-*` 动作就回 `app_not_ready`。
         var relay: (any ControlRelayManaging)? = nil
+        /// 配对过的 Mac（`macs` / `mac-*`）。测试里可以不给，这组动作就回 `app_not_ready`。
+        var macs: (any ControlRemoteMacs)? = nil
     }
 
     /// `ControlServer` 默认 requestHandler 指向的实例。app 起来后调 `attach(_:)` 注入依赖；
@@ -62,7 +64,8 @@ final class ControlHandler {
         forwardingCoordinator: ForwardingCoordinator,
         pool: any ControlConnectionPooling,
         registry: TerminalSessionRegistry,
-        relay: (any ControlRelayManaging)? = nil
+        relay: (any ControlRelayManaging)? = nil,
+        macs: (any ControlRemoteMacs)? = nil
     ) {
         dependencies = Dependencies(
             settings: settings,
@@ -70,7 +73,8 @@ final class ControlHandler {
             forwardingCoordinator: forwardingCoordinator,
             pool: pool,
             registry: registry,
-            relay: relay
+            relay: relay,
+            macs: macs
         )
     }
 
@@ -134,6 +138,8 @@ final class ControlHandler {
                 return try await handleTerminal(request, deps)
             case .relay:
                 return try await handleRelay(request, deps)
+            case .mac:
+                return try await handleMac(request, deps)
             case .misc:
                 return try await handleMisc(request, deps)
             }

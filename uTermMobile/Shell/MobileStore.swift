@@ -31,6 +31,15 @@ struct MOpenTarget: Equatable {
 }
 
 /// 一次「看 Mac 屏幕」的请求（远程桌面，全屏覆盖呈现）。
+/// 「浏览这台 Mac 的文件」的请求，等工作区消费。
+struct MRemoteFilesRequest: Equatable {
+    let client: RemoteMacClient
+    /// 让同一台 Mac 的连续请求也能被 `onChange` 看到。
+    let token = UUID()
+
+    static func == (lhs: MRemoteFilesRequest, rhs: MRemoteFilesRequest) -> Bool { lhs.token == rhs.token }
+}
+
 struct MRemoteDesktopRequest: Identifiable {
     let id = UUID()
     let client: RemoteMacClient
@@ -69,6 +78,9 @@ final class MobileStore {
     /// 切到别的 App 后让运行继续（iOS 26 系统后台继续处理；更早的系统短暂延时）。
     @ObservationIgnored
     lazy var parallelKeeper = ParallelBackgroundKeeper { [weak self] in self?.parallelSessions ?? [] }
+
+    /// 浏览一台 Mac 的文件（Mac 面板「文件」发起）。工作区开一个文件标签。
+    var remoteFiles: MRemoteFilesRequest?
 
     /// 远程桌面（Mac 面板「屏幕」发起）。根视图以全屏覆盖呈现。
     var remoteDesktop: MRemoteDesktopRequest?
@@ -146,6 +158,13 @@ final class MobileStore {
         showWorkspace = true
     }
     func openSFTP(_ host: ServerProfile) { requestConnect(host, kind: .sftp) }
+
+    /// 浏览一台 Mac 的文件：工作区里开（或带出已有的）它的文件标签。标签自己显示连接中 / 失败，不走连接中页。
+    func openRemoteFiles(_ client: RemoteMacClient) {
+        guard connecting == nil else { return }
+        remoteFiles = MRemoteFilesRequest(client: client)
+        showWorkspace = true
+    }
 
     /// 连接中页跑完（已连接）：撤下中转页，露出目标会话。
     func finishConnect() { connecting = nil }

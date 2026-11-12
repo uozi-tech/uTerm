@@ -274,6 +274,17 @@ struct RemoteMacSheet: View {
                     MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "需要更新 Mac 上的 uTerm", last: true)
                 }
             }
+            section("文件", footer: client.supportsFiles
+                        ? "从主目录开始浏览这台 Mac 上的文件，可以上传、下载、改名和删除。Mac 不用打开 SSH。"
+                        : "Mac 上的 uTerm 版本过旧，不支持浏览文件。将其更新到最新版本后即可使用。") {
+                if client.supportsFiles {
+                    MInsetRow(icon: "folder", label: "浏览文件", sub: "Mac 上的文件", chevron: true, last: true) {
+                        openFiles()
+                    }
+                } else {
+                    MInsetRow(icon: "folder", iconColor: M.text3, label: "浏览文件", sub: "需要更新 Mac 上的 uTerm", last: true)
+                }
+            }
             section("Mac 上的终端",
                     footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签页，之后 Mac 上新开或关闭终端，手机上的标签页也跟着变，直到点「断开全部终端」。接管期间它们按这台手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
                 if client.sessions.isEmpty {
@@ -348,6 +359,14 @@ struct RemoteMacSheet: View {
         }
     }
 
+    private func openFiles() {
+        dismiss()
+        let client = self.client
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            store.openRemoteFiles(client)
+        }
+    }
+
     private func endTakeover() {
         store.teardownTabIDs = workspace.endTakeover(of: client)
     }
@@ -388,6 +407,15 @@ extension RemoteMacClient {
     /// 远控标签的 `ServerProfile`（标题、连接中页的名字）：**不入库**的临时对象，只描述 Mac 上那个终端。
     /// 传输不读它的连接参数，所以不要求这台服务器已同步到手机；Mac 本机 shell 没有服务器，用这台 Mac 代表。
     /// 「最近连接」这类记账已按 `modelContext == nil` 跳过。
+    /// 文件标签挂的临时主机：只用来显示名字，不入库。
+    var filesTabHost: ServerProfile {
+        let host = ServerProfile()
+        host.id = RemoteConstants.localShellServerID
+        host.name = macName
+        host.host = "本机"
+        return host
+    }
+
     func tabHost(for sessionID: UUID) -> ServerProfile {
         let host = ServerProfile()
         if let session = sessions.first(where: { $0.id == sessionID }),

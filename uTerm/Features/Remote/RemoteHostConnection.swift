@@ -345,6 +345,8 @@ final class RemoteHostConnection {
         case .terminalImage:
             guard let request = try? RemoteTerminalImageRequest(decoding: message.payload) else { return }
             deliverImage(request, channel: message.channel)
+        case .fileRequest:
+            handleFileRequest(message.payload)
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
             Task { await startDesktop(request) }
@@ -374,8 +376,41 @@ final class RemoteHostConnection {
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
-             .linkAck, .linkFragment, .programStatus, .terminalSnapshot:
+             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply:
             break
+        }
+    }
+
+    /// 一条文件请求：过门禁，交给辅助程序，把应答发回去。主程序不解释内容，只为了记日志看一眼头。
+    /// 应答不计入终端输出的背压：主控端自己限着在途的请求数，这里计进去的话传文件时镜像的终端会以为链路堵了。
+    private func handleFileRequest(_ payload: Data) {
+        let access = server.fileAccess
+        let link = self.link
+        let send: @Sendable (Data) -> Void = { reply in
+            link.queue.async {
+                link.sendOnQueue(RemoteMessage(.fileReply, channel: RemoteConstants.fileChannel, payload: reply),
+                                 countsTowardBackpressure: false)
+            }
+        }
+        guard let (request, _) = try? RemoteFileCodec.decode(RemoteFileRequest.self, from: payload) else {
+            send(RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
+                                                    RemoteFileError(.invalid, "请求解不开")), compress: false))
+            return
+        }
+        if let refusal = access.refusal(request.op) {
+            send(RemoteFileCodec.packReply(.failure(request.id, refusal), compress: false))
+            return
+        }
+        // 传输时一秒几十条读写，逐条记没有意义：只记会改东西的和跑命令。
+        if request.op.isMutation, request.op != .write {
+            // 命令只记开头：里面可能带着令牌，日志也不该被一条长命令撑开。
+            let subject = request.op == .exec ? String((request.command ?? "").prefix(80)) : (request.path ?? "")
+            AppLogger.info("远控：\(self.peerName) 文件操作 \(request.op.rawValue) \(subject)",
+                           category: RemoteLog.category)
+        }
+        server.noteRemoteInput()
+        Task.detached {
+            send(await access.perform(payload))
         }
     }
 

@@ -82,6 +82,27 @@ DEFAULT_PAYLOADS = {
                           "base64": base64.b64encode(b"prod-web\n").decode(),
                           "truncated": False}},
     "sftp-put": {},
+    "macs": {"mac": {"macs": [{"id": "MAC-1", "name": "studio", "onLocalNetwork": True,
+                               "connected": False}]}},
+    "mac-ls": {"entries": [{"name": "Package.swift", "isDirectory": False, "isSymlink": False,
+                            "size": 120, "modifiedAt": "2026-09-09T01:00:00Z",
+                            "permissions": 33188, "ownerName": "me", "groupName": "staff"}]},
+    "mac-read": {"mac": {"name": "studio", "path": "/Users/me/a.swift", "text": "let a = 1\n",
+                         "count": 1, "totalLines": 9, "sha256": "ab" * 32}},
+    "mac-grep": {"mac": {"name": "studio", "path": "/Users/me/app", "count": 3,
+                         "matches": [{"path": "Sources/a.swift", "line": 4, "text": "func alpha() {}",
+                                      "before": ["// 上一行"], "after": ["// 下一行"]}]}},
+    "mac-find": {"mac": {"name": "studio", "found": [{"path": "Sources/a.swift", "isDirectory": False,
+                                                      "size": 12, "modifiedAt": "2026-09-09T01:00:00Z",
+                                                      "permissions": 33188}]}},
+    "mac-tree": {"mac": {"name": "studio", "text": "/Users/me/app/\n└── Sources/", "count": 1}},
+    "mac-run": {"result": RESULT},
+    "mac-write": {"mac": {"name": "studio", "path": "/Users/me/n.md", "sha256": "cd" * 32, "bytes": 5}},
+    "mac-edit": {"mac": {"name": "studio", "count": 1, "sha256": "ef" * 32}},
+    "mac-patch": {"mac": {"name": "studio", "text": "patching file a.txt\n"}},
+    "mac-mkdir": {}, "mac-rm": {}, "mac-mv": {}, "mac-cp": {}, "mac-chmod": {}, "mac-ln": {},
+    "mac-xattr": {"mac": {"name": "studio", "names": ["com.apple.quarantine"]}},
+    "mac-wait-change": {"mac": {"name": "studio", "names": ["/Users/me/app/build/out"], "timedOut": False}},
     "sftp-mkdir": {}, "sftp-rm": {}, "sftp-rmdir": {}, "sftp-mv": {}, "sftp-chmod": {},
     "forward-list": {"rules": [{"id": "r-1", "serverID": HOST["id"],
                                 "serverName": "prod-web", "name": "pg", "kind": "local",
@@ -550,6 +571,107 @@ def exercise(server, root, rejecting):
     run_cli(server, ["run", "-H", "prod-web", "-c", "make", "--max-duration", "7200"])
     equal(last(server)["maxDurationSeconds"], 7200, "maxDurationSeconds")
     check("timeoutSeconds" not in last(server), "没给 --timeout 就不带，用服务端默认")
+
+    print("配对过的 Mac（macs / mac …）")
+    proc = run_cli(server, ["macs", "--format", "table"])
+    equal(last(server)["action"], "macs", "macs action")
+    check("studio" in proc.stdout and "MAC-1" in proc.stdout, "macs 表格里有名字与 id")
+
+    run_cli(server, ["mac", "ls", "-M", "studio"])
+    equal(last(server)["action"], "mac-ls", "mac ls action")
+    equal(last(server)["mac"], {"target": "studio"}, "目标 Mac 放在 mac.target")
+    equal(last(server)["path"], "~", "mac ls 默认主目录")
+    check("host" not in last(server), "mac 命令不带 host")
+
+    proc = run_cli(server, ["mac", "read", "-M", "studio", "~/a.swift", "--lines", "120:180",
+                            "--format", "table"])
+    equal(last(server)["mac"]["startLine"], 120, "read --lines 的起点")
+    equal(last(server)["mac"]["endLine"], 180, "read --lines 的终点")
+    check(proc.stdout.startswith("let a = 1"), "read 的 table 输出是文本本身")
+    run_cli(server, ["mac", "read", "-M", "studio", "~/a.swift", "--head", "20"])
+    equal((last(server)["mac"]["startLine"], last(server)["mac"]["endLine"]), (1, 20), "read --head")
+    run_cli(server, ["mac", "read", "-M", "studio", "~/a.swift", "--tail", "5"])
+    equal(last(server)["mac"]["tail"], 5, "read --tail")
+    run_cli(server, ["mac", "read", "-M", "studio", "~/a.swift", "--head", "5", "--tail", "5"],
+            expect_exit=2, label="read 的 --head 与 --tail 只能给一种")
+
+    proc = run_cli(server, ["mac", "grep", "-M", "studio", "func \\w+", "~/app", "-i", "-F",
+                            "--include", "*.swift", "--include", "*.m", "-C", "1", "--hidden",
+                            "--format", "table"])
+    request = last(server)
+    equal(request["mac"]["pattern"], "func \\w+", "grep 的模式原样传")
+    equal(request["mac"]["include"], ["*.swift", "*.m"], "grep --include 可重复")
+    equal(sorted(request["mac"]["options"]), ["fixed", "hidden", "ignoreCase"], "grep 的开关")
+    equal(request["mac"]["context"], 1, "grep -C")
+    check("Sources/a.swift:4: func alpha() {}" in proc.stdout, "grep 输出 路径:行号: 内容")
+    check("Sources/a.swift-3- // 上一行" in proc.stdout, "grep 带上文")
+
+    run_cli(server, ["mac", "find", "-M", "studio", "~/app", "--name", "*.swift", "--type", "f",
+                     "--newer", "3600", "--hash"])
+    request = last(server)
+    equal(request["mac"]["pattern"], "*.swift", "find --name")
+    equal(sorted(request["mac"]["options"]), ["files", "hash"], "find 的开关")
+    equal(request["mac"]["seconds"], 3600.0, "find --newer")
+
+    run_cli(server, ["mac", "run", "-M", "studio", "--cwd", "~/app", "--timeout", "30", "--",
+                     "swift", "build"])
+    request = last(server)
+    equal(request["command"], "swift build", "mac run 把 argv 拼成 command")
+    equal(request["path"], "~/app", "mac run --cwd 走 path")
+    equal(request["timeoutSeconds"], 30, "mac run --timeout")
+
+    run_cli(server, ["mac", "write", "-M", "studio", "~/n.md", "--text", "hello", "--if-match", "abc"])
+    request = last(server)
+    equal(request["text"], "hello", "write --text")
+    equal(request["mac"]["ifMatch"], "abc", "write --if-match")
+    check("force" not in request, "write 默认不带 force（只肯新建）")
+    source = os.path.join(root, "write-source.txt")
+    with open(source, "w") as handle:
+        handle.write("from file\n")
+    run_cli(server, ["mac", "write", "-M", "studio", "~/n.md", "--file", source, "--force"])
+    equal(last(server)["text"], "from file\n", "write --file 读本地文件")
+    equal(last(server)["force"], True, "write --force")
+    before = len(server.requests)
+    run_cli(server, ["mac", "write", "-M", "studio", "~/n.md", "--text", "a", "--file", source],
+            expect_exit=2, label="write 的 --text 与 --file 只能给一个")
+    equal(len(server.requests), before, "参数不对时不发请求")
+
+    run_cli(server, ["mac", "edit", "-M", "studio", "~/a.swift", "--old", "let a = 1",
+                     "--new", "let a = 2", "--all"])
+    request = last(server)
+    equal((request["mac"]["oldText"], request["mac"]["newText"]), ("let a = 1", "let a = 2"), "edit")
+    equal(request["mac"]["options"], ["all"], "edit --all")
+
+    run_cli(server, ["mac", "patch", "-M", "studio", "~/app", "--file", source, "--dry-run", "-p", "0"])
+    request = last(server)
+    equal(request["text"], "from file\n", "patch --file")
+    equal(request["mac"]["options"], ["dryRun"], "patch --dry-run")
+    equal(request["mac"]["strip"], 0, "patch -p")
+
+    run_cli(server, ["mac", "mkdir", "-M", "studio", "-p", "~/a/b"])
+    equal(last(server)["mac"]["options"], ["parents"], "mkdir -p")
+    run_cli(server, ["mac", "rm", "-M", "studio", "-r", "~/a"])
+    equal(last(server)["mac"]["options"], ["recursive"], "rm -r")
+    run_cli(server, ["mac", "mv", "-M", "studio", "~/a", "~/b", "--force"])
+    equal((last(server)["path"], last(server)["newPath"], last(server)["force"]),
+          ("~/a", "~/b", True), "mv")
+    run_cli(server, ["mac", "ln", "-M", "studio", "target.txt", "~/link"])
+    equal((last(server)["path"], last(server)["newPath"]), ("~/link", "target.txt"),
+          "ln：链接放在 path，指向放在 newPath")
+    run_cli(server, ["mac", "xattr", "-M", "studio", "~/a", "set", "com.x", "v"])
+    request = last(server)
+    equal((request["mac"]["attributeAction"], request["mac"]["attribute"], request["text"]),
+          ("set", "com.x", "v"), "xattr set")
+    run_cli(server, ["mac", "xattr", "-M", "studio", "~/a", "get"], expect_exit=2,
+            label="xattr get 缺属性名")
+    run_cli(server, ["mac", "wait-change", "-M", "studio", "~/app/build", "--wait", "120"])
+    equal(last(server)["waitSeconds"], 120.0, "wait-change --wait")
+
+    server.override = {"ok": False, "code": "permission_denied",
+                       "message": "那台 Mac 上没有打开「允许打开本机终端」"}
+    proc = run_cli(server, ["mac", "ls", "-M", "studio"], expect_exit=1,
+                   label="那台 Mac 关着开关 → permission_denied")
+    equal(json.loads(proc.stdout)["code"], "permission_denied", "失败响应原样是 JSON")
 
     print("心跳与静默超时")
     # 心跳的每一个 `\n` 都会重置客户端的 socket 超时：累计时长超过 idle 预算也不该断。

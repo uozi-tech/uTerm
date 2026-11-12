@@ -219,6 +219,8 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
     @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
+    /// 等文件应答的请求。应答在连接队列上直接交付，不经主线程（传文件时一秒几十条）。
+    @ObservationIgnored nonisolated let fileWaiters = RemoteFileWaiters()
     @ObservationIgnored private var peer: RemoteHello?
     @ObservationIgnored private let heartbeat: RemoteHeartbeat
     /// 各个标签与桌面流的退避等待都挂在这里，网络恢复、回到前台时一起叫醒。
@@ -653,6 +655,7 @@ final class RemoteMacClient: Identifiable {
         workspaceWaiters.removeAll()
         for (_, waiter) in imageWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         imageWaiters.removeAll()
+        fileWaiters.failAll(RemoteFileError(.unreachable, "与 Mac 的连接已断开"))
         for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
     }
 
@@ -684,6 +687,8 @@ final class RemoteMacClient: Identifiable {
                 table.bind(sessionID: result.sessionID, channel: message.channel)
             }
             DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
+        case .fileReply:
+            client?.fileWaiters.deliver(message.payload)
         case .pong:
             let precise = link.latestRoundTrip.map { $0 * 1000 }
             let millis = precise.map { Int($0.rounded()) }
@@ -859,6 +864,56 @@ final class RemoteMacClient: Identifiable {
         return await withCheckedContinuation { continuation in
             workspaceWaiters[requestID] = continuation
             link.send(RemoteMessage(.listLocalWorkspaces, payload: RemoteJSON.encode(RemoteLocalWorkspacesRequest(requestID: requestID))))
+        }
+    }
+}
+
+// MARK: - 文件
+
+extension RemoteMacClient {
+    /// 这台 Mac 认得文件请求（老 Mac 收到 `fileRequest` 会断开整条连接）。
+    var supportsFiles: Bool { macFeatures.contains(RemoteFeature.files) }
+
+    /// 发一条文件请求，等应答。打包、压缩、解包都不在主线程上做。被控端回了错误就抛 `RemoteFileError`。
+    nonisolated func performFile(_ request: RemoteFileRequest, body: Data = Data(),
+                                 timeout: Duration? = nil) async throws -> (reply: RemoteFileReply, body: Data) {
+        var request = request
+        request.acceptsCompression = true
+        let payload = RemoteFileCodec.packRequest(request, body: body, compress: true)
+        let raw = try await sendFile(payload, id: request.id, timeout: timeout ?? RemoteFileTimeouts.limit(for: request))
+        let (reply, data) = try RemoteFileCodec.unpackReply(raw)
+        if let error = reply.error { throw error }
+        return (reply, data)
+    }
+
+    private func sendFile(_ payload: Data, id: UUID, timeout: Duration) async throws -> Data {
+        await connect()
+        guard state == .connected, let link else {
+            let reason: String
+            if case .failed(let message) = state { reason = message } else { reason = "没有连上 Mac" }
+            throw RemoteFileError(.unreachable, reason)
+        }
+        guard supportsFiles else {
+            throw RemoteFileError(.unsupported, "这台 Mac 上的 uTerm 版本太旧，不支持远程访问文件。把 Mac 上的 uTerm 更新到最新版后再试")
+        }
+        let waiters = fileWaiters
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                let watchdog = Task {
+                    try? await Task.sleep(for: timeout)
+                    guard !Task.isCancelled else { return }
+                    waiters.fail(id, RemoteFileError(.timeout, "Mac 在 \(RemoteConnectTrace.millis(timeout) / 1000) 秒内没有回应"))
+                }
+                waiters.add(id, continuation, watchdog: watchdog)
+                // 取消可能早于登记：那时取消回调已经扑空了，这里补上。
+                if Task.isCancelled {
+                    waiters.fail(id, CancellationError())
+                    return
+                }
+                link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
+            }
+        } onCancel: {
+            waiters.fail(id, CancellationError())
         }
     }
 }

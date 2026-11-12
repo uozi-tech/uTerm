@@ -9,10 +9,12 @@ struct SFTPBrowserView: View {
     /// 本标签的「打开」执行者（下载到本地交外部应用、保存自动回传；数据库交 uTable）。
     /// nil（只挂浏览器本体的测试夹具）时不提供「打开」类动作，双击文件退回「下载…」。
     var externalOpen: ExternalOpenCoordinator? = nil
-    let server: ServerProfile
-    let openWorkspace: () -> Void
-    /// 「操作 › 在终端中打开」：打开该服务器的纯终端窗口（不是工作区）。
-    var openTerminal: () -> Void = {}
+    /// 浏览的是哪台主机。远程 Mac 的文件窗口没有主机档案，是 nil。
+    var server: ServerProfile? = nil
+    /// 「在工作区打开」。nil（远程 Mac）时不显示这个入口。
+    var openWorkspace: (() -> Void)? = nil
+    /// 「操作 › 在终端中打开」：打开该服务器的纯终端窗口（不是工作区）。nil 时不显示。
+    var openTerminal: (() -> Void)? = nil
 
     @State private var history: [String] = []
     @State private var hIdx = 0

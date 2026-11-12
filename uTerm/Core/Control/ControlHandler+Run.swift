@@ -638,7 +638,7 @@ extension ControlHandler {
     // MARK: - 请求解析
 
     /// 命令整串。优先 `command`（客户端已 shlex.join 好），否则把 `args` 安全拼接。
-    static func commandText(_ request: ControlRequest) throws(ControlFailure) -> String {
+    nonisolated static func commandText(_ request: ControlRequest) throws(ControlFailure) -> String {
         if let command = trimmed(request.command) { return command }
         if let args = request.args, !args.isEmpty {
             return shellJoin(args)
@@ -659,7 +659,7 @@ extension ControlHandler {
 
     /// `shlex.join` 的 Swift 版：安全字符原样，其余整段单引号包起来
     /// （单引号自身用 `'\''` 转义）。避免「引号地狱」，也不给注入留缝。
-    static func shellJoin(_ args: [String]) -> String {
+    nonisolated static func shellJoin(_ args: [String]) -> String {
         args.map { argument -> String in
             let safe = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@%+=:,./-_")
             if !argument.isEmpty, argument.unicodeScalars.allSatisfy({ safe.contains($0) }) {

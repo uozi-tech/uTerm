@@ -192,9 +192,19 @@ final class MobileWorkspace {
         tabs.first { $0.terminal?.remote == remote }
     }
 
-    /// 接着这台 Mac 上终端的全部标签。
+    /// 这台 Mac 的文件标签（一台 Mac 至多一个）。
+    func existing(remoteFiles client: RemoteMacClient) -> MWorkTab? {
+        tabs.first {
+            if case .files(let files) = $0 { return files.controller.remoteMac === client }
+            return false
+        }
+    }
+
+    /// 接着这台 Mac 的全部标签：它上面的终端，加上它的文件标签。
     func remoteTabIDs(of client: RemoteMacClient) -> Set<UUID> {
-        Set(terminalTabs.filter { $0.remote?.client === client }.map(\.id))
+        var ids = Set(terminalTabs.filter { $0.remote?.client === client }.map(\.id))
+        if let files = existing(remoteFiles: client) { ids.insert(files.id) }
+        return ids
     }
 
     /// 接管一台 Mac：每个终端一个标签，开在聚焦格末尾，`focus` 放到前台。之后它新开的终端由 `follow` 接上。

@@ -133,10 +133,12 @@
 				Core/Control/ControlHandler.swift,
 				"Core/Control/ControlHandler+Forward.swift",
 				"Core/Control/ControlHandler+Hosts.swift",
+				"Core/Control/ControlHandler+Mac.swift",
 				"Core/Control/ControlHandler+Relay.swift",
 				"Core/Control/ControlHandler+Run.swift",
 				"Core/Control/ControlHandler+SFTP.swift",
 				"Core/Control/ControlHandler+Terminal.swift",
+				Core/Control/ControlMacSessions.swift,
 				Core/Control/ControlProtocol.swift,
 				Core/Control/ControlRequestContext.swift,
 				Core/Control/ControlServer.swift,
@@ -269,11 +271,13 @@
 				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
 				Features/Remote/Controller/RemoteDesktopWindow.swift,
 				Features/Remote/Controller/RemoteDiagnosticsWindow.swift,
+				Features/Remote/Controller/RemoteMacFilesWindow.swift,
 				Features/Remote/Controller/RemoteMacWindow.swift,
 				Features/Remote/Controller/RemoteMacWindowModel.swift,
 				Features/Remote/Controller/RemoteMacsPane.swift,
 				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteControlSettings.swift,
+				Features/Remote/RemoteFileAccess.swift,
 				Features/Remote/RemoteHostConnection.swift,
 				Features/Remote/RemoteHostServer.swift,
 				Features/Remote/RemoteLocalShellOpener.swift,
@@ -451,6 +455,15 @@
 			);
 			target = 555445524D53534800000006 /* uterm-ssh */;
 		};
+		46494C455300000000000002 /* Exceptions for "uTermFiles" folder in "uTermMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"RemoteFileService+Exec.swift",
+				"RemoteFileService+Search.swift",
+				RemoteFileService.swift,
+			);
+			target = 10C0DE0000000000000000A1 /* uTermMobile */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -475,6 +488,14 @@
 				5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */,
 			);
 			path = uTermShellAgent;
+			sourceTree = "<group>";
+		};
+		46494C455300000000000001 /* uTermFiles */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				46494C455300000000000002 /* Exceptions for "uTermFiles" folder in "uTermMobile" target */,
+			);
+			path = uTermFiles;
 			sourceTree = "<group>";
 		};
 		555445524D53534800000001 /* uTermSSH */ = {
@@ -632,6 +653,7 @@
 				5348454C4C00000000000001 /* uTermShellAgent */,
 				484F4C444552000000000001 /* uTermHolder */,
 				555445524D53534800000001 /* uTermSSH */,
+				46494C455300000000000001 /* uTermFiles */,
 			);
 			sourceTree = "<group>";
 		};
@@ -694,6 +716,7 @@
 			fileSystemSynchronizedGroups = (
 				10C0DE0000000000000000B0 /* uTermMobile */,
 				484F4C444552000000000001 /* uTermHolder */,
+				46494C455300000000000001 /* uTermFiles */,
 				555445524D53534800000001 /* uTermSSH */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);
@@ -764,6 +787,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+				46494C455300000000000001 /* uTermFiles */,
 				5348454C4C00000000000001 /* uTermShellAgent */,
 			);
 			name = uTermShellAgent;
@@ -818,6 +842,7 @@
 			fileSystemSynchronizedGroups = (
 				484F4C444552000000000001 /* uTermHolder */,
 				5348454C4C00000000000001 /* uTermShellAgent */,
+				46494C455300000000000001 /* uTermFiles */,
 				555445524D53534800000001 /* uTermSSH */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);

@@ -138,7 +138,8 @@ struct uTermApp: App {
                 modelContainer: modelContainer,
                 forwardingCoordinator: forwardingCoordinator,
                 registry: terminalRegistry,
-                relay: remoteServer
+                relay: remoteServer,
+                macs: ControlMacSessions(directory: remoteMacs)
             )
             LaunchForwardingBootstrap.start(
                 modelContainer: modelContainer,
@@ -147,6 +148,7 @@ struct uTermApp: App {
                 relay: launchRelay
             )
             remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
+            remoteServer.fileAccess = .live(settings: remoteSettings)
             remoteServer.sessionRestoration = {
                 await LocalShellRestorer.shared.finished()
                 await SSHSessionRestorer.shared.finished()
@@ -283,7 +285,8 @@ struct uTermApp: App {
         modelContainer: ModelContainer,
         forwardingCoordinator: ForwardingCoordinator,
         registry: TerminalSessionRegistry,
-        relay: any ControlRelayManaging
+        relay: any ControlRelayManaging,
+        macs: any ControlRemoteMacs
     ) {
         let handler = ControlHandler.shared
         handler.attach(ControlHandler.Dependencies(
@@ -292,7 +295,8 @@ struct uTermApp: App {
             forwardingCoordinator: forwardingCoordinator,
             pool: ControlConnectionPool.shared,
             registry: registry,
-            relay: relay
+            relay: relay,
+            macs: macs
         ))
         settings.observe { settings in
             if settings.isEnabled {
@@ -516,6 +520,21 @@ struct uTermApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 900, height: 600)
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
+
+        // 一台远程 Mac 的文件一个窗口：SFTP 窗口的那套浏览器，文件走远控链路，与终端窗口共用连接。
+        WindowGroup(for: RemoteMacFilesWindowID.self) { $macID in
+            RemoteMacFilesWindowView(windowID: macID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .environment(remoteMacs)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 980, height: 620)
         .restorationBehavior(.disabled)
         .routesNewWindowToWelcome()
 

@@ -18,6 +18,8 @@ final class MobileSFTPController {
     let browser: FileBrowserModel
 
     var state: State {
+        // 远程 Mac：连上并问到主目录之前，浏览器本体还没东西可看。
+        if let remotePhase { return remotePhase }
         switch browser.state {
         case .idle: return .idle
         case .connecting: return .connecting
@@ -35,6 +37,11 @@ final class MobileSFTPController {
     /// 正在进行的递归删除；nil = 无。同一时刻只允许一个。
     var deletion: RemoteDeletionProgress? { browser.deletion }
 
+    /// 浏览的是一台配对过的 Mac（文件走远控链路，不建 SSH）。主机的文件标签为 nil。
+    @ObservationIgnored let remoteMac: RemoteMacClient?
+    @ObservationIgnored private var remoteProvider: RemoteMacFileProvider?
+    /// 远程 Mac 还没进到浏览态时的状态（连接中 / 失败）；nil = 看浏览器本体的。
+    private var remotePhase: State?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var closed = false
     @ObservationIgnored private var connectTask: Task<Void, Never>?
@@ -56,7 +63,19 @@ final class MobileSFTPController {
         key: .name, ascending: true, foldersFirst: true, showHidden: true)
 
     init() {
+        remoteMac = nil
         browser = FileBrowserModel(sortOptions: Self.sortOptions, resolvesOwnerNames: false)
+    }
+
+    /// 浏览一台配对过的 Mac。连接归远控链路管（和它的终端标签共用一条），这里只等它连上、问到主目录。
+    /// 建好后调 `startRemote()`。
+    init(remoteMac client: RemoteMacClient) {
+        let provider = RemoteMacFileProvider(client: client)
+        remoteMac = client
+        remoteProvider = provider
+        browser = FileBrowserModel(provider: provider, startPath: "/", sortOptions: Self.sortOptions)
+        remotePhase = .connecting
+        started = true     // 误触的 `start(profile:…)` 不会去建 SSH 连接
     }
 
     /// 测试注入口（同 `FileBrowserModel.init(testProvider:startPath:)`）：
@@ -66,6 +85,7 @@ final class MobileSFTPController {
     /// 目录内容不在这里读 —— `entries` 仍由 `load(_:)` 走 provider 填，
     /// 这样测试跑的是产品自己的加载/排序路径。
     init(testProvider: any SFTPProviding, startPath: String) {
+        remoteMac = nil
         browser = FileBrowserModel(testProvider: testProvider, startPath: startPath,
                                    sortOptions: Self.sortOptions, resolvesOwnerNames: false)
         started = true
@@ -91,6 +111,42 @@ final class MobileSFTPController {
             await browser.connect(profile: profile, modelContainer: container, hostKeyRelay: relay)
             guard let self, !self.closed, browser.state == .browsing else { return }
             Self.markConnected(pid, in: container)
+        }
+    }
+
+    /// 远程 Mac：连上 → 问主目录 → 列第一屏。失败停在失败页，`restart()` 再来。
+    func startRemote() {
+        guard let client = remoteMac, let provider = remoteProvider, !closed else { return }
+        connectTask?.cancel()
+        remotePhase = .connecting
+        let browser = browser
+        connectTask = Task { [weak self] in
+            await client.connect()
+            guard let self, !self.closed, !Task.isCancelled else { return }
+            switch client.state {
+            case .connected:
+                break
+            case .failed(let message):
+                self.remotePhase = .failed(message)
+                return
+            case .awaitingApproval:
+                self.remotePhase = .failed(String(localized: "还在等那台 Mac 上确认配对。在 Mac 上点「允许」后重试。"))
+                return
+            case .idle, .connecting:
+                self.remotePhase = .failed(String(localized: "连不上这台 Mac"))
+                return
+            }
+            do {
+                // 那台 Mac 关着「允许打开本机终端」、或它的 uTerm 太旧，这一步就会说清楚。
+                let home = try await provider.realPath("~")
+                guard !self.closed, !Task.isCancelled else { return }
+                await browser.load(home)
+                guard !self.closed, !Task.isCancelled else { return }
+                self.remotePhase = nil
+            } catch {
+                guard !self.closed else { return }
+                self.remotePhase = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -145,6 +201,12 @@ final class MobileSFTPController {
 
     /// 失败后重连（连接中页「重试」）；只有处于失败态时才生效。
     func restart() {
+        if remoteMac != nil {
+            guard case .failed = state else { return }
+            browser.clearTransientError()
+            startRemote()
+            return
+        }
         guard case .failed = state,
               let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
         connectTask?.cancel()

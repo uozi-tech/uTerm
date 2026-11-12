@@ -10,7 +10,10 @@ UUID 指一台**用户已保存**的主机。
 """
 import argparse
 import array
+import concurrent.futures
 import csv
+import datetime
+import fnmatch
 import hashlib
 import io
 import json
@@ -21,6 +24,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -328,7 +332,174 @@ def build_parser():
     p = add("disconnect", "松开命令行连接池对主机的持有")
     p.add_argument("--host", "-H", help="不给就释放全部")
 
+    # --- mac ---
+    add("macs", "列出配对过的 Mac（经远控链路访问它们的文件、跑命令，不需要 SSH）")
+    build_mac_parser(sub, shared)
+
     return parser
+
+
+def build_mac_parser(sub, shared):
+    mac = sub.add_parser("mac", parents=[shared], help="配对过的 Mac：读写文件、搜代码、跑命令")
+    mac_sub = mac.add_subparsers(dest="mac_action", required=True)
+
+    def mac_add(name, help_text):
+        p = mac_sub.add_parser(name, parents=[shared], help=help_text)
+        p.add_argument("--mac", "-M", required=True, help="Mac 的名字或设备 UUID（见 utermctl macs）")
+        return p
+
+    def walk_flags(p):
+        p.add_argument("--hidden", action="store_true", help="连隐藏文件一起")
+        p.add_argument("--no-ignore", action="store_true", help="不按 .gitignore 过滤")
+
+    p = mac_add("ls", "列目录")
+    p.add_argument("path", nargs="?", default="~")
+
+    p = mac_add("stat", "看一个文件的类型、大小、权限与修改时间")
+    p.add_argument("path")
+
+    p = mac_add("cat", "打印一个文本文件（上限 1 MiB；更大的用 read 读一段或 get 下载）")
+    p.add_argument("path")
+    p.add_argument("--max-bytes", type=int)
+
+    p = mac_add("read", "读文件的一段：按行（--lines / --head / --tail）或按字节（--offset / --length）")
+    p.add_argument("path")
+    p.add_argument("--lines", dest="line_range", metavar="A:B", help="第 A 行到第 B 行（从 1 起，两端都含；B 可省）")
+    p.add_argument("--head", type=int, metavar="N", help="开头 N 行")
+    p.add_argument("--tail", type=int, metavar="N", help="最后 N 行")
+    p.add_argument("--offset", type=int, help="按字节读：起点")
+    p.add_argument("--length", type=int, help="按字节读：长度，封顶 1 MiB")
+    p.add_argument("--max-bytes", type=int, help="按行读时内容的字节上限，默认 256 KiB")
+
+    p = mac_add("grep", "在目录里搜文件内容（正则；默认跳过 .gitignore 里的和二进制文件）")
+    p.add_argument("pattern")
+    p.add_argument("path", nargs="?", default="~")
+    p.add_argument("--ignore-case", "-i", action="store_true")
+    p.add_argument("--fixed", "-F", action="store_true", help="按字面量搜，不当正则")
+    p.add_argument("--include", action="append", metavar="GLOB", help="只搜名字匹配的文件，可重复")
+    p.add_argument("--exclude", action="append", metavar="GLOB", help="跳过名字匹配的文件，可重复")
+    p.add_argument("--context", "-C", type=int, metavar="N", help="每处匹配前后各带 N 行")
+    p.add_argument("--limit", type=int, help="最多回多少处，默认 200，封顶 2000")
+    walk_flags(p)
+
+    p = mac_add("find", "按名字找文件 / 目录")
+    p.add_argument("path", nargs="?", default="~")
+    p.add_argument("--name", metavar="GLOB", help="名字的通配符，如 '*.swift'")
+    p.add_argument("--type", choices=["f", "d"], help="只要文件（f）或只要目录（d）")
+    p.add_argument("--depth", type=int, help="最多往下几层")
+    p.add_argument("--newer", type=float, metavar="SECONDS", help="只要最近这么多秒内改过的")
+    p.add_argument("--hash", action="store_true", help="每个文件带 sha256")
+    p.add_argument("--exclude", action="append", metavar="GLOB")
+    p.add_argument("--ignore-case", "-i", action="store_true")
+    p.add_argument("--limit", type=int, help="最多回多少项，默认 500，封顶 5000")
+    walk_flags(p)
+
+    p = mac_add("tree", "目录树（文本）")
+    p.add_argument("path", nargs="?", default="~")
+    p.add_argument("--depth", type=int, help="层数，默认 3")
+    p.add_argument("--limit", type=int, help="最多多少项，默认 400")
+    walk_flags(p)
+
+    p = mac_add("hash", "算一个文件的 sha256")
+    p.add_argument("path")
+    p = mac_add("du", "一个目录占多少空间")
+    p.add_argument("path", nargs="?", default="~")
+    p = mac_add("df", "所在磁盘的可用空间")
+    p.add_argument("path", nargs="?", default="~")
+
+    p = mac_add("get", "下载一个文件（-r 下载整个目录）")
+    p.add_argument("path")
+    p.add_argument("local", help="本地落盘路径")
+    p.add_argument("--recursive", "-r", action="store_true", help="下载整个目录")
+    transfer_options(p, "覆盖已存在的本地文件")
+
+    p = mac_add("put", "上传一个本地文件（-r 上传整个目录）")
+    p.add_argument("local", help="本地文件路径")
+    p.add_argument("path", help="那台 Mac 上的目标路径")
+    p.add_argument("--recursive", "-r", action="store_true", help="上传整个目录")
+    transfer_options(p, "覆盖已存在的远端文件")
+
+    p = mac_add("sync", "把一个目录同步过去 / 同步回来：只传大小或修改时间不一样的文件")
+    p.add_argument("direction", choices=["up", "down"], help="up：本地 → 那台 Mac；down：反过来")
+    p.add_argument("local", help="本地目录")
+    p.add_argument("path", help="那台 Mac 上的目录")
+    p.add_argument("--delete", action="store_true", help="目标里多出来的文件删掉（up 时移进那台 Mac 的废纸篓）")
+    p.add_argument("--checksum", action="store_true", help="大小相同、时间不同的文件先比 sha256，一样就不传")
+    p.add_argument("--dry-run", action="store_true", help="只列要做什么，不动文件")
+    p.add_argument("--exclude", action="append", metavar="GLOB", help="跳过名字匹配的文件或目录，可重复")
+    p.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL)
+    p.add_argument("--quiet", action="store_true")
+
+    p = mac_add("mkdir", "建目录")
+    p.add_argument("path")
+    p.add_argument("--parents", "-p", action="store_true", help="连上级目录一起建；已存在不算错")
+
+    p = mac_add("rm", "删文件（-r 删整个目录；想留后路用 trash）")
+    p.add_argument("path")
+    p.add_argument("--recursive", "-r", action="store_true")
+
+    mac_add("rmdir", "删空目录").add_argument("path")
+    mac_add("trash", "移到废纸篓（能从废纸篓放回）").add_argument("path")
+
+    for name, help_text in (("mv", "改名 / 移动"), ("cp", "复制（目录整个复制）")):
+        p = mac_add(name, help_text)
+        p.add_argument("path")
+        p.add_argument("new_path", metavar="new-path")
+        p.add_argument("--force", action="store_true", help="目标已存在时覆盖")
+
+    p = mac_add("chmod", "改权限")
+    p.add_argument("path")
+    p.add_argument("mode", help="八进制，如 644")
+    p.add_argument("--recursive", "-R", action="store_true")
+
+    p = mac_add("ln", "建符号链接")
+    p.add_argument("target", help="链接指向哪里")
+    p.add_argument("path", help="链接放在哪里")
+    p.add_argument("--force", action="store_true", help="已存在时替换")
+    mac_add("readlink", "看符号链接指向哪里").add_argument("path")
+
+    p = mac_add("touch", "建空文件 / 更新修改时间")
+    p.add_argument("path")
+
+    p = mac_add("write", "写一个文本文件（内容来自 --text、--file 或标准输入）；默认只肯新建")
+    p.add_argument("path")
+    p.add_argument("--text", help="要写的内容")
+    p.add_argument("--file", dest="source", help="从这个本地文件读内容")
+    p.add_argument("--force", action="store_true", help="覆盖已存在的文件")
+    p.add_argument("--if-match", metavar="SHA256", help="只有文件现在的 sha256 是这个才写（防止盖掉别人的改动）")
+    p.add_argument("--mode", help="新文件的权限，八进制")
+
+    p = mac_add("edit", "把文件里的一段文字换成另一段（要换的文字必须只出现一次，除非 --all）")
+    p.add_argument("path")
+    p.add_argument("--old", required=True, help="原文，一字不差")
+    p.add_argument("--new", required=True, help="换成什么")
+    p.add_argument("--all", action="store_true", help="出现几次换几次")
+    p.add_argument("--if-match", metavar="SHA256")
+
+    p = mac_add("patch", "打一个 unified diff（来自 --file 或标准输入）")
+    p.add_argument("path", nargs="?", default="~", help="在哪个目录下打，默认主目录")
+    p.add_argument("--file", dest="source", help="本地的 diff 文件")
+    p.add_argument("--strip", "-p", type=int, help="去掉路径前几段，同 patch -p，默认 1")
+    p.add_argument("--dry-run", action="store_true", help="只检查能不能打上")
+
+    p = mac_add("xattr", "扩展属性：list / get / set / remove")
+    p.add_argument("path")
+    p.add_argument("attribute_action", nargs="?", default="list", choices=["list", "get", "set", "remove"])
+    p.add_argument("attribute", nargs="?")
+    p.add_argument("value", nargs="?")
+
+    p = mac_add("wait-change", "等一个文件或目录有变化")
+    p.add_argument("path")
+    p.add_argument("--wait", type=float, help="最多等几秒，默认 30，封顶 600")
+
+    p = mac_add("run", "在那台 Mac 上跑一条命令（登录 shell，没有 stdin）")
+    p.add_argument("--cwd", help="在哪个目录下跑，默认主目录")
+    p.add_argument("--command", "-c", help="整串 shell 命令（与 -- 之后的 argv 二选一）")
+    p.add_argument("--timeout", type=int, help="静默超时（秒），默认 60，封顶 1800")
+    p.add_argument("--max-duration", type=int, help="总时长上限（秒），默认 3600，封顶 21600")
+    p.add_argument("--max-lines", type=int, help="输出行数上限，默认 200")
+    p.add_argument("--max-bytes", type=int, help="输出字节上限，默认 16000，封顶 1 MiB")
+    p.add_argument("argv", nargs="*", help="-- 之后的命令与参数")
 
 
 def transfer_options(p, force_help):
@@ -352,7 +523,7 @@ def transfer_options(p, force_help):
 
 def resolved_action(args):
     """把 `sftp ls` / `forward list` / `terminal read` 拼成协议里的 kebab action。"""
-    for group in ("sftp", "forward", "terminal", "relay"):
+    for group in ("sftp", "forward", "terminal", "relay", "mac"):
         leaf = getattr(args, group + "_action", None)
         if args.action == group and leaf:
             return "%s-%s" % (group, leaf)
@@ -730,10 +901,11 @@ class Progress(object):
     """stderr 上的一行进度。tty 上原地刷新；非 tty 或 `--quiet` 时不刷，只在结束
     打一行汇总（stdout 留给 JSON，进度绝不能污染它）。"""
 
-    def __init__(self, label, total, live):
+    def __init__(self, label, total, live, silent=False):
         self.label = label
         self.total = total
-        self.live = live
+        self.live = live and not silent
+        self.silent = silent
         self.done = 0
         self.started = time.time()
         self.drawn = False
@@ -760,7 +932,7 @@ class Progress(object):
         if self.drawn:
             sys.stderr.write("\r\033[K")
             self.drawn = False
-        if note:
+        if note and not self.silent:
             sys.stderr.write(note + "\n")
         sys.stderr.flush()
 
@@ -960,8 +1132,27 @@ def local_sha256(path):
     return digest.hexdigest()
 
 
-def remote_sha256(host, path):
+def target_fields(args):
+    """这次传输 / 查询的对象：配对过的 Mac（`mac …`）或 SSH 主机（`sftp …`）。"""
+    mac = getattr(args, "mac", None)
+    if mac:
+        return {"mac": {"target": mac}}
+    return {"host": args.host}
+
+
+def transfer_action(args, verb):
+    return ("mac-" if getattr(args, "mac", None) else "sftp-") + verb
+
+
+def remote_sha256(args, path):
     """回 (十六进制, None) 或 (None, 说明)。远端两个工具都没有不算失败。"""
+    if getattr(args, "mac", None):
+        response = send_request(new_request("mac-hash", path=path, **target_fields(args)))
+        if not response.get("ok"):
+            return None, ("那台 Mac 算 sha256 没成（%s：%s），跳过校验"
+                          % (response.get("code"), response.get("message") or ""))
+        return ((response.get("mac") or {}).get("sha256") or "").lower() or None, None
+    host = args.host
     quoted = shlex.quote(path)
     command = ("sha256sum -- %s 2>/dev/null || shasum -a 256 -- %s"
                % (quoted, quoted))
@@ -988,7 +1179,7 @@ def verify_pair(args, local_path, total):
         verdict["note"] = "小于 %s，默认不做 sha256 校验" % human(VERIFY_MIN_BYTES)
         return verdict
     verdict["sha256"] = local_sha256(local_path)
-    remote, note = remote_sha256(args.host, args.path)
+    remote, note = remote_sha256(args, args.path)
     verdict["remote"] = remote
     if remote is None:
         verdict["note"] = note
@@ -999,9 +1190,10 @@ def verify_pair(args, local_path, total):
     return verdict
 
 
-def remote_stat(host, path):
+def remote_stat(args, path):
     """回 (stat 字典, None) 或 (None, 失败响应)。"""
-    response = send_request(new_request("sftp-stat", host=host, path=path))
+    response = send_request(new_request(transfer_action(args, "stat"), path=path,
+                                        **target_fields(args)))
     if not response.get("ok"):
         return None, response
     return (response.get("stat") or {}), None
@@ -1063,7 +1255,8 @@ def run_transfer(action, args, fd, state, workers, progress, base_fields):
             fields.pop("force", None)
         elif args.resume:
             fields["ranges"] = [{"offset": o, "length": n} for o, n in state.missing()]
-        return send_request(new_request(action, host=args.host, path=args.path,
+        fields.update(target_fields(args))
+        return send_request(new_request(action, path=args.path,
                                         parallel=workers, **fields),
                             fd=fd, on_progress=on_progress)
 
@@ -1084,8 +1277,11 @@ def do_put(args):
     if args.resume and not state.missing():
         fail("续传状态文件 %s 说这份文件已经传完了 —— 要重传就删掉它，或去掉 --resume "
              "加 --force" % state.path)
+    in_tree = getattr(args, "in_tree", False)
+    if in_tree:
+        state.disabled = True     # 整棵目录里的单个文件不留续传状态：重跑一遍就是续传
     progress = Progress("↑ " + os.path.basename(local), total - resumed,
-                        sys.stderr.isatty() and not args.quiet)
+                        sys.stderr.isatty() and not args.quiet, silent=in_tree)
 
     def stats(**extra):
         fields = dict(started=started, bytes=state.completed - resumed, total=total,
@@ -1100,11 +1296,16 @@ def do_put(args):
         return transfer_failure(
             {"code": "local_read_failed", "message": "%s：%s" % (local, error)}, stats())
     try:
-        response = run_transfer("sftp-put", args, fd, state, workers, progress,
+        response = run_transfer(transfer_action(args, "put"), args, fd, state, workers, progress,
                                 {"force": True if args.force else None})
     finally:
         os.close(fd)
 
+    if not response.get("ok") and response.get("code") == "file_exists" and not state.done:
+        # 根本没开始传：不留续传状态，也不提 --resume（接着传的前提是上一趟传了一半）。
+        state.remove()
+        progress.finish("上传失败（file_exists）：远端已存在 %s，要覆盖请加 --force" % args.path)
+        return transfer_failure(response, stats())
     if not response.get("ok"):
         moved = state.completed - resumed
         incomplete = state.completed > 0
@@ -1139,7 +1340,7 @@ def do_get(args):
     # 成功之前绝不占用目标名：半截文件写在 `<目标>.part`，校验过了才 rename 过去。
     part = local + PART_SUFFIX
 
-    stat, error = remote_stat(args.host, args.path)
+    stat, error = remote_stat(args, args.path)
     if error is not None:
         return transfer_failure(error, transfer_stats(
             "get", args, started=started, bytes=0, total=0, parallel=workers, resumed=0))
@@ -1153,8 +1354,11 @@ def do_get(args):
         if not state.missing():
             fail("续传状态文件 %s 说这份文件已经下完了 —— 要重下就删掉它，或去掉 --resume "
                  "加 --force" % state.path)
+    in_tree = getattr(args, "in_tree", False)
+    if in_tree:
+        state.disabled = True
     progress = Progress("↓ " + os.path.basename(local), size - resumed,
-                        sys.stderr.isatty() and not args.quiet)
+                        sys.stderr.isatty() and not args.quiet, silent=in_tree)
 
     def stats(**extra):
         fields = dict(started=started, bytes=state.completed - resumed, total=size,
@@ -1170,7 +1374,7 @@ def do_get(args):
         return transfer_failure(
             {"code": "local_write_failed", "message": "%s：%s" % (part, raised)}, stats())
     try:
-        response = run_transfer("sftp-get", args, fd, state, workers, progress, {})
+        response = run_transfer(transfer_action(args, "get"), args, fd, state, workers, progress, {})
     finally:
         os.close(fd)
 
@@ -1228,6 +1432,473 @@ def finish_transfer(verb, target, progress, stats, verdict):
     progress.finish(summary)
     return {"id": str(uuid.uuid4()), "ok": True, "code": "ok",
             "message": summary, "transfer": stats}
+
+
+# ---------------------------------------------------------------------------
+# 配对过的 Mac（`macs` / `mac …`）
+#
+# 对象是 uTerm 里配对过的另一台 Mac，走远控链路（局域网、直连或中继），那台 Mac 不用开 SSH。
+# 单文件的 get / put 复用上面的传输（fd 交给 uTerm、并行、续传、校验）；整个目录的
+# get -r / put -r / sync 由这里编排：本地这一半只有客户端碰得到（uTerm 在沙盒里）。
+# ---------------------------------------------------------------------------
+
+# 一条请求上限 1 MiB：直接写进请求里的文本留出 JSON 转义的余量，再大就走 put。
+MAX_INLINE_TEXT = 512 * 1024
+TREE_WORKERS = 4
+
+
+def inline_text(args, what):
+    """`mac write` / `mac patch` 的内容：--text、--file 或标准输入。"""
+    text = getattr(args, "text", None)
+    source = getattr(args, "source", None)
+    if text is not None and source:
+        fail("--text 与 --file 只能给一个")
+    if text is None:
+        if source:
+            try:
+                with open(os.path.expanduser(source), "rb") as handle:
+                    data = handle.read()
+            except OSError as error:
+                fail("读不了 %s：%s" % (source, error))
+        elif not sys.stdin.isatty():
+            data = sys.stdin.buffer.read()
+        else:
+            fail("缺少%s：用 --text、--file，或从标准输入给" % what)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            fail("内容不是 UTF-8 文本：二进制文件用 `mac put`")
+    if len(text.encode("utf-8")) > MAX_INLINE_TEXT:
+        fail("内容超过 %s：先写到本地文件，再用 `mac put` 传" % human(MAX_INLINE_TEXT))
+    return text
+
+
+def make_mac_request(args):
+    leaf = args.mac_action
+    mac = {"target": args.mac}
+    request = {"id": str(uuid.uuid4()), "action": "mac-" + leaf, "mac": mac}
+
+    options = []
+    for name, option in (("hidden", "hidden"), ("no_ignore", "noIgnore"),
+                         ("ignore_case", "ignoreCase"), ("fixed", "fixed"),
+                         ("parents", "parents"), ("recursive", "recursive"),
+                         ("all", "all"), ("dry_run", "dryRun"), ("hash", "hash")):
+        if getattr(args, name, False) is True:
+            options.append(option)
+    kind = getattr(args, "type", None)
+    if kind:
+        options.append("files" if kind == "f" else "directories")
+    if options:
+        mac["options"] = options
+
+    for field, key in (("path", "path"), ("new_path", "newPath"), ("mode", "mode"),
+                       ("max_bytes", "maxBytes"), ("wait", "waitSeconds"),
+                       ("timeout", "timeoutSeconds"), ("max_duration", "maxDurationSeconds"),
+                       ("max_lines", "maxLines")):
+        value = getattr(args, field, None)
+        if value is not None and value != "":
+            request[key] = value
+    for field, key in (("include", "include"), ("exclude", "exclude"), ("limit", "limit"),
+                       ("depth", "depth"), ("context", "context"), ("tail", "tail"),
+                       ("offset", "offset"), ("length", "length"), ("if_match", "ifMatch"),
+                       ("strip", "strip"), ("newer", "seconds")):
+        value = getattr(args, field, None)
+        if value is not None:
+            mac[key] = value
+    if getattr(args, "force", False):
+        request["force"] = True
+
+    if leaf == "grep":
+        mac["pattern"] = args.pattern
+    elif leaf == "find":
+        if args.name:
+            mac["pattern"] = args.name
+    elif leaf == "read":
+        picked = [x for x in (args.line_range, args.head, args.tail, args.offset) if x is not None]
+        if len(picked) > 1:
+            fail("--lines / --head / --tail / --offset 只能给一种")
+        if args.line_range:
+            first, _, last = args.line_range.partition(":")
+            try:
+                mac["startLine"] = int(first) if first else 1
+                if last:
+                    mac["endLine"] = int(last)
+            except ValueError:
+                fail("--lines 要写成 A:B（如 120:180），实得 " + args.line_range)
+        if args.head is not None:
+            mac["startLine"], mac["endLine"] = 1, args.head
+    elif leaf == "ln":
+        request["newPath"] = args.target
+    elif leaf == "write":
+        request["text"] = inline_text(args, "要写的内容")
+    elif leaf == "edit":
+        mac["oldText"], mac["newText"] = args.old, args.new
+    elif leaf == "patch":
+        request["text"] = inline_text(args, "补丁")
+    elif leaf == "xattr":
+        mac["attributeAction"] = args.attribute_action
+        if args.attribute:
+            mac["attribute"] = args.attribute
+        if args.attribute_action != "list" and not args.attribute:
+            fail("xattr %s 要给属性名" % args.attribute_action)
+        if args.attribute_action == "set":
+            if args.value is None:
+                fail("xattr set 要给值")
+            request["text"] = args.value
+    elif leaf == "run":
+        request["command"] = command_string(args)
+        if args.cwd:
+            request["path"] = args.cwd
+    return request
+
+
+def mac_call(args, action, mac=None, **fields):
+    target = {"target": args.mac}
+    target.update(mac or {})
+    return send_with_retry(lambda previous: send_request(new_request(action, mac=target, **fields)))
+
+
+def remote_join(root, relative):
+    return root.rstrip("/") + "/" + relative if relative else root
+
+
+def excluded(name, patterns):
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns or [])
+
+
+def epoch_of(stamp):
+    """ISO8601（`2026-11-11T08:00:00Z`）→ 距 1970 的整秒；读不懂回 None。"""
+    if not stamp:
+        return None
+    try:
+        return int(datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def remote_tree(args, root, patterns):
+    """逐层列一棵远端目录树。回 (目录相对路径列表, {文件相对路径: 条目}, 跳过的符号链接, 失败响应)。"""
+    directories, files, links = [], {}, []
+    queue = [""]
+    while queue:
+        relative = queue.pop(0)
+        response = mac_call(args, "mac-ls", path=remote_join(root, relative))
+        if not response.get("ok"):
+            return None, None, None, response
+        for entry in response.get("entries") or []:
+            name = entry.get("name") or ""
+            if name in ("", ".", "..") or excluded(name, patterns):
+                continue
+            child = relative + "/" + name if relative else name
+            if entry.get("isSymlink"):
+                links.append(child)
+            elif entry.get("isDirectory"):
+                directories.append(child)
+                queue.append(child)
+            else:
+                files[child] = entry
+    return directories, files, links, None
+
+
+def local_tree(root, patterns):
+    """回 (目录相对路径列表, {文件相对路径: os.stat_result}, 跳过的符号链接)。"""
+    directories, files, links = [], {}, []
+    for current, names, leaves in os.walk(root):
+        names[:] = sorted(n for n in names if not excluded(n, patterns))
+        base = os.path.relpath(current, root)
+        base = "" if base == "." else base
+        for name in list(names):
+            child = os.path.join(base, name) if base else name
+            if os.path.islink(os.path.join(current, name)):
+                links.append(child)
+                names.remove(name)
+            else:
+                directories.append(child)
+        for name in sorted(leaves):
+            if excluded(name, patterns):
+                continue
+            child = os.path.join(base, name) if base else name
+            full = os.path.join(current, name)
+            if os.path.islink(full):
+                links.append(child)
+            elif os.path.isfile(full):
+                files[child] = os.stat(full)
+    return directories, files, links
+
+
+def transfer_one(args, direction, local, remote, force=True):
+    """整棵目录里的一个文件。回 None（成了）或 {path, code, message}。"""
+    one = argparse.Namespace(mac=args.mac, host=None, path=remote, local=local, force=force,
+                             resume=False, parallel=getattr(args, "parallel", DEFAULT_PARALLEL),
+                             verify=False, quiet=True, in_tree=True)
+    try:
+        if direction == "down":
+            os.makedirs(os.path.dirname(os.path.abspath(local)), exist_ok=True)
+            response = do_get(one)
+        else:
+            response = do_put(one)
+    except SystemExit:
+        return {"code": "local_failure", "message": "本地这边没法传（已存在且没给 --force，或读写不了）"}
+    except BaseException as raised:      # noqa: BLE001
+        return {"code": "local_failure", "message": "%s: %s" % (type(raised).__name__, raised)}
+    if response.get("ok"):
+        return None
+    return {"code": response.get("code") or "operation_failed", "message": response.get("message") or ""}
+
+
+def transfer_many(args, direction, jobs, label, after=None):
+    """并行传一批文件。`jobs` 是 [(相对路径, 本地路径, 远端路径, 字节数)]。回 (成了的相对路径, 失败列表, 字节数)。"""
+    force = getattr(args, "force", True)
+    total = sum(job[3] for job in jobs)
+    progress = Progress(label, total, sys.stderr.isatty() and not getattr(args, "quiet", False))
+    lock = threading.Lock()
+    done, failed, moved = [], [], [0]
+
+    def work(job):
+        relative, local, remote, size = job
+        failure = transfer_one(args, direction, local, remote, force=force)
+        if failure is None and after is not None:
+            after(job)
+        with lock:
+            if failure is None:
+                done.append(relative)
+                moved[0] += size
+            else:
+                failure["path"] = relative
+                failed.append(failure)
+            progress.update(moved[0])
+
+    if jobs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=TREE_WORKERS) as pool:
+            list(pool.map(work, jobs))
+    progress.finish(None)
+    return sorted(done), sorted(failed, key=lambda item: item["path"]), moved[0]
+
+
+def tree_response(verb, summary, failed, **payload):
+    payload["failed"] = failed
+    ok = not failed
+    message = summary if ok else summary + "；%d 个没成，见 failed" % len(failed)
+    sys.stderr.write(verb + "：" + message + "\n")
+    return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed",
+            "message": message, "tree": payload}
+
+
+def do_mac_tree(args, direction):
+    """`mac get -r` / `mac put -r`。"""
+    if args.resume:
+        fail("整个目录不用 --resume：重跑一遍（加 --force）或用 `mac sync`，已经一样的文件不会重传")
+    local = os.path.abspath(os.path.expanduser(args.local))
+    started = time.time()
+    if direction == "down":
+        if os.path.exists(local) and not os.path.isdir(local):
+            fail("本地 %s 不是目录" % local)
+        directories, files, links, error = remote_tree(args, args.path, None)
+        if error is not None:
+            return error
+        os.makedirs(local, exist_ok=True)
+        for relative in directories:
+            os.makedirs(os.path.join(local, relative), exist_ok=True)
+        jobs = [(relative, os.path.join(local, relative), remote_join(args.path, relative),
+                 int(entry.get("size") or 0)) for relative, entry in sorted(files.items())]
+    else:
+        if not os.path.isdir(local):
+            fail("本地目录不存在：" + local)
+        directories, files, links = local_tree(local, None)
+        for relative in [""] + directories:
+            response = mac_call(args, "mac-mkdir", mac={"options": ["parents"]},
+                                path=remote_join(args.path, relative))
+            if not response.get("ok"):
+                return response
+        jobs = [(relative, os.path.join(local, relative), remote_join(args.path, relative), info.st_size)
+                for relative, info in sorted(files.items())]
+    done, failed, moved = transfer_many(args, direction, jobs,
+                                        ("↓ " if direction == "down" else "↑ ") + os.path.basename(local))
+    seconds = round(time.time() - started, 3)
+    summary = "%d 个文件，%s，%d 个目录，%.1fs" % (len(done), human(moved), len(directories), seconds)
+    if links:
+        summary += "；跳过 %d 个符号链接" % len(links)
+    return tree_response("下载完成" if direction == "down" else "上传完成", summary, failed,
+                         localPath=local, remotePath=args.path, files=len(done), bytes=moved,
+                         directories=len(directories), skippedLinks=links, seconds=seconds)
+
+
+def do_mac_sync(args):
+    """`mac sync up|down`：只传大小或修改时间不一样的文件，传完把修改时间对齐。"""
+    local = os.path.abspath(os.path.expanduser(args.local))
+    up = args.direction == "up"
+    started = time.time()
+    if up and not os.path.isdir(local):
+        fail("本地目录不存在：" + local)
+    if not up and os.path.exists(local) and not os.path.isdir(local):
+        fail("本地 %s 不是目录" % local)
+
+    local_dirs, local_files, local_links = local_tree(local, args.exclude) if os.path.isdir(local) else ([], {}, [])
+    remote_dirs, remote_files, remote_links, error = remote_tree(args, args.path, args.exclude)
+    if error is not None:
+        if error.get("code") != "file_not_found" or not up:
+            return error
+        remote_dirs, remote_files, remote_links = [], {}, []    # 目标还不存在：整份传过去
+
+    def remote_hash(relative):
+        response = mac_call(args, "mac-hash", path=remote_join(args.path, relative))
+        return ((response.get("mac") or {}).get("sha256") or "").lower() if response.get("ok") else None
+
+    source = local_files if up else remote_files
+    target = remote_files if up else local_files
+    changed, unchanged, retime = [], 0, []
+    for relative in sorted(source):
+        local_info, remote_entry = local_files.get(relative), remote_files.get(relative)
+        if relative not in target:
+            changed.append(relative)
+            continue
+        if local_info.st_size != int(remote_entry.get("size") or 0):
+            changed.append(relative)
+            continue
+        if int(local_info.st_mtime) == epoch_of(remote_entry.get("modifiedAt")):
+            unchanged += 1
+            continue
+        if args.checksum and local_sha256(os.path.join(local, relative)) == remote_hash(relative):
+            retime.append(relative)      # 内容一样，只是时间不同：对齐时间，不传
+            unchanged += 1
+            continue
+        changed.append(relative)
+    extra = sorted(set(target) - set(source)) if args.delete else []
+
+    if args.dry_run:
+        message = "要传 %d 个文件，%d 个不用动" % (len(changed), unchanged)
+        if extra:
+            message += "，要删 %d 个" % len(extra)
+        return {"id": str(uuid.uuid4()), "ok": True, "code": "ok", "message": message + "（--dry-run，没有动文件）",
+                "sync": {"direction": args.direction, "dryRun": True, "transfer": changed,
+                         "delete": extra, "unchanged": unchanged}}
+
+    def align(relative):
+        """把目标的修改时间设成和源一样：下次同步靠它判断「没变」。"""
+        if up:
+            mac_call(args, "mac-touch", mac={"seconds": int(local_files[relative].st_mtime)},
+                     path=remote_join(args.path, relative))
+        else:
+            stamp = epoch_of(remote_files[relative].get("modifiedAt"))
+            if stamp is not None:
+                os.utime(os.path.join(local, relative), (stamp, stamp))
+
+    if up:
+        for relative in [""] + local_dirs:
+            response = mac_call(args, "mac-mkdir", mac={"options": ["parents"]},
+                                path=remote_join(args.path, relative))
+            if not response.get("ok"):
+                return response
+    else:
+        os.makedirs(local, exist_ok=True)
+        for relative in remote_dirs:
+            os.makedirs(os.path.join(local, relative), exist_ok=True)
+
+    def size_of(relative):
+        return local_files[relative].st_size if up else int(remote_files[relative].get("size") or 0)
+
+    jobs = [(relative, os.path.join(local, relative), remote_join(args.path, relative), size_of(relative))
+            for relative in changed]
+    args.force = True
+    done, failed, moved = transfer_many(args, "up" if up else "down", jobs,
+                                        ("↑ " if up else "↓ ") + os.path.basename(local),
+                                        after=lambda job: align(job[0]))
+    for relative in retime:
+        align(relative)
+
+    deleted = []
+    for relative in extra:
+        if up:
+            response = mac_call(args, "mac-trash", path=remote_join(args.path, relative))
+            if response.get("ok"):
+                deleted.append(relative)
+            else:
+                failed.append({"path": relative, "code": response.get("code"), "message": response.get("message")})
+        else:
+            try:
+                os.remove(os.path.join(local, relative))
+                deleted.append(relative)
+            except OSError as raised:
+                failed.append({"path": relative, "code": "local_write_failed", "message": str(raised)})
+
+    seconds = round(time.time() - started, 3)
+    summary = "传了 %d 个文件（%s），%d 个没变" % (len(done), human(moved), unchanged)
+    if deleted:
+        summary += "，删了 %d 个%s" % (len(deleted), "（在那台 Mac 的废纸篓里）" if up else "")
+    links = local_links if up else remote_links
+    if links:
+        summary += "；跳过 %d 个符号链接" % len(links)
+    ok = not failed
+    message = summary if ok else summary + "；%d 个没成，见 failed" % len(failed)
+    sys.stderr.write("同步完成：" + message + "\n")
+    return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed", "message": message,
+            "sync": {"direction": args.direction, "dryRun": False, "transferred": done, "deleted": deleted,
+                     "unchanged": unchanged, "bytes": moved, "failed": failed, "skippedLinks": links,
+                     "seconds": seconds}}
+
+
+MAC_COLUMNS = ["name", "onLocalNetwork", "onRelay", "connected", "path", "supportsFiles", "id"]
+
+
+def mac_output(response, fmt, action):
+    """`macs` / `mac …` 的人类可读输出；回 None 表示交给通用的表格逻辑。"""
+    mac = response.get("mac") or {}
+    if action == "macs":
+        rows = [[cell(item.get(c)) for c in MAC_COLUMNS] for item in mac.get("macs") or []]
+        if not rows:
+            return response.get("message") or "没有配对过的 Mac"
+        return render_table(MAC_COLUMNS, rows) if fmt == "table" else render_csv(MAC_COLUMNS, rows)
+    if action == "mac-run":
+        return run_output(response)
+    payload = response.get("file")
+    if isinstance(payload, dict):
+        if payload.get("text") is not None:
+            return payload["text"]
+        return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `mac get` 下载后本地处理"
+                % (payload.get("path", "?"), payload.get("bytes", "?")))
+    if action == "mac-grep":
+        matches = mac.get("matches") or []
+        if fmt == "csv":
+            return render_csv(["path", "line", "text"],
+                              [[m.get("path", ""), str(m.get("line", "")), m.get("text", "")] for m in matches])
+        lines = []
+        for m in matches:
+            first = m.get("line", 0) - len(m.get("before") or [])
+            for offset, text in enumerate(m.get("before") or []):
+                lines.append("%s-%d- %s" % (m.get("path"), first + offset, text))
+            lines.append("%s:%d: %s" % (m.get("path"), m.get("line", 0), m.get("text", "")))
+            for offset, text in enumerate(m.get("after") or []):
+                lines.append("%s-%d- %s" % (m.get("path"), m.get("line", 0) + 1 + offset, text))
+            if m.get("before") or m.get("after"):
+                lines.append("--")
+        lines.append("-- " + (response.get("message") or ""))
+        return "\n".join(lines)
+    if action == "mac-find":
+        header = ["path", "kind", "size", "modifiedAt"]
+        found = mac.get("found") or []
+        if any(item.get("sha256") for item in found):
+            header.append("sha256")
+        rows = [[cell(item.get("path")), "dir" if item.get("isDirectory") else "file", cell(item.get("size")),
+                 cell(item.get("modifiedAt"))] + ([cell(item.get("sha256"))] if "sha256" in header else [])
+                for item in found]
+        if not rows:
+            return response.get("message") or ""
+        body = render_table(header, rows, limit=200) if fmt == "table" else render_csv(header, rows)
+        return body + ("\n-- " + response.get("message", "") if mac.get("truncated") else "")
+    if action in ("mac-ls", "mac-stat"):
+        return None
+    if mac.get("text") is not None and action in ("mac-read", "mac-tree", "mac-patch", "mac-xattr"):
+        body = mac["text"].rstrip("\n")
+        if action == "mac-read" or mac.get("truncated"):
+            body += "\n-- " + (response.get("message") or "")
+        return body
+    if action == "mac-xattr" and mac.get("names") is not None:
+        return "\n".join(mac["names"]) or "（没有扩展属性）"
+    if action == "mac-wait-change" and mac.get("names"):
+        return "\n".join(mac["names"]) + "\n-- " + (response.get("message") or "")
+    if action in ("mac-get", "mac-put", "mac-sync"):
+        return as_json(response)
+    return response.get("message") or as_json(response)
 
 
 TRANSFER_COLUMNS = ["action", "localPath", "remotePath", "bytes", "totalBytes",
@@ -1418,6 +2089,11 @@ def render(response, fmt, args):
     if fmt == "json":
         return as_json(response)
 
+    if action == "macs" or action.startswith("mac-"):
+        text = mac_output(response, fmt, action)
+        if text is not None:
+            return text
+
     if action == "sftp-cat":
         payload = response.get("file") or {}
         if payload.get("text") is not None:
@@ -1462,9 +2138,23 @@ def main():
     fmt = getattr(args, "format", "json")
     action = resolved_action(args)
     # 传输要打开本地文件、交 fd、收进度、续传、校验，自己走一条路；其余动作一请求一响应。
-    if action in ("sftp-put", "sftp-get"):
+    if action == "mac-sync" or (action in ("mac-put", "mac-get") and args.recursive):
         try:
-            response = do_put(args) if action == "sftp-put" else do_get(args)
+            if action == "mac-sync":
+                parallel_for(args)
+                response = do_mac_sync(args)
+            else:
+                response = do_mac_tree(args, "down" if action == "mac-get" else "up")
+        except SystemExit:
+            raise
+        except BaseException as raised:      # noqa: BLE001
+            response = {"id": None, "ok": False, "code": "local_failure",
+                        "message": "%s: %s" % (type(raised).__name__, raised)}
+        print(as_json(response))
+        return exit_code_for(response)
+    if action in ("sftp-put", "sftp-get", "mac-put", "mac-get"):
+        try:
+            response = do_put(args) if action.endswith("-put") else do_get(args)
         except SystemExit:
             raise                     # `fail()` 的本地拒绝：消息已经在 stderr 上了
         except BaseException as raised:      # noqa: BLE001
@@ -1473,7 +2163,8 @@ def main():
                         "message": "%s: %s" % (type(raised).__name__, raised)}
         print(render_transfer(response, fmt))
         return exit_code_for(response)
-    response = send_request(make_request(args))
+    request = make_mac_request(args) if action.startswith("mac-") else make_request(args)
+    response = send_request(request)
     print(render(response, fmt, args))
     return exit_code_for(response)
 

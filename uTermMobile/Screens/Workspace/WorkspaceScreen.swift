@@ -59,11 +59,13 @@ struct WorkspaceScreen: View {
         }
         .onChange(of: store.openTarget) { _, t in consume(t) }
         .onChange(of: store.remoteTakeover) { _, t in consume(t) }
+        .onChange(of: store.remoteFiles) { _, r in consume(r) }
         .onChange(of: followedSessionIDs) { _, _ in followRemoteSessions() }
         .task(id: workspace.followedClients.map(ObjectIdentifier.init)) { await keepFollowedMacsConnected() }
         .onAppear {
             consume(store.openTarget)
             consume(store.remoteTakeover)
+            consume(store.remoteFiles)
         }
         .onChange(of: workspace.activeTab?.id) { _, _ in syncKeyboard() }
         .onChange(of: workspace.focusedPaneID) { _, _ in syncKeyboard() }
@@ -153,6 +155,20 @@ struct WorkspaceScreen: View {
         req.tabID = front?.id
         req.terminal = front?.terminal?.controller
         req.companionTabIDs = changes.opened.map(\.id).filter { $0 != front?.id }
+    }
+
+    /// 浏览一台 Mac 的文件：已有它的文件标签就带到前台，没有就开一个。文件走远控链路，和终端标签共用连接。
+    private func consume(_ request: MRemoteFilesRequest?) {
+        guard let request else { return }
+        store.remoteFiles = nil
+        if let existing = workspace.existing(remoteFiles: request.client) {
+            workspace.activate(existing.id)
+            return
+        }
+        let files = FileTab(host: request.client.filesTabHost,
+                            controller: MobileSFTPController(remoteMac: request.client))
+        files.controller.startRemote()
+        workspace.open(.files(files))
     }
 
     /// 接管中的 Mac 的终端列表（按 Mac 上的标签顺序发来，重排了也会变）。nil = 这条连接上还没收到，

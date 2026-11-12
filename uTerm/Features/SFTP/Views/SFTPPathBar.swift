@@ -31,9 +31,10 @@ struct SFTPPathBar: View {
     let onRefresh: () -> Void
     let showHidden: Bool
     let onToggleHidden: () -> Void
-    let onOpenInTerminal: () -> Void
-    /// 「在工作区打开」显眼按钮（accent 着色）——打开该服务器的工作区窗口。
-    let onOpenWorkspace: () -> Void
+    /// nil 时菜单里没有「在终端中打开」。
+    let onOpenInTerminal: (() -> Void)?
+    /// 「在工作区打开」显眼按钮（accent 着色）——打开该服务器的工作区窗口。nil 时不显示。
+    let onOpenWorkspace: (() -> Void)?
     let sortKey: FileBrowserModel.SortKey
     let onSetSort: (FileBrowserModel.SortKey) -> Void
     var part: Part = .full
@@ -61,7 +62,7 @@ struct SFTPPathBar: View {
             }
 
             if part != .leading {
-                SFTPOpenWorkspaceButton(action: onOpenWorkspace)
+                if let onOpenWorkspace { SFTPOpenWorkspaceButton(action: onOpenWorkspace) }
 
                 actionsMenu
             }
@@ -157,7 +158,7 @@ struct SFTPPathBar: View {
             UDMenu(width: 200, head: "排序", items: actionsMenuItems)
         }
         .accessibilityLabel("操作菜单")
-        .help("排序、显示隐藏文件、在终端中打开")
+        .help(onOpenInTerminal == nil ? "排序、显示隐藏文件" : "排序、显示隐藏文件、在终端中打开")
     }
 
     private var actionsMenuItems: [UDMenuItem] {
@@ -166,8 +167,10 @@ struct SFTPPathBar: View {
         }
         items.append(.divider())
         items.append(UDMenuItem(label: "显示隐藏文件", active: showHidden, action: onToggleHidden))
-        items.append(.divider())
-        items.append(UDMenuItem(label: "在终端中打开", systemImage: "terminal", action: onOpenInTerminal))
+        if let onOpenInTerminal {
+            items.append(.divider())
+            items.append(UDMenuItem(label: "在终端中打开", systemImage: "terminal", action: onOpenInTerminal))
+        }
         return items
     }
 }

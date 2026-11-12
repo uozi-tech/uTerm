@@ -37,4 +37,7 @@ nonisolated enum LocalShellAgent {
     func connectSession(namespace: String, id: String, reply: @escaping @Sendable (FileHandle?, String?) -> Void)
     /// 列出活着的会话 id。连不上的（holder 已经不在）顺手清掉 socket 文件。
     func listSessions(namespace: String, reply: @escaping @Sendable ([String]) -> Void)
+    /// 远控文件服务：一条打包好的请求进、一条打包好的应答出（格式见 `RemoteFileWire`，执行在 `RemoteFileService`）。
+    /// 主程序在沙盒里读不到主目录，文件操作和跑命令都得在这边做。该不该放行由主程序在转发之前判断。
+    func fileRequest(_ payload: Data, reply: @escaping @Sendable (Data) -> Void)
 }

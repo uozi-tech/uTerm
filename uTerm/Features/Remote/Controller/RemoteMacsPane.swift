@@ -36,6 +36,7 @@ struct RemoteMacsPane: View {
                         RemoteMacDetailPanel(mac: selected,
                                              onOpen: { open(selected) },
                                              onOpenScreen: { openWindow(value: RemoteDesktopWindowID(macID: selected.id)) },
+                                             onOpenFiles: { openWindow(value: RemoteMacFilesWindowID(macID: selected.id)) },
                                              onDiagnose: { openWindow(value: RemoteDiagnosticsWindowID(macID: selected.id)) })
                             .id(selected.id)
                     }
@@ -168,6 +169,7 @@ struct RemoteMacsPane: View {
             // 不在线时终端与屏幕都打不开；「网络诊断」留着，正好查为什么不在线。
             Button("打开终端") { open(mac) }.disabled(!mac.isOnline)
             Button("打开屏幕") { openWindow(value: RemoteDesktopWindowID(macID: mac.id)) }.disabled(!mac.isOnline)
+            Button("浏览文件") { openWindow(value: RemoteMacFilesWindowID(macID: mac.id)) }.disabled(!mac.isOnline)
             Button("网络诊断") { openWindow(value: RemoteDiagnosticsWindowID(macID: mac.id)) }
             Divider()
             Button("忘记这台 Mac…", role: .destructive) { forgetting = mac }
@@ -250,6 +252,7 @@ private struct RemoteMacDetailPanel: View {
     let mac: RemoteMacDirectory.Mac
     let onOpen: () -> Void
     let onOpenScreen: () -> Void
+    let onOpenFiles: () -> Void
     let onDiagnose: () -> Void
 
     @Environment(RemoteMacDirectory.self) private var directory
@@ -363,6 +366,8 @@ private struct RemoteMacDetailPanel: View {
                     .disabled(!mac.isOnline)
                 HStack(spacing: 8) {
                     DetailActionButton(title: "打开屏幕", systemImage: "display", action: onOpenScreen)
+                        .disabled(!mac.isOnline)
+                    DetailActionButton(title: "浏览文件", systemImage: "folder", action: onOpenFiles)
                         .disabled(!mac.isOnline)
                     DetailActionButton(title: "网络诊断", systemImage: "stethoscope", action: onDiagnose)
                 }            }

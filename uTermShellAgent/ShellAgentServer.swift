@@ -6,13 +6,26 @@ import os
 ///
 /// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
-    static let version = "5"
+    static let version = "6"
     /// 等 holder 开始监听的上限。正常几毫秒。
     private static let spawnWaitSeconds = 5.0
     /// 控制通道在 holder 和 `uterm-ssh` 里的 fd 号。0/1/2 之后第一个，holder 自己开的 fd 都排在它后面。
     private static let childControlFD: Int32 = 3
 
     private let queue = DispatchQueue(label: "com.uozi.uTerm.ShellAgent")
+    /// 文件请求并发着做（读写互不相干）；跑命令、等变化可能占很久，单独一个池子，不挤普通读写。
+    private let fileQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.uozi.uTerm.ShellAgent.files"
+        queue.maxConcurrentOperationCount = 16
+        return queue
+    }()
+    private let longFileQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.uozi.uTerm.ShellAgent.files.long"
+        queue.maxConcurrentOperationCount = 16
+        return queue
+    }()
     private let log = Logger(subsystem: "com.uozi.uTerm", category: "shell-agent")
 
     override init() {
@@ -31,6 +44,13 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
 
     func ping(reply: @escaping @Sendable (String) -> Void) {
         reply(Self.version)
+    }
+
+    func fileRequest(_ payload: Data, reply: @escaping @Sendable (Data) -> Void) {
+        let isLong = RemoteFileCodec.operation(of: payload)?.isLongRunning ?? false
+        (isLong ? longFileQueue : fileQueue).addOperation {
+            reply(RemoteFileService.handle(payload))
+        }
     }
 
     func openSession(namespace: String, id: String, directory shellDirectory: String?, columns: Int, rows: Int, ownsResponsibility: Bool,

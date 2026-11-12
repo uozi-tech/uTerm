@@ -254,6 +254,9 @@ final class ControlProtocolTests: XCTestCase {
             .forwardStart, .forwardStop,
             .terminalSend, .terminalOpen,
             .relayImport,
+            // 远程 Mac：跑命令与一切写操作。`mac-xattr` 读写共用一个动作，写在 handler 里补判。
+            .macRun, .macPut, .macMkdir, .macRm, .macRmdir, .macMv, .macChmod,
+            .macWrite, .macEdit, .macPatch, .macCp, .macTrash, .macLn, .macTouch,
         ]
         let execCapable: Set<ControlAction> = [.run, .runMany, .quickRun, .terminalSend, .terminalOpen]
 

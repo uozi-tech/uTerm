@@ -341,7 +341,7 @@ extension ControlHandler {
     }
 
     /// 去空白后的非空串，否则 nil。
-    static func trimmed(_ value: String?) -> String? {
+    nonisolated static func trimmed(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed

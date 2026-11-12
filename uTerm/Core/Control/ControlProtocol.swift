@@ -75,6 +75,46 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     /// 松开 CLI 连接池对某主机的 exec / SFTP 持有。
     case disconnect = "disconnect"
 
+    // MARK: 远程 Mac（配对过的 Mac，经远控链路；不需要那台 Mac 开 SSH）
+
+    /// 列出配对过的 Mac 与在线情况。
+    case macs = "macs"
+    /// 在远程 Mac 上跑一条命令（登录 shell）。
+    case macRun = "mac-run"
+    case macLs = "mac-ls"
+    case macStat = "mac-stat"
+    case macCat = "mac-cat"
+    case macGet = "mac-get"
+    case macPut = "mac-put"
+    case macMkdir = "mac-mkdir"
+    case macRm = "mac-rm"
+    case macRmdir = "mac-rmdir"
+    case macMv = "mac-mv"
+    case macChmod = "mac-chmod"
+    /// 按行 / 按字节读一段。
+    case macRead = "mac-read"
+    case macGrep = "mac-grep"
+    case macFind = "mac-find"
+    case macTree = "mac-tree"
+    case macHash = "mac-hash"
+    case macDu = "mac-du"
+    case macDf = "mac-df"
+    /// 整份写入（可带 `ifMatch` 防覆盖）。
+    case macWrite = "mac-write"
+    /// 把一段文字换成另一段。
+    case macEdit = "mac-edit"
+    /// 打 unified diff。
+    case macPatch = "mac-patch"
+    case macCp = "mac-cp"
+    case macTrash = "mac-trash"
+    case macLn = "mac-ln"
+    case macReadlink = "mac-readlink"
+    case macTouch = "mac-touch"
+    /// 扩展属性：读（list / get）只要主开关；写（set / remove）另由 handler 核改动开关。
+    case macXattr = "mac-xattr"
+    /// 等文件或目录有变化。
+    case macWaitChange = "mac-wait-change"
+
     /// 需要主开关 `control.enabled`。只有 `ping` 不需要 —— 否则客户端连开关状态都问不到。
     public var requiresEnabled: Bool {
         self != .ping
@@ -90,14 +130,18 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
              .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
              .forwardStart, .forwardStop,
              .terminalSend, .terminalOpen,
-             .relayImport:
+             .relayImport,
+             .macRun, .macPut, .macMkdir, .macRm, .macRmdir, .macMv, .macChmod,
+             .macWrite, .macEdit, .macPatch, .macCp, .macTrash, .macLn, .macTouch:
             return true
         case .ping, .hosts, .hostKey, .quickCommands,
              .sftpLs, .sftpStat, .sftpCat, .sftpGet,
              .forwardList,
              .terminals, .terminalRead, .terminalWait,
              .relayCheck,
-             .disconnect:
+             .disconnect,
+             .macs, .macLs, .macStat, .macCat, .macGet, .macRead, .macGrep, .macFind, .macTree,
+             .macHash, .macDu, .macDf, .macReadlink, .macXattr, .macWaitChange:
             return false
         }
     }
@@ -131,6 +175,11 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
             return .relay
         case .ping, .disconnect:
             return .misc
+        case .macs, .macRun, .macLs, .macStat, .macCat, .macGet, .macPut, .macMkdir, .macRm, .macRmdir,
+             .macMv, .macChmod, .macRead, .macGrep, .macFind, .macTree, .macHash, .macDu, .macDf,
+             .macWrite, .macEdit, .macPatch, .macCp, .macTrash, .macLn, .macReadlink, .macTouch,
+             .macXattr, .macWaitChange:
+            return .mac
         }
     }
 }
@@ -144,6 +193,7 @@ nonisolated public enum ControlActionGroup: String, Codable, Sendable, CaseItera
     case terminal
     case relay
     case misc
+    case mac
 }
 
 // MARK: - 请求
@@ -192,6 +242,8 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
     public var name: String?
     /// `terminal-wait` 最多等多少秒。
     public var waitSeconds: Double?
+    /// `mac-*`：哪台 Mac，以及这一组动作专有的参数。
+    public var mac: ControlMacArguments?
 
     public init(
         id: String? = nil,
@@ -271,6 +323,9 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
     public var run: ControlTerminalRun?
     /// `relay-import` / `relay-check`：中继的公开信息与测试结果。永远不含成员密钥。
     public var relay: ControlRelayInfo?
+    /// `mac-*`：远程 Mac 这一组动作专有的结果（搜索命中、目录树、哈希……）。列目录、属性、读文件、
+    /// 传输、跑命令仍然放在 `entries` / `stat` / `file` / `transfer` / `result` 里，和 SSH 主机的同名动作一个形状。
+    public var mac: ControlMacPayload?
 
     public init(
         id: String? = nil,
@@ -986,13 +1041,13 @@ nonisolated public enum ControlProtocol {
 
     /// 占传输槽位的动作。
     public static func isTransfer(_ action: ControlAction) -> Bool {
-        action == .sftpGet || action == .sftpPut
+        action == .sftpGet || action == .sftpPut || action == .macGet || action == .macPut
     }
 
     /// 这条请求占「长连接」槽位（与传输共用 `maxTransferClients`）：传输，以及
     /// `terminal-wait` —— 一等就是几分钟，不能占着 `run` / `ping` 的名额。
     public static func occupiesLongLivedSlot(_ action: ControlAction) -> Bool {
-        isTransfer(action) || action == .terminalWait
+        isTransfer(action) || action == .terminalWait || action == .macWaitChange || action == .macRun
     }
 
     /// Debug and Release may share the same sandbox container. Keep their
@@ -1087,4 +1142,98 @@ nonisolated public struct ControlProgressEvent: Codable, Sendable, Equatable {
     public var bytes: Int64
     public var totalBytes: Int64?
     public var done: [ControlByteRange]
+}
+
+// MARK: - 远程 Mac
+
+/// `mac-*` 动作的参数。全部可选；哪个动作用哪些见 `skills/uterm/references/mac.md`。
+nonisolated public struct ControlMacArguments: Codable, Sendable, Equatable {
+    /// 配对过的 Mac 的名字或设备 UUID。解析规则同主机：精确 → 忽略大小写 → 唯一前缀。
+    public var target: String?
+    /// `mac-grep` 的正则 / 字面量；`mac-find` 的文件名通配符。
+    public var pattern: String?
+    public var include: [String]?
+    public var exclude: [String]?
+    public var limit: Int?
+    public var depth: Int?
+    /// 开关，原样交给被控端（见 `RemoteFileOption`）。
+    public var options: [String]?
+    public var startLine: Int?
+    public var endLine: Int?
+    public var tail: Int?
+    public var offset: Int64?
+    public var length: Int?
+    public var context: Int?
+    public var ifMatch: String?
+    public var oldText: String?
+    public var newText: String?
+    /// `mac-xattr`：`list` / `get` / `set` / `remove`。
+    public var attributeAction: String?
+    public var attribute: String?
+    /// `mac-find`：只要最近这么多秒内改过的。`mac-touch`：要设的修改时间（距 1970 的秒数）。
+    public var seconds: Double?
+    public var strip: Int?
+
+    public init(target: String? = nil) {
+        self.target = target
+    }
+}
+
+nonisolated public struct ControlMacSnapshot: Codable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+    /// 局域网里此刻找得到。
+    public var onLocalNetwork: Bool
+    /// 此刻在中继上。没问过中继时为 nil（不代表不在）。
+    public var onRelay: Bool?
+    /// 命令行这边已经握着到它的连接。
+    public var connected: Bool
+    /// 连着时走的哪条路（局域网 / 公网直连 / 中继）。
+    public var path: String?
+    /// 连着时才知道：那台 Mac 上的 uTerm 支不支持文件访问。
+    public var supportsFiles: Bool?
+}
+
+nonisolated public struct ControlMacMatch: Codable, Sendable, Equatable {
+    public var path: String
+    public var line: Int
+    public var text: String
+    public var before: [String]?
+    public var after: [String]?
+}
+
+nonisolated public struct ControlMacEntry: Codable, Sendable, Equatable {
+    public var path: String
+    public var isDirectory: Bool
+    public var size: Int64
+    /// ISO8601。
+    public var modifiedAt: String
+    public var permissions: Int
+    public var sha256: String?
+}
+
+nonisolated public struct ControlMacPayload: Codable, Sendable, Equatable {
+    public var macs: [ControlMacSnapshot]?
+    /// 这次动作落在哪台 Mac 上。
+    public var name: String?
+    /// 解析后的绝对路径。
+    public var path: String?
+    public var matches: [ControlMacMatch]?
+    public var found: [ControlMacEntry]?
+    /// 目录树、按行读回来的正文、补丁的输出。
+    public var text: String?
+    /// 正文不是 UTF-8 时。
+    public var base64: String?
+    public var sha256: String?
+    public var count: Int?
+    public var totalLines: Int?
+    public var bytes: Int64?
+    public var totalBytes: Int64?
+    public var files: Int?
+    public var directories: Int?
+    public var names: [String]?
+    public var truncated: Bool?
+    public var timedOut: Bool?
+
+    public init() {}
 }

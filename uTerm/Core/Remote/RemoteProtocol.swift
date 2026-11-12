@@ -43,7 +43,11 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
                                           RemoteFeature.desktopUnlockOutcomes,
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
-                                          RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus]
+                                          RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus,
+                                          RemoteFeature.files]
+    /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
+    /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
+    static let fileChannel: UInt32 = 0xFFFF_F11E
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -118,6 +122,9 @@ nonisolated enum RemoteFeature {
     /// 链路层的端到端计量与分片（见 `RemoteLinkFlow`）：认得 `linkAck` / `linkFragment`。两端都声明才启用，
     /// 否则照旧整条消息直接交给 TCP。
     static let linkFlow = "link-flow"
+    /// 文件服务：认得 `fileRequest` / `fileReply`（列目录、读写、搜索、跑命令，见 `RemoteFileWire`）。
+    /// 老 Mac 收到 `fileRequest` 会当未知消息断开整条连接，所以主控端只对声明了这一项的 Mac 发。
+    static let files = "files"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -252,6 +259,11 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 负载 = 1 字节标志（`RemoteTerminalSnapshotPiece`）+ 影子终端二进制快照的一段。快照可以很大，切成多条发。
         /// 只有两端终端引擎版本相同（握手里的 `terminalEngine`）才会接入成功，所以设备一定解得开。
         case terminalSnapshot = 47
+        /// 主控端 → Mac：一条文件请求（`RemoteConstants.fileChannel`）。负载是 `RemoteFileCodec` 打包的
+        /// `RemoteFileRequest` 加正文。只发给 `features` 带 `files` 的 Mac。
+        case fileRequest = 48
+        /// Mac → 主控端：对应的应答（同一通道）。负载是打包的 `RemoteFileReply` 加正文，按请求号对上。
+        case fileReply = 49
     }
 
     var kind: Kind

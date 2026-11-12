@@ -176,6 +176,10 @@ private struct RemoteMacTerminalArea: View {
                             UDButton(title: "查看屏幕", style: .secondary) { openDesktop() }
                                 .disabled(model.client.state != .connected)
                         }
+                        if model.client.supportsFiles {
+                            UDButton(title: "浏览文件", style: .secondary) { openFiles() }
+                                .disabled(model.client.state != .connected)
+                        }
                     }
                 }
             } else {
@@ -193,6 +197,7 @@ private struct RemoteMacTerminalArea: View {
                     onRequestClose: { tab in model.close(tab.id) },
                     stripAccessory: { _ in
                         HStack(spacing: 2) {
+                            if model.client.supportsFiles { filesButton }
                             if model.client.supportsDesktop { desktopButton }
                             newShellButton
                         }
@@ -255,6 +260,23 @@ private struct RemoteMacTerminalArea: View {
 
     private func openDesktop() {
         openWindow(value: RemoteDesktopWindowID(macID: macID))
+    }
+
+    private func openFiles() {
+        openWindow(value: RemoteMacFilesWindowID(macID: macID))
+    }
+
+    private var filesButton: some View {
+        Button { openFiles() } label: {
+            Image(systemName: "folder")
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .iconButtonHover(cornerRadius: 6)
+        .disabled(model.client.state != .connected)
+        .help(String(localized: "在新窗口里浏览这台 Mac 的文件"))
+        .accessibilityLabel(Text("浏览文件"))
     }
 
     private var desktopButton: some View {

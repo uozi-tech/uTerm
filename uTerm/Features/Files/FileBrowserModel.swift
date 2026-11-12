@@ -265,6 +265,21 @@ final class FileBrowserModel {
         if persistsSortPreferences { observeSortPreferences() }
     }
 
+    /// 已经连好的文件通道（远程 Mac：连接归远控链路管，本模型不建连、不重连）。
+    /// 建好后调 `load(startPath)` 列第一屏。`dispose()` 只是不再用它，通道本身由调用方管。
+    init(provider: any SFTPProviding, startPath: String,
+         sortOptions: RemoteEntrySortOptions? = nil, resolvesOwnerNames: Bool = false) {
+        self.fixedConcurrencyLimit = nil
+        self.sftpConnector = { _, _, _ in provider }
+        self.persistsSortPreferences = sortOptions == nil
+        self.resolvesOwnerNames = resolvesOwnerNames
+        self.provider = provider
+        self.currentPath = startPath
+        self.state = .browsing
+        applySortOptions(sortOptions ?? Self.persistedSortOptions())
+        if persistsSortPreferences { observeSortPreferences() }
+    }
+
     init(testProvider: any SFTPProviding, startPath: String, maxConcurrentTransfers: Int = 4,
          sortOptions: RemoteEntrySortOptions? = nil, resolvesOwnerNames: Bool = true) {
         self.fixedConcurrencyLimit = maxConcurrentTransfers
