@@ -187,15 +187,23 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         precondition(BackgroundLaunchMode.reopenPresentation == .foreground)
-        Self.showGUI()
-        // showGUI 已处理完。返回 true 时 AppKit 还会走默认流程，可能再还原一个窗口或多开一个。
-        return false
+        // showGUI 处理完就返回 false：返回 true 时 AppKit 还会走默认流程，可能再还原一个窗口或多开一个。
+        // 例外是一扇窗口都拿不出来（后台隐藏启动时 SwiftUI 不建初始窗口，开窗入口也就没装上）：这时让 AppKit
+        // 走默认流程，SwiftUI 会开欢迎窗，它的视图出现时装上入口、接回终端。
+        return Self.showGUI(handlingReopen: true) == .nothingToShow
     }
 
     /// 后台唤起的实例已经被要求露出界面（用户打开了 uTerm，或远控要用终端）。之后装好开窗入口时要接回终端。
     private(set) static var hasShownGUI = false
 
-    static func showGUI() {
+    enum GUIPresentation: Equatable {
+        case shown
+        /// 没有窗口可露出、也没有开窗入口。
+        case nothingToShow
+    }
+
+    @discardableResult
+    static func showGUI(handlingReopen: Bool = false) -> GUIPresentation {
         hasShownGUI = true
         LocalShellRestorer.shared.restoreIfNeeded()
         SSHSessionRestorer.shared.restoreIfNeeded()
@@ -206,8 +214,25 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
             window.makeKeyAndOrderFront(nil)
         } else if let openWelcome {
             openWelcome()
+        } else if let hidden = ReopenWindowPicker.pickHidden(NSApp.windows) {
+            hidden.makeKeyAndOrderFront(nil)
         } else {
-            ReopenWindowPicker.pickHidden(NSApp.windows)?.makeKeyAndOrderFront(nil)
+            // 一扇窗口都没有：不在 reopen 里的话，请 LaunchServices 给自己发一次 reopen，走上面那条默认流程。
+            if !handlingReopen { requestReopen() }
+            return .nothingToShow
+        }
+        return .shown
+    }
+
+    /// 让系统按「用户又打开了 uTerm」给这个实例发一次 reopen（不会另起一个实例）。
+    private static func requestReopen() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            if let error {
+                AppLogger.info("请系统重新打开 uTerm 失败：\(error.localizedDescription)", category: "app")
+            }
         }
     }
 
