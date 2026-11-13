@@ -159,43 +159,16 @@ private struct KnownHostRow: View {
 
 // MARK: - 删除确认弹层
 
-/// 删除已知主机指纹的确认弹层（同 `KeyDeleteConfirm` 的居中卡片 + 半透明遮罩）。
+/// 删除已知主机指纹的确认弹层。
 private struct KnownHostDeleteConfirm: View {
     let address: String
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
     var body: some View {
-        ZStack {
-            UDModalBackdrop(onDismiss: onCancel)
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(UD.danger.opacity(0.14))
-                        .overlay(RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(UD.danger.opacity(0.3), lineWidth: 1))
-                        .frame(width: 36, height: 36)
-                        .overlay(Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 16, weight: .medium)).foregroundStyle(UD.danger))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(KnownHostCopy.deleteTitle(address: address))
-                            .font(.system(size: 14, weight: .medium)).foregroundStyle(UD.text)
-                        Text(KnownHostCopy.deleteMessage)
-                            .font(.system(size: 12)).foregroundStyle(UD.text2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                HStack(spacing: 8) {
-                    Spacer()
-                    UDButton(title: "取消", style: .secondary, action: onCancel)
-                    UDButton(title: "删除", style: .danger, action: onConfirm)
-                }
-            }
-            .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 16)
-            .frame(width: 400)
-            .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlayHi))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-            .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
+        UDConfirmModal(title: KnownHostCopy.deleteTitle(address: address), width: 400,
+                       onCancel: onCancel, onConfirm: onConfirm) {
+            Text(KnownHostCopy.deleteMessage)
         }
     }
 }

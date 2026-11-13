@@ -53,46 +53,16 @@ struct PFEmptyState: View {
 
 // MARK: - 删除确认（设计稿 PFDeleteConfirm，仿 GroupDeleteConfirm 结构）
 
-/// 删除转发规则确认浮层：380pt 卡，警示图标 + 标题（含规则名）+ 说明（含类型 flag +
-/// 监听地址 mono）+ 取消 / 删除（`UDButton(.danger)`）。
+/// 删除转发规则确认浮层：标题含规则名，说明含类型 flag + 监听地址 mono。
 struct PortForwardDeleteConfirm: View {
     let rule: ForwardingRuleSnapshot
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
     var body: some View {
-        ZStack {
-            UDModalBackdrop(onDismiss: onCancel)
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(UD.danger.opacity(0.14))
-                        .overlay(RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(UD.danger.opacity(0.3), lineWidth: 1))
-                        .frame(width: 36, height: 36)
-                        .overlay(Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 16, weight: .medium)).foregroundStyle(UD.danger))
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("删除「\(rule.name)」？")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(UD.text)
-                        message
-                            .font(.system(size: 12))
-                            .lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                HStack(spacing: 8) {
-                    Spacer()
-                    UDButton(title: "取消", style: .secondary, action: onCancel)
-                    UDButton(title: "删除", style: .danger, action: onConfirm)
-                }
-            }
-            .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 16)
-            .frame(width: 380)
-            .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlay))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-            .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
+        UDConfirmModal(title: "删除「\(rule.name)」？",
+                       onCancel: onCancel, onConfirm: onConfirm) {
+            message
         }
     }
 

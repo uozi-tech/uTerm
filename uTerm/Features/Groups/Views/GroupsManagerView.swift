@@ -787,36 +787,9 @@ private struct GroupDeleteConfirm: View {
     var onConfirm: () -> Void
 
     var body: some View {
-        ZStack {
-            UDModalBackdrop(onDismiss: onCancel)
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(UD.danger.opacity(0.14))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(UD.danger.opacity(0.3), lineWidth: 1))
-                        .frame(width: 36, height: 36)
-                        .overlay(Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 16, weight: .medium)).foregroundStyle(UD.danger))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("删除分组「\(groupName)」？")
-                            .font(.system(size: 14, weight: .medium)).foregroundStyle(UD.text)
-                        message
-                            .font(.system(size: 12))
-                            .lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                HStack(spacing: 8) {
-                    Spacer()
-                    UDButton(title: "取消", style: .secondary, action: onCancel)
-                    UDButton(title: "删除", style: .danger, action: onConfirm)
-                }
-            }
-            .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 16)
-            .frame(width: 380)
-            .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlay))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-            .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
+        UDConfirmModal(title: "删除分组「\(groupName)」？",
+                       onCancel: onCancel, onConfirm: onConfirm) {
+            message
         }
     }
 

@@ -2237,7 +2237,7 @@
 			repositoryURL = "https://github.com/uozi-tech/uAppKit.git";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.12.0;
+				minimumVersion = 1.13.0;
 			};
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
