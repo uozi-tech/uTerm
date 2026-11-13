@@ -259,16 +259,11 @@ struct PortForwardListView: View {
     /// 保存草稿：编辑既有规则就地改字段；新建则插入并分配 sortOrder。
     private func save(_ draft: ForwardEditorDraft) {
         if let existing = draft.editingID.flatMap({ id in rules.first { $0.id == id } }) {
-            existing.name = draft.name
-            existing.typeRaw = draft.kind.rawValue
-            existing.listenHost = draft.listenHost
-            existing.listenPort = draft.listenPort
-            existing.destHost = draft.destHost
-            existing.destPort = draft.destPort
-            existing.autostart = draft.autostart
-            try? modelContext.save()
-            // 改配置后停掉旧隧道，让用户重新开启（避免旧端口残留）。
-            coordinator.stop(existing.id)
+            // 类型 / 地址 / 端口变了才停旧隧道，让用户重新开启（避免旧端口残留）。
+            // 只改名称或「连接时自动启动」时隧道不动，行上的开关保持原样。
+            if draft.commit(to: existing, in: modelContext) {
+                coordinator.stop(existing.id)
+            }
         } else {
             let rule = ForwardingRule(
                 serverID: server.id,

@@ -1,5 +1,6 @@
 import UDesignKit
 import SwiftUI
+import SwiftData
 
 /// 端口转发编辑器的保存载荷（纯值类型）。`ForwardEditorSheet` 校验通过后产出，
 /// 由 `PortForwardListView.save(_:)` 写入 `modelContext`/`ForwardingRuleStore`。
@@ -13,6 +14,34 @@ struct ForwardEditorDraft: Equatable {
     let destHost: String?
     let destPort: Int
     let autostart: Bool
+}
+
+extension ForwardEditorDraft {
+    /// 草稿里决定隧道怎么建的那几项（类型、监听地址、目标地址）和规则现在的值不一样。
+    /// 名称和「连接时自动启动」不算：改它们不影响已经建好的隧道。
+    func rewiresTunnel(of rule: ForwardingRule) -> Bool {
+        kind != rule.kind
+            || listenHost != rule.listenHost
+            || listenPort != rule.listenPort
+            || destHost != rule.destHost
+            || destPort != rule.destPort
+    }
+
+    /// 把草稿写进既有规则并存盘。返回 true 表示隧道相关的配置变了，
+    /// 在跑的旧隧道是按旧配置建的，调用方要把它停掉；返回 false 时隧道不用动。
+    @discardableResult
+    func commit(to rule: ForwardingRule, in context: ModelContext) -> Bool {
+        let rewires = rewiresTunnel(of: rule)
+        rule.name = name
+        rule.typeRaw = kind.rawValue
+        rule.listenHost = listenHost
+        rule.listenPort = listenPort
+        rule.destHost = destHost
+        rule.destPort = destPort
+        rule.autostart = autostart
+        try? context.save()
+        return rewires
+    }
 }
 
 /// 新建 / 编辑端口转发规则的浮层卡（设计稿 `pages/port-forwarding.jsx` 的 `ForwardEditor`）。
@@ -107,10 +136,7 @@ struct ForwardEditorSheet: View {
     }
 
     var body: some View {
-        ZStack {
-            UDModalBackdrop(onDismiss: onCancel)
-            card
-        }
+        UDModal(onDismiss: onCancel) { card }
     }
 
     private var card: some View {
@@ -123,9 +149,6 @@ struct ForwardEditorSheet: View {
         }
         .frame(width: 460)
         .frame(maxHeight: 620)
-        .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlay))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-        .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
     }
 
     private var header: some View {

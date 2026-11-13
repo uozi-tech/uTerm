@@ -212,19 +212,13 @@ struct GlobalForwardingWindowView: View {
         editing = GFEditTarget(rule: nil, server: server)
     }
 
-    /// 保存草稿。编辑既有：就地写字段 + 持久化；若「保持连接」则用新配置**重启**隧道立即生效，
-    /// 否则只断开旧隧道（避免旧端口残留）。新建：插入新规则并分配 sortOrder（与单主机页一致，
+    /// 保存草稿。编辑既有：就地写字段 + 持久化；类型 / 地址 / 端口变了的话，若「保持连接」则用
+    /// 新配置**重启**隧道立即生效，否则只断开旧隧道（避免旧端口残留）。新建：插入新规则并分配 sortOrder（与单主机页一致，
     /// 默认不自动起 —— 用户在行上点「保持连接」再建立）。
     private func save(_ draft: ForwardEditorDraft, on server: ServerProfile) {
         if let id = draft.editingID, let rule = rules.first(where: { $0.id == id }) {
-            rule.name = draft.name
-            rule.typeRaw = draft.kind.rawValue
-            rule.listenHost = draft.listenHost
-            rule.listenPort = draft.listenPort
-            rule.destHost = draft.destHost
-            rule.destPort = draft.destPort
-            rule.autostart = draft.autostart
-            try? modelContext.save()
+            // 只改名称或「连接时自动启动」：隧道不用动。
+            guard draft.commit(to: rule, in: modelContext) else { return }
             coordinator.stop(rule.id)
             if rule.launchAtAppStart {
                 coordinator.start(rule.snapshot, on: server,
