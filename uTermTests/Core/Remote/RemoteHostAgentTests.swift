@@ -41,6 +41,8 @@ final class RemoteHostAgentTests: XCTestCase {
         let listener = NSXPCListener.anonymous()
         var bridge: RemoteHostAgentBridge?
         var terminated = false
+        /// 远控进程「本进程」的授权与申请记录（替代真的 CGPreflight / CGRequest）。
+        let permissions = AgentPermissionBox()
         private let suites: [String]
 
         init(grace: Duration) async {
@@ -66,6 +68,9 @@ final class RemoteHostAgentTests: XCTestCase {
             environment.updateGrace = grace
             environment.requestTimeout = .seconds(3)
             environment.build = "agent-test"
+            let permissions = self.permissions
+            environment.desktopPermissions = { permissions.current }
+            environment.requestPostEvents = { permissions.requests += 1 }
             service = RemoteHostAgentService(environment: environment)
             listener.delegate = service
             listener.resume()
@@ -277,6 +282,44 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertFalse(quiet, "远控关着时 App 不再去连远控进程")
     }
 
+    // MARK: - 被控端授权
+
+    /// 远控进程在服务时，「辅助功能」以它报的为准（tccd 按它自己的身份判，uTerm 的授权替不了），申请也由它发起。
+    func test_permissions_come_from_the_agent_and_post_event_request_goes_to_it() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        rig.permissions.current = RemoteHostAgentPermissions(screenCapture: true, postEvents: false)
+        rig.startApp()
+        let connected = await waitUntil { rig.bridge?.isConnected == true }
+        XCTAssertTrue(connected)
+        let bridge = try XCTUnwrap(rig.bridge)
+        let localGranted = RemoteHostAgentPermissions(screenCapture: true, postEvents: true)
+
+        let before = await RemoteHostPermissionSource.current(agent: bridge, local: { localGranted })
+        XCTAssertEqual(before, RemoteHostAgentPermissions(screenCapture: true, postEvents: false),
+                       "App 自己有辅助功能也不算：注入在远控进程里做")
+
+        var localRequests = 0
+        await RemoteHostPermissionSource.requestPostEvents(agent: bridge, local: { localRequests += 1 })
+        XCTAssertEqual(rig.permissions.requests, 1, "由远控进程申请，系统设置里登记的是「uTerm 远程控制」")
+        XCTAssertEqual(localRequests, 0)
+
+        rig.permissions.current.postEvents = true
+        let after = await RemoteHostPermissionSource.current(agent: bridge, local: { localGranted })
+        XCTAssertTrue(after.postEvents)
+    }
+
+    /// 远控进程刚起、App 还没握手（服务端没建）时，授权查询也照答。
+    func test_agent_answers_permissions_before_hello() async {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        rig.permissions.current = RemoteHostAgentPermissions(screenCapture: false, postEvents: true)
+        let reply = await rig.service.perform(.desktopPermissions)
+        XCTAssertTrue(reply.ok)
+        XCTAssertEqual(reply.data.flatMap { RemoteHostAgentJSON.decode(RemoteHostAgentPermissions.self, from: $0) },
+                       rig.permissions.current)
+    }
+
     func test_chunk_kind_round_trips_and_feed_splits_without_losing_snapshot_flags() {
         let chunks: [RemoteTerminalChunk] = [.output(Data([1, 2])), .snapshot(Data([3]), isFirst: true, isLast: false),
                                              .snapshot(Data([4]), isFirst: false, isLast: false),
@@ -340,4 +383,10 @@ private final class AsyncGate {
         for waiter in waiters { waiter.resume() }
         waiters = []
     }
+}
+
+@MainActor
+private final class AgentPermissionBox {
+    var current = RemoteHostAgentPermissions(screenCapture: true, postEvents: false)
+    var requests = 0
 }

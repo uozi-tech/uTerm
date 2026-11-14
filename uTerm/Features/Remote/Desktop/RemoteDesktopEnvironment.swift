@@ -177,11 +177,87 @@ enum RemoteDesktopPermissions {
     }
 }
 
+/// 被控端（别的设备看 / 控制这台 Mac）的授权去哪里查、向谁申请。
+///
+/// 远控进程在服务时（App 里的 `RemoteHostServer.agent` 不为 nil），远程桌面的采集与注入都在它那里做，授权也要按它算：
+/// 屏幕录制 tccd 会归到 uTerm 名下，「辅助功能」（PostEvent）却只认远控进程自己的身份——系统设置里另有一项
+/// 「uTerm 远程控制」要打开。所以这时问远控进程、由它申请；屏幕录制仍由 App 申请（记在 uTerm 名下，系统框由前台的
+/// App 弹更自然）。没有远控进程时问本进程。
+enum RemoteHostPermissionSource {
+    /// 问一次远控进程最多等多久。它没回话（刚被重启、正在换版本）就按没问到算。
+    static let agentReplyTimeout: Duration = .seconds(2)
+
+    /// 被控端此刻的授权。远控进程刚重启、还没连上时隔一会儿再问；一直问不到（远控关着、版本太旧）就退回本进程的结果。
+    static func current(agent: (any RemoteHostAgentLink)?,
+                        retryDelay: Duration = .milliseconds(500), attempts: Int = 6,
+                        replyTimeout: Duration = agentReplyTimeout,
+                        local: () async -> RemoteHostAgentPermissions = localPermissions) async -> RemoteHostAgentPermissions {
+        if let agent {
+            for attempt in 0..<max(attempts, 1) {
+                switch await ask(agent, .desktopPermissions, timeout: replyTimeout) {
+                case .answered(let permissions):
+                    return permissions
+                case .unsupported:
+                    AppLogger.notice("远控进程不认得授权查询（旧版本），改看 uTerm 本身的授权", category: RemoteLog.category)
+                    return await local()
+                case .unreachable:
+                    if attempt + 1 < attempts { try? await Task.sleep(for: retryDelay) }
+                }
+            }
+            AppLogger.notice("问不到远控进程的授权状态，改看 uTerm 本身的授权", category: RemoteLog.category)
+        }
+        return await local()
+    }
+
+    /// 申请「辅助功能」：有远控进程时由它申请（等系统授权框处理完才回）；问不到时退回本进程。
+    static func requestPostEvents(agent: (any RemoteHostAgentLink)?,
+                                  local: () async -> Void = { await RemoteDesktopPermissions.requestPostEvents() }) async {
+        if let agent, let reply = await agent.send(.requestPostEvents), reply.ok { return }
+        await local()
+    }
+
+    /// 本进程的授权（没有远控进程，或问不到它时）。
+    static func localPermissions() async -> RemoteHostAgentPermissions {
+        async let screen = RemoteDesktopPermissions.screenCaptureGranted()
+        async let post = RemoteDesktopPermissions.postEventsGranted()
+        return await RemoteHostAgentPermissions(screenCapture: screen, postEvents: post)
+    }
+
+    private enum Answer: Sendable {
+        case answered(RemoteHostAgentPermissions)
+        /// 回了话但解不开：远控进程是不认得这条命令的旧版本。
+        case unsupported
+        /// 没连着，或超时没回。
+        case unreachable
+    }
+
+    /// `send` 在连接断掉时要等它自己的长超时（130 秒）才回，界面等不了这么久，这里另设一个短的。
+    private static func ask(_ agent: any RemoteHostAgentLink, _ command: RemoteHostAgentCommand,
+                            timeout: Duration) async -> Answer {
+        let reply: RemoteHostAgentCommandReply? = await withCheckedContinuation { continuation in
+            let once = RemoteOnce<RemoteHostAgentCommandReply?>(continuation)
+            Task { once.resume(await agent.send(command)) }
+            Task {
+                try? await Task.sleep(for: timeout)
+                once.resume(nil)
+            }
+        }
+        guard let reply else { return .unreachable }
+        guard reply.ok, let data = reply.data,
+              let permissions = RemoteHostAgentJSON.decode(RemoteHostAgentPermissions.self, from: data) else {
+            return .unsupported
+        }
+        return .answered(permissions)
+    }
+}
+
 /// 设置页上展示的授权状态。进程内的值不会因为用户在系统设置里改了开关而变（见上），
 /// 所以「已请求过但还没生效」单独记一笔，用来提示重启。
 ///
 /// 不在 `init` 里查：它是设置页的 `@State` 初值，SwiftUI 每次重建视图都会再跑一遍初值表达式，
 /// 在那里等 tccd 会让设置窗口每次刷新都卡几十毫秒。由视图在 `.task` 里调 `refresh()`。
+///
+/// 查的是被控端的授权（`RemoteHostPermissionSource`）：远控进程在服务时问它，否则问本进程。
 @MainActor
 @Observable
 final class RemoteDesktopPermissionState {
@@ -191,19 +267,19 @@ final class RemoteDesktopPermissionState {
     private(set) var isLoaded = false
     /// 用户在这次运行里点过「授权」：系统设置里打开之后要重启才生效。
     private(set) var requestedThisRun = false
+    /// 远控进程（没有时为 nil）。由视图在查询前交进来：`RemoteHostServer.agent` 在 App 启动后才接上。
+    @ObservationIgnored var agent: (any RemoteHostAgentLink)?
     /// 切回前台和点按钮都会触发查询，可能叠在一起；只认最后一次发起的结果。
     @ObservationIgnored private var generation = 0
 
     func refresh() async {
         generation += 1
         let current = generation
-        async let screen = RemoteDesktopPermissions.screenCaptureGranted()
-        async let post = RemoteDesktopPermissions.postEventsGranted()
-        let (screenGranted, postGranted) = await (screen, post)
+        let permissions = await RemoteHostPermissionSource.current(agent: agent)
         guard current == generation else { return }
         // 值没变就不写：`@Observable` 对同值赋值也会通知，整页会白白重算。
-        if screenCapture != screenGranted { screenCapture = screenGranted }
-        if postEvents != postGranted { postEvents = postGranted }
+        if screenCapture != permissions.screenCapture { screenCapture = permissions.screenCapture }
+        if postEvents != permissions.postEvents { postEvents = permissions.postEvents }
         if !isLoaded { isLoaded = true }
     }
 
@@ -219,7 +295,7 @@ final class RemoteDesktopPermissionState {
     func requestPostEvents() {
         requestedThisRun = true
         Task {
-            await RemoteDesktopPermissions.requestPostEvents()
+            await RemoteHostPermissionSource.requestPostEvents(agent: agent)
             await refresh()
         }
     }

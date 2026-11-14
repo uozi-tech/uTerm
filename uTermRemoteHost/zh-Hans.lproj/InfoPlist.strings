@@ -1,0 +1,4 @@
+/* 系统设置（隐私与安全性 › 辅助功能 等）列表、授权框里显示的名字。Info.plist 里未本地化的名字必须等于包的文件名，这里的才生效；构建时生成的 Info.plist 会把 CFBundleName 换成
+   PRODUCT_NAME（uTermRemoteHost），没有本地化资源时系统设置只认它，所以名字在这里给。 */
+"CFBundleName" = "uTerm 远程控制";
+"CFBundleDisplayName" = "uTerm 远程控制";

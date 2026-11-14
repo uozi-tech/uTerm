@@ -43,6 +43,11 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     private var isRegistered = false
     /// 正在用的桥（App 进程里至多一个；没用远控进程时为 nil）。
     static var current: RemoteHostAgentBridge?
+    /// 连着的远控进程（远控关着、还没连上时为 nil）。授权引导据此决定「辅助功能」问谁。
+    static var connectedLink: (any RemoteHostAgentLink)? {
+        guard let current, current.isConnected else { return nil }
+        return current
+    }
     /// 远控进程用不了了（后台运行被关掉）：远控服务改回在 App 里跑。App 接线时设。
     var onFallback: (@MainActor () -> Void)?
     /// 退回 App 内服务之后 App 显示的配对审批框与被控指示条。

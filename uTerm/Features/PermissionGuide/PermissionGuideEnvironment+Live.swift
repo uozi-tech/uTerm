@@ -18,8 +18,11 @@ extension PermissionGuideEnvironment {
         },
         screenCaptureGranted: { await RemoteDesktopPermissions.screenCaptureGranted() },
         requestScreenCapture: { await RemoteDesktopPermissions.requestScreenCapture() },
-        postEventsGranted: { await RemoteDesktopPermissions.postEventsGranted() },
-        requestPostEvents: { await RemoteDesktopPermissions.requestPostEvents() },
+        // 「辅助功能」是给手机操作这台 Mac 用的：远控进程在服务时按它的身份算（见 `RemoteHostPermissionSource`）。
+        postEventsGranted: {
+            await RemoteHostPermissionSource.current(agent: RemoteHostAgentBridge.connectedLink).postEvents
+        },
+        requestPostEvents: { await RemoteHostPermissionSource.requestPostEvents(agent: RemoteHostAgentBridge.connectedLink) },
         loginItemNeedsApproval: {
             let identifier = BackgroundServiceSettings.loginItemIdentifier
             return await Task.detached {

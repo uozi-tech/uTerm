@@ -219,6 +219,19 @@ nonisolated enum RemoteHostAgentCommand: Codable, Sendable {
     case performFile(device: UUID, payload: Data, requestID: UUID, timeoutMilliseconds: Int)
     /// 请远控进程停止服务并退出（随后 launchd 会在 App 下一次连接时拉起新版本）。
     case shutdown
+    /// 查被控端的系统授权：回 `RemoteHostAgentPermissions`。
+    ///
+    /// 必须在远控进程里查：屏幕录制由 tccd 归到 uTerm 名下，「辅助功能」（PostEvent）却按远控进程自己的身份
+    /// （`com.uozi.uTerm.RemoteHost`，系统设置里叫「uTerm 远程控制」）判，uTerm 的授权替不了它（2026-11-14 实测）。
+    case desktopPermissions
+    /// 由远控进程申请「辅助功能」：系统设置的列表里登记的是「uTerm 远程控制」。回 `RemoteHostAgentPermissions`。
+    case requestPostEvents
+}
+
+/// 远控进程此刻的系统授权（本进程内的结果，用户在系统设置里改了之后要重启远控进程才变）。
+nonisolated struct RemoteHostAgentPermissions: Codable, Equatable, Sendable {
+    var screenCapture: Bool
+    var postEvents: Bool
 }
 
 nonisolated struct RemoteHostAgentCommandReply: Codable, Sendable {

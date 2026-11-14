@@ -43,7 +43,7 @@ struct RemoteCapabilitiesGroup: View {
                                           openSettings: RemoteDesktopPermissions.openScreenCaptureSettings)
                     }
                     .settingsNested()
-                    SettingsRow(label: "辅助功能", hint: "控制鼠标和键盘；没有这项时手机只能查看") {
+                    SettingsRow(label: "辅助功能", hint: accessibilityHint) {
                         permissionControl(granted: permissions.postEvents,
                                           request: permissions.requestPostEvents,
                                           openSettings: RemoteDesktopPermissions.openAccessibilitySettings)
@@ -88,13 +88,23 @@ struct RemoteCapabilitiesGroup: View {
         }
         // 授权查询要等 tccd，只在这一处、在后台查（见 RemoteDesktopPermissionState）。
         .task(id: settings.isDesktopEnabled) {
-            if settings.isDesktopEnabled { await permissions.refresh() }
+            guard settings.isDesktopEnabled else { return }
+            permissions.agent = server.agent
+            await permissions.refresh()
         }
         // 从系统设置切回来时刷新一次（在本进程里通常仍是未授权，要重启才生效，见 RemoteDesktopPermissions）。
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             guard settings.isDesktopEnabled else { return }
+            permissions.agent = server.agent
             Task { await permissions.refresh() }
         }
+    }
+
+    /// 远控进程在服务时，「辅助功能」要在系统设置里打开它那一项（不是 uTerm），这里点名。
+    private var accessibilityHint: String {
+        server.agent == nil
+            ? String(localized: "控制鼠标和键盘；没有这项时手机只能查看")
+            : String(localized: "控制鼠标和键盘；没有这项时手机只能查看。系统设置里要打开的是「uTerm 远程控制」")
     }
 
     private var helperHint: String {

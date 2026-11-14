@@ -25,6 +25,14 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
         var updateGrace: Duration = RemoteHostAgent.updateGrace
         var requestTimeout: Duration = RemoteHostAgent.appRequestWait
         var build: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        /// 本进程的屏幕录制 / 辅助功能授权（`desktopPermissions`）。
+        var desktopPermissions: @MainActor () async -> RemoteHostAgentPermissions = {
+            async let screen = RemoteDesktopPermissions.screenCaptureGranted()
+            async let post = RemoteDesktopPermissions.postEventsGranted()
+            return await RemoteHostAgentPermissions(screenCapture: screen, postEvents: post)
+        }
+        /// 以本进程的身份申请「辅助功能」（`requestPostEvents`）。
+        var requestPostEvents: @MainActor () async -> Void = { await RemoteDesktopPermissions.requestPostEvents() }
     }
 
     private let environment: Environment
@@ -166,6 +174,16 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
     }
 
     func perform(_ command: RemoteHostAgentCommand) async -> RemoteHostAgentCommandReply {
+        // 授权与服务端无关：远控进程刚起、还没建服务端时也照答（App 据「回不了话」判断远控进程是旧版本）。
+        switch command {
+        case .desktopPermissions:
+            return RemoteHostAgentCommandReply(data: RemoteHostAgentJSON.encode(await environment.desktopPermissions()))
+        case .requestPostEvents:
+            await environment.requestPostEvents()
+            return RemoteHostAgentCommandReply(data: RemoteHostAgentJSON.encode(await environment.desktopPermissions()))
+        default:
+            break
+        }
         guard let server else { return RemoteHostAgentCommandReply(ok: false, error: "远控进程还没准备好") }
         switch command {
         case .approvePairing(let id): server.approvePairing(id)
@@ -213,6 +231,8 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
             }
         case .shutdown:
             Task { self.shutdown(reason: "远控组件正在更新") }
+        case .desktopPermissions, .requestPostEvents:
+            break  // 上面已经处理
         }
         scheduleStatePush()
         return RemoteHostAgentCommandReply()

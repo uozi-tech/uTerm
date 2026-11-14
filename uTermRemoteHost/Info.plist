@@ -2,10 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- 系统设置（辅助功能等列表）、本地网络授权框里显示的名字在 zh-Hans.lproj / en.lproj 的 InfoPlist.strings 里给。
+	     这里的值必须等于包的文件名（PRODUCT_NAME）：未本地化的 CFBundleDisplayName 与文件名不一致时，系统不采用本地化
+	     名字，只显示文件名（2026-11-14 实测）。CFBundleName 构建时也会被换成 PRODUCT_NAME。 -->
 	<key>CFBundleDisplayName</key>
-	<string>uTerm 远程控制</string>
+	<string>uTermRemoteHost</string>
 	<key>CFBundleName</key>
-	<string>uTerm 远程控制</string>
+	<string>uTermRemoteHost</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>LSAppNapIsDisabled</key>
