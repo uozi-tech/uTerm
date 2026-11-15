@@ -292,13 +292,44 @@ struct RemoteDesktopContent: View {
     /// 读数：盖在画面左上角，点顶栏的仪表按钮开关。
     @ViewBuilder private var statsBadge: some View {
         if showStats, session.state == .streaming {
-            Text(session.statsText)
-                .font(UD.mono(11))
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(.black.opacity(0.6)))
-                .padding(10)
-                .allowsHitTesting(false)
+            let items = session.statItems
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                ForEach(items) { item in
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text(item.label)
+                            .font(UD.font(10.5))
+                            .foregroundStyle(.white.opacity(0.55))
+                        Text(item.value)
+                            .font(UD.mono(11, weight: .medium))
+                            .foregroundStyle(Self.statColor(item.level))
+                        Text(item.unit)
+                            .font(UD.mono(10))
+                            .foregroundStyle(.white.opacity(0.55))
+                        if let detail = item.detail {
+                            Text(detail)
+                                .font(UD.mono(10))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .padding(.leading, 2)
+                        }
+                    }
+                }
+            }
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(RemoteDesktopStat.spokenText(items))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Capsule().fill(.black.opacity(0.6)))
+            .padding(10)
+            .allowsHitTesting(false)
+        }
+    }
+
+    private static func statColor(_ level: RemoteDesktopStat.Level) -> Color {
+        switch level {
+        case .normal: return .white.opacity(0.92)
+        case .warning: return UD.warning
+        case .poor: return UD.danger
         }
     }
 

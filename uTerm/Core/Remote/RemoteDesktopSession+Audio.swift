@@ -25,13 +25,4 @@ extension RemoteDesktopSession {
         guard supportsAudio, audioState == .off, let mac = client.macDeviceID,
               RemoteDesktopAudioPreference.wantsAudio(mac: mac, defaults: defaults) else { return }
         setAudio(true)
-    }
-
-    /// 读数里接在画面读数后面的一段；没开声音时为空。
-    var audioStatsText: String? {
-        guard isAudioOn else { return nil }
-        let audio = audioStats
-        return String(format: "声音 缓冲 %d ms（目标 %d）补洞 %d", audio.bufferedMillis, audio.targetMillis,
-                      audio.counters.concealed)
-    }
-}
+    }}

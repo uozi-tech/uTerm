@@ -214,7 +214,7 @@ final class RemoteDesktopAudioEndToEndTests: XCTestCase {
         defer { session.stop() }
         await session.start()
         XCTAssertFalse(session.isAudioOn)
-        XCTAssertNil(session.audioStatsText)
+        XCTAssertFalse(session.statItems.contains { $0.kind == .audio })
 
         session.toggleAudio(defaults: defaults)
         XCTAssertTrue(session.isAudioOn)
@@ -222,7 +222,7 @@ final class RemoteDesktopAudioEndToEndTests: XCTestCase {
         let capturing = await waitUntil { mac.latestAudioSource?.started == true && session.audioState == .playing }
         XCTAssertTrue(capturing, "Mac 应开始采集并回格式：\(session.audioState)")
         XCTAssertTrue(RemoteDesktopAudioPreference.wantsAudio(mac: macID, defaults: defaults))
-        XCTAssertNotNil(session.audioStatsText)
+        XCTAssertTrue(session.statItems.contains { $0.kind == .audio })
 
         session.toggleAudio(defaults: defaults)
         XCTAssertFalse(session.isAudioOn)

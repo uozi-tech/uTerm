@@ -59,7 +59,8 @@ struct RemoteDesktopScreen: View {
             // Mac 屏幕放在顶栏之下的可见区；软键盘弹起时安全区底边抬到键盘上方，画面跟着缩到键盘之上，
             // 不被挡住。只有黑底铺满整屏。
             VStack(spacing: 0) {
-                topBar
+                topBar(width: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
+                       - barInsets.leading - barInsets.trailing)
                 ZStack {
                     if let session {
                         RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
@@ -165,41 +166,56 @@ struct RemoteDesktopScreen: View {
 
     // MARK: - 顶栏
 
-    private var topBar: some View {
-        HStack(spacing: 8) {
-            barButton("xmark") {
-                session?.stop()
-                onClose()
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(client.macName)
-                    .font(M.sans(13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(statusLine)
-                    .font(M.mono(10.5))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(1)
-            }
-            .onTapGesture { showStats.toggle() }
-            Spacer(minLength: 8)
-            if let session, session.supportsAudio, session.state == .streaming {
-                barButton(audioOn ? "speaker.wave.2.fill" : "speaker.slash", active: audioOn) { session.toggleAudio() }
-                    .accessibilityLabel(audioOn ? "关闭声音" : "打开声音")
-            }
-            barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
-                .accessibilityLabel("适配屏幕")
-            if session?.canControl == true {
-                barButton(keyBarShown ? "keyboard.chevron.compact.down" : "keyboard", active: keyBarShown) {
-                    keyBarShown.toggle()
-                    keyboardVisible = keyBarShown
+    private func topBar(width barWidth: CGFloat) -> some View {
+        // 读数只在画面在传时有；宽屏放进这一行的空当，窄屏另起一行（按宽度定，不按内容定：
+        // 读数每秒都在变宽变窄，按内容定会在两种排法之间来回跳，画面高度跟着抖）。
+        let stats = showStats && session?.state == .streaming ? session?.statItems : nil
+        let inline = barWidth >= Self.inlineStatsMinWidth
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                barButton("xmark") {
+                    session?.stop()
+                    onClose()
                 }
-                .accessibilityLabel(keyBarShown ? "收起键盘" : "弹出键盘")
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(client.macName)
+                        .font(M.sans(13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(statusLine)
+                        .font(M.sans(10.5))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { showStats.toggle() }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(showStats ? "隐藏延迟与帧率" : "显示延迟与帧率")
+                if inline, let stats {
+                    statsStrip(stats).padding(.leading, 16)
+                }
+                Spacer(minLength: 8)
+                if let session, session.supportsAudio, session.state == .streaming {
+                    barButton(audioOn ? "speaker.wave.2.fill" : "speaker.slash", active: audioOn) { session.toggleAudio() }
+                        .accessibilityLabel(audioOn ? "关闭声音" : "打开声音")
+                }
+                barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
+                    .accessibilityLabel("适配屏幕")
+                if session?.canControl == true {
+                    barButton(keyBarShown ? "keyboard.chevron.compact.down" : "keyboard", active: keyBarShown) {
+                        keyBarShown.toggle()
+                        keyboardVisible = keyBarShown
+                    }
+                    .accessibilityLabel(keyBarShown ? "收起键盘" : "弹出键盘")
+                }
+                // 不常用的（粘贴、帘幕、解锁密码）收进一个菜单，顶栏只留声音、适配屏幕和键盘。
+                if hasMoreActions {
+                    MMenu { moreActions } label: { barIcon("ellipsis") }
+                        .accessibilityLabel("更多")
+                }
             }
-            // 不常用的（粘贴、帘幕、解锁密码）收进一个菜单，顶栏只留声音、适配屏幕和键盘。
-            if hasMoreActions {
-                MMenu { moreActions } label: { barIcon("ellipsis") }
-                    .accessibilityLabel("更多")
+            if !inline, let stats {
+                statsStrip(stats)
             }
         }
         // 上、左、右都是离屏幕边缘的绝对距离（整列已铺满屏幕），按安全区与屏幕圆角取大，
@@ -208,6 +224,15 @@ struct RemoteDesktopScreen: View {
         .padding(.bottom, 6)
         .padding(.leading, barInsets.leading)
         .padding(.trailing, barInsets.trailing)
+    }
+
+    /// 顶栏够这么宽（已扣掉两侧让出的距离）时读数放进名字和按钮之间，不另起一行。
+    static let inlineStatsMinWidth: CGFloat = 760
+
+    private func statsStrip(_ items: [RemoteDesktopStat]) -> some View {
+        RemoteDesktopStatsStrip(items: items)
+            .contentShape(Rectangle())
+            .onTapGesture { showStats.toggle() }
     }
 
     private var canPaste: Bool { session?.canPaste == true }
@@ -267,9 +292,7 @@ struct RemoteDesktopScreen: View {
 
     private var statusLine: String {
         guard let session else { return String(localized: "正在连接…") }
-        let base = session.statusText(controlling: String(localized: "触控板模式")) ?? ""
-        guard showStats, session.state == .streaming else { return base }
-        return base + " · " + session.statsText
+        return session.statusText(controlling: String(localized: "触控板模式")) ?? ""
     }
 
     private func barButton(_ symbol: String, active: Bool = false, action: @escaping () -> Void) -> some View {

@@ -113,17 +113,84 @@ extension RemoteDesktopSession {
         }
     }
 
-    /// 读数：延迟放最前（最先要看的是「点一下多久见到结果」），其余是排查用的分项，开着声音时接上声音读数。
-    var statsText: String {
-        let latency = self.latency.map { String(localized: "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）") }
-        let video = String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
-                           stats.megabitsPerSecond, stats.decodeMillis)
-        return [latency, video, audioStatsText].compactMap(\.self).joined(separator: " · ")
+    /// 读数：延迟放最前（最先要看的是「点一下多久见到结果」），其余是排查用的分项，开着声音时接上声音缓冲。
+    var statItems: [RemoteDesktopStat] {
+        RemoteDesktopStat.items(latency: latency, video: stats, audio: isAudioOn ? audioStats : nil)
     }
 
     /// 要多大的画面：按本机屏幕的像素（长边、短边，与方向无关），至少 1080p——放大看细节时还有余量。
     nonisolated static func requestedSize(longPixels: Int, shortPixels: Int) -> (width: Int, height: Int) {
         (max(longPixels, 1920), max(shortPixels, 1080))
+    }
+}
+
+// MARK: - 读数
+
+/// 读数里的一项：小标题、数值、单位各自分开，两端按自己的版式画（数值亮、标题和单位暗），不再拼成一整串。
+nonisolated struct RemoteDesktopStat: Equatable, Identifiable, Sendable {
+    enum Kind: Sendable { case latency, frameRate, bitrate, decode, audio }
+
+    /// 数值要不要变色提醒。
+    enum Level: Sendable {
+        case normal
+        /// 能用，但已经感觉得到（黄）。
+        case warning
+        /// 明显拖慢操作（红）。
+        case poor
+    }
+
+    var kind: Kind
+    var label: String
+    var value: String
+    var unit: String
+    /// 补充读数（延迟的 p95、声音缓冲的目标深度）：地方够才画。
+    var detail: String?
+    var level = Level.normal
+
+    var id: Kind { kind }
+
+    /// 延迟（画面往返的中位数）到这个数变黄 / 变红：100 ms 以内操作跟手，过了 200 ms 拖动和打字明显滞后。
+    static let latencyWarningMillis = 100
+    static let latencyPoorMillis = 200
+    /// 解码一帧超过 60 Hz 的一帧时间，硬解就跟不上满帧率了。
+    static let decodeWarningMillis = 1000.0 / 60
+
+    /// 按当前读数排出各项。老 Mac 不报延迟、没开声音时，对应的项不出现。帧率与码率不变色：画面不动时
+    /// 本来就只有几帧、几十 kbps，低不代表有问题。
+    static func items(latency: RemoteDesktopLatency?, video: RemoteDesktopReceiverStats.Snapshot,
+                      audio: RemoteAudioReceiver.Snapshot?) -> [RemoteDesktopStat] {
+        var items: [RemoteDesktopStat] = []
+        if let latency {
+            let level: Level = latency.p50Millis >= latencyPoorMillis ? .poor
+                : latency.p50Millis >= latencyWarningMillis ? .warning : .normal
+            items.append(RemoteDesktopStat(kind: .latency, label: String(localized: "延迟"),
+                                           value: String(latency.p50Millis), unit: "ms",
+                                           detail: "p95 \(latency.p95Millis)", level: level))
+        }
+        items.append(RemoteDesktopStat(kind: .frameRate, label: String(localized: "帧率"),
+                                       value: String(format: "%.0f", video.framesPerSecond), unit: "fps"))
+        items.append(RemoteDesktopStat(kind: .bitrate, label: String(localized: "码率"),
+                                       value: String(format: "%.1f", video.megabitsPerSecond), unit: "Mbps"))
+        items.append(RemoteDesktopStat(kind: .decode, label: String(localized: "解码"),
+                                       value: String(format: "%.1f", video.decodeMillis), unit: "ms",
+                                       level: video.decodeMillis >= decodeWarningMillis ? .warning : .normal))
+        if let audio {
+            // 补洞是开声音以来的累计数，没补过就不占地方。
+            var detail = String(localized: "目标 \(String(audio.targetMillis))")
+            if audio.counters.concealed > 0 {
+                detail += " · " + String(localized: "补洞 \(String(audio.counters.concealed))")
+            }
+            items.append(RemoteDesktopStat(kind: .audio, label: String(localized: "声音缓冲"),
+                                           value: String(audio.bufferedMillis), unit: "ms", detail: detail))
+        }
+        return items
+    }
+
+    /// 读屏时念的一句。
+    static func spokenText(_ items: [RemoteDesktopStat]) -> String {
+        items.map { item in
+            [item.label, item.value, item.unit, item.detail].compactMap(\.self).joined(separator: " ")
+        }.joined(separator: "，")
     }
 }
 

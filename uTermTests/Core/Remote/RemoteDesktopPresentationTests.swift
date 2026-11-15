@@ -26,6 +26,53 @@ final class RemoteDesktopPresentationTests: XCTestCase {
         }
     }
 
+    /// 读数分项：老 Mac 不报延迟、没开声音时对应的项不出现；数值、单位、补充读数各归各的。
+    func test_stat_items_follow_what_is_measured() {
+        let video = RemoteDesktopReceiverStats.Snapshot(framesPerSecond: 4.6, megabitsPerSecond: 13.52, decodeMillis: 5.94)
+        let bare = RemoteDesktopStat.items(latency: nil, video: video, audio: nil)
+        XCTAssertEqual(bare.map(\.kind), [.frameRate, .bitrate, .decode])
+        XCTAssertEqual(bare.map(\.value), ["5", "13.5", "5.9"])
+        XCTAssertEqual(bare.map(\.unit), ["fps", "Mbps", "ms"])
+
+        var audio = RemoteAudioReceiver.Snapshot()
+        audio.bufferedMillis = 88
+        audio.targetMillis = 150
+        let full = RemoteDesktopStat.items(latency: RemoteDesktopLatency(p50Millis: 30, p95Millis: 128),
+                                           video: video, audio: audio)
+        XCTAssertEqual(full.map(\.kind), [.latency, .frameRate, .bitrate, .decode, .audio], "延迟放最前")
+        XCTAssertEqual(full.first?.value, "30")
+        XCTAssertEqual(full.first?.detail, "p95 128")
+        XCTAssertEqual(full.last?.value, "88")
+        XCTAssertEqual(full.last?.detail?.contains("150"), true)
+        XCTAssertEqual(full.last?.detail?.contains("·"), false, "没补过洞就不写补洞")
+
+        audio.counters.concealed = 3
+        let concealed = RemoteDesktopStat.items(latency: nil, video: video, audio: audio)
+        XCTAssertEqual(concealed.last?.detail?.hasSuffix("3"), true, "补过洞才写累计数")
+        XCTAssertFalse(RemoteDesktopStat.spokenText(full).isEmpty)
+    }
+
+    /// 变色：延迟过 100 ms 黄、过 200 ms 红；解码超过 60 Hz 的一帧时间黄；帧率、码率低不算问题。
+    func test_stat_levels() {
+        func latencyLevel(_ p50: Int) -> RemoteDesktopStat.Level? {
+            RemoteDesktopStat.items(latency: RemoteDesktopLatency(p50Millis: p50, p95Millis: 500),
+                                    video: .init(), audio: nil).first?.level
+        }
+        XCTAssertEqual(latencyLevel(30), .normal, "只看中位数，p95 高不变色")
+        XCTAssertEqual(latencyLevel(99), .normal)
+        XCTAssertEqual(latencyLevel(100), .warning)
+        XCTAssertEqual(latencyLevel(199), .warning)
+        XCTAssertEqual(latencyLevel(200), .poor)
+
+        func levels(_ video: RemoteDesktopReceiverStats.Snapshot) -> [RemoteDesktopStat.Level] {
+            RemoteDesktopStat.items(latency: nil, video: video, audio: nil).map(\.level)
+        }
+        XCTAssertEqual(levels(.init(framesPerSecond: 1, megabitsPerSecond: 0.1, decodeMillis: 6)),
+                       [.normal, .normal, .normal], "画面不动时帧率、码率本来就低")
+        XCTAssertEqual(levels(.init(framesPerSecond: 60, megabitsPerSecond: 20, decodeMillis: 17)),
+                       [.normal, .normal, .warning])
+    }
+
     func test_requested_size_is_at_least_1080p() {
         XCTAssertTrue(RemoteDesktopSession.requestedSize(longPixels: 1179, shortPixels: 639) == (1920, 1080))
         XCTAssertTrue(RemoteDesktopSession.requestedSize(longPixels: 5120, shortPixels: 2880) == (5120, 2880))
