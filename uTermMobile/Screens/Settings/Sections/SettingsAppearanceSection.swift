@@ -25,6 +25,8 @@ struct SettingsAppearanceSection: View {
                                        set: { AccentState.shared.selected = $0 }),
                     size: 30, spacing: 14)
             }
+            // 色板只占自身宽度，不撑满就会被分组居中（旧版靠行尾 Spacer 撑开）。
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
         }
     }
