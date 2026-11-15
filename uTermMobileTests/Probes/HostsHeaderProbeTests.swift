@@ -277,7 +277,7 @@ final class MChromeSideStatusColumnTests: XCTestCase {
 
     func testDuoCoverCountsEvenWithoutReportedStatusBar() {
         let cover = geometry(trailing: 84)
-        XCTAssertNil(cover.statusBar, "真机不报状态栏矩形")
+        XCTAssertNil(cover.statusBar, "没有探针结果时没有状态栏矩形")
         XCTAssertTrue(cover.hasSideStatusColumn)
     }
 

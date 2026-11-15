@@ -96,7 +96,7 @@ struct WorkspaceTabStrip: View {
     var onAgent: () -> Void
     var onToggleSplit: () -> Void = {}
     var onMoveToOtherPane: (UUID) -> Void = { _ in }
-    /// Agent / 分屏两个开关是否放在条尾。状态栏在右侧一列时（Duo），它们改放到那一列状态栏
+    /// Agent / 分屏两个开关是否放在条尾。状态栏在侧边一列时（Duo），它们改放到那一列状态栏
     /// 下面（WorkspaceSideControls），条上只留返回与标签。
     var showsTrailingControls: Bool = true
     /// 这一格的 id：标签条与标签的位置按它记进 `frames`。
@@ -261,8 +261,8 @@ struct WorkspaceAgentButton: View {
     }
 }
 
-/// Duo 状态栏在右侧一列时，Agent / 分屏两个开关竖排在那一列状态栏下面（Apple 对 Duo 的建议：
-/// 按钮放侧边、内容让出整块左侧），而不是挤在标签条尾、让那一列空着。作用于聚焦格。
+/// Duo 状态栏在侧边一列时（折叠横握在左边，其余在右边），Agent / 分屏两个开关竖排在那一列状态栏
+/// 下面（Apple 对 Duo 的建议：按钮放侧边），而不是挤在标签条尾、让那一列空着。作用于聚焦格。
 struct WorkspaceSideControls: View {
     /// 聚焦格的前台标签是终端时才有 Agent 开关。
     var agentOn: Bool?
