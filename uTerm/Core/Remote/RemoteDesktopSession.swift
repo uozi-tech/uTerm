@@ -87,6 +87,8 @@ final class RemoteDesktopSession {
     private let codec: RemoteVideoCodec
     private var maxWidth: Int
     private var maxHeight: Int
+    /// 本机每个点几个像素（见 `RemoteDesktopStartRequest.pointScale`）。
+    private let pointScale: Double?
     /// 要看的显示器（nil = 那台 Mac 的主显示器）。`switchDisplay` 改它再重开流。
     private(set) var displayID: UInt32?
     /// 要不要光标形状（Mac 主控端要，拿它当本机光标；手机自己画箭头，不要）。
@@ -104,12 +106,14 @@ final class RemoteDesktopSession {
 
     /// - Parameters:
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
+    ///   - pointScale: 本机每个点几个像素；无显示器的 Mac 据此定虚拟屏的点数。nil = 不报（被控端按老规则）。
     ///   - outputPixelFormat: 解出来的像素格式。nil = 按码流位深出 4:2:0（Main10 出 10-bit）；测试比对用 BGRA。
     ///   - audioOutput: 声音放到哪里。nil = 系统扬声器（`RemoteAudioEnginePlayer`）；Mac 单测传一个不出声的。
-    init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, codec: RemoteVideoCodec = .hevc,
-         outputPixelFormat: OSType? = nil, displayID: UInt32? = nil,
+    init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, pointScale: Double? = nil,
+         codec: RemoteVideoCodec = .hevc, outputPixelFormat: OSType? = nil, displayID: UInt32? = nil,
          cursorImages: Bool = false, audioOutput: (any RemoteAudioOutput)? = nil) {
         self.client = client
+        self.pointScale = pointScale
         self.displayID = displayID
         self.wantsCursorImages = cursorImages
         self.maxWidth = maxWidth
@@ -258,7 +262,7 @@ final class RemoteDesktopSession {
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
                                                 displayID: displayID, sidecarRefine: true, latencyStats: true,
-                                                cursorImages: wantsCursorImages ? true : nil)
+                                                cursorImages: wantsCursorImages ? true : nil, pointScale: pointScale)
         let wasConnected = client.state == .connected
         let startStep = trace.begin(.desktopStart, detail: wasConnected ? nil : String(localized: "含建连"))
         let attached: RemoteAttachment

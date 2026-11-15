@@ -53,6 +53,10 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var latencyStats: Bool? = nil
     /// 要光标形状（`desktopCursorImage`）：Mac 主控端拿它当本机光标。老 Mac 不认这个键，什么都不发。
     var cursorImages: Bool? = nil
+    /// 看的设备每个点几个像素（Duo / iPad / 视网膜 Mac 是 2，iPhone 是 3，普通外接屏是 1）。无显示器的 Mac
+    /// 拿它把 `maxWidth` / `maxHeight` 换成点数，定虚拟屏多大（`RemoteHeadlessDisplay.virtualSize`）。
+    /// 老 Mac 不认这个键；老的主控端不发，被控端按 2 算、下限照旧。
+    var pointScale: Double? = nil
 }
 
 /// Mac → 主控端：光标此刻的样子（I 形、调整大小的箭头…）。图是 PNG，尺寸与热点都按点算。

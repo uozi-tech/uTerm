@@ -103,7 +103,7 @@ struct RemoteDesktopScreen: View {
             .task(id: requestedSize != nil) {
                 guard session == nil, let requestedSize else { return }
                 let created = RemoteDesktopSession(client: client, maxWidth: requestedSize.width,
-                                                   maxHeight: requestedSize.height)
+                                                   maxHeight: requestedSize.height, pointScale: displayScale)
                 created.onClipboard = { content in copyFromMac(content) }
                 session = created
                 refreshVault()

@@ -651,7 +651,7 @@ extension RemoteHostConnection {
             return reject(.screenPermission,
                           "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
         }
-        await environment.prepareDisplays((request.maxWidth, request.maxHeight))
+        await environment.prepareDisplays((request.maxWidth, request.maxHeight), request.pointScale)
         let preparedAt = millis()
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard let display = environment.display(request.displayID) ?? environment.display(nil) else {

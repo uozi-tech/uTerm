@@ -9,8 +9,10 @@ import ObjectiveC
 /// - 建一块**按看的那台设备的宽高比**来的 2 倍虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16；
 ///   做法同 Sunshine 的 macOS 分支 Lumen）：宽高比对得上，不再把 16:9 的屏塞进 16:10 或手机的框里留黑边。
 ///   手机报来的比例是它放画面的那块画布的（顶栏下面），不是整块屏幕的。
-///   点数不小于 1920×1080（窗口、菜单栏放得下，user 定的下限）：看的设备够大时像素正好等于视频尺寸，采集
-///   直接出 4:2:0、不用再缩；更小的设备（手机、MacBook）按比例放大到下限，采集比视频大，由采集源再缩一截。
+///   点数按看的设备自己的点数来（它报的像素除以它的像素倍数）：MacBook、iPad、带外接屏的 Mac 看到的桌面和
+///   自己的屏幕一样大，像素正好等于视频尺寸，采集直接出 4:2:0、不用再缩。太小的设备（Duo、手机）等比放大到
+///   1280×800 点的下限（窗口、菜单栏放得下），采集比视频大，由采集源再缩一截。原先下限是 1920×1080，Duo 上
+///   成了 1920×1241 点，界面只有手机上一半大（2026-11-15 user：按设备的尺寸、适当放大）。
 ///   它一出现，系统就撤掉占位屏，它成为唯一的主屏。
 /// - 换了一台设备来看：新尺寸没超过这块屏建时定的上限就只换模式（同一块屏、同一个显示器号，窗口留在原处，
 ///   系统只按新尺寸把放不下的挪进来）；超了才拆掉重建。
@@ -33,12 +35,15 @@ enum RemoteHeadlessDisplay {
     /// 不知道看的设备多大时（老客户端）虚拟屏的点数：与占位屏一样。
     nonisolated static let defaultPoints = (width: 1920, height: 1080)
     /// 虚拟屏点数的下限与上限：太小了窗口和菜单栏放不下，太大的像素 WindowServer 不收。
-    nonisolated static let minimumPoints = (width: 1920, height: 1080)
+    /// 下限 1280×800（老款 13 寸 MacBook 的大小）：Duo 内屏 → 1280×828，iPhone 横屏 → 约 2020×800。
+    nonisolated static let minimumPoints = (width: 1280, height: 800)
+    /// 老的主控端不报像素倍数（`RemoteDesktopStartRequest.pointScale`）：照原来的规则，按 2 倍算、下限 1920×1080。
+    nonisolated static let legacyMinimumPoints = (width: 1920, height: 1080)
     nonisolated static let maximumPoints = (width: 3840, height: 2160)
     /// 建屏时像素上限至少给到这么大：之后换一台不超过它的设备来看只换模式、不重建。
-    /// 5760×2880：盖住按下限放大后的 iPhone 横屏（手机按顶栏下面的画布要，比屏幕更扁，约 5450–5500×2160，
-    /// 见 `RemoteDesktopRequestSize`）、iPad 13（3840×2880）与 MacBook（3840×24xx）。
-    nonisolated static let minimumMaxPixels = (width: 5760, height: 2880)
+    /// 5120×2880：盖住 5K 屏的 Mac、iPad 13（约 2920×2064）、MacBook（3024×1964…）、iPhone 横屏（约 4040×1600；
+    /// 老的主控端按老下限是约 4694×2160）。
+    nonisolated static let minimumMaxPixels = (width: 5120, height: 2880)
     /// 最后一个人走后多久拆虚拟屏。
     nonisolated static let releaseGrace: Duration = .seconds(30)
 
@@ -65,14 +70,17 @@ enum RemoteHeadlessDisplay {
         case rebuild
     }
 
-    /// 看的设备要的像素（与方向无关）→ 虚拟屏的点数。Mac 的屏总是横的：长边做宽。点数先取像素的一半，
-    /// 哪一边不到下限就整体等比放大到够（宽高比照旧，不拉变形），再夹在上限之内；不知道多大（nil）时与占位屏同大。
-    nonisolated static func virtualSize(viewerPixels: (width: Int, height: Int)?) -> VirtualSize {
+    /// 看的设备要的像素（与方向无关）→ 虚拟屏的点数。Mac 的屏总是横的：长边做宽。点数先取那台设备自己的
+    /// 点数（像素除以它的像素倍数 `pointScale`），哪一边不到下限就整体等比放大到够（宽高比照旧，不拉变形），
+    /// 再夹在上限之内；不知道多大（nil）时与占位屏同大。`pointScale` 为 nil（老的主控端）按 2 倍、老下限算。
+    nonisolated static func virtualSize(viewerPixels: (width: Int, height: Int)?, pointScale: Double? = nil) -> VirtualSize {
         guard let viewerPixels, viewerPixels.width > 0, viewerPixels.height > 0 else {
             return VirtualSize(width: defaultPoints.width, height: defaultPoints.height)
         }
-        let long = Double(max(viewerPixels.width, viewerPixels.height)) / 2
-        let short = Double(min(viewerPixels.width, viewerPixels.height)) / 2
+        let scale = pointScale.map { $0.isFinite ? min(4, max(1, $0)) : 2 } ?? 2
+        let minimumPoints = pointScale == nil ? legacyMinimumPoints : minimumPoints
+        let long = Double(max(viewerPixels.width, viewerPixels.height)) / scale
+        let short = Double(min(viewerPixels.width, viewerPixels.height)) / scale
         let grow = max(1, Double(minimumPoints.width) / long, Double(minimumPoints.height) / short)
         return VirtualSize(width: min(maximumPoints.width, Int((long * grow).rounded())),
                            height: min(maximumPoints.height, Int((short * grow).rounded())))
@@ -214,10 +222,10 @@ enum RemoteHeadlessDisplay {
 
     /// 开流前：无显示器的 Mac 建（或改）一块按 `viewerPixels` 来的 2 倍虚拟屏，等它就绪再返回（最多 3 秒）。
     /// 接着真显示器时不动。
-    static func ensureHiDPI(viewerPixels: (width: Int, height: Int)? = nil) async {
+    static func ensureHiDPI(viewerPixels: (width: Int, height: Int)? = nil, pointScale: Double? = nil) async {
         cancelRelease()
         releaseIfRealDisplayAppeared()
-        let wanted = virtualSize(viewerPixels: viewerPixels)
+        let wanted = virtualSize(viewerPixels: viewerPixels, pointScale: pointScale)
         if let state = virtualState, virtualDisplay != nil {
             switch change(from: state, to: wanted) {
             case .keep:

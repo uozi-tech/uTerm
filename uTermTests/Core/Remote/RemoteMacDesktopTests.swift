@@ -188,6 +188,47 @@ final class RemoteMacDesktopTests: XCTestCase {
                       "接上真显示器：拆掉虚拟屏")
     }
 
+    /// 报了像素倍数的主控端：虚拟屏的点数就是那台设备自己的点数，太小的等比放大到 1280×800 的下限。
+    func test_virtual_display_matches_the_viewer_points() {
+        typealias Display = RemoteHeadlessDisplay
+        typealias Size = RemoteHeadlessDisplay.VirtualSize
+        // 和自己的屏幕一样大：视网膜 MacBook、5K、普通 1 倍外接屏、iPad 13。
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (3024, 1964), pointScale: 2), Size(width: 1512, height: 982))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (5120, 2880), pointScale: 2), Size(width: 2560, height: 1440))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2560, 1440), pointScale: 1), Size(width: 2560, height: 1440))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (1920, 1080), pointScale: 1), Size(width: 1920, height: 1080))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2916, 2064), pointScale: 2), Size(width: 1458, height: 1032))
+        // 太小的放大到下限，宽高比照旧：Duo 内屏的画布（原先 1920×1241）、iPhone 横屏的画布（原先 2728×1080）。
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2176, 1407), pointScale: 2), Size(width: 1280, height: 828))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (3046, 1206), pointScale: 3), Size(width: 2021, height: 800))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (1206, 3046), pointScale: 3), Size(width: 2021, height: 800), "与方向无关")
+        // 倍数不像话的夹在 1–4；上限照旧。
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2560, 1440), pointScale: 0), Size(width: 2560, height: 1440))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2560, 1600), pointScale: .nan), Size(width: 1280, height: 800))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (16000, 9000), pointScale: 2), Size(width: 3840, height: 2160))
+        // 常见设备互相换着看只换模式：都在建屏时的像素上限之内。
+        let duo = Display.virtualSize(viewerPixels: (2176, 1407), pointScale: 2)
+        let limit = Display.maxPixels(for: duo)
+        let state = Display.VirtualState(size: duo, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
+        for other in [((3046, 1206), 3.0), ((2916, 2064), 2.0), ((3024, 1964), 2.0), ((5120, 2880), 2.0), ((2560, 1440), 1.0)] {
+            XCTAssertEqual(Display.change(from: state, to: Display.virtualSize(viewerPixels: other.0, pointScale: other.1)),
+                           .switchMode, "\(other)")
+        }
+    }
+
+    /// Mac 主控端报的像素倍数取像素最多的那块屏的。
+    func test_mac_viewer_reports_the_scale_of_its_largest_screen() {
+        let retina = RemoteDesktopWindowModel.requestedPixels(screens: [(CGSize(width: 1512, height: 982), 2)])
+        XCTAssertTrue(retina == (3024, 1964, 2))
+        let external = RemoteDesktopWindowModel.requestedPixels(
+            screens: [(CGSize(width: 1512, height: 982), 2), (CGSize(width: 3840, height: 2160), 1)])
+        XCTAssertTrue(external == (3840, 2160, 1))
+        let builtInLargest = RemoteDesktopWindowModel.requestedPixels(
+            screens: [(CGSize(width: 1920, height: 1080), 1), (CGSize(width: 1512, height: 982), 2)])
+        XCTAssertTrue(builtInLargest == (3024, 1964, 2))
+    }
+
+    /// 老的主控端不报像素倍数，规则照旧：
     /// 虚拟屏按看的设备的宽高比来（长边做宽），点数是像素的一半；不到 1920×1080 点的整体等比放大到下限。
     /// 换一台设备来看：没超过建屏时的像素上限就只换模式，超了才重建。
     func test_virtual_display_follows_viewer_pixels() {
@@ -211,18 +252,17 @@ final class RemoteMacDesktopTests: XCTestCase {
 
         let mbp = Display.virtualSize(viewerPixels: (3024, 1964))
         let limit = Display.maxPixels(for: mbp)
-        XCTAssertEqual(limit.width, 5760, "上限至少 5760×2880：之后换别的常见设备只换模式")
+        XCTAssertEqual(limit.width, 5120, "上限至少 5120×2880：之后换别的常见设备只换模式")
         XCTAssertEqual(limit.height, 2880)
         let state = Display.VirtualState(size: mbp, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
         XCTAssertEqual(Display.change(from: state, to: mbp), .keep)
-        // (3046, 1206)、(2863, 1125)：iPhone 横屏按顶栏下面的画布要的（`RemoteDesktopRequestSize`），比屏幕更扁。
-        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880), (3046, 1206), (2863, 1125)] {
+        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880)] {
             XCTAssertEqual(Display.change(from: state, to: Display.virtualSize(viewerPixels: other)), .switchMode,
                            "\(other)")
         }
         XCTAssertEqual(Display.change(from: state, to: Size(width: 3008, height: 1692)), .rebuild, "6K 超了上限")
         let big = Display.maxPixels(for: Size(width: 3008, height: 1692))
-        XCTAssertEqual(big.width, 6016, "要的比 5760×2880 大就按要的")
+        XCTAssertEqual(big.width, 6016, "要的比 5120×2880 大就按要的")
         XCTAssertEqual(big.height, 3384)
     }
 
@@ -230,9 +270,10 @@ final class RemoteMacDesktopTests: XCTestCase {
     func test_prepare_displays_gets_viewer_pixels_and_viewer_presence() async throws {
         let rig = try await makeRig()
         defer { rig.client.disconnect() }
-        let session = RemoteDesktopSession(client: rig.client, maxWidth: 3024, maxHeight: 1964)
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 3024, maxHeight: 1964, pointScale: 2)
         await session.start()
         XCTAssertEqual(rig.mac.preparedViewerPixels.map { [$0.width, $0.height] }, [[3024, 1964]])
+        XCTAssertEqual(rig.mac.preparedPointScales, [2])
         XCTAssertEqual(rig.mac.displayUse, [true])
         session.stop()
         let released = await waitUntil { rig.mac.displayUse == [true, false] }

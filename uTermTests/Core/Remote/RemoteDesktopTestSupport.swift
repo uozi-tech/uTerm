@@ -622,6 +622,7 @@ final class FakeDesktopMac {
     private(set) var preparedDisplays = 0
     /// 每次整理显示器时看的设备要的像素。
     private(set) var preparedViewerPixels: [(width: Int, height: Int)] = []
+    private(set) var preparedPointScales: [Double?] = []
     /// 有没有人在看桌面的通知（true = 有人开始看，false = 没人看了）。
     private(set) var displayUse: [Bool] = []
     let clipboard = FakeClipboard()
@@ -643,9 +644,10 @@ final class FakeDesktopMac {
                 guard let self else { return nil }
                 return requested == self.secondDisplay.id && self.hasSecondDisplay ? self.secondDisplay : self.display
             },
-            prepareDisplays: { [weak self] viewer in
+            prepareDisplays: { [weak self] viewer, scale in
                 self?.preparedDisplays += 1
                 self?.preparedViewerPixels.append(viewer)
+                self?.preparedPointScales.append(scale)
             },
             displaysInUse: { [weak self] inUse in self?.displayUse.append(inUse) },
             listDisplays: { [weak self] in

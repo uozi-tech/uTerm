@@ -21,7 +21,7 @@ final class RemoteDesktopWindowModel {
         self.client = client
         let size = Self.requestedPixels()
         self.session = session ?? RemoteDesktopSession(client: client, maxWidth: size.width, maxHeight: size.height,
-                                                       cursorImages: true)
+                                                       pointScale: size.scale, cursorImages: true)
     }
 
     /// 连上（第一次时在那台 Mac 上核对配对数字），再开流。已经在放就什么也不做。
@@ -47,16 +47,22 @@ final class RemoteDesktopWindowModel {
     }
 
     /// 要多大的画面：按本机最大那块屏幕的像素（见 `RemoteDesktopSession.requestedSize`）。那台 Mac 会按自己
-    /// 显示器的比例套进这个框里。
-    static func requestedPixels(screens: [NSScreen] = NSScreen.screens) -> (width: Int, height: Int) {
-        var long = 0, short = 0
+    /// 显示器的比例套进这个框里；它没接显示器时按这些像素除以 `scale` 的点数建虚拟屏（和这块屏一样大）。
+    /// `scale` 取像素最多的那块屏的。
+    static func requestedPixels(screens: [NSScreen] = NSScreen.screens) -> (width: Int, height: Int, scale: Double) {
+        requestedPixels(screens: screens.map { (size: $0.frame.size, scale: $0.backingScaleFactor) })
+    }
+
+    static func requestedPixels(screens: [(size: CGSize, scale: CGFloat)]) -> (width: Int, height: Int, scale: Double) {
+        var long = 0, short = 0, scale = 2.0
         for screen in screens {
-            let scale = screen.backingScaleFactor
-            let w = Int(screen.frame.width * scale), h = Int(screen.frame.height * scale)
+            let w = Int(screen.size.width * screen.scale), h = Int(screen.size.height * screen.scale)
+            if max(w, h) > long { scale = Double(screen.scale) }
             long = max(long, max(w, h))
             short = max(short, min(w, h))
         }
-        return RemoteDesktopSession.requestedSize(longPixels: long, shortPixels: short)
+        let size = RemoteDesktopSession.requestedSize(longPixels: long, shortPixels: short)
+        return (size.width, size.height, scale)
     }
 }
 

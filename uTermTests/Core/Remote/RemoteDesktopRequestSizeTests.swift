@@ -15,9 +15,9 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
     }
 
     /// 无显示器的 Mac 按请求建出的虚拟屏，放进手机的画布里「适配屏幕」后的视口。
-    private func phoneViewport(request: (width: Int, height: Int), canvas: CGSize,
+    private func phoneViewport(request: (width: Int, height: Int), scale: Double, canvas: CGSize,
                                corners: RemoteDesktopCornerRadii) -> RemoteDesktopViewport {
-        let display = RemoteHeadlessDisplay.virtualSize(viewerPixels: request)
+        let display = RemoteHeadlessDisplay.virtualSize(viewerPixels: request, pointScale: scale)
         return RemoteDesktopViewport(contentSize: CGSize(width: display.width, height: display.height),
                                      viewSize: canvas, corners: corners, bleedsIntoCorners: true)
     }
@@ -80,12 +80,17 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
     /// 回归：原先按整块屏幕的比例要，虚拟屏放进顶栏下面的画布，左右各空 70pt。
     func test_headless_display_fills_the_duo_canvas() {
         let request = duoRequest()
-        assertFills(phoneViewport(request: (request.width, request.height), canvas: Self.duoCanvas, corners: Self.bottom55),
+        assertFills(phoneViewport(request: (request.width, request.height), scale: 2, canvas: Self.duoCanvas,
+                                  corners: Self.bottom55), Self.duoCanvas)
+        // 老的 Mac 不认像素倍数（按老下限建更大的虚拟屏）：一样铺满。
+        let display = RemoteHeadlessDisplay.virtualSize(viewerPixels: (request.width, request.height))
+        assertFills(RemoteDesktopViewport(contentSize: CGSize(width: display.width, height: display.height),
+                                          viewSize: Self.duoCanvas, corners: Self.bottom55, bleedsIntoCorners: true),
                     Self.duoCanvas)
 
         // 对照：按整块屏幕要（原来的做法），同一块画布里左右空出一截。
         let old = RemoteDesktopSession.requestedSize(longPixels: 2000, shortPixels: 1407)
-        let oldFrame = phoneViewport(request: old, canvas: Self.duoCanvas, corners: Self.bottom55).contentFrame
+        let oldFrame = phoneViewport(request: old, scale: 2, canvas: Self.duoCanvas, corners: Self.bottom55).contentFrame
         XCTAssertGreaterThan(oldFrame.minX, 30)
     }
 
@@ -129,8 +134,8 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
 
         // 横着的手机：建出的虚拟屏铺满画布。
         let canvas = CGSize(width: 874, height: 402 - 16 - row)
-        assertFills(phoneViewport(request: (landscape.width, landscape.height), canvas: canvas, corners: Self.bottom55),
-                    canvas)
+        assertFills(phoneViewport(request: (landscape.width, landscape.height), scale: 3, canvas: canvas,
+                                  corners: Self.bottom55), canvas)
     }
 
     // MARK: - 边界
@@ -142,7 +147,8 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
         XCTAssertEqual(request.height, 1080)
         XCTAssertEqual(CGFloat(request.width) / CGFloat(request.height), 667.0 / 321.0, accuracy: 0.001)
         let canvas = CGSize(width: 667, height: 321)
-        assertFills(phoneViewport(request: (request.width, request.height), canvas: canvas, corners: .square), canvas)
+        assertFills(phoneViewport(request: (request.width, request.height), scale: 2, canvas: canvas, corners: .square),
+                    canvas)
     }
 
     func test_unmeasured_canvas_falls_back_to_the_screen_pixels() {
