@@ -178,6 +178,10 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(plan(vendor: 0x10AC, available: [oneX]), .none, "真显示器")
         XCTAssertEqual(plan(online: 2, available: [oneX]), .none, "不止一块屏")
         XCTAssertEqual(plan(builtin: true, available: [oneX]), .none, "内建屏")
+        XCTAssertEqual(plan(vendor: Display.virtualVendor, model: Display.virtualModel, available: [oneX]), .adoptOrphan,
+                       "上一个远控进程留下的虚拟屏：接着用，不另建一块")
+        XCTAssertEqual(plan(vendor: Display.virtualVendor, model: Display.virtualModel, online: 2, available: [oneX]),
+                       .none, "不止一块屏时不碰")
 
         let ours: CGDirectDisplayID = 7
         XCTAssertFalse(Display.realDisplayAppeared(ours: ours, online: [(ours, 0x7554, 1)]), "只有虚拟屏")
@@ -186,6 +190,8 @@ final class RemoteMacDesktopTests: XCTestCase {
                        "「屏幕共享」的独占屏走了会把虚拟屏接回来，不拆")
         XCTAssertTrue(Display.realDisplayAppeared(ours: ours, online: [(ours, 0x7554, 1), (3, 0x10AC, 0xA0C5)]),
                       "接上真显示器：拆掉虚拟屏")
+        XCTAssertFalse(Display.realDisplayAppeared(ours: ours, online: [(ours, 0x7554, 1), (16, 0x7554, 1)]),
+                       "上一个远控进程留下的虚拟屏不是真显示器，不拆自己这块")
     }
 
     /// 建好的虚拟屏系统可能默认挑同像素的 1 倍模式（2026-11-16 mini：要 1280×828 点给了 2560×1656 点的 1 倍）：

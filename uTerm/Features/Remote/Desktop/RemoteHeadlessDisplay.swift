@@ -32,6 +32,9 @@ enum RemoteHeadlessDisplay {
     /// 系统「屏幕共享」建的独占虚拟屏：厂商号 'aapl'、型号 0x1234。
     nonisolated static let screenSharingVendor: UInt32 = 0x6161_706C
     nonisolated static let screenSharingModel: UInt32 = 0x1234
+    /// 我们建的虚拟屏的厂商号与型号（序列号固定 1）：系统按它们认出「还是那块屏」。
+    nonisolated static let virtualVendor: UInt32 = 0x7554
+    nonisolated static let virtualModel: UInt32 = 0x0001
     /// 不知道看的设备多大时（老客户端）虚拟屏的点数：与占位屏一样。
     nonisolated static let defaultPoints = (width: 1920, height: 1080)
     /// 虚拟屏点数的下限与上限：太小了窗口和菜单栏放不下，太大的像素 WindowServer 不收。
@@ -112,13 +115,19 @@ enum RemoteHeadlessDisplay {
         case switchMode(Int)
         /// 建一块 2 倍虚拟屏。
         case createVirtual
+        /// 主屏是 uTerm 自己的虚拟屏，可这个进程手上没有它：上一个远控进程建的，进程结束了屏却没撤
+        ///（2026-11-15/16 真机两次实测：换包、重启远控进程后它都留着）。改不了它的设置，只能用公开接口
+        /// 在它现有的模式里切到要的 2 倍模式。
+        case adoptOrphan
     }
 
     /// 无显示器的 Mac 该怎么变清晰。只看唯一一块在线、非内建的占位屏。能建虚拟屏就建（它按看的设备的像素来，
     /// 占位屏自己的 2 倍模式只有 16:9 一种）；建不了时，当前 1 倍、又带同点数 2 倍模式的就换过去。
     nonisolated static func plan(vendor: UInt32, model: UInt32, builtin: Bool, onlineDisplays: Int,
                                  current: Mode, available: [Mode], canCreateVirtual: Bool = true) -> Plan {
-        guard onlineDisplays == 1, !builtin, vendor == placeholderVendor, model == placeholderModel else { return .none }
+        guard onlineDisplays == 1, !builtin else { return .none }
+        if vendor == virtualVendor, model == virtualModel { return .adoptOrphan }
+        guard vendor == placeholderVendor, model == placeholderModel else { return .none }
         if canCreateVirtual { return .createVirtual }
         if let index = hiDPIUpgrade(current: current, available: available) { return .switchMode(index) }
         return .none
@@ -174,6 +183,8 @@ enum RemoteHeadlessDisplay {
         online.contains { display in
             display.id != ours
                 && !(display.vendor == placeholderVendor && display.model == placeholderModel)
+                // 上一个远控进程留下的那块（见 `Plan.adoptOrphan`）不是真显示器。
+                && !(display.vendor == virtualVendor && display.model == virtualModel)
                 && !(display.vendor == screenSharingVendor && display.model == screenSharingModel)
         }
     }
@@ -272,6 +283,10 @@ enum RemoteHeadlessDisplay {
                     canCreateVirtual: NSClassFromString("CGVirtualDisplay") != nil) {
         case .none:
             return
+        case .adoptOrphan:
+            AppLogger.notice("远程桌面：主屏是上一个远控进程留下的虚拟屏（\(CGDisplayPixelsWide(main))×\(CGDisplayPixelsHigh(main))），"
+                             + "接着用，切到 \(wanted.width)×\(wanted.height) 点的 2 倍", category: RemoteLog.category)
+            selectHiDPIMode(main, size: wanted)
         case .switchMode(let index):
             switchMode(main, to: modes[index])
         case .createVirtual:
@@ -407,8 +422,8 @@ enum RemoteHeadlessDisplay {
         // 物理尺寸大得离谱时 WindowServer 不收（Lumen 的注释）。
         descriptor.setValue(NSValue(size: NSSize(width: 597, height: 336)), forKey: "sizeInMillimeters")
         // 厂商、型号、序列号固定：系统按它们认出「还是那块屏」，记得上面的窗口摆法。
-        descriptor.setValue(0x7554, forKey: "vendorID")
-        descriptor.setValue(0x0001, forKey: "productID")
+        descriptor.setValue(virtualVendor, forKey: "vendorID")
+        descriptor.setValue(virtualModel, forKey: "productID")
         descriptor.setValue(1, forKey: "serialNum")
         descriptor.setValue(DispatchQueue.main, forKey: "queue")
 
