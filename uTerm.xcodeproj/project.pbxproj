@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		55535348535441434B000014 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000003 /* USSHStack */; };
+		55535348535441434B000013 /* USSHStack in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		55535348535441434B000011 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; };
+		55535348535441434B000012 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000002 /* USSHStack */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
@@ -33,20 +37,14 @@
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
 		5550414E4750000000000011 /* UPaneGroups in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E4750000000000001 /* UPaneGroups */; };
-		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
-		555445524D53534800000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555445524D5353480000000E /* USSHKit */; };
-		555445524D53534800000012 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 555445524D5353480000000F /* Citadel */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		851030E33047167600A370DF /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000002 /* UDesignKit */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
-		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
 		A61DF38274718E88C0968BB9 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29DE64AF6B8DE16B490ADC2 /* main.swift */; };
 		A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = 018260924700EAFE1739852A /* TreeSitterPython */; };
 		AD0CF0F0F0F0F0F0F0F00002 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = AD0CF0F0F0F0F0F0F0F00001 /* Markdown */; };
-		B1C2D3E4F5A6789BCDEF0002 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */; };
-		C17ADE1000000000000002 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = C17ADE1000000000000001 /* Citadel */; };
 		CE7EF0F0F0F0F0F0F0F00002 /* CodeEditTextView in Frameworks */ = {isa = PBXBuildFile; productRef = CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */; };
 		SPRK00000000000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = SPRK00000000000000000001 /* Sparkle */; };
 		TC000000000000000000001 /* SwiftTreeSitter in Frameworks */ = {isa = PBXBuildFile; productRef = TC000000000000000000002 /* SwiftTreeSitter */; };
@@ -115,6 +113,20 @@
 			remoteInfo = uTermMobile;
 		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		55535348535441434B000020 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				55535348535441434B000013 /* USSHStack in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -737,8 +749,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				555445524D53534800000011 /* USSHKit in Frameworks */,
-				555445524D53534800000012 /* Citadel in Frameworks */,
+				55535348535441434B000012 /* USSHStack in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -746,9 +757,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				55535348535441434B000011 /* USSHStack in Frameworks */,
 				5544455349474E0000000011 /* UDesignKit in Frameworks */,
 				5550414E45540000000011 /* UPaneTree in Frameworks */,
-				555353484B49540000000011 /* USSHKit in Frameworks */,
 				4147454E544B495400000011 /* AgentKit in Frameworks */,
 				5541424B0000000000000011 /* UAppKitBridge in Frameworks */,
 				5550414E4750000000000011 /* UPaneGroups in Frameworks */,
@@ -756,9 +767,6 @@
 				474853540000000000000A12 /* GhosttyKit in Frameworks */,
 				474853540000000000000A13 /* GhosttyVt in Frameworks */,
 				SPRK00000000000000000002 /* Sparkle in Frameworks */,
-				C17ADE1000000000000002 /* Citadel in Frameworks */,
-				A50000000000000000000002 /* SwiftASN1 in Frameworks */,
-				B1C2D3E4F5A6789BCDEF0002 /* _CryptoExtras in Frameworks */,
 				CE7EF0F0F0F0F0F0F0F00002 /* CodeEditTextView in Frameworks */,
 				AD0CF0F0F0F0F0F0F0F00002 /* Markdown in Frameworks */,
 				TC000000000000000000001 /* SwiftTreeSitter in Frameworks */,
@@ -782,6 +790,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				55535348535441434B000014 /* USSHStack in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1009,8 +1018,7 @@
 			);
 			name = "uterm-ssh";
 			packageProductDependencies = (
-				555445524D5353480000000E /* USSHKit */,
-				555445524D5353480000000F /* Citadel */,
+				55535348535441434B000002 /* USSHStack */,
 			);
 			productName = "uterm-ssh";
 			productReference = 555445524D53534800000005 /* uterm-ssh */;
@@ -1023,6 +1031,7 @@
 				85D6BEEB2FBC4E7E00FC90D8 /* Sources */,
 				85D6BEEC2FBC4E7E00FC90D8 /* Frameworks */,
 				85D6BEED2FBC4E7E00FC90D8 /* Resources */,
+				55535348535441434B000020 /* Embed Frameworks */,
 				CFCFCFCF000000000000F0F1 /* Set Build Number */,
 				CFCFCFCF000000000000F0F5 /* Copy utermctl CLI and Skills */,
 				DBBA0F7D575A176953DE3806 /* Embed Background Login Item */,
@@ -1046,9 +1055,9 @@
 			);
 			name = uTerm;
 			packageProductDependencies = (
+				55535348535441434B000001 /* USSHStack */,
 				5544455349474E0000000001 /* UDesignKit */,
 				5550414E45540000000001 /* UPaneTree */,
-				555353484B49540000000001 /* USSHKit */,
 				4147454E544B495400000001 /* AgentKit */,
 				5541424B0000000000000001 /* UAppKitBridge */,
 				5550414E4750000000000001 /* UPaneGroups */,
@@ -1056,9 +1065,6 @@
 				474853540000000000000A02 /* GhosttyKit */,
 				474853540000000000000A03 /* GhosttyVt */,
 				SPRK00000000000000000001 /* Sparkle */,
-				C17ADE1000000000000001 /* Citadel */,
-				A50000000000000000000001 /* SwiftASN1 */,
-				B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */,
 				CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */,
 				AD0CF0F0F0F0F0F0F0F00001 /* Markdown */,
 				TC000000000000000000002 /* SwiftTreeSitter */,
@@ -1097,6 +1103,9 @@
 				B00000000000000000000002 /* uTermTests */,
 			);
 			name = uTermTests;
+			packageProductDependencies = (
+				55535348535441434B000003 /* USSHStack */,
+			);
 			productName = uTermTests;
 			productReference = B0000000000000000000000C /* uTermTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -1177,6 +1186,7 @@
 				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
 				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
 				4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */,
+				55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -1743,6 +1753,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_HARDENED_RUNTIME = YES;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.SSH;
 				PRODUCT_NAME = "uterm-ssh";
@@ -1759,6 +1770,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_HARDENED_RUNTIME = YES;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.SSH;
 				PRODUCT_NAME = "uterm-ssh";
@@ -2257,6 +2269,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/CodeEditTextView;
 		};
+		55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/USSHStack;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -2497,35 +2513,15 @@
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UPaneGroups;
 		};
-		555353484B49540000000001 /* USSHKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = USSHKit;
-		};
 		555353484B49540000000002 /* USSHKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = USSHKit;
 		};
-		555445524D5353480000000E /* USSHKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = USSHKit;
-		};
-		555445524D5353480000000F /* Citadel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
-			productName = Citadel;
-		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterJavaScript;
-		};
-		A50000000000000000000001 /* SwiftASN1 */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */;
-			productName = SwiftASN1;
 		};
 		A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -2536,16 +2532,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */;
 			productName = Markdown;
-		};
-		B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */;
-			productName = _CryptoExtras;
-		};
-		C17ADE1000000000000001 /* Citadel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
-			productName = Citadel;
 		};
 		C9011540443CD85AA784C8A9 /* TreeSitterTOML */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -2596,6 +2582,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
 			productName = TreeSitterMarkdown;
+		};
+		55535348535441434B000001 /* USSHStack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
+			productName = USSHStack;
+		};
+		55535348535441434B000002 /* USSHStack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
+			productName = USSHStack;
+		};
+		55535348535441434B000003 /* USSHStack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
+			productName = USSHStack;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

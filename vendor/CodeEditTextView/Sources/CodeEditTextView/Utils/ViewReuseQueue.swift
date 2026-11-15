@@ -6,12 +6,12 @@
 //
 
 import AppKit
-import DequeModule
 
 /// Maintains a queue of views available for reuse.
 public class ViewReuseQueue<View: NSView, Key: Hashable> {
     /// A stack of views that are not currently in use
-    public var queuedViews: Deque<View> = []
+    // uTerm 补丁 #5：原为 `Deque<View>`。改成 Array 是为了不依赖 swift-collections（见 UTERM-PATCHES.md）。
+    public var queuedViews: [View] = []
 
     /// Maps views that are no longer queued to the keys they're queued with.
     public var usedViews: [Key: View] = [:]
@@ -33,7 +33,7 @@ public class ViewReuseQueue<View: NSView, Key: Hashable> {
         if let usedView = usedViews[key] {
             view = usedView
         } else {
-            view = queuedViews.popFirst() ?? createView()
+            view = queuedViews.popLast() ?? createView()
             view.prepareForReuse()
             view.isHidden = false
             usedViews[key] = view

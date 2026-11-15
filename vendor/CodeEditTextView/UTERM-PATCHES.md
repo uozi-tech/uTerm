@@ -225,9 +225,26 @@ TextSelection 对象因此重建（`view == nil`），走到创建分支。范�
 | ⌘A 全选 | 整块 [52→588] | 整块 [52→600] | 171/297/600/304/193/82 参差 |
 | 横滚到 x=2000 | — | 2000→2600 整屏铺满 | 仅超宽行有色 |
 
+## 补丁 #5：`ViewReuseQueue` 的 `Deque` 换成 Array，去掉 swift-collections 依赖
+
+文件：`Sources/CodeEditTextView/Utils/ViewReuseQueue.swift`、`Package.swift`
+
+整个包只有这一处用 swift-collections（`queuedViews: Deque<View>`），manifest 却依赖整个 `Collections`
+伞形 product，把 `_RopeModule` / `HashTreeCollections` / `OrderedCollections` 一起链进了主程序。更要紧的是
+SSH 栈改成动态 framework（`Packages/USSHStack`）之后：swift-nio 也依赖 `DequeModule`，同一个静态 target 同时
+被 framework 和 App 链接，Xcode 会自动把 `DequeModule` 连同 `InternalCollectionsUtilities` / `SpanPreview` 改成
+三个动态 framework 塞进 `Contents/Frameworks/`（各带一份 swiftmodule，近 2 MB）。
+
+改法：`queuedViews` 换成 `[View]`，`popFirst()` 换成 `popLast()`。这是复用池，取哪一个空闲视图都一样；
+`popLast()` 是 O(1)。`TextLayoutManager` 里唯一的外部用法 `queuedViews.removeAll()` 不受影响。
+manifest 删掉 swift-collections 包依赖与 `Collections` product。
+
+升级时：上游若还在用 `Deque`，照上面重做；若上游别处新用了 swift-collections，要么一样换掉，要么接受
+那三个动态 framework（功能不受影响，只是包大一点）。
+
 ## manifest 改动（相对上游）
 
-`Package.swift` 两处裁剪，源码不受影响：
+`Package.swift` 两处裁剪，源码不受影响（另见补丁 #5 删掉的 swift-collections 依赖）：
 
 1. 删掉 `SwiftLintPlugin` 依赖与两个 target 上的 `.plugin(name: "SwiftLint", ...)`。
    vendored 副本不跑上游的 lint；且该 build-tool 插件会让 CLI 构建需要额外传
@@ -239,7 +256,7 @@ TextSelection 对象因此重建（`view == nil`），走到创建分支。范�
 
 pbxproj 以 `XCLocalSwiftPackageReference "vendor/CodeEditTextView"` 引用本目录，替换原先的
 `XCRemoteSwiftPackageReference "CodeEditTextView"`。app target 的 `CodeEditTextView`
-product 依赖改指向本地包。`TextStory` / `swift-collections` 仍由本包 manifest 从远程拉取。
+product 依赖改指向本地包。`TextStory` 仍由本包 manifest 从远程拉取（swift-collections 见补丁 #5）。
 
 ## 升级重放步骤
 
@@ -250,6 +267,6 @@ product 依赖改指向本地包。`TextStory` / `swift-collections` 仍由本�
    `TextSelectionManager.swift` 里的 `cachedLineBreakFill` 存储属性）与补丁 #3（搜
    `CGRectArray+BoundingRect.swift` 里的 `$0.maxY < $1.maxY`），
    再按上面两条重做 manifest 裁剪。
-3. 补丁 #4 只是警告清理，上游若已修掉直接跳过。
+3. 补丁 #4 只是警告清理，上游若已修掉直接跳过。补丁 #5 搜 `import DequeModule`。
 4. 更新本文件顶部的基线 tag / revision。
 5. 用各补丁的验证方法确认横向滚动与 ⌘A 选区右缘仍然正确。

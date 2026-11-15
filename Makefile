@@ -278,6 +278,9 @@ build: engine holder
 
 # Archive with automatic signing (development); the Developer ID profile + re-signing
 # happen at the export-app step. Kept separate so a failed export does not waste the build.
+# ARCHS=arm64：工程里的 `ARCHS[sdk=macosx*] = arm64` 管不到 SwiftPM 包的 target。包静态链进 App 时多编的
+# x86_64 只是白编，链接时就丢了；SSH 栈改成动态 framework（Packages/USSHStack）之后，包 target 自己链接成
+# Mach-O，不在命令行压成 arm64 就会出一个双架构的 framework（多 8 MB）。
 archive: engine holder
 	rm -rf "$(ARCHIVE_PATH)"
 	xcodebuild archive \
@@ -290,6 +293,7 @@ archive: engine holder
 		-skipPackagePluginValidation \
 		$(PACKAGE_ARGS) \
 		-allowProvisioningUpdates \
+		ARCHS=arm64 \
 		CODE_SIGN_STYLE=Automatic \
 		DEVELOPMENT_TEAM=$(TEAM_ID) \
 		ENABLE_HARDENED_RUNTIME=YES
@@ -548,7 +552,7 @@ verify-distribution-signing:
 	test -d "$(EXPORT_APP)"
 	python3 scripts/verify-background-launcher.py "$(EXPORT_APP)" "uTermBackgroundLauncher"
 	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
-	@for helper in Helpers/uterm-holder.app Helpers/uterm-ssh XPCServices/uTermShellAgent.xpc Helpers/uTermRemoteHost.app Helpers/uTermRemoteHost.app/Contents/XPCServices/uTermShellAgent.xpc; do \
+	@for helper in Helpers/uterm-holder.app Helpers/uterm-ssh Frameworks/USSHStack.framework XPCServices/uTermShellAgent.xpc Helpers/uTermRemoteHost.app Helpers/uTermRemoteHost.app/Contents/XPCServices/uTermShellAgent.xpc; do \
 		path="$(EXPORT_APP)/Contents/$$helper"; \
 		info=$$(codesign -dv --verbose=4 "$$path" 2>&1) || { printf '%s\n' "ERROR: $$path is missing or unsigned."; exit 1; }; \
 		if ! printf '%s\n' "$$info" | grep -q 'Authority=Developer ID Application' \
@@ -568,6 +572,14 @@ verify-distribution-signing:
 	if otool -L "$$agent/Contents/MacOS/uTermRemoteHost" | grep -q '@rpath'; then \
 		printf '%s\n' 'ERROR: uTermRemoteHost links a bundled dylib. Link its packages statically.'; exit 1; \
 	fi
+	@# SSH 栈是一个动态 framework（Packages/USSHStack），主程序和 uterm-ssh 都从 Contents/Frameworks 加载它；
+	@# 任何一边又静态链了一份（target 直接声明了 USSHKit / Citadel 这类静态 product）就不会再链接它。
+	@for bin in MacOS/uTerm Helpers/uterm-ssh; do \
+		otool -L "$(EXPORT_APP)/Contents/$$bin" | grep -q '@rpath/USSHStack.framework/' \
+			|| { printf '%s\n' "ERROR: $$bin does not link USSHStack.framework (SSH stack linked statically again?)."; exit 1; }; \
+	done
+	@otool -l "$(EXPORT_APP)/Contents/Helpers/uterm-ssh" | grep -q '@executable_path/../Frameworks' \
+		|| { printf '%s\n' 'ERROR: uterm-ssh has no @executable_path/../Frameworks rpath.'; exit 1; }
 	@# holder 是 App 包（见 Config/uterm-holder-Info.plist）：本地网络的说明文字从包里的 Info.plist 读，没有它 SSH 连局域网主机
 	@# 会被拒；系统设置里显示的名字与图标靠图标和本地化名字。
 	@holder="$(EXPORT_APP)/Contents/Helpers/uterm-holder.app"; \

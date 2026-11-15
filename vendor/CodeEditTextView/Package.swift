@@ -23,11 +23,7 @@ let package = Package(
             url: "https://github.com/ChimeHQ/TextStory",
             from: "0.9.0"
         ),
-        // Useful data structures
-        .package(
-            url: "https://github.com/apple/swift-collections.git",
-            .upToNextMajor(from: "1.0.0")
-        ),
+        // uTerm 补丁 #5：删掉 swift-collections 依赖（见 UTERM-PATCHES.md）
         // uTerm 裁剪：删掉 SwiftLintPlugin 依赖（见 UTERM-PATCHES.md）
     ],
     targets: [
@@ -36,7 +32,6 @@ let package = Package(
             name: "CodeEditTextView",
             dependencies: [
                 "TextStory",
-                .product(name: "Collections", package: "swift-collections"),
                 "CodeEditTextViewObjC"
             ]
         ),
