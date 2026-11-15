@@ -513,7 +513,8 @@ dmg: export-app dmg-background
 	swift scripts/set-volume-icon.swift "$(EXPORT_APP)/Contents/Resources/AppIcon.icns" "$(DMG_MOUNT)"
 	sync
 	hdiutil detach "$(DMG_MOUNT)"
-	hdiutil convert "$(DMG_RW)" -format UDZO -o "$(DMG_PATH)"
+	# ULMO（LZMA）比 UDZO（zlib）小约三成：2.1.6 实测 53.9 → 38.4 MB；macOS 10.15 起都能挂载。
+	hdiutil convert "$(DMG_RW)" -format ULMO -o "$(DMG_PATH)"
 	rm -f "$(DMG_RW)"
 	@printf '%s\n' "Created DMG: $(DMG_PATH)"
 

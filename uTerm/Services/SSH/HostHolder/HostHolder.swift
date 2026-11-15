@@ -92,11 +92,11 @@ nonisolated enum HostHolder {
         }
     }
 
-    /// 打包时用 LZFSE 压过（`scripts/build-host-holder.sh`）。没打进包（没跑 `make holder`）返回 nil。
+    /// 打包时用 LZMA 压过（`scripts/build-host-holder.sh`）。没打进包（没跑 `make holder`）返回 nil。
     static func bundledBinary(named name: String, in bundle: Bundle = .main) -> Data? {
-        guard let url = bundle.url(forResource: name, withExtension: "lzfse"),
+        guard let url = bundle.url(forResource: name, withExtension: "lzma"),
               let packed = try? Data(contentsOf: url),
-              let unpacked = try? (packed as NSData).decompressed(using: .lzfse) else { return nil }
+              let unpacked = try? (packed as NSData).decompressed(using: .lzma) else { return nil }
         return unpacked as Data
     }
 

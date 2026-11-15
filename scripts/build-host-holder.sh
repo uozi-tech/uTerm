@@ -5,7 +5,8 @@
 #   scripts/build-host-holder.sh          # 源码没变就什么都不做
 #   scripts/build-host-holder.sh --force
 #
-# 产物不进版本库：uTerm/Services/SSH/HostHolder/Binaries/uterm-holder-linux-{amd64,arm64}.lzfse
+# 产物不进版本库：uTerm/Services/SSH/HostHolder/Binaries/uterm-holder-linux-{amd64,arm64}.lzma
+# 用 LZMA 而不是 LZFSE：两份合计小 0.68 MB（2.9 → 2.2 MB），解压只在第一次上传时做一次。
 # 需要 Go（版本见 holder/go.mod）和系统自带的 compression_tool。
 set -euo pipefail
 
@@ -21,7 +22,7 @@ fingerprint="$( { go version; cat holder/go.mod; find holder -name '*.go' ! -nam
     | shasum -a 256 | cut -d' ' -f1)"
 up_to_date=1
 for arch in $architectures; do
-    [ -f "$output/uterm-holder-linux-$arch.lzfse" ] || up_to_date=0
+    [ -f "$output/uterm-holder-linux-$arch.lzma" ] || up_to_date=0
 done
 if [ "${1:-}" != "--force" ] && [ "$up_to_date" = 1 ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$fingerprint" ]; then
     exit 0
@@ -30,10 +31,12 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$output" build
+# Binaries/ 在同步组里，留着的旧格式产物会被一起打进包。
+rm -f "$output"/*.lzfse
 for arch in $architectures; do
     (cd holder && GOWORK=off GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
         go build -trimpath -ldflags='-s -w -buildid=' -o "$work/uterm-holder-linux-$arch" ./cmd/uterm-holder)
-    compression_tool -encode -a lzfse -i "$work/uterm-holder-linux-$arch" -o "$output/uterm-holder-linux-$arch.lzfse"
+    compression_tool -encode -a lzma -i "$work/uterm-holder-linux-$arch" -o "$output/uterm-holder-linux-$arch.lzma"
 done
 echo "$fingerprint" > "$stamp"
 version="$(sed -n 's/^const version = "\(.*\)"/\1/p' holder/cmd/uterm-holder/main.go)"
