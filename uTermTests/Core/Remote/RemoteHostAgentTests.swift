@@ -81,12 +81,15 @@ final class RemoteHostAgentTests: XCTestCase {
         }
 
         /// 起一个 App 侧的桥（App 启动 / 重启）。
-        func startApp(restoration: (@MainActor () async -> Void)? = nil, restoresEagerly: Bool = true) {
-            let endpoint = listener.endpoint
+        func startApp(restoration: (@MainActor () async -> Void)? = nil, restoresEagerly: Bool = true,
+                      appBuild: String = "agent-test", endpoint: NSXPCListenerEndpoint? = nil,
+                      restartAgent: (@MainActor () -> Void)? = nil) {
+            let endpoint = endpoint ?? listener.endpoint
             let bridge = RemoteHostAgentBridge(
                 server: appServer, registry: registry, settings: settings, restoration: restoration,
-                transport: .init(makeConnection: { NSXPCConnection(listenerEndpoint: endpoint) }, serverRequirement: nil),
-                restoresEagerly: restoresEagerly, appBuild: "agent-test")
+                transport: .init(makeConnection: { NSXPCConnection(listenerEndpoint: endpoint) }, serverRequirement: nil,
+                                 restartAgent: restartAgent),
+                restoresEagerly: restoresEagerly, appBuild: appBuild)
             self.bridge = bridge
             bridge.start()
             bridge.settingsChanged()
@@ -268,6 +271,50 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertTrue(stopped, "用户退出 uTerm 时远控随之结束")
     }
 
+    // MARK: - 换包（Sparkle 更新）
+
+    /// 2.1.5 实测（2026-11-15）：Sparkle 换包后旧远控进程留着服务，新 App 按签名核对它失败（-67065），
+    /// 一直重连；tccd 也不认它的屏幕录制授权，手机开屏幕报「用户拒绝」。新 App 连上时版本对不上，旧进程就该退出。
+    func test_agent_exits_when_app_returns_as_a_different_build() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        rig.startApp()
+        let connected = await waitUntil { rig.agentServer?.port != nil && rig.bridge?.isConnected == true }
+        XCTAssertTrue(connected)
+        rig.bridge?.depart(.update)
+        rig.bridge?.simulateAppTermination()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(rig.service.isShutDown, "App 更新期间照常服务")
+
+        rig.startApp(appBuild: "agent-test-next")
+        let stopped = await waitUntil(5) { rig.service.isShutDown }
+        XCTAssertTrue(stopped, "新版 App 连上时旧远控进程退出，让 launchd 换成包里的新版本")
+        XCTAssertEqual(rig.agentServer?.status, .stopped)
+        XCTAssertEqual(rig.bridge?.isConnected, false, "退出的旧进程不算连上")
+    }
+
+    /// 已经卡住的旧远控进程（2.1.5 及以前不会自己退出）：连得上、回话全被拒收。App 连续几次等不到握手回话，
+    /// 就请 launchd 换掉它；只换一次。
+    func test_app_restarts_agent_that_never_answers_hello() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        let silent = NSXPCListener.anonymous()
+        let rejecting = RejectingListener()
+        silent.delegate = rejecting
+        silent.resume()
+        defer { silent.invalidate() }
+        var restarts = 0
+        rig.startApp(endpoint: silent.endpoint, restartAgent: { restarts += 1 })
+        let restarted = await waitUntil(6) { restarts > 0 }
+        XCTAssertTrue(restarted, "连续 \(RemoteHostAgent.unansweredHelloLimit) 次不回话就换掉远控进程")
+        XCTAssertGreaterThanOrEqual(rejecting.count, RemoteHostAgent.unansweredHelloLimit)
+        let attempts = rejecting.count
+        let retried = await waitUntil(6) { rejecting.count > attempts }
+        XCTAssertTrue(retried, "换完照常重连")
+        XCTAssertEqual(restarts, 1, "这次启动里只换一次")
+        XCTAssertEqual(rig.bridge?.isConnected, false)
+    }
+
     func test_turning_remote_off_shuts_the_agent_down() async throws {
         let rig = await Rig(grace: .seconds(30))
         defer { rig.tearDown() }
@@ -382,6 +429,18 @@ private final class AsyncGate {
         isOpen = true
         for waiter in waiters { waiter.resume() }
         waiters = []
+    }
+}
+
+/// 拒绝每个连接的监听器：App 那头的连接失效、等不到回话（像核不过签名的旧远控进程）。
+private final class RejectingListener: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var total = 0
+    var count: Int { lock.withLock { total } }
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        lock.withLock { total += 1 }
+        return false
     }
 }
 

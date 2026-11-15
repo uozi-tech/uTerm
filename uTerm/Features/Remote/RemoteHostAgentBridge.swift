@@ -17,6 +17,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         var serverRequirement: String?
         /// 断开时查一下 launchd 任务还在不在（用户可能在系统设置里关了它的后台运行）。测试里不查。
         var checksRegistration = false
+        /// 换掉一个怎么连都不回话的远控进程（正式版注销再注册 launchd 任务）。测试里记一笔。
+        var restartAgent: (@MainActor () -> Void)?
     }
 
     private let server: RemoteHostServer
@@ -38,6 +40,10 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     /// 远控进程版本和 App 不同，等它空下来（没有设备连着）就换掉。
     private var pendingUpgrade = false
     private var upgradeCheck: Task<Void, Never>?
+    /// 连续几次连上了却没等到握手回话。
+    private var unansweredHellos = 0
+    /// 这次启动里已经换过一次远控进程（换了还不回话就别再换，免得反复弹「添加了后台项目」）。
+    private var restartedAgent = false
     private(set) var isConnected = false
     private var isStopped = false
     private var isRegistered = false
@@ -109,7 +115,18 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     static let production = Transport(makeConnection: {
         NSXPCConnection(machServiceName: RemoteHostAgent.machServiceName, options: [])
-    }, serverRequirement: RemoteHostAgent.agentRequirement, checksRegistration: true)
+    }, serverRequirement: RemoteHostAgent.agentRequirement, checksRegistration: true,
+       restartAgent: { RemoteHostAgentBridge.restartRegistration() })
+
+    /// 注销再注册：launchd 结束正在跑的远控进程，下次连接时按包里的二进制拉起。
+    static func restartRegistration() {
+        do {
+            try SMAppService.agent(plistName: RemoteHostAgent.plistName).unregister()
+        } catch {
+            AppLogger.info("注销远控进程失败：\(error.localizedDescription)", category: RemoteLog.category)
+        }
+        _ = register()
+    }
 
     // MARK: - 起停
 
@@ -208,6 +225,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     private func helloReplied(_ info: RemoteHostAgentInfo?, on replied: ObjectIdentifier) {
         guard connection.map(ObjectIdentifier.init) == replied, let info else { return }
         isConnected = true
+        unansweredHellos = 0
         reconnectDelay = .milliseconds(250)
         AppLogger.notice("远控进程已连上（build \(info.build)，pid \(info.pid)，\(info.authorizedConnections) 台设备连着）",
                          category: RemoteLog.category)
@@ -218,6 +236,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     private func connectionLost(_ lost: ObjectIdentifier) {
         guard connection.map(ObjectIdentifier.init) == lost else { return }
+        let answered = isConnected
         connection = nil
         agent = nil
         isConnected = false
@@ -231,6 +250,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         }
         // 远控进程没了（被换新版本、崩溃）：launchd 在下一次连接时按需拉起。远控关着就不连。
         guard settings.isEnabled else { return }
+        unansweredHellos = answered ? 0 : unansweredHellos + 1
+        if unansweredHellos >= RemoteHostAgent.unansweredHelloLimit { restartUnresponsiveAgent() }
         let delay = reconnectDelay
         reconnectDelay = min(reconnectDelay * 2, .seconds(5))
         reconnect?.cancel()
@@ -238,6 +259,16 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             guard (try? await Task.sleep(for: delay)) != nil else { return }
             self?.connect()
         }
+    }
+
+    /// 连得上却总不回话：多半是更新前起来的旧远控进程（2.1.5 及以前不会自己退出），它的可执行文件已被新包替换，
+    /// App 按签名核对它失败、回话全被拒收。App 是沙盒进程，结束不了它，只能经 launchd 注销再注册。
+    private func restartUnresponsiveAgent() {
+        guard !restartedAgent, let restart = transport.restartAgent else { return }
+        restartedAgent = true
+        let attempts = unansweredHellos
+        AppLogger.notice("远控进程连上 \(attempts) 次都不回话，注销再注册，换成包里的版本", category: RemoteLog.category)
+        restart()
     }
 
     private func fallBack() {

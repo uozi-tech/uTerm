@@ -5,7 +5,8 @@ import Observation
 /// 只是会话、秘密、设置都经 App 转来），之后把服务端的状态推回 App。
 ///
 /// App 走了（连接失效）就进入宽限期：已建立的远控连接照常服务，终端暂停；宽限期内 App 回来就续上，到期就停止服务、
-/// 退出进程（launchd 在 App 下一次连接时再拉起，那时也就换成了包里的新版本）。
+/// 退出进程（launchd 在 App 下一次连接时再拉起，那时也就换成了包里的新版本）。App 回来时版本变了（更新）也立即退出：
+/// 换过包的旧进程既过不了 App 的签名核对，也过不了屏幕录制的授权核对。
 @MainActor
 final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
     /// 构造远控进程里那些和系统打交道的部件。测试里换成合成的。
@@ -132,14 +133,22 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
     // MARK: - App 发来的
 
     func hello(_ hello: RemoteHostAgentHello) -> RemoteHostAgentInfo {
-        grace?.cancel()
-        grace = nil
-        departure = nil
         guard let connection else { return info() }
         let app = connection.remoteObjectProxyWithErrorHandler { @Sendable error in
             AppLogger.info("远控进程：调 App 失败：\(error.localizedDescription)", category: RemoteLog.category)
         } as? any RemoteHostAppXPC
         self.app = app
+        // App 换了版本（Sparkle 更新）：本进程的可执行文件已被新包替换，App 按签名核对本进程会失败（-67065），
+        // tccd 也不再认本进程的屏幕录制授权。留着只会让 App 一直重连、手机开不了屏幕：交出没写回的数据，退出，
+        // launchd 在 App 下一次连接时按包里的新版本拉起。连着的设备会断开重连。
+        guard hello.appBuild == environment.build else {
+            flushPendingWrites()
+            shutdown(reason: "App 已是 build \(hello.appBuild)，本进程是 build \(environment.build)")
+            return info()
+        }
+        grace?.cancel()
+        grace = nil
+        departure = nil
         secrets.replaceAll(hello.secrets, keeping: pendingSecretAccounts)
         if !pendingWrites.contains(where: { if case .persistRelayConfig = $0 { true } else { false } }) {
             relayStorage.replace(hello.relayConfig)

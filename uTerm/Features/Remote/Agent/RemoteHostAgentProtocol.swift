@@ -26,8 +26,10 @@ nonisolated enum RemoteHostAgent {
 
     /// App 不在时还对外服务多久（崩溃、被强制结束）。
     static let defaultGrace: Duration = .seconds(120)
-    /// App 说自己要更新时的宽限期（Sparkle 下载完、替换、重启要更久）。
+    /// App 说自己要更新时的宽限期（Sparkle 下载完、替换、重启要更久）。新 App 一连上、版本对不上，远控进程就退出换新。
     static let updateGrace: Duration = .seconds(300)
+    /// App 连续这么多次连上远控进程却等不到握手回话，就注销再注册它（换掉核不过签名的旧进程）。
+    static let unansweredHelloLimit = 3
     /// App 不在期间，开本机终端这类要 App 办的请求最多等多久。
     static let appRequestWait: Duration = .seconds(15)
     /// 每个终端接入的信用窗口：App 最多先送这么多字节，远控进程交给链路多少再补多少。
