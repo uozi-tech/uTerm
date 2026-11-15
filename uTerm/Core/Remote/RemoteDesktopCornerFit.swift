@@ -36,13 +36,19 @@ nonisolated struct RemoteDesktopPictureCorners: Equatable {
     var isSquare: Bool { radius <= 0 || !(topLeft || topRight || bottomLeft || bottomRight) }
 }
 
-/// 「适配屏幕」与屏幕 / 窗口圆角同心（iOS 26 的同心原则）。
+/// 「适配屏幕」躲开屏幕 / 窗口的圆角。
 ///
 /// 画布铺满整屏（手机）或铺到窗口底边（Mac），四角落在屏幕 / 窗口的圆角里。普通的等比适配下画面的角
-/// 如果落进了圆角弧线，画面不再缩到直角躲开弧线，而是离画布四边留一圈一样宽的窄边（`gap`）铺满，
-/// 画面自己的角切成同心圆角：半径 = 外面的圆角 − 画面角离画布两边较远的那个距离。两个圆心重合（四边都
-/// 只留 `gap` 时）或画面的圆心更靠里，画面的弧线就整个在外面的弧线以内。普通适配下角本来就在弧线外
-///（另一个方向留着宽黑边）就照旧铺满、不留窄边，离外圆角比半径还远的角是直角。
+/// 如果落进了圆角弧线，按顺序试两种办法：
+///
+/// 1. **挪进黑边**：画面在某个方向比画布小（等比适配留下的黑边），就在这个方向上把画面往离圆角远的那头挪，
+///    让两头的角各自躲开弧线，大小不变、角还是直角。尽量居中，只挪到刚好躲开为止。典型是 Duo 内屏上看 16:9
+///    的外接屏：画布只有下面两个角是屏幕圆角，上下各有 ~50pt 黑边，画面往上挪一点就整块铺满宽度。
+/// 2. **同心圆角**（iOS 26 的同心原则）：黑边不够挪，画面就离画布四边留一圈一样宽的窄边（`gap`）铺满，
+///    自己的角切成同心圆角：半径 = 外面的圆角 − 画面角离画布两边较远的那个距离。两个圆心重合（四边都
+///    只留 `gap` 时）或画面的圆心更靠里，画面的弧线就整个在外面的弧线以内。
+///
+/// 普通适配下角本来就在弧线外（另一个方向留着宽黑边）就照旧居中铺满，离外圆角比半径还远的角是直角。
 nonisolated enum RemoteDesktopCornerFit {
     /// 画面离画布四边的窄边宽度（视图点）：与 `MBottomPanel` 离屏幕边的距离一致。
     static let gap: CGFloat = 8
@@ -58,13 +64,55 @@ nonisolated enum RemoteDesktopCornerFit {
         return ox * ox + oy * oy <= r * r
     }
 
-    /// 适配时画面四边留的窄边：普通等比适配下画面的角落进了外圆角的弧线才留，否则 0。
+    /// 一个角在某个方向上至少要离边多远，才整个在（连续曲率）圆弧之外；它在另一个方向上离边 `other`。
+    /// 和 `clears` 是同一个圆：`clears(other, 结果)` 正好成立。另一个方向出了视图（放大后）按贴边算：
+    /// 角虽然出去了，画面那条边靠角的一段仍会被弧线切掉；也让放大时画面不在超出的那一刻跳回居中。
+    static func clearance(other: CGFloat, radius: CGFloat) -> CGFloat {
+        guard radius > 0 else { return 0 }
+        let other = max(0, other)
+        let r = radius * continuousAllowance + 1
+        guard other < r else { return 0 }
+        let o = r - other
+        return r - (r * r - o * o).squareRoot()
+    }
+
+    /// 某个方向上画面离起点那条边多远：`slack` 是两头空余的总和，两头的角各要离边 `low` / `high` 才躲得开
+    /// 圆弧。尽量居中，躲不开就往空的那头挪；两头加起来都不够时按要求的比例分（挪不开的角由同心圆角兜底）。
+    static func offset(slack: CGFloat, low: CGFloat, high: CGFloat) -> CGFloat {
+        guard slack > 0, low + high > 0 else { return slack / 2 }
+        if low + high <= slack { return min(max(slack / 2, low), slack - high) }
+        return slack * low / (low + high)
+    }
+
+    /// 尺寸为 `size` 的画面在视图里的左上角（只对比视图小的方向有意义，大的方向由视口按拖动位置定）。
+    /// `shifts` 为 false 时居中（同心圆角那种适配：四边一样宽）。
+    static func origin(size: CGSize, view: CGSize, corners: RemoteDesktopCornerRadii, shifts: Bool) -> CGPoint {
+        let sx = view.width - size.width, sy = view.height - size.height
+        guard shifts, corners.max > 0 else { return CGPoint(x: sx / 2, y: sy / 2) }
+        // 算一个方向时，另一个方向按居中量离边多远（适配时那个方向贴边或比视图大，居中就是它的实际位置）。
+        let dx = sx / 2, dy = sy / 2
+        let top = max(clearance(other: dx, radius: corners.topLeft), clearance(other: dx, radius: corners.topRight))
+        let bottom = max(clearance(other: dx, radius: corners.bottomLeft), clearance(other: dx, radius: corners.bottomRight))
+        let left = max(clearance(other: dy, radius: corners.topLeft), clearance(other: dy, radius: corners.bottomLeft))
+        let right = max(clearance(other: dy, radius: corners.topRight), clearance(other: dy, radius: corners.bottomRight))
+        return CGPoint(x: offset(slack: sx, low: left, high: right), y: offset(slack: sy, low: top, high: bottom))
+    }
+
+    /// 画面（`frame`，视图坐标）的四个直角是否都在各自的外圆弧之外。
+    static func clearsAll(frame: CGRect, view: CGSize, corners: RemoteDesktopCornerRadii) -> Bool {
+        let left = frame.minX, right = view.width - frame.maxX, top = frame.minY, bottom = view.height - frame.maxY
+        return clears(dx: left, dy: top, radius: corners.topLeft) && clears(dx: right, dy: top, radius: corners.topRight)
+            && clears(dx: left, dy: bottom, radius: corners.bottomLeft)
+            && clears(dx: right, dy: bottom, radius: corners.bottomRight)
+    }
+
+    /// 适配时画面四边留的窄边：普通等比适配下画面的角落进了外圆角的弧线、在黑边里挪也躲不开时才留，否则 0。
     static func margin(content: CGSize, view: CGSize, corners: RemoteDesktopCornerRadii) -> CGFloat {
         guard corners.max > 0, content.width > 0, content.height > 0 else { return 0 }
         let full = min(view.width / content.width, view.height / content.height)
-        let dx = (view.width - content.width * full) / 2, dy = (view.height - content.height * full) / 2
-        // 居中：四个角离视图两边的距离都一样，只看最大的外圆角。
-        return clears(dx: dx, dy: dy, radius: corners.max) ? 0 : gap
+        let size = CGSize(width: content.width * full, height: content.height * full)
+        let placed = CGRect(origin: origin(size: size, view: view, corners: corners, shifts: true), size: size)
+        return clearsAll(frame: placed, view: view, corners: corners) ? 0 : gap
     }
 
     /// 适配比例（每个内容点占多少视图点）：等比放进四边各让出 `margin` 的视图。
@@ -76,14 +124,14 @@ nonisolated enum RemoteDesktopCornerFit {
         return inset > 0 ? inset : full
     }
 
-    /// 画面（`frame`，视图坐标）四角的同心圆角。画面放大出了画布的角在屏幕外，不切。
+    /// 画面（`frame`，视图坐标）四角的同心圆角。画面放大出了画布的角在屏幕外，不切；挪进黑边后离边够远的
+    /// 角（每个角按它自己离两条边的距离算）也不切。
     static func pictureCorners(frame: CGRect, view: CGSize, corners: RemoteDesktopCornerRadii) -> RemoteDesktopPictureCorners {
-        let dx = min(frame.minX, view.width - frame.maxX)
-        let dy = min(frame.minY, view.height - frame.maxY)
-        guard dx >= -0.5, dy >= -0.5 else { return .square }
-        let distance = max(0, dx, dy)
-        func cut(_ outer: CGFloat) -> CGFloat { outer - distance }
-        let radii = [corners.topLeft, corners.topRight, corners.bottomLeft, corners.bottomRight].map(cut)
+        let left = frame.minX, right = view.width - frame.maxX, top = frame.minY, bottom = view.height - frame.maxY
+        guard min(left, right) >= -0.5, min(top, bottom) >= -0.5 else { return .square }
+        func cut(_ outer: CGFloat, _ dx: CGFloat, _ dy: CGFloat) -> CGFloat { outer - max(0, dx, dy) }
+        let radii = [cut(corners.topLeft, left, top), cut(corners.topRight, right, top),
+                     cut(corners.bottomLeft, left, bottom), cut(corners.bottomRight, right, bottom)]
         // CALayer 只有一个半径：取最大的那个。同一个框，半径越大切得越多、形状越往里收，所以对每个角
         // 都不会超出外面的弧线（取小的反而会让外圆角更大的那个角戳出去）。
         let positive = radii.filter { $0 > 0.5 }

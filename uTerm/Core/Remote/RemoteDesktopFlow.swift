@@ -572,7 +572,8 @@ nonisolated enum RemoteDesktopGeometry {
 /// 手机上看桌面的视口：整块显示器按 `zoom` 放大后，视图里露出哪一块。
 ///
 /// `zoom == 1` 是「适配屏幕」（整块显示器完整放进视图，留黑边）。`center` 是可见区域中心在显示器上的
-/// 归一化坐标。放大后拖不出显示器边界；某个方向内容比视图小时那个方向居中。
+/// 归一化坐标。放大后拖不出显示器边界；某个方向内容比视图小时那个方向居中（画面的角落进屏幕圆角时往黑边里挪，
+/// 见 `RemoteDesktopCornerFit`）。
 /// 缩放下限就是适配（`minZoom == 1`），不允许缩到适配以下：再缩只是四周多黑边、内容更小，
 /// 主流远程桌面也都这么做。想看到更多应该改 Mac 端的输出分辨率，而不是缩画面。
 nonisolated struct RemoteDesktopViewport: Equatable {
@@ -607,11 +608,14 @@ nonisolated struct RemoteDesktopViewport: Equatable {
 
     var scale: CGFloat { fitScale * zoom }
 
-    /// 整块显示器在视图坐标里的位置与大小（画面就画在这里）。
+    /// 整块显示器在视图坐标里的位置与大小（画面就画在这里）。比视图小的方向不看 `center`：按
+    /// `RemoteDesktopCornerFit.origin` 放，画面的角落进圆弧时往黑边宽的那头挪（同心圆角那种适配照旧居中）。
     var contentFrame: CGRect {
         let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
-        let origin = CGPoint(x: viewSize.width / 2 - center.x * size.width,
-                             y: viewSize.height / 2 - center.y * size.height)
+        let shifts = RemoteDesktopCornerFit.margin(content: contentSize, view: viewSize, corners: corners) == 0
+        let rest = RemoteDesktopCornerFit.origin(size: size, view: viewSize, corners: corners, shifts: shifts)
+        let origin = CGPoint(x: size.width > viewSize.width ? viewSize.width / 2 - center.x * size.width : rest.x,
+                             y: size.height > viewSize.height ? viewSize.height / 2 - center.y * size.height : rest.y)
         return CGRect(origin: origin, size: size)
     }
 
@@ -690,7 +694,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
                        y: axis(point.y, origin: frame.minY, length: frame.height, view: viewSize.height))
     }
 
-    /// 内容比视图大的方向不让拖出边界，比视图小的方向居中。
+    /// 内容比视图大的方向不让拖出边界；比视图小的方向 `center` 归中（位置由 `contentFrame` 按圆角定）。
     mutating func clamp() {
         let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
         func axis(_ value: CGFloat, content: CGFloat, view: CGFloat) -> CGFloat {

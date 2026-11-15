@@ -45,25 +45,39 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
         return scenes
     }
 
-    /// 「适配屏幕」与屏幕 / 窗口圆角同心：画面离四边留一样宽的窄边铺满（紧的那个方向正好是窄边），
-    /// 画面的角切成同心圆角、整个落在外面的圆角以内；只有直角的画布照旧铺满不留边。
+    /// 「适配屏幕」躲开屏幕 / 窗口的圆角，三种结果：角本来就在弧线外的照旧居中铺满；黑边够挪的往黑边里挪、
+    /// 铺满、直角；都不行的离四边留一样宽的窄边（紧的那个方向正好是窄边），画面的角切成同心圆角。
+    /// 不论哪种，画面整个落在外面的圆角以内。
     func test_fit_fills_with_uniform_margin_and_concentric_corners() {
         let gap = RemoteDesktopCornerFit.gap
         for scene in Self.scenes() {
             let viewport = RemoteDesktopViewport(contentSize: scene.content, viewSize: scene.canvas, corners: scene.corners)
             let frame = viewport.contentFrame
             let label = scene.name
+            XCTAssertEqual(frame.width / frame.height, scene.content.width / scene.content.height, accuracy: 1e-6, label)
+            let full = min(scene.canvas.width / scene.content.width, scene.canvas.height / scene.content.height)
+            let fullDx = (scene.canvas.width - scene.content.width * full) / 2
+            let fullDy = (scene.canvas.height - scene.content.height * full) / 2
+            let centeredClears = RemoteDesktopCornerFit.clears(dx: fullDx, dy: fullDy, radius: scene.corners.max)
+            let shifted = !centeredClears && abs(viewport.fitScale - full) < 1e-9
+            if shifted {
+                // 挪进黑边：大小不变、紧的方向贴边、角是直角且都在弧线外。
+                XCTAssertEqual(min(frame.minX, frame.minY), 0, accuracy: 1e-6, label)
+                XCTAssertTrue(viewport.pictureCorners.isSquare, label)
+                XCTAssertTrue(RemoteDesktopCornerFit.clearsAll(frame: frame, view: scene.canvas, corners: scene.corners), label)
+                print("[corner-fit] \(label): shifted dx \(frame.minX) top \(frame.minY) "
+                      + "bottom \(scene.canvas.height - frame.maxY) scale \(viewport.fitScale)")
+                XCTAssertTrue(Self.pictureInsideCanvas(frame: frame, picture: .square, canvas: scene.canvas, corners: scene.corners),
+                              "\(label) 画面角出了外圆角")
+                continue
+            }
             let dx = frame.minX, dy = frame.minY
             // 居中、等比。
             XCTAssertEqual(frame.midX, scene.canvas.width / 2, accuracy: 1e-6, label)
             XCTAssertEqual(frame.midY, scene.canvas.height / 2, accuracy: 1e-6, label)
-            XCTAssertEqual(frame.width / frame.height, scene.content.width / scene.content.height, accuracy: 1e-6, label)
-            // 普通适配下角落进弧线的：四边至少留窄边，紧的那个方向正好是窄边（铺满，不再为直角多缩）。
+            // 角落进弧线又挪不开的：四边至少留窄边，紧的那个方向正好是窄边（铺满，不再为直角多缩）。
             // 角本来就在弧线外的：照旧铺满，紧的那个方向贴边。
-            let full = min(scene.canvas.width / scene.content.width, scene.canvas.height / scene.content.height)
-            let fullDx = (scene.canvas.width - scene.content.width * full) / 2
-            let fullDy = (scene.canvas.height - scene.content.height * full) / 2
-            let needsMargin = !RemoteDesktopCornerFit.clears(dx: fullDx, dy: fullDy, radius: scene.corners.max)
+            let needsMargin = !centeredClears
             XCTAssertEqual(min(dx, dy), needsMargin ? gap : 0, accuracy: 1e-6, label)
             if !needsMargin { XCTAssertEqual(viewport.fitScale, full, accuracy: 1e-9, label) }
             print("[corner-fit] \(label): margin \(needsMargin ? gap : 0) dx \(dx) dy \(dy) "
@@ -100,6 +114,56 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
         zoomed.zoom(by: 2, anchor: CGPoint(x: 437, y: 201))
         XCTAssertLessThan(zoomed.contentFrame.minX, 0)
         XCTAssertTrue(zoomed.pictureCorners.isSquare)
+    }
+
+    /// Duo 内屏看 16:9 外接屏（2026-11-15 真机实测「底部圆角、左右没铺满」）：画布只有下面两个角是屏幕
+    /// 圆角，上下黑边加起来比要躲开的距离多，画面往上挪、铺满宽度、直角，不再缩一圈切圆角。
+    func test_letterboxed_picture_shifts_away_from_bottom_corners() {
+        let canvas = CGSize(width: 1000, height: 660)
+        let corners = RemoteDesktopCornerRadii(bottomLeft: 55, bottomRight: 55)
+        var viewport = RemoteDesktopViewport(contentSize: Self.external, viewSize: canvas, corners: corners)
+        let frame = viewport.contentFrame
+        XCTAssertEqual(viewport.fitScale, canvas.width / Self.external.width, accuracy: 1e-9, "宽度铺满，不缩")
+        XCTAssertEqual(frame.minX, 0, accuracy: 1e-6)
+        XCTAssertEqual(frame.maxX, canvas.width, accuracy: 1e-6)
+        XCTAssertTrue(viewport.pictureCorners.isSquare, "直角，不切圆角")
+        let need = RemoteDesktopCornerFit.clearance(other: 0, radius: 55)
+        XCTAssertEqual(canvas.height - frame.maxY, need, accuracy: 1e-6, "下面只让到刚好躲开弧线")
+        XCTAssertLessThan(frame.minY, canvas.height - frame.maxY, "往上挪了")
+        XCTAssertGreaterThan(frame.minY, 0, "上面还留着黑边，没有挪过头")
+        // 触点映射跟着挪：画面左下角的视图点仍对应显示器左下角。
+        let corner = viewport.normalized(viewPoint: CGPoint(x: frame.minX, y: frame.maxY))
+        XCTAssertEqual(corner.x, 0, accuracy: 1e-9)
+        XCTAssertEqual(corner.y, 1, accuracy: 1e-9)
+        // 放大：上下黑边还够让时，下沿一直停在躲开弧线的位置（不在宽度超出的那一刻跳回居中）；
+        // 不够让了就贴着上沿往下长，连续地过渡到高过视图；之后按拖动位置走，角在视图外不切。
+        viewport.setZoom(1.05)
+        XCTAssertEqual(canvas.height - viewport.contentFrame.maxY, need, accuracy: 1e-6)
+        XCTAssertTrue(viewport.pictureCorners.isSquare)
+        viewport.setZoom(1.1)
+        XCTAssertEqual(viewport.contentFrame.minY, 0, accuracy: 1e-6, "黑边不够让：上沿贴边")
+        viewport.setZoom(2)
+        XCTAssertLessThan(viewport.contentFrame.minY, 0)
+        XCTAssertTrue(viewport.pictureCorners.isSquare)
+        viewport.reset()
+        XCTAssertEqual(viewport.contentFrame, frame, "回到适配屏幕还是挪好的位置")
+        // 四个角都是屏幕圆角（手机整屏）、上下黑边不够两头各让的：还是同心圆角那一套，居中。
+        let tight = RemoteDesktopViewport(contentSize: Self.external, viewSize: CGSize(width: 1000, height: 640),
+                                          corners: RemoteDesktopCornerRadii(all: 55))
+        XCTAssertEqual(tight.contentFrame.midY, 320, accuracy: 1e-6)
+        XCTAssertEqual(tight.contentFrame.minX, RemoteDesktopCornerFit.gap, accuracy: 1e-6)
+        XCTAssertFalse(tight.pictureCorners.isSquare)
+    }
+
+    /// `clearance` 与 `clears` 是同一个圆：刚好躲开时 `clears` 成立，再近一点就不成立。
+    func test_clearance_matches_clears() {
+        for other in stride(from: CGFloat(0), through: 80, by: 5) {
+            let need = RemoteDesktopCornerFit.clearance(other: other, radius: 55)
+            XCTAssertTrue(RemoteDesktopCornerFit.clears(dx: other, dy: need + 1e-6, radius: 55), "other \(other)")
+            if need > 0.01 { XCTAssertFalse(RemoteDesktopCornerFit.clears(dx: other, dy: need - 0.01, radius: 55), "other \(other)") }
+        }
+        XCTAssertEqual(RemoteDesktopCornerFit.clearance(other: -3, radius: 55),
+                       RemoteDesktopCornerFit.clearance(other: 0, radius: 55), "角出了视图按贴边算")
     }
 
     /// 只在 86e1b171 那版也要缩的场景里让出窄边，且最多让出一圈窄边：比普通适配小不超过 2×gap。
@@ -272,7 +336,10 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
                 let viewport = RemoteDesktopViewport(contentSize: scene.content, viewSize: scene.canvas, corners: scene.corners)
                 frame = viewport.contentFrame
                 picture = viewport.pictureCorners
-                label = "改后：同心 r=\(Int(picture.radius.rounded()))，边 \(Int(RemoteDesktopCornerFit.gap))"
+                let full = min(scene.canvas.width / scene.content.width, scene.canvas.height / scene.content.height)
+                label = picture.isSquare && abs(viewport.fitScale - full) < 1e-9
+                    ? "改后：挪进黑边，铺满、直角"
+                    : "改后：同心 r=\(Int(picture.radius.rounded()))，边 \(Int(RemoteDesktopCornerFit.gap))"
             }
             (label as NSString).draw(at: CGPoint(x: origin.x, y: gap - 4),
                                      withAttributes: [.font: NSFont.systemFont(ofSize: 15, weight: .semibold)])
