@@ -20,42 +20,12 @@ struct SettingsAppearanceSection: View {
 
             VStack(alignment: .leading, spacing: 11) {
                 Text("强调色").font(M.sans(14)).foregroundStyle(M.text2)
-                AccentPickerRow()
+                UDAccentSwatches(
+                    selection: Binding(get: { AccentState.shared.selected },
+                                       set: { AccentState.shared.selected = $0 }),
+                    size: 30, spacing: 14)
             }
             .padding(14)
         }
-    }
-}
-
-/// 强调色选择（5 色，写 AccentState，全局即时重染）。
-struct AccentPickerRow: View {
-    @State private var selected: AccentColor = AccentState.shared.selected
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(AccentColor.allCases) { color in
-                let c = color.base(dark: true).color()
-                let on = selected == color
-                Circle().fill(c)
-                    .frame(width: 30, height: 30)
-                    // 选中环：外圈一道正文色描边，中间隔开 3pt 卡片底。旧版是贴边白环，
-                    // 日间白卡上完全看不出选中了哪一个。
-                    .padding(3)
-                    .overlay(Circle().strokeBorder(on ? M.text : .clear, lineWidth: 2))
-                    .frame(width: M.minTarget, height: M.minTarget)   // 命中区 44pt
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.spring(duration: 0.25)) {
-                            selected = color
-                            AccentState.shared.selected = color
-                        }
-                    }
-                    .accessibilityElement()
-                    .accessibilityLabel(Text(color.label))
-                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-            }
-            Spacer()
-        }
-        .padding(.leading, -7)   // 让第一个色块的视觉左缘与上方「强调色」文字对齐
     }
 }
