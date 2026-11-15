@@ -833,10 +833,20 @@ final class RemoteMacClient: Identifiable {
         guard attachment.link === link else { throw RemoteProtocolError.closed }
         let request = RemoteTerminalImageRequest(requestID: UUID(), image: image)
         let requestID = request.requestID
+        // 整张图是一条消息，量不出发了多少：发出去之前停在「发送」的起点，链路接走之后进「等对方处理」。
+        // 进度的接收方要在这个任务里取，下面的回调在链路队列上。
+        let progress = PasteProgressReporter.sink
+        progress?(PasteProgress(.sending))
         let result = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<RemoteTerminalImageResult, Error>) in
             imageWaiters[requestID] = continuation
-            attachment.link.send(RemoteMessage(.terminalImage, channel: attachment.channel, payload: request.encoded()))
+            let link = attachment.link, channel = attachment.channel
+            link.queue.async {
+                // 几 MB 的拼装不放主线程。
+                link.sendOnQueue(RemoteMessage(.terminalImage, channel: channel, payload: request.encoded())) { error in
+                    if error == nil { progress?(PasteProgress(.finishing)) }
+                }
+            }
             // Mac 一直不回（处理途中出错、旧版本丢了请求）也不能让贴图一直转圈。
             Task { [weak self] in
                 try? await Task.sleep(for: Self.terminalImageTimeout)

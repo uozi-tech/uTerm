@@ -162,6 +162,23 @@ final class SFTPSessionPipelineTests: XCTestCase {
         XCTAssertGreaterThan(peak, 1, "峰值只有 1 说明退化回串行了")
     }
 
+    /// 每确认一片报一次累计字节数：单调递增、最后一次等于总长（贴图的进度条靠它）。
+    func testWriteReportsCumulativeProgressPerAcknowledgedSlice() async throws {
+        let bytes = payload(100_000)
+        let file = RecordingFile()
+        await file.setLatency(.milliseconds(1))
+        var reports: [(written: Int, total: Int)] = []
+
+        try await SFTPPipeline.write(file, data: buffer(bytes), at: 0, inFlight: 2) { written, total in
+            reports.append((written, total))
+        }
+
+        XCTAssertEqual(reports.count, 4, "一片一次")
+        XCTAssertEqual(Set(reports.map(\.total)), [100_000])
+        XCTAssertEqual(reports.last?.written, 100_000)
+        XCTAssertEqual(reports.map(\.written), reports.map(\.written).sorted(), "累计值不能往回走")
+    }
+
     func testWriteWithInFlightOneIsSerial() async throws {
         let bytes = payload(96_000)
         let file = RecordingFile()

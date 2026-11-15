@@ -93,24 +93,32 @@ nonisolated enum SFTPPipeline {
     ///
     /// 任一片失败 → TaskGroup 取消其余、等它们收尾，然后把**原错误**抛出去
     ///（不包一层，`ControlFilePayloadBuilder.errorCode(for:)` 还要认服务端状态码）。
+    ///
+    /// `progress`：每确认一片报一次「已写字节数 / 总字节数」，在调用方的任务里调（不在子任务里）。
     static func write(
         _ file: some SFTPPipelineFile,
         data: ByteBuffer,
         at base: UInt64,
-        inFlight: Int = defaultInFlight
+        inFlight: Int = defaultInFlight,
+        progress: ((_ written: Int, _ total: Int) -> Void)? = nil
     ) async throws {
         let total = data.readableBytes
         guard total > 0 else { return }
         let window = max(1, inFlight)
-        try await withThrowingTaskGroup(of: Void.self) { group in
+        try await withThrowingTaskGroup(of: Int.self) { group in
             var running = 0
             var start = 0
+            var written = 0
+            func acknowledged(_ bytes: Int) {
+                written += bytes
+                progress?(written, total)
+            }
             while start < total {
                 try Task.checkCancellation()
                 if running >= window {
                     // 窗口满了：等最早完成的一个腾位置。它若失败，错误在这里抛出，
                     // 退出 body 时 TaskGroup 自动取消并等待其余子任务。
-                    try await group.next()
+                    if let bytes = try await group.next() { acknowledged(bytes) }
                     running -= 1
                 }
                 let end = min(start + chunkSize, total)
@@ -119,15 +127,17 @@ nonisolated enum SFTPPipeline {
                     throw SFTPPipelineError.sliceOutOfRange
                 }
                 let offset = base + UInt64(start)
+                let length = end - start
                 group.addTask {
                     try await file.writeChunk(slice, at: offset)
                     // 每个 ack 都是一次进展：CLI 的静默看门狗靠它区分「慢」和「卡死」。
                     IOActivity.touch()
+                    return length
                 }
                 running += 1
                 start = end
             }
-            try await group.waitForAll()
+            while let bytes = try await group.next() { acknowledged(bytes) }
         }
     }
 

@@ -7,10 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		55535348535441434B000014 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000003 /* USSHStack */; };
-		55535348535441434B000013 /* USSHStack in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		55535348535441434B000011 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; };
-		55535348535441434B000012 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000002 /* USSHStack */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
@@ -38,6 +34,10 @@
 		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
 		5550414E4750000000000011 /* UPaneGroups in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E4750000000000001 /* UPaneGroups */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
+		55535348535441434B000011 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; };
+		55535348535441434B000012 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000002 /* USSHStack */; };
+		55535348535441434B000013 /* USSHStack in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		55535348535441434B000014 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000003 /* USSHStack */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		851030E33047167600A370DF /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000002 /* UDesignKit */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
@@ -561,6 +561,7 @@
 				Features/Remote/RemoteRelayUpdateMonitor.swift,
 				Features/Remote/RemoteSleepPolicy.swift,
 				Features/Settings/Model/SettingsSection.swift,
+				Features/Terminal/PasteProgress.swift,
 				Features/Terminal/ProgramStatus.swift,
 				Features/Terminal/Shadow/TerminalEngineVersion.swift,
 				Services/SSH/TerminalImage.swift,
@@ -2265,13 +2266,13 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/kcp;
 		};
-		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/CodeEditTextView;
-		};
 		55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/USSHStack;
+		};
+		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/CodeEditTextView;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -2518,6 +2519,21 @@
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = USSHKit;
 		};
+		55535348535441434B000001 /* USSHStack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
+			productName = USSHStack;
+		};
+		55535348535441434B000002 /* USSHStack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
+			productName = USSHStack;
+		};
+		55535348535441434B000003 /* USSHStack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
+			productName = USSHStack;
+		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
@@ -2582,21 +2598,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
 			productName = TreeSitterMarkdown;
-		};
-		55535348535441434B000001 /* USSHStack */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
-			productName = USSHStack;
-		};
-		55535348535441434B000002 /* USSHStack */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
-			productName = USSHStack;
-		};
-		55535348535441434B000003 /* USSHStack */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
-			productName = USSHStack;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

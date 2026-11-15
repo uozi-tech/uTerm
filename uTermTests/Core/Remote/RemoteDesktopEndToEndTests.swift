@@ -159,6 +159,19 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         let pasted = await waitUntil { mac.injector.allPastes.count == pastes.count }
         XCTAssertTrue(pasted)
         XCTAssertEqual(mac.injector.allPastes, pastes)
+        // 手机的「粘贴到 Mac」等全部交给链路才返回，一路报发送进度，最后一次是 100%。
+        let big = RemoteDesktopPaste.png(Data(repeating: 9, count: 150_000))
+        let reports = PasteReports()
+        try await PasteProgressReporter.$sink.withValue({ reports.add($0) }) {
+            try await session.pasteAndWait(big)
+        }
+        let sent = reports.all
+        XCTAssertEqual(sent.map(\.overall), sent.map(\.overall).sorted(), "发送进度不能往回走")
+        XCTAssertEqual(sent.last?.phase, .sending)
+        XCTAssertEqual(sent.last?.fraction, 1)
+        XCTAssertGreaterThan(sent.count, 1, "分块发送应逐块报进度")
+        let pastedBig = await waitUntil { mac.injector.allPastes.last == big }
+        XCTAssertTrue(pastedBig)
         let controlling = await waitUntil { server.desktopViewer?.isControlling == true }
         XCTAssertTrue(controlling, "收到输入后 Mac 上的指示改成「正在控制」")
 
@@ -771,4 +784,12 @@ private final class MessageInbox: @unchecked Sendable {
     var all: [RemoteMessage] { lock.lock(); defer { lock.unlock() }; return messages }
     func first(_ kind: RemoteMessage.Kind) -> RemoteMessage? { all.first { $0.kind == kind } }
     func of(_ kind: RemoteMessage.Kind) -> [RemoteMessage] { all.filter { $0.kind == kind } }
+}
+
+/// 收进度上报（在链路队列上调）。
+private final class PasteReports: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [PasteProgress] = []
+    func add(_ item: PasteProgress) { lock.withLock { items.append(item) } }
+    var all: [PasteProgress] { lock.withLock { items } }
 }

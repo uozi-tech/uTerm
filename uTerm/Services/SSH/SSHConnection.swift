@@ -516,7 +516,9 @@ nonisolated extension ConnectedClient {
             do {
                 var buffer = ByteBuffer()
                 buffer.writeBytes(image.data)
-                try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: 0)
+                try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: 0) { written, total in
+                    PasteProgressReporter.report(.sending(written, of: total))
+                }
                 try await file.close()
             } catch {
                 try? await file.close()

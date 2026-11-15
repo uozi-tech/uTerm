@@ -119,12 +119,7 @@ struct TerminalKeyBar: View {
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
             pickedPhoto = nil
-            controller.sendImage {
-                guard let data = try await item.loadTransferable(type: Data.self) else {
-                    throw RemoteDesktopPasteEncoding.Failure.unreadableImage
-                }
-                return try await RemoteDesktopPasteSource.terminalImage(data: data)
-            }
+            controller.sendImage { try await RemoteDesktopPasteSource.terminalImage(photo: item) }
         }
     }
 
@@ -135,7 +130,7 @@ struct TerminalKeyBar: View {
 
     @ViewBuilder private var imageNote: some View {
         if let note = controller.imageNote {
-            MKeyBarNote(text: note)
+            MKeyBarNote(text: note.text, progress: note.progress)
                 .padding(.horizontal, 10)
                 .transition(.opacity)
         }
@@ -231,23 +226,34 @@ struct TerminalKeyBar: View {
     }
 }
 
-/// 浮在键盘条上方的一条提示（贴图的进度 / 结果）。它压在终端的字上面，底必须不透明：`M.button` 只是一层
+/// 浮在键盘条上方的一条提示（贴图的进度 / 结果），进行中时字下面带一条进度条。它压在终端的字上面，底必须不透明：`M.button` 只是一层
 /// 白 8% / 黑 4% 的淡色，单用它字会从下面透上来（1090 实测）。所以先垫工作面的底色，再叠键帽那层淡色，
 /// 外加一圈分区线把它和同色的终端分开。
 struct MKeyBarNote: View {
     let text: String
+    /// 0...1；nil = 不带进度条。
+    var progress: Double?
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: MRadius.sm)
-        Text(text)
-            .font(M.sans(12, weight: .medium))
-            .foregroundStyle(M.text)
-            .lineLimit(2)
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(M.button)
-            .background(M.surface)
-            .clipShape(shape)
-            .overlay(shape.strokeBorder(M.divider, lineWidth: 1))
+        VStack(alignment: .leading, spacing: 5) {
+            Text(text)
+                .font(M.sans(12, weight: .medium))
+                .foregroundStyle(M.text)
+                .lineLimit(2)
+            if let progress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(M.accent)
+                    .frame(width: 180)
+                    .accessibilityLabel(text)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(M.button)
+        .background(M.surface)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(M.divider, lineWidth: 1))
     }
 }
 

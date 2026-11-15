@@ -653,11 +653,41 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
     /// 同时在途几块。太少的话直连上每个往返只传一块（确认才算完成），太多又把链路占满。
     static let window = 4
 
+    /// 排着队的一条内容和它的回调。只在 `link.queue` 上碰（所以 `@unchecked`）。
+    private final class Item: @unchecked Sendable {
+        let payload: Data
+        let progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)?
+        let completion: (@Sendable (Error?) -> Void)?
+        private var sent = 0
+        private var finished = false
+
+        init(payload: Data, progress: (@Sendable (Int, Int) -> Void)?, completion: (@Sendable (Error?) -> Void)?) {
+            self.payload = payload
+            self.progress = progress
+            self.completion = completion
+        }
+
+        /// 链路接走了 `bytes` 字节（`error` 非 nil 时是没接走）。
+        func handedOff(_ bytes: Int, error: Error?) {
+            guard !finished else { return }
+            if let error { return finish(error) }
+            sent += bytes
+            progress?(sent, payload.count)
+            if sent >= payload.count { finish(nil) }
+        }
+
+        func finish(_ error: Error?) {
+            guard !finished else { return }
+            finished = true
+            completion?(error)
+        }
+    }
+
     private let link: RemoteLink
     private let channel: UInt32
     private let supportsChunks: Bool
-    private var waiting: [Data] = []
-    private var current: Data?
+    private var waiting: [Item] = []
+    private var current: Item?
     private var offset = 0
     private var inFlight = 0
     private var nextID: UInt32 = 1
@@ -669,13 +699,30 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
         self.supportsChunks = supportsChunks
     }
 
+    deinit {
+        // 还没发完的不能让等着的人一直等。
+        let pending = waiting + (current.map { [$0] } ?? [])
+        guard !pending.isEmpty else { return }
+        link.queue.async { pending.forEach { $0.finish(RemoteProtocolError.closed) } }
+    }
+
     func isFor(link other: RemoteLink, channel otherChannel: UInt32) -> Bool {
         link === other && channel == otherChannel
     }
 
-    func enqueue(_ payload: Data) {
+    /// 排一条内容。打包（几 MB 的拷贝）在链路队列上做，不占调用方的线程。
+    /// - Parameters:
+    ///   - progress: 链路已接走多少字节 / 总字节数，在 `link.queue` 上调。
+    ///   - completion: 全部交给链路后（或发不出去时带着错误）在 `link.queue` 上调一次。
+    func enqueue(_ content: RemoteDesktopPaste,
+                 progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)? = nil,
+                 completion: (@Sendable (Error?) -> Void)? = nil) {
         link.queue.async { [self] in
-            waiting.append(payload)
+            guard !failed else {
+                completion?(RemoteProtocolError.closed)
+                return
+            }
+            waiting.append(Item(payload: content.encoded(), progress: progress, completion: completion))
             pump()
         }
     }
@@ -686,23 +733,30 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
             if current == nil {
                 guard !waiting.isEmpty else { return }
                 let next = waiting.removeFirst()
-                guard supportsChunks, next.count > Self.chunkBytes else {
+                guard supportsChunks, next.payload.count > Self.chunkBytes else {
                     // 排在队里的就按序发：小内容不能抢到前面的大内容之前。
-                    link.sendOnQueue(RemoteMessage(.desktopPaste, channel: channel, payload: next))
+                    let count = next.payload.count
+                    link.sendOnQueue(RemoteMessage(.desktopPaste, channel: channel, payload: next.payload),
+                                     completion: { error in next.handedOff(count, error: error) })
                     continue
                 }
                 current = next
                 offset = 0
             }
-            guard let payload = current else { return }
+            guard let item = current else { return }
+            let payload = item.payload
             while inFlight < Self.window, offset < payload.count {
                 let end = min(payload.count, offset + Self.chunkBytes)
                 let chunk = RemoteDesktopPasteChunk(pasteID: nextID, offset: UInt32(offset), total: UInt32(payload.count),
                                                     bytes: Data(payload[(payload.startIndex + offset)..<(payload.startIndex + end)]))
+                let length = end - offset
                 offset = end
                 inFlight += 1
                 link.sendOnQueue(RemoteMessage(.desktopPasteChunk, channel: channel, payload: chunk.encoded()),
-                                 completion: { [weak self] error in self?.chunkFinished(error) })
+                                 completion: { [weak self] error in
+                                     item.handedOff(length, error: error)
+                                     self?.chunkFinished(error)
+                                 })
             }
             guard offset >= payload.count else { return }
             current = nil
@@ -712,10 +766,12 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
 
     private func chunkFinished(_ error: Error?) {
         inFlight -= 1
-        if error != nil {
+        if let error {
             failed = true
+            let dropped = waiting + (current.map { [$0] } ?? [])
             waiting = []
             current = nil
+            dropped.forEach { $0.finish(error) }
             return
         }
         pump()

@@ -388,12 +388,30 @@ final class RemoteDesktopSession {
 
     /// 把一张图片或一段文字粘贴进 Mac 当前的前台 app（Mac 写剪贴板后按 ⌘V）。
     func paste(_ content: RemoteDesktopPaste) {
-        guard let attachment, canPaste else { return }
+        uploader()?.enqueue(content)
+    }
+
+    /// 同上，等内容全部交给链路才返回；发送的进度报给 `PasteProgressReporter`。不能粘贴、半路断开时抛错。
+    func pasteAndWait(_ content: RemoteDesktopPaste) async throws {
+        guard let uploader = uploader() else { throw RemoteProtocolError.closed }
+        let sink = PasteProgressReporter.sink
+        let progress: (@Sendable (Int, Int) -> Void)? = sink.map { sink in
+            { @Sendable sent, total in sink(PasteProgress.sending(sent, of: total)) }
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            uploader.enqueue(content, progress: progress) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private func uploader() -> RemoteDesktopPasteUploader? {
+        guard let attachment, canPaste else { return nil }
         if pasteUploader?.isFor(link: attachment.link, channel: attachment.channel) != true {
             pasteUploader = RemoteDesktopPasteUploader(link: attachment.link, channel: attachment.channel,
                                                        supportsChunks: client.supportsDesktopPasteChunks)
         }
-        pasteUploader?.enqueue(content.encoded())
+        return pasteUploader
     }
 
     /// App 退到后台 / 回到前台。后台时画面没人看（显示层也不出图）。

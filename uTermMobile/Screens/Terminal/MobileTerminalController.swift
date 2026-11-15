@@ -393,18 +393,26 @@ final class MobileTerminalController {
     /// 后端能不能收图片：直连 SSH 传成服务器上的文件；远控 Mac 终端交给 Mac（本机 shell 走剪贴板 +
     /// Ctrl+V，SSH 会话由 Mac 传文件）。测试的假传输不能。
     private(set) var acceptsImages = false
-    /// 贴图的进度 / 结果（键盘条上方的提示），几秒后自己消失。
-    private(set) var imageNote: String?
+    /// 贴图的进度 / 结果（键盘条上方的提示）。进行中带进度条；出了结果几秒后自己消失。
+    private(set) var imageNote: PasteNote?
     @ObservationIgnored private var imageNoteTask: Task<Void, Never>?
+    /// 一次贴一张：上一张还在路上时再点不另起一次（两条进度会互相盖掉）。
+    @ObservationIgnored private var sendingImage = false
 
     /// 读一张图（剪贴板 / 相册）交给终端里的程序。传成文件时把路径粘进终端，后面带一个空格。
+    /// 读取、压缩、上传都不在主线程上做，各段的进度经 `PasteProgressReporter` 画到提示里的进度条上。
     func sendImage(_ load: @escaping @MainActor () async throws -> TerminalImage) {
-        guard let receiver = connection as? any TerminalImageReceiving, state == .connected else { return }
-        showImageNote("正在发送图片…", sticky: true)
+        guard let receiver = connection as? any TerminalImageReceiving, state == .connected, !sendingImage else { return }
+        sendingImage = true
+        showImageNote(PasteProgress(.reading).note)
+        let relay = PasteProgressRelay { [weak self] progress in self?.imageProgressChanged(progress) }
         Task { [weak self] in
+            defer { self?.sendingImage = false }
             do {
-                let image = try await load()
-                let delivery = try await TerminalPaste.deliver(image: image, to: receiver) { self?.paste($0) }
+                let delivery = try await PasteProgressReporter.$sink.withValue(relay.sink) {
+                    let image = try await load()
+                    return try await TerminalPaste.deliver(image: image, to: receiver) { self?.paste($0) }
+                }
                 guard let self else { return }
                 switch delivery {
                 case .clipboard:
@@ -424,10 +432,21 @@ final class MobileTerminalController {
         terminal.paste(text)
     }
 
-    private func showImageNote(_ note: String, sticky: Bool = false) {
+    /// 进度只往进行中的那条提示上走：结果已经出来（提示没了进度条）之后晚到的不再把进度条拉回来。
+    private func imageProgressChanged(_ progress: PasteProgress) {
+        guard let current = imageNote?.progress, progress.overall >= current else { return }
+        imageNote = progress.note
+    }
+
+    private func showImageNote(_ text: String) {
+        showImageNote(PasteNote(text: text))
+    }
+
+    /// 带进度的（进行中）一直留着，直到换成结果；结果几秒后自己消失。
+    private func showImageNote(_ note: PasteNote) {
         imageNoteTask?.cancel()
         imageNote = note
-        guard !sticky else { return }
+        guard note.progress == nil else { return }
         imageNoteTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }

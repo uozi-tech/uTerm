@@ -19,9 +19,12 @@ struct RemoteDesktopScreen: View {
     @State private var showStats = false
     @State private var pickingPhoto = false
     @State private var pickedPhoto: PhotosPickerItem?
-    /// 粘贴的结果提示（「已粘贴到 Mac」/「已复制到手机」/ 失败原因），几秒后自己消失。
-    @State private var pasteNote: String?
+    /// 粘贴的进度（读取 / 压缩 / 发送，带进度条）与结果（「已粘贴到 Mac」/「已复制到手机」/ 失败原因）；
+    /// 结果几秒后自己消失。
+    @State private var pasteNote: PasteNote?
     @State private var pasteNoteTask: Task<Void, Never>?
+    /// 一次粘一份：上一份还在路上时再点不另起一次。
+    @State private var pasting = false
     /// 远程解锁的进行态与密码输入。
     @State private var unlockPhase: UnlockPhase = .idle
     @State private var enteringPassword = false
@@ -331,28 +334,33 @@ struct RemoteDesktopScreen: View {
     // MARK: - 粘贴到 Mac
 
     private func pasteClipboard() async {
-        do {
-            send(try await RemoteDesktopPasteSource.clipboard())
-        } catch {
-            showPasteNote(error.localizedDescription)
-        }
+        await paste { try await RemoteDesktopPasteSource.clipboard() }
     }
 
     private func pastePhoto(_ item: PhotosPickerItem) async {
+        await paste { try await RemoteDesktopPasteSource.photo(item) }
+    }
+
+    /// 读出内容、发给 Mac，等全部交给链路后报结果。读取、压缩、打包都不在主线程上做，进度画在顶上的提示里。
+    private func paste(_ load: @MainActor () async throws -> RemoteDesktopPaste) async {
+        guard let session, session.canPaste, !pasting else { return }
+        pasting = true
+        defer { pasting = false }
+        showPasteNote(PasteProgress(.reading).note)
+        let relay = PasteProgressRelay { progress in
+            guard let current = pasteNote?.progress, progress.overall >= current else { return }
+            pasteNote = progress.note
+        }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw RemoteDesktopPasteEncoding.Failure.unreadableImage
+            let content = try await PasteProgressReporter.$sink.withValue(relay.sink) {
+                let content = try await load()
+                try await session.pasteAndWait(content)
+                return content
             }
-            send(try await RemoteDesktopPasteEncoding.image(data: data))
+            showPasteNote(RemoteDesktopPasteEncoding.sentNote(content))
         } catch {
             showPasteNote(error.localizedDescription)
         }
-    }
-
-    private func send(_ content: RemoteDesktopPaste) {
-        guard let session, session.canPaste else { return }
-        session.paste(content)
-        showPasteNote(RemoteDesktopPasteEncoding.sentNote(content))
     }
 
     /// Mac 上拷贝的文字（⌘C / 右键「拷贝」）放进手机剪贴板。
@@ -361,9 +369,15 @@ struct RemoteDesktopScreen: View {
         showPasteNote(RemoteDesktopPasteEncoding.receivedNote(content, source: "Mac", here: String(localized: "手机")))
     }
 
-    private func showPasteNote(_ note: String) {
+    private func showPasteNote(_ text: String) {
+        showPasteNote(PasteNote(text: text))
+    }
+
+    /// 带进度的（进行中）一直留着，直到换成结果；结果几秒后自己消失。
+    private func showPasteNote(_ note: PasteNote) {
         pasteNoteTask?.cancel()
         withAnimation(.easeOut(duration: 0.15)) { pasteNote = note }
+        guard note.progress == nil else { return }
         pasteNoteTask = Task {
             try? await Task.sleep(for: .seconds(2.5))
             guard !Task.isCancelled else { return }
@@ -373,14 +387,24 @@ struct RemoteDesktopScreen: View {
 
     @ViewBuilder private var pasteToast: some View {
         if let pasteNote {
-            Text(pasteNote)
-                .font(M.sans(13, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Capsule().fill(.black.opacity(0.75)))
-                .padding(.top, 10)
-                .transition(.opacity)
-                .allowsHitTesting(false)
+            VStack(spacing: 6) {
+                Text(pasteNote.text)
+                    .font(M.sans(13, weight: .medium))
+                    .foregroundStyle(.white)
+                if let progress = pasteNote.progress {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .tint(.white)
+                        .frame(width: 180)
+                        .accessibilityLabel(pasteNote.text)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: pasteNote.progress == nil ? 100 : 14, style: .continuous)
+                .fill(.black.opacity(0.75)))
+            .padding(.top, 10)
+            .transition(.opacity)
+            .allowsHitTesting(false)
         }
     }
 

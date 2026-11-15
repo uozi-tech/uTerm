@@ -35,6 +35,7 @@ nonisolated enum RemoteDesktopPasteEncoding {
             if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return .png(data) }
             if data.starts(with: [0xFF, 0xD8, 0xFF]) { return .jpeg(data) }
         }
+        PasteProgressReporter.report(PasteProgress(.encoding))
         return try await Task.detached(priority: .userInitiated) { try encode(data, limit: limit) }.value
     }
 
