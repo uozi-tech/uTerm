@@ -75,6 +75,65 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
         XCTAssertTrue(tight.pictureCorners.isSquare)
     }
 
+    /// 2026-11-15 Duo 实测：Mac 的虚拟屏 1920×1230 点，画布 1000×646.5pt，宽高比差 0.9%。原来画面铺满宽度、
+    /// 底下留 6pt 黑条，下角还进了屏幕圆角；现在拉成画布的比例，整块铺满。
+    func test_nearly_matching_picture_is_stretched_to_fill() {
+        let canvas = Self.duoCanvas
+        let content = CGSize(width: 1920, height: 1230)
+        var viewport = RemoteDesktopViewport(contentSize: content, viewSize: canvas, corners: Self.bottom55,
+                                             bleedsIntoCorners: true)
+        XCTAssertEqual(viewport.contentFrame.minX, 0, accuracy: 1e-6)
+        XCTAssertEqual(viewport.contentFrame.minY, 0, accuracy: 1e-6)
+        XCTAssertEqual(viewport.contentFrame.width, canvas.width, accuracy: 1e-6)
+        XCTAssertEqual(viewport.contentFrame.height, canvas.height, accuracy: 1e-6)
+        XCTAssertTrue(viewport.pictureCorners.isSquare)
+        // 触点照样对应整块显示器：画布的四个角就是显示器的四个角。
+        let far = viewport.normalized(viewPoint: CGPoint(x: canvas.width, y: canvas.height))
+        XCTAssertEqual(far.x, 1, accuracy: 1e-9)
+        XCTAssertEqual(far.y, 1, accuracy: 1e-9)
+        let middle = viewport.viewPoint(normalized: CGPoint(x: 0.5, y: 0.5))
+        XCTAssertEqual(middle.x, canvas.width / 2, accuracy: 1e-6)
+        XCTAssertEqual(middle.y, canvas.height / 2, accuracy: 1e-6)
+        // 手指横扫过整块画布（增益 1 的速度），光标也正好横穿整块显示器。
+        let swept = RemoteTrackpad.advance(CGPoint(x: 0, y: 0), by: CGSize(width: canvas.width, height: canvas.height),
+                                           speed: 150, viewport: viewport)
+        XCTAssertEqual(swept.x, 1, accuracy: 1e-9)
+        XCTAssertEqual(swept.y, 1, accuracy: 1e-9)
+        // 放大后同样拉着，两个方向一样放大，拖不出边界。
+        viewport.setZoom(2)
+        XCTAssertEqual(viewport.contentFrame.width, canvas.width * 2, accuracy: 1e-6)
+        XCTAssertEqual(viewport.contentFrame.height, canvas.height * 2, accuracy: 1e-6)
+        viewport.pan(by: CGSize(width: 10_000, height: 10_000))
+        XCTAssertEqual(viewport.contentFrame.minX, 0, accuracy: 1e-6)
+        XCTAssertEqual(viewport.contentFrame.minY, 0, accuracy: 1e-6)
+
+        // 比例反过来差一丝（画面比画布高一点）：同样拉满。
+        let taller = RemoteDesktopViewport(contentSize: CGSize(width: 1920, height: 1260), viewSize: canvas,
+                                           corners: Self.bottom55, bleedsIntoCorners: true)
+        XCTAssertEqual(taller.contentFrame.minX, 0, accuracy: 1e-6)
+        XCTAssertEqual(taller.contentFrame.minY, 0, accuracy: 1e-6)
+        XCTAssertEqual(taller.contentFrame.width, canvas.width, accuracy: 1e-6)
+        XCTAssertEqual(taller.contentFrame.height, canvas.height, accuracy: 1e-6)
+    }
+
+    /// 差得多的不拉（Duo 看 16:9 外接屏，差 15%）：照旧铺满宽度、挪开下角；Mac 窗口从不拉。
+    func test_stretch_only_for_small_mismatches_on_the_phone() {
+        let canvas = Self.duoCanvas
+        let external = RemoteDesktopViewport(contentSize: CGSize(width: 2560, height: 1440), viewSize: canvas,
+                                             corners: Self.bottom55, bleedsIntoCorners: true)
+        XCTAssertEqual(external.pictureSize, CGSize(width: 2560, height: 1440))
+        XCTAssertEqual(external.contentFrame.width / external.contentFrame.height, 2560.0 / 1440.0, accuracy: 1e-9)
+        // 差 3%：超过容差，不拉。
+        let off = CGSize(width: canvas.width * 1.03, height: canvas.height)
+        let notStretched = RemoteDesktopViewport(contentSize: off, viewSize: canvas, corners: Self.bottom55,
+                                                 bleedsIntoCorners: true)
+        XCTAssertEqual(notStretched.pictureSize, off)
+        // Mac 窗口（不贴边）：差一丝也不拉。
+        let window = RemoteDesktopViewport(contentSize: CGSize(width: 1920, height: 1230), viewSize: canvas,
+                                           corners: Self.bottom55)
+        XCTAssertEqual(window.pictureSize, CGSize(width: 1920, height: 1230))
+    }
+
     // MARK: - Duo 内屏看无显示器的 Mac
 
     /// 回归：原先按整块屏幕的比例要，虚拟屏放进顶栏下面的画布，左右各空 70pt。

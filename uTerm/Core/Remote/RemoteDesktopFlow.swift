@@ -592,12 +592,29 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     private(set) var zoom: CGFloat = 1
     private(set) var center = CGPoint(x: 0.5, y: 0.5)
 
+    /// 贴边铺满时，显示器和视图的宽高比差在这个比例以内就把画面拉成视图的比例，整块铺满。
+    /// 显示器的宽高比是对方按我们要的框定的，点数取整、顶栏高度在开流后又变了一点（出读数条），总会差一丝：
+    /// 不拉的话这一丝就成了一条黑边，下角又进了屏幕圆角（2026-11-15 Duo 实测差 0.9%，底下 6pt 黑条）。
+    /// 2% 的变形看不出来，触点照样按画面换算，点得准。
+    static let stretchTolerance: CGFloat = 0.02
+
     init(contentSize: CGSize, viewSize: CGSize, corners: RemoteDesktopCornerRadii = .square,
          bleedsIntoCorners: Bool = false) {
         self.contentSize = contentSize
         self.viewSize = viewSize
         self.corners = corners
         self.bleedsIntoCorners = bleedsIntoCorners
+    }
+
+    /// 画面按这个点尺寸排：通常就是 `contentSize`；贴边铺满、宽高比和视图只差一丝时（`stretchTolerance`）
+    /// 保留宽度、把高度拉到视图的比例。只用于排版，归一化坐标照旧对应整块显示器。
+    var pictureSize: CGSize {
+        guard bleedsIntoCorners, contentSize.width > 0, contentSize.height > 0,
+              viewSize.width > 0, viewSize.height > 0 else { return contentSize }
+        let viewAspect = viewSize.width / viewSize.height
+        let ratio = (contentSize.width / contentSize.height) / viewAspect
+        guard ratio != 1, abs(ratio - 1) <= Self.stretchTolerance else { return contentSize }
+        return CGSize(width: contentSize.width, height: contentSize.width / viewAspect)
     }
 
     /// 适配时四边留的窄边（见 `RemoteDesktopCornerFit.margin`）；贴边铺满的不留。
@@ -609,7 +626,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     ///（见 `RemoteDesktopCornerFit`；`bleedsIntoCorners` 时不留）。
     var fitScale: CGFloat {
         guard contentSize.width > 0, contentSize.height > 0 else { return 1 }
-        return RemoteDesktopCornerFit.scale(content: contentSize, view: viewSize,
+        return RemoteDesktopCornerFit.scale(content: pictureSize, view: viewSize,
                                             corners: bleedsIntoCorners ? .square : corners)
     }
 
@@ -624,7 +641,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     /// 整块显示器在视图坐标里的位置与大小（画面就画在这里）。比视图小的方向不看 `center`：按
     /// `RemoteDesktopCornerFit.origin` 放，画面的角落进圆弧时往黑边宽的那头挪（同心圆角那种适配照旧居中）。
     var contentFrame: CGRect {
-        let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
+        let size = CGSize(width: pictureSize.width * scale, height: pictureSize.height * scale)
         let shifts = fitMargin == 0
         let rest = RemoteDesktopCornerFit.origin(size: size, view: viewSize, corners: corners, shifts: shifts)
         let origin = CGPoint(x: size.width > viewSize.width ? viewSize.width / 2 - center.x * size.width : rest.x,
@@ -650,7 +667,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
         let fixed = normalized(viewPoint: anchor)
         zoom = min(Self.maxZoom, max(Self.minZoom, zoom * factor))
         // 缩放后让 fixed 仍落在 anchor 下面。
-        let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
+        let size = CGSize(width: pictureSize.width * scale, height: pictureSize.height * scale)
         guard size.width > 0, size.height > 0 else { return }
         center = CGPoint(x: fixed.x - (anchor.x - viewSize.width / 2) / size.width,
                          y: fixed.y - (anchor.y - viewSize.height / 2) / size.height)
@@ -709,7 +726,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
 
     /// 内容比视图大的方向不让拖出边界；比视图小的方向 `center` 归中（位置由 `contentFrame` 按圆角定）。
     mutating func clamp() {
-        let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
+        let size = CGSize(width: pictureSize.width * scale, height: pictureSize.height * scale)
         func axis(_ value: CGFloat, content: CGFloat, view: CGFloat) -> CGFloat {
             guard content > view, content > 0 else { return 0.5 }
             let half = view / 2 / content
@@ -729,10 +746,11 @@ nonisolated enum RemoteTrackpad {
     static func advance(_ pointer: CGPoint, by delta: CGSize, speed: CGFloat,
                         viewport: RemoteDesktopViewport) -> CGPoint {
         let scale = viewport.scale
-        guard scale > 0, viewport.contentSize.width > 0, viewport.contentSize.height > 0 else { return pointer }
+        let picture = viewport.pictureSize
+        guard scale > 0, picture.width > 0, picture.height > 0 else { return pointer }
         let gain = acceleration(speed: speed)
-        let dx = delta.width / scale * gain / viewport.contentSize.width
-        let dy = delta.height / scale * gain / viewport.contentSize.height
+        let dx = delta.width / scale * gain / picture.width
+        let dy = delta.height / scale * gain / picture.height
         return CGPoint(x: min(1, max(0, pointer.x + dx)), y: min(1, max(0, pointer.y + dy)))
     }
 
