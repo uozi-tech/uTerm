@@ -215,8 +215,8 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(limit.height, 2880)
         let state = Display.VirtualState(size: mbp, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
         XCTAssertEqual(Display.change(from: state, to: mbp), .keep)
-        // (3136, 1206)、(3168, 1206)：iPhone 横屏按顶栏下面的画布要的（`RemoteDesktopRequestSize`），比屏幕更扁。
-        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880), (3136, 1206), (3168, 1206)] {
+        // (3046, 1206)、(2863, 1125)：iPhone 横屏按顶栏下面的画布要的（`RemoteDesktopRequestSize`），比屏幕更扁。
+        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880), (3046, 1206), (2863, 1125)] {
             XCTAssertEqual(Display.change(from: state, to: Display.virtualSize(viewerPixels: other)), .switchMode,
                            "\(other)")
         }

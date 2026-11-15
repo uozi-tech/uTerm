@@ -49,6 +49,9 @@ nonisolated struct RemoteDesktopPictureCorners: Equatable {
 ///    只留 `gap` 时）或画面的圆心更靠里，画面的弧线就整个在外面的弧线以内。
 ///
 /// 普通适配下角本来就在弧线外（另一个方向留着宽黑边）就照旧居中铺满，离外圆角比半径还远的角是直角。
+///
+/// 第 2 种只有 Mac 窗口用。手机上（`RemoteDesktopViewport.bleedsIntoCorners`）挪不开就贴边铺满、直角，
+/// 落进屏幕圆角的那一点由屏幕自己切掉，不留那圈窄边。
 nonisolated enum RemoteDesktopCornerFit {
     /// 画面离画布四边的窄边宽度（视图点）：与 `MBottomPanel` 离屏幕边的距离一致。
     static let gap: CGFloat = 8
@@ -113,13 +116,6 @@ nonisolated enum RemoteDesktopCornerFit {
         let size = CGSize(width: content.width * full, height: content.height * full)
         let placed = CGRect(origin: origin(size: size, view: view, corners: corners, shifts: true), size: size)
         return clearsAll(frame: placed, view: view, corners: corners) ? 0 : gap
-    }
-
-    /// 「适配屏幕」时画面在画布里最多能占多大：宽高比和它一样的画面正好铺满（角落进外圆角时四边各让出
-    /// `gap`、切同心圆角，否则贴边）。无显示器的 Mac 按看的设备要的宽高比建虚拟屏，手机按这个比例要。
-    static func fillSize(view: CGSize, corners: RemoteDesktopCornerRadii) -> CGSize {
-        let margin = margin(content: view, view: view, corners: corners)
-        return CGSize(width: max(0, view.width - margin * 2), height: max(0, view.height - margin * 2))
     }
 
     /// 适配比例（每个内容点占多少视图点）：等比放进四边各让出 `margin` 的视图。

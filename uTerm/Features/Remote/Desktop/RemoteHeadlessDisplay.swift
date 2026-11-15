@@ -36,7 +36,7 @@ enum RemoteHeadlessDisplay {
     nonisolated static let minimumPoints = (width: 1920, height: 1080)
     nonisolated static let maximumPoints = (width: 3840, height: 2160)
     /// 建屏时像素上限至少给到这么大：之后换一台不超过它的设备来看只换模式、不重建。
-    /// 5760×2880：盖住按下限放大后的 iPhone 横屏（手机按顶栏下面的画布要，比屏幕更扁，约 5520–5680×2160，
+    /// 5760×2880：盖住按下限放大后的 iPhone 横屏（手机按顶栏下面的画布要，比屏幕更扁，约 5450–5500×2160，
     /// 见 `RemoteDesktopRequestSize`）、iPad 13（3840×2880）与 MacBook（3840×24xx）。
     nonisolated static let minimumMaxPixels = (width: 5760, height: 2880)
     /// 最后一个人走后多久拆虚拟屏。

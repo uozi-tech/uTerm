@@ -74,7 +74,8 @@ final class RemoteDesktopCanvasView: UIView {
     /// 放大后光标离画面边缘至少留这么多（视图点）。
     private static let pointerMargin: CGFloat = 48
 
-    private var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 16, height: 10), viewSize: .zero)
+    private var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 16, height: 10), viewSize: .zero,
+                                                 bleedsIntoCorners: true)
     /// 指针（显示器归一化坐标）。
     private var pointer = CGPoint(x: 0.5, y: 0.5)
     private var lastSentPointer: CGPoint?
@@ -165,8 +166,10 @@ final class RemoteDesktopCanvasView: UIView {
         keyInput.frame = CGRect(x: 0, y: max(0, bounds.height - 48), width: bounds.width, height: min(48, bounds.height))
     }
 
-    /// 画布四个角各自落在多大的屏幕圆角里：画布铺满整屏，四角（键盘条收起时连下面两个）正是屏幕的
-    /// 物理圆角，「适配屏幕」让画面离四边留一圈窄边、自己的角切成同心圆角（`RemoteDesktopCornerFit`）。
+    /// 画布四个角各自落在多大的屏幕圆角里：画布铺到屏幕边，角（键盘条收起时是下面两个）正是屏幕的
+    /// 物理圆角。「适配屏幕」留着黑边时把画面往黑边里挪、让角躲开弧线（`RemoteDesktopCornerFit`）；
+    /// 挪不开（画面正好铺满画布，比如无显示器的 Mac 按画布比例建的虚拟屏）就贴边铺满，角由屏幕自己切
+    /// （`bleedsIntoCorners`）。
     ///
     /// iOS 26 起用系统的同心圆角：探针视图与画布同框，`containerConcentric` 给出每个角离屏幕圆角
     /// 还剩多大的半径（不在屏幕角上的角是 0）。在 `layoutSubviews` 里读，变了系统会再排一次版。
@@ -188,7 +191,7 @@ final class RemoteDesktopCanvasView: UIView {
                                         bottomLeft: bottom && left ? r : 0, bottomRight: bottom && right ? r : 0)
     }
 
-    static let legacyScreenCornerRadius: CGFloat = 55
+    private static let legacyScreenCornerRadius: CGFloat = 55
 
     func updateContentSize(_ size: CGSize?) {
         guard let size, size.width > 0, size.height > 0, size != viewport.contentSize else { return }

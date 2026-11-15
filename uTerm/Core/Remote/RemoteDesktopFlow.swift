@@ -585,25 +585,38 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     var viewSize: CGSize
     /// 视图四个角各自落在多大的圆角里（视图点）：画布铺到了屏幕 / 窗口的圆角里时由视图量出来。
     var corners: RemoteDesktopCornerRadii = .square
+    /// 画面的角在黑边里挪也躲不开圆角时怎么办。false（Mac 窗口）：四边留一圈窄边、切同心圆角。
+    /// true（手机）：照旧贴边铺满、直角，落进屏幕圆角的那一点由屏幕自己切掉——手机上要的是不留黑边
+    /// （2026-11-15 Duo 实测：留的那圈 8pt 窄边被看成黑边，user 定「完全铺满」）。
+    var bleedsIntoCorners = false
     private(set) var zoom: CGFloat = 1
     private(set) var center = CGPoint(x: 0.5, y: 0.5)
 
-    init(contentSize: CGSize, viewSize: CGSize, corners: RemoteDesktopCornerRadii = .square) {
+    init(contentSize: CGSize, viewSize: CGSize, corners: RemoteDesktopCornerRadii = .square,
+         bleedsIntoCorners: Bool = false) {
         self.contentSize = contentSize
         self.viewSize = viewSize
         self.corners = corners
+        self.bleedsIntoCorners = bleedsIntoCorners
+    }
+
+    /// 适配时四边留的窄边（见 `RemoteDesktopCornerFit.margin`）；贴边铺满的不留。
+    private var fitMargin: CGFloat {
+        bleedsIntoCorners ? 0 : RemoteDesktopCornerFit.margin(content: contentSize, view: viewSize, corners: corners)
     }
 
     /// 适配时每个显示器点占多少视图点：等比放进视图；画面的角会落进外圆角时四边留一圈窄边
-    ///（见 `RemoteDesktopCornerFit`）。
+    ///（见 `RemoteDesktopCornerFit`；`bleedsIntoCorners` 时不留）。
     var fitScale: CGFloat {
         guard contentSize.width > 0, contentSize.height > 0 else { return 1 }
-        return RemoteDesktopCornerFit.scale(content: contentSize, view: viewSize, corners: corners)
+        return RemoteDesktopCornerFit.scale(content: contentSize, view: viewSize,
+                                            corners: bleedsIntoCorners ? .square : corners)
     }
 
-    /// 画面四角与视图圆角同心的圆角（放大后出了视图的角不切）。
+    /// 画面四角与视图圆角同心的圆角（放大后出了视图的角不切；`bleedsIntoCorners` 时总是直角）。
     var pictureCorners: RemoteDesktopPictureCorners {
-        RemoteDesktopCornerFit.pictureCorners(frame: contentFrame, view: viewSize, corners: corners)
+        guard !bleedsIntoCorners else { return .square }
+        return RemoteDesktopCornerFit.pictureCorners(frame: contentFrame, view: viewSize, corners: corners)
     }
 
     var scale: CGFloat { fitScale * zoom }
@@ -612,7 +625,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     /// `RemoteDesktopCornerFit.origin` 放，画面的角落进圆弧时往黑边宽的那头挪（同心圆角那种适配照旧居中）。
     var contentFrame: CGRect {
         let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
-        let shifts = RemoteDesktopCornerFit.margin(content: contentSize, view: viewSize, corners: corners) == 0
+        let shifts = fitMargin == 0
         let rest = RemoteDesktopCornerFit.origin(size: size, view: viewSize, corners: corners, shifts: shifts)
         let origin = CGPoint(x: size.width > viewSize.width ? viewSize.width / 2 - center.x * size.width : rest.x,
                              y: size.height > viewSize.height ? viewSize.height / 2 - center.y * size.height : rest.y)

@@ -49,8 +49,8 @@ struct RemoteDesktopScreen: View {
     }
     /// 顶栏左右要让出的距离（按屏幕圆角算，见 `ScreenCornerInsetsReader`）。
     @State private var barInsets = EdgeInsets(top: 14, leading: 24, bottom: 0, trailing: 24)
-    /// 整块屏幕的大小与下角的圆角（和 `barInsets` 同一个探针读的）。
-    @State private var screenMetrics: ScreenCornerInsetsReader.Screen?
+    /// 整块屏幕的大小（和 `barInsets` 同一个探针读的）。
+    @State private var screenSize: CGSize?
     /// 顶栏除去顶边距（`barInsets.top`）的高度：画布上沿离屏幕顶边的距离减顶边距。
     @State private var barRowHeight: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
@@ -89,7 +89,7 @@ struct RemoteDesktopScreen: View {
             // 键盘条开着时底边不忽略：键盘收起后键盘条要让开 Home 条（它自己的底色照样铺到屏幕底边）。
             .ignoresSafeArea(.container, edges: keyBarShown ? [.top, .horizontal] : .all)
             .background(Color.black.ignoresSafeArea())
-            .background(ScreenCornerInsetsReader(insets: $barInsets, screen: $screenMetrics).ignoresSafeArea())
+            .background(ScreenCornerInsetsReader(insets: $barInsets, screen: $screenSize).ignoresSafeArea())
             .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
             .sheet(isPresented: $enteringPassword) {
                 if let session { passwordSheet(session) }
@@ -111,7 +111,7 @@ struct RemoteDesktopScreen: View {
             }
         }
         .onChange(of: requestedSize) { _, size in
-            // 状态栏藏起来后安全区才变、屏幕圆角晚一拍才读到：还没开流就按新的要。已经在放（或正在重连）的
+            // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
             // 不动，不然 Mac 上的虚拟屏跟着换尺寸、窗口来回搬。
             guard let size, let session else { return }
             switch session.state {
@@ -178,9 +178,9 @@ struct RemoteDesktopScreen: View {
     /// 向 Mac 要多大的画面：比例按顶栏下面的画布，大小不小于屏幕像素（见 `RemoteDesktopRequestSize`）。
     /// 屏幕或顶栏还没量出来时为 nil。
     private var requestedSize: RemoteDesktopRequestSize? {
-        guard let screen = screenMetrics, barRowHeight > 0 else { return nil }
-        return .fitting(screen: screen.size, scale: displayScale, barHeight: barInsets.top + barRowHeight,
-                        topInset: barInsets.top, bottomCornerRadius: screen.bottomCornerRadius)
+        guard let screenSize, barRowHeight > 0 else { return nil }
+        return .fitting(screen: screenSize, scale: displayScale, barHeight: barInsets.top + barRowHeight,
+                        topInset: barInsets.top)
     }
 
     // MARK: - 顶栏
@@ -576,19 +576,14 @@ struct RemoteDesktopScreen: View {
 /// 安全区本来就更大（刘海屏竖握、横握的灵动岛那侧）时取安全区。
 /// 铺满全屏、不接触摸，只在布局 / 安全区变化时回报。
 ///
-/// 顺带报整块屏幕的大小和下面两个角的圆角（`Screen`）：向 Mac 要多大的画面要用（`RemoteDesktopRequestSize`），
-/// 那时画布还没建，读不到它自己的圆角。
+/// 顺带报整块屏幕的大小：向 Mac 要多大的画面要用（`RemoteDesktopRequestSize`），SwiftUI 的排版框在状态栏
+/// 藏起来之前少一条安全区，不是整块屏幕。
 private struct ScreenCornerInsetsReader: UIViewRepresentable {
     static let cornerClearanceSide: CGFloat = 24
     static let cornerClearanceTop: CGFloat = 14
 
-    struct Screen: Equatable {
-        var size: CGSize
-        var bottomCornerRadius: CGFloat
-    }
-
     @Binding var insets: EdgeInsets
-    @Binding var screen: Screen?
+    @Binding var screen: CGSize?
 
     func makeUIView(context: Context) -> Probe {
         let probe = Probe()
@@ -600,25 +595,8 @@ private struct ScreenCornerInsetsReader: UIViewRepresentable {
     func updateUIView(_ uiView: Probe, context: Context) {}
 
     final class Probe: UIView {
-        var onChange: ((EdgeInsets, Screen) -> Void)?
-        private var reported: (insets: EdgeInsets, screen: Screen)?
-
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            // 同画布里的圆角探针：与屏幕同框的视图，系统给出每个角的屏幕圆角。
-            if #available(iOS 26.0, *) { cornerConfiguration = .corners(radius: .containerConcentric()) }
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-        /// 屏幕下面两个角的圆角。更早的系统读不到：有 Home 条（全面屏）就按画布用的那个固定值。
-        private var bottomCornerRadius: CGFloat {
-            if #available(iOS 26.0, *) {
-                return max(effectiveRadius(corner: .bottomLeft), effectiveRadius(corner: .bottomRight))
-            }
-            return (window?.safeAreaInsets.bottom ?? 0) > 0 ? RemoteDesktopCanvasView.legacyScreenCornerRadius : 0
-        }
+        var onChange: ((EdgeInsets, CGSize) -> Void)?
+        private var reported: (insets: EdgeInsets, screen: CGSize)?
 
         override func layoutSubviews() {
             super.layoutSubviews()
@@ -650,7 +628,7 @@ private struct ScreenCornerInsetsReader: UIViewRepresentable {
             }
             // 还没排版（安全区先变）时没有大小可报。
             guard bounds.width > 0, bounds.height > 0 else { return }
-            let screen = Screen(size: bounds.size, bottomCornerRadius: bottomCornerRadius)
+            let screen = bounds.size
             guard reported?.insets != value || reported?.screen != screen else { return }
             reported = (value, screen)
             // 布局回调里不直接改 SwiftUI 状态。
