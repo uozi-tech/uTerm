@@ -115,6 +115,13 @@ nonisolated enum RemoteDesktopCornerFit {
         return clearsAll(frame: placed, view: view, corners: corners) ? 0 : gap
     }
 
+    /// 「适配屏幕」时画面在画布里最多能占多大：宽高比和它一样的画面正好铺满（角落进外圆角时四边各让出
+    /// `gap`、切同心圆角，否则贴边）。无显示器的 Mac 按看的设备要的宽高比建虚拟屏，手机按这个比例要。
+    static func fillSize(view: CGSize, corners: RemoteDesktopCornerRadii) -> CGSize {
+        let margin = margin(content: view, view: view, corners: corners)
+        return CGSize(width: max(0, view.width - margin * 2), height: max(0, view.height - margin * 2))
+    }
+
     /// 适配比例（每个内容点占多少视图点）：等比放进四边各让出 `margin` 的视图。
     static func scale(content: CGSize, view: CGSize, corners: RemoteDesktopCornerRadii) -> CGFloat {
         guard content.width > 0, content.height > 0, view.width > 0, view.height > 0 else { return 1 }

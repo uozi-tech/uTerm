@@ -8,6 +8,7 @@ import ObjectiveC
 ///
 /// - 建一块**按看的那台设备的宽高比**来的 2 倍虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16；
 ///   做法同 Sunshine 的 macOS 分支 Lumen）：宽高比对得上，不再把 16:9 的屏塞进 16:10 或手机的框里留黑边。
+///   手机报来的比例是它放画面的那块画布的（顶栏下面），不是整块屏幕的。
 ///   点数不小于 1920×1080（窗口、菜单栏放得下，user 定的下限）：看的设备够大时像素正好等于视频尺寸，采集
 ///   直接出 4:2:0、不用再缩；更小的设备（手机、MacBook）按比例放大到下限，采集比视频大，由采集源再缩一截。
 ///   它一出现，系统就撤掉占位屏，它成为唯一的主屏。
@@ -35,8 +36,9 @@ enum RemoteHeadlessDisplay {
     nonisolated static let minimumPoints = (width: 1920, height: 1080)
     nonisolated static let maximumPoints = (width: 3840, height: 2160)
     /// 建屏时像素上限至少给到这么大：之后换一台不超过它的设备来看只换模式、不重建。
-    /// 5120×2880：盖住按下限放大后的 iPhone 横屏（约 4694×2160）、iPad 13（3840×2880）与 MacBook（3840×24xx）。
-    nonisolated static let minimumMaxPixels = (width: 5120, height: 2880)
+    /// 5760×2880：盖住按下限放大后的 iPhone 横屏（手机按顶栏下面的画布要，比屏幕更扁，约 5520–5680×2160，
+    /// 见 `RemoteDesktopRequestSize`）、iPad 13（3840×2880）与 MacBook（3840×24xx）。
+    nonisolated static let minimumMaxPixels = (width: 5760, height: 2880)
     /// 最后一个人走后多久拆虚拟屏。
     nonisolated static let releaseGrace: Duration = .seconds(30)
 

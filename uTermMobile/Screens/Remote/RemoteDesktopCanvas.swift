@@ -188,7 +188,7 @@ final class RemoteDesktopCanvasView: UIView {
                                         bottomLeft: bottom && left ? r : 0, bottomRight: bottom && right ? r : 0)
     }
 
-    private static let legacyScreenCornerRadius: CGFloat = 55
+    static let legacyScreenCornerRadius: CGFloat = 55
 
     func updateContentSize(_ size: CGSize?) {
         guard let size, size.width > 0, size.height > 0, size != viewport.contentSize else { return }

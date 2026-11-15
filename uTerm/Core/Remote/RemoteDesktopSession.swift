@@ -85,8 +85,8 @@ final class RemoteDesktopSession {
     nonisolated let receiver: RemoteDesktopReceiver
     let client: RemoteMacClient
     private let codec: RemoteVideoCodec
-    private let maxWidth: Int
-    private let maxHeight: Int
+    private var maxWidth: Int
+    private var maxHeight: Int
     /// 要看的显示器（nil = 那台 Mac 的主显示器）。`switchDisplay` 改它再重开流。
     private(set) var displayID: UInt32?
     /// 要不要光标形状（Mac 主控端要，拿它当本机光标；手机自己画箭头，不要）。
@@ -119,6 +119,14 @@ final class RemoteDesktopSession {
         // 直连的抖动小；TCP 中继上关键帧前后包会成串晚到，起步缓深一些。
         audioReceiver = RemoteAudioReceiver(config: client.path == .relay ? .relay : .direct)
         self.audioOutput = audioOutput ?? RemoteAudioEnginePlayer()
+    }
+
+    /// 改要的尺寸：下一次开流（第一次、手动重试、重连）按它要，已经在放的流不动。手机要等顶栏和屏幕圆角
+    /// 量出来才知道画布多大（`RemoteDesktopRequestSize`），会话可能已经在建连了。
+    func setRequestedSize(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+        maxWidth = width
+        maxHeight = height
     }
 
     var canControl: Bool { info?.canControl ?? false }

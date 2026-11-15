@@ -211,17 +211,18 @@ final class RemoteMacDesktopTests: XCTestCase {
 
         let mbp = Display.virtualSize(viewerPixels: (3024, 1964))
         let limit = Display.maxPixels(for: mbp)
-        XCTAssertEqual(limit.width, 5120, "上限至少 5120×2880：之后换别的常见设备只换模式")
+        XCTAssertEqual(limit.width, 5760, "上限至少 5760×2880：之后换别的常见设备只换模式")
         XCTAssertEqual(limit.height, 2880)
         let state = Display.VirtualState(size: mbp, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
         XCTAssertEqual(Display.change(from: state, to: mbp), .keep)
-        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880)] {
+        // (3136, 1206)、(3168, 1206)：iPhone 横屏按顶栏下面的画布要的（`RemoteDesktopRequestSize`），比屏幕更扁。
+        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880), (3136, 1206), (3168, 1206)] {
             XCTAssertEqual(Display.change(from: state, to: Display.virtualSize(viewerPixels: other)), .switchMode,
                            "\(other)")
         }
         XCTAssertEqual(Display.change(from: state, to: Size(width: 3008, height: 1692)), .rebuild, "6K 超了上限")
         let big = Display.maxPixels(for: Size(width: 3008, height: 1692))
-        XCTAssertEqual(big.width, 6016, "要的比 5120×2880 大就按要的")
+        XCTAssertEqual(big.width, 6016, "要的比 5760×2880 大就按要的")
         XCTAssertEqual(big.height, 3384)
     }
 
