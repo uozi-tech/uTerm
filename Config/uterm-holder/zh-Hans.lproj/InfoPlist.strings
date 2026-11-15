@@ -1,0 +1,3 @@
+/* 系统设置（辅助功能、文件与文件夹、本地网络等列表）与授权框里显示的名字，见 Config/uterm-holder-Info.plist 的注释。 */
+"CFBundleName" = "uTerm 终端";
+"CFBundleDisplayName" = "uTerm 终端";

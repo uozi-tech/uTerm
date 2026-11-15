@@ -1,0 +1,3 @@
+/* Name shown in System Settings and permission prompts. */
+"CFBundleName" = "uTerm Terminal";
+"CFBundleDisplayName" = "uTerm Terminal";

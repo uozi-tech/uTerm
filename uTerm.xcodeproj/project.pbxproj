@@ -120,7 +120,7 @@
 		52484F535400000000000001 /* uTermRemoteHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermRemoteHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermBackgroundLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		484F4C444552000000000003 /* uterm-holder */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "uterm-holder"; sourceTree = BUILT_PRODUCTS_DIR; };
+		484F4C444552000000000003 /* uterm-holder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "uterm-holder.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5348454C4C00000000000003 /* uTermShellAgent.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = uTermShellAgent.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		555445524D53534800000005 /* uterm-ssh */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "uterm-ssh"; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -832,7 +832,7 @@
 				B1000000000000000000000C /* uTermMobileTests.xctest */,
 				1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */,
 				5348454C4C00000000000003 /* uTermShellAgent.xpc */,
-				484F4C444552000000000003 /* uterm-holder */,
+				484F4C444552000000000003 /* uterm-holder.app */,
 				555445524D53534800000005 /* uterm-ssh */,
 				52484F535400000000000001 /* uTermRemoteHost.app */,
 			);
@@ -959,6 +959,7 @@
 			buildPhases = (
 				484F4C444552000000000006 /* Sources */,
 				484F4C444552000000000007 /* Frameworks */,
+				484F4C44455200000000000E /* Copy Icon and Names */,
 			);
 			buildRules = (
 			);
@@ -969,8 +970,8 @@
 			);
 			name = "uterm-holder";
 			productName = "uterm-holder";
-			productReference = 484F4C444552000000000003 /* uterm-holder */;
-			productType = "com.apple.product-type.tool";
+			productReference = 484F4C444552000000000003 /* uterm-holder.app */;
+			productType = "com.apple.product-type.application";
 		};
 		5348454C4C00000000000004 /* uTermShellAgent */ = {
 			isa = PBXNativeTarget;
@@ -1298,7 +1299,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n/bin/rm -f \"$helpers/uterm-holder\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder\" \"$helpers/uterm-holder\"\n/bin/rm -f \"$helpers/uterm-ssh\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-ssh\" \"$helpers/uterm-ssh\"\n# 远控进程（SMAppService.agent）：先删后拷，运行中的旧版本映射着旧文件。plist 由 launchd 在注册时读取。\n/bin/rm -rf \"$helpers/uTermRemoteHost.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermRemoteHost.app\" \"$helpers/uTermRemoteHost.app\"\nagents=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents\"\n/bin/mkdir -p \"$agents\"\n/bin/cp \"${SRCROOT}/Config/com.uozi.uTerm.RemoteHost.plist\" \"$agents/com.uozi.uTerm.RemoteHost.plist\"\n";
+			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n# holder 是 App 包（uterm-holder.app）；旧版本的裸可执行文件 Helpers/uterm-holder 一并删掉。\n/bin/rm -rf \"$helpers/uterm-holder\" \"$helpers/uterm-holder.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder.app\" \"$helpers/uterm-holder.app\"\n/bin/rm -f \"$helpers/uterm-ssh\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-ssh\" \"$helpers/uterm-ssh\"\n# 远控进程（SMAppService.agent）：先删后拷，运行中的旧版本映射着旧文件。plist 由 launchd 在注册时读取。\n/bin/rm -rf \"$helpers/uTermRemoteHost.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermRemoteHost.app\" \"$helpers/uTermRemoteHost.app\"\nagents=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents\"\n/bin/mkdir -p \"$agents\"\n/bin/cp \"${SRCROOT}/Config/com.uozi.uTerm.RemoteHost.plist\" \"$agents/com.uozi.uTerm.RemoteHost.plist\"\n";
 		};
 		CFCFCFCF000000000000F0F1 /* Set Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1377,6 +1378,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -eu\nsource_app=\"${BUILT_PRODUCTS_DIR}/uTermBackgroundLauncher.app\"\ndestination=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LoginItems/uTermBackgroundLauncher.app\"\n/bin/mkdir -p \"$(dirname \"$destination\")\"\n/usr/bin/ditto \"$source_app\" \"$destination\"\n";
+		};
+		484F4C44455200000000000E /* Copy Icon and Names */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Icon and Names";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n# holder 的源码在 uTermHolder/ 同步组里，那个组也编进主程序、iOS 与 uterm-ssh，资源放进去会被它们一起收走，\n# 所以图标与本地化名字放在 Config/uterm-holder/，在这里拷进包（签名在这一步之后）。\nsrc=\"${SRCROOT}/Config/uterm-holder\"\nres=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/bin/mkdir -p \"$res\"\n/bin/cp \"$src/AppIcon.icns\" \"$res/AppIcon.icns\"\nfor lang in zh-Hans en; do\n  /bin/mkdir -p \"$res/$lang.lproj\"\n  /bin/cp \"$src/$lang.lproj/InfoPlist.strings\" \"$res/$lang.lproj/InfoPlist.strings\"\ndone\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1643,9 +1662,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/uterm-holder-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
@@ -1662,9 +1681,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/uterm-holder-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;

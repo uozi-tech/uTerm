@@ -546,7 +546,7 @@ verify-distribution-signing:
 	test -d "$(EXPORT_APP)"
 	python3 scripts/verify-background-launcher.py "$(EXPORT_APP)" "uTermBackgroundLauncher"
 	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
-	@for helper in Helpers/uterm-holder Helpers/uterm-ssh XPCServices/uTermShellAgent.xpc Helpers/uTermRemoteHost.app Helpers/uTermRemoteHost.app/Contents/XPCServices/uTermShellAgent.xpc; do \
+	@for helper in Helpers/uterm-holder.app Helpers/uterm-ssh XPCServices/uTermShellAgent.xpc Helpers/uTermRemoteHost.app Helpers/uTermRemoteHost.app/Contents/XPCServices/uTermShellAgent.xpc; do \
 		path="$(EXPORT_APP)/Contents/$$helper"; \
 		info=$$(codesign -dv --verbose=4 "$$path" 2>&1) || { printf '%s\n' "ERROR: $$path is missing or unsigned."; exit 1; }; \
 		if ! printf '%s\n' "$$info" | grep -q 'Authority=Developer ID Application' \
@@ -566,10 +566,13 @@ verify-distribution-signing:
 	if otool -L "$$agent/Contents/MacOS/uTermRemoteHost" | grep -q '@rpath'; then \
 		printf '%s\n' 'ERROR: uTermRemoteHost links a bundled dylib. Link its packages statically.'; exit 1; \
 	fi
-	@if ! otool -X -s __TEXT __info_plist "$(EXPORT_APP)/Contents/Helpers/uterm-holder" | grep -q .; then \
-		printf '%s\n' 'ERROR: uterm-holder has no embedded Info.plist (local network access to SSH hosts would be denied).'; \
-		exit 1; \
-	fi
+	@# holder 是 App 包（见 Config/uterm-holder-Info.plist）：本地网络的说明文字从包里的 Info.plist 读，没有它 SSH 连局域网主机
+	@# 会被拒；系统设置里显示的名字与图标靠图标和本地化名字。
+	@holder="$(EXPORT_APP)/Contents/Helpers/uterm-holder.app"; \
+	/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$$holder/Contents/Info.plist" >/dev/null 2>&1 \
+		|| { printf '%s\n' 'ERROR: uterm-holder.app has no NSLocalNetworkUsageDescription (local network access to SSH hosts would be denied).'; exit 1; }; \
+	test -f "$$holder/Contents/Resources/AppIcon.icns" && test -f "$$holder/Contents/Resources/zh-Hans.lproj/InfoPlist.strings" \
+		|| { printf '%s\n' 'ERROR: uterm-holder.app is missing its icon or localized name.'; exit 1; }
 	@sign_info=$$(codesign -dv --verbose=4 "$(EXPORT_APP)" 2>&1); \
 	if ! printf '%s\n' "$$sign_info" | grep -q 'Authority=Developer ID Application'; then \
 		printf '%s\n' 'ERROR: Exported app is not signed with a Developer ID Application certificate.'; \

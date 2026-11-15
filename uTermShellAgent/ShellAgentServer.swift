@@ -217,6 +217,10 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
 
     // MARK: - 拉起 holder
 
+    /// holder 是 App 包（tccd 按 bundle id 认它，系统设置里有名字和图标，见 `Config/uterm-holder-Info.plist`），
+    /// 可执行文件名不变，按进程名找 holder 的地方不受影响。
+    static let holderExecutable = "uterm-holder.app/Contents/MacOS/uterm-holder"
+
     /// .../uTerm.app/Contents/XPCServices/uTermShellAgent.xpc → .../uTerm.app/Contents/Helpers/<name>
     private func helper(_ name: String) throws -> String {
         let path = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -228,7 +232,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
     private func spawnHolder(directory: String, name: String, columns: Int, rows: Int, workingDirectory: String,
                              executable: String, argv0: String,
                              environment: [String], controlFD: Int32?, ownsResponsibility: Bool = false) throws -> pid_t {
-        let holder = try helper("uterm-holder")
+        let holder = try helper(Self.holderExecutable)
         let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), workingDirectory, executable, argv0]
 
         var attributes: posix_spawnattr_t?
@@ -271,7 +275,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
     /// 让新进程自己当责任进程（Terminal、iTerm、lldb 都这么起子进程）。
     ///
     /// 本地网络权限按责任进程放行。默认责任进程是 App：App 一死，系统立刻丢弃这个进程树上局域网连接的包，
-    /// App 重开也恢复不了，写一次就 EHOSTUNREACH。holder 自己当责任进程后，权限归它（Info.plist 内嵌在二进制里），
+    /// App 重开也恢复不了，写一次就 EHOSTUNREACH。holder 自己当责任进程后，权限归它（它是 App 包 `uterm-holder.app`，说明文字在包的 Info.plist 里），
     /// 跟 App 活不活无关。文稿等隐私授权也跟着归它，所以本机 shell 要用户选，SSH 用不到这些授权，总是这样起。SPI 没有头文件，SDK 也不保证有符号，所以按名字找；找不到就退回默认行为。
     private static func disclaimResponsibility(_ attributes: inout posix_spawnattr_t?) {
         typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32

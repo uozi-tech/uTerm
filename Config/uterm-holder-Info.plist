@@ -2,10 +2,34 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- uterm-holder.app：每个终端会话一个进程，持有 PTY。做成 App 包（而不是裸可执行文件）是为了 tccd 按 bundle id 认它：
+	     disclaim 之后它是终端里程序的责任进程，系统设置的「辅助功能」等列表里显示它的名字和图标（裸可执行文件只能按路径
+	     记，显示文件名和通用图标）。名字在 Config/uterm-holder/{zh-Hans,en}.lproj/InfoPlist.strings；这里未本地化的
+	     CFBundleDisplayName 必须等于包的文件名，本地化名字才生效。本地网络的说明文字也从这里读（做成包之前是内嵌进二进制的）。 -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh-Hans</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.uozi.uTerm.holder</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>uTerm 终端</string>
+	<string>uterm-holder</string>
+	<key>CFBundleDisplayName</key>
+	<string>uterm-holder</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>uTerm 的终端要连接你局域网里的机器，这样 uTerm 重启时连接也不会断。</string>
 	<key>NSDocumentsFolderUsageDescription</key>
