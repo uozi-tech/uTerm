@@ -307,6 +307,7 @@ export-app: archive
 		'	<key>signingStyle</key><string>automatic</string>' \
 		'</dict>' \
 		'</plist>' > "$(EXPORT_OPTIONS)"
+	scripts/thin-sparkle.sh "$(ARCHIVE_PATH)/Products/Applications/$(APP_NAME).app"
 	xcodebuild -exportArchive \
 		-archivePath "$(ARCHIVE_PATH)" \
 		-exportPath "$(EXPORT_DIR)" \

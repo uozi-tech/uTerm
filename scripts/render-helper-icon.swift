@@ -46,8 +46,10 @@ func render(size: Int) -> Data {
     return rep.representation(using: .png, properties: [:])!
 }
 
+// 最大只出到 256 像素：这两个图标只在系统设置、授权弹窗、活动监视器里小尺寸显示，512 / 1024 那三张占了
+// 每份图标的四分之三（约 0.5 MB）。资源目录里对应的格子留空（Contents.json 里没有 filename）。
 for (name, size) in [("icon_16", 16), ("icon_16@2x", 32), ("icon_32", 32), ("icon_32@2x", 64), ("icon_128", 128),
-                     ("icon_128@2x", 256), ("icon_256", 256), ("icon_256@2x", 512), ("icon_512", 512), ("icon_512@2x", 1024)] {
+                     ("icon_128@2x", 256), ("icon_256", 256)] {
     var file = name
     if iconsetNames {
         let points = name.hasSuffix("@2x") ? size / 2 : size
