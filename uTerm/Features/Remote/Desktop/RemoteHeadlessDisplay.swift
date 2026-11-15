@@ -133,6 +133,20 @@ enum RemoteHeadlessDisplay {
         }
     }
 
+    /// 虚拟屏建好 / 换了模式之后，该切到的那个 2 倍模式在 `available` 里的下标；已经是它、或者没有它时为 nil。
+    ///
+    /// 设置里只给了一个模式，系统却会按物理尺寸自己生成一串缩放模式，再挑一个当默认：点数大的（1920×1230）
+    /// 默认就是 2 倍，点数小的会挑同像素的 1 倍模式（2026-11-16 mini：要 1280×828 点，系统给的是 2560×1656 点
+    /// 的 1 倍，界面小一半）。所以建屏后明确切过去。
+    nonisolated static func hiDPIMode(for size: VirtualSize, current: Mode, available: [Mode]) -> Int? {
+        func matches(_ mode: Mode) -> Bool {
+            mode.width == size.width && mode.height == size.height
+                && mode.pixelWidth == size.pixelWidth && mode.pixelHeight == size.pixelHeight
+        }
+        guard !matches(current) else { return nil }
+        return available.firstIndex { $0.usable && matches($0) }
+    }
+
     /// 系统「屏幕共享」的独占虚拟屏正在线：这时屏幕采集一定找不到显示器。
     nonisolated static func screenSharingHoldsDisplay() -> Bool {
         var count: UInt32 = 0
@@ -328,9 +342,35 @@ enum RemoteHeadlessDisplay {
             waited += 1
         }
         let ready = CGMainDisplayID() == id
-        AppLogger.info("远程桌面：无显示器，建了 \(size.width)×\(size.height) 点（\(size.pixelWidth)×\(size.pixelHeight) 像素）的虚拟屏"
-                       + (ready ? "" : "（还没成为主屏）"), category: RemoteLog.category)
+        AppLogger.notice("远程桌面：无显示器，建了 \(size.width)×\(size.height) 点（\(size.pixelWidth)×\(size.pixelHeight) 像素）的虚拟屏"
+                         + (ready ? "" : "（还没成为主屏）"), category: RemoteLog.category)
+        selectHiDPIMode(id, size: size)
         return true
+    }
+
+    /// 把虚拟屏切到 `size` 的 2 倍模式（见 `hiDPIMode`）。已经是了就不动。
+    private static func selectHiDPIMode(_ id: CGDirectDisplayID, size: VirtualSize) {
+        guard let current = CGDisplayCopyDisplayMode(id) else { return }
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        let modes = (CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode]) ?? []
+        guard let index = hiDPIMode(for: size, current: mode(current), available: modes.map(mode)) else {
+            if current.pixelWidth != 2 * current.width {
+                AppLogger.notice("远程桌面：虚拟屏现在是 \(current.width)×\(current.height) 点的 1 倍，找不到 \(size.width)×\(size.height) 点的 2 倍模式",
+                                 category: RemoteLog.category)
+            }
+            return
+        }
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        guard CGConfigureDisplayWithDisplayMode(config, id, modes[index], nil) == .success,
+              CGCompleteDisplayConfiguration(config, .permanently) == .success else {
+            CGCancelDisplayConfiguration(config)
+            AppLogger.notice("远程桌面：虚拟屏没能从 \(current.width)×\(current.height) 点切到 \(size.width)×\(size.height) 点的 2 倍",
+                             category: RemoteLog.category)
+            return
+        }
+        AppLogger.notice("远程桌面：虚拟屏从 \(current.width)×\(current.height) 点（\(current.pixelWidth) 像素宽）切到 \(size.width)×\(size.height) 点的 2 倍",
+                         category: RemoteLog.category)
     }
 
     /// 同一块虚拟屏换个模式：显示器号不变，窗口留在这块屏上。等系统报出新的像素尺寸再返回（最多 3 秒）。
@@ -349,8 +389,9 @@ enum RemoteHeadlessDisplay {
             try? await Task.sleep(for: .milliseconds(50))
             waited += 1
         }
-        AppLogger.info("远程桌面：虚拟屏换成 \(size.width)×\(size.height) 点（\(size.pixelWidth)×\(size.pixelHeight) 像素）"
-                       + (waited < 60 ? "" : "（系统还没报出新尺寸）"), category: RemoteLog.category)
+        AppLogger.notice("远程桌面：虚拟屏换成 \(size.width)×\(size.height) 点（\(size.pixelWidth)×\(size.pixelHeight) 像素）"
+                         + (waited < 60 ? "" : "（系统还没报出新尺寸）"), category: RemoteLog.category)
+        selectHiDPIMode(id, size: size)
         return true
     }
 

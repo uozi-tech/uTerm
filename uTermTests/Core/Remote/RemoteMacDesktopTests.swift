@@ -188,6 +188,25 @@ final class RemoteMacDesktopTests: XCTestCase {
                       "接上真显示器：拆掉虚拟屏")
     }
 
+    /// 建好的虚拟屏系统可能默认挑同像素的 1 倍模式（2026-11-16 mini：要 1280×828 点给了 2560×1656 点的 1 倍）：
+    /// 找出要切到的 2 倍模式；已经是它、或者没有能用的就不切。
+    func test_virtual_display_switches_to_its_hidpi_mode() {
+        typealias Display = RemoteHeadlessDisplay
+        typealias Mode = RemoteHeadlessDisplay.Mode
+        let size = RemoteHeadlessDisplay.VirtualSize(width: 1280, height: 828)
+        let oneX = Mode(width: 2560, height: 1656, pixelWidth: 2560, pixelHeight: 1656)
+        let twoX = Mode(width: 1280, height: 828, pixelWidth: 2560, pixelHeight: 1656)
+        // 实测的模式表（节选）：同点数的 1 倍、不可用的 2 倍、缩放模式都在里面。
+        let modes = [Mode(width: 800, height: 518, pixelWidth: 800, pixelHeight: 518),
+                     Mode(width: 1280, height: 828, pixelWidth: 1280, pixelHeight: 828),
+                     Mode(width: 1280, height: 828, pixelWidth: 2560, pixelHeight: 1656, usable: false),
+                     twoX, oneX,
+                     Mode(width: 640, height: 414, pixelWidth: 1280, pixelHeight: 828, usable: false)]
+        XCTAssertEqual(Display.hiDPIMode(for: size, current: oneX, available: modes), 3)
+        XCTAssertNil(Display.hiDPIMode(for: size, current: twoX, available: modes), "已经是 2 倍")
+        XCTAssertNil(Display.hiDPIMode(for: size, current: oneX, available: [oneX]), "没有 2 倍模式：不切")
+    }
+
     /// 报了像素倍数的主控端：虚拟屏的点数就是那台设备自己的点数，太小的等比放大到 1280×800 的下限。
     func test_virtual_display_matches_the_viewer_points() {
         typealias Display = RemoteHeadlessDisplay
