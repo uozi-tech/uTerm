@@ -43,8 +43,8 @@ struct WorkspaceScreen: View {
         // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
         // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
         .ignoresSafeArea(.container, edges: chrome.statusRowHeight != nil ? .top : [])
-        // Duo 折叠 / 展开横屏：状态栏在右侧一列的顶部，下面空着——Agent / 分屏开关放到那里。
-        .overlay(alignment: .topTrailing) {
+        // Duo 折叠 / 展开横屏：状态栏在侧边一列的顶部（折叠横握在左边），下面空着——Agent / 分屏开关放到那里。
+        .overlay(alignment: chrome.statusColumn?.edge == .leading ? .topLeading : .topTrailing) {
             if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
                 WorkspaceSideControls(
                     // 远控标签没有 Agent（同标签条，见 WorkspaceTabStrip）。
@@ -54,7 +54,7 @@ struct WorkspaceScreen: View {
                     onToggleSplit: toggleSplit)
                     .frame(width: column.width)
                     .padding(.top, column.statusBottom)
-                    .offset(x: column.width)
+                    .offset(x: column.edge == .leading ? -column.width : column.width)
             }
         }
         .onChange(of: store.openTarget) { _, t in consume(t) }

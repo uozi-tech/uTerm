@@ -5,21 +5,29 @@ import SwiftUI
 /// iPhone Duo 的状态栏只占屏幕一角（竖屏：右上角一小块；横屏：右侧一列的顶部），但安全区是整条矩形：
 /// 竖屏时整个顶边都算进安全区，横屏时整列右边都算进安全区。只按安全区布局，状态栏旁边那一截
 /// 横条、那一列状态栏下面的空间就都浪费了，居中的页面也是按「去掉那一列」的宽度居中、看起来偏左。
-/// iOS 27.1 起系统用「遮挡」类保留区（`ReservedRegion.Kind.occlusion`）报告状态栏真正占的矩形，
-/// 用「容器边距」（`ContentMarginGuide.container`）报告屏幕圆角处该留的边距——这里在根视图量一次，
-/// 经环境值下发，需要贴着状态栏 / 屏幕角布局的视图据此计算。
+/// iOS 27.1 起系统用「遮挡」类保留区（`UIView.ReservedRegion.Kind.occlusion`）报告状态栏真正占的矩形，
+/// 用「容器边距」（`ContentMarginGuide.container`）报告屏幕圆角处该留的边距，用 `verticalBarEdge`
+/// 报告侧边那一列在哪边——这里在根视图量一次，经环境值下发，需要贴着状态栏 / 屏幕角布局的视图据此计算。
+///
+/// 状态栏矩形只能从 UIKit 读（`MTopBarProbe`）：Duo 真机上 SwiftUI 的 `GeometryProxy.reservedRegions`
+/// 在任何姿态下都不含状态栏（2026-11-15 `FoldableChromeProbeTests` 实录），UIKit 每次都报。
 nonisolated struct MChromeGeometry: Equatable, Sendable {
     /// 根视图（安全区内）在全局坐标里的矩形。
     var root: CGRect = .zero
     var safeAreaInsets = EdgeInsets()
-    /// 状态栏实际占的矩形（全局坐标，含系统给的交互边距）。不在顶边或系统不报告时为 nil。
+    /// 状态栏实际占的矩形（全局坐标，含系统给的交互边距）。不在顶边、与安全区对不上或系统不报告时为 nil。
+    /// 由 UIKit 探针量（见类型注释）。
     var statusBar: CGRect?
+    /// 系统放侧边竖栏的那一边（`UITraitCollection.verticalBarEdge`，iOS 27.1）：Duo 上就是状态栏那一列。
+    /// 系统说没有竖栏（普通 iPhone / iPad、Duo 展开竖屏）为 nil。只在 `reportsVerticalBarEdge` 时有意义。
+    var verticalBarEdge: HorizontalEdge?
+    /// 系统能回答 `verticalBarEdge`（iOS 27.1 起）。否则侧列只能按安全区猜。
+    var reportsVerticalBarEdge = false
     /// 容器边距（屏幕圆角等）。iOS 27.1 以下为 0。
     var containerMargins = EdgeInsets()
     /// 系统给「贴顶的自绘横条（高 `MChromeGeometry.topBarExtent`）」划的区域（全局坐标）：
     /// 已避开状态栏、灵动岛与屏幕圆角（UIKit `UIView.LayoutRegion.bar(onEdge: .top, extent:)`，
-    /// iOS 27.1）。真机 Duo 不把状态栏报成遮挡保留区（实测只有一块无关的非活动区），状态栏
-    /// 旁边那截能不能放东西、能放多宽，只有这个接口说得准。iOS 27.1 以下为 nil。
+    /// iOS 27.1）。iOS 27.1 以下为 nil。
     var topBar: CGRect?
     /// 横向角落适配的安全区（`UIView.LayoutRegion.safeArea(cornerAdaptation: .horizontal)`，全局坐标）：
     /// 把屏幕角上的系统元素（Duo 竖屏右上角的状态栏）当「角」，在横向让开它、纵向不再整条让出顶边。
@@ -40,8 +48,8 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
     #if DEBUG
     /// 系统报告的全部遮挡区（未过滤、含非活动），只给布局诊断浮层看。
     var rawOcclusion: [RawRegion] = []
-    struct RawRegion: Equatable, Sendable { var frame: CGRect; var active: Bool }
     #endif
+    struct RawRegion: Equatable, Sendable { var frame: CGRect; var active: Bool }
 
     /// 整块屏幕（全局坐标）。
     var screen: CGRect {
@@ -53,45 +61,67 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
     static func measure(_ proxy: GeometryProxy) -> MChromeGeometry {
         var geometry = MChromeGeometry(root: proxy.frame(in: .global), safeAreaInsets: proxy.safeAreaInsets)
         if #available(iOS 27.1, *) {
-            let origin = geometry.root.origin
-            let screenTop = geometry.screen.minY
-            let screen = geometry.screen
-            let insets = geometry.safeAreaInsets
-            geometry.statusBar = proxy.reservedRegions(kind: .occlusion)
-                .filter(\.isActive)
-                .map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) }
-                .first { bar in
-                    // 只认与安全区对得上的状态栏矩形。转屏途中系统会先报几次过期 / 转置的矩形
-                    // （实测竖屏先后报过 (0,0,82×144)、(585,0,84×124)，稳定后才是 (525,0,144×82)），
-                    // 按那些布局要么让错位置、要么整个模式不生效（实机：竖屏标签条没进状态行）。
-                    guard bar.minY <= screenTop + 1, abs(bar.maxX - screen.maxX) < 1 else { return false }
-                    let isRow = insets.top > 0 && abs(bar.height - insets.top) <= 2 && bar.width < screen.width / 2
-                    let isColumn = insets.trailing > 0 && abs(bar.width - insets.trailing) <= 2
-                    return isRow || isColumn
-                }
             geometry.containerMargins = proxy.contentMargins(for: .container)
-            #if DEBUG
-            geometry.rawOcclusion = proxy.reservedRegions(kind: .occlusion, options: .includeInactive)
-                .map { RawRegion(frame: $0.frame.offsetBy(dx: origin.x, dy: origin.y), active: $0.isActive) }
-            #endif
         }
         return geometry
+    }
+
+    /// 从系统报的活动遮挡区里挑出状态栏：贴着屏幕顶、贴着左或右沿，且与安全区对得上——
+    /// 顶行右端的一块（Duo 展开竖屏），或宽度等于侧边安全区的一列（Duo 折叠、展开横屏；折叠横屏在左边）。
+    /// 转屏途中系统会先报几次过期 / 转置的矩形（实测竖屏先后报过 (0,0,82×144)、(585,0,84×124)，
+    /// 稳定后才是 (525,0,144×82)），按那些布局要么让错位置、要么整个模式不生效，所以对不上就不认。
+    /// 前置摄像头那一小块（Duo 折叠 (399,29 37×37)）不贴屏幕顶，自然排除。
+    static func statusBar(among regions: [CGRect], screen: CGRect, safeArea insets: EdgeInsets) -> CGRect? {
+        regions.first { bar in
+            guard bar.minY <= screen.minY + 1 else { return false }
+            if abs(bar.maxX - screen.maxX) < 1 {
+                let isRow = insets.top > 0 && abs(bar.height - insets.top) <= 2 && bar.width < screen.width / 2
+                let isColumn = insets.trailing > 0 && abs(bar.width - insets.trailing) <= 2
+                return isRow || isColumn
+            }
+            if abs(bar.minX - screen.minX) < 1 {
+                return insets.top == 0 && insets.leading > 0 && abs(bar.width - insets.leading) <= 2
+            }
+            return false
+        }
     }
 }
 
 nonisolated extension MChromeGeometry {
-    /// 状态栏在右侧一列的顶部（Duo 折叠、Duo 展开横屏）：该列宽度（= 右侧安全区），以及状态栏
-    /// 底边距根视图顶边的距离——这一列在它下面是空的、可以用。
-    var statusColumn: (width: CGFloat, statusBottom: CGFloat)? {
-        guard let bar = statusBar, safeAreaInsets.trailing > 0,
-              abs(bar.width - safeAreaInsets.trailing) <= 2 else { return nil }
-        return (safeAreaInsets.trailing, bar.maxY - root.minY)
+    /// 状态栏在侧边一列的顶部（Duo 折叠竖屏、展开横屏在右边，折叠横屏在左边）：在哪边、该列宽度
+    /// （= 那一侧的安全区），以及状态栏底边距根视图顶边的距离——这一列在它下面是空的、可以用。
+    var statusColumn: (edge: HorizontalEdge, width: CGFloat, statusBottom: CGFloat)? {
+        guard let bar = statusBar, safeAreaInsets.top == 0 else { return nil }
+        let screen = screen
+        let edge: HorizontalEdge
+        if abs(bar.maxX - screen.maxX) < 1 {
+            edge = .trailing
+        } else if abs(bar.minX - screen.minX) < 1 {
+            edge = .leading
+        } else {
+            return nil
+        }
+        let width = inset(edge)
+        guard width > 0, abs(bar.width - width) <= 2 else { return nil }
+        return (edge, width, bar.maxY - root.minY)
     }
 
-    /// 状态栏占右侧一整列、顶边没有安全区（Duo 外屏、Duo 展开横屏）。只看安全区：真机不把状态栏
-    /// 报成遮挡保留区，`statusColumn` 在真机上是 nil。普通 iPhone 横屏左右都有安全区，不算。
+    /// 状态栏占侧边一整列、顶边没有安全区（Duo 外屏竖握 / 横握、Duo 展开横屏）。
+    ///
+    /// iOS 27.1 起听系统的 `verticalBarEdge`：普通 iPhone / iPad 报「无」。转屏后它会比安全区晚一拍
+    /// （实测折叠横握第一次读数仍是 trailing、安全区已到左边），所以还要那一侧真有安全区才算。
+    /// 更早的系统按安全区猜：只有一侧有、顶边没有（普通 iPhone 横屏左右都有，不算）。
     var hasSideStatusColumn: Bool {
-        safeAreaInsets.top == 0 && safeAreaInsets.leading == 0 && safeAreaInsets.trailing > 0
+        guard safeAreaInsets.top == 0 else { return false }
+        if reportsVerticalBarEdge {
+            guard let verticalBarEdge else { return false }
+            return inset(verticalBarEdge) > 0
+        }
+        return (safeAreaInsets.leading > 0) != (safeAreaInsets.trailing > 0)
+    }
+
+    private func inset(_ edge: HorizontalEdge) -> CGFloat {
+        edge == .leading ? safeAreaInsets.leading : safeAreaInsets.trailing
     }
 
     /// 状态栏在顶部一行的右端（Duo 展开竖屏）：整条顶边都算安全区，但状态栏只占右边一块，
@@ -100,7 +130,7 @@ nonisolated extension MChromeGeometry {
     /// 顶部横条区域的上沿在哪台设备上都高于顶部安全区（模拟器实测上沿都是 10：iPhone 18 Pro 安全区 62、
     /// iPhone 17e 47、iPad 32），它本身分不出「顶行有空位」。普通 iPhone 顶行正中是灵动岛 / 刘海，iPad
     /// 的状态栏横跨整行，只有展开的 Duo 状态栏才缩在一角，所以先按设备判断。
-    /// 退路是遮挡保留区里的状态栏矩形（vphone 报告、真机不报）。
+    /// 退路是遮挡保留区里的状态栏矩形（没有顶部横条区域时）。
     var statusRowHeight: CGFloat? {
         guard safeAreaInsets.top > 0, safeAreaInsets.trailing == 0 else { return nil }
         if let topBar {
@@ -167,22 +197,34 @@ extension MChromeMeasurer {
 }
 
 extension MChromeGeometry {
-    /// 叠上 UIKit 探针量到的、SwiftUI 量不到的那几项。
+    /// 叠上 UIKit 探针量到的、SwiftUI 量不到（或量不准）的那几项。
     func merging(_ probe: MChromeProbeResult) -> MChromeGeometry {
         var g = self
         g.topBar = probe.topBar
         g.cornerSafeArea = probe.cornerSafeArea
         g.isUnfoldedPhone = probe.isUnfoldedPhone
+        g.verticalBarEdge = probe.verticalBarEdge
+        g.reportsVerticalBarEdge = probe.reportsVerticalBarEdge
+        g.statusBar = MChromeGeometry.statusBar(among: probe.occlusion.filter(\.active).map(\.frame),
+                                                screen: g.screen, safeArea: g.safeAreaInsets)
+        #if DEBUG
+        g.rawOcclusion = probe.occlusion
+        #endif
         return g
     }
 }
 
-/// 全屏的 UIKit 探针：向系统要「贴顶横条」的布局区域（`UIView.LayoutRegion.bar`），换算成
-/// 窗口坐标报上去。布局、安全区一变就重算。SwiftUI 没有对应接口，只能借一层 UIView。
+/// 全屏的 UIKit 探针：向系统要「贴顶横条」的布局区域（`UIView.LayoutRegion.bar`）、遮挡保留区与
+/// 侧边竖栏的位置，换算成窗口坐标报上去。布局、安全区、相关特征一变就重算。SwiftUI 要么没有对应
+/// 接口，要么（遮挡保留区）在真机上漏报状态栏，只能借一层 UIView。
 nonisolated struct MChromeProbeResult: Equatable, Sendable {
     var topBar: CGRect?
     var cornerSafeArea: CGRect?
     var isUnfoldedPhone = false
+    /// 全部遮挡保留区（窗口坐标，含非活动）。状态栏从活动的里挑，见 `MChromeGeometry.statusBar(among:)`。
+    var occlusion: [MChromeGeometry.RawRegion] = []
+    var verticalBarEdge: HorizontalEdge?
+    var reportsVerticalBarEdge = false
 }
 
 private struct MTopBarProbe: UIViewRepresentable {
@@ -201,6 +243,19 @@ private struct MTopBarProbe: UIViewRepresentable {
     final class ProbeView: UIView {
         var onChange: ((MChromeProbeResult) -> Void)?
         private var last: MChromeProbeResult?
+        private var followUp: Task<Void, Never>?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            if #available(iOS 27.1, *) {
+                registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) {
+                    (view: ProbeView, _: UITraitCollection) in view.report()
+                }
+            }
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override func layoutSubviews() {
             super.layoutSubviews()
@@ -224,11 +279,30 @@ private struct MTopBarProbe: UIViewRepresentable {
             if #available(iOS 27.1, *) {
                 let insets = edgeInsets(for: .bar(onEdge: UIRectEdge.top, extent: MChromeGeometry.topBarExtent))
                 result.topBar = convert(bounds.inset(by: insets), to: window)
+                result.occlusion = reservedRegions(kind: .occlusion, options: .includeInactive).map {
+                    MChromeGeometry.RawRegion(frame: convert($0.frame, to: window), active: $0.isActive)
+                }
+                result.reportsVerticalBarEdge = true
+                result.verticalBarEdge = switch traitCollection.verticalBarEdge {
+                case .leading: .leading
+                case .trailing: .trailing
+                default: nil
+                }
             }
             guard last != result else { return }
             last = result
             // 布局过程中改 SwiftUI 状态会被警告 / 丢弃：挪到下一轮主循环。
             DispatchQueue.main.async { [weak self] in self?.onChange?(result) }
+            // 转屏 / 开合后保留区与竖栏位置要过一会儿才稳定，稳定那一下不一定再触发布局：
+            // 一变就在 0.4 s、1.2 s 各补量一次（量到的没变就不再上报）。
+            followUp?.cancel()
+            followUp = Task { @MainActor [weak self] in
+                for delay in [400, 800] {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    guard !Task.isCancelled, let self else { return }
+                    self.report()
+                }
+            }
         }
     }
 }
@@ -262,13 +336,14 @@ private struct MStatusBarAvoidance: ViewModifier {
         if inRow, let corner = chrome.cornerSafeArea, corner.minY < screen.minY + chrome.safeAreaInsets.top - 1 {
             trailing = max(trailing, frame.maxX - corner.maxX)
         }
-        // 三路都没让出状态栏（真机竖屏：遮挡保留区不报状态栏；横条区域与角落安全区都横跨整宽）时，
+        // 三路都没让出状态栏（遮挡保留区没报状态栏、横条区域与角落安全区都横跨整宽）时，
         // 按真机实测的状态栏底板宽度保底让位：底板约占 545–650pt（屏宽 669），右沿留 136pt。
         if inRow, chrome.statusBar == nil, frame.maxX > screen.maxX - Self.statusPlatterReserve {
             trailing = max(trailing, frame.maxX - (screen.maxX - Self.statusPlatterReserve))
         }
-        // vphone 上横条区域不避开状态栏、遮挡保留区却报了状态栏矩形；两路取较大的让位。
-        if let bar = chrome.statusBar, frame.minY < bar.maxY, frame.maxX > bar.minX {
+        // 横条区域不一定避开状态栏（vphone 实测）；与状态栏矩形真有重叠时两路取较大的让位。
+        // 左边一列的状态栏（Duo 折叠横握）在本条左侧、不重叠，不让。
+        if let bar = chrome.statusBar, frame.minY < bar.maxY, frame.maxX > bar.minX, frame.minX < bar.maxX {
             trailing = max(trailing, frame.maxX - bar.minX + 8)
         }
         let rowHeight = inRow ? (chrome.statusRowHeight ?? minHeight) : minHeight

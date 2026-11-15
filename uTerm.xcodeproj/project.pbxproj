@@ -7,25 +7,28 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		52484F535400000000000015 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000012 /* CJuice */; };
-		52484F535400000000000016 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000013 /* CKCP */; };
-		52484F535400000000000017 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000014 /* UDesignKit */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
-		4748535400000000000000A2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A1 /* GhosttyTerminal */; };
-		4748535400000000000000A4 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A3 /* GhosttyKit */; };
-		4748535400000000000000A6 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A5 /* GhosttyVt */; };
 		11C9AA437B69DB1986D60B81 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC2B686538A588EAD56ECE6E /* Cocoa.framework */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
 		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
+		4748535400000000000000A2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A1 /* GhosttyTerminal */; };
+		4748535400000000000000A4 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A3 /* GhosttyKit */; };
+		4748535400000000000000A6 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A5 /* GhosttyVt */; };
+		474853540000000000000A11 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A01 /* GhosttyTerminal */; };
+		474853540000000000000A12 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A02 /* GhosttyKit */; };
+		474853540000000000000A13 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A03 /* GhosttyVt */; };
 		4A55494345000000000000A3 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A1 /* CJuice */; };
 		4A55494345000000000000A4 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A2 /* CJuice */; };
 		4B43500000000000000000A3 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A1 /* CKCP */; };
 		4B43500000000000000000A4 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A2 /* CKCP */; };
+		52484F535400000000000015 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000012 /* CJuice */; };
+		52484F535400000000000016 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000013 /* CKCP */; };
+		52484F535400000000000017 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000014 /* UDesignKit */; };
 		5541424B0000000000000011 /* UAppKitBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 5541424B0000000000000001 /* UAppKitBridge */; };
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
@@ -38,9 +41,6 @@
 		851030E33047167600A370DF /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000002 /* UDesignKit */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
-		474853540000000000000A11 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A01 /* GhosttyTerminal */; };
-		474853540000000000000A12 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A02 /* GhosttyKit */; };
-		474853540000000000000A13 /* GhosttyVt in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A03 /* GhosttyVt */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
 		A61DF38274718E88C0968BB9 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29DE64AF6B8DE16B490ADC2 /* main.swift */; };
 		A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = 018260924700EAFE1739852A /* TreeSitterPython */; };
@@ -58,20 +58,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		52484F53540000000000000C /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 5348454C4C00000000000004;
-			remoteInfo = uTermShellAgent;
-		};
-		52484F535400000000000018 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 52484F53540000000000000E;
-			remoteInfo = uTermRemoteHost;
-		};
 		25FE8A04CCE470F978BD4E34 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
@@ -85,6 +71,20 @@
 			proxyType = 1;
 			remoteGlobalIDString = 484F4C444552000000000004;
 			remoteInfo = "uterm-holder";
+		};
+		52484F53540000000000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5348454C4C00000000000004;
+			remoteInfo = uTermShellAgent;
+		};
+		52484F535400000000000018 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 52484F53540000000000000E;
+			remoteInfo = uTermRemoteHost;
 		};
 		5348454C4C0000000000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -117,10 +117,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		52484F535400000000000001 /* uTermRemoteHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermRemoteHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermBackgroundLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		484F4C444552000000000003 /* uterm-holder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "uterm-holder.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		52484F535400000000000001 /* uTermRemoteHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermRemoteHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5348454C4C00000000000003 /* uTermShellAgent.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = uTermShellAgent.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		555445524D53534800000005 /* uterm-ssh */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "uterm-ssh"; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -133,121 +133,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		52484F535400000000000003 /* Exceptions for "uTermRemoteHost" folder in "uTermRemoteHost" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-				uTermRemoteHost.entitlements,
-			);
-			target = 52484F53540000000000000E /* uTermRemoteHost */;
-		};
-		52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Core/Remote/RemoteAudioCodec.swift,
-				Core/Remote/RemoteAudioProtocol.swift,
-				Core/Remote/RemoteCaptureRate.swift,
-				Core/Remote/RemoteConnectTrace.swift,
-				Core/Remote/RemoteCrypto.swift,
-				Core/Remote/RemoteDatagram.swift,
-				Core/Remote/RemoteDeadline.swift,
-				Core/Remote/RemoteDesktopFlow.swift,
-				Core/Remote/RemoteDesktopPasteEncoding.swift,
-				Core/Remote/RemoteDesktopProtocol.swift,
-				Core/Remote/RemoteDeviceModel.swift,
-				Core/Remote/RemoteDirectHistory.swift,
-				Core/Remote/RemoteDirectPath.swift,
-				Core/Remote/RemoteFileWaiters.swift,
-				Core/Remote/RemoteICEAgent.swift,
-				Core/Remote/RemoteIdentityStore.swift,
-				Core/Remote/RemoteKCP.swift,
-				Core/Remote/RemoteKeyMap.swift,
-				Core/Remote/RemoteLink.swift,
-				Core/Remote/RemoteLinkEstimator.swift,
-				Core/Remote/RemoteLinkFlow.swift,
-				Core/Remote/RemoteLocalState.swift,
-				Core/Remote/RemoteNetworkWatcher.swift,
-				Core/Remote/RemoteP2PTransport.swift,
-				Core/Remote/RemotePairing.swift,
-				Core/Remote/RemotePathDialer.swift,
-				Core/Remote/RemoteProgramStatus.swift,
-				Core/Remote/RemoteProtocol.swift,
-				Core/Remote/RemoteRelayCertificateRenewal.swift,
-				Core/Remote/RemoteRelayClient.swift,
-				Core/Remote/RemoteRelayConfig.swift,
-				Core/Remote/RemoteRelayConnection.swift,
-				Core/Remote/RemoteRelayRelease.swift,
-				Core/Remote/RemoteRelayRevocations.swift,
-				Core/Remote/RemoteSignaling.swift,
-				Core/Remote/RemoteStreamEchoServer.swift,
-				Core/Remote/RemoteStreamScale.swift,
-				Core/Remote/RemoteSyncedStorage.swift,
-				Core/Remote/RemoteTransport.swift,
-				Core/Remote/RemoteVideoDatagram.swift,
-				Features/Remote/RemoteHostServer.swift,
-				Features/Remote/RemoteHostConnection.swift,
-				Features/Remote/RemoteHostSessions.swift,
-				Features/Remote/RemoteRelayHostLink.swift,
-				Features/Remote/RemoteRelayUpdateMonitor.swift,
-				Features/Remote/RemoteControlSettings.swift,
-				Features/Remote/RemoteLocalShellOpener.swift,
-				Features/Remote/RemoteFileAccess.swift,
-				Features/Remote/RemoteSleepPolicy.swift,
-				Features/Remote/RemotePasteboard.swift,
-				Features/Remote/RemotePairingPanel.swift,
-				Features/Remote/Desktop/RemoteAudioStreamer.swift,
-				Features/Remote/Desktop/RemoteCurtain.swift,
-				Features/Remote/Desktop/RemoteCurtainMute.swift,
-				Features/Remote/Desktop/RemoteDesktopEnvironment.swift,
-				Features/Remote/Desktop/RemoteDesktopIndicator.swift,
-				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
-				Features/Remote/Desktop/RemoteEventInjector.swift,
-				Features/Remote/Desktop/RemoteFrameScaler.swift,
-				Features/Remote/Desktop/RemoteHeadlessDisplay.swift,
-				Features/Remote/Desktop/RemoteScreenControl.swift,
-				Features/Remote/Desktop/RemoteSystemCursor.swift,
-				Features/Remote/Desktop/RemoteVideoEncoder.swift,
-				Features/Remote/Desktop/ScreenCaptureAudioSource.swift,
-				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
-				Features/Remote/Agent/RemoteForwardedSessions.swift,
-				Features/Remote/Agent/RemoteHostAgentProtocol.swift,
-				Features/Remote/Agent/RemoteHostAgentService.swift,
-				Core/Logging/AppLogger.swift,
-				Core/Preferences/DefaultsKey.swift,
-				Core/AppInstallLocation.swift,
-				Features/Terminal/Shadow/TerminalEngineVersion.swift,
-				Features/Terminal/ProgramStatus.swift,
-				Services/SSH/TerminalImage.swift,
-				Core/Logging/LogLevel.swift,
-				Core/Persistence/KeychainStore.swift,
-				Core/Remote/RemoteDesktopCornerFit.swift,
-				Core/Remote/RemoteICEProbe.swift,
-				Core/Remote/RemoteNetworkLabel.swift,
-				Core/Remote/RemoteRelayRace.swift,
-				Core/TestHostEnvironment.swift,
-				Features/Settings/Model/SettingsSection.swift,
-				Features/Remote/RemotePairingCode.swift,
-			);
-			target = 52484F53540000000000000E /* uTermRemoteHost */;
-		};
-		52484F535400000000000005 /* Exceptions for "uTermFiles" folder in "uTermRemoteHost" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"RemoteFileService+Exec.swift",
-				"RemoteFileService+Scope.swift",
-				"RemoteFileService+Search.swift",
-				RemoteFileService.swift,
-			);
-			target = 52484F53540000000000000E /* uTermRemoteHost */;
-		};
-		52484F535400000000000006 /* Exceptions for "uTermShellAgent" folder in "uTermRemoteHost" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				main.swift,
-				ShellAgentServer.swift,
-			);
-			target = 52484F53540000000000000E /* uTermRemoteHost */;
-		};
 		10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -384,6 +269,20 @@
 				Features/Preview/Views/PreviewBufferBody.swift,
 				Features/Preview/Views/PreviewStatusRow.swift,
 				Features/Preview/Views/PreviewTabMenu.swift,
+				Features/Remote/Agent/RemoteForwardedSessions.swift,
+				Features/Remote/Agent/RemoteHostAgentProtocol.swift,
+				Features/Remote/Agent/RemoteHostAgentService.swift,
+				Features/Remote/Controller/RemoteDesktopEventMapper.swift,
+				Features/Remote/Controller/RemoteDesktopKeyboardCapture.swift,
+				Features/Remote/Controller/RemoteDesktopMacCanvas.swift,
+				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
+				Features/Remote/Controller/RemoteDesktopWindow.swift,
+				Features/Remote/Controller/RemoteDiagnosticsWindow.swift,
+				Features/Remote/Controller/RemoteMacFilesWindow.swift,
+				Features/Remote/Controller/RemoteMacsPane.swift,
+				Features/Remote/Controller/RemoteMacWindow.swift,
+				Features/Remote/Controller/RemoteMacWindowModel.swift,
+				Features/Remote/Controller/RemoteSharedFoldersSection.swift,
 				Features/Remote/Desktop/RemoteAudioStreamer.swift,
 				Features/Remote/Desktop/RemoteCurtain.swift,
 				Features/Remote/Desktop/RemoteCurtainMute.swift,
@@ -392,40 +291,26 @@
 				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
 				Features/Remote/Desktop/RemoteEventInjector.swift,
 				Features/Remote/Desktop/RemoteFrameScaler.swift,
-				Features/Remote/Desktop/RemoteScreenControl.swift,
-				Features/Remote/Desktop/RemoteVideoEncoder.swift,
 				Features/Remote/Desktop/RemoteHeadlessDisplay.swift,
+				Features/Remote/Desktop/RemoteScreenControl.swift,
 				Features/Remote/Desktop/RemoteSystemCursor.swift,
+				Features/Remote/Desktop/RemoteVideoEncoder.swift,
 				Features/Remote/Desktop/ScreenCaptureAudioSource.swift,
 				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
-				Features/Remote/Controller/RemoteDesktopEventMapper.swift,
-				Features/Remote/Controller/RemoteDesktopMacCanvas.swift,
-				Features/Remote/Controller/RemoteDesktopKeyboardCapture.swift,
-				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
-				Features/Remote/Controller/RemoteDesktopWindow.swift,
-				Features/Remote/Controller/RemoteDiagnosticsWindow.swift,
-				Features/Remote/Controller/RemoteMacFilesWindow.swift,
-				Features/Remote/Controller/RemoteMacWindow.swift,
-				Features/Remote/Controller/RemoteMacWindowModel.swift,
-				Features/Remote/Controller/RemoteMacsPane.swift,
-				Features/Remote/Controller/RemoteSharedFoldersSection.swift,
 				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteFileAccess.swift,
 				"Features/Remote/RemoteFileAccess+Live.swift",
 				Features/Remote/RemoteFileSharingStore.swift,
+				Features/Remote/RemoteHostAgentBridge.swift,
 				Features/Remote/RemoteHostConnection.swift,
 				Features/Remote/RemoteHostServer.swift,
 				Features/Remote/RemoteHostSessions.swift,
-				Features/Remote/RemoteRegistrySessions.swift,
-				Features/Remote/RemoteHostAgentBridge.swift,
-				Features/Remote/Agent/RemoteForwardedSessions.swift,
-				Features/Remote/Agent/RemoteHostAgentProtocol.swift,
-				Features/Remote/Agent/RemoteHostAgentService.swift,
 				Features/Remote/RemoteLocalShellOpener.swift,
 				"Features/Remote/RemoteLocalShellOpener+Live.swift",
 				Features/Remote/RemotePairingPanel.swift,
 				Features/Remote/RemotePasteboard.swift,
+				Features/Remote/RemoteRegistrySessions.swift,
 				Features/Remote/RemoteRelayHostLink.swift,
 				Features/Remote/RemoteRelayManager.swift,
 				Features/Remote/RemoteRelayUpdateMonitor.swift,
@@ -547,6 +432,16 @@
 			);
 			target = 10C0DE0000000000000000A1 /* uTermMobile */;
 		};
+		46494C455300000000000002 /* Exceptions for "uTermFiles" folder in "uTermMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				RemoteFileService.swift,
+				"RemoteFileService+Exec.swift",
+				"RemoteFileService+Scope.swift",
+				"RemoteFileService+Search.swift",
+			);
+			target = 10C0DE0000000000000000A1 /* uTermMobile */;
+		};
 		484F4C444552000000000002 /* Exceptions for "uTermHolder" folder in "uTerm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -554,6 +449,129 @@
 				main.swift,
 			);
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
+		};
+		484F4C4445520000000000D1 /* Exceptions for "uTermHolder" folder in "uTermMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				HolderOutputLog.swift,
+				HolderServer.swift,
+				main.swift,
+			);
+			target = 10C0DE0000000000000000A1 /* uTermMobile */;
+		};
+		52484F535400000000000003 /* Exceptions for "uTermRemoteHost" folder in "uTermRemoteHost" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 52484F53540000000000000E /* uTermRemoteHost */;
+		};
+		52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Core/AppInstallLocation.swift,
+				Core/Logging/AppLogger.swift,
+				Core/Logging/LogLevel.swift,
+				Core/Persistence/KeychainStore.swift,
+				Core/Preferences/DefaultsKey.swift,
+				Core/Remote/RemoteAudioCodec.swift,
+				Core/Remote/RemoteAudioProtocol.swift,
+				Core/Remote/RemoteCaptureRate.swift,
+				Core/Remote/RemoteConnectTrace.swift,
+				Core/Remote/RemoteCrypto.swift,
+				Core/Remote/RemoteDatagram.swift,
+				Core/Remote/RemoteDeadline.swift,
+				Core/Remote/RemoteDesktopCornerFit.swift,
+				Core/Remote/RemoteDesktopFlow.swift,
+				Core/Remote/RemoteDesktopPasteEncoding.swift,
+				Core/Remote/RemoteDesktopProtocol.swift,
+				Core/Remote/RemoteDeviceModel.swift,
+				Core/Remote/RemoteDirectHistory.swift,
+				Core/Remote/RemoteDirectPath.swift,
+				Core/Remote/RemoteFileWaiters.swift,
+				Core/Remote/RemoteICEAgent.swift,
+				Core/Remote/RemoteICEProbe.swift,
+				Core/Remote/RemoteIdentityStore.swift,
+				Core/Remote/RemoteKCP.swift,
+				Core/Remote/RemoteKeyMap.swift,
+				Core/Remote/RemoteLink.swift,
+				Core/Remote/RemoteLinkEstimator.swift,
+				Core/Remote/RemoteLinkFlow.swift,
+				Core/Remote/RemoteLocalState.swift,
+				Core/Remote/RemoteNetworkLabel.swift,
+				Core/Remote/RemoteNetworkWatcher.swift,
+				Core/Remote/RemoteP2PTransport.swift,
+				Core/Remote/RemotePairing.swift,
+				Core/Remote/RemotePathDialer.swift,
+				Core/Remote/RemoteProgramStatus.swift,
+				Core/Remote/RemoteProtocol.swift,
+				Core/Remote/RemoteRelayCertificateRenewal.swift,
+				Core/Remote/RemoteRelayClient.swift,
+				Core/Remote/RemoteRelayConfig.swift,
+				Core/Remote/RemoteRelayConnection.swift,
+				Core/Remote/RemoteRelayRace.swift,
+				Core/Remote/RemoteRelayRelease.swift,
+				Core/Remote/RemoteRelayRevocations.swift,
+				Core/Remote/RemoteSignaling.swift,
+				Core/Remote/RemoteStreamEchoServer.swift,
+				Core/Remote/RemoteStreamScale.swift,
+				Core/Remote/RemoteSyncedStorage.swift,
+				Core/Remote/RemoteTransport.swift,
+				Core/Remote/RemoteVideoDatagram.swift,
+				Core/TestHostEnvironment.swift,
+				Features/Remote/Agent/RemoteForwardedSessions.swift,
+				Features/Remote/Agent/RemoteHostAgentProtocol.swift,
+				Features/Remote/Agent/RemoteHostAgentService.swift,
+				Features/Remote/Desktop/RemoteAudioStreamer.swift,
+				Features/Remote/Desktop/RemoteCurtain.swift,
+				Features/Remote/Desktop/RemoteCurtainMute.swift,
+				Features/Remote/Desktop/RemoteDesktopEnvironment.swift,
+				Features/Remote/Desktop/RemoteDesktopIndicator.swift,
+				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
+				Features/Remote/Desktop/RemoteEventInjector.swift,
+				Features/Remote/Desktop/RemoteFrameScaler.swift,
+				Features/Remote/Desktop/RemoteHeadlessDisplay.swift,
+				Features/Remote/Desktop/RemoteScreenControl.swift,
+				Features/Remote/Desktop/RemoteSystemCursor.swift,
+				Features/Remote/Desktop/RemoteVideoEncoder.swift,
+				Features/Remote/Desktop/ScreenCaptureAudioSource.swift,
+				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
+				Features/Remote/RemoteControlSettings.swift,
+				Features/Remote/RemoteFileAccess.swift,
+				Features/Remote/RemoteHostConnection.swift,
+				Features/Remote/RemoteHostServer.swift,
+				Features/Remote/RemoteHostSessions.swift,
+				Features/Remote/RemoteLocalShellOpener.swift,
+				Features/Remote/RemotePairingCode.swift,
+				Features/Remote/RemotePairingPanel.swift,
+				Features/Remote/RemotePasteboard.swift,
+				Features/Remote/RemoteRelayHostLink.swift,
+				Features/Remote/RemoteRelayUpdateMonitor.swift,
+				Features/Remote/RemoteSleepPolicy.swift,
+				Features/Settings/Model/SettingsSection.swift,
+				Features/Terminal/ProgramStatus.swift,
+				Features/Terminal/Shadow/TerminalEngineVersion.swift,
+				Services/SSH/TerminalImage.swift,
+			);
+			target = 52484F53540000000000000E /* uTermRemoteHost */;
+		};
+		52484F535400000000000005 /* Exceptions for "uTermFiles" folder in "uTermRemoteHost" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				RemoteFileService.swift,
+				"RemoteFileService+Exec.swift",
+				"RemoteFileService+Scope.swift",
+				"RemoteFileService+Search.swift",
+			);
+			target = 52484F53540000000000000E /* uTermRemoteHost */;
+		};
+		52484F535400000000000006 /* Exceptions for "uTermShellAgent" folder in "uTermRemoteHost" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				main.swift,
+				ShellAgentServer.swift,
+			);
+			target = 52484F53540000000000000E /* uTermRemoteHost */;
 		};
 		5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -580,15 +598,6 @@
 			);
 			target = 10C0DE0000000000000000A1 /* uTermMobile */;
 		};
-		484F4C4445520000000000D1 /* Exceptions for "uTermHolder" folder in "uTermMobile" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				HolderOutputLog.swift,
-				HolderServer.swift,
-				main.swift,
-			);
-			target = 10C0DE0000000000000000A1 /* uTermMobile */;
-		};
 		555445524D53534800000004 /* Exceptions for "uTermHolder" folder in "uterm-ssh" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -598,30 +607,21 @@
 			);
 			target = 555445524D53534800000006 /* uterm-ssh */;
 		};
-		46494C455300000000000002 /* Exceptions for "uTermFiles" folder in "uTermMobile" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"RemoteFileService+Exec.swift",
-				"RemoteFileService+Scope.swift",
-				"RemoteFileService+Search.swift",
-				RemoteFileService.swift,
-			);
-			target = 10C0DE0000000000000000A1 /* uTermMobile */;
-		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		52484F535400000000000002 /* uTermRemoteHost */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				52484F535400000000000003 /* Exceptions for "uTermRemoteHost" folder in "uTermRemoteHost" target */,
-			);
-			path = uTermRemoteHost;
-			sourceTree = "<group>";
-		};
 		10C0DE0000000000000000B0 /* uTermMobile */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = uTermMobile;
+			sourceTree = "<group>";
+		};
+		46494C455300000000000001 /* uTermFiles */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				46494C455300000000000002 /* Exceptions for "uTermFiles" folder in "uTermMobile" target */,
+				52484F535400000000000005 /* Exceptions for "uTermFiles" folder in "uTermRemoteHost" target */,
+			);
+			path = uTermFiles;
 			sourceTree = "<group>";
 		};
 		484F4C444552000000000001 /* uTermHolder */ = {
@@ -634,22 +634,21 @@
 			path = uTermHolder;
 			sourceTree = "<group>";
 		};
+		52484F535400000000000002 /* uTermRemoteHost */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				52484F535400000000000003 /* Exceptions for "uTermRemoteHost" folder in "uTermRemoteHost" target */,
+			);
+			path = uTermRemoteHost;
+			sourceTree = "<group>";
+		};
 		5348454C4C00000000000001 /* uTermShellAgent */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				52484F535400000000000006 /* Exceptions for "uTermShellAgent" folder in "uTermRemoteHost" target */,
 				5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */,
+				52484F535400000000000006 /* Exceptions for "uTermShellAgent" folder in "uTermRemoteHost" target */,
 			);
 			path = uTermShellAgent;
-			sourceTree = "<group>";
-		};
-		46494C455300000000000001 /* uTermFiles */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				52484F535400000000000005 /* Exceptions for "uTermFiles" folder in "uTermRemoteHost" target */,
-				46494C455300000000000002 /* Exceptions for "uTermFiles" folder in "uTermMobile" target */,
-			);
-			path = uTermFiles;
 			sourceTree = "<group>";
 		};
 		555445524D53534800000001 /* uTermSSH */ = {
@@ -664,8 +663,8 @@
 		85D6BEF12FBC4E7E00FC90D8 /* uTerm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */,
 				10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */,
+				52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */,
 			);
 			path = uTerm;
 			sourceTree = "<group>";
@@ -683,16 +682,6 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		52484F535400000000000008 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				52484F535400000000000015 /* CJuice in Frameworks */,
-				52484F535400000000000016 /* CKCP in Frameworks */,
-				52484F535400000000000017 /* UDesignKit in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		10C0DE0000000000000000A4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -724,6 +713,16 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52484F535400000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				52484F535400000000000015 /* CJuice in Frameworks */,
+				52484F535400000000000016 /* CKCP in Frameworks */,
+				52484F535400000000000017 /* UDesignKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -867,36 +866,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		52484F53540000000000000E /* uTermRemoteHost */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 52484F53540000000000000F /* Build configuration list for PBXNativeTarget "uTermRemoteHost" */;
-			buildPhases = (
-				52484F535400000000000007 /* Sources */,
-				52484F535400000000000008 /* Frameworks */,
-				52484F535400000000000009 /* Resources */,
-				52484F53540000000000000B /* Set Build Number */,
-				52484F53540000000000000A /* Embed File Service */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				52484F53540000000000000D /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				52484F535400000000000002 /* uTermRemoteHost */,
-				46494C455300000000000001 /* uTermFiles */,
-				5348454C4C00000000000001 /* uTermShellAgent */,
-			);
-			name = uTermRemoteHost;
-			packageProductDependencies = (
-				52484F535400000000000012 /* CJuice */,
-				52484F535400000000000013 /* CKCP */,
-				52484F535400000000000014 /* UDesignKit */,
-			);
-			productName = uTermRemoteHost;
-			productReference = 52484F535400000000000001 /* uTermRemoteHost.app */;
-			productType = "com.apple.product-type.application";
-		};
 		10C0DE0000000000000000A1 /* uTermMobile */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 10C0DE0000000000000000A2 /* Build configuration list for PBXNativeTarget "uTermMobile" */;
@@ -912,8 +881,8 @@
 			);
 			fileSystemSynchronizedGroups = (
 				10C0DE0000000000000000B0 /* uTermMobile */,
-				484F4C444552000000000001 /* uTermHolder */,
 				46494C455300000000000001 /* uTermFiles */,
+				484F4C444552000000000001 /* uTermHolder */,
 				555445524D53534800000001 /* uTermSSH */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);
@@ -971,6 +940,36 @@
 			name = "uterm-holder";
 			productName = "uterm-holder";
 			productReference = 484F4C444552000000000003 /* uterm-holder.app */;
+			productType = "com.apple.product-type.application";
+		};
+		52484F53540000000000000E /* uTermRemoteHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 52484F53540000000000000F /* Build configuration list for PBXNativeTarget "uTermRemoteHost" */;
+			buildPhases = (
+				52484F535400000000000007 /* Sources */,
+				52484F535400000000000008 /* Frameworks */,
+				52484F535400000000000009 /* Resources */,
+				52484F53540000000000000B /* Set Build Number */,
+				52484F53540000000000000A /* Embed File Service */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				52484F53540000000000000D /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				46494C455300000000000001 /* uTermFiles */,
+				52484F535400000000000002 /* uTermRemoteHost */,
+				5348454C4C00000000000001 /* uTermShellAgent */,
+			);
+			name = uTermRemoteHost;
+			packageProductDependencies = (
+				52484F535400000000000012 /* CJuice */,
+				52484F535400000000000013 /* CKCP */,
+				52484F535400000000000014 /* UDesignKit */,
+			);
+			productName = uTermRemoteHost;
+			productReference = 52484F535400000000000001 /* uTermRemoteHost.app */;
 			productType = "com.apple.product-type.application";
 		};
 		5348454C4C00000000000004 /* uTermShellAgent */ = {
@@ -1039,9 +1038,9 @@
 				52484F535400000000000019 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+				46494C455300000000000001 /* uTermFiles */,
 				484F4C444552000000000001 /* uTermHolder */,
 				5348454C4C00000000000001 /* uTermShellAgent */,
-				46494C455300000000000001 /* uTermFiles */,
 				555445524D53534800000001 /* uTermSSH */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);
@@ -1198,14 +1197,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		52484F535400000000000009 /* Resources */ = {
+		10C0DE0000000000000000A5 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		10C0DE0000000000000000A5 /* Resources */ = {
+		52484F535400000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1243,6 +1242,30 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		484F4C44455200000000000E /* Copy Icon and Names */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Config/uterm-holder/AppIcon.icns",
+				"$(SRCROOT)/Config/uterm-holder/zh-Hans.lproj/InfoPlist.strings",
+				"$(SRCROOT)/Config/uterm-holder/en.lproj/InfoPlist.strings",
+			);
+			name = "Copy Icon and Names";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/zh-Hans.lproj/InfoPlist.strings",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/en.lproj/InfoPlist.strings",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n# holder 的源码在 uTermHolder/ 同步组里，那个组也编进主程序、iOS 与 uterm-ssh，资源放进去会被它们一起收走，\n# 所以图标与本地化名字放在 Config/uterm-holder/，在这里拷进包（签名在这一步之后）。\nsrc=\"${SRCROOT}/Config/uterm-holder\"\nres=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/bin/mkdir -p \"$res\"\n/bin/cp \"$src/AppIcon.icns\" \"$res/AppIcon.icns\"\nfor lang in zh-Hans en; do\n  /bin/mkdir -p \"$res/$lang.lproj\"\n  /bin/cp \"$src/$lang.lproj/InfoPlist.strings\" \"$res/$lang.lproj/InfoPlist.strings\"\ndone\n";
+		};
 		52484F53540000000000000A /* Embed File Service */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1379,40 +1402,9 @@
 			shellPath = /bin/sh;
 			shellScript = "set -eu\nsource_app=\"${BUILT_PRODUCTS_DIR}/uTermBackgroundLauncher.app\"\ndestination=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LoginItems/uTermBackgroundLauncher.app\"\n/bin/mkdir -p \"$(dirname \"$destination\")\"\n/usr/bin/ditto \"$source_app\" \"$destination\"\n";
 		};
-		484F4C44455200000000000E /* Copy Icon and Names */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/Config/uterm-holder/AppIcon.icns",
-				"$(SRCROOT)/Config/uterm-holder/zh-Hans.lproj/InfoPlist.strings",
-				"$(SRCROOT)/Config/uterm-holder/en.lproj/InfoPlist.strings",
-			);
-			name = "Copy Icon and Names";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/zh-Hans.lproj/InfoPlist.strings",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/en.lproj/InfoPlist.strings",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -eu\n# holder 的源码在 uTermHolder/ 同步组里，那个组也编进主程序、iOS 与 uterm-ssh，资源放进去会被它们一起收走，\n# 所以图标与本地化名字放在 Config/uterm-holder/，在这里拷进包（签名在这一步之后）。\nsrc=\"${SRCROOT}/Config/uterm-holder\"\nres=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/bin/mkdir -p \"$res\"\n/bin/cp \"$src/AppIcon.icns\" \"$res/AppIcon.icns\"\nfor lang in zh-Hans en; do\n  /bin/mkdir -p \"$res/$lang.lproj\"\n  /bin/cp \"$src/$lang.lproj/InfoPlist.strings\" \"$res/$lang.lproj/InfoPlist.strings\"\ndone\n";
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		52484F535400000000000007 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		10C0DE0000000000000000A3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1421,6 +1413,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		484F4C444552000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52484F535400000000000007 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1473,6 +1472,12 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		484F4C44455200000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "uterm-holder";
+			target = 484F4C444552000000000004 /* uterm-holder */;
+			targetProxy = 484F4C44455200000000000A /* PBXContainerItemProxy */;
+		};
 		52484F53540000000000000D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = uTermShellAgent;
@@ -1484,12 +1489,6 @@
 			name = uTermRemoteHost;
 			target = 52484F53540000000000000E /* uTermRemoteHost */;
 			targetProxy = 52484F535400000000000018 /* PBXContainerItemProxy */;
-		};
-		484F4C44455200000000000B /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = "uterm-holder";
-			target = 484F4C444552000000000004 /* uterm-holder */;
-			targetProxy = 484F4C44455200000000000A /* PBXContainerItemProxy */;
 		};
 		5348454C4C0000000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1522,70 +1521,6 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		52484F535400000000000010 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = uTermRemoteHost/uTermRemoteHost.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = ABCDE12345;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = uTermRemoteHost/Info.plist;
-				INFOPLIST_KEY_LSUIElement = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.RemoteHost;
-				PRODUCT_NAME = uTermRemoteHost;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-			};
-			name = Debug;
-		};
-		52484F535400000000000011 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = uTermRemoteHost/uTermRemoteHost.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = ABCDE12345;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = uTermRemoteHost/Info.plist;
-				INFOPLIST_KEY_LSUIElement = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.RemoteHost;
-				PRODUCT_NAME = uTermRemoteHost;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-			};
-			name = Release;
-		};
 		10C0DE0000000000000000F1 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
@@ -1698,6 +1633,70 @@
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		52484F535400000000000010 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = uTermRemoteHost/uTermRemoteHost.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = uTermRemoteHost/Info.plist;
+				INFOPLIST_KEY_LSUIElement = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.RemoteHost;
+				PRODUCT_NAME = uTermRemoteHost;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		52484F535400000000000011 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = uTermRemoteHost/uTermRemoteHost.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = uTermRemoteHost/Info.plist;
+				INFOPLIST_KEY_LSUIElement = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.RemoteHost;
+				PRODUCT_NAME = uTermRemoteHost;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
@@ -2143,15 +2142,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		52484F53540000000000000F /* Build configuration list for PBXNativeTarget "uTermRemoteHost" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				52484F535400000000000010 /* Debug */,
-				52484F535400000000000011 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		10C0DE0000000000000000A2 /* Build configuration list for PBXNativeTarget "uTermMobile" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -2175,6 +2165,15 @@
 			buildConfigurations = (
 				484F4C444552000000000008 /* Debug */,
 				484F4C444552000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		52484F53540000000000000F /* Build configuration list for PBXNativeTarget "uTermRemoteHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				52484F535400000000000010 /* Debug */,
+				52484F535400000000000011 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -2240,6 +2239,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
 		};
+		4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "vendor/libghostty-spm";
+		};
 		4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/libjuice;
@@ -2251,10 +2254,6 @@
 		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/CodeEditTextView;
-		};
-		4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "vendor/libghostty-spm";
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -2366,36 +2365,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		52484F535400000000000012 /* CJuice */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
-			productName = CJuice;
-		};
-		52484F535400000000000013 /* CKCP */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
-			productName = CKCP;
-		};
-		52484F535400000000000014 /* UDesignKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = UDesignKit;
-		};
-		474853540000000000000A01 /* GhosttyTerminal */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
-			productName = GhosttyTerminal;
-		};
-		474853540000000000000A02 /* GhosttyKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
-			productName = GhosttyKit;
-		};
-		474853540000000000000A03 /* GhosttyVt */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
-			productName = GhosttyVt;
-		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
@@ -2431,6 +2400,36 @@
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = AgentKit;
 		};
+		4748535400000000000000A1 /* GhosttyTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
+			productName = GhosttyTerminal;
+		};
+		4748535400000000000000A3 /* GhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
+			productName = GhosttyKit;
+		};
+		4748535400000000000000A5 /* GhosttyVt */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
+			productName = GhosttyVt;
+		};
+		474853540000000000000A01 /* GhosttyTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
+			productName = GhosttyTerminal;
+		};
+		474853540000000000000A02 /* GhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
+			productName = GhosttyKit;
+		};
+		474853540000000000000A03 /* GhosttyVt */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
+			productName = GhosttyVt;
+		};
 		4A55494345000000000000A1 /* CJuice */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
@@ -2455,6 +2454,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterINI;
+		};
+		52484F535400000000000012 /* CJuice */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
+			productName = CJuice;
+		};
+		52484F535400000000000013 /* CKCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
+			productName = CKCP;
+		};
+		52484F535400000000000014 /* UDesignKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = UDesignKit;
 		};
 		5541424B0000000000000001 /* UAppKitBridge */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -2580,21 +2594,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
 			productName = TreeSitterMarkdown;
-		};
-		4748535400000000000000A1 /* GhosttyTerminal */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
-			productName = GhosttyTerminal;
-		};
-		4748535400000000000000A3 /* GhosttyKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
-			productName = GhosttyKit;
-		};
-		4748535400000000000000A5 /* GhosttyVt */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */;
-			productName = GhosttyVt;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
