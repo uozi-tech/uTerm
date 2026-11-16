@@ -108,8 +108,9 @@ nonisolated final class RemoteDirectAttempt: @unchecked Sendable {
             answersChecks = false
             confirmed = false
         }
-        // 每 100 ms 发一次（确认包可能丢），每 10 ms 看一眼回应到了没有：以前发完就睡 100 ms，回应 20 ms 就到了
-        // 也要等满 100 ms 才发现。
+        // 每 `checkResend` 发一次，每 10 ms 看一眼回应到了没有：以前发完就睡 100 ms，回应 20 ms 就到了也要等满
+        // 100 ms 才发现。重发要勤：手机这头 ICE 先报连上时，Mac 那头往往还没选好路，回应发不出去，第一个确认包
+        // 白发（2026-11-16 Duo：Mac 收到确认后约 120 ms 手机才确认完）。
         let clock = ContinuousClock()
         let deadline = clock.now + limit
         var nextSend = clock.now
@@ -124,8 +125,8 @@ nonisolated final class RemoteDirectAttempt: @unchecked Sendable {
         return locked { confirmed }
     }
 
-    /// 路径确认包多久重发一次。
-    static let checkResend: Duration = .milliseconds(100)
+    /// 路径确认包多久重发一次。包只有几十字节，1.5 s 的时限里最多五十个。
+    static let checkResend: Duration = .milliseconds(30)
 
     /// Mac：等手机发来带认证的确认。收到就回应，并一直回应它后面的重发。
     func waitForCheck(keys: RemoteDatagramKeys, limit: Duration = hostWaitLimit) async -> Bool {

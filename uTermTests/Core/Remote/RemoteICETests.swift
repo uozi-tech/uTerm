@@ -179,6 +179,15 @@ final class RemoteICETests: XCTestCase {
         let nearFirst = RemoteICEDescriptionFilter.checkOrdered(description, local: local)
             .components(separatedBy: "\r\n").filter { $0.hasPrefix("a=candidate:") }.map { String($0.dropFirst(12).prefix(1)) }
         XCTAssertEqual(nearFirst, ["1", "5", "3", "2", "4", "6"])
+
+        // 分两拨：能指望的先加，别的私有 IPv4 和中继晚加，不占前面的检查时间槽。
+        func ids(_ lines: [String]) -> [String] { lines.map { String($0.dropFirst(12).prefix(1)) } }
+        let waves = RemoteICEDescriptionFilter.checkWaves(description, local: local)
+        XCTAssertEqual(ids(waves.now), ["1", "5", "3"])
+        XCTAssertEqual(ids(waves.later), ["2", "4", "6"])
+        let noLocal = RemoteICEDescriptionFilter.checkWaves(description, local: nil)
+        XCTAssertEqual(ids(noLocal.now), ["5", "3"])
+        XCTAssertEqual(ids(noLocal.later), ["1", "2", "4", "6"])
     }
 
     func test_public_only_drops_every_private_ipv4_range() {

@@ -301,6 +301,16 @@ nonisolated enum RemoteICEDescriptionFilter {
         return lines.map { line in Self.isCandidate(line) ? sorted.popFirst() ?? line : line }.joined(separator: "\r\n")
     }
 
+    /// 按检查先后排好、再分成两拨：`now` 是能指望的（同网段的私有 IPv4、公网映射、公网的本机地址），`later` 是
+    /// 别的私有 IPv4 与中继（见 `RemoteICEAgent.addRemoteCandidates`）。
+    static func checkWaves(_ description: String, local: String?) -> (now: [String], later: [String]) {
+        let nearby = Self.subnets(of: local)
+        let ordered = Self.lines(checkOrdered(description, local: local)).filter(Self.isCandidate)
+        let now = ordered.filter { Self.checkRank($0, nearby: nearby) <= 2 }
+        let later = ordered.filter { Self.checkRank($0, nearby: nearby) > 2 }
+        return (now, later)
+    }
+
     /// 拆成凭据（候选行和 `a=end-of-candidates` 以外的行）与候选行（原来的先后，见 `RemoteICEAgent.answer`）。
     static func split(_ description: String) -> (credentials: String, candidates: [String]) {
         let lines = Self.lines(description)

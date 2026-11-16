@@ -103,19 +103,50 @@ nonisolated final class RemoteICEAgent: @unchecked Sendable {
     /// 上一次 `localDescription` 交出去的本机描述（排对端地址的先后时认同网段用；不另外去取，免得改了角色）。
     private var lastLocalDescription: String?
 
+    /// 不在本机网段的私有 IPv4 与中继地址晚多久再加（见 `addRemoteCandidates`）。
+    static let lateCandidateDelay: Duration = .milliseconds(300)
+
     /// 对端的描述。一方在调用 `localDescription` 之前调这个，就成为 controlled。
-    ///
-    /// 候选地址按 `RemoteICEDescriptionFilter.checkOrdered` 重排后再交给 libjuice：它按地址加进来的先后每 50 ms
-    /// 发一个检查（`STUN_PACING_TIME`），不按优先级。原样交时私网地址排在前面，跨网络时一个个白试，能通的公网映射
-    /// 排在最后（2026-11-16 mini 有 7 个 IPv4 本机地址：手机要过约 350 ms 才轮到它）。
+    /// 对端的地址分两拨加进去，见 `addRemoteCandidates`。
     func setRemote(_ description: String) -> Bool {
-        let local = lock.withLock { lastLocalDescription }
-        let ordered = RemoteICEDescriptionFilter.checkOrdered(description, local: local)
-        return withAgent { agent in
-            guard ordered.utf8.count < Int(JUICE_MAX_SDP_STRING_LEN),
-                  juice_set_remote_description(agent, ordered) == JUICE_ERR_SUCCESS else { return false }
-            return juice_set_remote_gathering_done(agent) == JUICE_ERR_SUCCESS
+        let credentials = RemoteICEDescriptionFilter.split(description).credentials
+        let set = withAgent { agent in
+            credentials.utf8.count < Int(JUICE_MAX_SDP_STRING_LEN)
+                && juice_set_remote_description(agent, credentials) == JUICE_ERR_SUCCESS
         } ?? false
+        return set && addRemoteCandidates(description)
+    }
+
+    /// 把对端的地址交给 libjuice：能指望的先加（同网段的私有 IPv4、公网映射、公网的本机地址），其余的（别的私有
+    /// IPv4、中继）过 `lateCandidateDelay` 再加，加完才报对端收集完。
+    ///
+    /// libjuice 按地址加进来的先后每 50 ms 发一个检查（`STUN_PACING_TIME`），不按优先级；收到对端的检查后回的
+    /// 触发检查也要排进这些时间槽。原样一次加进去时，跨网络白试的私网地址占满了前面的槽：能通的公网映射要过约
+    /// 350 ms 才轮到，排到它前面也没用，对端打过来之后要回的那个触发检查照样排在它们后面（2026-11-16 mini 有
+    /// 7 个本机 IPv4，Duo 打通 373 ms）。晚加的那拨照样会试：公司里跨网段路由的私有地址也通。
+    private func addRemoteCandidates(_ description: String) -> Bool {
+        let local = lock.withLock { lastLocalDescription }
+        let waves = RemoteICEDescriptionFilter.checkWaves(description, local: local)
+        let added = withAgent { agent in
+            // 单个地址解析不了（对端多报了一种格式）不要紧，其余的照样试。
+            for candidate in waves.now { _ = juice_add_remote_candidate(agent, candidate) }
+            return true
+        } ?? false
+        guard added else { return false }
+        let finish: @Sendable () -> Void = { [weak self] in
+            _ = self?.withAgent { agent in
+                for candidate in waves.later { _ = juice_add_remote_candidate(agent, candidate) }
+                return juice_set_remote_gathering_done(agent) == JUICE_ERR_SUCCESS
+            }
+        }
+        if waves.later.isEmpty {
+            finish()
+        } else {
+            let delay = Self.lateCandidateDelay
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(
+                deadline: .now() + .milliseconds(Int(RemoteConnectTrace.millis(delay))), execute: finish)
+        }
+        return true
     }
 
     /// 应答的一方（controlled）：设对端、收集本机地址，一步做完。
@@ -132,14 +163,10 @@ nonisolated final class RemoteICEAgent: @unchecked Sendable {
                 && juice_gather_candidates(agent) == JUICE_ERR_SUCCESS
         } ?? false
         guard started else { return false }
-        // 本机地址在 gather 时就列出来了（公网映射要等 STUN 回来），拿它认同网段再排对端地址的先后。
-        let ordered = RemoteICEDescriptionFilter.split(
-            RemoteICEDescriptionFilter.checkOrdered(description, local: localDescription())).candidates
-        return withAgent { agent in
-            // 单个地址解析不了（对端多报了一种格式）不要紧，其余的照样试。
-            for candidate in ordered { _ = juice_add_remote_candidate(agent, candidate) }
-            return juice_set_remote_gathering_done(agent) == JUICE_ERR_SUCCESS
-        } ?? false
+        // 本机地址在 gather 时就列出来了（公网映射要等 STUN 回来）：先取一次本机描述，好认同网段。
+        // 这一端已经是 controlled，取它不会改角色。
+        _ = localDescription()
+        return addRemoteCandidates(description)
     }
 
     @discardableResult
