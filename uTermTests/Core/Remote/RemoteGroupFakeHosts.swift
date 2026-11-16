@@ -20,6 +20,18 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
         let host: UUID
     }
 
+    /// 每台 Mac 上发生的事，按先后（撤销与开通的先后用）。
+    enum Event: Equatable {
+        case vouch(device: UUID, key: Data)
+        case revoke(device: UUID, key: Data)
+    }
+
+    enum RevokeReply {
+        case outcome(RemoteSiblingRevokeResult.Outcome)
+        case unreachable
+        case tooOld
+    }
+
     var paired: [RemoteGroupVouchTarget] = []
     var online: Set<UUID> = []
     /// 每台 Mac 怎么回；没写的回 `added`。
@@ -31,6 +43,14 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
     /// 卡住的请求被取消了几次。
     private(set) var cancelled = 0
     private(set) var adopted: [RemoteGroupGrant] = []
+    /// 每台 Mac 怎么回撤销请求；没写的回 `revoked`。
+    var revokeReplies: [UUID: RevokeReply] = [:]
+    private(set) var revokeCalls: [Call] = []
+    private(set) var events: [UUID: [Event]] = [:]
+    /// 信任表里每台 Mac 的记下时间（回滚核对用）。
+    var pairedAt: [UUID: Date] = [:]
+    /// `dropAdoptedHost` 拿掉的 Mac。
+    private(set) var dropped: [UUID] = []
 
     /// 加一台配对过的 Mac（默认在线）。
     @discardableResult
@@ -41,6 +61,7 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
                                             model: "Mac mini", platform: RemoteDevicePlatform.mac.rawValue, relay: relay)
         paired.removeAll { $0.id == id }
         paired.append(target)
+        pairedAt[id] = Date(timeIntervalSince1970: 1_700_000_000 + Double(paired.count))
         if isOnline { online.insert(id) }
         return target
     }
@@ -59,6 +80,7 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
 
     func vouch(_ device: RemoteGroupDevice, at host: UUID) async throws -> RemoteVouchResult {
         calls.append(Call(device: device.id, host: host))
+        events[host, default: []].append(.vouch(device: device.id, key: device.publicKey))
         while held.contains(host) {
             if Task.isCancelled { break }
             try? await Task.sleep(for: .milliseconds(2))
@@ -86,10 +108,98 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
         if forgotten.contains(grant.hostID) { return .forgotten }
         paired.append(RemoteGroupVouchTarget(id: grant.hostID, name: grant.hostName, publicKey: grant.hostKey,
                                              model: grant.hostModel, platform: grant.hostPlatform, relay: grant.relay))
+        pairedAt[grant.hostID] = Date(timeIntervalSince1970: 1_750_000_000 + Double(adopted.count))
         return .added
     }
 
     func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
-        throw RemoteAttachError.rejected("测试里不撤销")
+        revokeCalls.append(Call(device: deviceID, host: host))
+        events[host, default: []].append(.revoke(device: deviceID, key: publicKey))
+        while held.contains(host) {
+            if Task.isCancelled { break }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        if Task.isCancelled {
+            cancelled += 1
+            throw CancellationError()
+        }
+        switch revokeReplies[host] ?? .outcome(.revoked) {
+        case .outcome(let outcome): return RemoteSiblingRevokeResult(requestID: UUID(), outcome: outcome)
+        case .unreachable: throw RemoteAttachError.unreachable("连不上")
+        case .tooOld: throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧")
+        }
+    }
+
+    func revokeCalls(at host: UUID) -> [UUID] { revokeCalls.filter { $0.host == host }.map(\.device) }
+
+    func trustedHost(_ id: UUID) -> RemoteGroupTrustedHost? {
+        guard let target = paired.first(where: { $0.id == id }) else { return nil }
+        return RemoteGroupTrustedHost(publicKey: target.publicKey, pairedAt: pairedAt[id] ?? .distantPast)
+    }
+
+    func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool {
+        guard let trusted = trustedHost(id), trusted.matches(publicKey: publicKey, pairedAt: pairedAt) else { return false }
+        paired.removeAll { $0.id == id }
+        online.remove(id)
+        self.pairedAt[id] = nil
+        dropped.append(id)
+        return true
+    }
+}
+
+/// 测试用的「这台 Mac 自己的被控端」（`RemoteGroupLocalHost`）：规则照 `RemoteHostServer.handleGroupController` /
+/// `handleGroupDrop`（拉黑的不加、公钥不同不替换、只撤经担保记下的）。`available` 为 false 时像远控进程不在：回 nil。
+@MainActor
+final class RemoteGroupFakeLocalHost: RemoteGroupLocalHost {
+    var accepts = true
+    var available = true
+    var peers: [UUID: RemoteGroupLocalController] = [:]
+    var blocked: Set<UUID> = []
+    private(set) var addCalls: [UUID] = []
+    private(set) var dropCalls: [UUID] = []
+
+    var acceptsGroupControllers: Bool { accepts }
+
+    func groupControllerPeers() -> [RemoteGroupLocalController] {
+        peers.values.sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    func isControllerBlocked(_ id: UUID) -> Bool { blocked.contains(id) }
+
+    /// Mac 主人在这台 Mac 上手动配对过它。
+    func pairManually(_ device: RemoteGroupDevice) {
+        peers[device.id] = RemoteGroupLocalController(id: device.id, publicKey: device.publicKey, isVouched: false,
+                                                      isFromGroup: false)
+    }
+
+    /// Mac 主人在这台 Mac 上撤销（拉黑）。
+    func ownerRevoke(_ id: UUID) {
+        peers[id] = nil
+        blocked.insert(id)
+    }
+
+    func addGroupController(_ device: RemoteGroupDevice) async -> RemoteVouchResult? {
+        guard available else { return nil }
+        addCalls.append(device.id)
+        if blocked.contains(device.id) { return RemoteVouchResult(requestID: UUID(), outcome: .rejected, reason: "撤销过") }
+        if let peer = peers[device.id] {
+            return peer.publicKey == device.publicKey
+                ? RemoteVouchResult(requestID: UUID(), outcome: .alreadyTrusted, internetAccess: false)
+                : RemoteVouchResult(requestID: UUID(), outcome: .rejected, reason: "换过钥匙")
+        }
+        peers[device.id] = RemoteGroupLocalController(id: device.id, publicKey: device.publicKey, isVouched: true,
+                                                      isFromGroup: true)
+        return RemoteVouchResult(requestID: UUID(), outcome: .added, internetAccess: false)
+    }
+
+    func dropGroupController(_ id: UUID, publicKey: Data) async -> RemoteSiblingRevokeResult? {
+        guard available else { return nil }
+        dropCalls.append(id)
+        guard let peer = peers[id], peer.publicKey == publicKey else {
+            return RemoteSiblingRevokeResult(requestID: UUID(), outcome: .notTrusted)
+        }
+        guard peer.isVouched else { return RemoteSiblingRevokeResult(requestID: UUID(), outcome: .notInFamily) }
+        peers[id] = nil
+        return RemoteSiblingRevokeResult(requestID: UUID(), outcome: .revoked)
     }
 }

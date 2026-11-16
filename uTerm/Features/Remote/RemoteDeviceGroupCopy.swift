@@ -51,6 +51,8 @@ enum RemoteDeviceGroupCopy {
     }
 
     static let removeMessage = String(localized: "被移除的设备要重新加入才能用。")
+    /// 移除确认里的第二句：Mac 上的撤销是自动的（§7.3）。
+    static let removeRevokesMacs = String(localized: "你的 Mac 也会撤销它的远程控制。")
     static let cascadeHeader = String(localized: "由它加进来的设备也一起移除：")
     static let leaveTitle = String(localized: "离开设备组？")
     static let leaveMessage = String(localized: "离开后这台设备要重新加入才能用，组里别的设备不受影响。")
@@ -82,6 +84,21 @@ enum RemoteDeviceGroupCopy {
     static func isWarning(_ status: RemoteDeviceGroup.PendingHost.Status) -> Bool {
         if case .needsPairing = status { return true }
         return false
+    }
+
+    // MARK: 已移除的设备
+
+    static let removedHeader = String(localized: "已移除的设备")
+    static let removedFooter = String(localized: "这些 Mac 连得上时会自动撤销，多半在等它们开机或上线。")
+    /// 撤销进度里没记下名字时的叫法。
+    static let unnamedDevice = String(localized: "一台已移除的设备")
+
+    /// 「已移除的设备」一行右边那几个字：还有几台 Mac 没撤（只剩一台时写它的名字）。
+    static func removedStatus(_ device: RemoteDeviceGroup.RemovedDevice) -> String {
+        if device.waitingHosts.count == 1, let host = device.waitingHosts.first {
+            return String(localized: "「\(host)」还没撤销")
+        }
+        return String(localized: "还有 \(device.waitingHosts.count) 台 Mac 没撤销")
     }
 
     // MARK: 弹窗（组员一侧输码）

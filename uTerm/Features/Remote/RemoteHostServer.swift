@@ -129,6 +129,8 @@ final class RemoteHostServer {
     @ObservationIgnored var grantInternetAccess: (UUID) -> Void = { _ in }
     /// 「允许已配对的设备为它主人的其它设备开通」，由设置决定。默认不允许（设置里默认打开）。
     @ObservationIgnored var vouchPolicy: () -> Bool = { false }
+    /// 设备组可以把组员记成这台 Mac 的主控端：开着被控和「允许担保」（App 里由设置决定；远控进程里不用）。
+    @ObservationIgnored var groupControllerPolicy: () -> Bool = { false }
     /// 有设备经担保被记下了（App 里发通知）。远控进程里不设：App 收到它写回的担保记录时自己比对出来。
     @ObservationIgnored var onDeviceVouched: (RemotePeerVouch) -> Void = { _ in }
     /// 当前的中继配置。可观察：命令行导入后设置页要跟着变。交给别的设备的是 `relayConfig(forPeer:)`。
@@ -698,8 +700,14 @@ final class RemoteHostServer {
     /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。发给它的中继证书一并吊销。
     func revoke(_ peerID: UUID) {
         if let agent { return agent.post(.revoke(peerID)) }
+        removeTrust(peerID, blocks: true)
+    }
+
+    /// 撤销在本进程里的那一步（远控进程在服务时它在远控进程里做，写入经 `persistSecret` 回到 App）。
+    /// `blocks` 为 false：同组设备请求的、设备组撤掉被移除的组员（§8），只删信任与担保来路，不拉黑。
+    private func removeTrust(_ peerID: UUID, blocks: Bool) {
         if let grant = identity.peer(id: peerID)?.relayGrant { revokeRelayGrant(grant) }
-        try? identity.revoke(id: peerID)
+        try? identity.revoke(id: peerID, blocks: blocks)
         trustedPeers = identity.trustedPeers()
         refreshVouches(notify: false)
         for connection in connections.values where connection.peerID == peerID {
@@ -762,7 +770,12 @@ final class RemoteHostServer {
         return RemoteVouchResult(requestID: request.requestID, outcome: .added, internetAccess: internet, relay: relay)
     }
 
-    /// 同一组的另一台设备说这台丢了：撤销它（断开、拉黑、吊销它的中继证书，同 `revoke`）。
+    /// 同一组的另一台设备说这台被移出了设备组：撤销它（断开、吊销它的中继证书，同 `revoke`），但**不拉黑**
+    /// （docs/remote-device-group-design.md §8）：那是设备组的决定，不是这台 Mac 主人的；设备找回来重新进组后，
+    /// 组员再替它开通要能成功。Mac 主人在 Mac 上撤销的照旧拉黑（`revoke`）。
+    ///
+    /// 在连接所在的进程里执行：远控进程在服务时就在远控进程里，信任表的写入经 `persistSecret` 回到 App 的钥匙串，
+    /// App 不在时排队（同配对、担保）。XPC 协议没有为此改动。
     func handleSiblingRevoke(_ request: RemoteSiblingRevokeRequest, requesterID: UUID,
                              requesterName: String) -> RemoteSiblingRevokeResult {
         let outcome = RemoteVouchPolicy.decideRevoke(request, requesterID: requesterID,
@@ -770,10 +783,15 @@ final class RemoteHostServer {
         switch outcome {
         case .revoked:
             let name = identity.peer(id: request.deviceID)?.displayName ?? request.deviceID.uuidString
-            AppLogger.notice("远控：\(requesterName) 撤销了同一组的「\(name)」（报告丢失）", category: RemoteLog.category)
+            AppLogger.notice("远控：\(requesterName) 撤销了同一组的「\(name)」（移出了设备组）", category: RemoteLog.category)
             // 下一拍再撤：撤的可能是发请求的这台自己，撤销会断开它的连接，先让结果发出去。
             let id = request.deviceID
-            Task { @MainActor [weak self] in self?.revoke(id) }
+            let key = request.publicKey
+            Task { @MainActor [weak self] in
+                // 这一拍之间被重新配对、换了钥匙的不撤。
+                guard let self, self.identity.peer(id: id)?.publicKey == key else { return }
+                self.removeTrust(id, blocks: false)
+            }
             return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked)
         case .notTrusted:
             return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notTrusted)
@@ -781,6 +799,54 @@ final class RemoteHostServer {
             return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notInFamily,
                                              reason: String(localized: "在这台 Mac 上它不是由你的设备开通的，要到 Mac 上撤销"))
         }
+    }
+
+    // MARK: - 设备组（这台 Mac 自己是组员）
+
+    /// 设备组：把组里的一台设备记成主控端，来路记成这台 Mac 自己（`RemotePeerVouch.vouchedBy == localID`，
+    /// 设置里显示「由设备组添加」）。规则同担保（`handleVouch`，担保者换成本机）：Mac 主人撤销过（拉黑）的不加，
+    /// 关了「允许担保」不加，已经认识的公钥不同不替换；公网接入照新配对设备的默认值（不开，担保者是本机，不在公网名单里），
+    /// 已经认识、又勾着公网接入的照旧给中继证书。
+    ///
+    /// 由 App 里的设备组调（远控进程不读名册）。远控进程在服务时转给它（`RemoteHostAgentCommand.groupAddController`），
+    /// 它的信任表与担保记录照常经 `persistSecret` 写回 App；转不过去（远控进程不在、版本太旧不认这个操作）回 nil。
+    func groupAddController(_ request: RemoteVouchRequest) async -> RemoteVouchResult? {
+        if let agent {
+            guard let reply = await agent.send(.groupAddController(RemoteHostAgentJSON.encode(request))), reply.ok,
+                  let data = reply.data else { return nil }
+            return RemoteHostAgentJSON.decode(RemoteVouchResult.self, from: data)
+        }
+        return handleGroupController(request)
+    }
+
+    /// 设备组：组员被移除了，撤掉它（断开、吊销中继证书、不拉黑）。只撤公钥对得上、而且是经担保（设备组或别的设备）
+    /// 记下的；Mac 主人在这台 Mac 上手动配对的不动（那要在 Mac 上撤）。远控进程在服务时转给它，转不过去回 nil。
+    func groupDropController(_ request: RemoteSiblingRevokeRequest) async -> RemoteSiblingRevokeResult? {
+        if let agent {
+            guard let reply = await agent.send(.groupDropController(RemoteHostAgentJSON.encode(request))), reply.ok,
+                  let data = reply.data else { return nil }
+            return RemoteHostAgentJSON.decode(RemoteSiblingRevokeResult.self, from: data)
+        }
+        return handleGroupDrop(request)
+    }
+
+    /// `groupAddController` 在本进程里的那一步。
+    func handleGroupController(_ request: RemoteVouchRequest) -> RemoteVouchResult {
+        handleVouch(request, voucherID: localID, voucherName: localName)
+    }
+
+    /// `groupDropController` 在本进程里的那一步。
+    func handleGroupDrop(_ request: RemoteSiblingRevokeRequest) -> RemoteSiblingRevokeResult {
+        guard let peer = identity.peer(id: request.deviceID), peer.publicKey == request.publicKey else {
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notTrusted)
+        }
+        guard identity.vouches()[request.deviceID] != nil else {
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notInFamily,
+                                             reason: String(localized: "它是在这台 Mac 上手动配对的，要在这里撤销"))
+        }
+        AppLogger.notice("远控：「\(peer.displayName)」已被移出设备组，撤掉", category: RemoteLog.category)
+        removeTrust(request.deviceID, blocks: false)
+        return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked)
     }
 
     /// 重读担保记录；`notify` 时对新出现的每一条回调 `onDeviceVouched`。

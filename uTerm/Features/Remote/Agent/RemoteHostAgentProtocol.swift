@@ -232,6 +232,14 @@ nonisolated enum RemoteHostAgentCommand: Codable, Sendable {
     case desktopPermissions
     /// 由远控进程申请「辅助功能」：系统设置的列表里登记的是「uTerm 远程控制」。回 `RemoteHostAgentPermissions`。
     case requestPostEvents
+    /// 设备组（App 里算的，远控进程不读名册）：把一台组员记成主控端，来路记成这台 Mac 自己
+    /// （`RemoteHostServer.groupAddController`）。负载是 `RemoteVouchRequest` 的 JSON，回复的 `data` 是
+    /// `RemoteVouchResult` 的 JSON。信任表与担保记录照常经 `persistSecret` 写回 App。
+    /// 不认这个操作的旧远控进程回 `ok: false`，App 过一阵再试。
+    case groupAddController(Data)
+    /// 设备组：组员被移除了，不拉黑地撤掉它（`RemoteHostServer.groupDropController`）。负载是
+    /// `RemoteSiblingRevokeRequest` 的 JSON，回复的 `data` 是 `RemoteSiblingRevokeResult` 的 JSON。
+    case groupDropController(Data)
 }
 
 /// 远控进程此刻的系统授权（本进程内的结果，用户在系统设置里改了之后要重启远控进程才变）。

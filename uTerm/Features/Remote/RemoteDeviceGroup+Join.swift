@@ -123,8 +123,11 @@ extension RemoteDeviceGroup {
             if !removal.hasValidAdmission { removal.admission = nil }
             adopted.recordRemoval(removal)
         }
+        // 组里早就处理过的移除：本机不再去请 Mac 撤销（只撤本机进组之后认下的）。
+        adopted.settleRevocations(for: package.removals)
+        // 本机重装之前的那一份（同一个设备 ID）不当组员：组员核对通过时会移除它。
         for member in [package.member] + package.others where member.device.hasValidKeys
-            && member.admission.isValid(for: member.device)
+            && member.admission.isValid(for: member.device) && member.device.id != local.id
             && member.device.signingKey != local.signingKey && adopted.member(signingKey: member.device.signingKey) == nil {
             adopted.members.append(member)
         }
@@ -217,8 +220,10 @@ extension RemoteDeviceGroup {
         // 由本机签：之后谁补签都只能原样带着它，改不了「是谁加的」。
         let admission = try RemoteGroupAdmission.make(device: join.device, admitter: local, admittedAt: admittedAt,
                                                       key: signingKey)
+        // 新设备重装之前的那一份（同一个设备 ID）不交给它：核对通过时本机就移除它（`retireOldIncarnations`）。
+        let others = state.members.filter { $0.device.id != join.device.id }
         let package = RemoteGroupAdmissionPackage(member: RemoteGroupMember(device: local, admission: selfAdmission),
-                                                  others: state.members, removals: state.removals, admission: admission)
+                                                  others: others, removals: state.removals, admission: admission)
         let sealed = try RemoteGroupJoinCrypto.sealPackage(package, key: RemoteGroupJoinCrypto.packageKey(keys), sid: join.sid,
                                                            candidate: join.device.id, member: local.id)
         let expected = try RemoteGroupJoinCrypto.expectedCandidateConfirmation(keys: keys, sid: join.sid, join: join)
@@ -261,12 +266,26 @@ extension RemoteDeviceGroup {
                 state.members.append(RemoteGroupMember(device: entry, admission: pending.admission))
                 admittedJoins[entry.id] = entry
                 AppLogger.notice("设备组：「\(entry.name)」核对通过，已加入", category: RemoteLog.category)
+                retireOldIncarnations(of: entry, in: &state)
                 continue
             }
             if now().timeIntervalSince(pending.submittedAt) <= Self.pendingLifetime { waiting.append(pending) }
         }
         state.pendingJoins = waiting
         state.pruneSubmissions(now: now(), window: Self.submissionWindow)
+    }
+
+    /// 重装过的设备（§7.3「重装过的设备」）：组里已有同一个设备 ID、钥匙不同的组员，就是它重装之前的那一份。
+    /// 认下新的这一份时同时移除旧的（不连带：旧的加进来的设备不受影响）。之后各台组员照移除的规则先请 Mac 撤掉旧钥匙，
+    /// 再替新钥匙开通（`RemoteDeviceGroup+Revoke.swift`：同一个 ID 在那台 Mac 上还有没撤完的就先不开通）。
+    func retireOldIncarnations(of entry: RemoteGroupDevice, in state: inout RemoteGroupLocalState) {
+        let old = state.members.filter { $0.device.id == entry.id && !$0.device.sameKeys(as: entry) }
+        guard !old.isEmpty else { return }
+        for member in old {
+            AppLogger.notice("设备组：「\(entry.name)」重装过，移除它之前的身份", category: RemoteLog.category)
+            writeRemoval(of: member, in: &state)
+        }
+        state.dropRemovedMembers()
     }
 
     /// 这一轮的 `done`：Ta 与存下的期望值相同，封着的条目打得开、ID 与两把钥匙就是本机喂进 `finish` 的那份。

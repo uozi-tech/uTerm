@@ -449,6 +449,39 @@ final class SettingsPageSnapshotTests: XCTestCase {
         newcomer.refresh()
         XCTAssertEqual(newcomer.pendingHosts.map(\.name), ["家里的 iMac", "工作室 Mac Studio", "旧的 MacBook Air"])
         try await shootGroup("my-devices-pending-macs", newcomer, height: 560, into: dir)
+
+        // 已移除的设备（G3）：mini 配对过三台 Mac，移除 iPad 时两台不在线；之后一台上线撤了，iPad 只剩一台在等。
+        // 再移除另一台 iPhone 时两台都不在线：两台在等。
+        let removal = GroupRig()
+        let paired = RemoteGroupFakeHosts()
+        let home = paired.addMac("家里的 iMac", online: false)
+        let studio = paired.addMac("工作室 Mac Studio", online: false)
+        paired.addMac("办公室 Mac mini")
+        let keeper = removal.device("Mac mini", model: "Mac mini", platform: .mac, hosts: paired)
+        let lost = removal.device("工作室 iPad Pro", model: "iPad Pro", platform: .mobile, hosts: RemoteGroupFakeHosts())
+        let spare = removal.device("旧的 iPhone", model: "iPhone 15", platform: .mobile, hosts: RemoteGroupFakeHosts())
+        let duo = removal.device("iPhone Duo", model: "iPhone 17 Pro", platform: .mobile, hosts: RemoteGroupFakeHosts())
+        try removal.join(duo, via: keeper)
+        try removal.join(lost, via: keeper)
+        try removal.join(spare, via: keeper)
+        func settleKeeper() async throws {
+            let deadline = Date().addingTimeInterval(5)
+            while keeper.vouchesInFlight > 0, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        }
+        try await settleKeeper()
+        keeper.remove([lost.local.id])
+        keeper.refresh()
+        try await settleKeeper()
+        paired.online.insert(studio.id)
+        keeper.refresh()
+        try await settleKeeper()
+        paired.online.remove(studio.id)
+        keeper.remove([spare.local.id])
+        keeper.refresh()
+        try await settleKeeper()
+        XCTAssertEqual(keeper.removedDevices.map(\.waitingHosts), [[home.name], [home.name, studio.name]])
+        XCTAssertTrue(keeper.isInGroup)
+        try await shootGroup("my-devices-removed-devices", keeper, height: 460, into: dir)
     }
 
     private func shootPrompt(_ name: String, _ service: RemoteDeviceGroupService, _ id: UUID, into dir: URL) async throws {

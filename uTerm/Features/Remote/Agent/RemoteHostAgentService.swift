@@ -238,6 +238,20 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
                 let failure = error as? RemoteFileError ?? RemoteFileError(.unreachable, error.localizedDescription)
                 return RemoteHostAgentCommandReply(ok: false, data: RemoteHostAgentJSON.encode(failure))
             }
+        case .groupAddController(let payload):
+            guard let request = RemoteHostAgentJSON.decode(RemoteVouchRequest.self, from: payload) else {
+                return RemoteHostAgentCommandReply(ok: false, error: "请求不合法")
+            }
+            let result = server.handleGroupController(request)
+            scheduleStatePush()
+            return RemoteHostAgentCommandReply(data: RemoteHostAgentJSON.encode(result))
+        case .groupDropController(let payload):
+            guard let request = RemoteHostAgentJSON.decode(RemoteSiblingRevokeRequest.self, from: payload) else {
+                return RemoteHostAgentCommandReply(ok: false, error: "请求不合法")
+            }
+            let result = server.handleGroupDrop(request)
+            scheduleStatePush()
+            return RemoteHostAgentCommandReply(data: RemoteHostAgentJSON.encode(result))
         case .shutdown:
             Task { self.shutdown(reason: "远控组件正在更新") }
         case .desktopPermissions, .requestPostEvents:

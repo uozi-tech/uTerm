@@ -11,7 +11,9 @@ import Observation
 /// 4. 给认的每台组员补签一条自己的 `admit`，删掉不再认的；
 /// 5. 登记本机条目（只给别的设备列「你的其它设备」用）、清掉本机写过的过期 `join` / `answer` / `done`；
 /// 6. 组里的 Mac（§7.2，`RemoteDeviceGroup+Hosts.swift`）：发本机配对过的 Mac 的 `host`、替别的组员问 Mac 并写 `grant`、
-///    收别的组员写给本机的 `grant`。
+///    收别的组员写给本机的 `grant`；
+/// 7. 移除之后（§7.3，`RemoteDeviceGroup+Revoke.swift`）：请本机配对过的 Mac 撤销被移除的设备（先于开通），
+///    拿掉只凭被移除的组员开通才记下的 Mac；本机是 Mac 时把组员记成自己的主控端（`RemoteDeviceGroup+LocalHost.swift`）。
 ///
 /// 每一跳都是 iCloud 钥匙串同步，几秒到几十秒。
 @MainActor
@@ -85,6 +87,8 @@ final class RemoteDeviceGroup {
     private(set) var pendingHosts: [PendingHost] = []
     /// 开通在进行（本机刚进组的 10 分钟里、本机正在替组员问 Mac）：轮询该改快。
     private(set) var isOpeningHosts = false
+    /// 被移除的设备里还有 Mac 没撤完的（「已移除的设备」，都撤完了就是空的；`RemoteDeviceGroup+Revoke.swift`）。
+    private(set) var removedDevices: [RemovedDevice] = []
     /// 写不进名册或本机钥匙串（多半是钥匙串不可用）。
     var storageError: String?
 
@@ -109,6 +113,8 @@ final class RemoteDeviceGroup {
     /// 本机配对过的 Mac（App 里是 `RemoteMacDirectory`），由 `RemoteDeviceGroupService` 交进来。nil 时不发 `host`、
     /// 不替别人开通、也不收结果。
     @ObservationIgnored weak var hosts: (any RemoteGroupHostAccess)?
+    /// 本机是 Mac 时它自己的被控端，由服务交进来（iOS、测试里为 nil）：把组员记成主控端（§7.3「组里的 Mac 互认」）。
+    @ObservationIgnored weak var localHost: (any RemoteGroupLocalHost)?
     /// 正在问的 Mac（每台一次只问一个组员）。模型释放时一起取消。
     @ObservationIgnored let vouches = RemoteGroupVouchTasks()
     /// 连不上的 Mac 与那一刻：60 秒内不再问它。
@@ -186,12 +192,14 @@ final class RemoteDeviceGroup {
             return
         }
         advancePendingJoins(snapshot, &state)
+        // 认下的每条移除（含连带的、离线时发生的、重装设备留下的旧身份）都要请 Mac 撤销：从本机的移除记录推出来。
+        trackRevocations(&state, names: knownNames(original, state, snapshot))
         persist(state, from: original)
         publishAdmits(snapshot, state)
         register(snapshot)
         cleanUp(snapshot, state)
         // 刚认下的新设备也在 state 里：这一轮就去问 Mac，不等下一轮。
-        syncHosts(snapshot, state)
+        syncHosts(snapshot, &state)
         publish(state, snapshot)
     }
 
@@ -230,25 +238,45 @@ final class RemoteDeviceGroup {
     func remove(_ ids: [UUID]) {
         guard var state = loadState(), !state.selfRemoved else { return }
         let original = state
-        let joinedAt = state.selfAdmission?.admittedAt ?? .distantPast
+        let names = knownNames(original, state, nil)
         for member in state.members where ids.contains(member.device.id) {
-            let removedAt = max(RemoteGroupTime(now()), member.admission.admittedAt, joinedAt)
-            do {
-                let record = try RemoteGroupRemove.make(target: member.device, admission: member.admission,
-                                                        removedAt: removedAt, signer: local, key: signingKey)
-                write(.remove(record))
-                state.recordRemoval(RemoteGroupRemoval(deviceID: member.device.id, publicKey: member.device.publicKey,
-                                                       signingKey: member.device.signingKey, removedAt: removedAt,
-                                                       admission: member.admission))
-                roster.delete(account: RemoteGroupAdmit.account(device: member.device.id, signer: local.id))
-                AppLogger.notice("设备组：移除「\(member.device.name)」", category: RemoteLog.category)
-            } catch {
-                fail(error)
-            }
+            writeRemoval(of: member, in: &state)
         }
         state.dropRemovedMembers()
+        trackRevocations(&state, names: names)
         persist(state, from: original)
         publish(state, roster.load())
+    }
+
+    /// 签一条移除这台组员的记录，本机马上记下这条移除、删掉自己给它签的 `admit`（不动名单，调用方 `dropRemovedMembers`）。
+    /// removedAt = max(现在, 它的加入时间, 本机的进组时间)：被偷的组员把加入时间写到将来也移得掉。
+    func writeRemoval(of member: RemoteGroupMember, in state: inout RemoteGroupLocalState) {
+        let joinedAt = state.selfAdmission?.admittedAt ?? .distantPast
+        let removedAt = max(RemoteGroupTime(now()), member.admission.admittedAt, joinedAt)
+        do {
+            let record = try RemoteGroupRemove.make(target: member.device, admission: member.admission,
+                                                    removedAt: removedAt, signer: local, key: signingKey)
+            write(.remove(record))
+            state.recordRemoval(RemoteGroupRemoval(deviceID: member.device.id, publicKey: member.device.publicKey,
+                                                   signingKey: member.device.signingKey, removedAt: removedAt,
+                                                   admission: member.admission))
+            // 同一个设备 ID 的 admit 落在同一个 account 上（重装过的设备新旧两把钥匙共用）：删掉之后，本轮的补签
+            // （`publishAdmits`）会给还在组里的那一份重写。
+            roster.delete(account: RemoteGroupAdmit.account(device: member.device.id, signer: local.id))
+            AppLogger.notice("设备组：移除「\(member.device.name)」", category: RemoteLog.category)
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// 本机此刻叫得出名字的设备（按 Ed25519 钥匙）：移除记录里没有名字，「已移除的设备」要显示。
+    func knownNames(_ original: RemoteGroupLocalState, _ state: RemoteGroupLocalState,
+                    _ snapshot: RemoteGroupSnapshot?) -> [Data: String] {
+        var names: [Data: String] = [:]
+        for device in snapshot?.devices ?? [] { names[device.signingKey] = device.name }
+        for admit in snapshot?.admits ?? [] { names[admit.device.signingKey] = admit.device.name }
+        for member in original.members + state.members { names[member.device.signingKey] = member.device.name }
+        return names
     }
 
     /// 移除连带：由这台设备加进来的组员，连同它们再加进来的，一层层算下去（不经过本机：本机加的设备不连带）。
@@ -384,6 +412,11 @@ final class RemoteDeviceGroup {
     func updateHostState(pending: [PendingHost], opening: Bool) {
         if pending != pendingHosts { pendingHosts = pending }
         if opening != isOpeningHosts { isOpeningHosts = opening }
+    }
+
+    /// 「已移除的设备」只在变了时才写。
+    func setRemovedDevices(_ rows: [RemovedDevice]) {
+        if rows != removedDevices { removedDevices = rows }
     }
 
     /// 加入进度只在变了时才写（`@Observable` 每次赋值都会通知界面）。

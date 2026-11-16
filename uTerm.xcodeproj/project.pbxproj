@@ -317,6 +317,7 @@
 				Features/Remote/RemoteFileSharingStore.swift,
 				Features/Remote/RemoteHostAgentBridge.swift,
 				Features/Remote/RemoteHostConnection.swift,
+				"Features/Remote/RemoteHostServer+DeviceGroup.swift",
 				Features/Remote/RemoteHostServer.swift,
 				Features/Remote/RemoteHostSessions.swift,
 				Features/Remote/RemoteLocalShellOpener.swift,

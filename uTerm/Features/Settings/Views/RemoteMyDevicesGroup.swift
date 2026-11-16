@@ -7,6 +7,7 @@ import UDesignKit
 /// - 点了「加入」：这一行下面大字显示 6 位数和「取消」，作废过就说一声；失败写原因。
 /// - 已进组：组员名单，每行一个操作（别的设备「移除…」，这台「离开…」）；下面是组里这台设备还不能用的 Mac
 ///   （「还没通的 Mac」，有才显示），再下面是还没进组的设备。
+/// - 被移除的设备还有 Mac 没撤完时：一组「已移除的设备」，每台一行（还有几台 Mac 没撤）。
 /// - 这台被移出了：说一声，再给「加入」。
 ///
 /// 状态在 App 级的 `RemoteDeviceGroupService`（全 App 一个、后台一直在读名册）；别的设备想加入时由
@@ -50,6 +51,18 @@ struct RemoteMyDevicesGroup: View {
                         Text(RemoteDeviceGroupCopy.pendingHostStatus(host.status))
                             .font(.system(size: 12))
                             .foregroundStyle(RemoteDeviceGroupCopy.isWarning(host.status) ? UD.warning : UD.text3)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        if let model, !model.isSelfRemoved, !model.removedDevices.isEmpty {
+            SettingsGroup(title: RemoteDeviceGroupCopy.removedHeader, footer: RemoteDeviceGroupCopy.removedFooter) {
+                ForEach(model.removedDevices) { device in
+                    SettingsListRow(icon: "minus.circle", tint: UD.text3, title: device.name) {
+                        Text(RemoteDeviceGroupCopy.removedStatus(device))
+                            .font(.system(size: 12))
+                            .foregroundStyle(UD.text3)
                             .lineLimit(1)
                     }
                 }
@@ -184,7 +197,7 @@ struct RemoteGroupRemoveSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(RemoteDeviceGroupCopy.removeTitle(plan.target))
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(UD.text)
-            Text(RemoteDeviceGroupCopy.removeMessage)
+            Text(RemoteDeviceGroupCopy.removeMessage + RemoteDeviceGroupCopy.removeRevokesMacs)
                 .font(.system(size: 12)).foregroundStyle(UD.text2)
                 .fixedSize(horizontal: false, vertical: true)
             if !plan.cascade.isEmpty {

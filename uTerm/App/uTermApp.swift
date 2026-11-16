@@ -128,7 +128,10 @@ struct uTermApp: App {
         remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
         remoteServer.grantInternetAccess = { [remoteSettings] in remoteSettings.internetDevices.insert($0) }
         remoteServer.vouchPolicy = { [remoteSettings] in remoteSettings.isDeviceVouchingEnabled }
-        remoteServer.onDeviceVouched = { RemoteVouchNotifier.post($0) }
+        remoteServer.groupControllerPolicy = { [remoteSettings] in
+            remoteSettings.isEnabled && remoteSettings.isDeviceVouchingEnabled
+        }
+        remoteServer.onDeviceVouched = { [localID = remoteServer.localID] in RemoteVouchNotifier.post($0, hostID: localID) }
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
         // 远控服务跑在常驻的远控进程里（App 更新、崩溃时远控连接不断）：配对审批框与被控指示条也由它显示。
@@ -236,7 +239,10 @@ struct uTermApp: App {
             installTerminalWindowOpener()
             presentPermissionGuideIfNeeded()
             // 「我的设备」后台轮询：别的设备想加入时弹面板输码，推进本机的加入、补签与移除（登记本机也在这里）。
-            if !BackgroundLaunchMode.isRunningInTestHost { deviceGroupService.start(hosts: remoteMacs) }
+            // 这台 Mac 自己的被控端也交进去：组里的别的设备自动记成它的主控端（§7.3「组里的 Mac 互认」）。
+            if !BackgroundLaunchMode.isRunningInTestHost {
+                deviceGroupService.start(hosts: remoteMacs, localHost: remoteServer)
+            }
         }
     }
 

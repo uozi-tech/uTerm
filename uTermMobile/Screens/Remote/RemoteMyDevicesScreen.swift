@@ -68,6 +68,7 @@ struct RemoteMyDevicesScreen: View {
                     }
                 }
             }
+            removedGroup(model)
             if !model.otherDevices.isEmpty {
                 MInsetGroup(header: RemoteDeviceGroupCopy.outsideHeader, footer: RemoteDeviceGroupCopy.outsideFooter) {
                     deviceRows(model.otherDevices)
@@ -80,12 +81,27 @@ struct RemoteMyDevicesScreen: View {
                 }
             }
             joinGroup(model)
+            if !model.isSelfRemoved { removedGroup(model) }
             MInsetGroup(header: String(localized: "你的其它设备")) {
                 if model.listedOtherDevices.isEmpty {
                     MInsetRow(icon: "icloud", iconColor: M.text3, label: String(localized: "还没有你的其它设备"),
                               sub: String(localized: "在另一台登录同一 Apple ID 的设备上打开 uTerm"), last: true)
                 } else {
                     deviceRows(model.listedOtherDevices)
+                }
+            }
+        }
+    }
+
+    /// 被移除的设备还有 Mac 没撤完时才显示，每台一行。
+    @ViewBuilder
+    private func removedGroup(_ model: RemoteDeviceGroup) -> some View {
+        if !model.removedDevices.isEmpty {
+            MInsetGroup(header: RemoteDeviceGroupCopy.removedHeader, footer: RemoteDeviceGroupCopy.removedFooter) {
+                ForEach(Array(model.removedDevices.enumerated()), id: \.element.id) { index, device in
+                    MInsetRow(icon: "clock", iconColor: M.text3, label: device.name,
+                              value: RemoteDeviceGroupCopy.removedStatus(device),
+                              last: index == model.removedDevices.count - 1)
                 }
             }
         }
@@ -183,7 +199,7 @@ private struct RemoveMemberSheet: View {
                     Text(RemoteDeviceGroupCopy.removeTitle(plan.target))
                         .font(M.sans(18, weight: .bold)).foregroundStyle(M.text)
                         .multilineTextAlignment(.center)
-                    Text(RemoteDeviceGroupCopy.removeMessage)
+                    Text(RemoteDeviceGroupCopy.removeMessage + RemoteDeviceGroupCopy.removeRevokesMacs)
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .multilineTextAlignment(.center)
                 }

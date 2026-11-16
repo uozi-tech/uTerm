@@ -171,13 +171,18 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         if blocked.contains(peer.id) { try saveBlocked(blocked.subtracting([peer.id])) }
     }
 
-    /// 撤销信任并拉黑：再来连要重新配对（`trust` 解除拉黑）。它的担保记录一并去掉。
-    func revoke(id: UUID) throws {
+    /// 撤销信任：再来连要重新配对。它的担保记录一并去掉。
+    ///
+    /// `blocks`（默认）时同时拉黑，之后谁担保它都不认，只有重新配对（`trust`）才解除——这是 Mac 主人在 Mac 上撤销、
+    /// 主控端「忘记」一台 Mac 时的做法。同组设备请 Mac 撤销（消息 52）、设备组撤掉被移除的组员、主控端撤掉只凭被移除的
+    /// 组员开通才记下的 Mac 时不拉黑：那不是这台设备主人的决定，设备找回来重新进组后要能自动开通回来
+    /// （docs/remote-device-group-design.md §8）。原来就拉黑着的不会因此解除。
+    func revoke(id: UUID, blocks: Bool = true) throws {
         lock.lock()
         defer { lock.unlock() }
         let peers = loadPeers().filter { $0.id != id }
         try storage.save(try JSONEncoder().encode(peers), account: peersAccount)
-        try saveBlocked(loadBlocked().union([id]))
+        if blocks { try saveBlocked(loadBlocked().union([id])) }
         var vouches = loadVouches()
         if vouches.removeValue(forKey: id) != nil { try saveVouches(vouches) }
     }

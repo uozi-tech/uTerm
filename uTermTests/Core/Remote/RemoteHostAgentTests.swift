@@ -467,6 +467,53 @@ final class RemoteHostAgentTests: XCTestCase {
         padClient.disconnect()
     }
 
+    /// 设备组（App 里算的）让远控进程把组员记成主控端、撤掉被移除的：经 XPC 新加的两个操作转过去，
+    /// 远控进程的信任表与担保记录写回 App；记下的设备不弹审批，撤掉的断开且不拉黑。同组撤销（消息 52）在远控进程里
+    /// 执行，同样不拉黑。
+    func test_device_group_controllers_travel_to_the_agent_and_back() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        var notified: [RemotePeerVouch] = []
+        rig.appServer.onDeviceVouched = { notified.append($0) }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil && rig.appServer.status == .listening }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(rig.agentServer?.port)
+
+        let padID = UUID()
+        let padIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let padKey = try padIdentity.localIdentity().publicKey.rawRepresentation
+        let request = RemoteVouchRequest(requestID: UUID(), deviceID: padID, name: "iPad", model: nil, platform: "mobile",
+                                         publicKey: padKey)
+        let added = await rig.appServer.groupAddController(request)
+        XCTAssertEqual(added?.kind, .added, added?.reason ?? "转不过去")
+        let written = await waitUntil { rig.appServer.peerVouches[padID] != nil && rig.appServer.identity.peer(id: padID) != nil }
+        XCTAssertTrue(written, "远控进程写回 App")
+        XCTAssertTrue(rig.appServer.peerVouches[padID]?.isFromDeviceGroup(hostID: rig.appServer.localID) ?? false)
+        XCTAssertEqual(notified.map(\.deviceID), [padID])
+        XCTAssertEqual(rig.appServer.groupControllerPeers().first { $0.id == padID }?.isFromGroup, true)
+
+        let pad = RemoteMacClient(macName: "测试 Mac",
+                                  endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                  identity: padIdentity)
+        pad.localDeviceOverride = (padID, "iPad")
+        let connecting = Task { await pad.connect() }
+        await connecting.value
+        XCTAssertEqual(pad.state, .connected)
+        XCTAssertTrue(rig.appServer.pairingRequests.isEmpty, "设备组记下的不弹审批")
+
+        let dropped = await rig.appServer.groupDropController(RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: padID,
+                                                                                         publicKey: padKey))
+        XCTAssertEqual(dropped?.kind, .revoked)
+        let gone = await waitUntil { rig.appServer.identity.peer(id: padID) == nil && pad.state != .connected }
+        XCTAssertTrue(gone, "撤掉、断开，写回 App")
+        XCTAssertFalse(rig.appServer.identity.isBlocked(padID))
+        XCTAssertFalse(rig.agentServer?.identity.isBlocked(padID) ?? true, "远控进程里也没拉黑")
+        let again = await rig.appServer.groupAddController(request)
+        XCTAssertEqual(again?.kind, .added)
+        pad.disconnect()
+    }
+
     func test_mirrored_secret_storage_keeps_unflushed_writes_over_app_snapshot() throws {
         let storage = RemoteMirroredSecretStorage(values: ["trustedPeers": Data([1])])
         let saved = Recorder()

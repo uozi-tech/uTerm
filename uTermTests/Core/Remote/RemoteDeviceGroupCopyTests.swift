@@ -116,4 +116,27 @@ final class RemoteDeviceGroupCopyTests: XCTestCase {
         RemoteLegacyDevices.retire(synced: synced, secrets: secrets)
         XCTAssertNotEqual(RemoteLegacyDevices.service, RemoteGroupRoster.service)
     }
+
+    func test_removed_device_status_names_the_last_mac_and_counts_otherwise() {
+        func row(_ hosts: [String]) -> RemoteDeviceGroup.RemovedDevice {
+            RemoteDeviceGroup.RemovedDevice(id: Data([1]), deviceID: UUID(), name: "iPad", waitingHosts: hosts)
+        }
+        XCTAssertEqual(RemoteDeviceGroupCopy.removedStatus(row(["Mac mini"])), "「Mac mini」还没撤销")
+        XCTAssertEqual(RemoteDeviceGroupCopy.removedStatus(row(["Mac mini", "iMac"])), "还有 2 台 Mac 没撤销")
+    }
+
+    /// G3 给本机状态加了两个字段：老版本存下的状态（没有这两个键）照样解得开，不当成空的（当成空的会清掉组员名单）。
+    func test_local_state_saved_before_g3_still_decodes() throws {
+        var state = RemoteGroupLocalState()
+        state.selfRemoved = true
+        state.submissions = [UUID(): [Date(timeIntervalSince1970: 1)]]
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: RemoteGroupFormat.encoder().encode(state))
+            as? [String: Any])
+        object["revocations"] = nil
+        object["adoptedHosts"] = nil
+        let old = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try RemoteGroupFormat.decoder().decode(RemoteGroupLocalState.self, from: old)
+        XCTAssertEqual(decoded, state)
+        XCTAssertTrue(decoded.revocations.isEmpty)
+    }
 }

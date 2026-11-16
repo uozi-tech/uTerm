@@ -18,6 +18,51 @@ nonisolated struct RemoteGroupPendingJoin: Codable, Equatable, Sendable {
     var submittedAt: Date
 }
 
+/// 一台被移除的设备在各台 Mac 上的撤销进度（G3，docs/remote-device-group-design.md §7.3「移除之后请 Mac 撤销」）。
+/// 每把被移除的 Ed25519 钥匙一条；做完了也留着（`hosts` 清空），免得同一条移除下一轮又从头撤一遍。
+nonisolated struct RemoteGroupRevocation: Codable, Equatable, Sendable {
+    var deviceID: UUID
+    /// 显示用（「已移除的设备」）。移除记录里没有名字，取认下这条移除时本机知道的名字。
+    var name: String
+    /// 远控公钥（X25519）：Mac 按设备 ID 与这把钥匙撤（记着的是别的钥匙就不撤）。
+    var publicKey: Data
+    var signingKey: Data
+    /// 对应的那条移除的时间：同一把钥匙后来又被移除一次（重新加入后）就重新撤一遍。
+    var removedAt: RemoteGroupTime
+    /// 要请哪几台 Mac 撤销：认下这条移除时本机配对过的那些（之后才配对的不问）。nil = 那时还不知道本机配对了哪些 Mac
+    /// （设备组服务还没把目录交进来），下一轮补上。
+    var hosts: [UUID]?
+    /// 已经做完的 Mac：撤了、Mac 本来就不认它、它在那台 Mac 上不是同一组的（撤不了，要到 Mac 上撤）。
+    var finished: [UUID] = []
+    /// 这台 Mac 在这个时间之前不再问：连不上 60 秒，Mac 上的 uTerm 太旧 6 小时。
+    var retryAfter: [UUID: Date] = [:]
+
+    /// 还没做完、此刻仍配对着的 Mac。
+    func outstanding(paired: Set<UUID>) -> [UUID] {
+        (hosts ?? []).filter { paired.contains($0) && !finished.contains($0) }
+    }
+
+    /// 这台 Mac 上还没做完（不管是不是在等重试）。
+    func isUnfinished(at host: UUID) -> Bool {
+        (hosts ?? []).contains(host) && !finished.contains(host)
+    }
+
+    /// 处理完了的记号：不再问任何 Mac。
+    var isSettled: Bool { hosts?.isEmpty ?? false }
+}
+
+/// 本机因为别的组员的开通结果（`grant`）才记进信任表的一台 Mac，以及凭哪些组员签的结果（G3，§7.3 最后一段）。
+/// 签名者都被移除了、也没有别的还在组里的组员开通过同一把钥匙时，这台 Mac 从本机拿掉（不拉黑）。
+/// 收下之前本机就已经认识的 Mac（`adopt` 回 `alreadyKnown`）不记，永远不回滚。
+nonisolated struct RemoteGroupAdoptedHost: Codable, Equatable, Sendable {
+    var hostID: UUID
+    var hostKey: Data
+    /// 收下时信任表里这台 Mac 的记下时间：之后变了（你在这台设备上重新配对过）就不再归设备组管。
+    var pairedAt: Date
+    /// 凭哪些组员（Ed25519 钥匙）签的结果。
+    var signers: [Data]
+}
+
 /// 本机的设备组状态。
 nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
     /// 本机认的组员（不含本机）。
@@ -36,6 +81,10 @@ nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
     var pendingJoins: [RemoteGroupPendingJoin] = []
     /// 组员一侧：每台新设备最近输过码的时间（限次数用）。
     var submissions: [UUID: [Date]] = [:]
+    /// G3：本机认下的每条移除在各台 Mac 上的撤销进度。
+    var revocations: [RemoteGroupRevocation] = []
+    /// G3：因为别的组员的开通结果才记下的 Mac。
+    var adoptedHosts: [RemoteGroupAdoptedHost] = []
 
     func member(signingKey: Data) -> RemoteGroupMember? {
         members.first { $0.device.signingKey == signingKey }
@@ -90,9 +139,44 @@ nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
             .filter { !$0.value.isEmpty }
     }
 
-    /// 回到只有自己一台：离开原组、被移出后重新开始。移除记录留着（不过期）。
+    /// 回到只有自己一台：离开原组、被移出后重新开始。移除记录留着（不过期），撤销进度也留着（没撤完的接着撤，
+    /// 撤完的不再撤一遍）。
     func solo() -> RemoteGroupLocalState {
-        RemoteGroupLocalState(removals: removals)
+        RemoteGroupLocalState(removals: removals, revocations: revocations)
+    }
+
+    func revocation(of signingKey: Data) -> RemoteGroupRevocation? {
+        revocations.first { $0.signingKey == signingKey }
+    }
+
+    /// 这些移除不用本机去撤（加入时从入组包里拿到的：组里早就处理过了）：记成处理完。
+    mutating func settleRevocations(for removals: [RemoteGroupRemoval]) {
+        for removal in removals {
+            let settled = RemoteGroupRevocation(deviceID: removal.deviceID, name: "", publicKey: removal.publicKey,
+                                                signingKey: removal.signingKey, removedAt: removal.removedAt, hosts: [])
+            if let index = revocations.firstIndex(where: { $0.signingKey == removal.signingKey }) {
+                // 本机自己正在撤的（同一次或更晚的移除）照常撤完。
+                if revocations[index].removedAt < removal.removedAt { revocations[index] = settled }
+            } else {
+                revocations.append(settled)
+            }
+        }
+    }
+}
+
+nonisolated extension RemoteGroupLocalState {
+    /// G3 加的字段老状态里没有：缺了按空的算（合成的解码会整份解不开，本机名单就被当成空的）。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        members = try container.decode([RemoteGroupMember].self, forKey: .members)
+        removals = try container.decode([RemoteGroupRemoval].self, forKey: .removals)
+        selfAdmission = try container.decodeIfPresent(RemoteGroupAdmission.self, forKey: .selfAdmission)
+        selfRemoved = try container.decode(Bool.self, forKey: .selfRemoved)
+        acknowledgementFrom = try container.decodeIfPresent(UUID.self, forKey: .acknowledgementFrom)
+        pendingJoins = try container.decode([RemoteGroupPendingJoin].self, forKey: .pendingJoins)
+        submissions = try container.decode([UUID: [Date]].self, forKey: .submissions)
+        revocations = try container.decodeIfPresent([RemoteGroupRevocation].self, forKey: .revocations) ?? []
+        adoptedHosts = try container.decodeIfPresent([RemoteGroupAdoptedHost].self, forKey: .adoptedHosts) ?? []
     }
 }
 

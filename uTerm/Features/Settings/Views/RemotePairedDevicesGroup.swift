@@ -94,8 +94,12 @@ struct RemotePairedDevicesGroup: View {
         let paired = peer.pairedAt.formatted(date: .abbreviated, time: .omitted)
         var parts = [peer.modelDetail, String(localized: "配对于 \(paired)")].compactMap(\.self)
         if let vouch = server.peerVouches[peer.id] {
-            let voucher = server.trustedPeers.first { $0.id == vouch.vouchedBy }?.displayName ?? vouch.voucherName
-            parts.append(String(localized: "由「\(voucher)」添加"))
+            if vouch.isFromDeviceGroup(hostID: server.localID) {
+                parts.append(String(localized: "由设备组添加"))
+            } else {
+                let voucher = server.trustedPeers.first { $0.id == vouch.vouchedBy }?.displayName ?? vouch.voucherName
+                parts.append(String(localized: "由「\(voucher)」添加"))
+            }
         }
         if online { parts.append(String(localized: "已连接")) }
         return parts.joined(separator: " · ")

@@ -72,6 +72,49 @@ protocol RemoteGroupHostAccess: AnyObject {
     func adopt(_ grant: RemoteGroupGrant) -> RemoteGroupAdoption
     /// 请这台 Mac 撤销被移除的那台设备。连不上抛错，Mac 太旧抛 `RemoteAttachError.rejected`。
     func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult
+    /// 本机信任表里此刻记着的这台 Mac（公钥与记下的时间）。没有返回 nil。
+    func trustedHost(_ id: UUID) -> RemoteGroupTrustedHost?
+    /// 拿掉一台只因为别的组员开通才记下的 Mac（G3）：**不拉黑**，不算「忘记」，以后别的组员再开通还能记回来。
+    /// 本机此刻记着的公钥与记下的时间都和收下时一样才拿（你在这台设备上重新配对过的不动）。返回拿掉没有。
+    func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool
+}
+
+/// 信任表里的一台 Mac（只要回滚时核对的那两项）。
+struct RemoteGroupTrustedHost: Equatable {
+    var publicKey: Data
+    var pairedAt: Date
+
+    /// 记下时间相同（经 JSON 来回可能差一个 ulp，按 1 毫秒内算）。
+    func matches(publicKey: Data, pairedAt: Date) -> Bool {
+        self.publicKey == publicKey && abs(self.pairedAt.timeIntervalSince(pairedAt)) < 0.001
+    }
+}
+
+/// 这台 Mac 自己的被控端（只有 Mac 有；App 里是 `RemoteHostServer`，`RemoteHostServer+DeviceGroup.swift`）。
+/// 设备组在 App 里把组员记成这台 Mac 的主控端（§7.3「组里的 Mac 互认」）；远控进程不读名册，
+/// 远控进程在服务时由 `RemoteHostServer` 经 XPC 转过去（`RemoteHostAgentCommand.groupAddController` / `groupDropController`）。
+@MainActor
+protocol RemoteGroupLocalHost: AnyObject {
+    /// 开着被控（「允许控制这台 Mac」）和「允许已配对的设备开通主人的其它设备」。
+    var acceptsGroupControllers: Bool { get }
+    /// 此刻信任的主控端。
+    func groupControllerPeers() -> [RemoteGroupLocalController]
+    /// Mac 主人在这台 Mac 上撤销过（拉黑）：永远不自动加回来。
+    func isControllerBlocked(_ id: UUID) -> Bool
+    /// 记下这台组员。转不过去（远控进程不在、版本太旧）回 nil。
+    func addGroupController(_ device: RemoteGroupDevice) async -> RemoteVouchResult?
+    /// 不拉黑地撤掉这台（被移除的）组员。转不过去回 nil。
+    func dropGroupController(_ id: UUID, publicKey: Data) async -> RemoteSiblingRevokeResult?
+}
+
+/// 这台 Mac 信任的一台主控端。
+struct RemoteGroupLocalController: Equatable {
+    var id: UUID
+    var publicKey: Data
+    /// 经担保记下的（设备组，或别的设备担保的）。手动配对的为 false：设备组不动它。
+    var isVouched: Bool
+    /// 由这台 Mac 按设备组记下的（担保者是这台 Mac 自己）。
+    var isFromGroup: Bool
 }
 
 extension RemoteGroupHostAccess {
@@ -118,6 +161,10 @@ extension RemoteMacDirectory: RemoteGroupHostAccess {
         #else
         return try await client(for: mac).vouch(for: device)
         #endif
+    }
+
+    func trustedHost(_ id: UUID) -> RemoteGroupTrustedHost? {
+        identity.peer(id: id).map { RemoteGroupTrustedHost(publicKey: $0.publicKey, pairedAt: $0.pairedAt) }
     }
 
     func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {

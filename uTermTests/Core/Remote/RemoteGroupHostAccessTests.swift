@@ -158,8 +158,12 @@ final class RemoteGroupHostAccessTests: XCTestCase {
         }
         func adopt(_ grant: RemoteGroupGrant) -> RemoteGroupAdoption { .alreadyKnown }
         func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
-            throw RemoteAttachError.rejected("不用")
+            try await client.revokeSibling(deviceID, publicKey: publicKey)
         }
+        func trustedHost(_ id: UUID) -> RemoteGroupTrustedHost? {
+            id == target.id ? RemoteGroupTrustedHost(publicKey: target.publicKey, pairedAt: .distantPast) : nil
+        }
+        func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool { false }
     }
 
     /// 两台设备经核对码组成设备组 → 组员 iPhone 在真服务端上替新设备 iPad 担保、写下签名的 grant →
@@ -242,6 +246,148 @@ final class RemoteGroupHostAccessTests: XCTestCase {
         XCTAssertTrue(server.pairingRequests.isEmpty, "不弹审批")
         await padConnecting.value
         XCTAssertEqual(padClient.state, .connected)
+        padClient.disconnect()
+    }
+
+    // MARK: - 真服务端 + G3
+
+    private func makeMember(_ name: String, id: UUID = UUID(), platform: RemoteDevicePlatform = .mobile,
+                            key: Curve25519.KeyAgreement.PrivateKey = .init(),
+                            roster: RemoteGroupRoster) -> RemoteDeviceGroup {
+        let store = RemoteGroupLocalStore(storage: RemoteMemoryStorage())
+        let signing = try! store.signingKey()
+        let local = RemoteGroupDevice(id: id, name: name, model: nil, platform: platform.rawValue,
+                                      publicKey: key.publicKey.rawRepresentation,
+                                      signingKey: signing.publicKey.rawRepresentation, updatedAt: Date())
+        return RemoteDeviceGroup(local: local, signingKey: signing, identityKey: key, roster: roster, store: store)
+    }
+
+    private func joinForReal(_ candidate: RemoteDeviceGroup, via member: RemoteDeviceGroup) throws {
+        member.refresh()
+        candidate.startJoin()
+        member.refresh()
+        guard case .showingCode(let code, _) = candidate.joinState else { throw XCTSkip("没显示核对码") }
+        XCTAssertTrue(member.submitCode(code, for: candidate.local.id))
+        candidate.refresh()
+        XCTAssertEqual(candidate.joinState, .joined)
+        member.refresh()
+    }
+
+    private func startServer() async throws -> (RemoteHostServer, NWEndpoint, Data) {
+        let server = RemoteHostServer(registry: TerminalSessionRegistry(),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
+                                      localName: "测试 Mac", localID: UUID(), advertises: false)
+        server.vouchPolicy = { true }
+        server.groupControllerPolicy = { true }
+        server.start()
+        _ = await waitUntil { server.port != nil }
+        let port = try XCTUnwrap(server.port)
+        let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
+        return (server, endpoint, try server.identity.localIdentity().publicKey.rawRepresentation)
+    }
+
+    /// 组里的 Mac 互认：这台 Mac 自己是组员（模型的被控端就是真服务端），iPad 经它加入 → Mac 把 iPad 记成主控端、
+    /// 写一条自己签的 grant → iPad 的真目录收下这台 Mac → 不经审批连上。
+    func test_end_to_end_mac_member_records_a_new_member_which_then_connects_without_approval() async throws {
+        let (server, endpoint, serverKey) = try await startServer()
+        defer { server.stop() }
+        let roster = RemoteGroupRoster(storage: RemoteMemorySyncedStorage())
+        let mac = makeMember("测试 Mac", id: server.localID, platform: .mac, key: try server.identity.localIdentity(),
+                             roster: roster)
+        mac.localHost = server
+        let padKey = Curve25519.KeyAgreement.PrivateKey()
+        let pad = makeMember("iPad", key: padKey, roster: roster)
+        let padHostsTable = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try padHostsTable.saveRaw(padKey.rawRepresentation, account: "identity")
+        let padDirectory = RemoteMacDirectory(identity: padHostsTable, adoptsRelayAsDefault: false)
+        pad.hosts = padDirectory
+
+        try joinForReal(pad, via: mac)
+        let written = await waitUntil {
+            roster.load().grants.contains { $0.isFor(pad.local) && $0.signer == server.localID }
+        }
+        XCTAssertTrue(written, "Mac 认下 iPad 的这一轮就记下它、写结果")
+        let grant = try XCTUnwrap(roster.load().grants.first { $0.isFor(pad.local) })
+        XCTAssertEqual(grant.outcome, RemoteVouchResult.Outcome.added.rawValue, grant.reason ?? "")
+        XCTAssertEqual(grant.host.publicKey, serverKey)
+        XCTAssertTrue(try XCTUnwrap(server.peerVouches[pad.local.id]).isFromDeviceGroup(hostID: server.localID))
+
+        pad.refresh()
+        let adopted = try XCTUnwrap(padHostsTable.peer(id: server.localID))
+        XCTAssertEqual(adopted.publicKey, serverKey)
+        let padClient = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: padHostsTable, expectedPeer: adopted)
+        padClient.localDeviceOverride = (pad.local.id, "iPad")
+        let connecting = Task { await padClient.connect() }
+        _ = await waitUntil(3) { padClient.state == .connected || !server.pairingRequests.isEmpty }
+        XCTAssertTrue(server.pairingRequests.isEmpty, "不弹审批")
+        await connecting.value
+        XCTAssertEqual(padClient.state, .connected)
+
+        // iPad 被移除：Mac 自己把它撤掉，不拉黑。
+        mac.remove([pad.local.id])
+        mac.refresh()
+        let dropped = await waitUntil { server.identity.peer(id: pad.local.id) == nil && padClient.state != .connected }
+        XCTAssertTrue(dropped)
+        XCTAssertFalse(server.identity.isBlocked(pad.local.id))
+        padClient.disconnect()
+    }
+
+    /// 重装过的设备：iPhone 替旧的 iPad 开通过；iPad 重装（同一个设备 ID、新钥匙）后经 iPhone 重新加入 →
+    /// iPhone 先在 Mac 上撤掉旧钥匙（不拉黑），再替新钥匙开通 → 新的 iPad 不经审批连上。
+    func test_end_to_end_reinstalled_device_old_key_is_revoked_and_new_key_connects_without_approval() async throws {
+        let (server, endpoint, serverKey) = try await startServer()
+        defer { server.stop() }
+        let roster = RemoteGroupRoster(storage: RemoteMemorySyncedStorage())
+        let phoneKey = Curve25519.KeyAgreement.PrivateKey()
+        let phone = makeMember("iPhone", key: phoneKey, roster: roster)
+        let phoneHostsTable = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try phoneHostsTable.saveRaw(phoneKey.rawRepresentation, account: "identity")
+        let phoneClient = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: phoneHostsTable)
+        phoneClient.localDeviceOverride = (phone.local.id, "iPhone")
+        let connecting = Task { await phoneClient.connect() }
+        _ = await waitUntil { !server.pairingRequests.isEmpty }
+        server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(phoneClient.state, .connected)
+        defer { phoneClient.disconnect() }
+        let phoneHosts = ClientHosts(target: RemoteGroupVouchTarget(id: server.localID, name: "测试 Mac", publicKey: serverKey,
+                                                                    model: "Mac mini", platform: "mac"),
+                                     client: phoneClient)
+        phone.hosts = phoneHosts
+
+        let padID = UUID()
+        let oldPad = makeMember("iPad", id: padID, roster: roster)
+        try joinForReal(oldPad, via: phone)
+        let oldKey = oldPad.local.publicKey
+        let vouchedOld = await waitUntil { server.identity.peer(id: padID)?.publicKey == oldKey }
+        XCTAssertTrue(vouchedOld)
+        _ = await waitUntil { phone.vouchesInFlight == 0 }
+
+        let newKey = Curve25519.KeyAgreement.PrivateKey()
+        let newPad = makeMember("iPad", id: padID, key: newKey, roster: roster)
+        let newHostsTable = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try newHostsTable.saveRaw(newKey.rawRepresentation, account: "identity")
+        let newDirectory = RemoteMacDirectory(identity: newHostsTable, adoptsRelayAsDefault: false)
+        newPad.hosts = newDirectory
+        try joinForReal(newPad, via: phone)
+        let replaced = await waitUntil {
+            phone.refresh()
+            return server.identity.peer(id: padID)?.publicKey == newKey.publicKey.rawRepresentation
+                && roster.load().grants.contains { $0.isFor(newPad.local) && $0.isUsable }
+        }
+        XCTAssertTrue(replaced, "先撤旧钥匙、再开通新的：\(String(describing: roster.load().grants.first { $0.isFor(newPad.local) }?.reason))")
+        XCTAssertFalse(server.identity.isBlocked(padID), "同组撤销不拉黑")
+
+        newPad.refresh()
+        let adopted = try XCTUnwrap(newHostsTable.peer(id: server.localID))
+        let padClient = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: newHostsTable, expectedPeer: adopted)
+        padClient.localDeviceOverride = (padID, "iPad")
+        let padConnecting = Task { await padClient.connect() }
+        _ = await waitUntil(3) { padClient.state == .connected || !server.pairingRequests.isEmpty }
+        XCTAssertTrue(server.pairingRequests.isEmpty, "不弹审批")
+        await padConnecting.value
+        XCTAssertEqual(padClient.state, .connected)
+        XCTAssertNotNil(newDirectory.pairedHostNames()[server.localID])
         padClient.disconnect()
     }
 }

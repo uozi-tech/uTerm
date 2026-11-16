@@ -24,6 +24,8 @@ final class RemoteDeviceGroupService {
     @ObservationIgnored private let makeModel: (_ createsIdentity: Bool) -> RemoteDeviceGroup?
     /// 本机配对过的 Mac，交给模型（`RemoteDeviceGroup.hosts`）：发 `host`、替组员开通、收别人替本机开通的结果。
     @ObservationIgnored private(set) weak var hosts: (any RemoteGroupHostAccess)?
+    /// 这台 Mac 自己的被控端（只有 Mac 交进来）：把组员记成主控端（`RemoteDeviceGroup.localHost`）。
+    @ObservationIgnored private(set) weak var localHost: (any RemoteGroupLocalHost)?
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var wake: CheckedContinuation<Void, Never>?
     /// 有几处界面要它勤快些（「我的设备」开着）。
@@ -35,8 +37,9 @@ final class RemoteDeviceGroupService {
     }
 
     /// 开始后台轮询。重复调用无害。
-    func start(hosts: any RemoteGroupHostAccess) {
+    func start(hosts: any RemoteGroupHostAccess, localHost: (any RemoteGroupLocalHost)? = nil) {
         self.hosts = hosts
+        if let localHost { self.localHost = localHost }
         handHosts()
         guard loop == nil else { return }
         loop = Task { [weak self] in
@@ -135,8 +138,9 @@ final class RemoteDeviceGroupService {
 
     /// 把本机配对过的 Mac 交给模型。还没 `start` 时不动它（不拿 nil 冲掉别处交进去的）。
     private func handHosts() {
-        guard let hosts, let model, model.hosts !== hosts else { return }
-        model.hosts = hosts
+        guard let model else { return }
+        if let hosts, model.hosts !== hosts { model.hosts = hosts }
+        if let localHost, model.localHost !== localHost { model.localHost = localHost }
     }
 
     private func refresh() {

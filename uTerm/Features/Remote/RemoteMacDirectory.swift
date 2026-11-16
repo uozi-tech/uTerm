@@ -670,6 +670,23 @@ final class RemoteMacDirectory {
         return .added
     }
 
+    /// 设备组回滚（G3，`RemoteGroupHostAccess.dropAdoptedHost`）：拿掉一台只因为后来被移除的组员开通才记下的 Mac。
+    /// 和「忘记」不同：不拉黑（以后别的组员再开通还能记回来），也就不在 `adopt` 里算作 `forgotten`。
+    /// 断开它的连接、清掉给它共享的文件夹（它可能是被偷的组员冒充的 Mac）。
+    func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool {
+        guard let peer = identity.peer(id: id),
+              RemoteGroupTrustedHost(publicKey: peer.publicKey, pairedAt: peer.pairedAt).matches(publicKey: publicKey,
+                                                                                                  pairedAt: pairedAt)
+        else { return false }
+        guard (try? identity.revoke(id: id, blocks: false)) != nil else { return false }
+        let macID = macs.first { $0.deviceID == id }?.id ?? id.uuidString
+        clients.removeValue(forKey: macID)?.disconnect()
+        onForget?(macID)
+        AppLogger.notice("我的设备：拿掉「\(peer.displayName)」（只凭被移除的组员开通的结果记下的）", category: RemoteLog.category)
+        refreshPaired()
+        return true
+    }
+
     /// 按 `Mac.id` 找：配对过的，或附近还没配对的。
     func mac(id: String) -> Mac? {
         macs.first { $0.id == id } ?? nearbyMacs.first { $0.id == id }

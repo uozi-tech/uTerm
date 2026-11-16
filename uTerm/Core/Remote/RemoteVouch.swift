@@ -101,6 +101,10 @@ nonisolated struct RemotePeerVouch: Codable, Equatable, Sendable {
     /// 同一个人的设备算一组：组号是最早那台（手动配对的）设备的 ID。撤销按组算。
     var family: UUID
     var vouchedAt: Date
+
+    /// 这台 Mac 自己当组员、按设备组记下的（担保者就是这台 Mac，docs/remote-device-group-design.md §7.3「组里的 Mac 互认」）。
+    /// 这样记下的设备组号也是这台 Mac 的 ID：它们算一组，可以一起撤掉，也可以互相请 Mac 撤销。
+    func isFromDeviceGroup(hostID: UUID) -> Bool { vouchedBy == hostID }
 }
 
 /// Mac 对一次担保的判断（纯函数，规则逐条可测）。

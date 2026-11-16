@@ -36,7 +36,8 @@ nonisolated enum RemoteGroupMembership {
             var admitted: [Data: RemoteGroupMember] = [:]
             for admit in snapshot.admits {
                 let key = admit.device.signingKey
-                guard key != local.signingKey, state.member(signingKey: key) == nil,
+                // 设备 ID 就是本机的：本机重装之前的那一份（钥匙不同），它的移除可能还没读到，不当组员。
+                guard key != local.signingKey, admit.device.id != local.id, state.member(signingKey: key) == nil,
                       admitters.accepts(admit.signer, key: admit.signerKey, at: admit.signedAt),
                       admitters.knowsAdmitter(admit.admission) else { continue }
                 if let removal = state.latestRemoval(of: key), removal >= admit.admission.admittedAt { continue }
