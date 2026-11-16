@@ -95,7 +95,7 @@ final class RemoteSiblingDevices {
         }
     }
 
-    /// 另一台设备正在确认本机：本机显示 6 位数，你在那台设备上输入；它输对后本机再请你点「允许」。
+    /// 另一台设备正在确认本机：本机显示 6 位数，你在那台设备上输入，并在本机点「允许」（先后不论）。
     struct Incoming: Identifiable, Equatable {
         let voucher: RemoteSiblingDevice
         let code: String
@@ -244,14 +244,21 @@ final class RemoteSiblingDevices {
             if let challenge, now().timeIntervalSince(challenge.createdAt) >= Self.incomingLifetime {
                 // 过期了没人管：本机清掉这一次的记录。
                 clearIncoming(from: voucher.id)
+            } else if let challenge, challenge.value == current.answeredChallenge,
+                      challenge.value == current.acceptedChallenge {
+                // 已经点了「允许」：不再弹窗，等那台设备上输对。收到这一次的「核对通过」就记下它。
+                if isConfirmed(by: voucher, challenge: challenge.value, snapshot: snapshot), trust(voucher) {
+                    clearIncoming(from: voucher.id)
+                }
             } else if let challenge, challenge.value == current.answeredChallenge, let code = current.answeredCode,
                !dismissedChallenges.contains(challenge.value) {
                 shown.append(Incoming(voucher: voucher, code: code,
                                       verified: isConfirmed(by: voucher, challenge: challenge.value, snapshot: snapshot)))
-            } else if challenge == nil, current.answeredChallenge != nil {
+            } else if challenge == nil, current.answeredChallenge != nil || current.acceptedChallenge != nil {
                 // 对方做完或放弃了：不再显示。
                 current.answeredChallenge = nil
                 current.answeredCode = nil
+                current.acceptedChallenge = nil
             }
             // 对方做完或放弃了，它没清掉本机的回答（App 中途被关）：本机清。
             if challenge == nil, snapshot.message(.reveal, candidate: local.id, voucher: voucher.id) != nil {
@@ -366,19 +373,39 @@ final class RemoteSiblingDevices {
         rebuildRows(roster.load())
     }
 
-    /// 本机是新设备：那台设备上输对了，你点了「允许」。记下这台担保者，之后收它替本机开通的结果。
+    /// 本机是新设备：你点了「允许」（是你自己在那台设备上发起的）。那台设备上已经输对了就马上记下这台担保者；
+    /// 还没输对就先记住这次「允许」、关掉弹窗，后台等它封的「核对通过」到了再记（`answerAsCandidate`）。
+    /// 两样都要有才算数，先后不论。记下之后收它替本机开通的结果。
     func acceptIncoming(_ voucherID: UUID) {
-        guard let shown = incoming.first(where: { $0.voucher.id == voucherID }), shown.verified else { return }
-        do {
-            try store.trustVoucher(RemoteSiblingApproval(id: shown.voucher.id, publicKey: shown.voucher.publicKey,
-                                                         name: shown.voucher.name, approvedAt: now()))
-        } catch {
-            storageError = String(localized: "没能保存确认结果：\(error.localizedDescription)")
-            return
+        guard let shown = incoming.first(where: { $0.voucher.id == voucherID }) else { return }
+        if shown.verified {
+            guard trust(shown.voucher) else { return }
+            clearIncoming(from: voucherID)
+        } else {
+            guard var state = store.commits()[voucherID], state.voucherKey == shown.voucher.publicKey,
+                  let challenge = state.answeredChallenge else { return }
+            state.acceptedChallenge = challenge
+            do {
+                try store.setCommit(state, voucher: voucherID)
+            } catch {
+                storageError = String(localized: "没能保存确认结果：\(error.localizedDescription)")
+                return
+            }
         }
-        clearIncoming(from: voucherID)
         incoming.removeAll { $0.voucher.id == voucherID }
         refresh()
+    }
+
+    /// 记下一台担保者。写不进去时报错、返回 false。
+    private func trust(_ voucher: RemoteSiblingDevice) -> Bool {
+        do {
+            try store.trustVoucher(RemoteSiblingApproval(id: voucher.id, publicKey: voucher.publicKey,
+                                                         name: voucher.name, approvedAt: now()))
+            return true
+        } catch {
+            storageError = String(localized: "没能保存确认结果：\(error.localizedDescription)")
+            return false
+        }
     }
 
     /// 本机是新设备：不是你发起的（或不想让它开通），不再显示，什么都不记。
@@ -422,7 +449,8 @@ final class RemoteSiblingDevices {
         refresh()
     }
 
-    /// 墓碑生效：撤掉本机对它的确认与认可、它在名册里的条目和往来记录；过期的墓碑清掉。
+    /// 墓碑生效：撤掉本机对它的确认与认可、它在名册里的往来记录（条目留着，名单里按「已丢失」显示，取消报告就回来）；
+    /// 过期的墓碑清掉。
     private func applyTombstones(_ snapshot: inout RemoteSiblingSnapshot) {
         for tombstone in snapshot.tombstones where now().timeIntervalSince(tombstone.revokedAt) > RemoteSiblingTombstone.lifetime {
             roster.delete(account: tombstone.account)
@@ -434,7 +462,7 @@ final class RemoteSiblingDevices {
             if approvals[tombstone.deviceID]?.publicKey == tombstone.publicKey { try? store.removeApproval(tombstone.deviceID) }
             if vouchers[tombstone.deviceID]?.publicKey == tombstone.publicKey { try? store.removeVoucher(tombstone.deviceID) }
             if let device = snapshot.device(tombstone.deviceID), device.publicKey == tombstone.publicKey {
-                roster.remove(device.id, snapshot: snapshot)
+                roster.removeTraffic(of: device.id, snapshot: snapshot)
                 snapshot.devices.removeAll { $0.id == device.id }
                 snapshot.messages.removeAll { $0.candidate == device.id || $0.voucher == device.id }
                 snapshot.grants.removeAll { $0.candidate == device.id || $0.voucher == device.id }
@@ -636,14 +664,6 @@ enum RemoteSiblingCopy {
     }
 
     static func incomingDetail(_ voucher: RemoteSiblingDevice) -> String {
-        String(localized: "在「\(voucher.name)」上输入这个数。不是你发起的，点「拒绝」。")
-    }
-
-    static func verifiedTitle(_ voucher: RemoteSiblingDevice) -> String {
-        String(localized: "「\(voucher.name)」上已核对通过")
-    }
-
-    static func verifiedDetail(_ voucher: RemoteSiblingDevice) -> String {
-        String(localized: "允许后，它会替这台设备开通它配对过的 Mac。")
+        String(localized: "在「\(voucher.name)」上输入这个数，然后点「允许」。不是你发起的，点「拒绝」。")
     }
 }

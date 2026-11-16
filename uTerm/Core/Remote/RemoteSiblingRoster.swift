@@ -219,6 +219,12 @@ nonisolated struct RemoteSiblingRoster: Sendable {
     /// 撤下一台设备，连同和它有关的消息。
     func remove(_ id: UUID, snapshot: RemoteSiblingSnapshot) {
         delete(account: RemoteSiblingRecord.deviceAccount(id))
+        removeTraffic(of: id, snapshot: snapshot)
+    }
+
+    /// 只撤和一台设备有关的往来记录（确认、开通结果），留着它的条目。报告丢失用：取消报告时它马上回到名单里，
+    /// 不用等它自己重新登记。
+    func removeTraffic(of id: UUID, snapshot: RemoteSiblingSnapshot) {
         for message in snapshot.messages where message.candidate == id || message.voucher == id {
             delete(account: message.account)
         }
@@ -330,6 +336,9 @@ nonisolated struct RemoteSiblingCommitState: Codable, Equatable, Sendable {
     /// 回答过的那次确认：对方的随机数与算出的 6 位数。
     var answeredChallenge: Data?
     var answeredCode: String?
+    /// 本机已经点了「允许」的那次确认（对方的随机数）：收到对方封的「核对通过」就自动记下它，不再弹窗问。
+    /// 可选：旧版存的状态里没有这个字段。
+    var acceptedChallenge: Data?
 }
 
 /// 上面两份记录的存取（`RemoteSecretStorage`：生产是本机钥匙串，`ThisDeviceOnly`）。

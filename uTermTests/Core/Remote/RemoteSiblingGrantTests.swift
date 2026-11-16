@@ -48,7 +48,7 @@ final class RemoteSiblingGrantTests: XCTestCase {
         candidate.refresh()
         voucher.refresh()
         let code = candidate.incoming.first?.code ?? ""
-        XCTAssertFalse(candidate.incoming.first?.verified ?? true, "还没输入，新设备不能先允许", file: file, line: line)
+        XCTAssertFalse(candidate.incoming.first?.verified ?? true, "还没输入，还没核对通过", file: file, line: line)
         XCTAssertTrue(voucher.submitCode(code), file: file, line: line)
         candidate.refresh()
         XCTAssertEqual(candidate.incoming.first?.verified, true, "输对后新设备看到「核对通过」", file: file, line: line)
@@ -139,7 +139,33 @@ final class RemoteSiblingGrantTests: XCTestCase {
         XCTAssertTrue(pad.received.isEmpty)
     }
 
-    func test_candidate_cannot_allow_before_the_voucher_typed_the_code() {
+    func test_candidate_can_allow_first_and_trusts_once_the_voucher_typed_the_code() {
+        let phone = model(identity("iPhone"))
+        let pad = model(identity("iPad"))
+        phone.refresh()
+        pad.refresh()
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        phone.refresh()
+        let code = pad.incoming.first?.code ?? ""
+        pad.acceptIncoming(phone.localDevice.id)
+        XCTAssertTrue(pad.incoming.isEmpty, "点了「允许」弹窗马上关")
+        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true, "没有「核对通过」之前不记")
+        pad.refresh()
+        XCTAssertTrue(pad.incoming.isEmpty, "后台等着，不再弹")
+        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true)
+
+        XCTAssertTrue(phone.submitCode(code))
+        pad.refresh()
+        XCTAssertTrue(pad.rows.first?.isTrustedVoucher ?? false, "那边输对后自动记下")
+        XCTAssertTrue(pad.incoming.isEmpty)
+        let left = roster.load().messages.filter { $0.candidate == pad.localDevice.id && $0.kind != .commitment }
+        XCTAssertTrue(left.isEmpty, "challenge / reveal / confirmed 都清掉：\(left.map(\.kind))")
+        pad.refresh()
+        XCTAssertTrue(pad.incoming.isEmpty)
+    }
+
+    func test_allowing_first_counts_only_for_that_confirmation() {
         let phone = model(identity("iPhone"))
         let pad = model(identity("iPad"))
         phone.refresh()
@@ -147,8 +173,17 @@ final class RemoteSiblingGrantTests: XCTestCase {
         phone.confirm(pad.localDevice.id)
         pad.refresh()
         pad.acceptIncoming(phone.localDevice.id)
-        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true, "没有「核对通过」就点不了允许")
-        XCTAssertEqual(pad.incoming.count, 1)
+        // 那边放弃了；下一次确认要重新点「允许」。
+        phone.cancel()
+        pad.refresh()
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        phone.refresh()
+        XCTAssertEqual(pad.incoming.count, 1, "新的一次照常弹出来")
+        XCTAssertTrue(phone.submitCode(pad.incoming.first?.code ?? ""))
+        pad.refresh()
+        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true, "上一次的「允许」不算这一次")
+        XCTAssertEqual(pad.incoming.first?.verified, true)
     }
 
     func test_forged_or_stale_confirmation_does_not_verify() throws {
@@ -180,6 +215,15 @@ final class RemoteSiblingGrantTests: XCTestCase {
                                                      key: RemoteSiblingSeal.key(local: phoneIdentity.key, remote: padIdentity.device.publicKey)))
         pad.refresh()
         XCTAssertEqual(pad.incoming.first?.verified, false)
+        // 先点了「允许」也一样：只认这一次、真 iPhone 封的。
+        pad.acceptIncoming(phoneIdentity.device.id)
+        pad.refresh()
+        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true)
+        try write(RemoteSiblingSeal.sealConfirmation(candidate: padIdentity.device.id, voucher: phoneIdentity.device.id,
+                                                     challenge: challenge.value,
+                                                     key: RemoteSiblingSeal.key(local: impostor, remote: padIdentity.device.publicKey)))
+        pad.refresh()
+        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true, "冒充者封的不算")
     }
 
     func test_allowing_clears_the_records_and_trusts_the_voucher() {
@@ -347,7 +391,24 @@ final class RemoteSiblingGrantTests: XCTestCase {
         // 丢了的那台自己：不再登记、不再答确认。
         pad.refresh()
         XCTAssertTrue(pad.localReportedLost)
-        XCTAssertNil(roster.load().device(pad.localDevice.id), "条目被别的设备删了，它也不再写回去")
+        let snapshot = roster.load()
+        XCTAssertNotNil(snapshot.device(pad.localDevice.id), "条目留着：取消报告时马上回到名单里")
+        XCTAssertFalse(snapshot.messages.contains { $0.candidate == pad.localDevice.id || $0.voucher == pad.localDevice.id },
+                       "和它有关的确认记录都清掉")
+        XCTAssertFalse(snapshot.grants.contains { $0.candidate == pad.localDevice.id || $0.voucher == pad.localDevice.id })
+    }
+
+    func test_unreported_device_is_back_in_the_list_right_away() {
+        let phone = model(identity("iPhone"))
+        let pad = model(identity("iPad"))
+        confirm(phone, pad)
+        phone.markLost(pad.localDevice.id)
+        pad.refresh()
+        phone.refresh()
+        XCTAssertFalse(phone.rows.contains { $0.id == pad.localDevice.id })
+        phone.clearLostReport(pad.localDevice.id)
+        XCTAssertEqual(phone.rows.first { $0.id == pad.localDevice.id }?.status, .unconfirmed,
+                       "不等它自己重新登记就回来，要重新确认")
     }
 
     func test_found_device_can_be_unreported_and_reinstalled_device_is_unaffected() {
