@@ -14,12 +14,16 @@ struct RemoteDesktopScreen: View {
 
     @State private var session: RemoteDesktopSession?
 
+    /// 这一屏用的是点按钮时就开了流的会话（按记下的尺寸开的）。
+    private let startedEarly: Bool
+
     /// `started`：点按钮时就开了流的会话（`RemoteDesktopRequestSizeMemory`），这一屏接着用，不另开。
     init(client: RemoteMacClient, tappedAt: ContinuousClock.Instant? = nil, started: RemoteDesktopSession? = nil,
          onClose: @escaping () -> Void) {
         self.client = client
         self.tappedAt = tappedAt
         self.onClose = onClose
+        startedEarly = started != nil
         _session = State(initialValue: started)
     }
     @State private var keys = RemoteDesktopKeyState()
@@ -132,7 +136,10 @@ struct RemoteDesktopScreen: View {
             }
             // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
             // 不动，不然 Mac 上的虚拟屏跟着换尺寸、窗口来回搬。
-            guard let size, let session else { return }
+            // 点按钮时就开了流的（`startedEarly`）用的是上次量好的最终尺寸，不跟着排版途中的中间值改：
+            // 中间值（状态栏还在时顶栏更高）一发过去，Mac 就把虚拟屏换成别的比例（2026-11-16 Duo：
+            // 1280×828 → 1280×900，多等 342 ms，画面上下留黑边）。
+            guard let size, let session, !startedEarly else { return }
             switch session.state {
             case .idle, .connecting, .failed, .ended: session.setRequestedSize(width: size.width, height: size.height)
             case .streaming, .reconnecting, .unsupported: break
