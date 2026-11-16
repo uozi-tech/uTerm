@@ -300,7 +300,8 @@ enum RemoteHeadlessDisplay {
 
     /// 叫醒主屏，等它醒着、读得到模式（最多约 3 秒）。返回主屏、它的模式和在线屏数；等不到时 nil。
     private static func awakeMainDisplay() async -> (CGDirectDisplayID, CGDisplayMode, UInt32)? {
-        await RemoteDisplayWake.wake(display: CGMainDisplayID())
+        // 这里只为读占位屏的模式，不采它（接着就换成虚拟屏），不用等它能被采集。
+        await RemoteDisplayWake.wake(display: CGMainDisplayID(), untilCapturable: false)
         for attempt in 0..<30 {
             if attempt > 0 { try? await Task.sleep(for: .milliseconds(100)) }
             var count: UInt32 = 0

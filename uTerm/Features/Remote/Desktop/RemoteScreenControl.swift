@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import IOKit.pwr_mgt
+import ScreenCaptureKit
 
 /// 手机注入的 CGEvent 在事件源上带的标记。帘幕模式用它把「手机的输入」从「Mac 本机的输入」里分出来，
 /// 本机的拦掉、手机的放行。取一个不像默认值（0）的常数即可。
@@ -36,16 +37,68 @@ nonisolated final class RemoteDisplayWake: @unchecked Sendable {
         IOPMAssertionDeclareUserActivity("uTerm 远程桌面" as CFString, kIOPMUserActiveLocal, &assertion)
     }
 
-    /// 点亮显示器并等它醒来（最多约 3 秒）。本来就醒着时立即返回。刚醒时 ScreenCaptureKit 还要一会儿才
-    /// 把它列进可采集的显示器，所以醒来后再多等一小段。
-    static func wake(display id: CGDirectDisplayID) async {
-        guard CGDisplayIsAsleep(id) != 0 else { return }
-        nudge()
-        let deadline = Date().addingTimeInterval(3)
-        while CGDisplayIsAsleep(id) != 0, Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(100))
+    /// 等显示器醒来最多多久。
+    static let wakeLimit: Duration = .seconds(3)
+    /// 醒来后等 ScreenCaptureKit 把它列进可采集的显示器最多多久（原先是醒来后固定睡这么久）。
+    static let capturableLimit: Duration = .milliseconds(400)
+
+    /// 读显示器状态的几样东西，测试里换成假的。
+    struct Probe: Sendable {
+        var isAsleep: @Sendable (CGDirectDisplayID) -> Bool
+        var online: @Sendable () -> [CGDirectDisplayID]
+        var main: @Sendable () -> CGDirectDisplayID
+        var isCapturable: @Sendable (CGDirectDisplayID) async -> Bool
+        var nudge: @Sendable () -> Void
+        var poll: Duration
+
+        static let live = Probe(
+            isAsleep: { CGDisplayIsAsleep($0) != 0 },
+            online: {
+                var count: UInt32 = 0
+                CGGetOnlineDisplayList(0, nil, &count)
+                var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+                CGGetOnlineDisplayList(count, &ids, &count)
+                return Array(ids.prefix(Int(count)))
+            },
+            main: { CGMainDisplayID() },
+            isCapturable: { id in
+                guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                else { return false }
+                return content.displays.contains { $0.displayID == id }
+            },
+            nudge: { RemoteDisplayWake.nudge() },
+            poll: .milliseconds(20))
+    }
+
+    /// 该等的是哪块屏：要的那块还在线就是它；不在线了就是当前主屏。
+    ///
+    /// 无显示器的 Mac 醒来时，系统把睡着的占位屏换成一块新号的占位屏，旧号被移除、之后一直报「睡着」。
+    /// 原先盯着旧号等，每次都等满 3 秒再加 0.4 秒（2026-11-16 mini：26.634 屏幕就醒了、新号成了主屏，
+    /// 30.022 才开始建虚拟屏，冷开屏「准备显示器」恒为 3.8 秒）。
+    static func target(requested: CGDirectDisplayID, online: [CGDirectDisplayID],
+                       main: CGDirectDisplayID) -> CGDirectDisplayID {
+        online.contains(requested) ? requested : main
+    }
+
+    /// 点亮显示器并等它醒来（最多 `wakeLimit`）。本来就醒着时立即返回。刚醒时 ScreenCaptureKit 还要一会儿才
+    /// 把它列进可采集的显示器：`untilCapturable` 时醒来后再等它列出来（最多 `capturableLimit`）。
+    static func wake(display id: CGDirectDisplayID, untilCapturable: Bool = true, probe: Probe = .live) async {
+        func current() -> CGDirectDisplayID { target(requested: id, online: probe.online(), main: probe.main()) }
+        var display = current()
+        guard probe.isAsleep(display) else { return }
+        probe.nudge()
+        let clock = ContinuousClock()
+        let deadline = clock.now + wakeLimit
+        while probe.isAsleep(display), clock.now < deadline {
+            try? await Task.sleep(for: probe.poll)
+            display = current()
         }
-        try? await Task.sleep(for: .milliseconds(400))
+        guard untilCapturable else { return }
+        let capturableDeadline = clock.now + capturableLimit
+        while clock.now < capturableDeadline {
+            if await probe.isCapturable(current()) { return }
+            try? await Task.sleep(for: probe.poll)
+        }
     }
 }
 
