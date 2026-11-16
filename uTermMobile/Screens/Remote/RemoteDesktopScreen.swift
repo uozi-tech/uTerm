@@ -13,6 +13,8 @@ struct RemoteDesktopScreen: View {
     let onClose: () -> Void
 
     @State private var session: RemoteDesktopSession?
+    /// 等画面尺寸稳住再记下来（`rememberRequestedSizeWhenSettled`）。
+    @State private var sizeMemoryTask: Task<Void, Never>?
 
     /// 这一屏用的是点按钮时就开了流的会话（按记下的尺寸开的）。
     private let startedEarly: Bool
@@ -130,6 +132,7 @@ struct RemoteDesktopScreen: View {
             }
         }
         .onChange(of: requestedSize) { _, size in
+            rememberRequestedSizeWhenSettled(size)
             // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
             // 不动，不然 Mac 上的虚拟屏跟着换尺寸、窗口来回搬。
             // 点按钮时就开了流的（`startedEarly`）用的是上次量好的最终尺寸，不跟着排版途中的中间值改：
@@ -166,12 +169,7 @@ struct RemoteDesktopScreen: View {
         .onDisappear {
             onScreen = false
             UIApplication.shared.isIdleTimerDisabled = false
-            // 记下这块屏幕要多大，下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。离开时才记：
-            // 排版途中会先量出中间值（状态栏还在、顶栏更高），每量一次就记的话中间值可能成了最后记下的那个
-            //（2026-11-16 Duo：横屏记成 2853×2007，Mac 按它建出 1280×900 的屏）。
-            if let requestedSize, let screenSize {
-                RemoteDesktopRequestSizeMemory.save(requestedSize, screen: screenSize, scale: displayScale)
-            }
+            sizeMemoryTask?.cancel()
             session?.stop()
         }
         .onChange(of: session?.screen.locked ?? false) { _, locked in
@@ -207,6 +205,23 @@ struct RemoteDesktopScreen: View {
         guard let state else { return true }
         return !state.isTerminal
     }
+
+    /// 记下这块屏幕要多大，下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。等它在屏幕上稳住
+    /// `sizeMemorySettle` 才记：排版途中会先量出中间值（状态栏还在、顶栏更高），关页时状态栏回来又量出一个，
+    /// 都只停几百毫秒。每量一次就记、或离开时才记，记下的都可能是这种值（2026-11-16 Duo：横屏记成 2853×2007，
+    /// 也就是整块屏幕的比例，Mac 按它建出 1280×900 的屏，左右留黑边）。
+    private func rememberRequestedSizeWhenSettled(_ size: RemoteDesktopRequestSize?) {
+        sizeMemoryTask?.cancel()
+        guard let size, let screenSize else { return }
+        let scale = displayScale
+        sizeMemoryTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.sizeMemorySettle)
+            guard !Task.isCancelled, onScreen, requestedSize == size, self.screenSize == screenSize else { return }
+            RemoteDesktopRequestSizeMemory.save(size, screen: screenSize, scale: scale)
+        }
+    }
+
+    private static let sizeMemorySettle: Duration = .seconds(1)
 
     /// 向 Mac 要多大的画面：比例按顶栏下面的画布，大小不小于屏幕像素（见 `RemoteDesktopRequestSize`）。
     /// 屏幕或顶栏还没量出来时为 nil。
