@@ -469,6 +469,8 @@ final class RemoteMacDesktopTests: XCTestCase {
         let server: RemoteHostServer
         let mac: FakeDesktopMac
         let client: RemoteMacClient
+        let endpoint: NWEndpoint
+        let identity: RemoteIdentityStore
     }
 
     private func makeRig() async throws -> Rig {
@@ -486,11 +488,47 @@ final class RemoteMacDesktopTests: XCTestCase {
                                     publicKey: try identity.localIdentity().publicKey.rawRepresentation, pairedAt: Date(),
                                     platform: RemoteDevicePlatform.mac.rawValue))
         let port = try XCTUnwrap(NWEndpoint.Port(rawValue: try XCTUnwrap(server.port)))
-        let client = RemoteMacClient(macName: "远程 Mac", endpoint: .hostPort(host: "127.0.0.1", port: port),
-                                     identity: identity)
+        let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
+        let client = RemoteMacClient(macName: "远程 Mac", endpoint: endpoint, identity: identity)
         await client.connect()
         XCTAssertEqual(client.state, .connected)
-        return Rig(server: server, mac: mac, client: client)
+        return Rig(server: server, mac: mac, client: client, endpoint: endpoint, identity: identity)
+    }
+
+    /// 看过屏幕的设备再连上来：按它上次要的尺寸先把显示器准备好，准备完没人开流就照常排上拆屏。
+    /// 头一次连（没看过）和正有人在看时都不动。
+    func test_reconnecting_viewer_prewarms_the_display_at_its_last_size() async throws {
+        let rig = try await makeRig()
+        defer { rig.client.disconnect() }
+        XCTAssertTrue(rig.mac.prewarmedViewerPixels.isEmpty, "没看过屏幕，不知道要多大")
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 2560, maxHeight: 1656)
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        session.stop()
+        _ = await waitUntil { rig.mac.displayUse.last == false }
+        rig.client.disconnect()
+        _ = await waitUntil { rig.client.state != .connected }
+        let usesBefore = rig.mac.displayUse.count
+        await rig.client.connect()
+        XCTAssertEqual(rig.client.state, .connected)
+        let prewarmed = await waitUntil { !rig.mac.prewarmedViewerPixels.isEmpty }
+        XCTAssertTrue(prewarmed)
+        XCTAssertEqual(rig.mac.prewarmedViewerPixels.first?.width, 2560)
+        XCTAssertEqual(rig.mac.prewarmedViewerPixels.first?.height, 1656)
+        let released = await waitUntil { rig.mac.displayUse.count > usesBefore }
+        XCTAssertTrue(released)
+        XCTAssertEqual(rig.mac.displayUse.last, false, "预建完没人开流：照常排上拆屏")
+
+        // 正在看的时候又来一条连接（同一台设备换了条路）：不动正在用的屏。
+        let watching = RemoteDesktopSession(client: rig.client, maxWidth: 2560, maxHeight: 1656)
+        await watching.start()
+        defer { watching.stop() }
+        let count = rig.mac.prewarmedViewerPixels.count
+        let second = RemoteMacClient(macName: "远程 Mac", endpoint: rig.endpoint, identity: rig.identity)
+        await second.connect()
+        defer { second.disconnect() }
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(rig.mac.prewarmedViewerPixels.count, count, "有人在看时不预建")
     }
 
     func test_screen_window_connects_then_streams_and_stops_the_stream_on_close() async throws {

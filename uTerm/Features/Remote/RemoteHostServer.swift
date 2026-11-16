@@ -402,6 +402,28 @@ final class RemoteHostServer {
 
     func connectionAuthorized(_ connection: RemoteHostConnection) {
         refreshConnectedDevices()
+        prewarmDesktop(for: connection)
+    }
+
+    /// 每台设备上次开屏时要的尺寸（只在内存里，远控进程重启就没了）。连上来时据此预建虚拟屏。
+    private var desktopRequestSizes: [UUID: (width: Int, height: Int, pointScale: Double?)] = [:]
+
+    func rememberDesktopRequest(peerID: UUID?, width: Int, height: Int, pointScale: Double?) {
+        guard let peerID else { return }
+        desktopRequestSizes[peerID] = (width, height, pointScale)
+    }
+
+    /// 看过屏幕的设备连上来、此刻没人在看：先把显示器准备好（`RemoteDesktopEnvironment.prewarmDisplays`）。
+    /// 准备完还没人开流就照常排上拆屏，和看完走了一样。
+    private func prewarmDesktop(for connection: RemoteHostConnection) {
+        guard desktopViewer == nil, desktopEnvironment.isEnabled(), let peerID = connection.peerID,
+              let size = desktopRequestSizes[peerID] else { return }
+        let environment = desktopEnvironment
+        Task { [weak self] in
+            await environment.prewarmDisplays((size.width, size.height), size.pointScale)
+            guard let self, self.desktopViewer == nil else { return }
+            environment.displaysInUse(false)
+        }
     }
 
     /// 此刻通过认证的连接数（远控进程据此判断能不能马上换新版本）。

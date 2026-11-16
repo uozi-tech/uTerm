@@ -628,6 +628,8 @@ final class FakeDesktopMac {
     private(set) var preparedPointScales: [Double?] = []
     /// 有没有人在看桌面的通知（true = 有人开始看，false = 没人看了）。
     private(set) var displayUse: [Bool] = []
+    /// 设备连上来时预建显示器用的尺寸（见 `RemoteHostServer.prewarmDesktop`）。
+    private(set) var prewarmedViewerPixels: [(width: Int, height: Int)] = []
     let clipboard = FakeClipboard()
     lazy var injector = RecordingInputSink(clipboard: clipboard)
     var detail = false
@@ -655,6 +657,7 @@ final class FakeDesktopMac {
                 self?.preparedViewerPixels.append(viewer)
                 self?.preparedPointScales.append(scale)
             },
+            prewarmDisplays: { [weak self] viewer, _ in self?.prewarmedViewerPixels.append(viewer) },
             displaysInUse: { [weak self] inUse in self?.displayUse.append(inUse) },
             listDisplays: { [weak self] in
                 guard let self, self.hasSecondDisplay else { return [] }

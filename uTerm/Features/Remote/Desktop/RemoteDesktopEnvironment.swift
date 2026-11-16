@@ -18,6 +18,9 @@ struct RemoteDesktopEnvironment {
     ///（`RemoteHeadlessDisplay`）。`pointScale` 为 nil 是老的主控端没报。
     var prepareDisplays: @MainActor (_ viewerPixels: (width: Int, height: Int), _ pointScale: Double?) async -> Void
         = { _, _ in }
+    /// 看过屏幕的设备连上来时先把显示器准备好（无显示器的 Mac 预建虚拟屏，见 `RemoteHeadlessDisplay.prewarm`）。
+    var prewarmDisplays: @MainActor (_ viewerPixels: (width: Int, height: Int), _ pointScale: Double?) async -> Void
+        = { _, _ in }
     /// 有没有人在看桌面：没人了虚拟屏过一会儿拆掉，又有人来就留着。
     var displaysInUse: @MainActor (_ inUse: Bool) -> Void = { _ in }
     /// 此刻接着的全部显示器（主显示器在前）。
@@ -57,6 +60,9 @@ struct RemoteDesktopEnvironment {
             display: { requested in RemoteDesktopEnvironment.display(id: requested ?? CGMainDisplayID()) },
             prepareDisplays: { viewer, scale in
                 await RemoteHeadlessDisplay.ensureHiDPI(viewerPixels: viewer, pointScale: scale)
+            },
+            prewarmDisplays: { viewer, scale in
+                await RemoteHeadlessDisplay.prewarm(viewerPixels: viewer, pointScale: scale)
             },
             displaysInUse: { inUse in
                 if inUse { RemoteHeadlessDisplay.cancelRelease() } else { RemoteHeadlessDisplay.scheduleRelease() }

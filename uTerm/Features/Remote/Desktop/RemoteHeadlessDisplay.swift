@@ -248,9 +248,37 @@ enum RemoteHeadlessDisplay {
         Task { @MainActor in RemoteHeadlessDisplay.releaseIfRealDisplayAppeared() }
     }
 
+    /// 正在做的那次 `ensureHiDPI`。一次只做一个：预建（`prewarm`）还没做完时开流来了，排在它后面，免得两边各建一块屏。
+    private static var preparing: Task<Void, Never>?
+
     /// 开流前：无显示器的 Mac 建（或改）一块按 `viewerPixels` 来的 2 倍虚拟屏，等它就绪再返回（最多 3 秒）。
     /// 接着真显示器时不动。
     static func ensureHiDPI(viewerPixels: (width: Int, height: Int)? = nil, pointScale: Double? = nil) async {
+        let previous = preparing
+        let task = Task { @MainActor in
+            await previous?.value
+            await prepare(viewerPixels: viewerPixels, pointScale: pointScale)
+        }
+        preparing = task
+        await task.value
+    }
+
+    /// 只看在线的显示器（不叫醒它）：是不是一块无显示器时的占位屏或 uTerm 自己的虚拟屏。
+    nonisolated static func looksHeadless(_ online: [(id: CGDirectDisplayID, vendor: UInt32, model: UInt32)]) -> Bool {
+        guard online.count == 1, let only = online.first else { return false }
+        return (only.vendor == placeholderVendor && only.model == placeholderModel)
+            || (only.vendor == virtualVendor && only.model == virtualModel)
+    }
+
+    /// 看过屏幕的设备又连上来：无显示器的 Mac 按它上次要的尺寸先把虚拟屏准备好，等它点开屏幕时不用再等
+    /// 叫醒、撤屏、建屏这几百毫秒（2026-11-16 mini：冷开屏「准备显示器」361 ms）。接着真显示器、或者不止一块屏时
+    /// 什么都不做（也不叫醒屏幕）。之后没人开流的话，照常由调用方排上拆屏。
+    static func prewarm(viewerPixels: (width: Int, height: Int), pointScale: Double?) async {
+        guard looksHeadless(onlineDisplays()) else { return }
+        await ensureHiDPI(viewerPixels: viewerPixels, pointScale: pointScale)
+    }
+
+    private static func prepare(viewerPixels: (width: Int, height: Int)?, pointScale: Double?) async {
         cancelRelease()
         releaseIfRealDisplayAppeared()
         let wanted = virtualSize(viewerPixels: viewerPixels, pointScale: pointScale)

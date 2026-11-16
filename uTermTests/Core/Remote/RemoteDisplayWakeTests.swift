@@ -114,4 +114,18 @@ final class RemoteDisplayWakeTests: XCTestCase {
         await RemoteDisplayWake.wake(display: 0xd, untilCapturable: false, probe: displays.probe)
         XCTAssertEqual(displays.capturableCheckCount, 0)
     }
+
+    /// 预建只在无显示器的 Mac 上做：唯一一块在线的是占位屏或 uTerm 的虚拟屏。接着真显示器、不止一块屏时不动
+    /// （也就不会去点亮屏幕）。
+    func testOnlyHeadlessMacsArePrewarmed() {
+        typealias Display = RemoteHeadlessDisplay
+        let placeholder = (id: CGDirectDisplayID(1), vendor: Display.placeholderVendor, model: Display.placeholderModel)
+        let ours = (id: CGDirectDisplayID(2), vendor: Display.virtualVendor, model: Display.virtualModel)
+        let real = (id: CGDirectDisplayID(3), vendor: UInt32(0x610), model: UInt32(0xA050))
+        XCTAssertTrue(Display.looksHeadless([placeholder]))
+        XCTAssertTrue(Display.looksHeadless([ours]))
+        XCTAssertFalse(Display.looksHeadless([real]))
+        XCTAssertFalse(Display.looksHeadless([ours, real]))
+        XCTAssertFalse(Display.looksHeadless([]))
+    }
 }
