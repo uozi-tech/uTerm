@@ -68,6 +68,12 @@
                 let delta = position.pixels(to: mapping.enginePixels(offsetPixels: offsetPixels))
                 guard position.isAvailable, abs(delta) > 0.001 else { return }
                 surface?.smoothScroll(byPixels: delta)
+                // uTerm 本地补丁：交给引擎的每一步给回归测试逐帧读（`UTermScrollTrace`，关着时不记）：
+                // 松手后的减速 / 回弹 / 对齐记 momentum，手指拖着记 drag，再记引擎此刻的行。
+                if UTermScrollTrace.isEnabled {
+                    UTermScrollTrace.record(systemScrollInMotion ? "momentum" : "drag", Double(delta))
+                    if let row = surface?.smoothScrollPosition()?.row { UTermScrollTrace.record("row", Double(row)) }
+                }
             }
 
             func systemScrollWillBeginDragging(_ scrollView: UIScrollView) {
