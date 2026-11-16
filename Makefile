@@ -141,7 +141,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help test-fast test-relay-e2e test-weak-network relay-dist relay-publish test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
-	engine check-engine holder test-holder test-holder-e2e build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
+	engine engine-build check-engine holder test-holder test-holder-e2e build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	sync-strings sync-strings-build check-strings \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
@@ -246,8 +246,19 @@ bump-major-mobile:
 # 校验 sha256、解到 vendor/libghostty-spm/BinaryTarget/。已是清单要的那一份时什么都不做，所以挂在每个会编工程的目标前面。
 # zip 默认从 <workspace>/uTerm-ghostty-artifacts/2026-11-15 取，换地方传 UTERM_GHOSTTY_ARTIFACTS=<目录>。
 # `make clean` 只清 build/，不动 vendor/ 下的这两份。
+# 取不到 zip（新克隆的仓库、换了机器；fetch 脚本退出码 3）时退到从上游源码现编（约 10–20 分钟，要联网），
+# 设 UTERM_GHOSTTY_NO_BUILD=1 就不退、直接失败。
 engine:
-	@scripts/fetch-ghostty-engine.sh
+	@rc=0; scripts/fetch-ghostty-engine.sh || rc=$$?; \
+	if [ $$rc -eq 3 ] && [ -z "$$UTERM_GHOSTTY_NO_BUILD" ]; then \
+		echo "取不到引擎 zip，改为从上游源码现编（make engine-build）"; \
+		scripts/build-ghostty-engine.sh; \
+	else exit $$rc; fi
+
+# 从上游源码现编引擎（scripts/build-ghostty-engine.sh），装进 BinaryTarget/，stamp 记成本机现编。
+# 默认只编 macOS + iOS；出正式 zip（升级引擎）用 ENGINE_BUILD_ARGS='--platforms macos,ios,maccatalyst,visionos --pack <目录>'。
+engine-build:
+	@scripts/build-ghostty-engine.sh $(ENGINE_BUILD_ARGS)
 
 # 只核不取：BinaryTarget/ 里不是清单要的那一份就非零退出。
 check-engine:

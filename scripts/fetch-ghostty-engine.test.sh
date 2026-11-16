@@ -81,10 +81,32 @@ out="$(run 2>&1)" && bad "sha256 对不上应当失败" || ok "sha256 对不上�
 case "$out" in *"sha256 对不上"*) ok "报错里写了 sha256 对不上" ;; *) bad "报错没说 sha256：$out" ;; esac
 assert_eq "$(cat "$dest/GhosttyKit.xcframework/macos-arm64/marker")" "kit-b" "校验不过时不动原来的那份"
 
-# 6. zip 找不到：非零退出，报错里有要找的路径。
+# 6. zip 找不到：退出码 3（make engine 据此退到现编），报错里有要找的路径和 make engine-build。
 write_lock kit-missing.zip "$(sha "$src/kit-a.zip")" vt-a.zip "$(sha "$src/vt-a.zip")"
-out="$(run 2>&1)" && bad "zip 找不到应当失败" || ok "zip 找不到时失败"
+rc=0; out="$(run 2>&1)" || rc=$?
+assert_eq "$rc" "3" "zip 找不到时退出码是 3"
 case "$out" in *"$src/kit-missing.zip"*) ok "报错里写了要找的路径" ;; *) bad "报错没写路径：$out" ;; esac
+case "$out" in *"make engine-build"*) ok "报错里提示了 make engine-build" ;; *) bad "报错没提示现编：$out" ;; esac
+rc=0; write_lock kit-a.zip "$(printf 'x' | /usr/bin/shasum -a 256 | awk '{print $1}')" vt-a.zip "$(sha "$src/vt-a.zip")"
+run >/dev/null 2>&1 || rc=$?
+assert_eq "$rc" "1" "sha256 对不上的退出码是 1，不是 3（不该退到现编）"
+
+# 6b. 本机现编的（stamp = local-build <engine_version>）：版本对得上就算就位，不找 zip；版本变了就不算。
+rm -rf "$dest"; mkdir -p "$dest/GhosttyKit.xcframework" "$dest/ghostty-vt.xcframework"
+for d in GhosttyKit.xcframework ghostty-vt.xcframework; do
+	printf '<plist/>\n' > "$dest/$d/Info.plist"; touch "$dest/$d/untouched"
+	printf 'local-build test-engine/1\n' > "$dest/$d.stamp"
+done
+write_lock kit-missing.zip "$(sha "$src/kit-a.zip")" vt-missing.zip "$(sha "$src/vt-a.zip")"
+run --check >/dev/null && ok "本机现编、版本对得上时 --check 通过" || bad "本机现编的不被认"
+out="$(run 2>&1)" && ok "本机现编时不找 zip" || bad "本机现编时还去找 zip：$out"
+case "$out" in *"本机现编"*) ok "输出里说明是本机现编" ;; *) bad "输出没说本机现编：$out" ;; esac
+[ -f "$dest/GhosttyKit.xcframework/untouched" ] && ok "本机现编的不被覆盖" || bad "本机现编的被覆盖了"
+sed -i '' 's#^engine_version=.*#engine_version=test-engine/2#' "$lock"
+if run --check >/dev/null 2>&1; then bad "清单换了版本，本机现编的旧版应当不算"; else ok "清单换了版本，本机现编的旧版不算"; fi
+rc=0; run >/dev/null 2>&1 || rc=$?
+assert_eq "$rc" "3" "旧的现编 + zip 不在：退出码 3（会重新现编）"
+rm -rf "$dest"
 
 # 7. 评估期留下的软链（指向 build/ 下、多半已经断了）：换成真目录，不顺着软链去删东西。
 write_lock kit-a.zip "$(sha "$src/kit-a.zip")" vt-a.zip "$(sha "$src/vt-a.zip")"

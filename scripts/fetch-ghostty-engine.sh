@@ -10,6 +10,8 @@
 #
 # zip 从哪来：默认 <workspace>/uTerm-ghostty-artifacts/2026-11-15，环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from 可改。
 # 清单里的 download_base 现在只是待办（还没上传），这里不联网。
+# 本机现编的（scripts/build-ghostty-engine.sh，stamp 是 `local-build <engine_version>`）也算就位：和清单的 engine_version
+# 一致就不动、不去找 zip。zip 找不到时退出码是 3（其余错误是 1），`make engine` 据此退到现编。
 # 测试用：--lock PATH 换清单，--dest PATH 换输出目录。
 set -euo pipefail
 
@@ -63,11 +65,13 @@ fi
 
 sha256_of() { /usr/bin/shasum -a 256 "$1" | awk '{print $1}'; }
 
-# 一个二进制是不是已经就位：目录是真目录（不是软链）、里面有 Info.plist、旁边的 stamp 记的 sha256 和清单一致。
+# 一个二进制是不是已经就位：目录是真目录（不是软链）、里面有 Info.plist、旁边的 stamp 记的是清单里的 sha256，
+# 或者是本机按清单的 engine_version 现编的（`local-build <engine_version>`）。
 is_current() {
-	local dir="$1" sha="$2"
-	[ -d "$DEST/$dir" ] && [ ! -L "$DEST/$dir" ] && [ -f "$DEST/$dir/Info.plist" ] \
-		&& [ -f "$DEST/$dir.stamp" ] && [ "$(cat "$DEST/$dir.stamp")" = "$sha" ]
+	local dir="$1" sha="$2" stamp
+	[ -d "$DEST/$dir" ] && [ ! -L "$DEST/$dir" ] && [ -f "$DEST/$dir/Info.plist" ] && [ -f "$DEST/$dir.stamp" ] || return 1
+	stamp="$(cat "$DEST/$dir.stamp")"
+	[ "$stamp" = "$sha" ] || [ "$stamp" = "local-build $(lock_value engine_version)" ]
 }
 
 fetch_one() {
@@ -82,7 +86,10 @@ fetch_one() {
 	case "$dir" in *.xcframework) ;; *) die "清单里 ${id}_dir 要以 .xcframework 结尾：$dir" ;; esac
 
 	if is_current "$dir" "$sha"; then
-		echo "$dir 已是清单要的那一份（${sha:0:12}…）"
+		case "$(cat "$DEST/$dir.stamp")" in
+			local-build*) echo "$dir 是本机现编的 $(lock_value engine_version)" ;;
+			*) echo "$dir 已是清单要的那一份（${sha:0:12}…）" ;;
+		esac
 		return 0
 	fi
 	if [ "$MODE" = check ]; then
@@ -92,10 +99,13 @@ fetch_one() {
 	fi
 
 	local src="$FROM/$zip"
-	[ -f "$src" ] || die "找不到 $src
+	if [ ! -f "$src" ]; then
+		echo "fetch-ghostty-engine: 找不到 $src
   清单要 ${zip}（sha256 ${sha}）。
-  把它放进 ${FROM}，或者用 UTERM_GHOSTTY_ARTIFACTS=<目录> 指到放 zip 的地方再跑一次。
-  自己编见 vendor/libghostty-spm/BUILD.md。"
+  把它放进 ${FROM}，或者用 UTERM_GHOSTTY_ARTIFACTS=<目录> 指到放 zip 的地方再跑一次；
+  或者从上游源码现编：make engine-build（scripts/build-ghostty-engine.sh）。" >&2
+		exit 3
+	fi
 	local actual
 	actual="$(sha256_of "$src")"
 	[ "$actual" = "$sha" ] || die "$src 的 sha256 对不上
