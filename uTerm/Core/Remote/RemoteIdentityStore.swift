@@ -109,6 +109,16 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         return key
     }
 
+    /// 已经有的本机长期私钥；还没生成过返回 nil，**不生成**。后台线程上只读身份时用它：
+    /// 两个 store 同时第一次 `localIdentity()` 会各生成一把，后存的顶掉先存的，先存的那份缓存就成了钥匙串里没有的钥匙。
+    func existingIdentity() -> Curve25519.KeyAgreement.PrivateKey? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cachedIdentity { return cachedIdentity }
+        guard let data = try? storage.load(Self.identityAccount) else { return nil }
+        return try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: data)
+    }
+
     /// 这台 Mac 在中继上的身份（P-256）。中继第一次见到它就和设备 ID 绑定，别的成员顶替不了这台 Mac。
     /// 长期密钥是 X25519，只能协商不能签名，所以单独一把。
     func relayHostKey() throws -> P256.Signing.PrivateKey {

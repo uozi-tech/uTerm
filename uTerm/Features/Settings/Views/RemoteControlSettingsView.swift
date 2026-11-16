@@ -31,6 +31,7 @@ struct RemoteControlSettingsView: View {
                 RemoteInternetGroup()
             }
             RemotePairedDevicesGroup()
+            RemoteMyDevicesGroup()
         }
     }
 }

@@ -46,6 +46,8 @@ enum MGlyph {
         case "refresh":    return "arrow.clockwise"
         case "host":       return "server.rack"
         case "mac":        return "laptopcomputer"
+        case "iphone":     return "iphone"
+        case "ipad":       return "ipad"
         case "display":    return "display"
         case "keyboard":   return "keyboard"
         case "file":       return "doc"
