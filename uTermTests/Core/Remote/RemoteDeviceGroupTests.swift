@@ -442,6 +442,20 @@ final class RemoteDeviceGroupTests: XCTestCase {
         XCTAssertEqual(admits(of: b.local.signingKey).map(\.signer), [a.local.id], "A 签的 admit 还在")
     }
 
+    func test_fast_polling_stops_ten_minutes_after_a_code_was_typed() {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        phone.startJoin()
+        refresh(mac)
+        let wrong = shownCode(phone) == "000000" ? "000001" : "000000"
+        XCTAssertTrue(mac.submitCode(wrong, for: phone.local.id))
+        refresh(mac)
+        XCTAssertTrue(mac.isAwaitingOthers, "刚输过码，在等新设备回话")
+        // 核对结果还留着（等 24 小时），但轮询不跟着快一整天。
+        clock += RemoteDeviceGroup.codeLifetime + 1
+        refresh(mac)
+        XCTAssertFalse(mac.isAwaitingOthers)
+    }
+
     func test_new_device_shows_whom_it_is_waiting_for_until_its_admit_arrives() {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         phone.startJoin()
@@ -894,29 +908,41 @@ final class RemoteDeviceGroupTests: XCTestCase {
 
     // MARK: - 存储
 
-    func test_background_construction_creates_neither_identity_nor_signing_key() throws {
+    func test_background_never_creates_the_identity_but_adds_a_signing_key_once_the_identity_exists() throws {
         let secrets = RemoteMemoryStorage()
         let identity = RemoteIdentityStore(role: .hosts, storage: secrets)
         let store = RemoteGroupLocalStore(storage: secrets)
+        // 设备 ID 在测试宿主的那份偏好里，别的用例可能早就生成过；这里要的是「只缺身份」。
+        _ = RemoteLocalDevice.id()
         XCTAssertNil(RemoteDeviceGroup.make(name: "Mac", model: nil, identity: identity, store: store, roster: roster,
                                             createsIdentity: false))
         XCTAssertNil(try secrets.load("identity"), "后台不生成远控身份")
-        XCTAssertNil(store.existingSigningKey(), "也不生成签名私钥")
+        XCTAssertNil(store.existingSigningKey(), "没有身份时也不生成签名私钥")
 
+        // 用着远程控制（有身份）、从没打开过「我的设备」：后台补一把签名私钥，好登记、好弹加入请求。
         _ = try identity.localIdentity()
-        XCTAssertNil(RemoteDeviceGroup.make(name: "Mac", model: nil, identity: identity, store: store, roster: roster,
-                                            createsIdentity: false), "有身份、没签名私钥也不行")
-        XCTAssertNil(store.existingSigningKey())
+        let background = try XCTUnwrap(RemoteDeviceGroup.make(name: "Mac", model: nil, identity: identity, store: store,
+                                                              roster: roster, createsIdentity: false))
+        let key = try XCTUnwrap(store.existingSigningKey())
+        XCTAssertEqual(background.local.signingKey, key.publicKey.rawRepresentation)
+        background.refresh()
+        XCTAssertTrue(roster.load().devices.contains { $0.signingKey == key.publicKey.rawRepresentation }, "后台照样登记")
 
         let foreground = try XCTUnwrap(RemoteDeviceGroup.make(name: "Mac", model: nil, identity: identity, store: store,
                                                               roster: roster, createsIdentity: true))
-        let key = try XCTUnwrap(store.existingSigningKey())
-        XCTAssertEqual(foreground.local.signingKey, key.publicKey.rawRepresentation)
-        let background = try XCTUnwrap(RemoteDeviceGroup.make(name: "Mac", model: nil, identity: identity, store: store,
-                                                              roster: roster, createsIdentity: false))
-        XCTAssertEqual(background.local.signingKey, foreground.local.signingKey, "都有了以后后台照样能用")
-        background.refresh()
+        XCTAssertEqual(foreground.local.signingKey, background.local.signingKey, "打开页面用的是同一把，不再生成")
         XCTAssertEqual(store.existingSigningKey()?.rawRepresentation, key.rawRepresentation)
+    }
+
+    func test_opening_the_page_creates_identity_and_signing_key() throws {
+        let secrets = RemoteMemoryStorage()
+        let identity = RemoteIdentityStore(role: .hosts, storage: secrets)
+        let store = RemoteGroupLocalStore(storage: secrets)
+        let foreground = try XCTUnwrap(RemoteDeviceGroup.make(name: "Mac", model: nil, identity: identity, store: store,
+                                                              roster: roster, createsIdentity: true))
+        XCTAssertNotNil(identity.existingIdentity())
+        XCTAssertEqual(foreground.local.signingKey, store.existingSigningKey()?.publicKey.rawRepresentation)
+        XCTAssertEqual(foreground.local.publicKey, identity.existingIdentity()?.publicKey.rawRepresentation)
     }
 
     func test_unreadable_local_store_reports_an_error_and_keeps_the_roster_untouched() {

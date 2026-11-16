@@ -419,8 +419,16 @@ nonisolated func settingsDeviceSymbol(for name: String) -> String {
 
 /// 配对过的设备的图标：Mac 按机型分笔记本 / 台式，其余按名字分 iPhone / iPad。
 nonisolated func settingsDeviceSymbol(for peer: RemotePeer) -> String {
-    let name = peer.model ?? peer.name
-    guard peer.isMac else { return settingsDeviceSymbol(for: name) }
+    settingsDeviceSymbol(name: peer.model ?? peer.name, isMac: peer.isMac)
+}
+
+/// 设备组里的设备的图标，规则同上。
+nonisolated func settingsDeviceSymbol(for device: RemoteGroupDevice) -> String {
+    settingsDeviceSymbol(name: device.model ?? device.name, isMac: device.isMac)
+}
+
+nonisolated private func settingsDeviceSymbol(name: String, isMac: Bool) -> String {
+    guard isMac else { return settingsDeviceSymbol(for: name) }
     return name.localizedCaseInsensitiveContains("MacBook") ? "laptopcomputer" : "desktopcomputer"
 }
 

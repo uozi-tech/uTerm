@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftData
 import SwiftUI
 import UDesignKit
@@ -54,8 +55,10 @@ final class SettingsPageSnapshotTests: XCTestCase {
         let background: BackgroundServiceSettings
         let remoteSettings: RemoteControlSettings
         let remoteServer: RemoteHostServer
-        /// 「我的设备」那组要它（替别的设备开通时问配对过的 Mac）。没配对过 Mac、不浏览。
+        /// 「我的 Mac」用的目录。没配对过 Mac、不浏览。
         let remoteMacs: RemoteMacDirectory
+        /// 「我的设备」的状态。nil = 没有远控身份（截图里不读真名册）。
+        var deviceGroup: RemoteDeviceGroupService?
     }
 
     private struct Options {
@@ -167,8 +170,8 @@ final class SettingsPageSnapshotTests: XCTestCase {
             .environment(fixture.remoteSettings)
             .environment(fixture.remoteServer)
             .environment(fixture.remoteMacs)
-            // 「我的设备」的状态（截图里不读名册）。
-            .environment(RemoteSiblingService { _ in nil })
+            // 「我的设备」的状态（截图里不读真名册）。
+            .environment(fixture.deviceGroup ?? RemoteDeviceGroupService { _ in nil })
             // 公网接入那一组读它（main 上早就要了，夹具一直没给，打开截图开关就崩）。
             .environment(TerminalSessionRegistry())
             .environment(\.colorScheme, dark ? .dark : .light)
@@ -302,6 +305,134 @@ final class SettingsPageSnapshotTests: XCTestCase {
                     .background(UD.bg)
             }
             fixture.remoteServer.updateInternetAccess(enabled: false, keepAwake: false)
+        }
+    }
+
+    // MARK: - 我的设备（设备组）
+
+    /// 几台设备共用一份内存名册、各自一份内存本机存储，和 `RemoteDeviceGroupTests` 一样走真的加入流程。
+    @MainActor
+    private final class GroupRig {
+        let synced = RemoteMemorySyncedStorage()
+        lazy var roster = RemoteGroupRoster(storage: synced)
+
+        func device(_ name: String, model: String?, platform: RemoteDevicePlatform) -> RemoteDeviceGroup {
+            let store = RemoteGroupLocalStore(storage: RemoteMemoryStorage())
+            let key = try! store.signingKey()
+            let local = RemoteGroupDevice(id: UUID(), name: name, model: model, platform: platform.rawValue,
+                                          publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
+                                          signingKey: key.publicKey.rawRepresentation, updatedAt: Date())
+            let group = RemoteDeviceGroup(local: local, signingKey: key, roster: roster, store: store)
+            group.refresh()
+            return group
+        }
+
+        /// `candidate` 经 `member` 加入，两边各刷新到回执落地。
+        func join(_ candidate: RemoteDeviceGroup, via member: RemoteDeviceGroup) throws {
+            candidate.startJoin()
+            member.refresh()
+            guard case .showingCode(let code, _) = candidate.joinState else { throw XCTSkip("没显示核对码") }
+            XCTAssertTrue(member.submitCode(code, for: candidate.local.id))
+            candidate.refresh()
+            member.refresh()
+            candidate.refresh()
+            XCTAssertEqual(candidate.joinState, .joined)
+        }
+    }
+
+    private func groupFixture(_ model: RemoteDeviceGroup) throws -> Fixture {
+        var fixture = try makeFixture(Options())
+        fixture.deviceGroup = RemoteDeviceGroupService { _ in model }
+        return fixture
+    }
+
+    private func shootGroup(_ name: String, _ model: RemoteDeviceGroup, height: CGFloat = 420, into dir: URL) async throws {
+        for dark in [false, true] {
+            let fixture = try groupFixture(model)
+            try await shoot(name, size: NSSize(width: 720, height: height), dark: dark, into: dir) {
+                environment(SettingsScroll { RemoteMyDevicesGroup() }, fixture, dark: dark)
+            }
+        }
+    }
+
+    /// 「我的设备」§6 的几个状态：还没进组（列出其它设备）、显示核对码、三台设备的组（含等回执、还没进组的设备），
+    /// 以及移除确认与组员一侧的输码面板。
+    func testRenderMyDevicesGroup() async throws {
+        defer { closeAllWindows() }
+        let dir = try outputDirectory()
+
+        let solo = GroupRig()
+        let mac = solo.device("我的 MacBook Pro", model: "MacBook Pro", platform: .mac)
+        _ = solo.device("iPhone Duo", model: "iPhone 17 Pro", platform: .mobile)
+        _ = solo.device("工作室 iPad Pro", model: "iPad Pro", platform: .mobile)
+        mac.refresh()
+        try await shootGroup("my-devices-solo", mac, into: dir)
+
+        mac.startJoin()
+        try await shootGroup("my-devices-code", mac, height: 520, into: dir)
+
+        let group = GroupRig()
+        let mini = group.device("Mac mini", model: "Mac mini", platform: .mac)
+        let phone = group.device("iPhone Duo", model: "iPhone 17 Pro", platform: .mobile)
+        let laptop = group.device("我的 MacBook Pro", model: "MacBook Pro", platform: .mac)
+        let ipad = group.device("工作室 iPad Pro", model: "iPad Pro", platform: .mobile)
+        try group.join(phone, via: mini)
+        // laptop 经 phone 加入、phone 还没读到回执：名单是三台，带「还在等……确认」；iPad 还没进组。
+        laptop.startJoin()
+        phone.refresh()
+        guard case .showingCode(let laptopCode, _) = laptop.joinState else { return XCTFail("laptop 没显示核对码") }
+        XCTAssertTrue(phone.submitCode(laptopCode, for: laptop.local.id))
+        laptop.refresh()
+        XCTAssertEqual(laptop.members.count, 3)
+        XCTAssertNotNil(laptop.awaitingAcknowledgement)
+        try await shootGroup("my-devices-group", laptop, height: 560, into: dir)
+
+        // 移除确认（在 mini 上移除 phone）：phone 加进来的 laptop 一起列出来。
+        phone.refresh()
+        mini.refresh()
+        let plan = RemoteGroupRemovalPlan(target: phone.local, cascade: mini.devicesAdmitted(by: phone.local.id))
+        XCTAssertEqual(plan.cascade.map(\.id), [laptop.local.id])
+        for dark in [false, true] {
+            let fixture = try groupFixture(mini)
+            try await shoot("my-devices-remove", size: NSSize(width: 400, height: 240), dark: dark, into: dir) {
+                environment(RemoteGroupRemoveSheet(plan: plan) { _ in }, fixture, dark: dark)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .background(UD.bg)
+            }
+        }
+
+        // 在 mini 上移除 phone（连同 laptop）：laptop 读到后显示「已被移出」，再给「加入」。
+        mini.remove(plan.ids)
+        laptop.refresh()
+        XCTAssertTrue(laptop.isSelfRemoved)
+        XCTAssertEqual(Set(laptop.listedOtherDevices.map(\.name)), ["Mac mini", "iPhone Duo", "工作室 iPad Pro"],
+                       "被移出后原来组里的设备也列出来")
+        try await shootGroup("my-devices-removed", laptop, into: dir)
+
+        // 组员一侧的输码面板（iPad 想加入，mini 上弹）：等输入、正在核对、输错后换了新数。
+        let service = RemoteDeviceGroupService { _ in mini }
+        service.tick()
+        ipad.startJoin()
+        service.tick()
+        let request = try XCTUnwrap(service.pendingRequest)
+        try await shootPrompt("my-devices-prompt-waiting", service, request.id, into: dir)
+        guard case .showingCode(let ipadCode, _) = ipad.joinState else { return XCTFail("iPad 没显示核对码") }
+        let wrong = String(format: "%06d", ((Int(ipadCode) ?? 0) + 1) % 1_000_000)
+        XCTAssertTrue(service.submit(wrong, for: request))
+        try await shootPrompt("my-devices-prompt-verifying", service, request.id, into: dir)
+        ipad.refresh()
+        service.tick()
+        try await shootPrompt("my-devices-prompt-wrong", service, request.id, into: dir)
+    }
+
+    private func shootPrompt(_ name: String, _ service: RemoteDeviceGroupService, _ id: UUID, into dir: URL) async throws {
+        let fixture = try makeFixture(Options())
+        for dark in [false, true] {
+            try await shoot(name, size: NSSize(width: 400, height: 200), dark: dark, into: dir) {
+                environment(RemoteDeviceGroupPromptView(service: service, candidateID: id), fixture, dark: dark)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .background(UD.panel)
+            }
         }
     }
 }

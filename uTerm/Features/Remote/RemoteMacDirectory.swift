@@ -632,15 +632,15 @@ final class RemoteMacDirectory {
         return macs.first { $0.deviceID == invitation.macID }
     }
 
-    /// 本机信任表里记的这台 Mac（「我的设备」替别的设备开通时取它的名字、机型、单独记的中继）。
+    /// 本机信任表里记的这台 Mac（设备组替别的组员开通时取它的名字、机型、单独记的中继）。
     func pairedPeer(id: UUID) -> RemotePeer? {
         identity.peer(id: id)
     }
 
-    /// 别的设备替本机开通了一台 Mac（「我的设备」，`RemoteSiblingDevices.receiveGrants`）：记进信任表。
+    /// 别的组员替本机开通了一台 Mac（设备组，`RemoteGroupHostAccess`，G2 接上）：记进信任表。
     /// 本机记着的公钥不一样就不覆盖；本机忘记过（拉黑）的不加回来——那是在这台设备上做的决定。
     /// 不替用户打开局域网浏览（iOS 上会弹本地网络授权框），等用户自己进主机页。
-    func adopt(_ grant: RemoteSiblingGrant) -> RemoteSiblingAdoption {
+    func adopt(_ grant: RemoteGroupGrant) -> RemoteGroupAdoption {
         if var existing = identity.peer(id: grant.hostID) {
             guard existing.publicKey == grant.hostKey else { return .conflict }
             // 早就配对过：本机还没有这台的中继时补上（凭担保开通后 Mac 发的证书）。

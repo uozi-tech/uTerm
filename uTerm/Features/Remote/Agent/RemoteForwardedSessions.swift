@@ -373,6 +373,11 @@ nonisolated final class RemoteMirroredSecretStorage: RemoteSecretStorage, @unche
         onSave?(account, data)
     }
 
+    /// 只删这份镜像，不回传：钥匙串归 App，远控进程从不删身份。
+    func delete(_ account: String) throws {
+        lock.withLock { values[account] = nil }
+    }
+
     /// App（重新）连上时交来的内容。`keeping` 里的条目是 App 不在时本进程写的、App 还没落盘，以本进程为准。
     func replaceAll(_ fresh: [String: Data], keeping pending: Set<String>) {
         lock.withLock {
@@ -405,6 +410,11 @@ nonisolated final class RemoteMirroredSyncedStorage: RemoteSyncedStorage, @unche
     func delete(account: String) throws {
         lock.withLock { value = nil }
         onChange?(nil)
+    }
+
+    /// 这份镜像只有一条，同 `delete(account:)`。
+    func deleteAll() throws {
+        try delete(account: "")
     }
 
     /// 换成 App 那份，不回传。

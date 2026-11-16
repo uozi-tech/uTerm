@@ -117,10 +117,12 @@ final class RemoteVouchTests: XCTestCase {
         let id: UUID
         let name: String
         let identity: RemoteIdentityStore
+        let signingKey = Curve25519.Signing.PrivateKey()
 
-        var sibling: RemoteSiblingDevice {
-            RemoteSiblingDevice(id: id, name: name, model: nil, platform: RemoteDevicePlatform.mobile.rawValue,
-                                publicKey: try! identity.localIdentity().publicKey.rawRepresentation, updatedAt: Date())
+        var groupDevice: RemoteGroupDevice {
+            RemoteGroupDevice(id: id, name: name, model: nil, platform: RemoteDevicePlatform.mobile.rawValue,
+                              publicKey: try! identity.localIdentity().publicKey.rawRepresentation,
+                              signingKey: signingKey.publicKey.rawRepresentation, updatedAt: Date())
         }
 
         init(_ name: String) {
@@ -181,19 +183,19 @@ final class RemoteVouchTests: XCTestCase {
         let phoneClient = try await pairByApproval(phone, to: server)
         XCTAssertTrue(phoneClient.supportsDeviceVouch)
 
-        let result = try await phoneClient.vouch(for: pad.sibling)
+        let result = try await phoneClient.vouch(for: pad.groupDevice)
         XCTAssertEqual(result.kind, .added)
         XCTAssertEqual(result.internetAccess, false)
         let record = try XCTUnwrap(server.peerVouches[pad.id])
         XCTAssertEqual(record.vouchedBy, phone.id)
         XCTAssertEqual(record.family, phone.id, "手动配对的担保者自己就是组号")
         XCTAssertEqual(vouched.map(\.deviceID), [pad.id], "Mac 上发一次通知")
-        XCTAssertEqual(server.trustedPeers.first { $0.id == pad.id }?.publicKey, pad.sibling.publicKey)
+        XCTAssertEqual(server.trustedPeers.first { $0.id == pad.id }?.publicKey, pad.groupDevice.publicKey)
 
         let padClient = try await connectWithoutApproval(pad, to: server)
         XCTAssertEqual(padClient.state, .connected)
 
-        let again = try await phoneClient.vouch(for: pad.sibling)
+        let again = try await phoneClient.vouch(for: pad.groupDevice)
         XCTAssertEqual(again.kind, .alreadyTrusted)
         XCTAssertEqual(vouched.count, 1, "已经认识的不再通知")
         phoneClient.disconnect()
@@ -205,7 +207,7 @@ final class RemoteVouchTests: XCTestCase {
         defer { server.stop() }
         let phone = Device("iPhone"), pad = Device("iPad")
         let phoneClient = try await pairByApproval(phone, to: server)
-        let result = try await phoneClient.vouch(for: pad.sibling)
+        let result = try await phoneClient.vouch(for: pad.groupDevice)
         XCTAssertEqual(result.kind, .notAllowed)
         XCTAssertNotNil(result.reason)
         XCTAssertNil(server.identity.peer(id: pad.id))
@@ -220,10 +222,10 @@ final class RemoteVouchTests: XCTestCase {
         defer { server.stop() }
         let phone = Device("iPhone"), pad = Device("iPad")
         let phoneClient = try await pairByApproval(phone, to: server)
-        _ = try await phoneClient.vouch(for: pad.sibling)
+        _ = try await phoneClient.vouch(for: pad.groupDevice)
         server.revoke(pad.id)
         XCTAssertNil(server.peerVouches[pad.id], "撤销时担保记录一并去掉")
-        let result = try await phoneClient.vouch(for: pad.sibling)
+        let result = try await phoneClient.vouch(for: pad.groupDevice)
         XCTAssertEqual(result.kind, .rejected)
         XCTAssertNil(server.identity.peer(id: pad.id))
         phoneClient.disconnect()
@@ -234,12 +236,12 @@ final class RemoteVouchTests: XCTestCase {
         defer { server.stop() }
         let phone = Device("iPhone"), pad = Device("iPad")
         let phoneClient = try await pairByApproval(phone, to: server)
-        _ = try await phoneClient.vouch(for: pad.sibling)
-        var impostor = pad.sibling
+        _ = try await phoneClient.vouch(for: pad.groupDevice)
+        var impostor = pad.groupDevice
         impostor.publicKey = newKey()
         let result = try await phoneClient.vouch(for: impostor)
         XCTAssertEqual(result.kind, .rejected)
-        XCTAssertEqual(server.identity.peer(id: pad.id)?.publicKey, pad.sibling.publicKey)
+        XCTAssertEqual(server.identity.peer(id: pad.id)?.publicKey, pad.groupDevice.publicKey)
         phoneClient.disconnect()
     }
 
@@ -254,11 +256,11 @@ final class RemoteVouchTests: XCTestCase {
         let macClient = try await pairByApproval(mac, to: server)
         allowed.insert(phone.id)
 
-        let fromPhone = try await phoneClient.vouch(for: pad.sibling)
+        let fromPhone = try await phoneClient.vouch(for: pad.groupDevice)
         XCTAssertEqual(fromPhone.internetAccess, true)
         XCTAssertTrue(allowed.contains(pad.id))
 
-        let fromMac = try await macClient.vouch(for: watch.sibling)
+        let fromMac = try await macClient.vouch(for: watch.groupDevice)
         XCTAssertEqual(fromMac.kind, .added)
         XCTAssertEqual(fromMac.internetAccess, false)
         XCTAssertFalse(allowed.contains(watch.id), "担保者自己不能经公网接入，新设备也不能")
@@ -273,7 +275,7 @@ final class RemoteVouchTests: XCTestCase {
         let phoneClient = try await pairByApproval(phone, to: server)
         XCTAssertFalse(phoneClient.supportsDeviceVouch)
         do {
-            _ = try await phoneClient.vouch(for: pad.sibling)
+            _ = try await phoneClient.vouch(for: pad.groupDevice)
             XCTFail("老 Mac 上应当直接报版本太旧")
         } catch RemoteAttachError.rejected(_) {}
         XCTAssertEqual(phoneClient.state, .connected, "没发出去，连接还在")
@@ -286,21 +288,21 @@ final class RemoteVouchTests: XCTestCase {
         let phone = Device("iPhone"), pad = Device("iPad"), stranger = Device("Stranger")
         let phoneClient = try await pairByApproval(phone, to: server)
         let strangerClient = try await pairByApproval(stranger, to: server)
-        _ = try await phoneClient.vouch(for: pad.sibling)
+        _ = try await phoneClient.vouch(for: pad.groupDevice)
         let padClient = try await connectWithoutApproval(pad, to: server)
         XCTAssertTrue(phoneClient.supportsSiblingRevoke)
 
         // 别组的设备撤不了。
-        let refused = try await strangerClient.revokeSibling(pad.id, publicKey: pad.sibling.publicKey)
+        let refused = try await strangerClient.revokeSibling(pad.id, publicKey: pad.groupDevice.publicKey)
         XCTAssertEqual(refused.kind, .notInFamily)
         XCTAssertNotNil(server.identity.peer(id: pad.id))
 
-        let result = try await phoneClient.revokeSibling(pad.id, publicKey: pad.sibling.publicKey)
+        let result = try await phoneClient.revokeSibling(pad.id, publicKey: pad.groupDevice.publicKey)
         XCTAssertEqual(result.kind, .revoked)
         let gone = await waitUntil { server.identity.peer(id: pad.id) == nil && padClient.state != .connected }
         XCTAssertTrue(gone, "撤掉并断开")
         XCTAssertTrue(server.identity.isBlocked(pad.id))
-        let again = try await phoneClient.vouch(for: pad.sibling)
+        let again = try await phoneClient.vouch(for: pad.groupDevice)
         XCTAssertEqual(again.kind, .rejected, "撤掉的设备不能借担保回来")
         XCTAssertEqual(phoneClient.state, .connected)
         phoneClient.disconnect()
@@ -326,10 +328,10 @@ final class RemoteVouchTests: XCTestCase {
         let phone = Device("iPhone"), pad = Device("iPad"), mac = Device("Mac"), stranger = Device("Stranger")
         let phoneClient = try await pairByApproval(phone, to: server)
         let strangerClient = try await pairByApproval(stranger, to: server)
-        _ = try await phoneClient.vouch(for: pad.sibling)
+        _ = try await phoneClient.vouch(for: pad.groupDevice)
         // 被担保的设备再担保：同一组。
         let padClient = try await connectWithoutApproval(pad, to: server)
-        let fromPad = try await padClient.vouch(for: mac.sibling)
+        let fromPad = try await padClient.vouch(for: mac.groupDevice)
         XCTAssertEqual(fromPad.kind, .added)
         XCTAssertEqual(server.peerVouches[mac.id]?.family, phone.id)
         XCTAssertEqual(server.peerVouches[mac.id]?.vouchedBy, pad.id)

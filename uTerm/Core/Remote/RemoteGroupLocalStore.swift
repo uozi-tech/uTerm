@@ -109,7 +109,7 @@ nonisolated final class RemoteGroupLocalStore: @unchecked Sendable {
         self.storage = storage
     }
 
-    /// 已经有的签名私钥；没有返回 nil，**不生成**（后台登记、定时刷新只能用这个，见 `existingIdentity` 的说明）。
+    /// 已经有的签名私钥；没有返回 nil，不生成。
     func existingSigningKey() -> Curve25519.Signing.PrivateKey? {
         lock.lock()
         defer { lock.unlock() }
@@ -117,7 +117,7 @@ nonisolated final class RemoteGroupLocalStore: @unchecked Sendable {
         return try? Curve25519.Signing.PrivateKey(rawRepresentation: data)
     }
 
-    /// 签名私钥；没有就生成并保存。只在前台、你打开「我的设备」或点了操作时调。
+    /// 签名私钥；没有就生成并保存。远控身份已经在了才调（见 `RemoteGroupDevice.local`）。
     func signingKey() throws -> Curve25519.Signing.PrivateKey {
         lock.lock()
         defer { lock.unlock() }
@@ -147,9 +147,10 @@ nonisolated final class RemoteGroupLocalStore: @unchecked Sendable {
 }
 
 nonisolated extension RemoteGroupDevice {
-    /// 本机的条目与签名私钥。远控身份（X25519）与设备 ID 跟主控方向是同一份（`RemoteSiblingDevice.local` 同理）。
-    /// `createsIdentity` 为 false 时，身份、设备 ID、签名私钥缺任何一样就抛错，什么都不生成：
-    /// 启动时别的地方可能正在第一次生成身份，后台再生成一把会顶掉它。
+    /// 本机的条目与签名私钥。远控身份（X25519）与设备 ID 跟主控方向是同一份（握手里报的就是它们）。
+    /// `createsIdentity` 为 false（后台）时，身份或设备 ID 缺一样就抛错、什么都不生成：启动时别的地方可能正在
+    /// 第一次生成身份，后台再生成一把会顶掉它。两样都有、只缺签名私钥时照样生成签名私钥：它只归设备组用，
+    /// 没有别处会同时生成；不生成的话，用着远程控制、但从没打开过「我的设备」的设备永远不会登记，也弹不出加入请求。
     static func local(name: String, model: String?, identity: RemoteIdentityStore, store: RemoteGroupLocalStore,
                       createsIdentity: Bool, now: Date = Date()) throws
         -> (device: RemoteGroupDevice, signingKey: Curve25519.Signing.PrivateKey) {
@@ -160,10 +161,11 @@ nonisolated extension RemoteGroupDevice {
             signingKey = try store.signingKey()
         } else {
             guard let existing = identity.existingIdentity(),
-                  RemoteLocalState.defaults.string(forKey: DefaultsKey.remoteDeviceID) != nil,
-                  let existingSigning = store.existingSigningKey() else { throw RemoteProtocolError.notPaired }
+                  RemoteLocalState.defaults.string(forKey: DefaultsKey.remoteDeviceID) != nil else {
+                throw RemoteProtocolError.notPaired
+            }
             identityKey = existing
-            signingKey = existingSigning
+            signingKey = try store.signingKey()
         }
         let device = RemoteGroupDevice(id: RemoteLocalDevice.id(), name: name, model: model,
                                        platform: RemoteDevicePlatform.current.rawValue,

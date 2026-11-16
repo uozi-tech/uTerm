@@ -6,6 +6,8 @@ nonisolated protocol RemoteSyncedStorage: Sendable {
     func loadAll() -> [Data]
     func save(_ data: Data, account: String) throws
     func delete(account: String) throws
+    /// 删掉这个 service 下的每一条（退役的名册用）。一条都没有不算错。
+    func deleteAll() throws
 }
 
 /// 经 iCloud 钥匙串同步的存储（中继配置用）：设备首次解锁后可读，Mac 锁屏时远控服务仍要读得到。
@@ -52,6 +54,11 @@ nonisolated struct RemoteKeychainSyncedStorage: RemoteSyncedStorage {
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unexpectedStatus(status) }
     }
+
+    func deleteAll() throws {
+        let status = SecItemDelete(base as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unexpectedStatus(status) }
+    }
 }
 
 /// 测试用的内存实现。
@@ -77,5 +84,11 @@ nonisolated final class RemoteMemorySyncedStorage: RemoteSyncedStorage, @uncheck
         lock.lock()
         defer { lock.unlock() }
         items[account] = nil
+    }
+
+    func deleteAll() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        items.removeAll()
     }
 }

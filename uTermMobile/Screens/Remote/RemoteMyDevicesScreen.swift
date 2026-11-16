@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// 设置 › 远程控制 › 我的设备：同一 Apple ID 下的其它设备，在这里确认（两台设备核对同一个 6 位数）。
-/// 状态与操作在共享的 `RemoteSiblingDevices`；这一页开着时才轮询名册。
+/// 设置 › 远程控制 › 我的设备：设备组（docs/remote-device-group-design.md §6），状态与 Mac 那一页相同：
+/// 还没进组（说明、「加入」、你的其它设备）、显示核对码、加入失败、已进组（组员名单，「移除…」/「离开…」，
+/// 还没进组的设备）、这台被移出了。状态与操作在共享的 `RemoteDeviceGroup`，文案在 `RemoteDeviceGroupCopy`；
+/// 别的设备想加入时由根视图上的 `RemoteGroupJoinHandler` 弹输码单子，不在这一页。
 struct RemoteMyDevicesScreen: View {
-    @Environment(RemoteMacDirectory.self) private var directory
-    @Environment(RemoteSiblingService.self) private var service
-    /// 输入框里的核对码。
-    @State private var codeText = ""
+    @Environment(RemoteDeviceGroupService.self) private var service
+    /// 等确认的移除（连带的设备可以取消勾选）。
+    @State private var removing: RemoteGroupRemovalPlan?
+    @State private var confirmingLeave = false
 
-    private var model: RemoteSiblingDevices? { service.model }
-    /// 等确认要报告丢失的那台。
-    @State private var reportingLost: RemoteSiblingDevice?
+    private var model: RemoteDeviceGroup? { service.model }
 
     var body: some View {
         ScrollView {
@@ -18,9 +18,8 @@ struct RemoteMyDevicesScreen: View {
                 if let model {
                     content(model)
                 } else {
-                    MInsetGroup(footer: RemoteSiblingCopy.footer) {
-                        MInsetRow(icon: "warn", iconColor: M.danger, label: "读不到这台设备的远程控制身份",
-                                  sub: "钥匙串不可用", last: true)
+                    MInsetGroup(footer: RemoteDeviceGroupCopy.intro) {
+                        MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.unavailable, last: true)
                     }
                 }
             }
@@ -31,81 +30,128 @@ struct RemoteMyDevicesScreen: View {
         .background(M.canvas)
         .navigationTitle("我的设备")
         .navigationBarTitleDisplayMode(.inline)
-        // 替别的设备开通要问到配对过的 Mac：页面开着时问中继谁在线（局域网浏览要用户在主机页打开过，这里不替他打开）。
         .task {
             service.ensureModel()
             await service.keepActive()
         }
-        .task { await directory.keepLiveStatusFresh() }
-        .confirmationDialog(RemoteSiblingCopy.lostConfirmTitle(reportingLost?.name ?? ""),
-                            isPresented: Binding(get: { reportingLost != nil }, set: { if !$0 { reportingLost = nil } }),
-                            titleVisibility: .visible) {
-            Button("报告丢失", role: .destructive) {
-                if let device = reportingLost { model?.markLost(device.id) }
-                reportingLost = nil
+        .sheet(item: $removing) { plan in
+            RemoveMemberSheet(plan: plan) { ids in
+                removing = nil
+                if let ids { model?.remove(ids) }
             }
-            Button("取消", role: .cancel) { reportingLost = nil }
+            .presentationDetents([.medium, .large])
+            .presentationBackground(M.canvas)
+        }
+        .confirmationDialog(RemoteDeviceGroupCopy.leaveTitle, isPresented: $confirmingLeave, titleVisibility: .visible) {
+            Button("离开", role: .destructive) { model?.leave() }
+            Button("取消", role: .cancel) {}
         } message: {
-            Text(RemoteSiblingCopy.lostConfirmMessage)
+            Text(RemoteDeviceGroupCopy.leaveMessage)
         }
     }
 
     @ViewBuilder
-    private func content(_ model: RemoteSiblingDevices) -> some View {
-        if let confirmation = model.confirmation {
-            confirmationGroup(confirmation, model: model)
-        }
-        if model.localReportedLost {
+    private func content(_ model: RemoteDeviceGroup) -> some View {
+        if let error = model.storageError {
             MInsetGroup {
-                MInsetRow(icon: "warn", iconColor: M.danger, label: "这台设备被报告丢失", sub: RemoteSiblingCopy.localLost, last: true)
+                MInsetRow(icon: "warn", iconColor: M.danger, label: error, last: true)
             }
         }
-        if !model.lost.isEmpty {
-            MInsetGroup(header: RemoteSiblingCopy.lostHeader, footer: RemoteSiblingCopy.lostFooter) {
-                ForEach(Array(model.lost.enumerated()), id: \.element.id) { index, item in
-                    MInsetRow(icon: "warn", iconColor: M.danger, label: item.tombstone.deviceName, sub: item.subtitle,
-                              last: index == model.lost.count - 1,
-                              trailing: AnyView(MMenu {
-                                  Button("找回来了，取消报告", systemImage: "arrow.uturn.backward") { model.clearLostReport(item.id) }
-                              } label: {
-                                  MIcon(name: "ellipsis", size: 16, color: M.text3).frame(width: 32, height: 32).contentShape(Rectangle())
-                              }))
+        if model.isInGroup, !model.isSelfRemoved {
+            memberGroup(model)
+            if !model.otherDevices.isEmpty {
+                MInsetGroup(header: RemoteDeviceGroupCopy.outsideHeader, footer: RemoteDeviceGroupCopy.outsideFooter) {
+                    deviceRows(model.otherDevices)
+                }
+            }
+        } else {
+            if model.isSelfRemoved {
+                MInsetGroup {
+                    MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.selfRemoved, last: true)
+                }
+            }
+            joinGroup(model)
+            MInsetGroup(header: String(localized: "你的其它设备")) {
+                if model.listedOtherDevices.isEmpty {
+                    MInsetRow(icon: "icloud", iconColor: M.text3, label: String(localized: "还没有你的其它设备"),
+                              sub: String(localized: "在另一台登录同一 Apple ID 的设备上打开 uTerm"), last: true)
+                } else {
+                    deviceRows(model.listedOtherDevices)
                 }
             }
         }
-        if !model.received.isEmpty {
-            MInsetGroup(header: RemoteSiblingCopy.receivedHeader, footer: RemoteSiblingCopy.receivedFooter) {
-                ForEach(Array(model.received.enumerated()), id: \.element.id) { index, item in
-                    MInsetRow(icon: "mac", iconColor: item.status.isUsable ? nil : M.text3, label: item.hostName,
-                              sub: item.subtitle, last: index == model.received.count - 1)
+    }
+
+    private func deviceRows(_ devices: [RemoteGroupDevice]) -> some View {
+        ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
+            MInsetRow(icon: glyph(for: device), iconColor: M.text3, label: device.name, sub: device.modelDetail,
+                      last: index == devices.count - 1)
+        }
+    }
+
+    // MARK: 还没进组
+
+    @ViewBuilder
+    private func joinGroup(_ model: RemoteDeviceGroup) -> some View {
+        switch model.joinState {
+        case .showingCode(let code, let attemptsLeft):
+            MInsetGroup(footer: RemoteDeviceGroupCopy.codeCaption(attemptsLeft: attemptsLeft)) {
+                VStack(spacing: 10) {
+                    Text(RemoteDeviceGroupCopy.codeTitle)
+                        .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
+                        .multilineTextAlignment(.center)
+                    Text(RemotePairingCode.grouped(code))
+                        .font(.system(size: 40, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(M.text)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+                .overlay(alignment: .bottom) { MRowDivider() }
+                MInsetRow(icon: "x", label: String(localized: "取消"), danger: true, last: true) { model.cancelJoin() }
+            }
+        case .failed(let reason):
+            MInsetGroup(footer: reason) {
+                MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.failedTitle)
+                MInsetRow(icon: "check", label: String(localized: "好"), last: true) { model.cancelJoin() }
+            }
+        case .joined, nil:
+            MInsetGroup(footer: RemoteDeviceGroupCopy.intro + RemoteDeviceGroupCopy.howToJoin) {
+                MInsetRow(icon: glyph(for: model.local), label: model.local.name,
+                          sub: [RemoteDeviceGroupCopy.thisDevice, RemoteDeviceGroupCopy.notJoined].joined(separator: " · "),
+                          last: false)
+                MInsetRow(icon: "plus", label: String(localized: "加入"), last: true) {
+                    model.startJoin()
+                    service.poke()
                 }
             }
         }
-        MInsetGroup(header: "我的设备", footer: RemoteSiblingCopy.footer) {
-            if let error = model.storageError {
-                MInsetRow(icon: "warn", iconColor: M.danger, label: error, last: model.rows.isEmpty)
+    }
+
+    // MARK: 已进组
+
+    private func memberGroup(_ model: RemoteDeviceGroup) -> some View {
+        MInsetGroup(header: String(localized: "设备组"), footer: RemoteDeviceGroupCopy.groupFooter) {
+            if let waiting = model.awaitingAcknowledgement {
+                MInsetRow(icon: "clock", iconColor: M.text3, label: RemoteDeviceGroupCopy.awaiting(waiting))
             }
-            if model.rows.isEmpty {
-                MInsetRow(icon: "icloud", iconColor: M.text3, label: "还没有别的设备",
-                          sub: "在你的其它设备上打开 uTerm 后会出现在这里", last: true)
-            }
-            ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
-                MInsetRow(icon: glyph(for: row.device), iconColor: row.needsConfirmation ? M.text3 : nil,
-                          label: row.device.name, sub: row.subtitle, last: index == model.rows.count - 1,
+            ForEach(Array(model.members.enumerated()), id: \.element.id) { index, row in
+                MInsetRow(icon: glyph(for: row.device), label: row.device.name,
+                          sub: RemoteDeviceGroupCopy.memberSubtitle(row), last: index == model.members.count - 1,
                           trailing: AnyView(menu(for: row, model: model)))
             }
         }
     }
 
-    private func menu(for row: RemoteSiblingDevices.Row, model: RemoteSiblingDevices) -> some View {
+    private func menu(for row: RemoteDeviceGroup.MemberRow, model: RemoteDeviceGroup) -> some View {
         MMenu {
-            if row.needsConfirmation {
-                Button("确认…", systemImage: "checkmark.shield") { model.confirm(row.id) }
+            if row.isLocal {
+                Button("离开…", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) { confirmingLeave = true }
             } else {
-                Button("取消确认", systemImage: "xmark.circle") { model.forgetConfirmation(row.id) }
+                Button("移除…", systemImage: "minus.circle", role: .destructive) {
+                    removing = RemoteGroupRemovalPlan(target: row.device, cascade: model.devicesAdmitted(by: row.device.id))
+                }
             }
-            Button("从名单移除", systemImage: "trash", role: .destructive) { model.remove(row.id) }
-            Button("这台设备丢了…", systemImage: "exclamationmark.triangle", role: .destructive) { reportingLost = row.device }
         } label: {
             MIcon(name: "ellipsis", size: 16, color: M.text3)
                 .frame(width: 32, height: 32)
@@ -113,51 +159,43 @@ struct RemoteMyDevicesScreen: View {
         }
     }
 
-    @ViewBuilder
-    private func confirmationGroup(_ confirmation: RemoteSiblingDevices.Confirmation,
-                                   model: RemoteSiblingDevices) -> some View {
-        switch confirmation {
-        case .waiting(let device):
-            MInsetGroup(footer: RemoteSiblingCopy.waitingDetail(device)) {
-                MInsetRow(icon: "refresh", label: RemoteSiblingCopy.waitingTitle(device),
-                          trailing: AnyView(ProgressView()))
-                MInsetRow(icon: "x", label: "取消", danger: true, last: true) { model.cancel() }
-            }
-        case .entering(let device, let attemptsLeft):
-            MInsetGroup(footer: RemoteSiblingCopy.enteringDetail(attemptsLeft: attemptsLeft)) {
-                VStack(spacing: 12) {
-                    Text(RemoteSiblingCopy.enteringTitle(device))
-                        .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
-                        .multilineTextAlignment(.center)
-                    TextField("000000", text: $codeText)
-                        .keyboardType(.numberPad)
-                        .textContentType(.oneTimeCode)
-                        .font(.system(size: 32, weight: .semibold, design: .monospaced))
-                        .multilineTextAlignment(.center)
-                        .onChange(of: codeText) { _, text in
-                            // 输满 6 位就核对，不用再点按钮。
-                            guard text.filter(\.isNumber).count == RemoteSiblingCode.codeLength else { return }
-                            model.submitCode(text)
-                            codeText = ""
-                        }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                MInsetRow(icon: "x", label: "取消", danger: true, last: true) {
-                    codeText = ""
-                    model.cancel()
-                }
-            }
-        case .failed(_, let reason):
-            MInsetGroup(footer: reason) {
-                MInsetRow(icon: "warn", iconColor: M.danger, label: "确认没有完成")
-                MInsetRow(icon: "check", label: "好", last: true) { model.cancel() }
-            }
-        }
-    }
+    private func glyph(for device: RemoteGroupDevice) -> String { device.mGlyph }
+}
 
-    private func glyph(for device: RemoteSiblingDevice) -> String {
-        if device.isMac { return "mac" }
-        return (device.model ?? device.name).localizedCaseInsensitiveContains("ipad") ? "ipad" : "iphone"
+/// 移除前的确认：列出由它加进来的设备（默认一起移除，可以取消勾选）。`onDone(nil)` 是取消。
+private struct RemoveMemberSheet: View {
+    @State var plan: RemoteGroupRemovalPlan
+    let onDone: ([UUID]?) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    Text(RemoteDeviceGroupCopy.removeTitle(plan.target))
+                        .font(M.sans(18, weight: .bold)).foregroundStyle(M.text)
+                        .multilineTextAlignment(.center)
+                    Text(RemoteDeviceGroupCopy.removeMessage)
+                        .font(M.sans(13)).foregroundStyle(M.text3)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                if !plan.cascade.isEmpty {
+                    MInsetGroup(header: RemoteDeviceGroupCopy.cascadeHeader) {
+                        ForEach(Array(plan.cascade.enumerated()), id: \.element.id) { index, device in
+                            MInsetRow(label: device.name, sub: device.modelDetail, last: index == plan.cascade.count - 1,
+                                      trailing: AnyView(MCheck(checked: plan.includes(device.id)) { plan.set(device.id, included: $0) }))
+                        }
+                    }
+                }
+                VStack(spacing: 10) {
+                    MBtn(title: String(localized: "移除"), kind: .danger, full: true) { onDone(plan.ids) }
+                    MBtn(title: String(localized: "取消"), kind: .secondary, full: true) { onDone(nil) }
+                }
+                .padding(.horizontal, 16)
+            }
+            .frame(maxWidth: M.readableWidth)
+            .frame(maxWidth: .infinity)
+        }
     }
 }

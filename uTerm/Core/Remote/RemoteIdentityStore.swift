@@ -238,6 +238,8 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
 nonisolated protocol RemoteSecretStorage: Sendable {
     func load(_ account: String) throws -> Data?
     func save(_ data: Data, account: String) throws
+    /// 没有这一条不算错。
+    func delete(_ account: String) throws
 }
 
 nonisolated struct RemoteKeychainStorage: RemoteSecretStorage {
@@ -280,6 +282,11 @@ nonisolated struct RemoteKeychainStorage: RemoteSecretStorage {
         let addStatus = SecItemAdd(add as CFDictionary, nil)
         guard addStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(addStatus) }
     }
+
+    func delete(_ account: String) throws {
+        let status = SecItemDelete(query(account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unexpectedStatus(status) }
+    }
 }
 
 /// 测试用的内存存储。
@@ -299,6 +306,12 @@ nonisolated final class RemoteMemoryStorage: RemoteSecretStorage, @unchecked Sen
         lock.lock()
         defer { lock.unlock() }
         items[account] = data
+    }
+
+    func delete(_ account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        items[account] = nil
     }
 }
 

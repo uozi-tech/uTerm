@@ -32,7 +32,7 @@ final class RemoteGroupRosterTests: XCTestCase {
 
     func test_roster_uses_its_own_service() {
         XCTAssertEqual(RemoteGroupRoster.service, "com.uozi.uTerm.remote.group")
-        XCTAssertNotEqual(RemoteGroupRoster.service, RemoteSiblingRoster.service)
+        XCTAssertNotEqual(RemoteGroupRoster.service, RemoteLegacyDevices.service)
         XCTAssertNotEqual(RemoteGroupLocalStore.stateAccount, RemoteIdentityStore.vouchAccount)
     }
 
@@ -403,4 +403,5 @@ nonisolated final class FailingSecretStorage: RemoteSecretStorage, @unchecked Se
 
     func load(_ account: String) throws -> Data? { throw Unavailable() }
     func save(_ data: Data, account: String) throws { throw Unavailable() }
+    func delete(_ account: String) throws { throw Unavailable() }
 }

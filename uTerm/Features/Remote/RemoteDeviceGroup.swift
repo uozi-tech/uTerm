@@ -110,8 +110,8 @@ final class RemoteDeviceGroup {
         self.now = now
     }
 
-    /// 用本机的远控身份建一个。`createsIdentity` 为 false 时缺身份或签名私钥就返回 nil，什么都不生成
-    /// （见 `RemoteGroupDevice.local`）。
+    /// 用本机的远控身份建一个。`createsIdentity` 为 false 时缺身份或设备 ID 就返回 nil、什么都不生成；
+    /// 两样都有时缺签名私钥会生成一把（见 `RemoteGroupDevice.local`）。
     static func live(createsIdentity: Bool = true) -> RemoteDeviceGroup? {
         make(name: LANSyncCoordinator.localDeviceName(), model: RemoteDeviceModel.current(),
              createsIdentity: createsIdentity)
@@ -328,8 +328,13 @@ final class RemoteDeviceGroup {
         if requests != joinRequests { joinRequests = requests }
         let waitingFor = state.acknowledgementFrom.flatMap { id in state.members.first { $0.device.id == id }?.device }
         if waitingFor != awaitingAcknowledgement { awaitingAcknowledgement = waitingFor }
+        // 「在等」只算最近这 10 分钟里的事：核对结果要留着等 24 小时（对方可能很久才上线），但不能让轮询
+        // 跟着快一整天。
+        func isRecent(_ date: Date) -> Bool { now().timeIntervalSince(date) <= Self.codeLifetime }
+        let joinedRecently = state.selfAdmission.map { isRecent($0.admittedAt.date) } ?? false
+        let submittedRecently = state.pendingJoins.contains { isRecent($0.submittedAt) }
         let awaiting = candidate != nil
-            || !state.selfRemoved && (sentDone != nil || waitingFor != nil || !state.pendingJoins.isEmpty)
+            || !state.selfRemoved && ((sentDone != nil || waitingFor != nil) && joinedRecently || submittedRecently)
         if awaiting != isAwaitingOthers { isAwaitingOthers = awaiting }
     }
 

@@ -842,9 +842,9 @@ final class RemoteMacClient: Identifiable {
         }
     }
 
-    /// 请 Mac 记下同一个人的另一台设备（本机在「我的设备」里确认过它）。Mac 版本太旧抛 `RemoteAttachError.rejected`；
+    /// 请 Mac 记下同一个人的另一台设备（和本机同在一个设备组里）。Mac 版本太旧抛 `RemoteAttachError.rejected`；
     /// 连不上照常抛连接失败。Mac 不肯记不算错误，看结果里的 `outcome`。
-    func vouch(for device: RemoteSiblingDevice) async throws -> RemoteVouchResult {
+    func vouch(for device: RemoteGroupDevice) async throws -> RemoteVouchResult {
         await connect()
         guard state == .connected, let link else {
             throw connectionFailure

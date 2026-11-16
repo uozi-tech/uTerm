@@ -436,8 +436,9 @@ final class RemoteHostAgentTests: XCTestCase {
 
         let padID = UUID()
         let padIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
-        let pad = RemoteSiblingDevice(id: padID, name: "iPad", model: nil, platform: "mobile",
-                                      publicKey: try padIdentity.localIdentity().publicKey.rawRepresentation, updatedAt: Date())
+        let pad = RemoteGroupDevice(id: padID, name: "iPad", model: nil, platform: "mobile",
+                                    publicKey: try padIdentity.localIdentity().publicKey.rawRepresentation,
+                                    signingKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation, updatedAt: Date())
         let result = try await phone.vouch(for: pad)
         XCTAssertEqual(result.kind, .added, "设置默认允许担保：\(result.reason ?? "")")
         let written = await waitUntil { rig.appServer.peerVouches[padID] != nil && rig.appServer.trustedPeers.count == 2 }
@@ -454,9 +455,10 @@ final class RemoteHostAgentTests: XCTestCase {
         rig.bridge?.settingsChanged()
         // 设置要经 XPC 交过去，期间担保还可能成功：每次换一台新设备问，直到被拒。
         let refused = await waitUntil {
-            let other = RemoteSiblingDevice(id: UUID(), name: "Mac", model: nil, platform: "mac",
-                                            publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
-                                            updatedAt: Date())
+            let other = RemoteGroupDevice(id: UUID(), name: "Mac", model: nil, platform: "mac",
+                                          publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
+                                          signingKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation,
+                                          updatedAt: Date())
             guard let result = try? await phone.vouch(for: other) else { return false }
             return result.kind == .notAllowed
         }
