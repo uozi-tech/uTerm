@@ -13,8 +13,8 @@ nonisolated struct RemoteGroupPendingJoin: Codable, Equatable, Sendable {
     var expectedConfirmation: Data
     /// 开 `done` 里条目的钥匙（`RemoteGroupJoinCrypto.entryKey`）。
     var entryKey: Data
-    /// 认它时记的加入时间（输码时就定下、也封进了入组包，两边一致）。
-    var admittedAt: RemoteGroupTime
+    /// 认它时用的加入信息（输码时就由本机签好、也封进了入组包，两边一致）。
+    var admission: RemoteGroupAdmission
     var submittedAt: Date
 }
 
@@ -29,6 +29,9 @@ nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
     var selfAdmission: RemoteGroupAdmission?
     /// 本机被组里的设备移出了：停止参与、不再写任何记录，直到你重新加入或确认离开。
     var selfRemoved = false
+    /// 本机核对通过、收下了名单，但还没看到任何一台组员签的认本机的 `admit`：在等这台组员（设备 ID）读到
+    /// `done`。在此之前别的设备都还不认本机。
+    var acknowledgementFrom: UUID?
     /// 组员一侧：输过码、在等 Ta 的加入。
     var pendingJoins: [RemoteGroupPendingJoin] = []
     /// 组员一侧：每台新设备最近输过码的时间（限次数用）。
@@ -42,15 +45,24 @@ nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
         removals.first { $0.signingKey == signingKey }?.removedAt
     }
 
-    /// 记下一条移除，只留每把钥匙最晚的那条。返回有没有变。
+    /// 记下一条移除，只留每把钥匙最晚的那条。它当初怎么进的组（`admission`）取最晚那次移除带的；
+    /// 一旦知道就留着，不被后来不带这份信息的移除冲掉。返回有没有变。
     @discardableResult
     mutating func recordRemoval(_ removal: RemoteGroupRemoval) -> Bool {
-        if let index = removals.firstIndex(where: { $0.signingKey == removal.signingKey }) {
-            guard removal.removedAt > removals[index].removedAt else { return false }
-            removals[index] = removal
-        } else {
+        guard let index = removals.firstIndex(where: { $0.signingKey == removal.signingKey }) else {
             removals.append(removal)
+            return true
         }
+        var merged = removals[index]
+        if removal.removedAt > merged.removedAt {
+            merged.removedAt = removal.removedAt
+            merged.deviceID = removal.deviceID
+            merged.admission = removal.admission ?? merged.admission
+        } else if merged.admission == nil {
+            merged.admission = removal.admission
+        }
+        guard merged != removals[index] else { return false }
+        removals[index] = merged
         return true
     }
 

@@ -74,6 +74,9 @@ final class RemoteDeviceGroup {
     private(set) var isSelfRemoved = false
     private(set) var joinState: JoinState?
     private(set) var joinRequests: [JoinRequest] = []
+    /// 本机已经核对通过、收下了名单，但组里还没有设备认本机：在等这台组员读到本机的回执、签下 `admit`。
+    /// 看到本机认的组员签的、认本机的 `admit` 就清掉。界面上显示「正在等「X」确认」。
+    private(set) var awaitingAcknowledgement: RemoteGroupDevice?
     /// 有一次加入在进行（本机在等别的设备的下一步）：轮询该改快。
     private(set) var isAwaitingOthers = false
     /// 写不进名册或本机钥匙串（多半是钥匙串不可用）。
@@ -130,17 +133,24 @@ final class RemoteDeviceGroup {
         let snapshot = roster.load()
         guard var state = loadState() else { return }
         let original = state
-        guard !state.selfRemoved else {
+        // 被移出的设备什么都不写；只有你在它上面点了「加入」，才推进那一次加入。
+        guard !state.selfRemoved || candidate != nil else {
             publish(state, snapshot)
             return
         }
         advanceCandidate(snapshot, &state)
+        guard !state.selfRemoved else {
+            persist(state, from: original)
+            publish(state, snapshot)
+            return
+        }
         state = RemoteGroupMembership.resolve(state, snapshot: snapshot, local: local)
+        if state.acknowledgementFrom != nil, hasAcceptedAdmitOfSelf(snapshot, state) {
+            state.acknowledgementFrom = nil
+        }
         if state.selfRemoved {
             AppLogger.notice("设备组：本机被移出了，停止参与", category: RemoteLog.category)
-            candidate = nil
             sentDone = nil
-            updateJoinState(nil)
             persist(state, from: original)
             publish(state, snapshot)
             return
@@ -161,14 +171,16 @@ final class RemoteDeviceGroup {
 
     /// 补签：本机认的每台组员都要有一条本机签的 `admit`，内容与本机记的一致；不再认的（被移除了、
     /// 或换组前留下的）删掉。补签让添加者后来被移除时，离线过的设备回来也还认它加过的设备。
+    /// 组里的第一台（自己加自己）不补签：名册不收这种 `admit`，组里每台设备进组时就从入组包里认了它。
     private func publishAdmits(_ snapshot: RemoteGroupSnapshot, _ state: RemoteGroupLocalState) {
         let mine = snapshot.admits.filter { $0.signer == local.id && $0.signerKey == local.signingKey }
-        let wanted = Set(state.members.map { RemoteGroupAdmit.account(device: $0.device.id, signer: local.id) })
+        let countersigned = state.members.filter { !$0.admission.isSelfAdmission(of: $0.device.signingKey) }
+        let wanted = Set(countersigned.map { RemoteGroupAdmit.account(device: $0.device.id, signer: local.id) })
         for admit in mine where !wanted.contains(admit.account) {
             roster.delete(account: admit.account)
         }
         let joinedAt = state.selfAdmission?.admittedAt ?? .distantPast
-        for member in state.members {
+        for member in countersigned {
             guard !mine.contains(where: { $0.matches(member) && $0.signedAt >= joinedAt }) else { continue }
             let signedAt = max(RemoteGroupTime(now()), joinedAt)
             do {
@@ -190,10 +202,12 @@ final class RemoteDeviceGroup {
         for member in state.members where ids.contains(member.device.id) {
             let removedAt = max(RemoteGroupTime(now()), member.admission.admittedAt, joinedAt)
             do {
-                let record = try RemoteGroupRemove.make(target: member.device, removedAt: removedAt, signer: local,
-                                                        key: signingKey)
+                let record = try RemoteGroupRemove.make(target: member.device, admission: member.admission,
+                                                        removedAt: removedAt, signer: local, key: signingKey)
                 write(.remove(record))
-                state.recordRemoval(record.removal)
+                state.recordRemoval(RemoteGroupRemoval(deviceID: member.device.id, publicKey: member.device.publicKey,
+                                                       signingKey: member.device.signingKey, removedAt: removedAt,
+                                                       admission: member.admission))
                 roster.delete(account: RemoteGroupAdmit.account(device: member.device.id, signer: local.id))
                 AppLogger.notice("设备组：移除「\(member.device.name)」", category: RemoteLog.category)
             } catch {
@@ -205,14 +219,26 @@ final class RemoteDeviceGroup {
         publish(state, roster.load())
     }
 
-    /// 移除连带：最初由这台设备加进来的组员（只算它直接加的）。移除一台设备时默认一起移除，可以取消勾选。
+    /// 移除连带：由这台设备加进来的组员，连同它们再加进来的，一层层算下去（不经过本机：本机加的设备不连带）。
+    /// 移除一台设备时默认一起移除，可以取消勾选。
+    ///
+    /// 要算到底：只算直接加的，被偷的组员先加一台自己的设备、再由那台去加别的，后加的就不在名单里。
+    /// 链条也经过已经移除的设备（带着加入信息记下的），先加一台、再移除它也断不了链。
+    /// 「是谁加的」带着添加者的签名（`RemoteGroupAdmission`），补签的设备改不了。
     func devicesAdmitted(by id: UUID) -> [RemoteGroupDevice] {
         guard let state = try? store.state() else { return [] }
-        let key = id == local.id ? local.signingKey : state.members.first { $0.device.id == id }?.device.signingKey
-        guard let key else { return [] }
-        return state.members
-            .filter { $0.admission.admitterID == id && $0.admission.admitterKey == key && $0.device.signingKey != key }
-            .map(\.device)
+        let root = id == local.id ? local.signingKey : state.members.first { $0.device.id == id }?.device.signingKey
+        guard let root else { return [] }
+        let edges = state.members.map { (admitter: $0.admission.admitterKey, key: $0.device.signingKey) }
+            + state.removals.compactMap { removal in removal.admission.map { (admitter: $0.admitterKey, key: removal.signingKey) } }
+        var reached: Set<Data> = [root]
+        var frontier = [root]
+        while let next = frontier.popLast() {
+            for edge in edges where edge.admitter == next && edge.key != local.signingKey && reached.insert(edge.key).inserted {
+                frontier.append(edge.key)
+            }
+        }
+        return state.members.filter { $0.device.signingKey != root && reached.contains($0.device.signingKey) }.map(\.device)
     }
 
     /// 离开所在的组（换组、或被移出后确认）：签一条移除自己的 `remove`，删掉本机签过的所有 `admit`，
@@ -234,7 +260,8 @@ final class RemoteDeviceGroup {
     func writeLeave(_ state: RemoteGroupLocalState) {
         let removedAt = max(RemoteGroupTime(now()), state.selfAdmission?.admittedAt ?? .distantPast)
         do {
-            write(.remove(try RemoteGroupRemove.make(target: local, removedAt: removedAt, signer: local, key: signingKey)))
+            write(.remove(try RemoteGroupRemove.make(target: local, admission: state.selfAdmission, removedAt: removedAt,
+                                                     signer: local, key: signingKey)))
             AppLogger.notice("设备组：本机离开原来的组", category: RemoteLog.category)
         } catch {
             fail(error)
@@ -257,9 +284,9 @@ final class RemoteDeviceGroup {
         if candidate == nil, snapshot.joins.contains(where: { $0.device.id == local.id }) {
             roster.delete(account: RemoteGroupJoin.account(local.id))
         }
-        // done：对方已经认了本机（看得到它签的 admit），或者等太久了。
+        // done：组里已经有设备认了本机（看得到它签的 admit），或者等太久了。
         for done in snapshot.dones where done.candidate == local.id && !(sentDone?.sameContent(as: done) ?? false) {
-            if isAcknowledged(done, snapshot: snapshot, state: state)
+            if hasAcceptedAdmitOfSelf(snapshot, state)
                 || now().timeIntervalSince(done.createdAt) > Self.pendingLifetime {
                 roster.delete(account: done.account)
             }
@@ -280,7 +307,12 @@ final class RemoteDeviceGroup {
         let rows = [MemberRow(device: local, isLocal: true, admittedByName: localAdmitter)]
             + state.members
             .sorted { ($0.device.name, $0.device.id.uuidString) < ($1.device.name, $1.device.id.uuidString) }
-            .map { MemberRow(device: $0.device, isLocal: false, admittedByName: names[$0.admission.admitterKey]) }
+            .map { member in
+                // 第一台（自己加自己）没有添加者。
+                let admitter = member.admission.isSelfAdmission(of: member.device.signingKey)
+                    ? nil : names[member.admission.admitterKey]
+                return MemberRow(device: member.device, isLocal: false, admittedByName: admitter)
+            }
         if rows != members { members = rows }
 
         let accepted = Set(state.members.map(\.device.signingKey)).union([local.signingKey])
@@ -294,8 +326,21 @@ final class RemoteDeviceGroup {
         if state.selfRemoved != isSelfRemoved { isSelfRemoved = state.selfRemoved }
         let requests = buildRequests(state, snapshot)
         if requests != joinRequests { joinRequests = requests }
-        let awaiting = !state.selfRemoved && (candidate != nil || sentDone != nil || !state.pendingJoins.isEmpty)
+        let waitingFor = state.acknowledgementFrom.flatMap { id in state.members.first { $0.device.id == id }?.device }
+        if waitingFor != awaitingAcknowledgement { awaitingAcknowledgement = waitingFor }
+        let awaiting = candidate != nil
+            || !state.selfRemoved && (sentDone != nil || waitingFor != nil || !state.pendingJoins.isEmpty)
         if awaiting != isAwaitingOthers { isAwaitingOthers = awaiting }
+    }
+
+    /// 本机认的某台组员签了认本机这一次加入的 `admit`（加入信息与本机记的相同：旧组、上一次加入时留下的不算）。
+    func hasAcceptedAdmitOfSelf(_ snapshot: RemoteGroupSnapshot, _ state: RemoteGroupLocalState) -> Bool {
+        guard let admission = state.selfAdmission else { return false }
+        let signers = RemoteGroupMembership.Signers(state: state, local: local)
+        return snapshot.admits.contains {
+            $0.device.signingKey == local.signingKey && $0.signerKey != local.signingKey && $0.admission == admission
+                && signers.accepts($0.signer, key: $0.signerKey, at: $0.signedAt)
+        }
     }
 
     /// 加入进度只在变了时才写（`@Observable` 每次赋值都会通知界面）。

@@ -26,18 +26,11 @@ extension RemoteDeviceGroup {
 
     // MARK: - 本机是新设备
 
-    /// 「加入」：生成一个数显示出来。本机已经和别的设备同组时先离开原组（只有本机过去，原来的组员不跟着走）；
-    /// 被移出过的从只有自己一台重新开始。
+    /// 「加入」：生成一个数显示出来。本机此刻在哪个组都不动：核对通过的那一刻才离开原组（`adopt`），
+    /// 取消、输错、过期都还留在原组里。
     func startJoin() {
-        guard var state = loadState() else { return }
-        if !state.selfRemoved, !state.members.isEmpty {
-            writeLeave(state)
-        }
-        deleteOwnAdmits(roster.load())
-        state = state.solo()
-        guard persist(state) else { return }
-        sentDone = nil
-        admittedJoins = [:]
+        guard let state = loadState() else { return }
+        if let candidate { roster.delete(account: candidate.join.account) }
         issueCode(burns: 0)
         publish(state, roster.load())
     }
@@ -83,13 +76,14 @@ extension RemoteDeviceGroup {
             return
         }
         if let (package, keys) = verify(answer, session: session) {
-            adopt(package, keys: keys, answer: answer, session: session, state: &state)
+            adopt(package, keys: keys, answer: answer, session: session, snapshot: snapshot, state: &state)
         } else {
             burn(session)
         }
     }
 
-    /// Tb 对、入组包打得开、包里的组员就是喂进 `finish` 的那份 AD 里的那台，才算核对通过。
+    /// Tb 对、入组包打得开、包里的组员就是喂进 `finish` 的那份 AD 里的那台、给本机的加入信息由它签过，
+    /// 才算核对通过。
     private func verify(_ answer: RemoteGroupAnswer,
                         session: CandidateSession) -> (RemoteGroupAdmissionPackage, CPaceKeys)? {
         guard let keys = try? session.cpace.finish(peerShare: answer.share,
@@ -99,14 +93,17 @@ extension RemoteDeviceGroup {
                                                               sid: session.sid, candidate: local.id,
                                                               member: answer.member.id),
               package.member.device.sameKeys(as: answer.member),
+              package.member.admission.isValid(for: package.member.device),
               package.admission.admitterID == answer.member.id,
-              package.admission.admitterKey == answer.member.signingKey else { return nil }
+              package.admission.admitterKey == answer.member.signingKey,
+              package.admission.isValid(for: local) else { return nil }
         return (package, keys)
     }
 
-    /// 核对通过：本机的名单换成入组包里的（含那台组员），回 `done`。
+    /// 核对通过：这时才离开原组（签离开记录、删掉本机签过的所有 `admit`），本机的名单换成入组包里的
+    /// （含那台组员），回 `done`。入组包整份可信（来自核对过的组员），只把签名对不上的条目丢掉。
     private func adopt(_ package: RemoteGroupAdmissionPackage, keys: CPaceKeys, answer: RemoteGroupAnswer,
-                       session: CandidateSession, state: inout RemoteGroupLocalState) {
+                       session: CandidateSession, snapshot: RemoteGroupSnapshot, state: inout RemoteGroupLocalState) {
         let entry: Data
         do {
             entry = try RemoteGroupJoinCrypto.sealEntry(local, key: RemoteGroupJoinCrypto.entryKey(keys), sid: session.sid,
@@ -116,12 +113,18 @@ extension RemoteDeviceGroup {
             burn(session)
             return
         }
+        // 换组：只有本机过去，原来的组员不跟着走。被移出过的组里已经不认本机，不用再签离开。
+        if !state.selfRemoved, !state.members.isEmpty { writeLeave(state) }
+        deleteOwnAdmits(snapshot)
         var adopted = state.solo()
         adopted.selfAdmission = package.admission
-        for removal in package.removals where removal.signingKey != local.signingKey {
+        adopted.acknowledgementFrom = answer.member.id
+        for var removal in package.removals where removal.signingKey != local.signingKey {
+            if !removal.hasValidAdmission { removal.admission = nil }
             adopted.recordRemoval(removal)
         }
         for member in [package.member] + package.others where member.device.hasValidKeys
+            && member.admission.isValid(for: member.device)
             && member.device.signingKey != local.signingKey && adopted.member(signingKey: member.device.signingKey) == nil {
             adopted.members.append(member)
         }
@@ -156,24 +159,16 @@ extension RemoteDeviceGroup {
         updateJoinState(.failed(reason))
     }
 
-    /// 回出去的 `done`：对方认了本机（看得到它签的、针对本机的 admit）或等太久就收起，名册里没了就重写。
+    /// 回出去的 `done`：组里有设备认了本机（看得到它签的、认本机这次加入的 admit）或等太久就收起，
+    /// 名册里没了就重写。
     private func advanceSentDone(_ snapshot: RemoteGroupSnapshot, _ state: RemoteGroupLocalState) {
         guard let done = sentDone else { return }
-        if isAcknowledged(done, snapshot: snapshot, state: state)
+        if hasAcceptedAdmitOfSelf(snapshot, state)
             || now().timeIntervalSince(done.createdAt) > Self.pendingLifetime {
             roster.delete(account: done.account)
             sentDone = nil
         } else if !snapshot.dones.contains(where: { $0.sameContent(as: done) }) {
             write(.done(done))
-        }
-    }
-
-    /// 那台组员已经签了认本机的 admit（签名者按本机记的钥匙认）。
-    func isAcknowledged(_ done: RemoteGroupDone, snapshot: RemoteGroupSnapshot, state: RemoteGroupLocalState) -> Bool {
-        guard let member = state.members.first(where: { $0.device.id == done.member }) else { return false }
-        return snapshot.admits.contains {
-            $0.device.signingKey == local.signingKey && $0.signer == member.device.id
-                && $0.signerKey == member.device.signingKey
         }
     }
 
@@ -213,13 +208,15 @@ extension RemoteDeviceGroup {
                                                       local: local)
         let keys = try cpace.finish(peerShare: join.share, peerAssociatedData: join.device.associatedData)
         let current = RemoteGroupTime(now())
-        // 一直只有自己一台的设备第一次替别人输码：从这一刻起它是组里的第一台。
-        let selfAdmission = state.selfAdmission
-            ?? RemoteGroupAdmission(admitterID: local.id, admitterKey: local.signingKey, admittedAt: current)
+        // 一直只有自己一台的设备第一次替别人输码：从这一刻起它是组里的第一台（自己签自己）。
+        let selfAdmission = try state.selfAdmission
+            ?? RemoteGroupAdmission.make(device: local, admitter: local, admittedAt: current, key: signingKey)
         state.selfAdmission = selfAdmission
         // 重新加入的设备：加入时间要晚于本机记下的、对它的移除，不然一认就又被那条移除去掉了。
         let admittedAt = max(current, state.latestRemoval(of: join.device.signingKey)?.next ?? current)
-        let admission = RemoteGroupAdmission(admitterID: local.id, admitterKey: local.signingKey, admittedAt: admittedAt)
+        // 由本机签：之后谁补签都只能原样带着它，改不了「是谁加的」。
+        let admission = try RemoteGroupAdmission.make(device: join.device, admitter: local, admittedAt: admittedAt,
+                                                      key: signingKey)
         let package = RemoteGroupAdmissionPackage(member: RemoteGroupMember(device: local, admission: selfAdmission),
                                                   others: state.members, removals: state.removals, admission: admission)
         let sealed = try RemoteGroupJoinCrypto.sealPackage(package, key: RemoteGroupJoinCrypto.packageKey(keys), sid: join.sid,
@@ -227,7 +224,7 @@ extension RemoteDeviceGroup {
         let expected = try RemoteGroupJoinCrypto.expectedCandidateConfirmation(keys: keys, sid: join.sid, join: join)
         let entryKey = RemoteGroupJoinCrypto.entryKey(keys).withUnsafeBytes { Data($0) }
         state.pendingJoins.append(RemoteGroupPendingJoin(candidate: join.device, sid: join.sid, expectedConfirmation: expected,
-                                                         entryKey: entryKey, admittedAt: admittedAt, submittedAt: now()))
+                                                         entryKey: entryKey, admission: admission, submittedAt: now()))
         return RemoteGroupAnswer(candidate: join.device.id, sid: join.sid, member: local, share: cpace.publicShare,
                                  confirmation: keys.localConfirmation, package: sealed, createdAt: now())
     }
@@ -261,9 +258,7 @@ extension RemoteDeviceGroup {
             // 别的组员先认了它（读到了它们签的 admit），本机这边就不用等了。
             guard state.member(signingKey: pending.candidate.signingKey) == nil else { continue }
             if let entry = verifiedEntry(pending, snapshot: snapshot) {
-                let admission = RemoteGroupAdmission(admitterID: local.id, admitterKey: local.signingKey,
-                                                     admittedAt: pending.admittedAt)
-                state.members.append(RemoteGroupMember(device: entry, admission: admission))
+                state.members.append(RemoteGroupMember(device: entry, admission: pending.admission))
                 admittedJoins[entry.id] = entry
                 AppLogger.notice("设备组：「\(entry.name)」核对通过，已加入", category: RemoteLog.category)
                 continue

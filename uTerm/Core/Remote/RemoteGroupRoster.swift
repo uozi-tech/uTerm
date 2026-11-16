@@ -124,12 +124,59 @@ nonisolated struct RemoteGroupDevice: Codable, Equatable, Hashable, Sendable, Id
     }
 }
 
-/// 一台组员最初是怎么进组的：谁加的、什么时候。补签 `admit` 时原样带上，移除连带按它找「它加进来的设备」。
+/// 一台组员最初是怎么进组的：谁加的、什么时候，带着添加者本人的签名。补签 `admit` 时原样带上，
+/// 移除连带按它找「它加进来的设备」。
+///
+/// 添加者的签名覆盖被加设备的 ID 与两把钥匙、添加者、加入时间：补签的设备改不了「是谁加的」——
+/// 它只能写成自己手里有私钥的设备，被偷的组员没法把它加的设备记到别的组员名下、躲过移除连带。
 nonisolated struct RemoteGroupAdmission: Codable, Equatable, Hashable, Sendable {
+    static let label = "uTerm device-group original-admission v1"
+
     var admitterID: UUID
     /// 添加者的 Ed25519 公钥。
     var admitterKey: Data
     var admittedAt: RemoteGroupTime
+    /// 添加者用 `admitterKey` 对 `signedBytes(for:)` 的签名。
+    var signature: Data
+
+    /// 添加者签一份。`admitter` 就是被加的设备自己时，是一直只有自己一台的设备记下的「我是第一台」，
+    /// 只在入组包里出现，名册里的 `admit` 不收（见 `RemoteGroupRecord.decode`）。
+    static func make(device: RemoteGroupDevice, admitter: RemoteGroupDevice, admittedAt: RemoteGroupTime,
+                     key: Curve25519.Signing.PrivateKey) throws -> RemoteGroupAdmission {
+        var admission = RemoteGroupAdmission(admitterID: admitter.id, admitterKey: admitter.signingKey,
+                                             admittedAt: admittedAt, signature: Data())
+        admission.signature = try key.signature(for: admission.signedBytes(deviceID: device.id, publicKey: device.publicKey,
+                                                                          signingKey: device.signingKey))
+        return admission
+    }
+
+    func signedBytes(deviceID: UUID, publicKey: Data, signingKey: Data) -> Data {
+        var canonical = RemoteGroupCanonical(label: Self.label)
+        canonical.append(deviceID)
+        canonical.append(publicKey)
+        canonical.append(signingKey)
+        canonical.append(admitterID)
+        canonical.append(admitterKey)
+        canonical.append(admittedAt)
+        return canonical.bytes
+    }
+
+    /// 签名对得上这台设备（ID 与两把钥匙）、这位添加者。添加者是不是本机认得的设备由 `RemoteGroupMembership` 判。
+    func isValid(deviceID: UUID, publicKey: Data, signingKey: Data) -> Bool {
+        guard admitterKey.count == RemoteGroupFormat.keyLength, signature.count == RemoteGroupFormat.signatureLength,
+              let key = try? Curve25519.Signing.PublicKey(rawRepresentation: admitterKey) else { return false }
+        return key.isValidSignature(signature, for: signedBytes(deviceID: deviceID, publicKey: publicKey,
+                                                                signingKey: signingKey))
+    }
+
+    func isValid(for device: RemoteGroupDevice) -> Bool {
+        isValid(deviceID: device.id, publicKey: device.publicKey, signingKey: device.signingKey)
+    }
+
+    /// 被加的设备自己当添加者（第一台）。
+    func isSelfAdmission(of signingKey: Data) -> Bool {
+        admitterKey == signingKey
+    }
 }
 
 /// 本机认的一台组员。
@@ -141,8 +188,19 @@ nonisolated struct RemoteGroupMember: Codable, Equatable, Sendable {
 /// 本机记下的一次移除（按 Ed25519 公钥记，不过期）。
 nonisolated struct RemoteGroupRemoval: Codable, Equatable, Sendable {
     var deviceID: UUID
+    /// X25519 公钥：只为核对 `admission` 的签名（签名覆盖设备的两把钥匙）。
+    var publicKey: Data
     var signingKey: Data
     var removedAt: RemoteGroupTime
+    /// 被移除的设备当初怎么进的组，只在本机确认它当过组员时才有（移除时它在本机的名单里，或者移除记录里
+    /// 带的那份由本机认得的添加者签过）。有它，这台设备才算「认得的添加者」，它加过的设备也才在移除连带的
+    /// 链条上（`RemoteGroupMembership.Signers`、`RemoteDeviceGroup.devicesAdmitted`）。
+    var admission: RemoteGroupAdmission?
+
+    /// 带着的加入信息签名对得上这台设备。
+    var hasValidAdmission: Bool {
+        admission?.isValid(deviceID: deviceID, publicKey: publicKey, signingKey: signingKey) ?? false
+    }
 }
 
 // MARK: - 签名
@@ -183,6 +241,16 @@ nonisolated struct RemoteGroupCanonical {
         append(withUnsafeBytes(of: time.milliseconds.bigEndian) { Data($0) })
     }
 
+    /// 先记有没有，有再记四个字段。
+    mutating func appendOptional(_ admission: RemoteGroupAdmission?) {
+        guard let admission else { return append(Data([0])) }
+        append(Data([1]))
+        append(admission.admitterID)
+        append(admission.admitterKey)
+        append(admission.admittedAt)
+        append(admission.signature)
+    }
+
     mutating func append(_ device: RemoteGroupDevice) {
         append(device.id)
         append(device.name)
@@ -220,6 +288,7 @@ nonisolated struct RemoteGroupAdmit: Codable, Equatable, Sendable {
         canonical.append(admission.admitterID)
         canonical.append(admission.admitterKey)
         canonical.append(admission.admittedAt)
+        canonical.append(admission.signature)
         canonical.append(signer)
         canonical.append(signerKey)
         canonical.append(signedAt)
@@ -258,6 +327,9 @@ nonisolated struct RemoteGroupRemove: Codable, Equatable, Sendable {
     /// 签名者取「现在」、被移除者的加入时间、自己的进组时间里最晚的那个：「移除时间 ≥ 加入时间」才算移除，
     /// 这样即便钟不准、或被移除者的加入时间被（被偷的组员）写到了将来，移除也照样生效。
     var removedAt: RemoteGroupTime
+    /// 被移除的设备当初怎么进的组（做移除的设备本机记的那份，带最初添加者的签名）。没见过这台设备的
+    /// 组员靠它知道「它当过组员、是谁加的」：它加过的设备照样认，移除连带也顺着它找得到。
+    var admission: RemoteGroupAdmission?
     var signer: UUID
     var signerKey: Data
     var signature: Data
@@ -274,16 +346,17 @@ nonisolated struct RemoteGroupRemove: Codable, Equatable, Sendable {
         canonical.append(publicKey)
         canonical.append(signingKey)
         canonical.append(removedAt)
+        canonical.appendOptional(admission)
         canonical.append(signer)
         canonical.append(signerKey)
         return canonical.bytes
     }
 
-    static func make(target: RemoteGroupDevice, removedAt: RemoteGroupTime, signer: RemoteGroupDevice,
-                     key: Curve25519.Signing.PrivateKey) throws -> RemoteGroupRemove {
+    static func make(target: RemoteGroupDevice, admission: RemoteGroupAdmission?, removedAt: RemoteGroupTime,
+                     signer: RemoteGroupDevice, key: Curve25519.Signing.PrivateKey) throws -> RemoteGroupRemove {
         var remove = RemoteGroupRemove(deviceID: target.id, publicKey: target.publicKey, signingKey: target.signingKey,
-                                       removedAt: removedAt, signer: signer.id, signerKey: signer.signingKey,
-                                       signature: Data())
+                                       removedAt: removedAt, admission: admission, signer: signer.id,
+                                       signerKey: signer.signingKey, signature: Data())
         remove.signature = try key.signature(for: remove.signedBytes)
         return remove
     }
@@ -293,8 +366,11 @@ nonisolated struct RemoteGroupRemove: Codable, Equatable, Sendable {
         return key.isValidSignature(signature, for: signedBytes)
     }
 
-    var removal: RemoteGroupRemoval {
-        RemoteGroupRemoval(deviceID: deviceID, signingKey: signingKey, removedAt: removedAt)
+    /// 记录里带的、签名对得上被移除者的那份加入信息。
+    var verifiedAdmission: RemoteGroupAdmission? {
+        guard let admission, admission.isValid(deviceID: deviceID, publicKey: publicKey, signingKey: signingKey)
+        else { return nil }
+        return admission
     }
 }
 
@@ -431,16 +507,20 @@ nonisolated enum RemoteGroupRecord: Equatable, Sendable {
                   done.confirmation.count == RemoteGroupFormat.tagLength, !done.entry.isEmpty else { return nil }
             return .done(done)
         case "admit":
+            // 最初添加者的签名也要对得上；自己加自己（第一台）的不收：它从不需要靠名册进别人的名单，
+            // 收了的话被偷的组员能让它加的设备自称「第一台」、躲过移除连带。
             guard let admit = envelope.admit, admit.device.hasValidKeys,
-                  admit.admission.admitterKey.count == RemoteGroupFormat.keyLength,
                   admit.signerKey.count == RemoteGroupFormat.keyLength,
-                  admit.signature.count == RemoteGroupFormat.signatureLength, admit.hasValidSignature else { return nil }
+                  admit.signature.count == RemoteGroupFormat.signatureLength, admit.hasValidSignature,
+                  admit.admission.isValid(for: admit.device), !admit.admission.isSelfAdmission(of: admit.device.signingKey)
+            else { return nil }
             return .admit(admit)
         case "remove":
             guard let remove = envelope.remove, remove.publicKey.count == RemoteGroupFormat.keyLength,
                   remove.signingKey.count == RemoteGroupFormat.keyLength,
                   remove.signerKey.count == RemoteGroupFormat.keyLength,
-                  remove.signature.count == RemoteGroupFormat.signatureLength, remove.hasValidSignature else { return nil }
+                  remove.signature.count == RemoteGroupFormat.signatureLength, remove.hasValidSignature,
+                  remove.admission == nil || remove.verifiedAdmission != nil else { return nil }
             return .remove(remove)
         default:
             return nil

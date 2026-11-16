@@ -6,16 +6,22 @@ import XCTest
 /// 设备组名册的记录格式、签名、加入用的 CPace 参数与封包、组员名单算法。整套流程与攻击场景见 `RemoteDeviceGroupTests`。
 final class RemoteGroupRosterTests: XCTestCase {
     private let clock = Date(timeIntervalSince1970: 1_800_000_000)
+    /// 每台测试设备的签名私钥（按公钥找），给它签加入信息用。
+    private var signingKeys: [Data: Curve25519.Signing.PrivateKey] = [:]
 
     private func device(_ name: String, signing: Curve25519.Signing.PrivateKey = .init()) -> RemoteGroupDevice {
-        RemoteGroupDevice(id: UUID(), name: name, model: "iPhone 16 Pro", platform: RemoteDevicePlatform.mobile.rawValue,
-                          publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
-                          signingKey: signing.publicKey.rawRepresentation, updatedAt: clock)
+        signingKeys[signing.publicKey.rawRepresentation] = signing
+        return RemoteGroupDevice(id: UUID(), name: name, model: "iPhone 16 Pro", platform: RemoteDevicePlatform.mobile.rawValue,
+                                 publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
+                                 signingKey: signing.publicKey.rawRepresentation, updatedAt: clock)
     }
 
-    private func admission(by admitter: RemoteGroupDevice, at seconds: TimeInterval = 0) -> RemoteGroupAdmission {
-        RemoteGroupAdmission(admitterID: admitter.id, admitterKey: admitter.signingKey,
-                             admittedAt: RemoteGroupTime(clock.addingTimeInterval(seconds)))
+    /// `admitter` 签的、`device` 的加入信息。
+    private func admission(of device: RemoteGroupDevice, by admitter: RemoteGroupDevice,
+                           at seconds: TimeInterval = 0) -> RemoteGroupAdmission {
+        try! RemoteGroupAdmission.make(device: device, admitter: admitter,
+                                       admittedAt: RemoteGroupTime(clock.addingTimeInterval(seconds)),
+                                       key: signingKeys[admitter.signingKey]!)
     }
 
     private func roundTrip(_ record: RemoteGroupRecord) throws -> RemoteGroupRecord? {
@@ -52,9 +58,10 @@ final class RemoteGroupRosterTests: XCTestCase {
                                        confirmation: Data(repeating: 4, count: 64), package: Data([5]), createdAt: clock)
         let done = RemoteGroupDone(candidate: phone.id, member: signer.id, sid: join.sid,
                                    confirmation: Data(repeating: 6, count: 64), entry: Data([7]), createdAt: clock)
-        let admit = try RemoteGroupAdmit.make(device: phone, admission: admission(by: signer), signer: signer,
+        let admit = try RemoteGroupAdmit.make(device: phone, admission: admission(of: phone, by: signer), signer: signer,
                                               signedAt: RemoteGroupTime(clock), key: key)
-        let remove = try RemoteGroupRemove.make(target: phone, removedAt: RemoteGroupTime(clock), signer: signer, key: key)
+        let remove = try RemoteGroupRemove.make(target: phone, admission: admission(of: phone, by: signer),
+                                                removedAt: RemoteGroupTime(clock), signer: signer, key: key)
         for record in [RemoteGroupRecord.device(phone), .join(join), .answer(answer), .done(done), .admit(admit), .remove(remove)] {
             XCTAssertEqual(try roundTrip(record), record)
         }
@@ -104,7 +111,8 @@ final class RemoteGroupRosterTests: XCTestCase {
     func test_admit_signature_covers_every_field() throws {
         let key = Curve25519.Signing.PrivateKey()
         let signer = device("Mac", signing: key)
-        let admit = try RemoteGroupAdmit.make(device: device("iPhone"), admission: admission(by: signer), signer: signer,
+        let phone = device("iPhone")
+        let admit = try RemoteGroupAdmit.make(device: phone, admission: admission(of: phone, by: signer), signer: signer,
                                               signedAt: RemoteGroupTime(clock), key: key)
         XCTAssertTrue(admit.hasValidSignature)
         let other = device("Other")
@@ -122,6 +130,7 @@ final class RemoteGroupRosterTests: XCTestCase {
             ("加入时间", { $0.admission.admittedAt = $0.admission.admittedAt.next }),
             ("签名者", { $0.signer = other.id }),
             ("签名时间", { $0.signedAt = $0.signedAt.next }),
+            ("最初添加者的签名", { $0.admission.signature = Data(repeating: 9, count: 64) }),
         ]
         for (field, tamper) in tampers {
             var forged = admit
@@ -137,8 +146,9 @@ final class RemoteGroupRosterTests: XCTestCase {
     func test_remove_signature_covers_every_field() throws {
         let key = Curve25519.Signing.PrivateKey()
         let signer = device("Mac", signing: key)
-        let remove = try RemoteGroupRemove.make(target: device("iPhone"), removedAt: RemoteGroupTime(clock), signer: signer,
-                                                key: key)
+        let phone = device("iPhone")
+        let remove = try RemoteGroupRemove.make(target: phone, admission: admission(of: phone, by: signer),
+                                                removedAt: RemoteGroupTime(clock), signer: signer, key: key)
         XCTAssertTrue(remove.hasValidSignature)
         let other = device("Other")
         let tampers: [(String, (inout RemoteGroupRemove) -> Void)] = [
@@ -148,6 +158,7 @@ final class RemoteGroupRosterTests: XCTestCase {
             ("时间", { $0.removedAt = $0.removedAt.next }),
             ("签名者", { $0.signer = other.id }),
             ("签名者钥匙", { $0.signerKey = other.signingKey }),
+            ("带的加入信息", { $0.admission = nil }),
         ]
         for (field, tamper) in tampers {
             var forged = remove
@@ -160,8 +171,9 @@ final class RemoteGroupRosterTests: XCTestCase {
         let key = Curve25519.Signing.PrivateKey()
         let signer = device("Mac", signing: key)
         let target = device("iPhone")
-        let remove = try RemoteGroupRemove.make(target: target, removedAt: RemoteGroupTime(clock), signer: signer, key: key)
-        var admit = try RemoteGroupAdmit.make(device: target, admission: admission(by: signer), signer: signer,
+        let remove = try RemoteGroupRemove.make(target: target, admission: nil, removedAt: RemoteGroupTime(clock),
+                                                signer: signer, key: key)
+        var admit = try RemoteGroupAdmit.make(device: target, admission: admission(of: target, by: signer), signer: signer,
                                               signedAt: RemoteGroupTime(clock), key: key)
         admit.signature = remove.signature
         XCTAssertFalse(admit.hasValidSignature, "remove 的签名搬不到 admit 上")
@@ -179,7 +191,7 @@ final class RemoteGroupRosterTests: XCTestCase {
         b.append("bc")
         XCTAssertNotEqual(a.bytes, b.bytes, "每段带长度前缀，换个切法拼不出同样的字节")
         var none = RemoteGroupCanonical(label: "x")
-        none.appendOptional(nil)
+        none.appendOptional(String?.none)
         var empty = RemoteGroupCanonical(label: "x")
         empty.appendOptional("")
         XCTAssertNotEqual(none.bytes, empty.bytes, "nil 与空串分得开")
@@ -190,7 +202,7 @@ final class RemoteGroupRosterTests: XCTestCase {
         let signer = device("Mac", signing: key)
         var odd = device("iPhone")
         odd.updatedAt = Date(timeIntervalSince1970: 1_800_000_000.123_456_789)
-        let admit = try RemoteGroupAdmit.make(device: odd, admission: admission(by: signer), signer: signer,
+        let admit = try RemoteGroupAdmit.make(device: odd, admission: admission(of: odd, by: signer), signer: signer,
                                               signedAt: RemoteGroupTime(clock), key: key)
         guard case .admit(let decoded) = try XCTUnwrap(try roundTrip(.admit(admit))) else { return XCTFail() }
         XCTAssertTrue(decoded.hasValidSignature)
@@ -251,8 +263,9 @@ final class RemoteGroupRosterTests: XCTestCase {
         let a = try RemoteGroupJoinCrypto.session(.initiator, code: "111111", candidate: candidate.id, sid: sid, local: candidate)
         let b = try RemoteGroupJoinCrypto.session(.responder, code: "111111", candidate: candidate.id, sid: sid, local: member)
         let keys = try b.finish(peerShare: a.publicShare, peerAssociatedData: candidate.associatedData)
-        let package = RemoteGroupAdmissionPackage(member: RemoteGroupMember(device: member, admission: admission(by: member)),
-                                                  others: [], removals: [], admission: admission(by: member, at: 1))
+        let package = RemoteGroupAdmissionPackage(
+            member: RemoteGroupMember(device: member, admission: admission(of: member, by: member)),
+            others: [], removals: [], admission: admission(of: candidate, by: member, at: 1))
         let key = RemoteGroupJoinCrypto.packageKey(keys)
         let sealed = try RemoteGroupJoinCrypto.sealPackage(package, key: key, sid: sid, candidate: candidate.id, member: member.id)
         XCTAssertEqual(RemoteGroupJoinCrypto.openPackage(sealed, key: key, sid: sid, candidate: candidate.id, member: member.id),
@@ -274,12 +287,13 @@ final class RemoteGroupRosterTests: XCTestCase {
         let a = device("A", signing: keys[1]), b = device("B", signing: keys[2]), c = device("C", signing: keys[3])
         let t = RemoteGroupTime(clock)
         var state = RemoteGroupLocalState()
-        state.selfAdmission = RemoteGroupAdmission(admitterID: local.id, admitterKey: local.signingKey, admittedAt: t)
-        state.members = [RemoteGroupMember(device: a, admission: admission(by: local))]
-        let admitB = try RemoteGroupAdmit.make(device: b, admission: admission(by: a, at: 1), signer: a, signedAt: t, key: keys[1])
-        let admitC = try RemoteGroupAdmit.make(device: c, admission: admission(by: b, at: 2), signer: b,
+        state.selfAdmission = admission(of: local, by: local)
+        state.members = [RemoteGroupMember(device: a, admission: admission(of: a, by: local))]
+        let admitB = try RemoteGroupAdmit.make(device: b, admission: admission(of: b, by: a, at: 1), signer: a, signedAt: t,
+                                               key: keys[1])
+        let admitC = try RemoteGroupAdmit.make(device: c, admission: admission(of: c, by: b, at: 2), signer: b,
                                                signedAt: RemoteGroupTime(clock.addingTimeInterval(2)), key: keys[2])
-        let removeA = try RemoteGroupRemove.make(target: a, removedAt: RemoteGroupTime(clock.addingTimeInterval(5)), signer: b,
+        let removeA = try RemoteGroupRemove.make(target: a, admission: nil, removedAt: RemoteGroupTime(clock.addingTimeInterval(5)), signer: b,
                                                  key: keys[2])
         let orders: [[Int]] = [[0, 1], [1, 0]]
         var results: [Set<String>] = []
@@ -299,17 +313,80 @@ final class RemoteGroupRosterTests: XCTestCase {
         let localKey = Curve25519.Signing.PrivateKey(), aKey = Curve25519.Signing.PrivateKey()
         let local = device("Local", signing: localKey), a = device("A", signing: aKey), x = device("X")
         var state = RemoteGroupLocalState()
-        state.selfAdmission = admission(by: local)
-        state.members = [RemoteGroupMember(device: a, admission: admission(by: local, at: 100))]
-        let early = try RemoteGroupAdmit.make(device: x, admission: admission(by: a, at: 50), signer: a,
+        state.selfAdmission = admission(of: local, by: local)
+        state.members = [RemoteGroupMember(device: a, admission: admission(of: a, by: local, at: 100))]
+        let early = try RemoteGroupAdmit.make(device: x, admission: admission(of: x, by: a, at: 50), signer: a,
                                               signedAt: RemoteGroupTime(clock.addingTimeInterval(50)), key: aKey)
         var snapshot = RemoteGroupSnapshot(admits: [early])
         XCTAssertTrue(RemoteGroupMembership.resolve(state, snapshot: snapshot, local: local).members.count == 1,
                       "A 进组之前签的 admit 不算")
-        let late = try RemoteGroupAdmit.make(device: x, admission: admission(by: a, at: 50), signer: a,
+        let late = try RemoteGroupAdmit.make(device: x, admission: admission(of: x, by: a, at: 50), signer: a,
                                              signedAt: RemoteGroupTime(clock.addingTimeInterval(100)), key: aKey)
         snapshot.admits = [late]
         XCTAssertEqual(RemoteGroupMembership.resolve(state, snapshot: snapshot, local: local).members.count, 2)
+    }
+
+    // MARK: - 最初添加者
+
+    func test_original_admission_signature_binds_device_admitter_and_time() {
+        let mac = device("Mac"), phone = device("iPhone"), other = device("Other")
+        let signed = admission(of: phone, by: mac)
+        XCTAssertTrue(signed.isValid(for: phone))
+        XCTAssertFalse(signed.isValid(for: other), "搬不到别的设备上")
+        var later = signed
+        later.admittedAt = later.admittedAt.next
+        XCTAssertFalse(later.isValid(for: phone), "改不了加入时间")
+        var renamed = signed
+        renamed.admitterID = other.id
+        renamed.admitterKey = other.signingKey
+        XCTAssertFalse(renamed.isValid(for: phone), "改成别的添加者，签名就对不上那把钥匙")
+        var rekeyed = phone
+        rekeyed.publicKey = other.publicKey
+        XCTAssertFalse(signed.isValid(for: rekeyed), "签名也覆盖 X25519")
+    }
+
+    func test_admit_is_dropped_unless_the_named_admitter_signed_it() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let thief = device("S", signing: key), honest = device("A"), x = device("X")
+        // 被偷的组员想把它加的设备记到 A 名下：A 的签名它做不出来，用自己的钥匙签就对不上 A。
+        var forged = try RemoteGroupAdmission.make(device: x, admitter: thief, admittedAt: RemoteGroupTime(clock), key: key)
+        forged.admitterID = honest.id
+        forged.admitterKey = honest.signingKey
+        let admit = try RemoteGroupAdmit.make(device: x, admission: forged, signer: thief, signedAt: RemoteGroupTime(clock),
+                                              key: key)
+        XCTAssertTrue(admit.hasValidSignature, "补签本身是对的")
+        XCTAssertNil(try roundTrip(.admit(admit)), "最初添加者的签名对不上，整条不收")
+        // 让它自称「第一台」也不收。
+        let selfAdmitted = try RemoteGroupAdmit.make(device: x, admission: admission(of: x, by: x), signer: thief,
+                                                     signedAt: RemoteGroupTime(clock), key: key)
+        XCTAssertNil(try roundTrip(.admit(selfAdmitted)), "名册里不收自己加自己的 admit")
+        let honestAdmit = try RemoteGroupAdmit.make(device: x, admission: admission(of: x, by: thief), signer: thief,
+                                                    signedAt: RemoteGroupTime(clock), key: key)
+        XCTAssertNotNil(try roundTrip(.admit(honestAdmit)), "如实写成自己加的照收")
+    }
+
+    func test_admit_naming_an_admitter_the_verifier_never_knew_is_ignored() throws {
+        let localKey = Curve25519.Signing.PrivateKey(), sKey = Curve25519.Signing.PrivateKey()
+        let local = device("Local", signing: localKey), s = device("S", signing: sKey)
+        let fresh = device("K"), x = device("X")
+        var state = RemoteGroupLocalState()
+        state.selfAdmission = admission(of: local, by: local)
+        state.members = [RemoteGroupMember(device: s, admission: admission(of: s, by: local))]
+        let viaFresh = try RemoteGroupAdmit.make(device: x, admission: admission(of: x, by: fresh), signer: s,
+                                                 signedAt: RemoteGroupTime(clock), key: sKey)
+        var snapshot = RemoteGroupSnapshot(admits: [viaFresh])
+        XCTAssertEqual(RemoteGroupMembership.resolve(state, snapshot: snapshot, local: local).members.count, 1,
+                       "现造的钥匙不是认得的添加者")
+        // 自己加自己的「第一台」记在移除记录里也不算认得：只有当过它组员的设备才知道是真的。
+        snapshot.removes = [try RemoteGroupRemove.make(target: fresh, admission: admission(of: fresh, by: fresh),
+                                                       removedAt: RemoteGroupTime(clock), signer: s, key: sKey)]
+        XCTAssertEqual(RemoteGroupMembership.resolve(state, snapshot: snapshot, local: local).members.count, 1)
+        // 移除记录里带着「由 S 加的」：认得了，但它连同 X 都在 S 的移除连带链条上（见 RemoteDeviceGroupTests）。
+        snapshot.removes = [try RemoteGroupRemove.make(target: fresh, admission: admission(of: fresh, by: s),
+                                                       removedAt: RemoteGroupTime(clock), signer: s, key: sKey)]
+        let resolved = RemoteGroupMembership.resolve(state, snapshot: snapshot, local: local)
+        XCTAssertEqual(Set(resolved.members.map(\.device.name)), ["S", "X"])
+        XCTAssertEqual(resolved.removals.first?.admission?.admitterKey, s.signingKey)
     }
 
     // MARK: - 本机存储

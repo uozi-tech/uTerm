@@ -111,9 +111,11 @@ final class RemoteDeviceGroupTests: XCTestCase {
         let cpace = try RemoteGroupJoinCrypto.session(.responder, code: guess, candidate: join.device.id, sid: join.sid,
                                                       local: attacker.device)
         let keys = try cpace.finish(peerShare: join.share, peerAssociatedData: join.device.associatedData)
-        let admission = RemoteGroupAdmission(admitterID: attacker.device.id, admitterKey: attacker.device.signingKey,
-                                             admittedAt: RemoteGroupTime(clock))
-        let package = RemoteGroupAdmissionPackage(member: RemoteGroupMember(device: attacker.device, admission: admission),
+        let selfAdmission = try RemoteGroupAdmission.make(device: attacker.device, admitter: attacker.device,
+                                                          admittedAt: RemoteGroupTime(clock), key: attacker.signing)
+        let admission = try RemoteGroupAdmission.make(device: join.device, admitter: attacker.device,
+                                                      admittedAt: RemoteGroupTime(clock), key: attacker.signing)
+        let package = RemoteGroupAdmissionPackage(member: RemoteGroupMember(device: attacker.device, admission: selfAdmission),
                                                   others: [], removals: [], admission: admission)
         let sealed = try RemoteGroupJoinCrypto.sealPackage(package, key: RemoteGroupJoinCrypto.packageKey(keys), sid: join.sid,
                                                            candidate: join.device.id, member: attacker.device.id)
@@ -248,47 +250,225 @@ final class RemoteDeviceGroupTests: XCTestCase {
         XCTAssertEqual(admits(of: phone.local.signingKey).map(\.signer), [mac.local.id])
     }
 
-    func test_cascade_helper_lists_exactly_the_devices_a_device_added() {
-        let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C"), d = makeDevice("D")
+    func test_cascade_helper_lists_exactly_the_devices_a_device_added_directly_or_through_them() {
+        let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C"), d = makeDevice("D"), e = makeDevice("E")
         join(b, via: a)
         join(c, via: a)
         join(d, via: b)
-        refresh(a, b, c, d, a, b, c, d)
-        XCTAssertEqual(Set(a.devicesAdmitted(by: a.local.id).map(\.name)), ["B", "C"])
+        join(e, via: c)
+        refresh(a, b, c, d, e, a, b, c, d, e)
+        XCTAssertEqual(Set(b.devicesAdmitted(by: a.local.id).map(\.name)), ["C", "E"],
+                       "A 加的 B、C，C 加的 E；B 是本机，链条不经过本机（本机加的 D 不连带）")
+        XCTAssertEqual(Set(e.devicesAdmitted(by: a.local.id).map(\.name)), ["B", "C", "D"])
         XCTAssertEqual(Set(a.devicesAdmitted(by: b.local.id).map(\.name)), ["D"])
         XCTAssertEqual(Set(c.devicesAdmitted(by: b.local.id).map(\.name)), ["D"], "别的组员上也知道是谁加的")
-        XCTAssertEqual(Set(d.devicesAdmitted(by: a.local.id).map(\.name)), ["B", "C"])
-        XCTAssertTrue(a.devicesAdmitted(by: c.local.id).isEmpty)
+        XCTAssertEqual(Set(a.devicesAdmitted(by: c.local.id).map(\.name)), ["E"])
+        XCTAssertTrue(a.devicesAdmitted(by: d.local.id).isEmpty)
         XCTAssertTrue(a.devicesAdmitted(by: UUID()).isEmpty)
+        XCTAssertEqual(Set(a.devicesAdmitted(by: a.local.id).map(\.name)), ["B", "C", "D", "E"])
+        XCTAssertEqual(Set(e.members.filter { !$0.isLocal }.compactMap(\.admittedByName)), ["A", "B"],
+                       "第一台 A 没有添加者；B、C 由 A 加，D 由 B 加")
+        // 组里的第一台自己加自己，不补签（名册不收这种 admit），各台从入组包里认它。
+        XCTAssertTrue(admits(of: a.local.signingKey).isEmpty)
+        XCTAssertEqual(names(e), ["A", "B", "C", "D"])
+    }
+
+    // MARK: - 最初添加者
+
+    /// 被偷的组员 S：手里只有自己的私钥（和它自己加进来的设备的私钥），想让它加的设备躲过移除连带。
+    func test_admitter_named_in_a_countersign_must_have_signed_the_admission() throws {
+        let a = makeDevice("A"), b = makeDevice("B"), s = makeDevice("S"), d = makeDevice("D")
+        join(b, via: a)
+        join(s, via: a)
+        refresh(b, s, a)
+        let x = Attacker(name: "X", at: clock)
+        let t = RemoteGroupTime(clock)
+        // 记到 A 名下：A 的签名做不出来，用自己的钥匙签、再改名字成 A。
+        var claimed = try RemoteGroupAdmission.make(device: x.device, admitter: s.local, admittedAt: t, key: s.signingKey)
+        claimed.admitterID = a.local.id
+        claimed.admitterKey = a.local.signingKey
+        try save(.admit(try RemoteGroupAdmit.make(device: x.device, admission: claimed, signer: s.local, signedAt: t,
+                                                  key: s.signingKey)))
+        // 让 X 自称「第一台」。
+        try save(.admit(try RemoteGroupAdmit.make(device: x.device, admission: try RemoteGroupAdmission.make(
+            device: x.device, admitter: x.device, admittedAt: t, key: x.signing), signer: s.local, signedAt: t,
+                                                  key: s.signingKey)), account: "admit.self")
+        // 记到一把现造的钥匙名下（那把钥匙签得出来，但谁都不认得它）。
+        let fresh = Attacker(name: "K", at: clock)
+        try save(.admit(try RemoteGroupAdmit.make(device: x.device, admission: try RemoteGroupAdmission.make(
+            device: x.device, admitter: fresh.device, admittedAt: t, key: fresh.signing), signer: s.local, signedAt: t,
+                                                  key: s.signingKey)), account: "admit.fresh")
+        refresh(a, b)
+        XCTAssertFalse(names(a).contains("X"), "三种都不认")
+        XCTAssertFalse(names(b).contains("X"))
+
+        // 补签时把一台已有组员改记到别人名下：补签的签名是 S 的，最初添加者的签名还是 A 的那份，改了就对不上。
+        join(d, via: a)
+        let original = try XCTUnwrap(roster.load().admits.first { $0.signer == a.local.id && $0.device.id == d.local.id })
+        var reattributed = original
+        reattributed.admission.admitterID = b.local.id
+        reattributed.admission.admitterKey = b.local.signingKey
+        let resigned = try RemoteGroupAdmit.make(device: d.local, admission: reattributed.admission, signer: s.local,
+                                                 signedAt: RemoteGroupTime(clock), key: s.signingKey)
+        try save(.admit(resigned), account: "admit.reattributed")
+        refresh(b, s)
+        XCTAssertEqual(Set(b.devicesAdmitted(by: a.local.id).map(\.name)), ["D", "S"], "仍然报真正的添加者")
+        XCTAssertTrue(b.devicesAdmitted(by: b.local.id).isEmpty)
+    }
+
+    func test_stolen_member_cannot_hide_its_devices_from_the_cascade() throws {
+        let a = makeDevice("A"), b = makeDevice("B"), s = makeDevice("S")
+        join(b, via: a)
+        join(s, via: a)
+        refresh(b, s, a)
+        let t = RemoteGroupTime(clock)
+        // S 加了自己的 Y（只能如实记成 S 加的），再让 Y 去加 X。
+        let y = Attacker(name: "Y", at: clock), x = Attacker(name: "X", at: clock)
+        try save(.admit(try RemoteGroupAdmit.make(device: y.device, admission: try RemoteGroupAdmission.make(
+            device: y.device, admitter: s.local, admittedAt: t, key: s.signingKey), signer: s.local, signedAt: t,
+                                                  key: s.signingKey)))
+        try save(.admit(try RemoteGroupAdmit.make(device: x.device, admission: try RemoteGroupAdmission.make(
+            device: x.device, admitter: y.device, admittedAt: t.next, key: y.signing), signer: y.device, signedAt: t.next,
+                                                  key: y.signing)))
+        // 再造一把 K：记成 S 加的、马上移除它，然后让 K 去加 Z，想把链条从中间断开。
+        let k = Attacker(name: "K", at: clock), z = Attacker(name: "Z", at: clock)
+        tick()
+        let later = RemoteGroupTime(clock)
+        try save(.remove(try RemoteGroupRemove.make(target: k.device, admission: try RemoteGroupAdmission.make(
+            device: k.device, admitter: s.local, admittedAt: later, key: s.signingKey), removedAt: later, signer: s.local,
+                                                    key: s.signingKey)))
+        try save(.admit(try RemoteGroupAdmit.make(device: z.device, admission: try RemoteGroupAdmission.make(
+            device: z.device, admitter: k.device, admittedAt: later.next, key: k.signing), signer: s.local,
+                                                  signedAt: later.next, key: s.signingKey)))
+        refresh(a, b, a)
+        XCTAssertEqual(names(a), ["B", "S", "X", "Y", "Z"], "移除之前，被偷的组员能加设备（方案接受）")
+        XCTAssertEqual(Set(a.devicesAdmitted(by: s.local.id).map(\.name)), ["X", "Y", "Z"], "一个都躲不掉")
+        XCTAssertEqual(Set(b.devicesAdmitted(by: s.local.id).map(\.name)), ["X", "Y", "Z"])
+        a.remove([s.local.id] + a.devicesAdmitted(by: s.local.id).map(\.id))
+        refresh(b)
+        XCTAssertEqual(names(a), ["B"])
+        XCTAssertEqual(names(b), ["A"])
+    }
+
+    /// 离线的组员从没见过添加者：A 加入、加了 B、又被移除，全在它离线的时候。移除记录里带着 A 的加入信息，
+    /// 它照样认 B，也知道 B 是 A 加的。
+    func test_offline_member_that_never_saw_the_admitter_still_accepts_its_devices() {
+        let y = makeDevice("Y"), v = makeDevice("V"), a = makeDevice("A"), b = makeDevice("B")
+        join(v, via: y)
+        refresh(y, v)
+        join(a, via: y)
+        join(b, via: a)
+        refresh(y)
+        y.remove([a.local.id])
+        XCTAssertEqual(names(y), ["B", "V"])
+        refresh(v)
+        XCTAssertEqual(names(v), ["B", "Y"])
+        XCTAssertEqual(v.members.first { $0.device.name == "B" }?.admittedByName, nil, "A 已不在名单里，名字报不出")
+        XCTAssertEqual(Set(y.devicesAdmitted(by: y.local.id).map(\.name)), ["B", "V"], "经过已移除的 A 也连得上")
+        XCTAssertEqual(Set(v.devicesAdmitted(by: y.local.id).map(\.name)), ["B"])
     }
 
     func test_switching_groups_takes_no_old_member_along_even_with_replayed_countersigns() throws {
-        let a = makeDevice("A"), b = makeDevice("B"), z = makeDevice("Z")
+        let a = makeDevice("A"), b = makeDevice("B"), z = makeDevice("Z"), w = makeDevice("W")
         join(b, via: a)
-        join(z, via: a)
-        refresh(b, z, a, b)
+        // Z、W 都是 B 加的：B 换组后新组认 B，B 当年签的「由 B 添加」在新组里添加者是认得的。
+        join(z, via: b)
+        join(w, via: b)
+        refresh(a, z, w, b, a)
         let oldCountersigns = roster.load().admits.filter { $0.signer == b.local.id }
-        XCTAssertEqual(Set(oldCountersigns.map(\.device.name)), ["A", "Z"])
+        XCTAssertEqual(Set(oldCountersigns.map(\.device.name)), ["W", "Z"], "第一台 A 不补签")
         // Z 丢了，被移除；B 跟着删了自己给 Z 签的那条。
         a.remove([z.local.id])
-        refresh(b)
-        XCTAssertEqual(names(b), ["A"])
+        refresh(b, w)
+        XCTAssertEqual(names(b), ["A", "W"])
 
         let c = makeDevice("C"), d = makeDevice("D")
         join(d, via: c)
-        // B 换到 C、D 的组：先离开原组，原来的组员不跟过去。
-        join(b, via: c)
-        refresh(d, a, b, c, d)
+        // B 换到 C、D 的组。点「加入」时还在原组里，核对通过的那一刻才离开，原来的组员不跟过去。
+        tick()
+        b.startJoin()
+        refresh(a, w)
+        XCTAssertTrue(names(a).contains("B"), "还没核对通过，原组照常认它")
+        refresh(c)
+        XCTAssertTrue(c.submitCode(shownCode(b), for: b.local.id))
+        refresh(b, c, b)
+        XCTAssertEqual(b.joinState, .joined)
+        refresh(d, a, w, b, c, d)
         XCTAssertEqual(names(b), ["C", "D"])
         XCTAssertEqual(names(c), ["B", "D"])
         XCTAssertEqual(names(d), ["B", "C"])
-        XCTAssertEqual(names(a), [], "B 离开了 A 的组")
+        XCTAssertEqual(names(a), ["W"], "B 离开了 A 的组")
+        XCTAssertEqual(names(w), ["A"])
+        XCTAssertTrue(roster.load().admits.filter { $0.signer == b.local.id }.allSatisfy { ["C", "D"].contains($0.device.name) },
+                      "B 在旧组签的 admit 都删了")
 
-        // 冒充者把 B 当年在旧组签的 admit 写回来：新组认 B，但只认 B 进组之后签的。
+        // 冒充者把 B 当年在旧组签的 admit 写回来：新组认 B、也认得「由 B 添加」，但只认 B 进组之后签的。
         for admit in oldCountersigns { try save(.admit(admit)) }
         refresh(c, d)
-        XCTAssertEqual(names(c), ["B", "D"], "已经移除的 Z 不能借旧签名进新组")
+        XCTAssertEqual(names(c), ["B", "D"], "已经移除的 Z、旧组的 W 都不能借旧签名进新组")
         XCTAssertEqual(names(d), ["B", "C"])
+    }
+
+    // MARK: - 换组的时机、等回执
+
+    func test_cancelled_or_failed_join_leaves_the_old_group_untouched() {
+        let a = makeDevice("A"), b = makeDevice("B"), other = makeDevice("Other")
+        join(b, via: a)
+        refresh(a, b)
+        b.startJoin()
+        refresh(other, a, b)
+        b.cancelJoin()
+        refresh(a, b)
+        XCTAssertEqual(names(a), ["B"])
+        XCTAssertEqual(names(b), ["A"])
+        XCTAssertTrue(roster.load().removes.isEmpty, "取消了，没签离开记录")
+
+        // 输错三次、过期，都一样。
+        b.startJoin()
+        for _ in 0..<RemoteDeviceGroup.codeAttempts {
+            refresh(other)
+            XCTAssertTrue(other.submitCode(wrongGuess(shownCode(b)), for: b.local.id))
+            refresh(b)
+        }
+        guard case .failed = b.joinState else { return XCTFail("\(String(describing: b.joinState))") }
+        b.startJoin()
+        tick(RemoteDeviceGroup.codeLifetime + 1)
+        refresh(b, a, b)
+        guard case .failed = b.joinState else { return XCTFail("\(String(describing: b.joinState))") }
+        XCTAssertEqual(names(a), ["B"])
+        XCTAssertEqual(names(b), ["A"])
+        XCTAssertTrue(roster.load().removes.isEmpty)
+        XCTAssertEqual(Set(admits(of: a.local.signingKey).map(\.signer)), [], "第一台不补签")
+        XCTAssertEqual(admits(of: b.local.signingKey).map(\.signer), [a.local.id], "A 签的 admit 还在")
+    }
+
+    func test_new_device_shows_whom_it_is_waiting_for_until_its_admit_arrives() {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        phone.startJoin()
+        refresh(mac)
+        XCTAssertTrue(mac.submitCode(shownCode(phone), for: phone.local.id))
+        refresh(phone)
+        XCTAssertEqual(phone.joinState, .joined)
+        XCTAssertEqual(phone.awaitingAcknowledgement?.id, mac.local.id, "收下了名单，组里还没有设备认本机")
+        XCTAssertTrue(phone.isAwaitingOthers)
+        // App 重启后照样知道在等谁。
+        let restarted = restart(phone)
+        refresh(restarted)
+        XCTAssertEqual(restarted.awaitingAcknowledgement?.id, mac.local.id)
+
+        // 冒充者写一条认 iPhone 的 admit：签名者它不认，不算。
+        let attacker = Attacker(name: "Mac", at: clock)
+        let admission = try! RemoteGroupAdmission.make(device: phone.local, admitter: attacker.device,
+                                                       admittedAt: RemoteGroupTime(clock), key: attacker.signing)
+        try! save(.admit(try! RemoteGroupAdmit.make(device: phone.local, admission: admission, signer: attacker.device,
+                                                    signedAt: RemoteGroupTime(clock), key: attacker.signing)))
+        refresh(restarted)
+        XCTAssertEqual(restarted.awaitingAcknowledgement?.id, mac.local.id)
+
+        refresh(mac, restarted)
+        XCTAssertNil(restarted.awaitingAcknowledgement, "看到 Mac 签的认本机的 admit 就清掉")
+        XCTAssertFalse(restarted.isAwaitingOthers)
+        XCTAssertTrue(roster.load().dones.isEmpty)
     }
 
     // MARK: - 签名记录的伪造
@@ -300,12 +480,12 @@ final class RemoteDeviceGroupTests: XCTestCase {
         refresh(b, c, a, b)
         let attacker = Attacker(name: "Evil", at: clock)
         let t = RemoteGroupTime(clock)
-        let selfAdmission = RemoteGroupAdmission(admitterID: attacker.device.id, admitterKey: attacker.device.signingKey,
-                                                 admittedAt: t)
+        let selfAdmission = try RemoteGroupAdmission.make(device: attacker.device, admitter: attacker.device, admittedAt: t,
+                                                          key: attacker.signing)
         // 不认识的钥匙签的。
         try save(.admit(try RemoteGroupAdmit.make(device: attacker.device, admission: selfAdmission, signer: attacker.device,
                                                   signedAt: t, key: attacker.signing)))
-        try save(.remove(try RemoteGroupRemove.make(target: b.local, removedAt: t, signer: attacker.device,
+        try save(.remove(try RemoteGroupRemove.make(target: b.local, admission: nil, removedAt: t, signer: attacker.device,
                                                     key: attacker.signing)))
         // 冒用 A 的 ID、配自己的钥匙签。
         var impostor = attacker.device
@@ -313,7 +493,8 @@ final class RemoteDeviceGroupTests: XCTestCase {
         impostor.name = "A"
         try save(.admit(try RemoteGroupAdmit.make(device: attacker.device, admission: selfAdmission, signer: impostor,
                                                   signedAt: t, key: attacker.signing)))
-        try save(.remove(try RemoteGroupRemove.make(target: c.local, removedAt: t, signer: impostor, key: attacker.signing)))
+        try save(.remove(try RemoteGroupRemove.make(target: c.local, admission: nil, removedAt: t, signer: impostor,
+                                                    key: attacker.signing)))
         // 改 A 签的真记录：名字、钥匙、时间都改不了（签名验不过）。
         let honest = try XCTUnwrap(roster.load().admits.first { $0.signer == a.local.id && $0.device.id == c.local.id })
         var renamed = honest
@@ -327,7 +508,7 @@ final class RemoteDeviceGroupTests: XCTestCase {
             try save(.admit(forged), account: "admit.forged.\(index)")
         }
         // 把 A 移除 C 的「签名」挪到别的目标上。
-        var moved = try RemoteGroupRemove.make(target: c.local, removedAt: t, signer: a.local, key: a.signingKey)
+        var moved = try RemoteGroupRemove.make(target: c.local, admission: nil, removedAt: t, signer: a.local, key: a.signingKey)
         moved.signingKey = b.local.signingKey
         try save(.remove(moved), account: "remove.forged")
 
@@ -350,11 +531,13 @@ final class RemoteDeviceGroupTests: XCTestCase {
         let evil = Attacker(name: "Evil", at: clock)
         tick(60)
         let t = RemoteGroupTime(clock)
-        let admission = RemoteGroupAdmission(admitterID: c.local.id, admitterKey: c.local.signingKey, admittedAt: t)
+        let admission = try RemoteGroupAdmission.make(device: evil.device, admitter: c.local, admittedAt: t, key: c.signingKey)
         try save(.admit(try RemoteGroupAdmit.make(device: evil.device, admission: admission, signer: c.local, signedAt: t,
                                                   key: c.signingKey)))
-        try save(.remove(try RemoteGroupRemove.make(target: b.local, removedAt: t, signer: c.local, key: c.signingKey)))
-        try save(.remove(try RemoteGroupRemove.make(target: a.local, removedAt: t, signer: c.local, key: c.signingKey)))
+        try save(.remove(try RemoteGroupRemove.make(target: b.local, admission: nil, removedAt: t, signer: c.local,
+                                                    key: c.signingKey)))
+        try save(.remove(try RemoteGroupRemove.make(target: a.local, admission: nil, removedAt: t, signer: c.local,
+                                                    key: c.signingKey)))
         refresh(a, b)
         XCTAssertEqual(names(a), ["B"])
         XCTAssertEqual(names(b), ["A"])
@@ -384,9 +567,10 @@ final class RemoteDeviceGroupTests: XCTestCase {
         // S 被偷了，移除之前小偷加了一台设备，并把加入时间写到很远的将来，想让它移不掉。
         let x = Attacker(name: "X", at: clock)
         let future = RemoteGroupTime(clock.addingTimeInterval(86_400 * 365 * 50))
-        try save(.admit(try RemoteGroupAdmit.make(device: x.device, admission: RemoteGroupAdmission(
-            admitterID: s.local.id, admitterKey: s.local.signingKey, admittedAt: future),
-                                                  signer: s.local, signedAt: RemoteGroupTime(clock), key: s.signingKey)))
+        let futureAdmission = try RemoteGroupAdmission.make(device: x.device, admitter: s.local, admittedAt: future,
+                                                            key: s.signingKey)
+        try save(.admit(try RemoteGroupAdmit.make(device: x.device, admission: futureAdmission, signer: s.local,
+                                                  signedAt: RemoteGroupTime(clock), key: s.signingKey)))
         refresh(a)
         XCTAssertTrue(names(a).contains("X"), "移除之前，被偷的组员能加设备（方案接受这一条）")
         a.remove([x.device.id, s.local.id])
@@ -658,8 +842,10 @@ final class RemoteDeviceGroupTests: XCTestCase {
 
         // 拿着 C 私钥的人在移除之后签的：B 一直没刷新，同时读到 C 被移除和这两条，也不认。
         let t = RemoteGroupTime(clock)
-        try save(.remove(try RemoteGroupRemove.make(target: b.local, removedAt: t, signer: c.local, key: c.signingKey)))
-        try save(.remove(try RemoteGroupRemove.make(target: a.local, removedAt: t, signer: c.local, key: c.signingKey)))
+        try save(.remove(try RemoteGroupRemove.make(target: b.local, admission: nil, removedAt: t, signer: c.local,
+                                                    key: c.signingKey)))
+        try save(.remove(try RemoteGroupRemove.make(target: a.local, admission: nil, removedAt: t, signer: c.local,
+                                                    key: c.signingKey)))
         refresh(a, b)
         XCTAssertEqual(names(a), ["B"])
         XCTAssertEqual(names(b), ["A"])
