@@ -148,14 +148,17 @@ nonisolated final class ControlServer: @unchecked Sendable {
     /// 起服务端。返回 nil 表示已开始监听（或本来就在跑）；返回非 nil 是**不会自愈**的
     /// 启动失败原因，调用方应写进 `ControlSettings.startupError` 让设置页显示出来。
     ///
-    /// 目前唯一的失败是 socket 路径超过 `sun_path` 上限：沙盒容器路径 + 长用户名会顶穿
-    /// 104 字节。这种情况绝不能进 accept 循环 —— 那会变成每 2 秒重试一次的死循环。
+    /// 目前唯一的失败是 socket 路径超过 `sun_path` 上限：`ControlProtocol.socketURL` 已经在
+    /// 默认路径放不下时退到容器的 `Data/tmp/`，走到这里说明用户名长到连那里都放不下（40 个
+    /// 字符以上）。这种情况绝不能进 accept 循环 —— 那会变成每 2 秒重试一次的死循环。
+    ///
+    /// 提示里不要写 `UTERM_CONTROL_SOCKET`：它只告诉客户端去哪里找，改不了 uTerm 的监听位置。
     @discardableResult
     func start() -> String? {
-        let pathBytes = socketURL.path.utf8.count
-        guard pathBytes <= ControlProtocol.maxSunPathLength - 1 else {
+        guard ControlProtocol.fitsInSunPath(socketURL) else {
+            let pathBytes = socketURL.path.utf8.count
             let message = "socket 路径过长（\(pathBytes) 字节，上限 \(ControlProtocol.maxSunPathLength - 1)）："
-                + "\(socketURL.path)。用 UTERM_CONTROL_SOCKET 指定一条更短的路径，或缩短用户名。"
+                + "\(socketURL.path)。macOS 用户名太长，命令行接口无法启动。"
             Self.logger.error("\(message, privacy: .public)")
             return message
         }

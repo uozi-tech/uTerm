@@ -39,12 +39,17 @@ PREFERENCE_CANDIDATES = [
     "~/Library/Preferences/com.uozi.uTerm.plist",
 ]
 
-# macOS 端 Debug 与 Release 都开沙盒，socket 只落在容器里。第二条候选是给
-# 「万一有人跑不带沙盒的构建」留的，成本为零。
+# macOS 端 Debug 与 Release 都开沙盒，socket 只落在容器里。顺序与 uTerm 的
+# `ControlProtocol.socketURL(applicationSupport:temporaryDirectory:)` 一致：默认在
+# Application Support 下；那条路径超过 sun_path 上限（用户名超过 10 个字符）时 uTerm
+# 改到容器的 Data/tmp/。最后一条是给「万一有人跑不带沙盒的构建」留的，成本为零。
 SOCKET_CANDIDATES = [
     "~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/control.sock",
+    "~/Library/Containers/com.uozi.uTerm/Data/tmp/control.sock",
     "~/Library/Application Support/uTerm/control.sock",
 ]
+# sockaddr_un.sun_path 104 字节，要给结尾 NUL 留 1 字节。
+MAX_SOCKET_PATH_BYTES = 103
 
 # `sftp get` / `sftp put` 让 uTerm 开几条 SFTP 通道并行搬（ControlProtocol 的
 # defaultTransferChannels / maxTransferChannels）。实测 50 ms RTT 下 8–16 路是顶，
@@ -83,9 +88,10 @@ SHA256_RE = re.compile(r"\b([0-9a-fA-F]{64})\b")
 
 FORMATS = ["json", "table", "csv"]
 
-# 本地判定（服务端不会发出这两个码）
+# 本地判定（服务端不会发出这几个码）
 CODE_NOT_RUNNING = "uterm_not_running"
 CODE_SOCKET_STALE = "uterm_socket_stale"
+CODE_SOCKET_PATH_TOO_LONG = "socket_path_too_long"
 
 # code → 退出码。技能文档里的错误码总表与这张表一一对应。
 EXIT_OK = 0
@@ -103,6 +109,34 @@ def socket_paths():
     if override:
         return [os.path.expanduser(override)]
     return [os.path.expanduser(p) for p in SOCKET_CANDIDATES]
+
+
+def socket_path_too_long_response(request, paths, launch_error):
+    """路径长度才是真正原因时给出 `socket_path_too_long`，否则返回 None。
+
+    用户名超过 10 个字符时默认位置放不进 sun_path，uTerm 改用容器的 Data/tmp/（第二条候选）：
+    - 第二条也放不下（用户名 40 个字符以上）：接口一定起不来，不管开关怎么设。
+    - 第二条放得下却连不上，而 uTerm 确实被拉起来了（没被开关拒绝，只是接口没就绪）：
+      装的是 2.1.6 及更早的版本，它不会改用短路径，接口在这台机器上起不来。
+    被开关拒绝时照旧报开关的原因。显式指定了 UTERM_CONTROL_SOCKET 时不判。
+    """
+    if os.environ.get(ENV_SOCKET) or len(paths) < 2:
+        return None
+    primary, fallback = paths[0], paths[1]
+    primary_bytes = len(primary.encode("utf-8"))
+    if primary_bytes <= MAX_SOCKET_PATH_BYTES:
+        return None
+    if len(fallback.encode("utf-8")) > MAX_SOCKET_PATH_BYTES:
+        message = ("macOS 用户名过长，uTerm 的 socket 路径连备用的短路径都超过系统上限 %d 字节（%s），"
+                   "命令行接口无法启动。" % (MAX_SOCKET_PATH_BYTES, fallback))
+    elif launch_error in (None, LAUNCH_NOT_READY_MESSAGE):
+        message = ("macOS 用户名过长，uTerm 默认的 socket 路径（%d 字节）超过系统上限 %d 字节：%s。"
+                   "uTerm 2.1.6 及更早的版本在这样的账户上无法启动命令行接口，"
+                   "请把 uTerm 更新到最新版本（新版本会自动改用更短的路径）。"
+                   % (primary_bytes, MAX_SOCKET_PATH_BYTES, primary))
+    else:
+        return None
+    return {"id": request.get("id"), "ok": False, "code": CODE_SOCKET_PATH_TOO_LONG, "message": message}
 
 
 def preference_value(key):
@@ -148,6 +182,10 @@ def launch_command():
             + ["--args", "--background", "--launch-source", "cli"])
 
 
+LAUNCH_NOT_READY_MESSAGE = ("已请求后台启动 uTerm，但接口在 10 秒内没有就绪。若 uTerm 本来就在运行，"
+                            "确认设置 ▸ 命令行与技能 里已打开「启用命令行接口」。")
+
+
 def start_background_and_wait():
     # 读得到设置就先在本地拦下，报得准、也不白起一次进程；读不到（None）照样请求启动，
     # uTerm 收到 `--launch-source cli` 会自己检查这两项，不满足就立刻退出。
@@ -181,8 +219,7 @@ def start_background_and_wait():
                 return False, ("uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开"
                                "「允许 CLI 按需启动」和「启用命令行接口」。")
             time.sleep(0.1)
-        return False, ("已请求后台启动 uTerm，但接口在 10 秒内没有就绪。若 uTerm 本来就在运行，"
-                       "确认设置 ▸ 命令行与技能 里已打开「启用命令行接口」。")
+        return False, LAUNCH_NOT_READY_MESSAGE
     finally:
         if launcher.poll() is None:
             launcher.terminate()
@@ -708,8 +745,9 @@ def send_request(request, fd=None, on_progress=None):
                     except (ConnectionRefusedError, OSError):
                         continue
         elif launch_error and not found_socket:
-            return {"id": request.get("id"), "ok": False,
-                    "code": CODE_NOT_RUNNING, "message": launch_error}
+            return (socket_path_too_long_response(request, paths, launch_error)
+                    or {"id": request.get("id"), "ok": False,
+                        "code": CODE_NOT_RUNNING, "message": launch_error})
     if stale:
         return {
             "id": request.get("id"),
@@ -721,6 +759,9 @@ def send_request(request, fd=None, on_progress=None):
                         # 残留 socket 时也试过按需启动：没起来的原因别吞掉，否则调用方只会干等。
                         + (" 按需启动没成功：" + launch_error if launch_error else "")),
         }
+    too_long = socket_path_too_long_response(request, paths, launch_error)
+    if too_long:
+        return too_long
     return {
         "id": request.get("id"),
         "ok": False,
@@ -845,7 +886,8 @@ def exit_code_for(response):
     code = response.get("code") or ""
     # `server_busy` 与 `empty_response` 是同一件事的两种表现（服务端槽位满，后者是它
     # 直接关连接）；`local_*` 是客户端自己的磁盘 / 本地文件问题 —— 都归「本地」这一档。
-    if code in (CODE_NOT_RUNNING, CODE_SOCKET_STALE, "socket_error", "empty_response",
+    if code in (CODE_NOT_RUNNING, CODE_SOCKET_STALE, CODE_SOCKET_PATH_TOO_LONG,
+                "socket_error", "empty_response",
                 "server_busy", "local_read_failed", "local_write_failed",
                 "local_failure"):
         return EXIT_LOCAL

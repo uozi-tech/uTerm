@@ -41,7 +41,8 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 **找不到就直说找不到，不要自己写 socket 客户端、也不要改用 `ssh`。**
 
 客户端自己找 socket。要连 Xcode 跑起来的 Debug 版（它的 socket 叫 `dev.sock`），用
-环境变量 `UTERM_CONTROL_SOCKET=<socket 路径>` 指过去；平时不用管。链接只由装在
+环境变量 `UTERM_CONTROL_SOCKET=<socket 路径>` 指过去；平时不用管。这个变量只告诉客户端去哪里找，
+改不了 uTerm 自己监听的位置。链接只由装在
 「应用程序」文件夹（`/Applications` 或 `~/Applications`）里的 uTerm 对齐，开发构建启动时不会改它们。
 
 万一执行时报 `operation not permitted`（uTerm 1.12.x 装下的旧链接指向 app 自己写出的
@@ -83,6 +84,8 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
   `message` 末尾带「按需启动没成功：…」就按上面处理；没带就**等几秒重试一次**，别
   当成「没装」去绕路。
 - `control_disabled`：正好在你发请求时用户把接口关了。处理同「命令行接口未启用」。
+- `socket_path_too_long`：macOS 用户名太长，socket 路径超过系统上限，和开关无关。照 `message`
+  说的办（通常是更新 uTerm）；**不要**自己设 `UTERM_CONTROL_SOCKET`，它改不了 uTerm 的监听位置。
 
 `ping` 的响应里还有两条有用的信息：`app.mutationsEnabled` 说明第二个开关开没开
 （没开的话 `run` 会被拒），`app.openHosts` 是命令行连接池当前持有的主机 —— 不在这个
@@ -299,6 +302,7 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 |---|---|
 | `uterm_not_running` | 连不上，且按需启动没成功（原因在 `message`：开关没开 / 接口没启用 / 没装） |
 | `uterm_socket_stale` | socket 残留、无人监听 —— `message` 带「按需启动没成功」就照它说的办，否则稍后重试 |
+| `socket_path_too_long` | macOS 用户名太长，socket 路径超过系统上限（与开关无关），照 `message` 办，通常是更新 uTerm |
 | `control_disabled` | 命令行接口在这次请求途中被关掉了 |
 | `mutations_disabled` | 第二个开关没打开：不允许执行命令与写入 |
 | `app_not_ready` | uTerm 还在启动，稍后重试 |

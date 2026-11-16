@@ -525,6 +525,7 @@ def main():
         exercise(server, root, rejecting)
         exercise_transfers(transfers, root)
         exercise_on_demand_launch(root)
+        exercise_socket_path_too_long()
         print("")
         if FAILURES:
             print("%d 项失败：" % len(FAILURES))
@@ -1296,6 +1297,47 @@ def exercise_on_demand_launch(root):
               "open 失败 → 报无法唤起并带上原因")
 
     os.chmod(unreadable, 0o600)
+
+
+def exercise_socket_path_too_long():
+    """用户名超过 10 个字符：默认 socket 路径放不进 sun_path（2026-11-16 的反馈）。"""
+    print("")
+    print("socket 路径超过 sun_path 上限")
+    client = load_client_module()
+    os.environ.pop(client.ENV_SOCKET, None)
+
+    def candidates(user):
+        return [p.replace("~", "/Users/" + user, 1) for p in client.SOCKET_CANDIDATES]
+
+    request = {"id": "long", "action": "ping"}
+    not_ready = client.LAUNCH_NOT_READY_MESSAGE
+
+    equal(len(candidates("exampleuser")[0].encode()), 104, "exampleuser 的默认路径正好 104 字节")
+    check(client.socket_path_too_long_response(request, candidates("abcdefghij"), not_ready) is None,
+          "用户名 10 个字符：默认路径放得下，不是这个原因")
+
+    response = client.socket_path_too_long_response(request, candidates("exampleuser"), not_ready)
+    equal((response or {}).get("code"), client.CODE_SOCKET_PATH_TOO_LONG, "11 个字符 + 接口没就绪 → socket_path_too_long")
+    check("更新" in (response or {}).get("message", ""), "消息让用户更新 uTerm")
+    check("UTERM_CONTROL_SOCKET" not in (response or {}).get("message", ""), "消息不再给 UTERM_CONTROL_SOCKET 的办法")
+    equal(client.exit_code_for(response or {}), client.EXIT_LOCAL, "socket_path_too_long 归本地这一档")
+
+    refused = "uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开……"
+    check(client.socket_path_too_long_response(request, candidates("exampleuser"), refused) is None,
+          "被开关拒绝时照旧报开关的原因")
+
+    huge = "u" * 41
+    response = client.socket_path_too_long_response(request, candidates(huge), refused)
+    equal((response or {}).get("code"), client.CODE_SOCKET_PATH_TOO_LONG, "41 个字符：短路径也放不下，不管开关")
+    check(client.socket_path_too_long_response(request, candidates("u" * 40), refused) is None,
+          "40 个字符：短路径放得下，被拒绝时报开关")
+
+    os.environ[client.ENV_SOCKET] = "/tmp/x.sock"
+    try:
+        check(client.socket_path_too_long_response(request, candidates("exampleuser"), not_ready) is None,
+              "显式指定 UTERM_CONTROL_SOCKET 时不判")
+    finally:
+        os.environ.pop(client.ENV_SOCKET, None)
 
 
 if __name__ == "__main__":

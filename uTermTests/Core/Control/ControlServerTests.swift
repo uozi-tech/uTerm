@@ -332,6 +332,8 @@ final class ControlServerTests: XCTestCase {
         let error = server.start()
         XCTAssertNotNil(error, "路径超过 sun_path 上限必须拒绝启动")
         XCTAssertTrue(error?.contains("socket 路径过长") == true, error ?? "")
+        // `UTERM_CONTROL_SOCKET` 只管客户端去哪里找，改不了这里的监听位置，别再拿它当办法。
+        XCTAssertFalse(error?.contains("UTERM_CONTROL_SOCKET") == true, error ?? "")
         XCTAssertFalse(FileManager.default.fileExists(atPath: long.path))
         XCTAssertFalse(server.isRunning)
     }

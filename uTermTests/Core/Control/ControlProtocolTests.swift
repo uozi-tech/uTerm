@@ -182,21 +182,78 @@ final class ControlProtocolTests: XCTestCase {
 
     // MARK: socket 路径
 
-    /// 沙盒容器路径 + 用户名会顶穿 `sun_path`（104 字节）。本机跑不过就说明这台机器
-    /// 上 uTerm 的 CLI 接口起不来 —— 见 `ControlServer.start()` 的显式检查与设置页提示。
-    func testSocketPathFitsInSunPath() {
-        let bytes = ControlProtocol.socketURL.path.utf8.count
-        XCTAssertLessThan(
-            bytes, ControlProtocol.maxSunPathLength,
-            "socket 路径 \(bytes) 字节，超过 sun_path 上限：\(ControlProtocol.socketURL.path)"
+    /// 构造一个用户名为 `user` 的沙盒容器，返回它的 Application Support 与 tmp。
+    /// 不用跑测试这台机器的真实路径：开发机用户名短，长用户名的情况永远测不到。
+    private func container(user: String) -> (applicationSupport: URL, temporary: URL) {
+        let data = URL(fileURLWithPath: "/Users/\(user)/Library/Containers/com.uozi.uTerm/Data", isDirectory: true)
+        return (
+            data.appending(path: "Library/Application Support/uTerm", directoryHint: .isDirectory),
+            data.appending(path: "tmp", directoryHint: .isDirectory)
         )
     }
 
-    func testSocketLivesUnderApplicationSupportDirectory() {
-        XCTAssertEqual(
-            ControlProtocol.socketURL.deletingLastPathComponent().path,
-            ControlProtocol.applicationSupportDirectory.path
-        )
+    private func socketURL(user: String) -> URL {
+        let dirs = container(user: user)
+        return ControlProtocol.socketURL(applicationSupport: dirs.applicationSupport, temporaryDirectory: dirs.temporary)
+    }
+
+    /// 用户名 10 个字符以内：照旧放在 Application Support 下（Release 版 10 字符正好 103 字节）。
+    func testShortUserNameKeepsApplicationSupportPath() {
+        for user in ["bobby", "abcdefghij"] {
+            let url = socketURL(user: user)
+            XCTAssertEqual(url.deletingLastPathComponent(), container(user: user).applicationSupport.standardizedFileURL)
+            XCTAssertTrue(ControlProtocol.fitsInSunPath(url), url.path)
+        }
+    }
+
+    /// 默认路径放不下就改到容器的 `Data/tmp/`。Release 的 `control.sock` 从 11 个字符起
+    /// （2026-11-16 的反馈是 `exampleuser`，104 字节），Debug 的 `dev.sock` 短 4 字节、从 15 个字符起。
+    func testLongUserNameFallsBackToContainerTemporaryDirectory() {
+        #if DEBUG
+        let firstTooLong = 15
+        #else
+        let firstTooLong = 11
+        #endif
+        let fitting = container(user: String(repeating: "u", count: firstTooLong - 1)).applicationSupport
+        XCTAssertTrue(ControlProtocol.fitsInSunPath(fitting.appending(path: ControlProtocol.socketFilename)))
+        for count in [firstTooLong, 32, 40] {
+            let user = String(repeating: "u", count: count)
+            let url = socketURL(user: user)
+            XCTAssertEqual(url.deletingLastPathComponent(), container(user: user).temporary.standardizedFileURL)
+            XCTAssertEqual(url.lastPathComponent, ControlProtocol.socketFilename)
+            XCTAssertTrue(ControlProtocol.fitsInSunPath(url), "\(url.path.utf8.count) 字节：\(url.path)")
+        }
+    }
+
+    /// 退路用的是 `NSTemporaryDirectory()`，客户端写死的却是 `~/Library/Containers/com.uozi.uTerm/Data/tmp/`。
+    /// 两者在沙盒里必须是同一个目录（测试宿主就是带沙盒的 app 本身）。
+    func testSandboxTemporaryDirectoryIsContainerTmp() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).standardizedFileURL.path
+        XCTAssertTrue(tmp.hasSuffix("/Library/Containers/com.uozi.uTerm/Data/tmp"), tmp)
+        XCTAssertTrue(tmp.hasPrefix("/Users/"), "客户端按 ~/Library/Containers 找，这里不能是 /private/var/…：\(tmp)")
+    }
+
+    /// 长到连 `Data/tmp/` 都放不下时返回的路径仍然超长，交给 `ControlServer.start()` 报错。
+    func testUserNameTooLongForBothLocations() {
+        let url = socketURL(user: String(repeating: "u", count: 60))
+        XCTAssertFalse(ControlProtocol.fitsInSunPath(url))
+    }
+
+    func testFitsInSunPathLeavesRoomForTerminatingNul() {
+        let base = "/" + String(repeating: "a", count: ControlProtocol.maxSunPathLength - 2)
+        XCTAssertTrue(ControlProtocol.fitsInSunPath(URL(fileURLWithPath: base)))
+        XCTAssertFalse(ControlProtocol.fitsInSunPath(URL(fileURLWithPath: base + "a")))
+    }
+
+    /// 客户端 `scripts/utermctl` 的 `SOCKET_CANDIDATES` 写死了这两个位置。
+    func testSocketCandidatesMatchClient() throws {
+        let client = try String(
+            contentsOf: DefaultsKeyLintTests.repoRoot.appending(path: "scripts/utermctl"), encoding: .utf8)
+        XCTAssertTrue(client.contains("\"~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/control.sock\""))
+        XCTAssertTrue(client.contains("\"~/Library/Containers/com.uozi.uTerm/Data/tmp/control.sock\""))
+    }
+
+    func testSocketFilenameSeparatesDebugFromRelease() {
         #if DEBUG
         XCTAssertEqual(ControlProtocol.socketURL.lastPathComponent, "dev.sock")
         #else

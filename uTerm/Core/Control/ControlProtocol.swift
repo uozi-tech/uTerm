@@ -1028,9 +1028,15 @@ nonisolated public enum ControlProtocol {
     ///
     /// `<Application Support>/uTerm/control.sock` 在沙盒容器里展开是
     /// `~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/control.sock`
-    /// —— 用户名 5 字符时 98 字节，超过 10 字符就会炸。`ControlServer.start()` 会先量一次，
-    /// 超限则不 bind、把原因写进 `ControlSettings.startupError`。
+    /// —— 除用户名外固定 93 字节，用户名超过 10 字符就放不下。这时 `socketURL` 改用
+    /// 容器的 `Data/tmp/`（见 `socketURL(applicationSupport:temporaryDirectory:)`）；
+    /// 连那里都放不下时 `ControlServer.start()` 不 bind、把原因写进 `ControlSettings.startupError`。
     public static let maxSunPathLength = 104
+
+    /// 路径能不能放进 `sun_path`（要给结尾的 NUL 留 1 字节）。
+    public static func fitsInSunPath(_ url: URL) -> Bool {
+        url.path.utf8.count <= maxSunPathLength - 1
+    }
 
     /// `run` 的静默超时（秒）：默认 / 封顶。连续这么久没有任何输出才判定卡住。
     public static let defaultRunTimeoutSeconds = 60
@@ -1086,17 +1092,31 @@ nonisolated public enum ControlProtocol {
         isTransfer(action) || action == .terminalWait || action == .macWaitChange || action == .macRun
     }
 
-    /// Debug and Release may share the same sandbox container. Keep their
-    /// listeners separate; CLI discovery continues to target Release by default.
+    /// Debug 与 Release 共用一个沙盒容器，socket 文件名分开；CLI 默认只找 Release 的。
+    #if DEBUG
+    public static let socketFilename = "dev.sock"
+    #else
+    public static let socketFilename = "control.sock"
+    #endif
+
+    /// uTerm 监听的位置。沙盒里 `NSTemporaryDirectory()` 就是容器的 `Data/tmp/`。
     public static var socketURL: URL {
-        #if DEBUG
-        let filename = "dev.sock"
-        #else
-        let filename = "control.sock"
-        #endif
-        return applicationSupportDirectory
-            .appending(path: filename)
-            .standardizedFileURL
+        socketURL(
+            applicationSupport: applicationSupportDirectory,
+            temporaryDirectory: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        )
+    }
+
+    /// 默认放在 `<Application Support>/uTerm/` 下；那条路径放不进 `sun_path`（用户名超过
+    /// 10 个字符）时改放 `temporaryDirectory`，即容器的 `Data/tmp/`，除用户名外 63 字节，
+    /// 用户名到 40 个字符都放得下。用户名正常的人路径不变。
+    ///
+    /// 两处都放不下时仍返回短的那条，由 `ControlServer.start()` 报错。客户端
+    /// （`scripts/utermctl` 的 `SOCKET_CANDIDATES`）按同样的顺序找这两个位置，改这里要一起改。
+    public static func socketURL(applicationSupport: URL, temporaryDirectory: URL) -> URL {
+        let primary = applicationSupport.appending(path: socketFilename).standardizedFileURL
+        if fitsInSunPath(primary) { return primary }
+        return temporaryDirectory.appending(path: socketFilename).standardizedFileURL
     }
 
     public static var applicationSupportDirectory: URL {
