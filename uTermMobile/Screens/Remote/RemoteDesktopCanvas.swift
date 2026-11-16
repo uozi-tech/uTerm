@@ -64,6 +64,12 @@ final class RemoteDesktopCanvasView: UIView {
     private let session: RemoteDesktopSession
     private let keys: RemoteDesktopKeyState
     private let displayLayer = AVSampleBufferDisplayLayer()
+    /// 画面挂在这个视图上（位置大小 = `displayedFrame`）。iOS 26 起它是 `extensionView` 的内容视图。
+    private let pictureView = UIView()
+    /// 角落滑开时空出来的那条窄缝用画面自己的边延伸补满（系统的背景延伸：边缘镜像再模糊），不露黑底。
+    /// 它的范围是「不滑开时的画面 ∪ 滑开后的画面」：平时两者重合、什么也不补，
+    /// 看真显示器留的黑边照旧是黑的；只有滑开时空出的那条缝在它的范围里。iOS 26 之前没有，缝是黑的。
+    private var extensionView: UIView?
     private let cursorLayer = CAShapeLayer()
     private let keyInput = RemoteKeyInputView()
     /// 量画布四角落在多大的屏幕圆角里（见 `screenCornerRadius`）。不画东西、不接触摸。
@@ -108,7 +114,18 @@ final class RemoteDesktopCanvasView: UIView {
         isMultipleTouchEnabled = true
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = UIColor.black.cgColor
-        layer.addSublayer(displayLayer)
+        pictureView.isUserInteractionEnabled = false
+        pictureView.layer.addSublayer(displayLayer)
+        if #available(iOS 26.0, *) {
+            let extensionView = UIBackgroundExtensionView()
+            extensionView.isUserInteractionEnabled = false
+            extensionView.automaticallyPlacesContentView = false
+            extensionView.contentView = pictureView
+            addSubview(extensionView)
+            self.extensionView = extensionView
+        } else {
+            addSubview(pictureView)
+        }
         cursorLayer.path = RemoteDesktopArrowCursor.path()
         cursorLayer.fillColor = UIColor.black.cgColor
         cursorLayer.strokeColor = UIColor.white.cgColor
@@ -209,7 +226,14 @@ final class RemoteDesktopCanvasView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let frame = viewport.displayedFrame
-        displayLayer.frame = frame
+        if let extensionView {
+            let area = viewport.contentFrame.union(frame)
+            extensionView.frame = area
+            pictureView.frame = frame.offsetBy(dx: -area.minX, dy: -area.minY)
+        } else {
+            pictureView.frame = frame
+        }
+        displayLayer.frame = pictureView.bounds
         displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
         cursorLayer.position = CGPoint(x: frame.minX + pointer.x * frame.width, y: frame.minY + pointer.y * frame.height)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
