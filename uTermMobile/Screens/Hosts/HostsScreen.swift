@@ -141,13 +141,14 @@ struct HostsScreen: View {
     }
 
     private func card(_ host: ServerProfile, groupColors: [String: Color]) -> some View {
-        HostCard(host: host,
+        HostCard(info: HostCardInfo(host),
                  groupColor: ServerGroupTint.color(for: host.group, colors: groupColors),
                  onOpen: { inspecting = host },
                  onConnect: { store.openTerminal(host) },
                  onSFTP: { store.openSFTP(host) },
                  onEdit: { editing = host },
                  onDelete: { pendingDelete = host })
+            .equatable()
     }
 
     private func delete(_ host: ServerProfile) {
@@ -165,9 +166,46 @@ struct HostsScreen: View {
     }
 }
 
+/// 卡片要画的字段，由主机页从 `ServerProfile` 抄一份值。
+///
+/// 卡片不直接读 SwiftData 对象：iCloud 合并数据时 SwiftData 对每台主机都发「跳板机变了」，凡是读过这台主机
+/// 任何一个字段的视图都跟着重算，不管读的是哪个字段、值变没变（Duo 回前台的头 1.4 秒里 22 张卡重算 480 次，
+/// 2026-11-16 实测；把读跳板机的那一处挪进子视图也没用）。抄成值以后，主机页照样会被叫醒重算一遍，
+/// 卡片按这份值判等，没变就不重算。
+struct HostCardInfo: Equatable {
+    let name: String
+    let endpoint: String
+    let monogram: String
+    let groupLabel: String
+    let authLabel: String
+    let isPinned: Bool
+    let sftpOnly: Bool
+    let lastConnectedAt: Date?
+    /// 在线探测的端点；走跳板机 / 没填地址时为 nil，不探也不画角标。
+    let reachabilityKey: HostEndpointKey?
+
+    init(_ host: ServerProfile) {
+        name = host.name
+        endpoint = host.endpointWithPort
+        monogram = host.monogram
+        groupLabel = host.groupLabel
+        authLabel = host.authMethod.label
+        isPinned = host.isPinned
+        sftpOnly = host.sftpOnly
+        lastConnectedAt = host.lastConnectedAt
+        reachabilityKey = HostEndpointKey(host)
+    }
+}
+
 /// 主机卡片（设计稿 `HostCard2`）。点击弹详情抽屉；菜单含连接 / 文件 / 编辑 / 删除。
-struct HostCard: View {
-    let host: ServerProfile
+///
+/// 按「字段值 + 组色」判等（闭包不比）：主机页每次重算都给每张卡新建一套闭包，不判等的话每张卡都要跟着重算。
+struct HostCard: View, Equatable {
+    static func == (lhs: HostCard, rhs: HostCard) -> Bool {
+        lhs.info == rhs.info && lhs.groupColor == rhs.groupColor
+    }
+
+    let info: HostCardInfo
     var groupColor: Color? = nil
     var onOpen: () -> Void
     var onConnect: () -> Void
@@ -176,7 +214,7 @@ struct HostCard: View {
     var onDelete: () -> Void
 
     /// 共享格式化器。**别改回「每行现建一个」**——这是逐行调用的。
-    private var lastText: String { UTermFormat.relative(host.lastConnectedAt, fallback: "从未连接") }
+    private var lastText: String { UTermFormat.relative(info.lastConnectedAt, fallback: "从未连接") }
 
     var body: some View {
         Button(action: onOpen) {
@@ -185,11 +223,11 @@ struct HostCard: View {
                     avatar
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 7) {
-                            Text(host.name).font(M.sans(16, weight: .semibold))
+                            Text(info.name).font(M.sans(16, weight: .semibold))
                                 .foregroundStyle(M.text).lineLimit(1)
-                            if host.isPinned { MIcon(name: "tag", size: 11, color: M.warning) }
+                            if info.isPinned { MIcon(name: "tag", size: 11, color: M.warning) }
                         }
-                        Text(host.endpointWithPort)
+                        Text(info.endpoint)
                             .font(M.mono(12.5)).foregroundStyle(M.text3).lineLimit(1)
                     }
                     Spacer(minLength: 4)
@@ -210,9 +248,9 @@ struct HostCard: View {
                 }
 
                 HStack(spacing: 6) {
-                    MGroupChip(host.groupLabel, tint: groupColor)
-                    MChip(text: host.authMethod.label, icon: "key", tone: .accent)
-                    if host.sftpOnly { MChip(text: "仅 SFTP", icon: "folder") }
+                    MGroupChip(info.groupLabel, tint: groupColor)
+                    MChip(text: info.authLabel, icon: "key", tone: .accent)
+                    if info.sftpOnly { MChip(text: "仅 SFTP", icon: "folder") }
                     Spacer(minLength: 6)
                     // 窄屏（iPhone Duo 分屏 ≈ 330pt）让位给 chip：时间单行截断，chip 不折行。
                     Text(lastText).font(M.sans(11.5)).foregroundStyle(M.text3)
@@ -224,7 +262,6 @@ struct HostCard: View {
             .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         }
         .buttonStyle(MPressStyle())
-        .watchesReachability(of: host)
         .mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.card)) {
             Button { onConnect() } label: { Label("连接终端", systemImage: "terminal") }
             Button { onSFTP() } label: { Label("浏览文件", systemImage: "folder") }
@@ -235,8 +272,9 @@ struct HostCard: View {
 
     /// 分组色色块 + 首字母，角标 = 在线状态（见 `HostAvatar`）。
     private var avatar: some View {
-        HostAvatar(monogram: host.monogram,
+        HostAvatar(monogram: info.monogram,
                    tint: groupColor,
-                   reachability: HostReachabilityMonitor.shared.entry(for: host))
+                   reachability: info.reachabilityKey.map(HostReachabilityMonitor.shared.entry(for:)))
+            .watchesReachability(of: info.reachabilityKey)
     }
 }

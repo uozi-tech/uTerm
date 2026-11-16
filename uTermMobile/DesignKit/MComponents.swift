@@ -624,32 +624,48 @@ struct MCardGrid<Content: View>: View {
 }
 
 /// `MCardGrid` 的非懒加载版：等宽多列，每行取最高卡片的高度，格子顶部对齐（与 LazyVGrid 的 `.top` 一致）。
+///
+/// 量过的行高按格子宽度缓存：一次排版先 `sizeThatFits` 再 `placeSubviews`，两步共用一份，每张卡片只量一遍。
+/// SwiftUI 每次重新排版前都会调 `updateCache`（2026-11-16 Duo 实测：每次 `sizeThatFits` 前都调），在那里清掉，
+/// 所以跨排版的复用指望不上。
 private struct MEagerCardColumns: Layout {
     var columns: Int
     var spacing: CGFloat
+
+    struct Cache {
+        var cellWidth: CGFloat?
+        var heights: [CGFloat] = []
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
 
     private func cellWidth(in width: CGFloat) -> CGFloat {
         max(0, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
     }
 
-    private func rowHeights(_ subviews: Subviews, cellWidth: CGFloat) -> [CGFloat] {
-        stride(from: 0, to: subviews.count, by: columns).map { start in
+    private func rowHeights(_ subviews: Subviews, cellWidth: CGFloat, cache: inout Cache) -> [CGFloat] {
+        if cache.cellWidth == cellWidth { return cache.heights }
+        let heights = stride(from: 0, to: subviews.count, by: columns).map { start in
             subviews[start..<min(start + columns, subviews.count)].map {
                 $0.sizeThatFits(ProposedViewSize(width: cellWidth, height: nil)).height
             }.max() ?? 0
         }
+        cache = Cache(cellWidth: cellWidth, heights: heights)
+        return heights
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let width = proposal.width ?? 0
-        let heights = rowHeights(subviews, cellWidth: cellWidth(in: width))
+        let heights = rowHeights(subviews, cellWidth: cellWidth(in: width), cache: &cache)
         return CGSize(width: width, height: heights.reduce(0, +) + spacing * CGFloat(max(0, heights.count - 1)))
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         let cell = cellWidth(in: bounds.width)
         var y = bounds.minY
-        for (row, height) in rowHeights(subviews, cellWidth: cell).enumerated() {
+        for (row, height) in rowHeights(subviews, cellWidth: cell, cache: &cache).enumerated() {
             for column in 0..<columns where row * columns + column < subviews.count {
                 subviews[row * columns + column].place(
                     at: CGPoint(x: bounds.minX + CGFloat(column) * (cell + spacing), y: y),
