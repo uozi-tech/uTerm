@@ -208,11 +208,20 @@ final class RemoteDesktopCanvasView: UIView {
     private func layoutContent() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = viewport.contentFrame
+        let frame = viewport.displayedFrame
+        displayLayer.frame = frame
         displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
-        cursorLayer.position = viewport.viewPoint(normalized: pointer)
+        cursorLayer.position = CGPoint(x: frame.minX + pointer.x * frame.width, y: frame.minY + pointer.y * frame.height)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
         CATransaction.commit()
+        if peekTarget != viewport.peekOffset { wake() }
+    }
+
+    /// 指针在被屏幕圆角切掉的角上时画面该挪多少（见 `RemoteDesktopViewport.cornerPeek`）。
+    /// 光标藏着（在别的显示器上 / 还没开流）时不挪。
+    private var peekTarget: CGSize {
+        guard session.info != nil, macCursorVisible else { return .zero }
+        return viewport.cornerPeek(for: pointer)
     }
 
     // MARK: - 每帧合并
@@ -236,11 +245,16 @@ final class RemoteDesktopCanvasView: UIView {
         let duration = link.targetTimestamp - link.timestamp
         if momentumActive { stepMomentum(duration: duration) }
         let edgeMoving = stepDragEdge(duration: duration)
+        let peekBefore = viewport.peekOffset
+        let peeking = viewport.stepPeek(toward: peekTarget, duration: duration)
+        if viewport.peekOffset != peekBefore { layoutContent() }
         if lastSentPointer != pointer, session.canControl {
             lastSentPointer = pointer
             session.send(.move(x: Float(pointer.x), y: Float(pointer.y)))
         }
-        if !momentumActive && !edgeMoving && !gesture.needsTick && lastSentPointer == pointer { link.isPaused = true }
+        if !momentumActive && !edgeMoving && !peeking && !gesture.needsTick && lastSentPointer == pointer {
+            link.isPaused = true
+        }
     }
 
     /// `CADisplayLink` 强持有 target：用一个弱引用的中转，画布才能正常释放。
