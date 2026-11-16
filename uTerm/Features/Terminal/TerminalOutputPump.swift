@@ -564,12 +564,42 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     /// DECSCUSR 0：光标形状、闪烁回到配置的默认值。
     static let resetCursorShape = Data("\u{1B}[0 q".utf8)
 
-    /// 换了一条新连接（重连，两端共用）：新连接上的程序不知道上一条连接上的程序把光标改成了什么形状（DECSCUSR，
-    /// vim 插入模式的竖线、Claude 的块……），先复位成设置里的那一种。影子、画面、镜像、检查点经这条泵看到它。
-    /// 接回 holder（程序还在跑）、远控镜像时影子随后整个换成快照，这一下被盖掉，程序设的形状保留。
-    /// 全新的终端（影子没内容）不送：光标本来就是默认的，也免得空终端被当成有内容、surface 挂上时白回放一次。
-    func resetCursorShapeForNewConnection() {
-        if shadow.hasContent { route(Self.resetCursorShape) }
+    /// 换连接时关掉上一条连接上的程序打开、却没来得及关的输入模式。这些模式决定终端往 PTY 发什么：
+    /// 鼠标上报（X10 / 1000 / 1002 / 1003 与 1005 / 1006 / 1015 / 1016 编码）留着，新 shell 就收到
+    /// `\e[<35;65;9M` 这种上报、readline 吞掉前缀后把其余的当字打进命令行（合盖断线、重连后满屏 `35;65;9M`）；
+    /// 焦点上报（1004）同理是 `\e[I` / `\e[O`；括号粘贴（2004）、应用光标键（DECCKM）、应用小键盘（DECKPAM）、
+    /// kitty 键盘协议、modifyOtherKeys 会让按键和粘贴变成 shell 不认的序列。另外把光标显示回来（Claude 这类程序会藏光标）、
+    /// 收掉没结束的同步输出（2026，否则画面停到超时）、SGR 复位（免得登录横幅带着上个程序的颜色）。
+    /// 不复位滚动区域与原点模式：这两条会把光标送回左上角，盖掉屏上的旧内容。
+    static let resetInputModes: Data = {
+        let privateModes: [String] = ["9", "1000", "1001", "1002", "1003", "1004", "1005", "1006", "1015", "1016",
+                                      "2004", "1", "2026"]
+        var text = privateModes.map { "\u{1B}[?\($0)l" }.joined()
+        text += "\u{1B}>"          // DECKPNM：小键盘回到普通模式
+        text += "\u{1B}[=0;1u"     // kitty 键盘协议：当前标志清零
+        text += "\u{1B}[>4m"       // modifyOtherKeys 复位
+        text += "\u{1B}[?25h"      // 光标可见
+        text += "\u{1B}[0m"        // SGR 复位
+        return Data(text.utf8)
+    }()
+
+    /// 退出备用屏（1049：回主屏并还原进备用屏前存的光标）。只在影子确实停在备用屏时送：不在备用屏时 1049 复位照样
+    /// 还原「存过的光标」，会把光标挪到不知哪次存的位置。
+    static let leaveAlternateScreen = Data("\u{1B}[?1049l".utf8)
+
+    /// 换连接时送进泵的整段复位：先离开备用屏（kitty 键盘标志按屏分开存，回主屏后再清），再复位输入模式与光标形状。
+    static func resetForNewConnection(onAlternateScreen: Bool) -> Data {
+        (onAlternateScreen ? leaveAlternateScreen : Data()) + resetInputModes + resetCursorShape
+    }
+
+    /// 换了一条新连接（重连，两端共用）：新连接上的程序不知道上一条连接上的程序把终端改成了什么样——光标形状（DECSCUSR，
+    /// vim 插入模式的竖线、Claude 的块……）、鼠标 / 焦点上报、键盘编码、备用屏（`resetForNewConnection`）。先复位，
+    /// 影子、画面、镜像、检查点经这条泵看到它。
+    /// 接回 holder（程序还在跑）、远控镜像时影子随后整个换成快照，这一下被盖掉，程序设的模式保留。
+    /// 全新的终端（影子没内容）不送：模式本来就是默认的，也免得空终端被当成有内容、surface 挂上时白回放一次。
+    func resetModesForNewConnection() {
+        guard shadow.hasContent else { return }
+        route(Self.resetForNewConnection(onAlternateScreen: shadow.isOnAlternateScreen))
     }
 
     /// 影子被不经过泵的方式改过（从检查点还原、直接喂了历史）：surface 要重新对齐。正在吃字节就当场回放，

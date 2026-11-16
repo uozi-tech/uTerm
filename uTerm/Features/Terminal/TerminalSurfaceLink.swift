@@ -150,10 +150,11 @@ final class TerminalSurfaceLink {
         view.uTermSetGridExpectedHandler { [weak self] cols, rows in self?.gridExpected(cols: cols, rows: rows) }
     }
 
-    /// 接一条新后端之前（两端共用的准备）：重连先复位光标形状（`CSI 0 q`，影子没内容时不送）。网格跟谁走由泵开始泵这条
+    /// 接一条新后端之前（两端共用的准备）：重连先复位上一条连接留下的终端模式（光标形状、鼠标 / 焦点上报、键盘编码、备用屏，
+    /// 见 `TerminalOutputPump.resetForNewConnection`；影子没内容时不送）。网格跟谁走由泵开始泵这条
     /// 后端时按它的能力定（`TerminalOutputPump.start(_ backend:)`）。调用方先 `pump.reset()`（换绑定的代次）。
     func prepareForNewConnection() {
-        pump.resetCursorShapeForNewConnection()
+        pump.resetModesForNewConnection()
     }
 
     // MARK: surface 的生与灭

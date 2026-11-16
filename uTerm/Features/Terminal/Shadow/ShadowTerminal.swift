@@ -223,6 +223,15 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         return Self.isAlternate(handle)
     }
 
+    /// 开着任何一种鼠标上报（X10 / 1000 / 1002 / 1003）。
+    var isMouseTracking: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        var tracking = false
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking)
+        return tracking
+    }
+
     /// 光标位置与状态。
     var cursor: Cursor {
         lock.lock()

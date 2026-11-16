@@ -40,7 +40,7 @@ final class TerminalReconnectCursorTests: XCTestCase {
         let first = ScriptedBackend()
         bridge.bind(first)
         XCTAssertNil(fed.all.range(of: TerminalOutputPump.resetCursorShape), "全新的终端不用复位")
-        first.emit("\u{1B}[6 q$ ")
+        first.emit("\u{1B}[6 q\u{1B}[?1003h\u{1B}[?1006h$ ")
         let gotFirst = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) {
             bridge.shadow.viewportText().contains("$")
         }
@@ -58,6 +58,7 @@ final class TerminalReconnectCursorTests: XCTestCase {
         let reset = try XCTUnwrap(after.range(of: TerminalOutputPump.resetCursorShape), "重连后要复位光标形状")
         let output = try XCTUnwrap(after.range(of: Data("again".utf8)))
         XCTAssertLessThan(reset.lowerBound, output.lowerBound, "复位排在新连接的输出前面")
+        XCTAssertFalse(bridge.shadow.isMouseTracking, "上一条连接上的程序开的鼠标上报要关掉，不然新 shell 收到满屏 `35;65;9M`")
         bridge.unbind()
     }
 }

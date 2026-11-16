@@ -24,6 +24,42 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertNotNil(after.range(of: TerminalOutputPump.resetCursorShape), "重连后要复位光标形状")
     }
 
+    /// 合盖断线后重连：上一条连接上的程序（Claude、tmux、vim）开着鼠标上报 / 焦点上报 / 备用屏 / 藏了光标就断了，
+    /// 新 shell 不知道，终端却继续把鼠标移动报给它——readline 吞掉 `ESC [ <` 前缀，命令行里满屏 `35;65;9M35;65;10M…`。
+    /// 重连要把这些模式复位：影子（和画面吃的是同一条字节流）里鼠标上报关了、回到主屏、光标可见，主屏原来的内容还在。
+    func testReconnectTurnsOffModesTheOldProgramLeftOn() async {
+        let session = TerminalSession()
+        session.attentionSink = { _ in }
+        defer { session.dispose() }
+        await session.connect(using: MockBackend())
+        session.feedOutput(text: "main-screen-line\r\n$ ")
+        session.feedOutput(text: "\u{1B}[?1049h\u{1B}[?1003h\u{1B}[?1006h\u{1B}[?1004h\u{1B}[?25lTUI")
+        XCTAssertTrue(session.shadow.isMouseTracking)
+        XCTAssertTrue(session.shadow.isOnAlternateScreen)
+        XCTAssertFalse(session.shadow.cursor.visible)
+
+        await session.connect(using: MockBackend())
+        XCTAssertFalse(session.shadow.isMouseTracking, "新连接上的 shell 没开鼠标上报，终端不能再往它发鼠标事件")
+        XCTAssertFalse(session.shadow.isOnAlternateScreen, "新 shell 画在主屏上")
+        XCTAssertTrue(session.shadow.cursor.visible)
+        XCTAssertTrue(session.shadow.viewportText().contains("main-screen-line"), "回到主屏，原来的内容还在")
+        XCTAssertFalse(session.shadow.viewportText().contains("TUI"))
+    }
+
+    /// 不在备用屏时不送 1049 复位：它会把光标还原到不知哪次存的位置。
+    func testReconnectOnMainScreenDoesNotMoveTheCursor() async {
+        let session = TerminalSession()
+        session.attentionSink = { _ in }
+        defer { session.dispose() }
+        await session.connect(using: MockBackend())
+        session.feedOutput(text: "\u{1B}7\u{1B}[?1003hline1\r\nline2\r\n$ ")
+        let before = session.shadow.cursor
+        await session.connect(using: MockBackend())
+        XCTAssertFalse(session.shadow.isMouseTracking)
+        XCTAssertEqual(session.shadow.cursor.x, before.x)
+        XCTAssertEqual(session.shadow.cursor.y, before.y)
+    }
+
     func testInitialStateIsIdle() {
         let session = TerminalSession()
         XCTAssertEqual(session.connectionState, .idle)

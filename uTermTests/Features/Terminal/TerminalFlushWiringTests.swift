@@ -180,11 +180,11 @@ final class TerminalFlushWiringTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(120))
         XCTAssertEqual(batches.total, afterClose, "旧连接的输出不能再进终端")
 
-        // 重连（影子已有内容）时先送一条光标形状复位（`resetCursorShape`），再是新连接的输出。
+        // 重连（影子已有内容）时先送一段模式复位（`resetForNewConnection`），再是新连接的输出。
         let newBackend = MockBackend()
         await session.connect(using: newBackend)
         await newBackend.emitOutput(Data("NEW".utf8))
-        let expected = afterClose + TerminalOutputPump.resetCursorShape.count + 3
+        let expected = afterClose + TerminalOutputPump.resetForNewConnection(onAlternateScreen: false).count + 3
         try await waitFor(batches, total: expected)
         XCTAssertEqual(batches.all.last, Data("NEW".utf8))
         await oldBackend.emitOutput(Data("STALE".utf8))
