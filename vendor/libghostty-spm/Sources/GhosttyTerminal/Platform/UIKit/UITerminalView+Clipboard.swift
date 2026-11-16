@@ -55,6 +55,7 @@
         /// work belongs to the host's button, not the callback.
         func pasteFromPasteboard() {
             dismissTouchSelection()
+            inputHandler.resetCommittedText()
             if inputHandler.hasMarkedText {
                 inputHandler.unmarkText()
             }

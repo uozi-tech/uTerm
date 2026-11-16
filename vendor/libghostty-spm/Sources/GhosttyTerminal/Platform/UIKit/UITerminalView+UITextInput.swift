@@ -182,6 +182,12 @@
                 }
             #endif
 
+            inputHandler.performBackspace { sendBackspaceKey() }
+        }
+
+        /// One Backspace press and release through the key encoder.
+        func sendBackspaceKey() {
+            let usage = UInt16(UIKeyboardHIDUsage.keyboardDeleteOrBackspace.rawValue)
             var keyEvent = ghostty_input_key_s()
             keyEvent.action = GHOSTTY_ACTION_PRESS
             keyEvent.mods = ghostty_input_mods_e(rawValue: 0)
@@ -310,7 +316,9 @@
             return inputHandler.text(in: range)
         }
 
-        open func replace(_: UITextRange, withText text: String) {
+        /// uTerm 本地补丁：按范围改。系统（听写）改写已上屏的字时范围落在 `TerminalCommittedTail` 里，
+        /// 原来忽略范围直接插入，会打出「hellohello world」。
+        open func replace(_ range: UITextRange, withText text: String) {
             #if !targetEnvironment(macCatalyst)
                 claimPendingInputMethodKeys()
             #endif
@@ -326,7 +334,11 @@
                 }
             #endif
 
-            inputHandler.insertText(text)
+            guard let range = range as? TerminalTextRange else {
+                inputHandler.insertText(text)
+                return
+            }
+            inputHandler.replaceCommittedText(in: range, with: text)
         }
 
         // MARK: - UITextInput Delegate

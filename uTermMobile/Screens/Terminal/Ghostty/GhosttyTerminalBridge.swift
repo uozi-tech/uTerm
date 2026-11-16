@@ -349,7 +349,9 @@ final class GhosttyTerminalBridge {
     // MARK: 输入
 
     /// 发给远端的原始字节（键盘条上的文字、提示词、回车）。和 surface 出来的击键、应答走同一条 FIFO。
+    /// 这些字节不经过终端视图，那一行跟着变了：视图记着的听写那段字作废。
     func write(_ data: Data) {
+        view.resetRewritableTextInput()
         input.write(data)
     }
 

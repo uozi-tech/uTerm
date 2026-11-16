@@ -23,6 +23,12 @@
             return becomeFirstResponder()
         }
 
+        /// uTerm 本地补丁：宿主绕过这个视图往终端写了字节（自己的粘贴、快捷短语）时调它，
+        /// 清掉听写还可能改写的那段字——终端那一行已经不是它记的样子了。
+        func resetRewritableTextInput() {
+            inputHandler.resetCommittedText()
+        }
+
         /// Paste text into the terminal. This is the text path: a program
         /// that enabled bracketed paste receives it framed as a paste, so a
         /// `\r` in it is a pasted character, not Enter. Keystrokes go
@@ -30,6 +36,7 @@
         @discardableResult
         func paste(text: String) -> Bool {
             dismissTouchSelection()
+            inputHandler.resetCommittedText()
             return surface?.paste(text: text) ?? false
         }
 
@@ -39,6 +46,7 @@
         @discardableResult
         func pasteWithProtection(text: String) -> Bool {
             dismissTouchSelection()
+            inputHandler.resetCommittedText()
             return surface?.pasteWithProtection(text: text) ?? false
         }
 

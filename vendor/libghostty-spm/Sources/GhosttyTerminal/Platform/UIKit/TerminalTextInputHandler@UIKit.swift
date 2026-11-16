@@ -11,6 +11,10 @@
     final class TerminalTextInputHandler {
         private weak var view: UITerminalView?
         private var markedTextState = TerminalMarkedTextState()
+        /// uTerm 本地补丁：上屏后系统还可能改写的那段字（听写），见 `TerminalCommittedTail`。
+        private var committedTail = TerminalCommittedTail()
+        /// 正在把这一段的改写发给终端：这期间经过 `sendInputKeyEvent` 的按键是我们自己发的，不清这一段。
+        private var isApplyingCommittedEdit = false
 
         var hasMarkedText: Bool {
             markedTextState.hasMarkedText
@@ -30,6 +34,9 @@
         // the caret off the start; it carries no text, so what the keyboard
         // reads as context is unchanged. Catalyst has no software keyboard
         // and keeps the plain document.
+        //
+        // uTerm 本地补丁：留着已上屏的一段（听写）时不要占位——那段字已经让光标离开了开头，
+        // 而占位没有字，`text(in:)` 读出来比范围短一格，UIKit 往前扩大范围找上一版时位置会差一格。
         #if targetEnvironment(macCatalyst)
             private static let documentAnchorLength = 0
         #else
@@ -40,7 +47,8 @@
         /// hands UIKit is a position in it.
         var document: TerminalInputDocument {
             TerminalInputDocument(
-                anchorLength: Self.documentAnchorLength,
+                anchorLength: committedTail.isEmpty ? Self.documentAnchorLength : 0,
+                committedLength: committedTail.length,
                 markedLength: markedTextState.documentLength,
             )
         }
@@ -74,10 +82,10 @@
                 if applyingStickyModifiers {
                     _ = view.handleStickyCommittedText(text)
                 } else {
-                    sendTypedText(text)
+                    sendCommittedText(text)
                 }
             #else
-                sendTypedText(text)
+                sendCommittedText(text)
             #endif
             view.refreshInputAccessoryContent()
 
@@ -136,6 +144,84 @@
                 event.text = ptr
                 view.sendInputKeyEvent(event)
             }
+        }
+
+        /// 上屏一段字。留着听写那一段时接在它后面（UIKit 下一版结果要连同它一起找）；没留着就和以前一样直接发。
+        private func sendCommittedText(_ text: String) {
+            guard !committedTail.isEmpty else {
+                sendTypedText(text)
+                return
+            }
+            applyCommittedEdit { sendTypedText(text) }
+            if text.contains(where: \.isNewline) {
+                // 带换行的走了粘贴，那一行已经交出去了。
+                committedTail.clear()
+            } else {
+                committedTail.append(text)
+            }
+        }
+
+        private func applyCommittedEdit(_ body: () -> Void) {
+            let wasApplying = isApplyingCommittedEdit
+            isApplyingCommittedEdit = true
+            defer { isApplyingCommittedEdit = wasApplying }
+            body()
+        }
+
+        /// uTerm 本地补丁：`replace(_:withText:)` 在没有组字时的实现。范围落在已上屏的那一段里就按范围改
+        ///（退格 + 补字），落在那一段之后就是在光标处插入、并从这里开始记。
+        func replaceCommittedText(in range: TerminalTextRange, with text: String) {
+            guard let view else { return }
+            let tailRange = document.committedRange(of: NSRange(location: range.location, length: range.length))
+
+            TerminalDebugLog.log(
+                .input,
+                "replace committed range=\(TerminalDebugLog.describe(tailRange)) tail=\(committedTail.length) text=\(TerminalDebugLog.describe(text))",
+            )
+
+            view.inputDelegate?.textWillChange(view)
+            view.inputDelegate?.selectionWillChange(view)
+
+            let edit = committedTail.replace(tailRange, with: text)
+            applyCommittedEdit {
+                for _ in 0 ..< edit.deletions {
+                    view.sendBackspaceKey()
+                }
+                sendTypedText(edit.typed)
+            }
+            if edit.typed.contains(where: \.isNewline) {
+                committedTail.clear()
+            }
+            view.refreshInputAccessoryContent()
+
+            view.inputDelegate?.selectionDidChange(view)
+            view.inputDelegate?.textDidChange(view)
+        }
+
+        /// 不在组字时按了退格：留着那一段就跟着删掉最后一个字符，文档和终端那一行保持一致。
+        func performBackspace(_ send: () -> Void) {
+            guard let view, !committedTail.isEmpty else {
+                send()
+                return
+            }
+            view.inputDelegate?.textWillChange(view)
+            view.inputDelegate?.selectionWillChange(view)
+            committedTail.removeLast()
+            applyCommittedEdit(send)
+            view.inputDelegate?.selectionDidChange(view)
+            view.inputDelegate?.textDidChange(view)
+        }
+
+        /// 终端那一行被别的输入改了（按键、粘贴、失焦）：清掉已上屏的那一段。
+        /// 听写进行中清掉会让 UIKit 取消这次听写——用户确实做了别的事。
+        func resetCommittedText() {
+            guard !isApplyingCommittedEdit, !committedTail.isEmpty, let view else { return }
+            TerminalDebugLog.log(.input, "reset committed tail=\(committedTail.length)")
+            view.inputDelegate?.textWillChange(view)
+            view.inputDelegate?.selectionWillChange(view)
+            committedTail.clear()
+            view.inputDelegate?.selectionDidChange(view)
+            view.inputDelegate?.textDidChange(view)
         }
 
         func setMarkedText(_ text: String?, selectedRange: NSRange) {
@@ -210,10 +296,10 @@
                     if applyingStickyModifiers {
                         _ = view.handleStickyCommittedText(committedText)
                     } else {
-                        sendTypedText(committedText)
+                        sendCommittedText(committedText)
                     }
                 #else
-                    sendTypedText(committedText)
+                    sendCommittedText(committedText)
                 #endif
             }
             view.refreshInputAccessoryContent()
@@ -258,8 +344,9 @@
         func text(in range: TerminalTextRange) -> String? {
             let document = document
             guard range.location >= 0, range.length >= 0, range.location + range.length <= document.length else { return nil }
-            let markedRange = document.markedRange(of: NSRange(location: range.location, length: range.length))
-            return markedTextState.text(in: markedRange)
+            let nsRange = NSRange(location: range.location, length: range.length)
+            guard let marked = markedTextState.text(in: document.markedRange(of: nsRange)) else { return nil }
+            return (committedTail.text(in: document.committedRange(of: nsRange)) ?? "") + marked
         }
 
         func deleteBackwardInMarkedText() -> Bool {
@@ -301,6 +388,7 @@
 
         private var shouldNotifySelectionChange: Bool {
             hasMarkedText
+                || !committedTail.isEmpty
                 || markedTextState.selectedRange.location != 0
                 || markedTextState.selectedRange.length != 0
         }

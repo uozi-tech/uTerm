@@ -35,6 +35,7 @@
         }
 
         public func dropInteraction(_: UIDropInteraction, performDrop session: any UIDropSession) {
+            inputHandler.resetCommittedText()
             let files = session.items.compactMap { item in
                 TerminalFileStaging.fileType(among: item.itemProvider.registeredTypeIdentifiers)
                     .map { TerminalFileStaging.Item(provider: item.itemProvider, type: $0) }

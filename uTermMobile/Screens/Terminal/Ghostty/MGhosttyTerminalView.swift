@@ -128,7 +128,8 @@ final class MGhosttyTerminalView: UITerminalView {
 
     @objc private func inputModeDidChange() {
         // 只记自己是第一响应者时的切换：别的标签抢到键盘时系统把键盘换成英文，那不是用户在这里选的。
-        guard isFirstResponder, let mode = super.textInputMode else { return }
+        // 听写也报成一次输入法切换，记下它下次弹出的就不是键盘了（同远程桌面的 `RemoteKeyboardRouting.isRememberable`）。
+        guard isFirstResponder, let mode = super.textInputMode, mode.primaryLanguage != "dictation" else { return }
         chosenInputMode = mode
     }
 
