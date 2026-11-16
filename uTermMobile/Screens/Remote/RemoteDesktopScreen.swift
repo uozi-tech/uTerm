@@ -266,9 +266,34 @@ struct RemoteDesktopScreen: View {
 
     private var canManagePassword: Bool { session?.supportsUnlock == true && client.macDeviceID != nil }
 
-    private var hasMoreActions: Bool { canPaste || canCurtain || canManagePassword }
+    /// 那台 Mac 接着几块显示器时才有「切换显示器」（老 Mac 不报列表）。
+    private var displays: [RemoteDesktopDisplaySummary] {
+        guard let displays = session?.info?.displays, displays.count > 1 else { return [] }
+        return displays
+    }
+
+    private var hasMoreActions: Bool { !displays.isEmpty || canPaste || canCurtain || canManagePassword }
 
     @ViewBuilder private var moreActions: some View {
+        if let session, !displays.isEmpty {
+            Section {
+                Menu {
+                    ForEach(displays, id: \.id) { display in
+                        Button {
+                            Task { await session.switchDisplay(to: display.id) }
+                        } label: {
+                            if display.id == session.info?.displayID {
+                                Label(display.menuTitle, systemImage: "checkmark")
+                            } else {
+                                Text(display.menuTitle)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("切换显示器", systemImage: "display.2")
+                }
+            }
+        }
         if canPaste {
             Section {
                 Button { Task { await pasteClipboard() } } label: {

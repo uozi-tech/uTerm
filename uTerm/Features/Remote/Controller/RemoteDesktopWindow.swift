@@ -269,9 +269,9 @@ struct RemoteDesktopContent: View {
                     Task { await session.switchDisplay(to: display.id) }
                 } label: {
                     if display.id == session.info?.displayID {
-                        Label(Self.displayTitle(display), systemImage: "checkmark")
+                        Label(display.menuTitle, systemImage: "checkmark")
                     } else {
-                        Text(Self.displayTitle(display))
+                        Text(display.menuTitle)
                     }
                 }
             }
@@ -287,12 +287,6 @@ struct RemoteDesktopContent: View {
         .fixedSize()
         .help(String(localized: "切换显示器"))
         .accessibilityLabel(Text("切换显示器"))
-    }
-
-    nonisolated static func displayTitle(_ display: RemoteDesktopDisplaySummary) -> String {
-        let size = "\(Int(display.width))×\(Int(display.height))"
-        return display.isMain ? String(localized: "\(display.name)（主显示器，\(size)）")
-                              : String(localized: "\(display.name)（\(size)）")
     }
 
     /// 读数：盖在画面左上角，点顶栏的仪表按钮开关。

@@ -329,7 +329,7 @@ final class RemoteMacDesktopTests: XCTestCase {
         await session.start()
         XCTAssertNil(session.info?.displays, "只有一块（或老 Mac）时不报")
         let main = RemoteDesktopDisplaySummary(id: 1, name: "内建视网膜显示器", width: 1512, height: 982, isMain: true)
-        XCTAssertEqual(RemoteDesktopContent.displayTitle(main), "内建视网膜显示器（主显示器，1512×982）")
+        XCTAssertEqual(main.menuTitle, "内建视网膜显示器（主显示器，1512×982）")
     }
 
         private func shape(_ seed: UInt8, hot: Double) -> RemoteDesktopCursorImage {

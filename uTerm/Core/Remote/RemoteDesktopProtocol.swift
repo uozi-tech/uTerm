@@ -121,6 +121,15 @@ nonisolated struct RemoteDesktopDisplaySummary: Codable, Equatable, Hashable, Se
     var isMain: Bool
 }
 
+extension RemoteDesktopDisplaySummary {
+    /// 「切换显示器」菜单里的一行（两端共用）。
+    nonisolated var menuTitle: String {
+        let size = "\(Int(width))×\(Int(height))"
+        return isMain ? String(localized: "\(name)（主显示器，\(size)）")
+                      : String(localized: "\(name)（\(size)）")
+    }
+}
+
 /// Mac → 手机：锁屏与帘幕状态（`desktopScreenState`，桌面通道）。只发给声明了 `desktop-unlock` 的手机。
 nonisolated struct RemoteDesktopScreenState: Codable, Equatable, Sendable {
     /// Mac 停在锁屏界面上。
