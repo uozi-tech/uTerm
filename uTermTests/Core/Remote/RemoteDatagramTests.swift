@@ -294,6 +294,38 @@ final class RemoteDatagramTests: XCTestCase {
         XCTAssertLessThan(estimator.state.jitterNanos, 2_000_000)
     }
 
+    /// 空闲的链路：每秒只有一个心跳包，手机 Wi-Fi 省电让往返在 30–280 ms 之间乱跳。自己几乎没在发，排队不可能是
+    /// 自己排出来的，节奏不该跟着退：以前一路退到下限，同一条连接上再开屏，首个关键帧要一秒多才发完
+    ///（2026-11-16 mini：空闲 11 分钟后开流，「链路 0.93 Mbps」，51 KB 关键帧到手机 1.17 s；新连接上 40–100 ms）。
+    func test_idle_link_with_power_save_delays_keeps_its_rate() {
+        var estimator = RemoteLinkEstimator(now: 0)
+        var state: (sequence: UInt64, received: UInt64, bytes: UInt64) = (0, 0, 0)
+        var now = feed(&estimator, seconds: 5, packetsPerReport: 200, trip: 30_000_000, start: 1_000_000_000,
+                       state: &state, backlog: true)
+        let active = estimator.pacingRate
+        XCTAssertGreaterThan(active, estimator.config.initialRate)
+        var seed: UInt64 = 5
+        func random(_ range: UInt64) -> UInt64 {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return (seed >> 33) % (range + 1)
+        }
+        for _ in 0..<60 {
+            // 心跳发出去，手机收到后攒 50 ms 回一份报告。
+            let trip = 30_000_000 + random(250_000_000)
+            state.sequence += 1
+            estimator.recordSent(sequence: state.sequence, now: now)
+            state.received += 1
+            state.bytes += 120
+            let reportAt = now + trip + 50_000_000
+            estimator.record(RemoteLinkReport(highestSequence: state.sequence, packets: state.received, bytes: state.bytes,
+                                              echoSequence: state.sequence, echoHeldMicros: 50_000), now: reportAt)
+            now += 1_000_000_000
+        }
+        // 刚停发的那一秒里窗口还算着刚才的流量，最多温和地退一档；之后不再退。起步不比新连接差。
+        XCTAssertGreaterThanOrEqual(estimator.pacingRate, estimator.config.initialRate,
+                                    "空闲时的往返起伏不是自己排的队（现在 \(estimator.pacingRate * 8 / 1e6) Mbps）")
+    }
+
     func test_heavy_loss_backs_off_after_it_persists() {
         var estimator = RemoteLinkEstimator(now: 0)
         var state: (sequence: UInt64, received: UInt64, bytes: UInt64) = (0, 0, 0)

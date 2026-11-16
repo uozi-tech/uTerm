@@ -71,6 +71,11 @@ nonisolated struct RemoteLinkState: Equatable, Sendable {
 ///   抖动只从往返**变短**的那一步量：排队涨起来时往返一路变长，不会把门槛跟着抬高。
 /// - 大量丢包：`heavyLoss` 以上持续超过 `heavyLossHold`。多半撞上了限速器，排队信号看不出来。
 ///
+/// - **自己几乎没在发时不算排队**：最近 1 秒发出的不到 `minRate`，队列不可能是自己排出来的（链路真窄到这个份上，
+///   节奏也早在下限了）。空闲的连接上只有心跳，手机 Wi-Fi 省电让往返在几十到几百毫秒之间乱跳；以前照样当排队，
+///   退到「送达速率 × 0.85」，而空闲时送达速率几乎为 0，节奏一路掉到下限。同一条连接上再开屏，首个关键帧要一秒多
+///   才发完（2026-11-16 mini：空闲 11 分钟后开流「链路 0.93 Mbps」，51 KB 关键帧到手机 1.17 s；新连接上 40–100 ms）。
+///
 /// 其余丢包交给重传和纠错。节奏只在确实有东西排队等发时才往上涨：没东西发的时候量不出带宽。
 /// 涨也分两段：头一次撞到排队前涨得快，好尽快找到上限；撞过之后只慢慢探，否则每隔几个往返就冲过头一次，
 /// 瓶颈把多出来的包全丢掉，重传反而占掉带宽。发出去的也不能比实际送达的快太多，送不到的再发也没用。
@@ -137,11 +142,18 @@ nonisolated struct RemoteLinkEstimator {
     private var lastAdjustment: UInt64
     private var heavyLossSince: UInt64?
     private var backlogged = false
+    /// 最近 1 秒每 100 ms 发出的字节（环形，`sentSlot` 是最新一格的绝对编号）。
+    private var sentBuckets = [UInt64](repeating: 0, count: Self.sentBucketCount)
+    private var sentSlot: UInt64 = 0
     private var foundCeiling = false
     private(set) var lossRate = 0.0
     private(set) var pacingRate: Double
 
     private static let sentCapacity = 8192
+    private static let sentBucketCount = 10
+    private static let sentBucketNanos: UInt64 = 100_000_000
+    /// 调用方不给包长时按一个满的数据报算（`RemoteP2PTransport.datagramBytes`）。
+    static let assumedDatagramBytes = 1200
 
     init(config: Config = Config(), now: UInt64) {
         self.config = config
@@ -179,8 +191,25 @@ nonisolated struct RemoteLinkEstimator {
         return fastest > floor ? fastest - floor : 0
     }
 
-    mutating func recordSent(sequence: UInt64, now: UInt64) {
+    mutating func recordSent(sequence: UInt64, now: UInt64, bytes: Int = RemoteLinkEstimator.assumedDatagramBytes) {
         sent[Int(sequence % UInt64(Self.sentCapacity))] = Sent(sequence: sequence, nanos: now)
+        advanceSentBuckets(to: now)
+        sentBuckets[Int(sentSlot % UInt64(Self.sentBucketCount))] &+= UInt64(max(0, bytes))
+    }
+
+    /// 最近 1 秒发出的字节 / 秒。
+    private mutating func recentSentRate(now: UInt64) -> Double {
+        advanceSentBuckets(to: now)
+        let window = Double(Self.sentBucketCount) * Double(Self.sentBucketNanos) / 1e9
+        return Double(sentBuckets.reduce(0, &+)) / window
+    }
+
+    private mutating func advanceSentBuckets(to now: UInt64) {
+        let slot = now / Self.sentBucketNanos
+        guard slot > sentSlot else { return }
+        let steps = min(UInt64(Self.sentBucketCount), slot - sentSlot)
+        for step in 1...steps { sentBuckets[Int((sentSlot + step) % UInt64(Self.sentBucketCount))] = 0 }
+        sentSlot = slot
     }
 
     /// 发送队列里有东西在等令牌：说明节奏卡住了发送。
@@ -257,7 +286,7 @@ nonisolated struct RemoteLinkEstimator {
             heavyLossSince = nil
         }
         let old = pacingRate
-        if queueDelay > config.queueThreshold {
+        if queueDelay > config.queueThreshold, recentSentRate(now: now) >= config.minRate {
             // 瓶颈在排队：退到略低于实际送达的速率，把队列放空。
             let delivered = deliveryRate
             pacingRate = delivered > 0 ? min(pacingRate, delivered * config.backoff) : pacingRate * config.backoff

@@ -423,7 +423,7 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         let now = DispatchTime.now().uptimeNanoseconds
         while let (kind, payload) = pacer.next(now: now) {
             guard let datagram = cipher.seal(kind, payload) else { continue }
-            estimator.recordSent(sequence: cipher.lastSequence, now: now)
+            estimator.recordSent(sequence: cipher.lastSequence, now: now, bytes: datagram.count)
             path.send(datagram)
         }
         if !pacer.isEmpty { estimator.noteBacklog() }
