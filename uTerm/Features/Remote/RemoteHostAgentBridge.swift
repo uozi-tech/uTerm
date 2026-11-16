@@ -315,7 +315,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     }
 
     /// 被控端用得到的身份存储账号（`RemoteIdentityStore` 的 `.controllers` 方向）。
-    static let secretAccounts = ["identity", "relayHostKey", "trustedPeers", "blockedPeers"]
+    static let secretAccounts = ["identity", "relayHostKey", "trustedPeers", "blockedPeers", RemoteIdentityStore.vouchAccount]
 
     // MARK: - 版本替换
 

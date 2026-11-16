@@ -44,7 +44,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopUnlockOutcomes,
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
                                           RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus,
-                                          RemoteFeature.files]
+                                          RemoteFeature.files, RemoteFeature.deviceVouch]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -128,6 +128,9 @@ nonisolated enum RemoteFeature {
     /// 反过来的文件服务：主控端（Mac）答被控 Mac 发来的 `fileRequest`，范围限在主控端共享出去的文件夹里。
     /// 只有主控端声明；被控的 Mac 只对声明了这一项的设备发（手机、老版本的 Mac 收到会当未知消息处理）。
     static let fileSharing = "file-sharing"
+    /// 认得 `vouchDevice`：已配对的设备可以请这台 Mac 记下同一个人的另一台设备（见 `RemoteVouch.swift`）。
+    /// 能力只说明认得这条消息；Mac 上关掉了「允许担保」时照样回 `notAllowed`。
+    static let deviceVouch = "device-vouch"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -268,6 +271,11 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case fileRequest = 48
         /// Mac → 主控端：对应的应答（同一通道）。负载是打包的 `RemoteFileReply` 加正文，按请求号对上。
         case fileReply = 49
+        /// 主控端 → Mac：请 Mac 记下同一个人的另一台设备（通道 0）。负载 = `RemoteVouchRequest`（JSON）。
+        /// 只发给 `features` 带 `device-vouch` 的 Mac。
+        case vouchDevice = 50
+        /// Mac → 主控端：担保的结果（通道 0）。负载 = `RemoteVouchResult`（JSON）。
+        case vouchResult = 51
     }
 
     var kind: Kind

@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @preconcurrency import Network
 @testable import uTerm
@@ -405,6 +406,63 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertEqual(feed.take(maxBytes: 4), .snapshot(Data(repeating: 7, count: 2), isFirst: false, isLast: true))
         XCTAssertNil(feed.take(maxBytes: 4))
         XCTAssertEqual(granted.value, 10, "取走多少就还多少信用")
+    }
+
+    /// 担保在远控进程里处理：信任表和担保记录经 `persistSecret` 写回 App，App 比对出新记录发通知；
+    /// 新设备随后连远控进程不弹审批；App 设置里关掉担保，远控进程跟着拒绝。
+    func test_vouch_handled_by_the_agent_is_written_back_and_notified_in_the_app() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        var notified: [RemotePeerVouch] = []
+        rig.appServer.onDeviceVouched = { notified.append($0) }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil && rig.appServer.status == .listening }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(rig.agentServer?.port)
+        func client(_ id: UUID, _ name: String, _ identity: RemoteIdentityStore) -> RemoteMacClient {
+            let client = RemoteMacClient(macName: "测试 Mac",
+                                         endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                         identity: identity)
+            client.localDeviceOverride = (id, name)
+            return client
+        }
+        let phone = client(UUID(), "iPhone", RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let connecting = Task { await phone.connect() }
+        let asked = await waitUntil { !rig.appServer.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        rig.appServer.approvePairing(try XCTUnwrap(rig.appServer.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(phone.state, .connected)
+
+        let padID = UUID()
+        let padIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let pad = RemoteSiblingDevice(id: padID, name: "iPad", model: nil, platform: "mobile",
+                                      publicKey: try padIdentity.localIdentity().publicKey.rawRepresentation, updatedAt: Date())
+        let result = try await phone.vouch(for: pad)
+        XCTAssertEqual(result.kind, .added, "设置默认允许担保：\(result.reason ?? "")")
+        let written = await waitUntil { rig.appServer.peerVouches[padID] != nil && rig.appServer.trustedPeers.count == 2 }
+        XCTAssertTrue(written, "信任表与担保记录应写回 App")
+        XCTAssertEqual(notified.map(\.deviceID), [padID], "App 侧发一次通知")
+
+        let padClient = client(padID, "iPad", padIdentity)
+        let padConnecting = Task { await padClient.connect() }
+        await padConnecting.value
+        XCTAssertEqual(padClient.state, .connected)
+        XCTAssertTrue(rig.appServer.pairingRequests.isEmpty, "被担保的设备不弹审批")
+
+        rig.settings.isDeviceVouchingEnabled = false
+        rig.bridge?.settingsChanged()
+        // 设置要经 XPC 交过去，期间担保还可能成功：每次换一台新设备问，直到被拒。
+        let refused = await waitUntil {
+            let other = RemoteSiblingDevice(id: UUID(), name: "Mac", model: nil, platform: "mac",
+                                            publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
+                                            updatedAt: Date())
+            guard let result = try? await phone.vouch(for: other) else { return false }
+            return result.kind == .notAllowed
+        }
+        XCTAssertTrue(refused, "App 里关掉担保，远控进程跟着拒绝")
+        phone.disconnect()
+        padClient.disconnect()
     }
 
     func test_mirrored_secret_storage_keeps_unflushed_writes_over_app_snapshot() throws {

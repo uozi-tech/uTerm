@@ -84,6 +84,8 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
 
     private static let identityAccount = "identity"
     private static let relayHostKeyAccount = "relayHostKey"
+    /// 被担保的设备是谁添加的（`RemotePeerVouch`），只有被控端（`.controllers`）用。
+    static let vouchAccount = "peerVouches"
 
     let role: RemoteTrustRole
 
@@ -169,13 +171,41 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         if blocked.contains(peer.id) { try saveBlocked(blocked.subtracting([peer.id])) }
     }
 
-    /// 撤销信任并拉黑：再来连要重新配对（`trust` 解除拉黑）。
+    /// 撤销信任并拉黑：再来连要重新配对（`trust` 解除拉黑）。它的担保记录一并去掉。
     func revoke(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
         let peers = loadPeers().filter { $0.id != id }
         try storage.save(try JSONEncoder().encode(peers), account: peersAccount)
         try saveBlocked(loadBlocked().union([id]))
+        var vouches = loadVouches()
+        if vouches.removeValue(forKey: id) != nil { try saveVouches(vouches) }
+    }
+
+    /// 被担保的设备 → 谁添加的。
+    func vouches() -> [UUID: RemotePeerVouch] {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadVouches()
+    }
+
+    func recordVouch(_ vouch: RemotePeerVouch) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var vouches = loadVouches()
+        vouches[vouch.deviceID] = vouch
+        try saveVouches(vouches)
+    }
+
+    private func loadVouches() -> [UUID: RemotePeerVouch] {
+        guard let data = try? storage.load(Self.vouchAccount),
+              let list = try? JSONDecoder().decode([RemotePeerVouch].self, from: data) else { return [:] }
+        return Dictionary(list.map { ($0.deviceID, $0) }, uniquingKeysWith: { _, latest in latest })
+    }
+
+    private func saveVouches(_ vouches: [UUID: RemotePeerVouch]) throws {
+        let list = vouches.values.sorted { $0.deviceID.uuidString < $1.deviceID.uuidString }
+        try storage.save(try JSONEncoder().encode(list), account: Self.vouchAccount)
     }
 
     func isBlocked(_ id: UUID) -> Bool {

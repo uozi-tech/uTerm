@@ -267,6 +267,7 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
             desktopEnvironment: environment.makeDesktopEnvironment(settings),
             relayRegistrationBlock: hello.relayRegistrationBlock.flatMap(RemoteRelayRegistrationBlock.init(rawValue:)))
         server.internetAccessPolicy = { [weak settings] in settings?.allowsInternetAccess($0) ?? false }
+        server.vouchPolicy = { [weak settings] in settings?.isDeviceVouchingEnabled ?? false }
         server.grantInternetAccess = { [weak self, weak settings] id in
             settings?.internetDevices.insert(id)
             self?.persist(.grantInternetAccess(id))
@@ -453,7 +454,7 @@ extension RemoteControlSettings {
         RemoteHostAgentSettings(enabled: isEnabled, desktopEnabled: isDesktopEnabled, unlockEnabled: isDesktopUnlockEnabled,
                                 audioEnabled: isDesktopAudioEnabled, localShellEnabled: isLocalShellEnabled,
                                 internetEnabled: isInternetEnabled, internetDevices: internetDevices.sorted { $0.uuidString < $1.uuidString },
-                                keepAwakeForInternet: keepsAwakeForInternet)
+                                keepAwakeForInternet: keepsAwakeForInternet, deviceVouching: isDeviceVouchingEnabled)
     }
 
     /// 远控进程里：换成 App 报来的那份（只改变了的项，每改一项回调一次起停逻辑，与 App 里一致）。
@@ -467,5 +468,7 @@ extension RemoteControlSettings {
         let devices = Set(snapshot.internetDevices)
         if internetDevices != devices { internetDevices = devices }
         if keepsAwakeForInternet != snapshot.keepAwakeForInternet { keepsAwakeForInternet = snapshot.keepAwakeForInternet }
+        let vouching = snapshot.deviceVouching ?? true
+        if isDeviceVouchingEnabled != vouching { isDeviceVouchingEnabled = vouching }
     }
 }

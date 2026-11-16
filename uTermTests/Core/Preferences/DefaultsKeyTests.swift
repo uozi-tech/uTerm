@@ -59,6 +59,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteInternetEnabled, "remote.internetEnabled"),
         (DefaultsKey.remoteInternetDevices, "remote.internetDevices"),
         (DefaultsKey.remoteKeepAwakeForInternet, "remote.keepAwakeForInternet"),
+        (DefaultsKey.remoteDeviceVouching, "remote.deviceVouching"),
         (DefaultsKey.remoteInternetOnly, "remote.internetOnly"),
         (DefaultsKey.remotePathMatrixLog, "remote.pathMatrixLog"),
         (DefaultsKey.remoteIceProbeNote, "remote.iceProbeNote"),
@@ -137,6 +138,7 @@ final class DefaultsKeyTests: XCTestCase {
         XCTAssertEqual(RemoteControlSettings.Keys.internetEnabled, DefaultsKey.remoteInternetEnabled)
         XCTAssertEqual(RemoteControlSettings.Keys.internetDevices, DefaultsKey.remoteInternetDevices)
         XCTAssertEqual(RemoteControlSettings.Keys.keepAwakeForInternet, DefaultsKey.remoteKeepAwakeForInternet)
+        XCTAssertEqual(RemoteControlSettings.Keys.deviceVouching, DefaultsKey.remoteDeviceVouching)
         XCTAssertEqual(BackgroundServiceSettings.Keys.launchAtLogin, DefaultsKey.backgroundLaunchAtLogin)
         XCTAssertEqual(BackgroundServiceSettings.Keys.allowOnDemandLaunch, DefaultsKey.backgroundAllowOnDemandLaunch)
         XCTAssertEqual(ExternalAppPreference.defaultsKey, DefaultsKey.externalOpenAppByExtension)

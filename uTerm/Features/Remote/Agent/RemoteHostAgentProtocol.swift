@@ -120,6 +120,8 @@ nonisolated struct RemoteHostAgentSettings: Codable, Equatable, Sendable {
     var internetEnabled = false
     var internetDevices: [UUID] = []
     var keepAwakeForInternet = false
+    /// 允许担保。可选：老 App 交来的设置没有这个键，按默认（开）算。
+    var deviceVouching: Bool?
 }
 
 nonisolated struct RemoteHostAgentSessions: Codable, Equatable, Sendable {

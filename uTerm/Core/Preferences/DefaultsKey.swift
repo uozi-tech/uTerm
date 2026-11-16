@@ -85,6 +85,8 @@ nonisolated enum DefaultsKey {
     static let remoteInternetDevices = "remote.internetDevices"
     /// macOS：开着公网接入时保持唤醒。
     static let remoteKeepAwakeForInternet = "remote.keepAwakeForInternet"
+    /// macOS：允许已配对的设备为它主人的其它设备开通（担保，默认开）。
+    static let remoteDeviceVouching = "remote.deviceVouching"
     /// iOS：只走公网（网络诊断）。
     static let remoteInternetOnly = "remote.internetOnly"
     /// iOS：网络诊断的记录、备注、轮数与测试项。

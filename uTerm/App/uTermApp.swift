@@ -123,6 +123,8 @@ struct uTermApp: App {
                                                 arguments: ProcessInfo.processInfo.arguments))
         remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
         remoteServer.grantInternetAccess = { [remoteSettings] in remoteSettings.internetDevices.insert($0) }
+        remoteServer.vouchPolicy = { [remoteSettings] in remoteSettings.isDeviceVouchingEnabled }
+        remoteServer.onDeviceVouched = { RemoteVouchNotifier.post($0) }
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
         // 远控服务跑在常驻的远控进程里（App 更新、崩溃时远控连接不断）：配对审批框与被控指示条也由它显示。

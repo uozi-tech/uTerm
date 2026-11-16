@@ -43,6 +43,8 @@ final class RemoteHostServer {
     /// 和配对时存进 `trustedPeers` 的名字可能不同（改过设备名、或 iCloud 配对记的是另一个名字）。
     private(set) var connectedPeerIDs: Set<UUID> = []
     private(set) var trustedPeers: [RemotePeer] = []
+    /// 被担保的设备是谁添加的（设置页显示来路、整组撤销用）。
+    private(set) var peerVouches: [UUID: RemotePeerVouch] = [:]
     /// 排队中的配对请求；审批面板只显示第一个。
     private(set) var pairingRequests: [PairingRequest] = []
     /// 正在出示的扫码配对邀请。一次性：有设备用它配上、过期、或关掉配对面板都作废。
@@ -125,6 +127,10 @@ final class RemoteHostServer {
     /// 凭邀请经公网配上的设备：替它勾上「允许经公网接入」。邀请是本机的人主动发出去的，配上了还要再去设置里
     /// 勾一次的话，对方第一次连就会被断开。
     @ObservationIgnored var grantInternetAccess: (UUID) -> Void = { _ in }
+    /// 「允许已配对的设备为它主人的其它设备开通」，由设置决定。默认不允许（设置里默认打开）。
+    @ObservationIgnored var vouchPolicy: () -> Bool = { false }
+    /// 有设备经担保被记下了（App 里发通知）。远控进程里不设：App 收到它写回的担保记录时自己比对出来。
+    @ObservationIgnored var onDeviceVouched: (RemotePeerVouch) -> Void = { _ in }
     /// 当前的中继配置。可观察：命令行导入后设置页要跟着变。交给别的设备的是 `relayConfig(forPeer:)`。
     var relayConfig: RemoteRelayConfig?
     /// 要吊销、中继还没确认的成员证书。
@@ -175,6 +181,7 @@ final class RemoteHostServer {
         self.localID = localID
         self.advertises = advertises
         self.trustedPeers = identity.trustedPeers()
+        self.peerVouches = identity.vouches()
     }
 
     // MARK: - 起停
@@ -667,9 +674,75 @@ final class RemoteHostServer {
         if let grant = identity.peer(id: peerID)?.relayGrant { revokeRelayGrant(grant) }
         try? identity.revoke(id: peerID)
         trustedPeers = identity.trustedPeers()
+        refreshVouches(notify: false)
         for connection in connections.values where connection.peerID == peerID {
             connection.close()
         }
+    }
+
+    // MARK: - 担保
+
+    /// 和这台设备同一组的设备（它自己、它的担保者、经同一组担保的其它设备）。
+    func familyMembers(of peerID: UUID) -> [UUID] {
+        RemoteVouchPolicy.familyMembers(of: peerID, trusted: trustedPeers, vouches: peerVouches)
+    }
+
+    /// 撤销整组。远控进程在服务时逐台转过去（`revoke` 自己会转）。
+    func revokeFamily(of peerID: UUID) {
+        for id in familyMembers(of: peerID) { revoke(id) }
+    }
+
+    /// 一台已认证的设备请本机记下同一个人的另一台设备（`RemoteHostConnection` 收到 `vouchDevice` 时调）。
+    func handleVouch(_ request: RemoteVouchRequest, voucherID: UUID, voucherName: String) -> RemoteVouchResult {
+        let decision = RemoteVouchPolicy.decide(request, voucherID: voucherID, hostID: localID, enabled: vouchPolicy(),
+                                                isBlocked: identity.isBlocked(request.deviceID),
+                                                existing: identity.peer(id: request.deviceID))
+        switch decision {
+        case .notAllowed(let reason):
+            AppLogger.info("远控：\(voucherName) 想为「\(request.name)」开通，本机没有允许担保", category: RemoteLog.category)
+            return RemoteVouchResult(requestID: request.requestID, outcome: .notAllowed, reason: reason)
+        case .rejected(let reason):
+            AppLogger.info("远控：拒绝 \(voucherName) 为「\(request.name)」开通：\(reason)", category: RemoteLog.category)
+            return RemoteVouchResult(requestID: request.requestID, outcome: .rejected, reason: reason)
+        case .alreadyTrusted:
+            let internet = allowsInternetAccess(request.deviceID)
+            return RemoteVouchResult(requestID: request.requestID, outcome: .alreadyTrusted, internetAccess: internet,
+                                     relay: internet ? relayConfig(forPeer: request.deviceID) : nil)
+        case .add:
+            break
+        }
+        let peer = RemotePeer(id: request.deviceID, name: request.name, publicKey: request.publicKey, pairedAt: Date(),
+                              model: request.model, platform: request.platform)
+        let vouch = RemotePeerVouch(deviceID: request.deviceID, deviceName: request.name, vouchedBy: voucherID,
+                                    voucherName: voucherName,
+                                    family: RemoteVouchPolicy.family(of: voucherID, vouches: identity.vouches()),
+                                    vouchedAt: Date())
+        do {
+            // 先记来路再信任：信任写进去了、来路没记上的话，这台设备在列表里就像是手动配对的，整组撤销漏掉它。
+            try identity.recordVouch(vouch)
+            try trust(peer)
+        } catch {
+            return RemoteVouchResult(requestID: request.requestID, outcome: .rejected,
+                                     reason: String(localized: "这台 Mac 没能保存：\(error.localizedDescription)"))
+        }
+        // 权限只继承、不放大：担保者此刻能经公网接入，新设备才能。
+        let internet = allowsInternetAccess(voucherID)
+        if internet { grantInternetAccess(request.deviceID) }
+        AppLogger.notice("远控：\(voucherName) 为「\(request.name)」开通了远程控制（公网接入：\(internet ? "是" : "否")）",
+                         category: RemoteLog.category)
+        refreshVouches(notify: true)
+        let relay = internet ? relayConfig(forPeer: request.deviceID) : nil
+        return RemoteVouchResult(requestID: request.requestID, outcome: .added, internetAccess: internet, relay: relay)
+    }
+
+    /// 重读担保记录；`notify` 时对新出现的每一条回调 `onDeviceVouched`。
+    private func refreshVouches(notify: Bool) {
+        let now = identity.vouches()
+        guard now != peerVouches else { return }
+        let added = now.values.filter { peerVouches[$0.deviceID] != $0 }
+        peerVouches = now
+        guard notify else { return }
+        for vouch in added.sorted(by: { $0.vouchedAt < $1.vouchedAt }) { onDeviceVouched(vouch) }
     }
 
     // MARK: - 会话与接管
@@ -996,6 +1069,8 @@ extension RemoteHostServer {
     func agentPersistedIdentity() {
         let peersNow = identity.trustedPeers()
         if trustedPeers != peersNow { trustedPeers = peersNow }
+        // 远控进程担保了一台设备：它写回的记录在这里比对出来，App 发通知。
+        refreshVouches(notify: true)
     }
 
     /// App 侧：远控进程断开了（宽限期之外、或进程没了），状态回到未开启，等桥接重连或退回进程内服务。

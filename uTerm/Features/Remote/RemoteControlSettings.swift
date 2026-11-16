@@ -17,6 +17,7 @@ final class RemoteControlSettings {
         static let internetEnabled = DefaultsKey.remoteInternetEnabled
         static let internetDevices = DefaultsKey.remoteInternetDevices
         static let keepAwakeForInternet = DefaultsKey.remoteKeepAwakeForInternet
+        static let deviceVouching = DefaultsKey.remoteDeviceVouching
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -97,6 +98,16 @@ final class RemoteControlSettings {
         }
     }
 
+    /// 「允许已配对的设备为它主人的其它设备开通」（默认开）。不让已配对设备多出权力：它本来就能经远程桌面
+    /// 打开这里出一张邀请。关掉后担保一律拒绝，已经开通的设备不受影响。
+    var isDeviceVouchingEnabled: Bool {
+        didSet {
+            guard isDeviceVouchingEnabled != oldValue else { return }
+            defaults.set(isDeviceVouchingEnabled, forKey: Keys.deviceVouching)
+            onChange?(self)
+        }
+    }
+
     func allowsInternetAccess(_ id: UUID) -> Bool {
         isEnabled && isInternetEnabled && internetDevices.contains(id)
     }
@@ -111,6 +122,7 @@ final class RemoteControlSettings {
         isInternetEnabled = defaults.object(forKey: Keys.internetEnabled) as? Bool ?? false
         internetDevices = Set((defaults.stringArray(forKey: Keys.internetDevices) ?? []).compactMap(UUID.init(uuidString:)))
         keepsAwakeForInternet = defaults.object(forKey: Keys.keepAwakeForInternet) as? Bool ?? false
+        isDeviceVouchingEnabled = defaults.object(forKey: Keys.deviceVouching) as? Bool ?? true
     }
 
     /// 开关变化时回调（起停 `RemoteHostServer`）。设置后立即回调一次，与持久化状态对齐。

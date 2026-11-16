@@ -372,6 +372,11 @@ final class RemoteHostConnection {
             deliverImage(request, channel: message.channel)
         case .fileRequest:
             handleFileRequest(message.payload)
+        case .vouchDevice:
+            guard let request = try? RemoteJSON.decode(RemoteVouchRequest.self, from: message.payload),
+                  let peerID else { return }
+            let result = server.handleVouch(request, voucherID: peerID, voucherName: peerName)
+            link.send(RemoteMessage(.vouchResult, payload: RemoteJSON.encode(result)))
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
             Task { await startDesktop(request) }
@@ -401,7 +406,7 @@ final class RemoteHostConnection {
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
-             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply:
+             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult:
             break
         }
     }
