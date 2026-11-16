@@ -49,7 +49,7 @@ final class RemoteDesktopKeyBarTests: XCTestCase {
     // MARK: - 面板与键盘
 
     func testOpeningAPanelCollapsesTheKeyboardAndClosingBringsItBack() {
-        var switcher = MKeyBarPanelSwitch<Int>()
+        var switcher = MKeyBarPanelSwitch<Int>(initial: 1)
         var panel: Int?
         var calls: [String] = []
         let show = { calls.append("show") }, collapse = { calls.append("collapse") }
@@ -66,7 +66,7 @@ final class RemoteDesktopKeyBarTests: XCTestCase {
     }
 
     func testClosingAPanelOpenedWithoutKeyboardLeavesItDown() {
-        var switcher = MKeyBarPanelSwitch<Int>()
+        var switcher = MKeyBarPanelSwitch<Int>(initial: 1)
         var panel: Int?
         var calls: [String] = []
         switcher.toggle(1, panel: &panel, softKeyboardUp: false, showKeyboard: { calls.append("show") },
@@ -75,6 +75,25 @@ final class RemoteDesktopKeyBarTests: XCTestCase {
                         collapseKeyboard: { calls.append("collapse") })
         XCTAssertNil(panel)
         XCTAssertEqual(calls, [])
+    }
+
+    /// 面板只有一个入口：关着时开上次看的那一页（含在面板里用分段切过去的），开着时关掉。
+    func testSingleEntryReopensTheLastPanel() {
+        var switcher = MKeyBarPanelSwitch<Int>(initial: 1)
+        var panel: Int?
+        var calls: [String] = []
+        let show = { calls.append("show") }, collapse = { calls.append("collapse") }
+
+        switcher.toggleAny(panel: &panel, softKeyboardUp: true, showKeyboard: show, collapseKeyboard: collapse)
+        XCTAssertEqual(panel, 1, "第一次开初始那一页")
+        panel = 2
+        switcher.remember(panel)
+        switcher.toggleAny(panel: &panel, softKeyboardUp: false, showKeyboard: show, collapseKeyboard: collapse)
+        XCTAssertNil(panel)
+        XCTAssertEqual(calls, ["collapse", "show"], "在面板里换页不改记「开面板前键盘弹着」")
+
+        switcher.toggleAny(panel: &panel, softKeyboardUp: false, showKeyboard: show, collapseKeyboard: collapse)
+        XCTAssertEqual(panel, 2, "再开回到上次那一页")
     }
 
     private func mountBar(panel: RemoteDesktopKeyBar.Panel?) async throws -> UIHostingController<RemoteDesktopKeyBar> {

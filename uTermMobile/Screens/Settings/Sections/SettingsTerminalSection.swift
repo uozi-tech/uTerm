@@ -28,8 +28,13 @@ struct SettingsTerminalSection: View {
                               MIcon(name: "chev-down", size: 11, color: M.text4)
                           }
                       }))
-            MInsetRow(label: "闪烁", last: true,
+            MInsetRow(label: "闪烁",
                       trailing: AnyView(MSwitch(on: $cursorBlink)))
+            // 键盘条 AI 面板里的启动命令 / 提示词 / 斜杠命令。只在本机，不跨设备同步。
+            NavigationLink { TerminalPhrasesScreen() } label: {
+                MInsetRow(label: "键盘条短语", sub: "启动命令、提示词、斜杠命令", chevron: true, last: true)
+            }
+            .buttonStyle(MRowStyle())
         }
     }
 }

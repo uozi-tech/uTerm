@@ -153,8 +153,8 @@ final class GhosttySpikeInputTests: XCTestCase {
             host.bridge.send(key)
             return String(decoding: try await sent(host), as: UTF8.self)
         }
-        for key in TerminalKeyCatalog.arrows + TerminalKeyCatalog.primary + TerminalKeyCatalog.function
-            + [TerminalKeyCatalog.shiftTab] + TerminalKeyCatalog.control {
+        for key in TerminalKeyCatalog.arrows + TerminalKeyCatalog.leading + TerminalKeyCatalog.trailing + TerminalKeyCatalog.function
+            + TerminalKeyCatalog.control {
             let bytes = try await press(key)
             XCTAssertEqual(bytes, key.send, "\(key.label) 普通模式下与今天的键盘条一致")
         }

@@ -78,6 +78,8 @@ nonisolated enum SettingsCatalog {
              kind: .status, key: nil, syncScope: .none, platforms: .iOS),
         Item(id: "terminal.mobileFontSize", section: .terminal, group: "终端", title: "字号",
              kind: .status, key: nil, syncScope: .none, platforms: .iOS),
+        Item(id: "terminal.keyBarPhrases", section: .terminal, group: "终端", title: "键盘条短语",
+             kind: .link, key: DefaultsKey.terminalKeyBarPhrases, syncScope: .local, platforms: .iOS),
 
         // MARK: 模型服务（列表在 SwiftData，Key 在钥匙串）
         Item(id: "providers.list", section: .providers, group: "模型服务", title: "模型服务",

@@ -25,12 +25,18 @@ enum TerminalKeyCatalog {
     static let escape = TerminalKey("esc", "\u{1b}")
     static let shiftTab = TerminalKey("⇧Tab", "\u{1b}[Z")
 
-    /// 常驻行：高频键 → 方向键 → 命令行符号，方向键单独一组（长按连发）。
-    static let primary = [escape, TerminalKey("tab", "\t"), enter, TerminalKey("^C", "\u{03}")]
+    static let tab = TerminalKey("tab", "\t")
+    static let interrupt = TerminalKey("^C", "\u{03}")
+
+    /// 常驻行的顺序按「手机竖屏第一屏放得下什么」排：esc / tab 和方向键在最前（shell 补全、翻历史、
+    /// AI 命令行里选选项都靠它们），修饰键其次，再往后是 ^C / ↵ / ⇧Tab 和命令行符号。方向键长按连发。
+    static let leading = [escape, tab]
     static let arrows = [
         TerminalKey("←", "\u{1b}[D"), TerminalKey("↑", "\u{1b}[A"),
         TerminalKey("↓", "\u{1b}[B"), TerminalKey("→", "\u{1b}[C"),
     ]
+    /// 修饰键之后的一组：中断、回车（键盘收着、看 AI 输出时要用），⇧Tab（Claude Code / Codex 切模式，手机键盘打不出）。
+    static let trailing = [interrupt, enter, shiftTab]
     static let shellSymbols = ["/", "|", "~", "-"].map { TerminalKey(symbol: $0) }
 
     /// home/end 用 xterm 普通光标态序列。
@@ -66,44 +72,47 @@ enum TerminalKeyCatalog {
         TerminalKey(symbol: "1"), TerminalKey(symbol: "2"), TerminalKey(symbol: "3"),
         enter, escape, shiftTab,
     ]
-    /// 常用提示词。显示什么就发什么，不放一点就有破坏性的（回退、推送）。
-    static let prompts = [
-        "继续",
-        "按你的方案做",
-        "先说方案，别改代码",
-        "这个方向不对，换个思路",
-        "修复这个错误",
-        "跑测试并修复失败项",
-        "解释一下刚才的改动",
-        "检查刚才的改动有没有问题",
-        "总结当前进度和下一步",
-        "提交当前改动",
-    ]
-    /// Claude Code 与 Codex 都支持的斜杠命令。
-    static let slashCommands = ["/clear", "/compact", "/resume", "/model", "/status", "/init"]
 }
 
 // MARK: - 终端快捷键条
 
 /// 终端的快捷键条：外壳与键帽见 `MKeyBar`（远程桌面共用），这里只管发什么给终端。
+///
+/// 常驻行：最左固定一个面板入口（按键 / AI 两个面板共用，面板顶上分段切换），中间滚动的是直接发的键
+///（顺序见 `TerminalKeyCatalog.leading`），最右固定键盘钮。
 struct TerminalKeyBar: View {
     enum Panel: Hashable { case prompts, keys }
 
     let controller: MobileTerminalController
+    /// 前台在跑 AI 命令行（见 `TermTab.agentInForeground`）。只决定 AI 面板里各组的先后，不藏任何一组：
+    /// 没装 shell 集成、不报状态的主机上它判不准。
+    let agentInForeground: Bool
     @State private var panel: Panel?
-    @State private var panels = MKeyBarPanelSwitch<Panel>()
+    @State private var panels = MKeyBarPanelSwitch<Panel>(initial: .prompts)
     @State private var softKeyboardUp = false
     @State private var pickingPhoto = false
     @State private var pickedPhoto: PhotosPickerItem?
+    @State private var editingPhrases = false
+    @AppStorage(DefaultsKey.terminalKeyBarPhrases) private var phrasesRaw = ""
 
     /// `panel` 的初值。生产侧一律省略（收起），探针和样式画廊用它把面板也挂起来。
-    init(controller: MobileTerminalController, panel: Panel? = nil) {
+    init(controller: MobileTerminalController, agentInForeground: Bool = false, panel: Panel? = nil) {
         self.controller = controller
+        self.agentInForeground = agentInForeground
         _panel = State(initialValue: panel)
     }
 
+    static let tabs: [(value: Panel, label: String)] = [
+        (.prompts, String(localized: "AI")), (.keys, String(localized: "按键")),
+    ]
+
     var body: some View {
-        MKeyBar(panel: $panel, softKeyboardUp: $softKeyboardUp) {
+        MKeyBar(panel: $panel, softKeyboardUp: $softKeyboardUp, tabs: Self.tabs) {
+            MKeyBarPanelButton(symbol: "square.grid.2x2", label: "按键与 AI 短语", active: panel != nil) {
+                panels.toggleAny(panel: &panel, softKeyboardUp: softKeyboardUp,
+                                 showKeyboard: controller.showKeyboard, collapseKeyboard: controller.collapseKeyboard)
+            }
+        } row: {
             keyRow
         } trailing: {
             MKeyBarKeyboardButton(shown: controller.keyboardShown) {
@@ -121,11 +130,10 @@ struct TerminalKeyBar: View {
             pickedPhoto = nil
             controller.sendImage { try await RemoteDesktopPasteSource.terminalImage(photo: item) }
         }
-    }
-
-    private func toggle(_ target: Panel) {
-        panels.toggle(target, panel: &panel, softKeyboardUp: softKeyboardUp,
-                      showKeyboard: controller.showKeyboard, collapseKeyboard: controller.collapseKeyboard)
+        .onChange(of: panel) { _, panel in panels.remember(panel) }
+        .sheet(isPresented: $editingPhrases) {
+            TerminalPhrasesScreen(showsDone: true)
+        }
     }
 
     @ViewBuilder private var imageNote: some View {
@@ -139,20 +147,22 @@ struct TerminalKeyBar: View {
     // MARK: 常驻行
 
     @ViewBuilder private var keyRow: some View {
-        MKeyBarPanelButton(symbol: "square.grid.2x2", label: "更多按键", active: panel == .keys) { toggle(.keys) }
-        MKeyBarPanelButton(symbol: "text.bubble", label: "AI 提示词", active: panel == .prompts) { toggle(.prompts) }
-        MKeyBarGap()
-        modifierKey("ctrl", armed: controller.controlArmed) { controller.toggleControl() }
-        modifierKey("alt", armed: controller.altArmed) { controller.toggleAlt() }
-        if controller.acceptsImages { imageMenu }
-        MKeyBarGap()
-        keyButtons(TerminalKeyCatalog.primary)
+        keyButtons(TerminalKeyCatalog.leading)
         MKeyBarGap()
         ForEach(TerminalKeyCatalog.arrows) { key in
             MRepeatingKeyButton(label: key.label) { send(key) }
         }
         MKeyBarGap()
+        modifierKey("ctrl", armed: controller.controlArmed) { controller.toggleControl() }
+        modifierKey("alt", armed: controller.altArmed) { controller.toggleAlt() }
+        MKeyBarGap()
+        keyButtons(TerminalKeyCatalog.trailing)
+        MKeyBarGap()
         keyButtons(TerminalKeyCatalog.shellSymbols)
+        if controller.acceptsImages {
+            MKeyBarGap()
+            imageMenu
+        }
     }
 
     /// 上膛之后多半是要接着在系统键盘上打一个字符（Ctrl+C），所以顺手把键盘弹出来；接着点键盘条上的键也行（Ctrl+←）。
@@ -193,11 +203,10 @@ struct TerminalKeyBar: View {
     @ViewBuilder private func panelContent(_ panel: Panel) -> some View {
         switch panel {
         case .prompts:
-            keySection("选项与模式", TerminalKeyCatalog.agentKeys)
-            MPromptGridSection(title: "提示词", prompts: TerminalKeyCatalog.prompts, minWidth: 150, mono: false,
-                               submit: submit, fill: fill)
-            MPromptGridSection(title: "斜杠命令", prompts: TerminalKeyCatalog.slashCommands, minWidth: 92, mono: true,
-                               submit: submit, fill: fill)
+            MKeyBarAIPanel(phrases: TerminalPhrases.decode(phrasesRaw), agentInForeground: agentInForeground,
+                           submit: submit, fill: fill, edit: { editingPhrases = true }) {
+                keySection("选项与模式", TerminalKeyCatalog.agentKeys)
+            }
         case .keys:
             keySection("导航", TerminalKeyCatalog.navigation)
             keySection("Ctrl", TerminalKeyCatalog.control)
@@ -210,7 +219,7 @@ struct TerminalKeyBar: View {
         MKeyGridSection(title: title, keys: keys, label: \.label, action: send)
     }
 
-    /// 发完收起面板、不弹键盘：接下来是看 AI 输出。
+    /// 发完收起面板、不弹键盘：接下来是看 AI 输出。启动命令同样走这里（括号粘贴 + 隔一下回车，shell 照样认）。
     private func submit(_ prompt: String) {
         panel = nil
         controller.clearStickyModifiers()

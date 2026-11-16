@@ -258,12 +258,17 @@ final class MobileTerminalKeyboardTests: XCTestCase {
 
     func testKeyCatalogIsUsableInAGrid() {
         // `id` 就是 label：同一组里重复会让 ForEach 串键。
-        let groups = [TerminalKeyCatalog.primary, TerminalKeyCatalog.arrows, TerminalKeyCatalog.shellSymbols,
+        let groups = [TerminalKeyCatalog.leading, TerminalKeyCatalog.arrows, TerminalKeyCatalog.trailing,
+                      TerminalKeyCatalog.shellSymbols,
                       TerminalKeyCatalog.navigation, TerminalKeyCatalog.control, TerminalKeyCatalog.function,
                       TerminalKeyCatalog.symbols, TerminalKeyCatalog.agentKeys]
         for group in groups { XCTAssertEqual(Set(group.map(\.id)).count, group.count) }
-        XCTAssertEqual(Set(TerminalKeyCatalog.prompts).count, TerminalKeyCatalog.prompts.count)
-        for prompt in TerminalKeyCatalog.prompts + TerminalKeyCatalog.slashCommands {
+        for kind in TerminalPhraseKind.allCases {
+            let list = TerminalPhrases.defaults[kind]
+            XCTAssertEqual(Set(list).count, list.count, "\(kind) 里有重复")
+        }
+        let defaults = TerminalPhrases.defaults
+        for prompt in defaults.launch + defaults.prompts + defaults.slash {
             XCTAssertFalse(prompt.unicodeScalars.contains { $0.value < 0x20 }, "提示词不能带控制字符：\(prompt)")
         }
     }

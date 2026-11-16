@@ -9,11 +9,15 @@ import UIKit
 /// 面板占键盘的位置（聊天软件的「+」面板那样），不和键盘叠着把正文挤没；两者同一时间只出现一个：
 /// 打开面板时收起键盘、关面板时还原，键盘回来（点正文、点键盘按钮）面板就让位。外接键盘不占屏幕，
 /// 也就不用让位，否则面板开着就打不了字。
-struct MKeyBar<Panel: Hashable, Row: View, Trailing: View, PanelContent: View>: View {
+struct MKeyBar<Panel: Hashable, Leading: View, Row: View, Trailing: View, PanelContent: View>: View {
     @Binding var panel: Panel?
     /// 系统键盘此刻占着屏幕（外面用它决定开面板时要不要收键盘）。外接键盘时正文也是第一响应者，
     /// 但屏幕上没有键盘，所以不能看响应者。
     @Binding var softKeyboardUp: Bool
+    /// 面板顶上的分段切换（按键 / AI）。只有一个面板时传空数组，不显示。
+    var tabs: [(value: Panel, label: String)] = []
+    /// 固定在最左、不跟着滚的键（面板入口）：键盘条的第一位，拇指最顺手、滚到哪都点得到。
+    @ViewBuilder let leading: () -> Leading
     @ViewBuilder let row: () -> Row
     /// 固定在最右、不跟着滚的键（收起 / 弹出键盘），否则要先滚过一整排键才够得到。
     @ViewBuilder let trailing: () -> Trailing
@@ -23,20 +27,29 @@ struct MKeyBar<Panel: Hashable, Row: View, Trailing: View, PanelContent: View>: 
     var body: some View {
         VStack(spacing: 0) {
             if let panel {
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 12) { content(panel) }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(spacing: 0) {
+                    // 分段钉在面板顶上、不跟着内容滚：切到另一个面板不用先滚回顶。
+                    if tabs.count > 1 {
+                        MSegmented(items: tabs, selection: Binding(get: { panel }, set: { self.panel = $0 }))
+                            .padding(.horizontal, 10).padding(.top, 8)
+                    }
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 12) { content(panel) }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    // 换面板时回到顶上，不沿用上一个面板滚到的位置。
+                    .id(panel)
                 }
                 // 高度固定：两个面板之间切换时正文不跟着改尺寸。横屏矮，留够正文的位置。
                 .frame(height: verticalSizeClass == .compact ? 150 : 240)
                 Rectangle().fill(M.divider).frame(height: 1)
             }
             HStack(spacing: 6) {
-                // 整排一起滚：分屏后一格很窄，固定在左边的键会占掉大半宽度。
+                // 两头各固定一个键，中间整排一起滚。分屏后一格很窄，固定的键不能再多。
+                leading().padding(.leading, 10)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) { row() }
-                        .padding(.leading, 10)
                 }
                 .mKeepsScrollContentInSafeArea()
                 trailing().padding(.trailing, 10)
@@ -66,6 +79,22 @@ nonisolated enum MKeyBarKeyboard {
 /// 面板开关：开面板前记下键盘是否弹着，关面板时还原。
 struct MKeyBarPanelSwitch<Panel: Hashable> {
     private var keyboardBeforePanel = false
+    /// 键盘条只有一个面板入口：再打开时回到上次看的那一页。
+    private(set) var lastPanel: Panel
+
+    init(initial: Panel) { lastPanel = initial }
+
+    /// 面板入口：开着就关，关着就开上次那一页。
+    mutating func toggleAny(panel: inout Panel?, softKeyboardUp: Bool,
+                            showKeyboard: () -> Void, collapseKeyboard: () -> Void) {
+        toggle(panel ?? lastPanel, panel: &panel, softKeyboardUp: softKeyboardUp,
+               showKeyboard: showKeyboard, collapseKeyboard: collapseKeyboard)
+    }
+
+    /// 面板里切到了另一页（分段）。
+    mutating func remember(_ panel: Panel?) {
+        if let panel { lastPanel = panel }
+    }
 
     mutating func toggle(_ target: Panel, panel: inout Panel?, softKeyboardUp: Bool,
                          showKeyboard: () -> Void, collapseKeyboard: () -> Void) {
@@ -76,6 +105,7 @@ struct MKeyBarPanelSwitch<Panel: Hashable> {
         }
         if panel == nil { keyboardBeforePanel = softKeyboardUp }
         panel = target
+        lastPanel = target
         if softKeyboardUp { collapseKeyboard() }
     }
 }
@@ -184,6 +214,65 @@ struct MPromptGridSection: View {
             .background(M.button)
             .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
             .contentShape(RoundedRectangle(cornerRadius: MRadius.sm))
+    }
+}
+
+/// AI 面板（终端与远程桌面共用）：启动命令、选项与模式（各端自己的键）、提示词、斜杠命令，底部「编辑短语…」。
+///
+/// 前台没在跑 AI 命令行时「启动」排最前（要的是先把它开起来），在跑时排最后。只调先后、不藏：判不准时也都点得到。
+struct MKeyBarAIPanel<Options: View>: View {
+    let phrases: TerminalPhrases
+    let agentInForeground: Bool
+    let submit: (String) -> Void
+    let fill: (String) -> Void
+    let edit: () -> Void
+    @ViewBuilder let options: () -> Options
+
+    var body: some View {
+        Group {
+            if agentInForeground {
+                options()
+                section(.prompt)
+                section(.slash)
+                section(.launch)
+            } else {
+                section(.launch)
+                options()
+                section(.prompt)
+                section(.slash)
+            }
+            MKeyBarEditPhrasesButton(action: edit)
+        }
+    }
+
+    @ViewBuilder private func section(_ kind: TerminalPhraseKind) -> some View {
+        let list = phrases[kind]
+        if !list.isEmpty {
+            switch kind {
+            case .launch:
+                MPromptGridSection(title: "启动", prompts: list, minWidth: 150, mono: true, submit: submit, fill: fill)
+            case .prompt:
+                MPromptGridSection(title: "提示词", prompts: list, minWidth: 150, mono: false, submit: submit, fill: fill)
+            case .slash:
+                MPromptGridSection(title: "斜杠命令", prompts: list, minWidth: 92, mono: true, submit: submit, fill: fill)
+            }
+        }
+    }
+}
+
+/// 面板底部「编辑短语…」：打开短语编辑页（设置 › 终端 › 键盘条短语 的同一页）。
+struct MKeyBarEditPhrasesButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("编辑短语…", systemImage: "square.and.pencil")
+                .font(M.sans(13, weight: .medium))
+                .foregroundStyle(M.text2)
+                .frame(maxWidth: .infinity, minHeight: MKeyCapMetrics.height)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
     }
 }
 

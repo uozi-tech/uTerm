@@ -52,6 +52,13 @@ final class TermTab: Identifiable {
         if let remote { return remote.client.programStatus(for: remote.sessionID) }
         return controller.programStatus
     }
+
+    /// 前台在跑 AI 命令行（含空闲），不是 shell。规则同 `programStatus`：远控读 Mac 推来的，直连读本机解析的。
+    var agentInForeground: Bool {
+        guard controller.state == .connected else { return false }
+        if let remote { return remote.client.programReport(for: remote.sessionID) != nil }
+        return controller.agentInForeground
+    }
 }
 
 // MARK: - 单个会话主体：终端 + 键盘条，或失败态
@@ -132,7 +139,7 @@ struct TerminalSessionBody: View {
                     .padding(.horizontal, Self.terminalInset.horizontal)
                     .background(terminalBg, ignoresSafeAreaEdges: .mSessionBody)
                     .overlay(alignment: .top) { statusBanner }
-                    TerminalKeyBar(controller: tab.controller)
+                    TerminalKeyBar(controller: tab.controller, agentInForeground: tab.agentInForeground)
                 }
             }
         }

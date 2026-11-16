@@ -51,6 +51,9 @@ final class MobileTerminalController {
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
     /// 见 `ProgramStatusTracker`）。远控标签不用它：状态由 Mac 推来，见 `TermTab.programStatus`。
     private(set) var programStatus: ProgramStatusRecord?
+    /// 前台是在报告状态的程序（Claude Code / Codex），不是 shell（含空闲态，见 `ProgramStatusTracker.hasRecords`）。
+    /// 键盘条按它决定面板里先放「启动」还是先放提示词。远控标签同样不用它，见 `TermTab.agentInForeground`。
+    private(set) var agentInForeground = false
     /// 曾经连上过：用于把随后的 `.disconnected` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
@@ -220,6 +223,8 @@ final class MobileTerminalController {
     private func publishProgramStatus() {
         let next = terminal.events.tracker.display
         if next != programStatus { programStatus = next }
+        let agent = terminal.events.tracker.hasRecords
+        if agent != agentInForeground { agentInForeground = agent }
     }
 
     // MARK: Ctrl / Alt 粘滞修饰

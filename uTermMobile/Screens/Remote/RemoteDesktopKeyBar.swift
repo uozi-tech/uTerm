@@ -58,8 +58,10 @@ struct RemoteDesktopKeyBar: View {
     @Binding var keyboardShown: Bool
     let send: (RemoteDesktopInput) -> Void
     @State private var panel: Panel?
-    @State private var panels = MKeyBarPanelSwitch<Panel>()
+    @State private var panels = MKeyBarPanelSwitch<Panel>(initial: .prompts)
     @State private var softKeyboardUp = false
+    @State private var editingPhrases = false
+    @AppStorage(DefaultsKey.terminalKeyBarPhrases) private var phrasesRaw = ""
 
     init(keys: RemoteDesktopKeyState, keyboardShown: Binding<Bool>, panel: Panel? = nil,
          send: @escaping (RemoteDesktopInput) -> Void) {
@@ -69,11 +71,18 @@ struct RemoteDesktopKeyBar: View {
         self.send = send
     }
 
+    /// 分段与终端那条一样：AI / 按键。
+    static let tabs: [(value: Panel, label: String)] = [
+        (.prompts, String(localized: "AI")), (.keys, String(localized: "按键")),
+    ]
+
     var body: some View {
-        MKeyBar(panel: $panel, softKeyboardUp: $softKeyboardUp) {
-            MKeyBarPanelButton(symbol: "square.grid.2x2", label: "更多按键", active: panel == .keys) { toggle(.keys) }
-            MKeyBarPanelButton(symbol: "text.bubble", label: "AI 提示词", active: panel == .prompts) { toggle(.prompts) }
-            MKeyBarGap()
+        MKeyBar(panel: $panel, softKeyboardUp: $softKeyboardUp, tabs: Self.tabs) {
+            MKeyBarPanelButton(symbol: "square.grid.2x2", label: "按键与 AI 短语", active: panel != nil) {
+                panels.toggleAny(panel: &panel, softKeyboardUp: softKeyboardUp,
+                                 showKeyboard: { keyboardShown = true }, collapseKeyboard: { keyboardShown = false })
+            }
+        } row: {
             ForEach(RemoteKeyCatalog.modifiers, id: \.label) { item in
                 MKeyButton(label: item.label, active: keys.modifiers.contains(item.modifier)) {
                     keys.toggle(item.modifier)
@@ -90,26 +99,25 @@ struct RemoteDesktopKeyBar: View {
         } content: { panel in
             switch panel {
             case .prompts:
-                section("选项与模式", RemoteKeyCatalog.agentKeys)
-                MPromptGridSection(title: "提示词", prompts: TerminalKeyCatalog.prompts, minWidth: 150, mono: false,
-                                   submit: submit, fill: fill)
-                MPromptGridSection(title: "斜杠命令", prompts: TerminalKeyCatalog.slashCommands, minWidth: 92,
-                                   mono: true, submit: submit, fill: fill)
+                // 远程桌面看不到 Mac 上哪个窗口在跑 AI 命令行，按没在跑排（「启动」在前）。
+                MKeyBarAIPanel(phrases: TerminalPhrases.decode(phrasesRaw), agentInForeground: false,
+                               submit: submit, fill: fill, edit: { editingPhrases = true }) {
+                    section("选项与模式", RemoteKeyCatalog.agentKeys)
+                }
             case .keys:
                 section("导航", RemoteKeyCatalog.navigation)
                 section("功能键", RemoteKeyCatalog.function)
                 section("符号", RemoteKeyCatalog.symbols)
             }
         }
+        .onChange(of: panel) { _, panel in panels.remember(panel) }
+        .sheet(isPresented: $editingPhrases) {
+            TerminalPhrasesScreen(showsDone: true)
+        }
     }
 
     private func section(_ title: LocalizedStringKey, _ keys: [RemoteBarKey]) -> some View {
         MKeyGridSection(title: title, keys: keys, label: \.label, action: tap)
-    }
-
-    private func toggle(_ target: Panel) {
-        panels.toggle(target, panel: &panel, softKeyboardUp: softKeyboardUp,
-                      showKeyboard: { keyboardShown = true }, collapseKeyboard: { keyboardShown = false })
     }
 
     /// 按一下：带上这个键自带的和上膛的修饰（然后熄灭），按下再抬起。

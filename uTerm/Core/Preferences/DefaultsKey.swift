@@ -55,6 +55,8 @@ nonisolated enum DefaultsKey {
 
     static let localShellKeepsLANConnections = "localShellKeepsLANConnections"
     static let localShellRecentDirectories = "localShell.recentDirectories"
+    /// iOS 键盘条面板里的启动命令 / 提示词 / 斜杠命令（`TerminalPhrases` 的 JSON，空串 = 默认值）。
+    static let terminalKeyBarPhrases = "terminalKeyBar.phrases"
 
     static let controlEnabled = "control.enabled"
     static let controlAllowMutations = "control.allowMutations"
