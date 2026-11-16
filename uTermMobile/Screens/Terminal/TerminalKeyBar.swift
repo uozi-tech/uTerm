@@ -163,6 +163,12 @@ struct TerminalKeyBar: View {
         keyButtons(TerminalKeyCatalog.trailing)
         MKeyBarGap()
         keyButtons(TerminalKeyCatalog.shellSymbols)
+        MKeyBarGap()
+        Button { controller.search.present() } label: {
+            MKeyIconCap(symbol: "magnifyingglass", active: controller.search.isPresented)
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityLabel("查找")
     }
 
     /// 上膛之后多半是要接着在系统键盘上打一个字符（Ctrl+C），所以顺手把键盘弹出来；接着点键盘条上的键也行（Ctrl+←）。

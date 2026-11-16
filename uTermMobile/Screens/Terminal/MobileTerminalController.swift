@@ -68,6 +68,8 @@ final class MobileTerminalController {
     /// TerminalScreen 重建」存活：iPhone Plus / Max 横屏翻 size class 时外壳在 Tab / Split 间切换、TerminalScreen 重建，
     /// 复用同一个视图既不空白也不断连。
     @ObservationIgnored let terminal: GhosttyTerminalBridge
+    /// 回滚区查找（两端共用的 `TerminalSearch`，本身可观察）。
+    var search: TerminalSearch { terminal.link.search }
     /// 后端按协议持有（`TerminalBackend`，桌面 `TerminalSession` 用的同一个抽象）：
     /// 生产是 `SSHConnection`，测试注入假传输。控制器本身不知道底下是谁。
     @ObservationIgnored private var connection: (any TerminalBackend)?

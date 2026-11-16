@@ -18,6 +18,8 @@ final class MGhosttyTerminalView: UITerminalView {
     var onPasteImage: (() -> Void)?
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，见 `MTerminalContainerView`。
     var hasHostedLayout = false
+    /// 这片终端的回滚区查找（`TerminalSurfaceLink.search`）：硬件键盘的 ⌘F / ⌘G / ⇧⌘G 落到它上面。
+    weak var search: TerminalSearch?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -129,6 +131,34 @@ final class MGhosttyTerminalView: UITerminalView {
         guard isFirstResponder, let mode = super.textInputMode else { return }
         chosenInputMode = mode
     }
+
+    // MARK: 硬件键盘的查找键
+
+    /// ⌘F 打开查找栏，⌘G / ⇧⌘G 往上 / 往下找（同 Mac）。按键绑定表里清掉了 Ghostty 自己的 ⌘F，这几个组合不会发给程序。
+    override var keyCommands: [UIKeyCommand]? {
+        var commands = super.keyCommands ?? []
+        guard search != nil else { return commands }
+        commands += Self.findKeyCommands
+        return commands
+    }
+
+    private static let findKeyCommands: [UIKeyCommand] = [
+        findKeyCommand(String(localized: "查找"), input: "f", modifiers: .command, action: #selector(showTerminalFind)),
+        findKeyCommand(String(localized: "往上找"), input: "g", modifiers: .command, action: #selector(terminalFindNext)),
+        findKeyCommand(String(localized: "往下找"), input: "g", modifiers: [.command, .shift],
+                       action: #selector(terminalFindPrevious)),
+    ]
+
+    private static func findKeyCommand(_ title: String, input: String, modifiers: UIKeyModifierFlags,
+                                       action: Selector) -> UIKeyCommand {
+        let command = UIKeyCommand(title: title, action: action, input: input, modifierFlags: modifiers)
+        command.wantsPriorityOverSystemBehavior = true
+        return command
+    }
+
+    @objc private func showTerminalFind() { search?.present() }
+    @objc private func terminalFindNext() { search?.next() }
+    @objc private func terminalFindPrevious() { search?.previous() }
 
     // MARK: 粘贴：剪贴板里只有图片时当贴图
 

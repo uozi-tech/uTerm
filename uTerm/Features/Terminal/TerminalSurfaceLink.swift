@@ -35,6 +35,8 @@ final class TerminalSurfaceLink {
     let events = TerminalEventRouter()
     /// 擦屏后清选区、整屏回放后找回视口。
     private(set) var keeper: TerminalSurfaceKeeper!
+    /// 回滚区查找（查找栏的状态；查找本身在 surface 上）。surface 换了一个时由这里通知它重发关键词。
+    let search = TerminalSearch()
     private weak var view: TerminalHostedView?
 
     // MARK: 平台出口（都在主线程上调）
@@ -145,6 +147,7 @@ final class TerminalSurfaceLink {
     /// 接上画面的视图：surface 的生灭与视图算出来的网格由它报来。
     func attach(_ view: TerminalHostedView) {
         self.view = view
+        search.perform = { [weak view] action in view?.performBindingAction(action) ?? false }
         view.uTermOnSurfaceAttached = { [weak self] in self?.surfaceAttached() }
         view.uTermOnSurfaceDetached = { [weak self] in self?.surfaceDetached() }
         view.uTermSetGridExpectedHandler { [weak self] cols, rows in self?.gridExpected(cols: cols, rows: rows) }
@@ -177,6 +180,7 @@ final class TerminalSurfaceLink {
             if let held = self.gridGate.settle() { self.adopt(held) }
             self.surfaceBecameReady()
         }
+        search.surfaceAttached()
         onSurfaceAttached()
     }
 
@@ -188,6 +192,7 @@ final class TerminalSurfaceLink {
         surfaceSizeTimeout?.cancel()
         surfaceSizeTimeout = nil
         gridGate.surfaceDetached()
+        search.surfaceDetached()
         onSurfaceDetached()
         syncSurfaceFeeding()
         pump.markSurfaceStale()

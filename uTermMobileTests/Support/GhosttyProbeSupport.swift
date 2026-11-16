@@ -312,11 +312,12 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
     let touchWatch = RealTouchWatch()
     private let openedAt = CACurrentMediaTime()
 
-    init(size: CGSize = CGSize(width: 393, height: 760)) throws {
+    /// `keepsBridgeDelegate`：留着桥自己的委托（点链接、查找的回报），不换成探针（`scrollbar` 就收不到了）。
+    init(size: CGSize = CGSize(width: 393, height: 760), keepsBridgeDelegate: Bool = false) throws {
         window = try makeSpikeWindow(size: size)
         bridge = GhosttyTerminalBridge(controller: Self.controller, frame: CGRect(origin: .zero, size: size))
         super.init()
-        bridge.view.delegate = self
+        if !keepsBridgeDelegate { bridge.view.delegate = self }
         bridge.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         window.addSubview(bridge.view)
         window.addGestureRecognizer(touchWatch)

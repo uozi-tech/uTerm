@@ -144,6 +144,7 @@ final class TerminalKeyBindingTests: XCTestCase {
 
     /// legacy 键盘模式（shell、多数程序）：⌥ 当 Meta、⌥← / ⌥→ 按词移动、⌘← / ⌘→ / ⌘⌫ 是行首 / 行尾 / 删到行首，
     /// 方向键与功能键照常编码；Ghostty 的默认绑定（⌘K 清屏、⌘T、⌘D、⌘↩ 全屏……）全清，没有菜单接的 ⌘ 组合一个字节都不发。
+    /// ⌘F / ⌘G 由 uTerm 自己的查找栏接（`GhosttySurfaceView.findCommand`），⌘E 没有选区时不接。
     func testLegacyModeRouting() async {
         let e = Self.esc
         await check([
@@ -158,7 +159,7 @@ final class TerminalKeyBindingTests: XCTestCase {
             ("⌘Home", nil), ("⌘End", nil), ("⌘PageUp", nil), ("⌘PageDown", nil),
             ("⇧PageUp", "\(e)[5;2~"), ("Home", "\(e)[H"), ("End", "\(e)[F"), ("←", "\(e)[D"),
             ("⌃C", "\u{03}"), ("Esc", e),
-        ], bindings: ["⌘←", "⌘→", "⌘⌫", "⌘Home", "⌘End", "⌘PageUp", "⌘PageDown"], mode: "legacy")
+        ], bindings: ["⌘←", "⌘→", "⌘⌫", "⌘Home", "⌘End", "⌘PageUp", "⌘PageDown", "⌘F", "⌘G"], mode: "legacy")
     }
 
     /// kitty 键盘协议（Claude Code 这类程序会开）：没有绑定的 ⌘ 组合按协议编码交给程序；
