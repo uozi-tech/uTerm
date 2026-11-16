@@ -436,6 +436,20 @@ final class ControlTerminalHandlerTests: XCTestCase {
         return (session, backend, entryID)
     }
 
+    /// 远端 shell 的行编辑器起来了（打开括号粘贴），等命令打进来，返回打进来的那一行（含回车）。
+    private func lineEditorReady(_ live: (session: TerminalSession, backend: MockBackend, entryID: UUID),
+                                 prompt: String = "% ") async throws -> String {
+        feed(live.session, prompt + "\u{1B}[?2004h")
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            let written = await live.backend.writtenData.map { String(decoding: $0, as: UTF8.self) }.joined()
+            if !written.isEmpty { return written }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("行编辑器起来之后命令没打进来")
+        return ""
+    }
+
     /// 后端收到的那一行里抠出标记 id（`…;S;<id>\007'`）。
     private func markerID(_ backend: MockBackend) async throws -> String {
         let written = await backend.writtenData.map { String(decoding: $0, as: UTF8.self) }.joined()
@@ -454,14 +468,20 @@ final class ControlTerminalHandlerTests: XCTestCase {
         XCTAssertEqual(opened.run?.state, "pending")
 
         try await Task.sleep(for: .milliseconds(100))
-        let written = await live.backend.writtenData.map { String(decoding: $0, as: UTF8.self) }.joined()
+        let early = await live.backend.writtenData
+        XCTAssertTrue(early.isEmpty, "远端的行编辑器还没起来就不打：早打的字会被终端驱动先回显一遍")
+        let written = try await lineEditorReady(live)
         XCTAssertTrue(written.contains("; (sudo ./bootstrap.zsh --only-root-entry); "), "命令原样打进窗口（包在子 shell 里），用户看得懂")
         XCTAssertTrue(written.hasSuffix("\"$?\"\r"), "末尾回车执行，并带出退出码")
         let id = try await markerID(live.backend)
 
-        // 远端：回显这一行 → 开始标记 → 要密码（用户在窗口里输，没有回显）→ 输出 → 结束标记。
-        feed(live.session, "% \(written.dropLast())\r\n\u{1B}]6973;S;\(id)\u{07}"
+        // 远端：行编辑器回显这一行 → 开始标记 → 要密码（用户在窗口里输，没有回显）→ 输出 → 结束标记。
+        feed(live.session, "\(written.dropLast())\r\n\u{1B}]6973;S;\(id)\u{07}"
             + "[sudo] password for uozi:\r\nupdated to 1.3.0\r\n\u{1B}]6973;D;\(id);3\u{07}% ")
+
+        let screen = live.session.shadow.viewportText()
+        XCTAssertFalse(screen.contains("6973"), "回显里的包装改写掉了：\(screen)")
+        XCTAssertTrue(screen.contains("% sudo ./bootstrap.zsh --only-root-entry\n[sudo] password for uozi:"), screen)
 
         let waited = await fixture.handler.handle(ControlRequest(
             action: .terminalWait, terminal: live.entryID.uuidString, waitSeconds: 2))
@@ -476,7 +496,7 @@ final class ControlTerminalHandlerTests: XCTestCase {
         let fixture = try makeFixture()
         let live = await openWithLiveSession(fixture)
         _ = await fixture.handler.handle(ControlRequest(action: .terminalOpen, host: "mac-01", command: "apt upgrade"))
-        try await Task.sleep(for: .milliseconds(100))
+        _ = try await lineEditorReady(live)
         let id = try await markerID(live.backend)
         feed(live.session, "\r\n\u{1B}]6973;S;\(id)\u{07}Reading package lists...\r\nDo you want to continue? [Y/n] ")
 

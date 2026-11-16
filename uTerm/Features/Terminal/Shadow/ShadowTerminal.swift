@@ -966,6 +966,19 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         return makeCursorMarker(handle)
     }
 
+    /// 在活动区第 `row` 行的行首打一个标记；越界返回 nil。
+    func markRow(_ row: Int) -> Marker? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard row >= 0, row < Int(Self.rows(handle)) else { return nil }
+        var point = GhosttyPoint()
+        point.tag = GHOSTTY_POINT_TAG_ACTIVE
+        point.value.coordinate = GhosttyPointCoordinate(x: 0, y: UInt32(row))
+        var ref: OpaquePointer?
+        guard ghostty_terminal_grid_ref_track(handle, point, &ref) == GHOSTTY_SUCCESS, let ref else { return nil }
+        return Marker(ref: ref, owner: self, column: 0)
+    }
+
     /// 调用方持锁。
     private func makeCursorMarker(_ terminal: OpaquePointer) -> Marker? {
         let at = Self.cursor(terminal)
@@ -982,6 +995,73 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         var coordinate = GhosttyPointCoordinate()
         guard ghostty_tracked_grid_ref_point(marker.ref, GHOSTTY_POINT_TAG_SCREEN, &coordinate) == GHOSTTY_SUCCESS else { return nil }
         return Int(coordinate.y)
+    }
+
+    // MARK: 回显
+
+    /// 活动区里一段被 shell 行编辑器回显出来的文字（`locateEcho`）。坐标都是活动区的格子坐标（左上角 0,0）。
+    nonisolated struct EchoSpan: Sendable, Equatable {
+        /// `prefix` 第一格。
+        var startRow: Int
+        var startColumn: Int
+        /// `suffix` 最后一格所在的行。
+        var endRow: Int
+        /// `prefix` 与 `suffix` 之间每个字占几格（1 或 2），按先后。
+        var middleWidths: [Int]
+        var cols: Int
+        var cursor: Cursor
+    }
+
+    /// 光标之前的活动区里，最后一处「`prefix` …… `suffix`」（两头只能是 ASCII，中间任意）。软折行跨行照样连着找；
+    /// 宽字的占位格不算字。在备用屏上、找不到时返回 nil。
+    func locateEcho(prefix: String, suffix: String) -> EchoSpan? {
+        let prefixScalars = prefix.unicodeScalars.map(\.value), suffixScalars = suffix.unicodeScalars.map(\.value)
+        guard !prefixScalars.isEmpty, !suffixScalars.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !Self.isAlternate(handle) else { return nil }
+        let cols = Int(Self.cols(handle))
+        let at = Self.cursor(handle)
+        var pending = false, visible = true
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP, &pending)
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_VISIBLE, &visible)
+        guard cols > 0 else { return nil }
+
+        // 光标之前的每个字：码点（空格子当空格）、所在格、宽度。
+        var cells: [(codepoint: UInt32, row: Int, column: Int, width: Int)] = []
+        for row in 0...Int(at.y) {
+            let end = row == Int(at.y) ? Int(at.x) : cols
+            for column in 0..<end {
+                guard var ref = Self.gridRef(handle, x: UInt16(column), y: UInt32(row)) else { continue }
+                var cell: GhosttyCell = 0
+                guard ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS else { continue }
+                var wide = GHOSTTY_CELL_WIDE_NARROW
+                ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide)
+                if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { continue }
+                var codepoint: UInt32 = 0
+                ghostty_cell_get(cell, GHOSTTY_CELL_DATA_CODEPOINT, &codepoint)
+                cells.append((codepoint == 0 ? 0x20 : codepoint, row, column,
+                              wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1))
+            }
+        }
+
+        func lastMatch(_ needle: [UInt32], endingBy limit: Int) -> Int? {
+            guard limit >= needle.count else { return nil }
+            var start = limit - needle.count
+            while start >= 0 {
+                if needle.indices.allSatisfy({ cells[start + $0].codepoint == needle[$0] }) { return start }
+                start -= 1
+            }
+            return nil
+        }
+        guard let suffixStart = lastMatch(suffixScalars, endingBy: cells.count),
+              let prefixStart = lastMatch(prefixScalars, endingBy: suffixStart) else { return nil }
+        let middle = cells[(prefixStart + prefixScalars.count)..<suffixStart]
+        return EchoSpan(
+            startRow: cells[prefixStart].row, startColumn: cells[prefixStart].column,
+            endRow: cells[suffixStart + suffixScalars.count - 1].row,
+            middleWidths: middle.map(\.width), cols: cols,
+            cursor: Cursor(x: Int(at.x), y: Int(at.y), pendingWrap: pending, visible: visible))
     }
 
     // MARK: 读文字

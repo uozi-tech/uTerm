@@ -181,6 +181,9 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     private var pendingErase: TerminalErase?
     private var eraseHandler: (@Sendable (TerminalErase) -> Void)?
     private var caughtUpHandler: (@Sendable (CatchUp) -> Void)?
+    /// 见 `whenFed`。`watchCarry` 是上一片末尾不到一整串的那几个字节（串可能被切在两片之间）。
+    private var watch: (pattern: Data, body: @Sendable () -> Void)?
+    private var watchCarry = Data()
 
     /// 保护闸门。surface 的 backlog 回调可能就在 `surface.receive` 里同步回来（那时 `stateLock` 在手上），
     /// 所以闸门另用一把锁，并且拿着它时不调 surface、不拿 `stateLock`（顺序只能是 stateLock → gateLock）。
@@ -276,6 +279,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     func reset() {
         stateLock.lock()
         currentGeneration &+= 1
+        watchCarry = Data()
         let task = ingressTask
         ingressTask = nil
         stateLock.unlock()
@@ -348,6 +352,55 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         defer { stateLock.unlock() }
         // 换了连接之后，上一条连接的入站任务手上还攥着的那一片不要了。
         if let generation, generation != currentGeneration { return }
+        if !asHistory, let watch, let cut = watchCut(in: slice, pattern: watch.pattern) {
+            // 在串的末尾切开：前半片进去、调 `body`（它 route 的字节排在这里）、再进后半片。
+            self.watch = nil
+            watchCarry = Data()
+            feedLocked(slice[..<cut], asHistory: false)
+            watch.body()
+            feedLocked(slice[cut...], asHistory: false)
+            return
+        }
+        feedLocked(slice, asHistory: asHistory)
+    }
+
+    /// 等字节流里来一串 `pattern`：它整串进了影子之后、同一片里排在它后面的字节之前，调一次 `body`
+    /// （在喂字节的那条线程上、拿着泵的锁）。`body` 里可以读影子、可以 `route(_:)` 本端的字节——它们正好插在这串后面，
+    /// 影子、tap、surface 看到的顺序一样。只等一次；再调会换掉上一个。历史字节不看。
+    func whenFed(_ pattern: Data, _ body: @escaping @Sendable () -> Void) {
+        guard !pattern.isEmpty else { return }
+        stateLock.withLock {
+            watch = (pattern, body)
+            watchCarry = Data()
+        }
+    }
+
+    /// 撤掉 `whenFed` 等着的那一串。
+    func cancelWhenFed() {
+        stateLock.withLock {
+            watch = nil
+            watchCarry = Data()
+        }
+    }
+
+    /// 调用方持 `stateLock`。`pattern` 在（上一片的尾巴 + 这一片）里结束的位置（这一片的下标）；没有就记下这一片的尾巴。
+    private func watchCut(in slice: Data, pattern: Data) -> Data.Index? {
+        let keep = pattern.count - 1
+        if !watchCarry.isEmpty {
+            // 跨片：尾巴比串短，命中的话一定结束在这一片里。
+            let head = watchCarry + slice.prefix(keep)
+            if let range = head.range(of: pattern) {
+                return slice.index(slice.startIndex, offsetBy: range.upperBound - watchCarry.count)
+            }
+        }
+        if let range = slice.range(of: pattern) { return range.upperBound }
+        watchCarry = slice.count >= keep ? Data(slice.suffix(keep)) : Data((watchCarry + slice).suffix(keep))
+        return nil
+    }
+
+    /// 调用方持 `stateLock`。一片字节：影子 → tap → surface。
+    private func feedLocked(_ slice: Data, asHistory: Bool) {
+        guard !slice.isEmpty else { return }
         let erase = scanner.scan(slice)
         shadow.feed(slice, asHistory: asHistory)
         fedHandler?(slice)

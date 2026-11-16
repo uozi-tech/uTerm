@@ -110,6 +110,51 @@ final class TerminalOutputPumpTests: XCTestCase {
         XCTAssertTrue(pump.isFeedingSurface)
     }
 
+    // MARK: whenFed
+
+    /// 等的那串一进影子就调回调，它 route 的字节正好插在串后面、同一片里后面的字节前面；影子和 surface 看到的顺序一样。
+    func testWhenFedInsertsBytesRightAfterThePattern() {
+        let (pump, shadow, surface) = makePump()
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        let calls = LockedBox(0)
+        let seenByShadow = LockedBox("")
+        pump.whenFed(Data("<M>".utf8)) { [weak pump] in
+            calls.mutate { $0 += 1 }
+            seenByShadow.mutate { $0 = shadow.screenRowText(0) ?? "" }
+            pump?.route(Data("[X]".utf8))
+        }
+        pump.route(Data("ab<M>cd".utf8))
+        pump.route(Data("<M>ef".utf8))
+
+        XCTAssertEqual(calls.value, 1, "只等一次")
+        XCTAssertEqual(seenByShadow.value, "ab<M>", "回调时影子刚好解析到串的末尾")
+        XCTAssertEqual(surface.liveBytes, Data("ab<M>[X]cd<M>ef".utf8))
+        XCTAssertEqual(shadow.screenRowText(0), "ab<M>[X]cd<M>ef")
+    }
+
+    /// 串被切在两片之间也认得出来。
+    func testWhenFedMatchesAcrossSlices() {
+        let (pump, _, surface) = makePump()
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        pump.whenFed(Data("MARK".utf8)) { [weak pump] in pump?.route(Data("!".utf8)) }
+        pump.route(Data("xxMA".utf8))
+        pump.route(Data("R".utf8))
+        pump.route(Data("Kyy".utf8))
+        XCTAssertEqual(surface.liveBytes, Data("xxMARK!yy".utf8))
+    }
+
+    /// 撤掉之后不再调。
+    func testCancelledWhenFedIsNotCalled() {
+        let (pump, _, _) = makePump()
+        let calls = LockedBox(0)
+        pump.whenFed(Data("M".utf8)) { calls.mutate { $0 += 1 } }
+        pump.cancelWhenFed()
+        pump.route(Data("M".utf8))
+        XCTAssertEqual(calls.value, 0)
+    }
+
     /// 影子是空的（新开的标签）：surface 建好时不回放。
     func testEmptyShadowIsNotReplayed() {
         let (pump, _, surface) = makePump()
