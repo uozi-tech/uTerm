@@ -3,7 +3,7 @@ import SwiftUI
 /// 终端的查找栏（iOS）：浮在终端顶上，不占终端的行数（行数一变就是一次 SIGWINCH）。状态与引擎之间的往来在两端共用的
 /// `TerminalSearch`，高亮由 surface 自己画。
 ///
-/// 入口：键盘条最右的放大镜、标签的长按菜单、硬件键盘 ⌘F（⌘G / ⇧⌘G 跳转，见 `MGhosttyTerminalView.keyCommands`）。
+/// 入口：键盘条上紧跟 esc / tab 的放大镜、标签的长按菜单、硬件键盘 ⌘F（⌘G / ⇧⌘G 跳转，见 `MGhosttyTerminalView.keyCommands`）。
 /// 键盘上的「搜索」键往上找（更早的输出），之后键盘不收起，可以接着按。
 struct MTerminalFindBar: View {
     let search: TerminalSearch
