@@ -130,10 +130,6 @@ struct RemoteDesktopScreen: View {
             }
         }
         .onChange(of: requestedSize) { _, size in
-            // 记下这块屏幕要多大：下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。
-            if let size, let screenSize {
-                RemoteDesktopRequestSizeMemory.save(size, screen: screenSize, scale: displayScale)
-            }
             // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
             // 不动，不然 Mac 上的虚拟屏跟着换尺寸、窗口来回搬。
             // 点按钮时就开了流的（`startedEarly`）用的是上次量好的最终尺寸，不跟着排版途中的中间值改：
@@ -170,6 +166,12 @@ struct RemoteDesktopScreen: View {
         .onDisappear {
             onScreen = false
             UIApplication.shared.isIdleTimerDisabled = false
+            // 记下这块屏幕要多大，下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。离开时才记：
+            // 排版途中会先量出中间值（状态栏还在、顶栏更高），每量一次就记的话中间值可能成了最后记下的那个
+            //（2026-11-16 Duo：横屏记成 2853×2007，Mac 按它建出 1280×900 的屏）。
+            if let requestedSize, let screenSize {
+                RemoteDesktopRequestSizeMemory.save(requestedSize, screen: screenSize, scale: displayScale)
+            }
             session?.stop()
         }
         .onChange(of: session?.screen.locked ?? false) { _, locked in
