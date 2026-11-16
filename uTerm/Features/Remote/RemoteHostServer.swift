@@ -419,8 +419,13 @@ final class RemoteHostServer {
         guard desktopViewer == nil, desktopEnvironment.isEnabled(), let peerID = connection.peerID,
               let size = desktopRequestSizes[peerID] else { return }
         let environment = desktopEnvironment
+        let name = connection.peerName
         Task { [weak self] in
+            let clock = ContinuousClock()
+            let started = clock.now
             await environment.prewarmDisplays((size.width, size.height), size.pointScale)
+            AppLogger.notice("远程桌面：\(name) 连上来，按它上次的 \(size.width)×\(size.height) 预备显示器 "
+                             + "\(RemoteConnectTrace.millis(clock.now - started)) ms", category: RemoteLog.category)
             guard let self, self.desktopViewer == nil else { return }
             environment.displaysInUse(false)
         }
