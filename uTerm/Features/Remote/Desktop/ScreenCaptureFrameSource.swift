@@ -41,6 +41,10 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
     private var onFrame: (@Sendable (CVPixelBuffer, UInt64) -> Void)?
     private var onStop: (@Sendable (Error?) -> Void)?
 
+    /// 等可采集列表里出现这块屏最多多久、隔多久问一次。
+    static let listingLimit: Duration = .seconds(2)
+    static let listingRetry: Duration = .milliseconds(25)
+
     init(display: RemoteDesktopDisplay, width: Int, height: Int, tenBit: Bool, frameRate: Int = 60) {
         self.display = display
         self.width = width
@@ -52,13 +56,23 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
 
     func start(onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
                onStop: @escaping @Sendable (Error?) -> Void) async throws {
-        // 显示器刚从睡眠里醒来时，可采集列表要过一会儿才有它：找不到就隔一会儿再问，最多约 2 秒。
+        // 显示器刚醒来、虚拟屏刚建好时，可采集列表要过一会儿才有它：找不到就隔一会儿再问，最多约 2 秒。
+        // 隔 25 ms 问一次（一次约 7 ms）：以前隔 200 ms，刚建好的虚拟屏第一次问不到，白等 200 ms
+        //（2026-11-16 mini：建屏后的开屏「第一帧已发出」一组 89–140 ms、一组 325–375 ms）。
         var target: SCDisplay?
-        for attempt in 0..<10 {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var attempts = 0
+        while true {
+            attempts += 1
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             target = content.displays.first(where: { $0.displayID == display.id })
-            if target != nil { break }
-            if attempt < 9 { try? await Task.sleep(for: .milliseconds(200)) }
+            if target != nil || clock.now - started >= Self.listingLimit { break }
+            try? await Task.sleep(for: Self.listingRetry)
+        }
+        if attempts > 1 {
+            AppLogger.notice("远程桌面：采集列表第 \(attempts) 次才有这块屏（等了 \(RemoteConnectTrace.millis(clock.now - started)) ms）",
+                             category: RemoteLog.category)
         }
         guard let target else {
             throw RemoteHeadlessDisplay.screenSharingHoldsDisplay()
