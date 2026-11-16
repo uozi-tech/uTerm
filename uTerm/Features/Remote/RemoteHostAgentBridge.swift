@@ -19,6 +19,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         var checksRegistration = false
         /// 换掉一个怎么连都不回话的远控进程（正式版注销再注册 launchd 任务）。测试里记一笔。
         var restartAgent: (@MainActor () -> Void)?
+        /// 发出握手后等多久没回话就当这次没连上（测试里调短）。
+        var helloTimeout: Duration = RemoteHostAgent.helloTimeout
     }
 
     private let server: RemoteHostServer
@@ -36,6 +38,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
     private let restoresEagerly: Bool
     private var sessionsPushScheduled = false
     private var reconnect: Task<Void, Never>?
+    private var helloDeadline: Task<Void, Never>?
     private var reconnectDelay: Duration = .milliseconds(250)
     /// 远控进程版本和 App 不同，等它空下来（没有设备连着）就换掉。
     private var pendingUpgrade = false
@@ -220,10 +223,25 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             let info = RemoteHostAgentJSON.decode(RemoteHostAgentInfo.self, from: data)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.helloReplied(info, on: token) } }
         }
+        armHelloDeadline(for: token)
+    }
+
+    /// launchd 拉不起远控进程时（任务挂在已经不在的包上、启动约束对不上签名），连接既不断开也不回话，
+    /// 只是一直排着等 launchd 重试。到点还没握上手就主动断开：算一次不回话，攒够了走注销再注册。
+    private func armHelloDeadline(for token: ObjectIdentifier) {
+        helloDeadline?.cancel()
+        let timeout = transport.helloTimeout
+        helloDeadline = Task { [weak self] in
+            guard (try? await Task.sleep(for: timeout)) != nil, let self, !self.isConnected,
+                  let connection = self.connection, ObjectIdentifier(connection) == token else { return }
+            AppLogger.notice("远控进程 \(timeout) 内没回握手，断开重连", category: RemoteLog.category)
+            connection.invalidate()
+        }
     }
 
     private func helloReplied(_ info: RemoteHostAgentInfo?, on replied: ObjectIdentifier) {
         guard connection.map(ObjectIdentifier.init) == replied, let info else { return }
+        helloDeadline?.cancel()
         isConnected = true
         unansweredHellos = 0
         reconnectDelay = .milliseconds(250)

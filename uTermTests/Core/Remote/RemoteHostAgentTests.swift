@@ -83,12 +83,13 @@ final class RemoteHostAgentTests: XCTestCase {
         /// 起一个 App 侧的桥（App 启动 / 重启）。
         func startApp(restoration: (@MainActor () async -> Void)? = nil, restoresEagerly: Bool = true,
                       appBuild: String = "agent-test", endpoint: NSXPCListenerEndpoint? = nil,
-                      restartAgent: (@MainActor () -> Void)? = nil) {
+                      restartAgent: (@MainActor () -> Void)? = nil,
+                      helloTimeout: Duration = RemoteHostAgent.helloTimeout) {
             let endpoint = endpoint ?? listener.endpoint
             let bridge = RemoteHostAgentBridge(
                 server: appServer, registry: registry, settings: settings, restoration: restoration,
                 transport: .init(makeConnection: { NSXPCConnection(listenerEndpoint: endpoint) }, serverRequirement: nil,
-                                 restartAgent: restartAgent),
+                                 restartAgent: restartAgent, helloTimeout: helloTimeout),
                 restoresEagerly: restoresEagerly, appBuild: appBuild)
             self.bridge = bridge
             bridge.start()
@@ -315,6 +316,24 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertEqual(rig.bridge?.isConnected, false)
     }
 
+    /// launchd 拉不起远控进程（任务挂在已删掉的开发构建上、启动约束和签名对不上）：连接不断也不回话，一直排队。
+    /// 握手超时要把它算成不回话，攒够了照样注销再注册，不能永远停在「正在连接」。
+    func test_app_restarts_agent_whose_hello_hangs() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        let hanging = NSXPCListener.anonymous()
+        let accepting = HangingAgentListener()
+        hanging.delegate = accepting
+        hanging.resume()
+        defer { hanging.invalidate() }
+        var restarts = 0
+        rig.startApp(endpoint: hanging.endpoint, restartAgent: { restarts += 1 }, helloTimeout: .milliseconds(300))
+        let restarted = await waitUntil(8) { restarts > 0 }
+        XCTAssertTrue(restarted, "握手超时 \(RemoteHostAgent.unansweredHelloLimit) 次也要换掉远控进程")
+        XCTAssertGreaterThanOrEqual(accepting.hellos, RemoteHostAgent.unansweredHelloLimit)
+        XCTAssertEqual(rig.bridge?.isConnected, false)
+    }
+
     func test_turning_remote_off_shuts_the_agent_down() async throws {
         let rig = await Rig(grace: .seconds(30))
         defer { rig.tearDown() }
@@ -442,6 +461,34 @@ private final class RejectingListener: NSObject, NSXPCListenerDelegate, @uncheck
         lock.withLock { total += 1 }
         return false
     }
+}
+
+/// 接下连接、收下握手却永远不回（launchd 一直排着拉不起进程时 App 看到的样子）。
+private final class HangingAgentListener: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
+    private let agent = HangingAgent()
+    var hellos: Int { agent.hellos }
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        connection.exportedInterface = NSXPCInterface(with: RemoteHostAgentXPC.self)
+        connection.exportedObject = agent
+        connection.resume()
+        return true
+    }
+}
+
+private final class HangingAgent: NSObject, RemoteHostAgentXPC, @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: [@Sendable (Data) -> Void] = []
+    var hellos: Int { lock.withLock { held.count } }
+
+    func hello(_ payload: Data, reply: @escaping @Sendable (Data) -> Void) { lock.withLock { held.append(reply) } }
+    func configure(_ payload: Data) {}
+    func updateSessions(_ payload: Data) {}
+    func terminalAttached(_ attachment: String, error: String?) {}
+    func terminalChunk(_ attachment: String, kind: Int, data: Data) {}
+    func terminalEnded(_ attachment: String, reason: String) {}
+    func command(_ payload: Data, reply: @escaping @Sendable (Data) -> Void) {}
+    func depart(_ reason: String, reply: @escaping @Sendable () -> Void) { reply() }
 }
 
 @MainActor

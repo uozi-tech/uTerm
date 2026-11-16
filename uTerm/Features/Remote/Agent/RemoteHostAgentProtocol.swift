@@ -30,6 +30,8 @@ nonisolated enum RemoteHostAgent {
     static let updateGrace: Duration = .seconds(300)
     /// App 连续这么多次连上远控进程却等不到握手回话，就注销再注册它（换掉核不过签名的旧进程）。
     static let unansweredHelloLimit = 3
+    /// 发出握手后最多等多久。正常冷启动约 1 秒；launchd 拉不起进程时连接不会断，靠它算作一次不回话。
+    static let helloTimeout: Duration = .seconds(10)
     /// App 不在期间，开本机终端这类要 App 办的请求最多等多久。
     static let appRequestWait: Duration = .seconds(15)
     /// 每个终端接入的信用窗口：App 最多先送这么多字节，远控进程交给链路多少再补多少。
