@@ -203,6 +203,7 @@ struct HostCard: View {
                         MIcon(name: "ellipsis", size: 18, color: M.text3)
                             .frame(width: M.minTarget, height: M.minTarget)
                             .contentShape(Rectangle())
+                            .contentShape(.hoverEffect, Circle())
                     }
                     .padding(.vertical, -5).padding(.trailing, -6)   // 命中区 44pt，不撑高卡片头
                     .accessibilityLabel(Text("更多操作"))
@@ -224,7 +225,7 @@ struct HostCard: View {
         }
         .buttonStyle(MPressStyle())
         .watchesReachability(of: host)
-        .mContextMenu {
+        .mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.card)) {
             Button { onConnect() } label: { Label("连接终端", systemImage: "terminal") }
             Button { onSFTP() } label: { Label("浏览文件", systemImage: "folder") }
             Button { onEdit() } label: { Label("编辑", systemImage: "pencil") }

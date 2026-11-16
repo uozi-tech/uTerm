@@ -316,7 +316,7 @@ struct MobileAgentChat: View {
                     .textSelection(.enabled)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .mContextMenu {
+                    .mContextMenu(preview: RoundedRectangle(cornerRadius: 18, style: .continuous)) {
                         Button { UIPasteboard.general.string = m.text } label: {
                             Label("拷贝", systemImage: "doc.on.doc")
                         }

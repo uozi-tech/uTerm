@@ -115,7 +115,7 @@ struct RemoteMacSection: View {
         MInsetRow(icon: "mac", iconColor: mac.isOnline ? nil : M.text3, label: mac.name,
                   value: rowValue(mac), chevron: mac.isOnline, last: last,
                   onTap: mac.isOnline ? { selected = mac } : nil)
-            .mContextMenu {
+            .mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.list)) {
                 if mac.isOnRelay {
                     Button { diagnosing = mac } label: { Label("网络诊断", systemImage: "stethoscope") }
                 }

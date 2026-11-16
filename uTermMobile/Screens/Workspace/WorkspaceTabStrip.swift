@@ -300,6 +300,10 @@ struct WorkspaceTabChip: View {
 
     private var isFront: Bool { activity != .inactive }
     private var pillHeight: CGFloat { inStatusRow ? 36 : 30 }
+    /// 看得见的胶囊（底板同款圆角）；视图本身上下撑到了 44pt。
+    private var pillShape: MCenteredRoundedRect {
+        MCenteredRoundedRect(cornerRadius: MRadius.sm, height: pillHeight)
+    }
 
     private var iconColor: Color {
         switch activity {
@@ -337,6 +341,7 @@ struct WorkspaceTabChip: View {
                     MIcon(name: "x", size: 10, color: M.text3, weight: .semibold)
                         .frame(width: 26, height: pillHeight)   // 关闭命中区占满胶囊高度
                         .contentShape(Rectangle())
+                        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("关闭标签页"))
@@ -353,12 +358,14 @@ struct WorkspaceTabChip: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { hovering = $0 }
+        // 浮起 / 拖拽预览贴着胶囊，不是外面撑到 44pt 的直角命中区。
+        .contentShape(.dragPreview, pillShape)
         // 长按拎起即可拖：拖到工作区边上分屏、拖进另一格并入；原地松手就是长按菜单。
         .onDrag {
             onDragStart()
             return WorkspaceTabDrag.itemProvider(tabID: tab.id)
         }
-        .mContextMenu {
+        .mContextMenu(preview: pillShape) {
             if canMove {
                 Button(action: onMove) {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")
