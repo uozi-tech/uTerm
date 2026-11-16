@@ -464,6 +464,8 @@ final class RemoteMacClient: Identifiable {
         link.setHandlers(
             onMessage: { [weak self, weak link] message in
                 guard let link else { return }
+                // 读数：配对结果到了链路（还没回主线程）。和「等待配对结果」这一步的结束对照，看是路上慢还是主线程慢。
+                if message.kind == .pairing { trace.event("配对结果到了链路") }
                 Self.route(message, link: link, table: table, client: self)
             },
             onClose: { [weak self] error in
