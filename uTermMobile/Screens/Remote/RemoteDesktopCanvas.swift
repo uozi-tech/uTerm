@@ -66,9 +66,10 @@ final class RemoteDesktopCanvasView: UIView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     /// 画面挂在这个视图上（位置大小 = `displayedFrame`）。iOS 26 起它是 `extensionView` 的内容视图。
     private let pictureView = UIView()
-    /// 角落滑开时空出来的那条窄缝用画面自己的边延伸补满（系统的背景延伸：边缘镜像再模糊），不露黑底。
-    /// 它的范围是「不滑开时的画面 ∪ 滑开后的画面」：平时两者重合、什么也不补，
-    /// 看真显示器留的黑边照旧是黑的；只有滑开时空出的那条缝在它的范围里。iOS 26 之前没有，缝是黑的。
+    /// 角落让开（画面朝对角缩小）时空出来的那两条窄缝用画面自己的边延伸补满（系统的背景延伸：边缘镜像再模糊），
+    /// 不露黑底。它的范围是「不让开时的画面 ∪ 让开后的画面」：平时两者重合、什么也不补（系统也不挂镜像和模糊层，
+    /// 见 `BackgroundExtensionProbeTests`），看真显示器留的黑边照旧是黑的；只有让开时空出的缝在它的范围里。
+    /// iOS 26 之前没有，缝是黑的。
     private var extensionView: UIView?
     private let cursorLayer = CAShapeLayer()
     private let keyInput = RemoteKeyInputView()
@@ -238,12 +239,12 @@ final class RemoteDesktopCanvasView: UIView {
         cursorLayer.position = CGPoint(x: frame.minX + pointer.x * frame.width, y: frame.minY + pointer.y * frame.height)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
         CATransaction.commit()
-        if peekTarget != viewport.peekOffset { wake() }
+        if peekTarget != viewport.peekInsets { wake() }
     }
 
-    /// 指针在被屏幕圆角切掉的角上时画面该挪多少（见 `RemoteDesktopViewport.cornerPeek`）。
-    /// 光标藏着（在别的显示器上 / 还没开流）时不挪。
-    private var peekTarget: CGSize {
+    /// 指针在被屏幕圆角切掉的角上时画面四边该收多少（见 `RemoteDesktopViewport.cornerPeek`）。
+    /// 光标藏着（在别的显示器上 / 还没开流）时不收。
+    private var peekTarget: RemoteDesktopEdgeInsets {
         guard session.info != nil, macCursorVisible else { return .zero }
         return viewport.cornerPeek(for: pointer)
     }
@@ -269,9 +270,9 @@ final class RemoteDesktopCanvasView: UIView {
         let duration = link.targetTimestamp - link.timestamp
         if momentumActive { stepMomentum(duration: duration) }
         let edgeMoving = stepDragEdge(duration: duration)
-        let peekBefore = viewport.peekOffset
+        let peekBefore = viewport.peekInsets
         let peeking = viewport.stepPeek(toward: peekTarget, duration: duration)
-        if viewport.peekOffset != peekBefore { layoutContent() }
+        if viewport.peekInsets != peekBefore { layoutContent() }
         if lastSentPointer != pointer, session.canControl {
             lastSentPointer = pointer
             session.send(.move(x: Float(pointer.x), y: Float(pointer.y)))

@@ -649,31 +649,40 @@ nonisolated struct RemoteDesktopViewport: Equatable {
         return CGRect(origin: origin, size: size)
     }
 
-    // MARK: 角落滑开（贴边铺满时）
+    // MARK: 角落让开（贴边铺满时）
 
     /// 屏幕圆角从角上沿对角线往里切多深，按半径的比例：iOS 的连续曲线圆角量出来是 0.2915，
-    /// 正圆弧是 0.2929（1 − sin45°），取 0.3 留一丝余量。画面往里挪这么多，它的角就落在弧线里面。
+    /// 正圆弧是 0.2929（1 − sin45°），取 0.3 留一丝余量。画面的角往里退这么多，就落在弧线里面。
     static let cornerClearance: CGFloat = 0.3
-    /// 指针离角多近（沿两条边，按半径的比例）开始滑开：连续曲线圆角从角起沿边约 1.49 个半径才变直。
+    /// 指针离角多近（沿两条边，按半径的比例）开始让开：连续曲线圆角从角起沿边约 1.49 个半径才变直。
     static let cornerZone: CGFloat = 1.5
 
-    /// 当前画面滑开的位移（视图点），由画布逐帧往 `cornerPeek(for:)` 逼近。只影响画面画在哪
+    /// 当前画面四条边往里收了多少（视图点），由画布逐帧往 `cornerPeek(for:)` 逼近。只影响画面画在哪
     ///（`displayedFrame`），不影响缩放、平移和指针换算——那些照旧按 `contentFrame`。
-    var peekOffset: CGSize = .zero
+    var peekInsets = RemoteDesktopEdgeInsets.zero
 
-    /// 画面实际画在哪：`contentFrame` 加上角落滑开的位移。
-    var displayedFrame: CGRect { contentFrame.offsetBy(dx: peekOffset.width, dy: peekOffset.height) }
+    /// 画面实际画在哪：`contentFrame` 四边各收 `peekInsets`。
+    var displayedFrame: CGRect {
+        let f = contentFrame
+        return CGRect(x: f.minX + peekInsets.left, y: f.minY + peekInsets.top,
+                      width: f.width - peekInsets.left - peekInsets.right,
+                      height: f.height - peekInsets.top - peekInsets.bottom)
+    }
 
-    /// 指针走进某个被屏幕圆角切掉的角时，画面该往里挪多少（视图点），否则为零。
+    /// 指针走进某个被屏幕圆角切掉的角时，画面四边该收多少（视图点），否则为零。
     ///
     /// 贴边铺满时画面的角由屏幕圆角切掉（`bleedsIntoCorners`），程序坞两头、触发角就落在里面看不全。
-    /// 指针进到那个角附近，把画面朝对角方向挪 `cornerClearance` 个半径，角就整个露出来；离开后回到零。
-    /// 用不带位移的位置判断（`contentFrame`），挪动本身不会让指针出入区域、来回抖。
-    /// 只在画面的那两条边正好贴着视图边（适配屏幕，或放大后拖到了那个角）时才挪。
-    func cornerPeek(for pointer: CGPoint) -> CGSize {
+    /// 指针进到那个角附近，画面以视图的对角（左下角让开时是右上角）为不动点等比缩小，直到这个角在两个方向上
+    /// 都退开 `cornerClearance` 个半径；离开后回到原样。按对角缩小而不是平移：平移会把对边推出视图——
+    /// 往上挪就把 Mac 的菜单栏压到顶栏底下（2026-11-16 Duo 实测），缩小时对角那两条边纹丝不动。
+    /// 缩小比例按视图的短边算，长边方向退得更多（Duo 横着：下边退 17pt、左边退约 26pt）。
+    /// 用不带收缩的位置判断（`contentFrame`），收缩本身不会让指针出入区域、来回抖。
+    /// 只在画面的那两条边正好贴着视图边（适配屏幕，或放大后拖到了那个角）时才让开。
+    func cornerPeek(for pointer: CGPoint) -> RemoteDesktopEdgeInsets {
         guard bleedsIntoCorners else { return .zero }
         let frame = contentFrame
-        guard frame.width > 0, frame.height > 0 else { return .zero }
+        let side = min(viewSize.width, viewSize.height)
+        guard frame.width > 0, frame.height > 0, side > 0 else { return .zero }
         let p = viewPoint(normalized: pointer)
         let touchesLeft = frame.minX >= -0.5, touchesRight = frame.maxX <= viewSize.width + 0.5
         let touchesTop = frame.minY >= -0.5, touchesBottom = frame.maxY <= viewSize.height + 0.5
@@ -688,26 +697,31 @@ nonisolated struct RemoteDesktopViewport: Equatable {
             let dx = left ? p.x : viewSize.width - p.x
             let dy = top ? p.y : viewSize.height - p.y
             guard dx <= zone, dy <= zone else { continue }
-            let shift = (radius * Self.cornerClearance).rounded(.up)
-            return CGSize(width: left ? shift : -shift, height: top ? shift : -shift)
+            let clearance = (radius * Self.cornerClearance).rounded(.up)
+            let shrink = min(0.5, clearance / side)
+            // 不动点：视图的对角。
+            let anchor = CGPoint(x: left ? viewSize.width : 0, y: top ? viewSize.height : 0)
+            return RemoteDesktopEdgeInsets(left: shrink * (anchor.x - frame.minX), top: shrink * (anchor.y - frame.minY),
+                                           right: shrink * (frame.maxX - anchor.x),
+                                           bottom: shrink * (frame.maxY - anchor.y))
         }
         return .zero
     }
 
-    /// 朝目标位移走一帧（指数逼近，`duration` 秒）。离目标不到 0.25 点时直接到位，返回还要不要再走。
-    mutating func stepPeek(toward target: CGSize, duration: CFTimeInterval) -> Bool {
+    /// 朝目标收缩走一帧（四条边各自指数逼近，`duration` 秒）。离目标都不到 0.25 点时直接到位，
+    /// 返回还要不要再走。从一个角换到另一个角时四条边各走各的，中间几帧比例差一丝，看不出来。
+    mutating func stepPeek(toward target: RemoteDesktopEdgeInsets, duration: CFTimeInterval) -> Bool {
         let t = 1 - exp(-max(0, duration) / Self.peekTimeConstant)
-        let next = CGSize(width: peekOffset.width + (target.width - peekOffset.width) * t,
-                          height: peekOffset.height + (target.height - peekOffset.height) * t)
-        if abs(next.width - target.width) < 0.25, abs(next.height - target.height) < 0.25 {
-            peekOffset = target
+        let next = peekInsets.moved(toward: target, by: t)
+        if next.distance(to: target) < 0.25 {
+            peekInsets = target
             return false
         }
-        peekOffset = next
+        peekInsets = next
         return true
     }
 
-    /// 滑开的时间常数：约 0.25 s 走完 95%。
+    /// 让开的时间常数：约 0.25 s 走完 95%。
     static let peekTimeConstant: CFTimeInterval = 0.08
 
     func viewPoint(normalized point: CGPoint) -> CGPoint {
@@ -795,6 +809,26 @@ nonisolated struct RemoteDesktopViewport: Equatable {
         }
         center = CGPoint(x: axis(center.x, content: size.width, view: viewSize.width),
                          y: axis(center.y, content: size.height, view: viewSize.height))
+    }
+}
+
+/// 画面四条边各往里收多少（视图点，正数往里）。
+nonisolated struct RemoteDesktopEdgeInsets: Equatable {
+    var left: CGFloat = 0
+    var top: CGFloat = 0
+    var right: CGFloat = 0
+    var bottom: CGFloat = 0
+
+    static let zero = RemoteDesktopEdgeInsets()
+
+    func moved(toward target: RemoteDesktopEdgeInsets, by t: CGFloat) -> RemoteDesktopEdgeInsets {
+        RemoteDesktopEdgeInsets(left: left + (target.left - left) * t, top: top + (target.top - top) * t,
+                                right: right + (target.right - right) * t, bottom: bottom + (target.bottom - bottom) * t)
+    }
+
+    /// 四条边里差得最多的那条。
+    func distance(to other: RemoteDesktopEdgeInsets) -> CGFloat {
+        max(abs(left - other.left), abs(top - other.top), abs(right - other.right), abs(bottom - other.bottom))
     }
 }
 
