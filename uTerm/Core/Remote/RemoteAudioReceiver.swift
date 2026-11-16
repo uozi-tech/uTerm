@@ -317,10 +317,24 @@ nonisolated final class RemoteAudioScratch: @unchecked Sendable {
 }
 
 /// `AVAudioEngine` + `AVAudioSourceNode`：音频线程按输出节拍来取，缓冲深度完全由抖动缓冲控制。
+///
+/// 引擎与音频会话的开关一律在 `EngineHost.queue` 上做，主线程只发起：`AVAudioEngine.start()` 很慢（Duo 实测
+/// App 启动后第一次 1047 ms，之后约 250 ms），以前在主线程上同步做，开屏时画面早就解出来了，「正在连接」那层
+/// 却要等它做完才撤（2026-11-16：首帧解码完 +522 ms，画面层 +1604 ms 才撤）。启动失败经 `onInterrupted` 报，
+/// 和被系统打断一样处理（关掉声音、说明原因）。
 @MainActor
 final class RemoteAudioEnginePlayer: RemoteAudioOutput {
-    private let engine = AVAudioEngine()
-    private var node: AVAudioSourceNode?
+    /// 只在 `queue` 上碰（通知里拿 `engine` 当 `object` 比对身份除外）。
+    nonisolated private final class EngineHost: @unchecked Sendable {
+        let engine = AVAudioEngine()
+        let queue = DispatchQueue(label: "com.uozi.uTerm.remote.audio-engine", qos: .userInitiated)
+        var node: AVAudioSourceNode?
+    }
+
+    private let host = EngineHost()
+    /// 每次 start / stop 加一：排在队列上的旧结果回到主线程时认得出来、不作数。
+    private var generation = 0
+    private var isStarted = false
     var onInterrupted: ((String) -> Void)?
     private var observers: [NSObjectProtocol] = []
 
@@ -328,24 +342,61 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
 
     func start(pull: @escaping @Sendable (UnsafeMutableBufferPointer<Float>, Int) -> Void) throws {
         stop()
+        generation += 1
+        isStarted = true
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        // 声音按钮默认关，打开是用户的选择：静音键下也出声，与看视频一致。
-        try session.setCategory(.playback, mode: .default, options: [])
-        try? session.setPreferredIOBufferDuration(0.01)
-        try session.setActive(true)
         observeSession()
         #endif
         observeEngineConfiguration()
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: RemoteAudioPolicy.sampleRate,
-                                         channels: AVAudioChannelCount(RemoteAudioPolicy.channels)) else { return }
-        // 交错采样的中转区：一次分配、跟着节点的闭包走，音频线程上不再分配内存。
-        let scratch = RemoteAudioScratch(frames: 8192, channels: Int(RemoteAudioPolicy.channels))
-        let node = AVAudioSourceNode(format: format, renderBlock: Self.renderBlock(scratch: scratch, pull: pull))
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        self.node = node
-        try engine.start()
+        let current = generation
+        Self.startOnQueue(host, pull: pull) { [weak self] failure in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.isStarted, self.generation == current, let failure else { return }
+                    self.onInterrupted?(failure)
+                }
+            }
+        }
+    }
+
+    /// 在引擎队列上：设好音频会话、挂上节点、启动。`done(nil)` = 成功，否则是给人看的失败原因。
+    nonisolated private static func startOnQueue(_ host: EngineHost,
+                                                 pull: @escaping @Sendable (UnsafeMutableBufferPointer<Float>, Int) -> Void,
+                                                 done: @escaping @Sendable (String?) -> Void) {
+        host.queue.async {
+            let clock = ContinuousClock()
+            let started = clock.now
+            do {
+                #if os(iOS)
+                let session = AVAudioSession.sharedInstance()
+                // 声音按钮默认关，打开是用户的选择：静音键下也出声，与看视频一致。
+                try session.setCategory(.playback, mode: .default, options: [])
+                try? session.setPreferredIOBufferDuration(0.01)
+                try session.setActive(true)
+                #endif
+                guard let format = AVAudioFormat(standardFormatWithSampleRate: RemoteAudioPolicy.sampleRate,
+                                                 channels: AVAudioChannelCount(RemoteAudioPolicy.channels)) else {
+                    done(nil)
+                    return
+                }
+                // 交错采样的中转区：一次分配、跟着节点的闭包走，音频线程上不再分配内存。
+                let scratch = RemoteAudioScratch(frames: 8192, channels: Int(RemoteAudioPolicy.channels))
+                let node = AVAudioSourceNode(format: format, renderBlock: renderBlock(scratch: scratch, pull: pull))
+                host.engine.attach(node)
+                host.engine.connect(node, to: host.engine.mainMixerNode, format: format)
+                host.node = node
+                try host.engine.start()
+                AppLogger.info("远程桌面声音：播放引擎启动 \(RemoteConnectTrace.millis(clock.now - started)) ms",
+                               category: RemoteLog.category)
+                done(nil)
+            } catch {
+                #if os(macOS)
+                done("这台 Mac 上无法播放声音：\(error.localizedDescription)")
+                #else
+                done("手机上无法播放声音：\(error.localizedDescription)")
+                #endif
+            }
+        }
     }
 
     /// 播放回调。必须在 nonisolated 的地方建：在本类（`@MainActor`）的方法里直接写闭包，Swift 会把它推断成主线程隔离、
@@ -373,30 +424,67 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
     }
 
     func stop() {
-        engine.stop()
-        if let node {
-            engine.detach(node)
-            self.node = nil
-        }
+        generation += 1
+        let wasStarted = isStarted
+        isStarted = false
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
+        guard wasStarted else { return }
+        Self.stopOnQueue(host)
+    }
+
+    nonisolated private static func stopOnQueue(_ host: EngineHost) {
+        host.queue.async {
+            host.engine.stop()
+            if let node = host.node {
+                host.engine.detach(node)
+                host.node = nil
+            }
+            #if os(iOS)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
+        }
+    }
+
+    /// 引擎停着、节点还挂着时重新 start（输出设备变了、打断结束后）。失败时 `failure` 是给人看的原因。
+    private func restart(failure: String, reactivateSession: Bool) {
+        let current = generation
+        Self.restartOnQueue(host, reactivateSession: reactivateSession) { [weak self] error in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.isStarted, self.generation == current, let error else { return }
+                    self.onInterrupted?("\(failure)：\(error)")
+                }
+            }
+        }
+    }
+
+    nonisolated private static func restartOnQueue(_ host: EngineHost, reactivateSession: Bool,
+                                                   done: @escaping @Sendable (String?) -> Void) {
+        host.queue.async {
+            guard host.node != nil, !host.engine.isRunning else {
+                done(nil)
+                return
+            }
+            #if os(iOS)
+            if reactivateSession { try? AVAudioSession.sharedInstance().setActive(true) }
+            #endif
+            do {
+                try host.engine.start()
+                done(nil)
+            } catch {
+                done(error.localizedDescription)
+            }
+        }
     }
 
     /// 输出设备或硬件格式变了（连上 AirPods、采样率变了）：系统会把引擎停掉并发这个通知，连接还在，重新 start 即可。
     /// 不接的话引擎静悄悄停着，按钮还亮着却没有声音。
     private func observeEngineConfiguration() {
         observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
-                                                                object: engine, queue: .main) { [weak self] _ in
+                                                                object: host.engine, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.node != nil, !self.engine.isRunning else { return }
-                do {
-                    try self.engine.start()
-                } catch {
-                    self.onInterrupted?("声音输出设备已更改，无法继续播放：\(error.localizedDescription)")
-                }
+                self?.restart(failure: "声音输出设备已更改，无法继续播放", reactivateSession: false)
             }
         })
     }
@@ -413,8 +501,7 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if options.contains(.shouldResume) {
-                    try? AVAudioSession.sharedInstance().setActive(true)
-                    try? self.engine.start()
+                    self.restart(failure: "声音被其他应用打断后无法恢复", reactivateSession: true)
                 } else {
                     self.onInterrupted?("声音被其他应用打断")
                 }

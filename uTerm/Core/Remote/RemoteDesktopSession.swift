@@ -488,6 +488,13 @@ final class RemoteDesktopSession {
         guard !audioPlaying, let audioOutput else { return }
         let receiver = audioReceiver
         audioOutput.onInterrupted = { [weak self] reason in self?.audioInterrupted(reason) }
+        let clock = ContinuousClock()
+        let started = clock.now
+        // 开屏时间线还开着（首帧还没上屏）就记下开声音占了主线程多久：这段时间「正在连接」那层撤不掉。
+        // 播放引擎在自己的队列上启动（`RemoteAudioEnginePlayer`），这里应当只有几毫秒。
+        defer {
+            openTrace?.event("开声音占主线程 \(RemoteConnectTrace.millis(clock.now - started)) ms")
+        }
         do {
             try audioOutput.start(pull: { receiver.pull(into: $0, frames: $1) })
             audioPlaying = true
