@@ -75,6 +75,8 @@ nonisolated final class RemoteDirectAttempt: @unchecked Sendable {
     func gather() -> Bool { agent?.gather() ?? false }
     func localDescription() -> String? { agent?.localDescription() }
     func setRemote(_ description: String) -> Bool { agent?.setRemote(description) ?? false }
+    /// 应答的一方（Mac）：设对端并收集，见 `RemoteICEAgent.answer`。
+    func answer(_ description: String) -> Bool { agent?.answer(description) ?? false }
     func selectedCandidates() -> (local: String, remote: String)? { agent?.selectedCandidates() }
 
     /// 交出去之前放弃：关掉 agent。交出去之后归传输层管，这里什么也不做。
@@ -106,15 +108,24 @@ nonisolated final class RemoteDirectAttempt: @unchecked Sendable {
             answersChecks = false
             confirmed = false
         }
+        // 每 100 ms 发一次（确认包可能丢），每 10 ms 看一眼回应到了没有：以前发完就睡 100 ms，回应 20 ms 就到了
+        // 也要等满 100 ms 才发现。
         let clock = ContinuousClock()
         let deadline = clock.now + limit
+        var nextSend = clock.now
         while clock.now < deadline, !Task.isCancelled {
             if locked({ confirmed }) { return true }
-            sendCheck()
-            try? await Task.sleep(for: .milliseconds(100))
+            if clock.now >= nextSend {
+                sendCheck()
+                nextSend = clock.now + Self.checkResend
+            }
+            try? await Task.sleep(for: .milliseconds(10))
         }
         return locked { confirmed }
     }
+
+    /// 路径确认包多久重发一次。
+    static let checkResend: Duration = .milliseconds(100)
 
     /// Mac：等手机发来带认证的确认。收到就回应，并一直回应它后面的重发。
     func waitForCheck(keys: RemoteDatagramKeys, limit: Duration = hostWaitLimit) async -> Bool {

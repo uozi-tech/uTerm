@@ -134,8 +134,8 @@ final class RemoteDirectPathTests: XCTestCase {
         guard !RemoteICECandidateKind.all(inDescription: offered).isEmpty else {
             throw XCTSkip("这台机器没有非回环网卡，没有候选地址可打")
         }
-        XCTAssertTrue(mac.setRemote(offered))
-        XCTAssertTrue(mac.gather())
+        // Mac 照生产代码的做法：先交凭据、收集，再一个个加手机的地址（`RemoteICEAgent.answer`）。
+        XCTAssertTrue(mac.answer(offered))
         await mac.waitForGathering(limit: .seconds(3))
         XCTAssertTrue(phone.setRemote(try XCTUnwrap(mac.localDescription())))
         let connected = await phone.waitForConnection(limit: .seconds(10))

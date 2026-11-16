@@ -145,6 +145,42 @@ final class RemoteICETests: XCTestCase {
         XCTAssertTrue(kept.contains("a=ice-ufrag:abcd") && kept.contains("a=ice-pwd:efgh") && kept.contains("a=end-of-candidates"))
     }
 
+    /// libjuice 按地址加进来的先后排检查：公网映射先试，不在本机网段的私有 IPv4 放后面（mini 有 7 个本机 IPv4，原样交时
+    /// 手机要过约 350 ms 才轮到能通的那个）。别的行原地不动，同一档里保持原来的先后。
+    func test_check_order_puts_reflexive_first_and_private_ipv4_last() {
+        let description = [
+            "a=ice-ufrag:abcd", "a=ice-pwd:efgh",
+            "a=candidate:1 1 UDP 2122317823 192.168.31.3 49160 typ host",
+            "a=candidate:2 1 UDP 2122317823 198.18.0.1 49160 typ host",
+            "a=candidate:3 1 UDP 2122317823 2408:8207::1 49163 typ host",
+            "a=candidate:4 1 UDP 2122317823 10.0.0.2 49160 typ host",
+            "a=candidate:5 1 UDP 1686052607 45.76.10.20 50000 typ srflx raddr 0.0.0.0 rport 0",
+            "a=candidate:6 1 UDP 16777215 203.0.113.9 3478 typ relay raddr 0.0.0.0 rport 0",
+            "a=end-of-candidates", "",
+        ].joined(separator: "\r\n")
+        let ordered = RemoteICEDescriptionFilter.checkOrdered(description)
+        let lines = ordered.components(separatedBy: "\r\n")
+        XCTAssertEqual(Array(lines.prefix(2)), ["a=ice-ufrag:abcd", "a=ice-pwd:efgh"])
+        XCTAssertEqual(lines.filter { $0.hasPrefix("a=candidate:") }.map { String($0.dropFirst(12).prefix(1)) },
+                       ["5", "3", "1", "2", "4", "6"])
+        XCTAssertEqual(Array(lines.suffix(2)), ["a=end-of-candidates", ""], "尾巴原样")
+        XCTAssertEqual(ordered.count, description.count, "只换顺序，不增不减")
+
+        let split = RemoteICEDescriptionFilter.split(description)
+        XCTAssertFalse(split.credentials.contains("a=candidate:"))
+        XCTAssertFalse(split.credentials.contains("end-of-candidates"), "对端收集完由加完地址之后再报")
+        // 拆出来的候选保持原来的先后：排序由 `RemoteICEAgent.answer` 收集完本机地址之后再按网段排。
+        XCTAssertTrue(split.credentials.contains("a=ice-ufrag:abcd") && split.credentials.contains("a=ice-pwd:efgh"))
+        XCTAssertEqual(split.candidates.map { String($0.dropFirst(12).prefix(1)) }, ["1", "2", "3", "4", "5", "6"])
+
+        // 本机也在 192.168.31.x：对端同网段的那个多半同一局域网，排最前（免得先走公网映射再换过去、换的那一下丢包）。
+        let local = "a=ice-ufrag:x\r\na=candidate:1 1 UDP 2122317823 192.168.31.119 50000 typ host\r\n"
+            + "a=candidate:2 1 UDP 1686052607 45.76.10.9 50000 typ srflx raddr 0.0.0.0 rport 0"
+        let nearFirst = RemoteICEDescriptionFilter.checkOrdered(description, local: local)
+            .components(separatedBy: "\r\n").filter { $0.hasPrefix("a=candidate:") }.map { String($0.dropFirst(12).prefix(1)) }
+        XCTAssertEqual(nearFirst, ["1", "5", "3", "2", "4", "6"])
+    }
+
     func test_public_only_drops_every_private_ipv4_range() {
         func kept(_ address: String) -> Bool {
             let line = "a=candidate:1 1 UDP 2122317823 \(address) 49160 typ host"

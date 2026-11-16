@@ -355,12 +355,12 @@ final class RemoteRelayHostLink {
                              connection: RemoteRelayConnection) async {
         // 中继那条路已经备好（`receiveOffer` 登记过）。这里任何一步不成，回一个不带地址的答复手机就走中继。
         let attempt = RemoteDirectAttempt(stunHost: config.host, stunPort: UInt16(clamping: config.port))
-        // 先设对端，这一端才是 controlled；地址一出来就开始往手机打。
+        // 应答的一方是 controlled；地址一出来就开始往手机打（见 `RemoteICEAgent.answer`）。
         let clock = ContinuousClock()
         let started = clock.now
         func elapsed() -> Int { RemoteConnectTrace.millis(clock.now - started) }
         var description: String?
-        if let attempt, attempt.setRemote(offer.remoteDescription), attempt.gather() {
+        if let attempt, attempt.answer(offer.remoteDescription) {
             await attempt.waitForGathering(limit: RemoteDirectAttempt.gatherLimit)
             description = attempt.localDescription()
         }

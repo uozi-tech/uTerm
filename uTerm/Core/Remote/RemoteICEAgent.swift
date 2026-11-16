@@ -91,18 +91,53 @@ nonisolated final class RemoteICEAgent: @unchecked Sendable {
 
     /// 本机的 ufrag、密码和目前收集到的候选地址。第一个调用它的一方成为 controlling。
     func localDescription() -> String? {
-        withAgent { agent -> String? in
+        let description = withAgent { agent -> String? in
             var buffer = [CChar](repeating: 0, count: Int(JUICE_MAX_SDP_STRING_LEN))
             guard juice_get_local_description(agent, &buffer, buffer.count) == JUICE_ERR_SUCCESS else { return nil }
             return Self.string(buffer)
         } ?? nil
+        if let description { lock.withLock { lastLocalDescription = description } }
+        return description
     }
 
+    /// 上一次 `localDescription` 交出去的本机描述（排对端地址的先后时认同网段用；不另外去取，免得改了角色）。
+    private var lastLocalDescription: String?
+
     /// 对端的描述。一方在调用 `localDescription` 之前调这个，就成为 controlled。
+    ///
+    /// 候选地址按 `RemoteICEDescriptionFilter.checkOrdered` 重排后再交给 libjuice：它按地址加进来的先后每 50 ms
+    /// 发一个检查（`STUN_PACING_TIME`），不按优先级。原样交时私网地址排在前面，跨网络时一个个白试，能通的公网映射
+    /// 排在最后（2026-11-16 mini 有 7 个 IPv4 本机地址：手机要过约 350 ms 才轮到它）。
     func setRemote(_ description: String) -> Bool {
-        withAgent { agent in
-            guard description.utf8.count < Int(JUICE_MAX_SDP_STRING_LEN),
-                  juice_set_remote_description(agent, description) == JUICE_ERR_SUCCESS else { return false }
+        let local = lock.withLock { lastLocalDescription }
+        let ordered = RemoteICEDescriptionFilter.checkOrdered(description, local: local)
+        return withAgent { agent in
+            guard ordered.utf8.count < Int(JUICE_MAX_SDP_STRING_LEN),
+                  juice_set_remote_description(agent, ordered) == JUICE_ERR_SUCCESS else { return false }
+            return juice_set_remote_gathering_done(agent) == JUICE_ERR_SUCCESS
+        } ?? false
+    }
+
+    /// 应答的一方（controlled）：设对端、收集本机地址，一步做完。
+    ///
+    /// 先只交对端的凭据（这一端就定成 controlled，还没有要检查的地址），再收集，最后一个个加对端的地址。
+    /// 先设整份描述再收集的话，给对端每个地址的检查先占了时间槽，去 STUN 服务器要公网映射的请求排在它们后面，
+    /// 收集一次要多等「对端地址数 × 50 ms」（2026-11-16 mini：手机 4 / 6 个地址，收集 211 / 323 ms；
+    /// 手机自己先收集再设对端，只要 22–34 ms）。
+    func answer(_ description: String) -> Bool {
+        let credentials = RemoteICEDescriptionFilter.split(description).credentials
+        let started = withAgent { agent in
+            credentials.utf8.count < Int(JUICE_MAX_SDP_STRING_LEN)
+                && juice_set_remote_description(agent, credentials) == JUICE_ERR_SUCCESS
+                && juice_gather_candidates(agent) == JUICE_ERR_SUCCESS
+        } ?? false
+        guard started else { return false }
+        // 本机地址在 gather 时就列出来了（公网映射要等 STUN 回来），拿它认同网段再排对端地址的先后。
+        let ordered = RemoteICEDescriptionFilter.split(
+            RemoteICEDescriptionFilter.checkOrdered(description, local: localDescription())).candidates
+        return withAgent { agent in
+            // 单个地址解析不了（对端多报了一种格式）不要紧，其余的照样试。
+            for candidate in ordered { _ = juice_add_remote_candidate(agent, candidate) }
             return juice_set_remote_gathering_done(agent) == JUICE_ERR_SUCCESS
         } ?? false
     }

@@ -77,6 +77,7 @@ nonisolated final class RemoteICEProbeSession: @unchecked Sendable {
     func gather() -> Bool { agent?.gather() ?? false }
     func localDescription() -> String? { agent?.localDescription() }
     func setRemote(_ description: String) -> Bool { agent?.setRemote(description) ?? false }
+    func answer(_ description: String) -> Bool { agent?.answer(description) ?? false }
     func selectedCandidates() -> (local: String, remote: String)? { agent?.selectedCandidates() }
     func close() { agent?.close() }
 
@@ -283,6 +284,70 @@ nonisolated enum RemoteICEDescriptionFilter {
     /// 198.18/15——Clash / Surge 一类代理的 TUN 网卡用它当假地址，Mac 开着代理时会成为 host 候选）。
     /// 「只走公网」与网络诊断用：同一局域网里两端的私有地址一配就通，量到的是局域网，不是外出时的那条路。
     /// srflx 候选的地址本身是公网映射，留着。
+    /// 候选行按检查的先后重排（稳定排序，别的行原地不动）：和本机同一个 /24 的私有 IPv4（多半同一局域网）→
+    /// 公网映射（srflx / prflx）→ 公网的本机地址（IPv6、非私有 IPv4）→ 其余私有 IPv4 → 中继。libjuice 按地址加进来的
+    /// 先后排检查，见 `RemoteICEAgent.setRemote`。`local` 是本机的描述，用来认同网段；nil 时不认。
+    ///
+    /// 同网段的排最前：同一局域网里它最先通，不用先走公网映射再换过去（换的那一下会丢包）。网段只看 /24，家里和
+    /// 公司都用 192.168.1.x 之类时会误认，那也只是那一两个地址先试，别的照样往后排。
+    static func checkOrdered(_ description: String, local: String? = nil) -> String {
+        let nearby = Self.subnets(of: local)
+        let lines = Self.lines(description)
+        let candidates = lines.filter(Self.isCandidate)
+        var sorted = candidates.enumerated().sorted { a, b in
+            let (ra, rb) = (Self.checkRank(a.element, nearby: nearby), Self.checkRank(b.element, nearby: nearby))
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)[...]
+        return lines.map { line in Self.isCandidate(line) ? sorted.popFirst() ?? line : line }.joined(separator: "\r\n")
+    }
+
+    /// 拆成凭据（候选行和 `a=end-of-candidates` 以外的行）与候选行（原来的先后，见 `RemoteICEAgent.answer`）。
+    static func split(_ description: String) -> (credentials: String, candidates: [String]) {
+        let lines = Self.lines(description)
+        let credentials = lines.filter { !Self.isCandidate($0) && $0 != "a=end-of-candidates" }
+        return (credentials.joined(separator: "\r\n"), lines.filter(Self.isCandidate))
+    }
+
+    /// 0 最先试。`nearby` 是本机私有 IPv4 的 /24 前缀（「192.168.31」）。
+    static func checkRank(_ line: String, nearby: Set<String> = []) -> Int {
+        guard let (type, address) = Self.typeAndAddress(line) else { return 3 }
+        switch type {
+        case "srflx", "prflx": return 1
+        case "relay": return 4
+        default:
+            if address.contains(":") || !Self.isPrivateIPv4(address) { return 2 }
+            return nearby.contains(Self.subnet(address)) ? 0 : 3
+        }
+    }
+
+    /// 描述里本机地址（host 候选）的私有 IPv4 /24 前缀。
+    private static func subnets(of description: String?) -> Set<String> {
+        guard let description else { return [] }
+        return Set(Self.lines(description).filter(Self.isCandidate).compactMap { line in
+            guard let (type, address) = Self.typeAndAddress(line), type == "host", !address.contains(":"),
+                  Self.isPrivateIPv4(address) else { return nil }
+            return Self.subnet(address)
+        })
+    }
+
+    private static func subnet(_ address: String) -> String {
+        address.split(separator: ".").prefix(3).joined(separator: ".")
+    }
+
+    private static func typeAndAddress(_ line: String) -> (type: String, address: String)? {
+        let fields = line.split(whereSeparator: \.isWhitespace)
+        guard let typeIndex = fields.firstIndex(of: "typ"), typeIndex >= 2, typeIndex + 1 < fields.count else { return nil }
+        return (String(fields[typeIndex + 1]), fields[typeIndex - 2].lowercased())
+    }
+
+    private static func isCandidate(_ line: String) -> Bool { line.hasPrefix("a=candidate:") }
+
+    private static func lines(_ description: String) -> [String] {
+        description.split(separator: "\r\n", omittingEmptySubsequences: false).flatMap {
+            $0.split(separator: "\n", omittingEmptySubsequences: false)
+        }.map(String.init)
+    }
+
     static func keep(_ description: String, family: RemoteICEAddressFamily?, publicOnly: Bool = false) -> String {
         description.split(separator: "\r\n", omittingEmptySubsequences: false).flatMap {
             $0.split(separator: "\n", omittingEmptySubsequences: false)
@@ -340,8 +405,8 @@ nonisolated enum RemoteICEProbeResponder {
                       stunHost: String, stunPort: UInt16, reply: @Sendable (String) async -> Void) async {
         guard let session = RemoteICEProbeSession(stunHost: stunHost, stunPort: stunPort, echoes: true) else { return }
         defer { session.close() }
-        // 先设对端，这一端才是 controlled；地址一出来就开始往手机打。
-        guard session.setRemote(request.remoteDescription), session.gather() else { return }
+        // 应答的一方是 controlled；地址一出来就开始往手机打（见 `RemoteICEAgent.answer`）。
+        guard session.answer(request.remoteDescription) else { return }
         await session.waitForGathering(limit: RemoteICEProbeRunner.gatherLimit)
         guard let description = session.localDescription() else { return }
         let answer = RemoteSignalBody(kind: .iceProbeAnswer, deviceID: localID, sentAt: Date().timeIntervalSince1970,
