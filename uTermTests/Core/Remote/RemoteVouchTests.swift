@@ -77,6 +77,28 @@ final class RemoteVouchTests: XCTestCase {
         XCTAssertEqual(RemoteVouchPolicy.familyMembers(of: stranger, trusted: trusted, vouches: vouches), [stranger])
     }
 
+    func test_revoke_policy_only_within_the_same_group_and_the_same_key() {
+        let root = UUID(), pad = UUID(), stranger = UUID(), key = newKey()
+        let vouches = [pad: RemotePeerVouch(deviceID: pad, deviceName: "iPad", vouchedBy: root, voucherName: "iPhone",
+                                            family: root, vouchedAt: Date())]
+        let padPeer = RemotePeer(id: pad, name: "iPad", publicKey: key, pairedAt: Date())
+        let request = RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: pad, publicKey: key)
+        XCTAssertEqual(RemoteVouchPolicy.decideRevoke(request, requesterID: root, existing: padPeer, vouches: vouches), .revoked)
+        XCTAssertEqual(RemoteVouchPolicy.decideRevoke(request, requesterID: pad, existing: padPeer, vouches: vouches), .revoked,
+                       "撤自己也行")
+        XCTAssertEqual(RemoteVouchPolicy.decideRevoke(request, requesterID: stranger, existing: padPeer, vouches: vouches),
+                       .notInFamily)
+        // 被撤的那台换过钥匙（重新配对过）：不撤。
+        var other = request
+        other.publicKey = newKey()
+        XCTAssertEqual(RemoteVouchPolicy.decideRevoke(other, requesterID: root, existing: padPeer, vouches: vouches), .notTrusted)
+        XCTAssertEqual(RemoteVouchPolicy.decideRevoke(request, requesterID: root, existing: nil, vouches: vouches), .notTrusted)
+        // 手动配对的根设备也能被组里的设备撤掉（组号就是它）。
+        let rootPeer = RemotePeer(id: root, name: "iPhone", publicKey: key, pairedAt: Date())
+        let rootRequest = RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: root, publicKey: key)
+        XCTAssertEqual(RemoteVouchPolicy.decideRevoke(rootRequest, requesterID: pad, existing: rootPeer, vouches: vouches), .revoked)
+    }
+
     func test_result_with_an_unknown_outcome_still_decodes() throws {
         let json = Data(#"{"requestID":"\#(UUID().uuidString)","outcome":"later-version"}"#.utf8)
         let result = try JSONDecoder().decode(RemoteVouchResult.self, from: json)
@@ -255,6 +277,46 @@ final class RemoteVouchTests: XCTestCase {
             XCTFail("老 Mac 上应当直接报版本太旧")
         } catch RemoteAttachError.rejected(_) {}
         XCTAssertEqual(phoneClient.state, .connected, "没发出去，连接还在")
+        phoneClient.disconnect()
+    }
+
+    func test_group_member_reports_another_lost_and_the_mac_revokes_it_for_good() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let phone = Device("iPhone"), pad = Device("iPad"), stranger = Device("Stranger")
+        let phoneClient = try await pairByApproval(phone, to: server)
+        let strangerClient = try await pairByApproval(stranger, to: server)
+        _ = try await phoneClient.vouch(for: pad.sibling)
+        let padClient = try await connectWithoutApproval(pad, to: server)
+        XCTAssertTrue(phoneClient.supportsSiblingRevoke)
+
+        // 别组的设备撤不了。
+        let refused = try await strangerClient.revokeSibling(pad.id, publicKey: pad.sibling.publicKey)
+        XCTAssertEqual(refused.kind, .notInFamily)
+        XCTAssertNotNil(server.identity.peer(id: pad.id))
+
+        let result = try await phoneClient.revokeSibling(pad.id, publicKey: pad.sibling.publicKey)
+        XCTAssertEqual(result.kind, .revoked)
+        let gone = await waitUntil { server.identity.peer(id: pad.id) == nil && padClient.state != .connected }
+        XCTAssertTrue(gone, "撤掉并断开")
+        XCTAssertTrue(server.identity.isBlocked(pad.id))
+        let again = try await phoneClient.vouch(for: pad.sibling)
+        XCTAssertEqual(again.kind, .rejected, "撤掉的设备不能借担保回来")
+        XCTAssertEqual(phoneClient.state, .connected)
+        phoneClient.disconnect()
+        strangerClient.disconnect()
+    }
+
+    func test_old_mac_is_never_sent_a_revocation() async throws {
+        let server = try await makeServer(features: RemoteConstants.localFeatures.filter { $0 != RemoteFeature.siblingRevoke })
+        defer { server.stop() }
+        let phone = Device("iPhone")
+        let phoneClient = try await pairByApproval(phone, to: server)
+        do {
+            _ = try await phoneClient.revokeSibling(UUID(), publicKey: newKey())
+            XCTFail("老 Mac 上应当直接报版本太旧")
+        } catch RemoteAttachError.rejected(_) {}
+        XCTAssertEqual(phoneClient.state, .connected)
         phoneClient.disconnect()
     }
 

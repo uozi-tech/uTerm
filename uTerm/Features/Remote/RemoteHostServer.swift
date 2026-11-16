@@ -735,6 +735,27 @@ final class RemoteHostServer {
         return RemoteVouchResult(requestID: request.requestID, outcome: .added, internetAccess: internet, relay: relay)
     }
 
+    /// 同一组的另一台设备说这台丢了：撤销它（断开、拉黑、吊销它的中继证书，同 `revoke`）。
+    func handleSiblingRevoke(_ request: RemoteSiblingRevokeRequest, requesterID: UUID,
+                             requesterName: String) -> RemoteSiblingRevokeResult {
+        let outcome = RemoteVouchPolicy.decideRevoke(request, requesterID: requesterID,
+                                                     existing: identity.peer(id: request.deviceID), vouches: identity.vouches())
+        switch outcome {
+        case .revoked:
+            let name = identity.peer(id: request.deviceID)?.displayName ?? request.deviceID.uuidString
+            AppLogger.notice("远控：\(requesterName) 撤销了同一组的「\(name)」（报告丢失）", category: RemoteLog.category)
+            // 下一拍再撤：撤的可能是发请求的这台自己，撤销会断开它的连接，先让结果发出去。
+            let id = request.deviceID
+            Task { @MainActor [weak self] in self?.revoke(id) }
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked)
+        case .notTrusted:
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notTrusted)
+        case .notInFamily:
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notInFamily,
+                                             reason: String(localized: "在这台 Mac 上它不是由你的设备开通的，要到 Mac 上撤销"))
+        }
+    }
+
     /// 重读担保记录；`notify` 时对新出现的每一条回调 `onDeviceVouched`。
     private func refreshVouches(notify: Bool) {
         let now = identity.vouches()

@@ -86,6 +86,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
     case device(RemoteSiblingDevice)
     case message(RemoteSiblingMessage)
     case grant(RemoteSiblingSealedGrant)
+    case tombstone(RemoteSiblingTombstone)
 
     static let version = 1
 
@@ -94,6 +95,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         case .device(let device): return Self.deviceAccount(device.id)
         case .message(let message): return message.account
         case .grant(let grant): return grant.account
+        case .tombstone(let tombstone): return tombstone.account
         }
     }
 
@@ -105,6 +107,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         var device: RemoteSiblingDevice?
         var message: RemoteSiblingMessage?
         var grant: RemoteSiblingSealedGrant?
+        var tombstone: RemoteSiblingTombstone?
     }
 
     func encoded() throws -> Data {
@@ -113,6 +116,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         case .device(let device): envelope = Envelope(v: Self.version, record: "device", device: device)
         case .message(let message): envelope = Envelope(v: Self.version, record: "message", message: message)
         case .grant(let grant): envelope = Envelope(v: Self.version, record: "grant", grant: grant)
+        case .tombstone(let tombstone): envelope = Envelope(v: Self.version, record: "tombstone", tombstone: tombstone)
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
@@ -135,6 +139,10 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         case "grant":
             guard let grant = envelope.grant, !grant.box.isEmpty else { return nil }
             return .grant(grant)
+        case "tombstone":
+            guard let tombstone = envelope.tombstone,
+                  tombstone.publicKey.count == RemoteSiblingCode.keyLength else { return nil }
+            return .tombstone(tombstone)
         default:
             return nil
         }
@@ -146,6 +154,12 @@ nonisolated struct RemoteSiblingSnapshot: Equatable, Sendable {
     var devices: [RemoteSiblingDevice] = []
     var messages: [RemoteSiblingMessage] = []
     var grants: [RemoteSiblingSealedGrant] = []
+    var tombstones: [RemoteSiblingTombstone] = []
+
+    /// 这台设备（这把钥匙）被报告丢了。重装后换了钥匙的不算。
+    func tombstone(for device: RemoteSiblingDevice) -> RemoteSiblingTombstone? {
+        tombstones.first { $0.deviceID == device.id && $0.publicKey == device.publicKey }
+    }
 
     func device(_ id: UUID) -> RemoteSiblingDevice? {
         devices.first { $0.id == id }
@@ -178,6 +192,8 @@ nonisolated struct RemoteSiblingRoster: Sendable {
                 snapshot.messages.append(message)
             case .grant(let grant):
                 snapshot.grants.append(grant)
+            case .tombstone(let tombstone):
+                snapshot.tombstones.append(tombstone)
             }
         }
         return snapshot
@@ -316,6 +332,7 @@ nonisolated final class RemoteSiblingLocalStore: @unchecked Sendable {
     private static let approvalsAccount = "siblingApprovals"
     private static let commitsAccount = "siblingCommits"
     private static let vouchersAccount = "siblingVouchers"
+    private static let revocationsAccount = "siblingRevocations"
 
     private let storage: any RemoteSecretStorage
     private let lock = NSLock()
@@ -357,6 +374,26 @@ nonisolated final class RemoteSiblingLocalStore: @unchecked Sendable {
 
     func removeVoucher(_ id: UUID) throws {
         try update(Self.vouchersAccount) { (all: inout [UUID: RemoteSiblingApproval]) in all[id] = nil }
+    }
+
+    /// 本机替丢了的设备向各台 Mac 撤销的进度：丢了的设备 → Mac → 结果（`RemoteSiblingRevokeResult.Outcome`
+    /// 的原始值，或 `RemoteSiblingGrant.unsupported`）。
+    func revocations() -> [UUID: [UUID: RemoteSiblingRevocationRecord]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return load(Self.revocationsAccount) ?? [:]
+    }
+
+    func recordRevocation(_ record: RemoteSiblingRevocationRecord, device: UUID, host: UUID) throws {
+        try update(Self.revocationsAccount) { (all: inout [UUID: [UUID: RemoteSiblingRevocationRecord]]) in
+            all[device, default: [:]][host] = record
+        }
+    }
+
+    func forgetRevocations(_ device: UUID) throws {
+        try update(Self.revocationsAccount) { (all: inout [UUID: [UUID: RemoteSiblingRevocationRecord]]) in
+            all[device] = nil
+        }
     }
 
     func setCommit(_ state: RemoteSiblingCommitState?, voucher: UUID) throws {
@@ -462,4 +499,32 @@ nonisolated enum RemoteSiblingSeal {
               grant.hostID == sealed.host, grant.hostKey.count == RemoteSiblingCode.keyLength else { return nil }
         return grant
     }
+}
+
+// MARK: - 丢了的设备
+
+/// 「这台设备丢了」：任何一台本人的设备写下，其它设备看到后不再信它、不再替它开通，并请各台 Mac 撤销它
+///（同一组的才撤得掉，见 `RemoteVouchPolicy.decideRevoke`）。谁都能写，但它只会减少信任：最坏是被偷的那台把你
+/// 别的设备也报成丢了，重新确认、配对即可。按公钥记：找回来重装过（换了钥匙）的不受影响。
+nonisolated struct RemoteSiblingTombstone: Codable, Equatable, Sendable {
+    var deviceID: UUID
+    var deviceName: String
+    var publicKey: Data
+    var revokedBy: UUID
+    var revokedAt: Date
+
+    var account: String { "tombstone.\(deviceID.uuidString)" }
+
+    /// 留这么久：各台设备、各台 Mac 早该处理完了。
+    static let lifetime: TimeInterval = 90 * 86_400
+}
+
+/// 本机替丢了的设备向一台 Mac 撤销的结果。
+nonisolated struct RemoteSiblingRevocationRecord: Codable, Equatable, Sendable {
+    var outcome: String
+    var reason: String?
+    var at: Date
+
+    /// 不用再问这台 Mac 了。版本太旧的过几个小时再问。
+    var isFinal: Bool { outcome != RemoteSiblingGrant.unsupported }
 }

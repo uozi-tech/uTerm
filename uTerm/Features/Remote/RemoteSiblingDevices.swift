@@ -47,6 +47,18 @@ final class RemoteSiblingDevices {
         var waiting: [String]
     }
 
+    /// 一台报告丢了的设备。
+    struct Lost: Identifiable, Equatable {
+        let tombstone: RemoteSiblingTombstone
+        /// 已经撤掉（或那台 Mac 本来就不信它）。
+        var revoked: [String]
+        /// 撤不了：不是同一组、Mac 版本太旧。名字 → 原因。
+        var refused: [String: String]
+        /// 还没问到。
+        var waiting: [String]
+        var id: UUID { tombstone.deviceID }
+    }
+
     /// 别的设备替本机开通的一台 Mac。
     struct Received: Identifiable, Equatable {
         enum Status: Equatable {
@@ -104,6 +116,10 @@ final class RemoteSiblingDevices {
     private(set) var incoming: [Incoming] = []
     /// 别的设备替本机开通的 Mac。
     var received: [Received] = []
+    /// 报告丢了的设备，以及本机替它向各台 Mac 撤销的进度。
+    var lost: [Lost] = []
+    /// 本机自己被另一台设备报告丢了。
+    private(set) var localReportedLost = false
     /// 写不进名册（多半是钥匙串不可用）。
     var storageError: String?
 
@@ -174,6 +190,14 @@ final class RemoteSiblingDevices {
 
     func refresh() {
         var snapshot = roster.load()
+        applyTombstones(&snapshot)
+        // 本机被报告丢了：不再登记、不回答确认、不替谁开通，等你在另一台设备上取消报告。
+        let reportedLost = snapshot.tombstone(for: local) != nil
+        if reportedLost != localReportedLost { localReportedLost = reportedLost }
+        guard !reportedLost else {
+            rebuildRows(snapshot)
+            return
+        }
         do {
             try roster.register(local, existing: snapshot.device(local.id))
             storageError = nil
@@ -236,6 +260,10 @@ final class RemoteSiblingDevices {
                 // 对方做完或放弃了：不再显示。
                 current.answeredChallenge = nil
                 current.answeredCode = nil
+            }
+            // 对方做完或放弃了，它没清掉本机的回答（App 中途被关）：本机清。
+            if challenge == nil, snapshot.message(.reveal, candidate: local.id, voucher: voucher.id) != nil {
+                roster.delete(account: RemoteSiblingMessage.account(.reveal, candidate: local.id, voucher: voucher.id))
             }
             let commitment = RemoteSiblingCode.commitment(candidate: local, voucher: voucher, nonce: current.nonce)
             let published = snapshot.message(.commitment, candidate: local.id, voucher: voucher.id)
@@ -340,6 +368,46 @@ final class RemoteSiblingDevices {
         rebuildRows(roster.load())
     }
 
+    /// 「这台设备丢了」：写下墓碑，本机马上不再信它；之后本机和你别的设备逐台请 Mac 撤销它。
+    func markLost(_ id: UUID) {
+        guard id != local.id else { return }
+        let snapshot = roster.load()
+        guard let device = snapshot.device(id) else { return }
+        if session?.device.id == id { cancel() }
+        write(.tombstone(RemoteSiblingTombstone(deviceID: device.id, deviceName: device.name, publicKey: device.publicKey,
+                                                revokedBy: local.id, revokedAt: now())))
+        refresh()
+    }
+
+    /// 找回来了：撤下墓碑。已经撤掉的 Mac 不会自己恢复，那台设备要重新确认、重新开通（或到 Mac 上配对）。
+    func clearLostReport(_ id: UUID) {
+        roster.delete(account: RemoteSiblingTombstone(deviceID: id, deviceName: "", publicKey: Data(), revokedBy: id,
+                                                      revokedAt: now()).account)
+        try? store.forgetRevocations(id)
+        lost.removeAll { $0.id == id }
+        refresh()
+    }
+
+    /// 墓碑生效：撤掉本机对它的确认与认可、它在名册里的条目和往来记录；过期的墓碑清掉。
+    private func applyTombstones(_ snapshot: inout RemoteSiblingSnapshot) {
+        for tombstone in snapshot.tombstones where now().timeIntervalSince(tombstone.revokedAt) > RemoteSiblingTombstone.lifetime {
+            roster.delete(account: tombstone.account)
+            try? store.forgetRevocations(tombstone.deviceID)
+        }
+        snapshot.tombstones.removeAll { now().timeIntervalSince($0.revokedAt) > RemoteSiblingTombstone.lifetime }
+        let approvals = store.approvals(), vouchers = store.trustedVouchers()
+        for tombstone in snapshot.tombstones where tombstone.deviceID != local.id {
+            if approvals[tombstone.deviceID]?.publicKey == tombstone.publicKey { try? store.removeApproval(tombstone.deviceID) }
+            if vouchers[tombstone.deviceID]?.publicKey == tombstone.publicKey { try? store.removeVoucher(tombstone.deviceID) }
+            if let device = snapshot.device(tombstone.deviceID), device.publicKey == tombstone.publicKey {
+                roster.remove(device.id, snapshot: snapshot)
+                snapshot.devices.removeAll { $0.id == device.id }
+                snapshot.messages.removeAll { $0.candidate == device.id || $0.voucher == device.id }
+                snapshot.grants.removeAll { $0.candidate == device.id || $0.voucher == device.id }
+            }
+        }
+    }
+
     private func advanceSession(_ snapshot: RemoteSiblingSnapshot) {
         guard var session, session.failure == nil, session.code == nil else {
             publishConfirmation()
@@ -428,6 +496,10 @@ final class RemoteSiblingDevices {
         }
         .sorted { ($0.device.name, $0.device.id.uuidString) < ($1.device.name, $1.device.id.uuidString) }
         if rows != self.rows { self.rows = rows }
+        let lost = snapshot.tombstones.filter { $0.deviceID != local.id }
+            .sorted { $0.revokedAt > $1.revokedAt }
+            .map { revocationProgress(for: $0) }
+        if lost != self.lost { self.lost = lost }
     }
 
     func write(_ record: RemoteSiblingRecord) {
@@ -477,7 +549,30 @@ extension RemoteSiblingDevices.Received {
     }
 }
 
+extension RemoteSiblingDevices.Lost {
+    var subtitle: String {
+        var parts: [String] = []
+        if !revoked.isEmpty { parts.append(String(localized: "已从 \(revoked.count) 台 Mac 撤销")) }
+        if !waiting.isEmpty { parts.append(String(localized: "\(waiting.count) 台等上线")) }
+        if !refused.isEmpty {
+            parts.append(String(localized: "\(refused.count) 台要到 Mac 上撤销：\(refused.keys.sorted().joined(separator: "、"))"))
+        }
+        if parts.isEmpty { parts.append(String(localized: "报告于 \(tombstone.revokedAt.formatted(date: .abbreviated, time: .omitted))")) }
+        return parts.joined(separator: " · ")
+    }
+}
+
 enum RemoteSiblingCopy {
+    static let lostHeader = String(localized: "报告丢失的设备")
+    static let lostFooter = String(localized: "你的设备会逐台请配对过的 Mac 撤销它（打开这一页、Mac 在线时进行）。只撤得掉由你的设备开通的那些；它自己在 Mac 上手动配对过的，要到那台 Mac 上撤销。找回来了就取消报告，但已经撤掉的 Mac 要重新开通。")
+    static let localLost = String(localized: "这台设备被你的另一台设备报告丢失，已不再参与「我的设备」。找回来的话，在那台设备上取消报告。")
+
+    static func lostConfirmTitle(_ name: String) -> String {
+        String(localized: "把「\(name)」报告为丢失？")
+    }
+
+    static let lostConfirmMessage = String(localized: "你所有的设备都会马上不再信任它，并逐台请配对过的 Mac 撤销它。撤销后它要重新配对才能连接。")
+
     static let footer = String(localized: "同一 Apple ID 下打开过 uTerm 的 iPhone、iPad 和 Mac 会出现在这里（要打开 iCloud 钥匙串）。确认一台新设备：两台都打开这一页，在已有的那台上点「确认…」，两台上的 6 位数一致就都点「一致」。之后已有的那台会替它向配对过的 Mac 开通，不用再到每台 Mac 上配对。只出现在名单里的设备连不上任何 Mac。")
 
     static let receivedHeader = String(localized: "替这台设备开通的 Mac")

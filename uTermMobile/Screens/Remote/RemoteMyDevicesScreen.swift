@@ -5,6 +5,8 @@ import SwiftUI
 struct RemoteMyDevicesScreen: View {
     @Environment(RemoteMacDirectory.self) private var directory
     @State private var model = RemoteSiblingDevices.live()
+    /// 等确认要报告丢失的那台。
+    @State private var reportingLost: RemoteSiblingDevice?
 
     var body: some View {
         ScrollView {
@@ -31,6 +33,17 @@ struct RemoteMyDevicesScreen: View {
             await model.run(hosts: directory)
         }
         .task { await directory.keepLiveStatusFresh() }
+        .confirmationDialog(RemoteSiblingCopy.lostConfirmTitle(reportingLost?.name ?? ""),
+                            isPresented: Binding(get: { reportingLost != nil }, set: { if !$0 { reportingLost = nil } }),
+                            titleVisibility: .visible) {
+            Button("报告丢失", role: .destructive) {
+                if let device = reportingLost { model?.markLost(device.id) }
+                reportingLost = nil
+            }
+            Button("取消", role: .cancel) { reportingLost = nil }
+        } message: {
+            Text(RemoteSiblingCopy.lostConfirmMessage)
+        }
     }
 
     @ViewBuilder
@@ -47,6 +60,24 @@ struct RemoteMyDevicesScreen: View {
         }
         if let confirmation = model.confirmation {
             confirmationGroup(confirmation, model: model)
+        }
+        if model.localReportedLost {
+            MInsetGroup {
+                MInsetRow(icon: "warn", iconColor: M.danger, label: "这台设备被报告丢失", sub: RemoteSiblingCopy.localLost, last: true)
+            }
+        }
+        if !model.lost.isEmpty {
+            MInsetGroup(header: RemoteSiblingCopy.lostHeader, footer: RemoteSiblingCopy.lostFooter) {
+                ForEach(Array(model.lost.enumerated()), id: \.element.id) { index, item in
+                    MInsetRow(icon: "warn", iconColor: M.danger, label: item.tombstone.deviceName, sub: item.subtitle,
+                              last: index == model.lost.count - 1,
+                              trailing: AnyView(MMenu {
+                                  Button("找回来了，取消报告", systemImage: "arrow.uturn.backward") { model.clearLostReport(item.id) }
+                              } label: {
+                                  MIcon(name: "ellipsis", size: 16, color: M.text3).frame(width: 32, height: 32).contentShape(Rectangle())
+                              }))
+                }
+            }
         }
         if !model.received.isEmpty {
             MInsetGroup(header: RemoteSiblingCopy.receivedHeader, footer: RemoteSiblingCopy.receivedFooter) {
@@ -80,6 +111,7 @@ struct RemoteMyDevicesScreen: View {
                 Button("取消确认", systemImage: "xmark.circle") { model.forgetConfirmation(row.id) }
             }
             Button("从名单移除", systemImage: "trash", role: .destructive) { model.remove(row.id) }
+            Button("这台设备丢了…", systemImage: "exclamationmark.triangle", role: .destructive) { reportingLost = row.device }
         } label: {
             MIcon(name: "ellipsis", size: 16, color: M.text3)
                 .frame(width: 32, height: 32)

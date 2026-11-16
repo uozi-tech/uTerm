@@ -235,6 +235,122 @@ final class RemoteSiblingGrantTests: XCTestCase {
         XCTAssertTrue(phoneHosts.asked.isEmpty, "取消确认后不再替它开通")
     }
 
+    // MARK: - 丢了的设备
+
+    func test_lost_device_is_dropped_everywhere_and_revoked_on_each_mac() async throws {
+        let mini = mac("Mac mini"), old = mac("Old Mac"), foreign = mac("Friend Mac")
+        let phoneHosts = FakeHosts(targets: [mini, old, foreign])
+        phoneHosts.revokeFailures[old.id] = RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧")
+        phoneHosts.revokeOutcomes[foreign.id] = .notInFamily
+        let macHosts = FakeHosts()
+        let phone = model(identity("iPhone"), hosts: phoneHosts)
+        let pad = model(identity("iPad"))
+        let laptop = model(identity("MacBook"), hosts: macHosts)
+        // iPhone 确认过 iPad；MacBook 认可 iPad 当担保者（iPad 确认过 MacBook）。
+        confirm(phone, pad)
+        confirm(pad, laptop)
+        phone.refresh()
+        await settle(phone)
+        phone.refresh()
+        await settle(phone)
+        phone.refresh()
+        await settle(phone)
+        let vouchedBefore = phoneHosts.asked.count
+
+        // MacBook 上报告 iPad 丢了。
+        laptop.markLost(pad.localDevice.id)
+        XCTAssertFalse(laptop.rows.contains { $0.id == pad.localDevice.id }, "从列表里去掉")
+        XCTAssertFalse(laptop.rows.contains { $0.isTrustedVoucher }, "不再收它开通的结果")
+        XCTAssertEqual(laptop.lost.map(\.id), [pad.localDevice.id])
+
+        // iPhone 看到墓碑：撤掉对它的确认，逐台请 Mac 撤销。
+        for _ in 0..<4 {
+            phone.refresh()
+            await settle(phone)
+        }
+        XCTAssertFalse(phone.rows.contains { $0.id == pad.localDevice.id })
+        XCTAssertEqual(Set(phoneHosts.revoked.map(\.host)), [mini.id, old.id, foreign.id])
+        XCTAssertTrue(phoneHosts.revoked.allSatisfy { $0.device == pad.localDevice.id && $0.key == pad.localDevice.publicKey })
+        XCTAssertEqual(phoneHosts.asked.count, vouchedBefore, "不再替它开通")
+        let progress = try XCTUnwrap(phone.lost.first)
+        XCTAssertEqual(progress.revoked, ["Mac mini"])
+        XCTAssertEqual(Set(progress.refused.keys), ["Old Mac", "Friend Mac"])
+
+        // 撤过的不再问；太旧的几个小时后再问。
+        clock += RemoteSiblingDevices.vouchRetryInterval + 1
+        phone.refresh()
+        await settle(phone)
+        XCTAssertEqual(phoneHosts.revoked.count, 3)
+        clock += RemoteSiblingDevices.vouchRefusedRetryInterval
+        phone.refresh()
+        await settle(phone)
+        XCTAssertEqual(phoneHosts.revoked.last?.host, old.id)
+
+        // 丢了的那台自己：不再登记、不再答确认。
+        pad.refresh()
+        XCTAssertTrue(pad.localReportedLost)
+        XCTAssertNil(roster.load().device(pad.localDevice.id), "条目被别的设备删了，它也不再写回去")
+    }
+
+    func test_found_device_can_be_unreported_and_reinstalled_device_is_unaffected() {
+        let phone = model(identity("iPhone"))
+        let padIdentity = identity("iPad")
+        let pad = model(padIdentity)
+        confirm(phone, pad)
+        phone.markLost(pad.localDevice.id)
+        pad.refresh()
+        XCTAssertTrue(pad.localReportedLost)
+
+        // 换了钥匙（重装）的同一台设备不受墓碑影响。
+        let reinstalled = model(identity("iPad", id: padIdentity.device.id))
+        reinstalled.refresh()
+        XCTAssertFalse(reinstalled.localReportedLost)
+        phone.refresh()
+        XCTAssertEqual(phone.rows.first { $0.id == padIdentity.device.id }?.status, .unconfirmed, "要重新确认")
+
+        phone.clearLostReport(padIdentity.device.id)
+        XCTAssertTrue(phone.lost.isEmpty)
+        XCTAssertTrue(roster.load().tombstones.isEmpty)
+    }
+
+    func test_tombstones_expire() throws {
+        let phone = model(identity("iPhone"))
+        let pad = model(identity("iPad"))
+        phone.refresh()
+        pad.refresh()
+        phone.markLost(pad.localDevice.id)
+        XCTAssertEqual(roster.load().tombstones.count, 1)
+        clock += RemoteSiblingTombstone.lifetime + 1
+        phone.refresh()
+        XCTAssertTrue(roster.load().tombstones.isEmpty)
+        XCTAssertTrue(phone.lost.isEmpty)
+    }
+
+    func test_stale_reveal_and_grants_for_unpaired_macs_are_cleaned_up() async throws {
+        let mini = mac()
+        let phoneHosts = FakeHosts(targets: [mini])
+        let phoneIdentity = identity("iPhone")
+        let phone = model(phoneIdentity, hosts: phoneHosts)
+        let pad = model(identity("iPad"))
+        phone.refresh()
+        pad.refresh()
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        XCTAssertNotNil(roster.load().message(.reveal, candidate: pad.localDevice.id, voucher: phone.localDevice.id))
+        // 已有设备那边 App 被关、challenge 留着没删：重开后它清掉 challenge，新设备随后清掉自己的回答。
+        model(phoneIdentity).refresh()
+        pad.refresh()
+        XCTAssertNil(roster.load().message(.reveal, candidate: pad.localDevice.id, voucher: phone.localDevice.id))
+
+        confirm(phone, pad)
+        phone.refresh()
+        await settle(phone)
+        XCTAssertEqual(roster.load().grants.count, 1)
+        phoneHosts.targets = []
+        phone.refresh()
+        XCTAssertTrue(roster.load().grants.isEmpty, "不再配对的 Mac 的开通结果清掉")
+    }
+
     // MARK: - 目录收下 Mac
 
     func test_directory_adopts_new_macs_but_never_overrides_or_brings_back_forgotten_ones() throws {
@@ -332,7 +448,10 @@ final class RemoteSiblingGrantTests: XCTestCase {
 private final class FakeHosts: RemoteSiblingHostAccess {
     var targets: [RemoteSiblingVouchTarget]
     var failures: [UUID: Error] = [:]
+    var revokeFailures: [UUID: Error] = [:]
+    var revokeOutcomes: [UUID: RemoteSiblingRevokeResult.Outcome] = [:]
     private(set) var asked: [(device: UUID, host: UUID)] = []
+    private(set) var revoked: [(device: UUID, key: Data, host: UUID)] = []
     private(set) var adopted: [RemoteSiblingGrant] = []
 
     init(targets: [RemoteSiblingVouchTarget] = []) {
@@ -356,6 +475,12 @@ private final class FakeHosts: RemoteSiblingHostAccess {
         adopted.append(grant)
         return .added
     }
+
+    func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
+        revoked.append((deviceID, publicKey, host))
+        if let failure = revokeFailures[host] { throw failure }
+        return RemoteSiblingRevokeResult(requestID: UUID(), outcome: revokeOutcomes[host] ?? .revoked)
+    }
 }
 
 /// 已有设备一侧：经真的 `RemoteMacClient` 问一台真的测试服务端。
@@ -377,4 +502,8 @@ private final class ClientHosts: RemoteSiblingHostAccess {
     }
 
     func adopt(_ grant: RemoteSiblingGrant) -> RemoteSiblingAdoption { .alreadyKnown }
+
+    func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
+        try await client.revokeSibling(deviceID, publicKey: publicKey)
+    }
 }

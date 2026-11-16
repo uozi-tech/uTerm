@@ -6,6 +6,8 @@ import UDesignKit
 struct RemoteMyDevicesGroup: View {
     @Environment(RemoteMacDirectory.self) private var directory
     @State private var model = RemoteSiblingDevices.live()
+    /// 等确认要报告丢失的那台。
+    @State private var reportingLost: RemoteSiblingDevice?
 
     var body: some View {
         SettingsGroup(title: "我的设备", footer: RemoteSiblingCopy.footer) {
@@ -22,6 +24,30 @@ struct RemoteMyDevicesGroup: View {
             await model.run(hosts: directory)
         }
         .task { await directory.keepLiveStatusFresh() }
+        .alert(RemoteSiblingCopy.lostConfirmTitle(reportingLost?.name ?? ""),
+               isPresented: Binding(get: { reportingLost != nil }, set: { if !$0 { reportingLost = nil } })) {
+            Button("取消", role: .cancel) { reportingLost = nil }
+            Button("报告丢失", role: .destructive) {
+                if let device = reportingLost { model?.markLost(device.id) }
+                reportingLost = nil
+            }
+        } message: {
+            Text(RemoteSiblingCopy.lostConfirmMessage)
+        }
+        if let model, !model.lost.isEmpty {
+            SettingsGroup(title: RemoteSiblingCopy.lostHeader, footer: RemoteSiblingCopy.lostFooter) {
+                ForEach(model.lost) { item in
+                    SettingsListRow(icon: "exclamationmark.triangle", tint: UD.danger, title: item.tombstone.deviceName,
+                                    subtitle: item.subtitle) {
+                        SettingsMoreMenu(items: [
+                            UDMenuItem(label: String(localized: "找回来了，取消报告"), systemImage: "arrow.uturn.backward") {
+                                model.clearLostReport(item.id)
+                            },
+                        ])
+                    }
+                }
+            }
+        }
         if let model, !model.received.isEmpty {
             SettingsGroup(title: RemoteSiblingCopy.receivedHeader, footer: RemoteSiblingCopy.receivedFooter) {
                 ForEach(model.received) { item in
@@ -52,6 +78,9 @@ struct RemoteMyDevicesGroup: View {
         if let confirmation = model.confirmation {
             confirmationBlock(confirmation, model: model)
                 .settingsDivider(inset: nil)
+        }
+        if model.localReportedLost {
+            SettingsListRow(icon: "exclamationmark.triangle", tint: UD.danger, title: RemoteSiblingCopy.localLost) { EmptyView() }
         }
         if let error = model.storageError {
             SettingsListRow(icon: "exclamationmark.triangle", tint: UD.danger, title: error) { EmptyView() }
@@ -86,6 +115,9 @@ struct RemoteMyDevicesGroup: View {
         }
         items.append(UDMenuItem(label: String(localized: "从名单移除"), systemImage: "trash", danger: true) {
             model.remove(row.id)
+        })
+        items.append(UDMenuItem(label: String(localized: "这台设备丢了…"), systemImage: "exclamationmark.triangle", danger: true) {
+            reportingLost = row.device
         })
         return items
     }

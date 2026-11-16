@@ -377,6 +377,12 @@ final class RemoteHostConnection {
                   let peerID else { return }
             let result = server.handleVouch(request, voucherID: peerID, voucherName: peerName)
             link.send(RemoteMessage(.vouchResult, payload: RemoteJSON.encode(result)))
+        case .revokeSibling:
+            guard let request = try? RemoteJSON.decode(RemoteSiblingRevokeRequest.self, from: message.payload),
+                  let peerID else { return }
+            let result = server.handleSiblingRevoke(request, requesterID: peerID, requesterName: peerName)
+            // 撤的可能就是自己：服务端下一拍才撤，结果先发出去。
+            link.send(RemoteMessage(.revokeSiblingResult, payload: RemoteJSON.encode(result)))
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
             Task { await startDesktop(request) }
@@ -406,7 +412,7 @@ final class RemoteHostConnection {
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
-             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult:
+             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult, .revokeSiblingResult:
             break
         }
     }

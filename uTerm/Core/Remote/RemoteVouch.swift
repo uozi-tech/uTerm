@@ -58,6 +58,38 @@ nonisolated struct RemoteVouchResult: Codable, Equatable, Sendable {
     }
 }
 
+/// 主控端 → Mac：撤销同一组里丢了的那台设备（`RemoteMessage.Kind.revokeSibling`）。
+nonisolated struct RemoteSiblingRevokeRequest: Codable, Equatable, Sendable {
+    var requestID: UUID
+    var deviceID: UUID
+    /// 丢了的那台的公钥：Mac 记着的不是这把（它后来重装、重新配对过）就不撤。
+    var publicKey: Data
+}
+
+/// Mac → 主控端：撤销的结果。
+nonisolated struct RemoteSiblingRevokeResult: Codable, Equatable, Sendable {
+    nonisolated enum Outcome: String, Sendable {
+        /// 撤掉了（之后它再来要到 Mac 上重新配对）。
+        case revoked
+        /// Mac 本来就不信任它（或记着的是另一把钥匙）：什么都没改。
+        case notTrusted = "not-trusted"
+        /// 它和请求的设备在这台 Mac 上不是同一组（各自手动配对的）：要到 Mac 上撤销。
+        case notInFamily = "not-in-family"
+    }
+
+    var requestID: UUID
+    var outcome: String
+    var reason: String?
+
+    var kind: Outcome? { Outcome(rawValue: outcome) }
+
+    init(requestID: UUID, outcome: Outcome, reason: String? = nil) {
+        self.requestID = requestID
+        self.outcome = outcome.rawValue
+        self.reason = reason
+    }
+}
+
 /// Mac 记下的、一台设备是谁添加的。不加在 `RemotePeer` 上：升级期间旧的远控进程还在重写信任表，
 /// 它不认识的字段会被丢掉。单独存一个账号（`RemoteIdentityStore.vouchAccount`），旧进程不碰它。
 nonisolated struct RemotePeerVouch: Codable, Equatable, Sendable {
@@ -104,6 +136,17 @@ nonisolated enum RemoteVouchPolicy {
             return .notAllowed(String(localized: "这台 Mac 没有允许已配对的设备为它主人的其它设备开通"))
         }
         return .add
+    }
+
+    /// 同一组的设备可以请 Mac 撤销组里的另一台（丢了）。只会减少信任，所以不看「允许担保」开关；
+    /// 但只认这台 Mac 上记着的组：各自手动配对的设备，Mac 没有凭据说它们属于同一个人。
+    static func decideRevoke(_ request: RemoteSiblingRevokeRequest, requesterID: UUID, existing: RemotePeer?,
+                             vouches: [UUID: RemotePeerVouch]) -> RemoteSiblingRevokeResult.Outcome {
+        guard let existing, existing.publicKey == request.publicKey else { return .notTrusted }
+        guard family(of: request.deviceID, vouches: vouches) == family(of: requesterID, vouches: vouches) else {
+            return .notInFamily
+        }
+        return .revoked
     }
 
     /// 一台设备属于哪一组：它是被担保的就取记录里的组号，否则（手动配对的）就是它自己。

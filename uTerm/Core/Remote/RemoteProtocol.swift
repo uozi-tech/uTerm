@@ -44,7 +44,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopUnlockOutcomes,
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
                                           RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus,
-                                          RemoteFeature.files, RemoteFeature.deviceVouch]
+                                          RemoteFeature.files, RemoteFeature.deviceVouch,
+                                          RemoteFeature.siblingRevoke]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -131,6 +132,8 @@ nonisolated enum RemoteFeature {
     /// 认得 `vouchDevice`：已配对的设备可以请这台 Mac 记下同一个人的另一台设备（见 `RemoteVouch.swift`）。
     /// 能力只说明认得这条消息；Mac 上关掉了「允许担保」时照样回 `notAllowed`。
     static let deviceVouch = "device-vouch"
+    /// 认得 `revokeSibling`：同一组（经担保添加的）设备可以请这台 Mac 撤销其中丢了的那台。
+    static let siblingRevoke = "sibling-revoke"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -276,6 +279,11 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case vouchDevice = 50
         /// Mac → 主控端：担保的结果（通道 0）。负载 = `RemoteVouchResult`（JSON）。
         case vouchResult = 51
+        /// 主控端 → Mac：撤销同一组里丢了的那台设备（通道 0）。负载 = `RemoteSiblingRevokeRequest`（JSON）。
+        /// 只发给 `features` 带 `sibling-revoke` 的 Mac。
+        case revokeSibling = 52
+        /// Mac → 主控端：撤销的结果（通道 0）。负载 = `RemoteSiblingRevokeResult`（JSON）。
+        case revokeSiblingResult = 53
     }
 
     var kind: Kind

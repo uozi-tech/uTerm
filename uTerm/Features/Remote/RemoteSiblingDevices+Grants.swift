@@ -38,6 +38,8 @@ protocol RemoteSiblingHostAccess: AnyObject {
     func vouch(_ device: RemoteSiblingDevice, at host: UUID) async throws -> RemoteVouchResult
     /// 新设备：把别的设备替本机开通的 Mac 记进信任表。
     func adopt(_ grant: RemoteSiblingGrant) -> RemoteSiblingAdoption
+    /// 请这台 Mac 撤销同一组里丢了的那台设备。连不上抛错，Mac 太旧抛 `RemoteAttachError.rejected`。
+    func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult
 }
 
 extension RemoteSiblingDevices {
@@ -89,11 +91,14 @@ extension RemoteSiblingDevices {
 
     // MARK: - 本机是已有设备
 
-    /// 找下一对还没问过的（设备, Mac），问一台。上一台还在问就等它。
+    /// 找下一件要问 Mac 的事做：先撤销丢了的设备，再替确认过的设备开通。一次只问一台，上一台还在问就等它。
     func vouchNext(_ snapshot: RemoteSiblingSnapshot) {
-        guard vouchTask == nil, let hosts, let localKey else { return }
-        let approvals = store.approvals()
+        guard vouchTask == nil, let hosts else { return }
         let targets = hosts.vouchTargets()
+        cleanUpGrants(snapshot, pairedHosts: Set(hosts.pairedHostNames().keys))
+        if revokeNext(snapshot, targets: targets, hosts: hosts) { return }
+        guard let localKey else { return }
+        let approvals = store.approvals()
         for device in others(snapshot) {
             guard approvals[device.id]?.publicKey == device.publicKey,
                   let key = try? RemoteSiblingSeal.key(local: localKey, remote: device.publicKey) else { continue }
@@ -110,6 +115,76 @@ extension RemoteSiblingDevices {
     }
 
     private func attemptKey(_ device: UUID, _ host: UUID) -> String { "\(device.uuidString).\(host.uuidString)" }
+
+    /// 本机替设备写过、但本机已经不再配对的 Mac 的开通结果：没用了，清掉。
+    private func cleanUpGrants(_ snapshot: RemoteSiblingSnapshot, pairedHosts: Set<UUID>) {
+        for grant in snapshot.grants where grant.voucher == local.id && !pairedHosts.contains(grant.host) {
+            roster.delete(account: grant.account)
+        }
+    }
+
+    // MARK: - 丢了的设备
+
+    /// 有还没撤的（丢了的设备, 在线的 Mac）就问一台，返回 true。
+    private func revokeNext(_ snapshot: RemoteSiblingSnapshot, targets: [RemoteSiblingVouchTarget],
+                            hosts: any RemoteSiblingHostAccess) -> Bool {
+        let done = store.revocations()
+        for tombstone in snapshot.tombstones where tombstone.deviceID != local.id {
+            for target in targets where target.id != tombstone.deviceID {
+                if let record = done[tombstone.deviceID]?[target.id],
+                   record.isFinal || now().timeIntervalSince(record.at) < Self.vouchRefusedRetryInterval { continue }
+                let key = "revoke." + attemptKey(tombstone.deviceID, target.id)
+                if let last = lastVouchAttempt[key], now().timeIntervalSince(last) < Self.vouchRetryInterval { continue }
+                lastVouchAttempt[key] = now()
+                vouchTask = Task { [weak self] in
+                    await self?.revoke(tombstone, at: target, hosts: hosts)
+                    self?.vouchTask = nil
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    private func revoke(_ tombstone: RemoteSiblingTombstone, at target: RemoteSiblingVouchTarget,
+                        hosts: any RemoteSiblingHostAccess) async {
+        let record: RemoteSiblingRevocationRecord
+        do {
+            let result = try await hosts.revokeSibling(tombstone.deviceID, publicKey: tombstone.publicKey, at: target.id)
+            guard !Task.isCancelled else { return }
+            record = RemoteSiblingRevocationRecord(outcome: result.outcome, reason: result.reason, at: now())
+        } catch RemoteAttachError.rejected(let reason) {
+            record = RemoteSiblingRevocationRecord(outcome: RemoteSiblingGrant.unsupported, reason: reason, at: now())
+        } catch {
+            AppLogger.info("我的设备：请「\(target.name)」撤销「\(tombstone.deviceName)」没连上：\(error.localizedDescription)",
+                           category: RemoteLog.category)
+            return
+        }
+        AppLogger.notice("我的设备：「\(target.name)」撤销「\(tombstone.deviceName)」的结果 \(record.outcome)",
+                         category: RemoteLog.category)
+        try? store.recordRevocation(record, device: tombstone.deviceID, host: target.id)
+        refresh()
+    }
+
+    /// 本机替丢了的设备向各台 Mac 撤销的进度（列表用）。
+    func revocationProgress(for tombstone: RemoteSiblingTombstone) -> Lost {
+        var lost = Lost(tombstone: tombstone, revoked: [], refused: [:], waiting: [])
+        let records = store.revocations()[tombstone.deviceID] ?? [:]
+        let names = hosts?.pairedHostNames() ?? [:]
+        for (hostID, name) in names.sorted(by: { $0.value < $1.value }) where hostID != tombstone.deviceID {
+            guard let record = records[hostID] else {
+                lost.waiting.append(name)
+                continue
+            }
+            switch RemoteSiblingRevokeResult.Outcome(rawValue: record.outcome) {
+            case .revoked, .notTrusted:
+                lost.revoked.append(name)
+            case .notInFamily, nil:
+                lost.refused[name] = record.reason ?? String(localized: "这台 Mac 撤不了它")
+            }
+        }
+        return lost
+    }
 
     private func needsVouch(device: RemoteSiblingDevice, host: RemoteSiblingVouchTarget, key: SymmetricKey,
                             snapshot: RemoteSiblingSnapshot) -> Bool {
@@ -209,6 +284,18 @@ extension RemoteMacDirectory: RemoteSiblingHostAccess {
         return try await client.vouch(for: device)
         #else
         return try await client(for: mac).vouch(for: device)
+        #endif
+    }
+
+    func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
+        guard let mac = macs.first(where: { $0.deviceID == host }) else { throw RemoteProtocolError.closed }
+        if let existing = existingClient(macID: mac.id) { return try await existing.revokeSibling(deviceID, publicKey: publicKey) }
+        #if os(macOS)
+        let client = acquireClient(for: mac)
+        defer { releaseClient(macID: mac.id) }
+        return try await client.revokeSibling(deviceID, publicKey: publicKey)
+        #else
+        return try await client(for: mac).revokeSibling(deviceID, publicKey: publicKey)
         #endif
     }
 }

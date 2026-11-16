@@ -220,6 +220,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var vouchWaiters: [UUID: CheckedContinuation<RemoteVouchResult, Error>] = [:]
+    @ObservationIgnored private var revokeWaiters: [UUID: CheckedContinuation<RemoteSiblingRevokeResult, Error>] = [:]
     /// 等文件应答的请求。应答在连接队列上直接交付，不经主线程（传文件时一秒几十条）。
     @ObservationIgnored nonisolated let fileWaiters = RemoteFileWaiters()
     /// 被控的 Mac 反过来读写本机文件时的门禁与执行。nil = 本机不提供文件（手机；握手时也不声明 `file-sharing`）。
@@ -668,6 +669,8 @@ final class RemoteMacClient: Identifiable {
         imageWaiters.removeAll()
         for (_, waiter) in vouchWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         vouchWaiters.removeAll()
+        for (_, waiter) in revokeWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        revokeWaiters.removeAll()
         fileWaiters.failAll(RemoteFileError(.unreachable, "与 Mac 的连接已断开"))
         for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
     }
@@ -778,6 +781,10 @@ final class RemoteMacClient: Identifiable {
             guard let result = try? RemoteJSON.decode(RemoteVouchResult.self, from: message.payload),
                   let waiter = vouchWaiters.removeValue(forKey: result.requestID) else { return }
             waiter.resume(returning: result)
+        case .revokeSiblingResult:
+            guard let result = try? RemoteJSON.decode(RemoteSiblingRevokeResult.self, from: message.payload),
+                  let waiter = revokeWaiters.removeValue(forKey: result.requestID) else { return }
+            waiter.resume(returning: result)
         default:
             break
         }
@@ -815,6 +822,25 @@ final class RemoteMacClient: Identifiable {
 
     /// 这台 Mac 认不认担保（老 Mac 收到 `vouchDevice` 会断开整条连接）。连上之后才知道。
     var supportsDeviceVouch: Bool { macFeatures.contains(RemoteFeature.deviceVouch) }
+
+    /// 这台 Mac 认不认撤销同组设备。
+    var supportsSiblingRevoke: Bool { macFeatures.contains(RemoteFeature.siblingRevoke) }
+
+    /// 请 Mac 撤销同一组里丢了的那台设备。Mac 版本太旧抛 `RemoteAttachError.rejected`；Mac 不肯撤看结果。
+    func revokeSibling(_ deviceID: UUID, publicKey: Data) async throws -> RemoteSiblingRevokeResult {
+        await connect()
+        guard state == .connected, let link else {
+            throw connectionFailure
+        }
+        guard supportsSiblingRevoke else {
+            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能替你撤销。把 Mac 上的 uTerm 更新到最新版，或到那台 Mac 上撤销")
+        }
+        let request = RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: deviceID, publicKey: publicKey)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteSiblingRevokeResult, Error>) in
+            revokeWaiters[request.requestID] = continuation
+            link.send(RemoteMessage(.revokeSibling, payload: RemoteJSON.encode(request)))
+        }
+    }
 
     /// 请 Mac 记下同一个人的另一台设备（本机在「我的设备」里确认过它）。Mac 版本太旧抛 `RemoteAttachError.rejected`；
     /// 连不上照常抛连接失败。Mac 不肯记不算错误，看结果里的 `outcome`。
