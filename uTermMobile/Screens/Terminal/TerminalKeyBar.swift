@@ -148,6 +148,10 @@ struct TerminalKeyBar: View {
 
     @ViewBuilder private var keyRow: some View {
         keyButtons(TerminalKeyCatalog.leading)
+        // 贴图常用（给 AI 命令行看截图），紧跟 esc / tab，不用滚就点得到；固定键不再加（分屏后一格太窄）。
+        if controller.acceptsImages {
+            imageMenu
+        }
         MKeyBarGap()
         ForEach(TerminalKeyCatalog.arrows) { key in
             MRepeatingKeyButton(label: key.label) { send(key) }
@@ -159,10 +163,6 @@ struct TerminalKeyBar: View {
         keyButtons(TerminalKeyCatalog.trailing)
         MKeyBarGap()
         keyButtons(TerminalKeyCatalog.shellSymbols)
-        if controller.acceptsImages {
-            MKeyBarGap()
-            imageMenu
-        }
     }
 
     /// 上膛之后多半是要接着在系统键盘上打一个字符（Ctrl+C），所以顺手把键盘弹出来；接着点键盘条上的键也行（Ctrl+←）。

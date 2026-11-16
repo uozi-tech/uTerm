@@ -283,6 +283,10 @@ enum MKeyCapMetrics {
     /// 键帽上下各多算这么多点按区域，加上键帽高度正好是整行 48pt，手指不必瞄准键帽。
     static let verticalHitInset: CGFloat = 5
     static let minWidth: CGFloat = 40
+    /// 键帽看得见的那块（在撑高的命中区里竖直居中），与键帽底板同款圆角。
+    static var capShape: MCenteredRoundedRect {
+        MCenteredRoundedRect(cornerRadius: MRadius.sm, height: height, style: .circular)
+    }
 }
 
 /// 文字键帽；`active` 时用强调色淡底 + 强调色字（修饰上膛态）。`fill` 时撑满网格列宽。
@@ -304,6 +308,8 @@ struct MKeyCap: View {
             .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
             .padding(.vertical, fill ? 0 : MKeyCapMetrics.verticalHitInset)
             .contentShape(Rectangle())
+            // 命中区上下撑开了；悬停 / 菜单浮起贴着键帽本身。
+            .contentShape([.hoverEffect, .contextMenuPreview], MKeyCapMetrics.capShape)
     }
 }
 
@@ -321,6 +327,8 @@ struct MKeyIconCap: View {
             .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
             .padding(.vertical, MKeyCapMetrics.verticalHitInset)
             .contentShape(Rectangle())
+            // 命中区上下撑开了；悬停 / 菜单浮起贴着键帽本身。
+            .contentShape([.hoverEffect, .contextMenuPreview], MKeyCapMetrics.capShape)
     }
 }
 
