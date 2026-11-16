@@ -8,6 +8,8 @@ import UIKit
 /// 连接状态的遮罩（连接中 / 重连中 / 失败 / 已结束 / Mac 版本太旧）、键盘条、前后台切换。
 struct RemoteDesktopScreen: View {
     let client: RemoteMacClient
+    /// 用户点开屏幕的时刻（交给开屏时间线，见 `RemoteDesktopSession.openRequestedAt`）。
+    var tappedAt: ContinuousClock.Instant? = nil
     let onClose: () -> Void
 
     @State private var session: RemoteDesktopSession?
@@ -108,6 +110,7 @@ struct RemoteDesktopScreen: View {
                 let created = RemoteDesktopSession(client: client, maxWidth: requestedSize.width,
                                                    maxHeight: requestedSize.height, pointScale: displayScale)
                 created.onClipboard = { content in copyFromMac(content) }
+                created.openRequestedAt = tappedAt
                 session = created
                 refreshVault()
                 await created.start()

@@ -43,6 +43,8 @@ struct MRemoteFilesRequest: Equatable {
 struct MRemoteDesktopRequest: Identifiable {
     let id = UUID()
     let client: RemoteMacClient
+    /// 用户点「查看并控制屏幕」的时刻（读数：开屏时间线记下从点按钮到真正开流隔了多久）。
+    var tappedAt: ContinuousClock.Instant? = nil
 }
 
 /// 全局 UI 状态（Pinia 等价物）。导航、当前标签、活动会话目标。

@@ -351,11 +351,12 @@ struct RemoteMacSheet: View {
     }
 
     private func openDesktop() {
+        let tapped = ContinuousClock.now
         dismiss()
         let client = self.client
         // 同终端：等面板收起再盖全屏，避免两个转场叠在一起。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            store.remoteDesktop = MRemoteDesktopRequest(client: client)
+            store.remoteDesktop = MRemoteDesktopRequest(client: client, tappedAt: tapped)
         }
     }
 
