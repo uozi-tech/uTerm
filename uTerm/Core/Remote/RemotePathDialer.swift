@@ -169,9 +169,12 @@ nonisolated struct RemotePathDialer: Sendable {
         guard attempt.setRemote(RemoteICEDescriptionFilter.keep(remote, family: nil, publicOnly: publicOnly)) else {
             return (nil, String(localized: "对端地址不可用"))
         }
+        let clock = ContinuousClock()
+        let started = clock.now
         guard await attempt.waitForConnection(limit: RemoteDirectAttempt.connectLimit) else {
             return (nil, String(localized: "直连没打通，改走中继"))
         }
+        let connected = clock.now
         guard await attempt.verify(keys: keys.check) else {
             return (nil, String(localized: "直连通了但路径确认没过，改走中继"))
         }
@@ -181,6 +184,9 @@ nonisolated struct RemotePathDialer: Sendable {
             let remote = RemoteICECandidateKind(sdp: selected.remote)?.label ?? "?"
             detail = "\(local) → \(remote)"
         }
+        // 对端有哪些地址、打通和确认各花多久（建连提速的读数）。
+        detail += " · 对端 \(Self.candidateSummary(remote) ?? "?") · 打通 \(RemoteConnectTrace.millis(connected - started)) ms"
+            + " · 确认 \(RemoteConnectTrace.millis(clock.now - connected)) ms"
         return (attempt.makeTransport(keys: keys.datagram), detail)
     }
 }

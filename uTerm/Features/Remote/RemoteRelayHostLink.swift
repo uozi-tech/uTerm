@@ -356,16 +356,25 @@ final class RemoteRelayHostLink {
         // 中继那条路已经备好（`receiveOffer` 登记过）。这里任何一步不成，回一个不带地址的答复手机就走中继。
         let attempt = RemoteDirectAttempt(stunHost: config.host, stunPort: UInt16(clamping: config.port))
         // 先设对端，这一端才是 controlled；地址一出来就开始往手机打。
+        let clock = ContinuousClock()
+        let started = clock.now
+        func elapsed() -> Int { RemoteConnectTrace.millis(clock.now - started) }
         var description: String?
         if let attempt, attempt.setRemote(offer.remoteDescription), attempt.gather() {
             await attempt.waitForGathering(limit: RemoteDirectAttempt.gatherLimit)
             description = attempt.localDescription()
         }
+        let gathered = elapsed()
         guard let reply = offer.sealedReply(ice: description, session: session) else {
             attempt?.close()
             return
         }
         try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
+        // 建连提速的读数：收集地址多久、两边各有哪些地址（只记种类和个数，不记地址）。
+        AppLogger.notice("公网接入（\(session.prefix(6))）：收集地址 \(gathered) ms，回复发出 \(elapsed()) ms；"
+                         + "Mac \(RemotePathDialer.candidateSummary(description) ?? "无")，"
+                         + "手机 \(RemotePathDialer.candidateSummary(offer.remoteDescription) ?? "无")",
+                         category: RemoteLog.category)
         guard let attempt, description != nil else {
             AppLogger.notice("公网接入（\(session.prefix(6))）：Mac 这边收集不到地址，只能走中继", category: RemoteLog.category)
             attempt?.close()
@@ -376,7 +385,9 @@ final class RemoteRelayHostLink {
         if checked, let selected = attempt.selectedCandidates() {
             let local = RemoteICECandidateKind(sdp: selected.local)?.label ?? "?"
             let remote = RemoteICECandidateKind(sdp: selected.remote)?.label ?? "?"
-            AppLogger.notice("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)（收到打招呼后：ICE 连上 "
+                             + "\(attempt.firstConnected.map { "\(RemoteConnectTrace.millis($0 - started)) ms" } ?? "?")，路径确认 \(elapsed()) ms）",
+                             category: RemoteLog.category)
         } else if !checked {
             AppLogger.notice("公网接入（\(session.prefix(6))）：直连没打通，等中继回拨", category: RemoteLog.category)
         }

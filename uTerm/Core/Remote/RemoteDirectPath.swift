@@ -38,6 +38,11 @@ nonisolated final class RemoteDirectAttempt: @unchecked Sendable {
     private var answersChecks = false
     private var confirmed = false
     private var handedOff = false
+    /// ICE 头一次报连上的时刻（读数用：把「打洞」和「确认路径」分开）。
+    private var connectedAt: ContinuousClock.Instant?
+
+    /// ICE 头一次报连上的时刻；还没连上为 nil。
+    var firstConnected: ContinuousClock.Instant? { locked { connectedAt } }
 
     init?(stunHost: String?, stunPort: UInt16) {
         let box = WeakBox()
@@ -142,7 +147,10 @@ nonisolated final class RemoteDirectAttempt: @unchecked Sendable {
     }
 
     private func record(phase newPhase: RemoteICEAgent.Phase) {
-        locked { phase = newPhase }
+        locked {
+            phase = newPhase
+            if newPhase.isConnected, connectedAt == nil { connectedAt = .now }
+        }
     }
 
     private func recordGatheringDone() {
