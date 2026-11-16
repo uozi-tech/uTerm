@@ -40,6 +40,21 @@ final class RemoteSiblingServiceTests: XCTestCase {
         XCTAssertNil(RemoteSiblingService.pending(in: []))
     }
 
+    func test_polls_faster_while_waiting_for_another_device() {
+        let (local, key) = device("iPad")
+        let (phone, _) = device("iPhone")
+        let store = RemoteSiblingLocalStore(storage: RemoteMemoryStorage())
+        let service = RemoteSiblingService { _ in
+            RemoteSiblingDevices(local: local, localKey: key, roster: self.roster, store: store)
+        }
+        service.tick()
+        XCTAssertEqual(service.interval, RemoteSiblingService.idleInterval)
+        try? store.trustVoucher(RemoteSiblingApproval(id: phone.id, publicKey: phone.publicKey, name: phone.name,
+                                                      approvedAt: Date()))
+        service.tick()
+        XCTAssertEqual(service.interval, RemoteSiblingService.activeInterval, "刚认可了担保者：在等开通结果")
+    }
+
     func test_polls_faster_while_someone_is_looking() async {
         let service = RemoteSiblingService { _ in nil }
         XCTAssertEqual(service.interval, RemoteSiblingService.idleInterval)

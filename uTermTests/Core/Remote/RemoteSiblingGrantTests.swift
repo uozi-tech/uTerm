@@ -165,6 +165,41 @@ final class RemoteSiblingGrantTests: XCTestCase {
         XCTAssertTrue(pad.incoming.isEmpty)
     }
 
+    func test_candidate_polls_fast_while_waiting_for_the_other_device() {
+        let phone = model(identity("iPhone"))
+        let pad = model(identity("iPad"))
+        phone.refresh()
+        pad.refresh()
+        XCTAssertFalse(pad.isAwaitingOthers)
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        phone.refresh()
+        let code = pad.incoming.first?.code ?? ""
+        pad.acceptIncoming(phone.localDevice.id)
+        XCTAssertTrue(pad.isAwaitingOthers, "弹窗关了，还在等核对通过")
+        XCTAssertTrue(phone.submitCode(code))
+        pad.refresh()
+        XCTAssertTrue(pad.isAwaitingOthers, "刚认可了担保者，还在等它送来开通结果")
+        clock += RemoteSiblingDevices.awaitingGrantsWindow + 1
+        pad.refresh()
+        XCTAssertFalse(pad.isAwaitingOthers)
+    }
+
+    func test_voucher_asks_the_macs_as_soon_as_the_code_is_right() async {
+        let host = mac()
+        let phoneHosts = FakeHosts(targets: [host])
+        let phone = model(identity("iPhone"), hosts: phoneHosts)
+        let pad = model(identity("iPad"))
+        phone.refresh()
+        pad.refresh()
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        phone.refresh()
+        XCTAssertTrue(phone.submitCode(pad.incoming.first?.code ?? ""))
+        await settle(phone)
+        XCTAssertEqual(phoneHosts.asked.map(\.host), [host.id], "不等下一轮")
+    }
+
     func test_allowing_first_counts_only_for_that_confirmation() {
         let phone = model(identity("iPhone"))
         let pad = model(identity("iPad"))
@@ -331,10 +366,13 @@ final class RemoteSiblingGrantTests: XCTestCase {
         await settle(phone)
         XCTAssertTrue(phoneHosts.asked.isEmpty)
         confirm(phone, pad)
+        await settle(phone)
+        XCTAssertEqual(phoneHosts.asked.count, 1, "确认过的才问")
         phone.forgetConfirmation(pad.localDevice.id)
+        phoneHosts.targets.append(mac("New Mac"))
         phone.refresh()
         await settle(phone)
-        XCTAssertTrue(phoneHosts.asked.isEmpty, "取消确认后不再替它开通")
+        XCTAssertEqual(phoneHosts.asked.count, 1, "取消确认后不再替它开通，新配对的 Mac 也不问")
     }
 
     // MARK: - 丢了的设备

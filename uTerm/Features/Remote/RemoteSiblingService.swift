@@ -8,7 +8,7 @@ import Observation
 /// 替确认过的设备开通、替丢了的设备撤销。全 App 只有这一个 `RemoteSiblingDevices`：两个实例同时跑会互相清掉
 /// 对方发出去的确认（每个实例启动时都清本机发出的 challenge）。
 ///
-/// 轮询间隔：有页面开着、有确认在进行、有别的设备在确认本机时 2 秒，否则 10 秒（读一次名册是一次本地钥匙串查询）。
+/// 轮询间隔：有页面开着、有确认在进行、有别的设备在确认本机、本机在等别的设备的下一步时 2 秒，否则 10 秒（读一次名册是一次本地钥匙串查询）。
 /// Mac 一直跑；iOS 只在前台跑（`start` / `stop` 跟着前后台）。
 @MainActor
 @Observable
@@ -87,6 +87,7 @@ final class RemoteSiblingService {
 
     var interval: Duration {
         let busy = demand > 0 || model?.confirmation != nil || !(model?.incoming.isEmpty ?? true)
+            || model?.isAwaitingOthers == true
         return busy ? Self.activeInterval : Self.idleInterval
     }
 

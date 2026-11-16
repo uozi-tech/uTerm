@@ -112,6 +112,8 @@ final class RemoteSiblingDevices {
     static let confirmationTimeout: TimeInterval = 5 * 60
     /// 回答过的确认显示这么久（对方没清掉记录时）。
     static let incomingLifetime: TimeInterval = 10 * 60
+    /// 认可担保者之后这么久之内算「在等开通结果」（担保者要逐台去问 Mac）。
+    static let awaitingGrantsWindow: TimeInterval = 5 * 60
 
     private(set) var rows: [Row] = []
     private(set) var confirmation: Confirmation?
@@ -122,6 +124,9 @@ final class RemoteSiblingDevices {
     var lost: [Lost] = []
     /// 本机自己被另一台设备报告丢了。
     private(set) var localReportedLost = false
+    /// 本机是新设备、在等别的设备的下一步：点了「允许」还没收到「核对通过」，或者刚认可了担保者、在等它送来开通结果。
+    /// 这期间轮询改快（`RemoteSiblingService.interval`）：弹窗关了不代表事情做完了。
+    private(set) var isAwaitingOthers = false
     /// 写不进名册（多半是钥匙串不可用）。
     var storageError: String?
 
@@ -141,6 +146,9 @@ final class RemoteSiblingDevices {
     @ObservationIgnored var lastVouchAttempt: [String: Date] = [:]
     /// 本机这边点了「不一致」的确认（对方的随机数）：不再显示。
     @ObservationIgnored private var dismissedChallenges: Set<Data> = []
+    /// 已经记过「写入后多少秒读到」的记录（账号 + 写入时间）。第一轮读到的只记下不打日志：那是启动前就在的。
+    @ObservationIgnored private var loggedArrivals: Set<String> = []
+    @ObservationIgnored private var arrivalsPrimed = false
 
     /// 本机作为已有设备、正在做的那次确认。
     private struct Session {
@@ -206,11 +214,51 @@ final class RemoteSiblingDevices {
             }
             snapshot.messages.removeAll { $0.kind == .challenge && $0.voucher == local.id }
         }
+        logArrivals(snapshot)
         answerAsCandidate(snapshot)
         advanceSession(snapshot)
         receiveGrants(snapshot)
         vouchNext(snapshot)
         rebuildRows(snapshot)
+        updateAwaiting()
+    }
+
+    private func updateAwaiting() {
+        let accepted = store.commits().values.contains { $0.acceptedChallenge != nil }
+        let recentVoucher = store.trustedVouchers().values.contains {
+            now().timeIntervalSince($0.approvedAt) < Self.awaitingGrantsWindow
+        }
+        let awaiting = accepted || recentVoucher
+        if awaiting != isAwaitingOthers { isAwaitingOthers = awaiting }
+    }
+
+    /// 别的设备写给本机的记录：第一次读到时记一行「写入后多少秒读到」，看 iCloud 钥匙串一跳实际要多久。
+    /// 时间按写入方的时钟算，两台设备的时钟差也算在里面。
+    private func logArrivals(_ snapshot: RemoteSiblingSnapshot) {
+        func name(_ id: UUID) -> String { snapshot.device(id)?.name ?? id.uuidString }
+        var arrivals: [(account: String, createdAt: Date, what: String)] = []
+        for message in snapshot.messages {
+            switch message.kind {
+            case .challenge where message.candidate == local.id:
+                arrivals.append((message.account, message.createdAt, "「\(name(message.voucher))」发来的确认请求"))
+            case .confirmed where message.candidate == local.id:
+                arrivals.append((message.account, message.createdAt, "「\(name(message.voucher))」的核对通过"))
+            case .reveal where message.voucher == local.id:
+                arrivals.append((message.account, message.createdAt, "「\(name(message.candidate))」的回答"))
+            default:
+                continue
+            }
+        }
+        for grant in snapshot.grants where grant.candidate == local.id {
+            arrivals.append((grant.account, grant.createdAt, "「\(name(grant.voucher))」送来的开通结果"))
+        }
+        for arrival in arrivals {
+            let key = arrival.account + "@\(arrival.createdAt.timeIntervalSince1970)"
+            guard loggedArrivals.insert(key).inserted, arrivalsPrimed else { continue }
+            let seconds = String(format: "%.1f", now().timeIntervalSince(arrival.createdAt))
+            AppLogger.notice("我的设备：\(arrival.what)写入后 \(seconds) 秒读到", category: RemoteLog.category)
+        }
+        arrivalsPrimed = true
     }
 
     // MARK: - 本机是新设备
@@ -354,7 +402,10 @@ final class RemoteSiblingDevices {
         }
         self.session = nil
         publishConfirmation()
-        rebuildRows(roster.load())
+        // 马上去问 Mac，不等下一轮。
+        let snapshot = roster.load()
+        vouchNext(snapshot)
+        rebuildRows(snapshot)
         return true
     }
 
