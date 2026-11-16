@@ -151,6 +151,8 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
 /// `handleGroupDrop`（拉黑的不加、公钥不同不替换、只撤经担保记下的）。`available` 为 false 时像远控进程不在：回 nil。
 @MainActor
 final class RemoteGroupFakeLocalHost: RemoteGroupLocalHost {
+    /// 这台 Mac 自己的设备 ID（设备组记下的担保者就是它）。
+    var hostID = UUID()
     var accepts = true
     var available = true
     var peers: [UUID: RemoteGroupLocalController] = [:]
@@ -172,6 +174,15 @@ final class RemoteGroupFakeLocalHost: RemoteGroupLocalHost {
                                                       isFromGroup: false)
     }
 
+    /// 一台已信任的主控端经消息 50 替 `device` 担保（被控端照 `decide`：拉黑的、已认识的不加）。
+    @discardableResult
+    func vouch(_ device: RemoteGroupDevice, by voucher: UUID) -> Bool {
+        guard peers[voucher] != nil, peers[device.id] == nil, !blocked.contains(device.id) else { return false }
+        peers[device.id] = RemoteGroupLocalController(id: device.id, publicKey: device.publicKey, isVouched: true,
+                                                      isFromGroup: false, vouchedBy: voucher)
+        return true
+    }
+
     /// Mac 主人在这台 Mac 上撤销（拉黑）。
     func ownerRevoke(_ id: UUID) {
         peers[id] = nil
@@ -188,7 +199,7 @@ final class RemoteGroupFakeLocalHost: RemoteGroupLocalHost {
                 : RemoteVouchResult(requestID: UUID(), outcome: .rejected, reason: "换过钥匙")
         }
         peers[device.id] = RemoteGroupLocalController(id: device.id, publicKey: device.publicKey, isVouched: true,
-                                                      isFromGroup: true)
+                                                      isFromGroup: true, vouchedBy: hostID)
         return RemoteVouchResult(requestID: UUID(), outcome: .added, internetAccess: false)
     }
 
@@ -199,7 +210,16 @@ final class RemoteGroupFakeLocalHost: RemoteGroupLocalHost {
             return RemoteSiblingRevokeResult(requestID: UUID(), outcome: .notTrusted)
         }
         guard peer.isVouched else { return RemoteSiblingRevokeResult(requestID: UUID(), outcome: .notInFamily) }
-        peers[id] = nil
+        // 同 `handleGroupDrop`：连带撤掉一层层由它担保的。
+        var vouches: [UUID: RemotePeerVouch] = [:]
+        for peer in peers.values {
+            guard let voucher = peer.vouchedBy else { continue }
+            vouches[peer.id] = RemotePeerVouch(deviceID: peer.id, deviceName: "", vouchedBy: voucher, voucherName: "",
+                                               family: hostID, vouchedAt: Date())
+        }
+        for removed in RemoteVouchPolicy.cascade(from: id, keeping: nil, trusted: Array(peers.keys), vouches: vouches) {
+            peers[removed] = nil
+        }
         return RemoteSiblingRevokeResult(requestID: UUID(), outcome: .revoked)
     }
 }

@@ -121,6 +121,10 @@ final class RemoteDeviceGroup {
     @ObservationIgnored var hostFailures: [UUID: Date] = [:]
     /// 每一对（组员的签名公钥, Mac）最近一次问完的时刻：60 秒内不再问同一对。
     @ObservationIgnored var lastAsked: [String: Date] = [:]
+    /// 本机在这台 Mac 上撤成功（`revoked`）的时刻：Mac 连带撤掉了由被撤设备担保的主控端（`RemoteVouchPolicy.cascade`），
+    /// 其中可能有正常的组员。这之前签的开通结果对这台 Mac 都不再算定论，本机把每台组员再问一遍
+    /// （还被信任的回 `already-trusted`，被连带撤掉的重新记下）。只在内存：App 重开后不再补问。
+    @ObservationIgnored var revalidateFrom: [UUID: RemoteGroupTime] = [:]
     /// 每台 Mac 上一次交给 `hosts.adopt` 的结果与它的结果：同一条、本机配对状态也没变时不再交。
     @ObservationIgnored var adoptions: [UUID: AdoptionMemo] = [:]
     /// 别的设备写给本机、已经读到过的记录（记一次耗时用）。nil = 还没读过第一轮。

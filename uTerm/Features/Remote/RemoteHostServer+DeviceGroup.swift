@@ -13,7 +13,8 @@ extension RemoteHostServer: RemoteGroupLocalHost {
         return identity.trustedPeers().map { peer in
             let vouch = vouches[peer.id]
             return RemoteGroupLocalController(id: peer.id, publicKey: peer.publicKey, isVouched: vouch != nil,
-                                              isFromGroup: vouch?.isFromDeviceGroup(hostID: localID) ?? false)
+                                              isFromGroup: vouch?.isFromDeviceGroup(hostID: localID) ?? false,
+                                              vouchedBy: vouch?.vouchedBy)
         }
     }
 

@@ -341,7 +341,11 @@ extension RemoteDeviceGroup {
             let age = now().timeIntervalSince(asked)
             if age >= 0, age < Self.vouchRetryInterval { return false }
         }
-        let relevant = results.filter { $0.isFor(device) && $0.isAbout(target.id, key: target.publicKey) }
+        // 本机刚在这台 Mac 上撤成功过：那之前签的结果都不算（Mac 可能连带撤掉了这台组员）。
+        let since = revalidateFrom[target.id] ?? .distantPast
+        let relevant = results.filter {
+            $0.isFor(device) && $0.isAbout(target.id, key: target.publicKey) && $0.signedAt >= since
+        }
         if relevant.contains(where: \.isFinal) { return false }
         if let latest = relevant.map(\.signedAt).max() {
             // 写到了将来很远的不算（钟不准、或被写坏了），免得永远不问。

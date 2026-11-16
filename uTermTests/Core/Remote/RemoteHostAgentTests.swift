@@ -502,11 +502,25 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertEqual(pad.state, .connected)
         XCTAssertTrue(rig.appServer.pairingRequests.isEmpty, "设备组记下的不弹审批")
 
+        // iPad 经消息 50 担保了一台谁都不知道的设备 Z。
+        let zID = UUID()
+        let zKey = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let z = RemoteGroupDevice(id: zID, name: "Z", model: nil, platform: "mobile", publicKey: zKey,
+                                  signingKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation, updatedAt: Date())
+        let zAdded = try await pad.vouch(for: z)
+        XCTAssertEqual(zAdded.kind, .added)
+        _ = await waitUntil { rig.appServer.identity.peer(id: zID) != nil }
+
         let dropped = await rig.appServer.groupDropController(RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: padID,
                                                                                          publicKey: padKey))
         XCTAssertEqual(dropped?.kind, .revoked)
-        let gone = await waitUntil { rig.appServer.identity.peer(id: padID) == nil && pad.state != .connected }
-        XCTAssertTrue(gone, "撤掉、断开，写回 App")
+        let gone = await waitUntil {
+            rig.appServer.identity.peer(id: padID) == nil && rig.appServer.identity.peer(id: zID) == nil
+                && pad.state != .connected
+        }
+        XCTAssertTrue(gone, "撤掉（连同它担保的 Z）、断开，写回 App")
+        XCTAssertNil(rig.agentServer?.identity.peer(id: zID), "远控进程里也撤了")
+        XCTAssertFalse(rig.appServer.identity.isBlocked(zID))
         XCTAssertFalse(rig.appServer.identity.isBlocked(padID))
         XCTAssertFalse(rig.agentServer?.identity.isBlocked(padID) ?? true, "远控进程里也没拉黑")
         let again = await rig.appServer.groupAddController(request)

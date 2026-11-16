@@ -23,7 +23,9 @@ extension RemoteDeviceGroup {
     func syncLocalHost(_ snapshot: RemoteGroupSnapshot, _ state: RemoteGroupLocalState) {
         guard let localHost, local.isMac, !vouches.isAsking(local.id), !isCoolingDown(local.id) else { return }
         let peers = localHost.groupControllerPeers()
-        if let drop = peers.first(where: { shouldDrop($0, state) }) {
+        // 被移除的设备本身先撤（被控端连带撤掉它担保的），剩下的再一台台撤。
+        let removedKeys = peers.filter { peer in state.removals.contains { $0.deviceID == peer.id && $0.publicKey == peer.publicKey } }
+        if let drop = (removedKeys + peers).first(where: { shouldDrop($0, state) }) {
             startLocalDrop(drop, localHost: localHost)
             return
         }
@@ -55,12 +57,19 @@ extension RemoteDeviceGroup {
         }
     }
 
-    /// 要撤的主控端：经担保记下的、钥匙是被移除的设备的（还在组里的不算：重新加入后同一把钥匙又是组员）；
-    /// 本机不在组里了时，设备组记下的都撤。
+    /// 要撤的主控端（都是经担保记下的；还在组里的不算：重新加入后同一把钥匙又是组员）：
+    /// - 钥匙是被移除的设备的；
+    /// - 担保它的是被移除的设备（组里此刻没有同一个 ID 的组员）：被偷的组员在移除前、或被别的被移除设备担保回来之后，
+    ///   替谁都不知道的钥匙担保的那些；
+    /// - 本机不在组里了时，设备组记下的。
+    /// 撤的时候被控端连带撤掉由它担保的（`RemoteVouchPolicy.cascade`）；里面正常的组员下一轮由本机重新记下。
     private func shouldDrop(_ peer: RemoteGroupLocalController, _ state: RemoteGroupLocalState) -> Bool {
         guard peer.isVouched else { return false }
         if state.members.contains(where: { $0.device.id == peer.id && $0.device.publicKey == peer.publicKey }) { return false }
         if state.removals.contains(where: { $0.deviceID == peer.id && $0.publicKey == peer.publicKey }) { return true }
+        if let voucher = peer.vouchedBy, voucher != local.id, voucher != peer.id,
+           state.removals.contains(where: { $0.deviceID == voucher }),
+           !state.members.contains(where: { $0.device.id == voucher }) { return true }
         return peer.isFromGroup && state.members.isEmpty
     }
 

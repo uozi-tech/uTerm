@@ -115,6 +115,8 @@ struct RemoteGroupLocalController: Equatable {
     var isVouched: Bool
     /// 由这台 Mac 按设备组记下的（担保者是这台 Mac 自己）。
     var isFromGroup: Bool
+    /// 担保它的设备（经担保记下的才有）。
+    var vouchedBy: UUID? = nil
 }
 
 extension RemoteGroupHostAccess {

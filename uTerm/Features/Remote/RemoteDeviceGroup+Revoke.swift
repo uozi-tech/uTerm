@@ -111,7 +111,11 @@ extension RemoteDeviceGroup {
         case .success(let reply):
             hostFailures[target.id] = nil
             switch reply.kind {
-            case .revoked, .notTrusted, .notInFamily:
+            case .revoked:
+                retry = nil
+                // Mac 连带撤掉了由它担保的设备，里面可能有正常的组员：这台 Mac 上的开通结果从现在起重新算。
+                revalidateFrom[target.id] = RemoteGroupTime(now())
+            case .notTrusted, .notInFamily:
                 retry = nil
             case nil:
                 // 不认识的结果（以后的版本多一种）：当成这一版还撤不了，过一阵再问。

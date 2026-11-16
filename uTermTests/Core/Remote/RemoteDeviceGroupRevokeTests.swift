@@ -37,6 +37,7 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
     /// 给一台 Mac 组员接上它自己的被控端。
     private func localHost(_ device: RemoteDeviceGroup) -> RemoteGroupFakeLocalHost {
         let host = RemoteGroupFakeLocalHost()
+        host.hostID = device.local.id
         localHosts[ObjectIdentifier(device)] = host
         device.localHost = host
         return host
@@ -265,7 +266,7 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
 
     // MARK: - 重装过的设备
 
-    func test_reinstalled_device_replaces_its_old_self_and_macs_revoke_the_old_key_before_vouching_the_new_one() async {
+    func test_reinstalled_device_replaces_its_old_self_and_macs_revoke_the_old_key_before_vouching_the_new_one() async throws {
         let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C")
         let mac = fake(a).addMac("Mac mini")
         join(b, via: a)
@@ -295,9 +296,13 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
         tick(6 * 3600)
         refresh(a)
         await settle(a)
-        let tail = Array(fake(a).events[mac.id]?.suffix(2) ?? [])
-        XCTAssertEqual(tail, [.revoke(device: b.local.id, key: oldKey),
-                              .vouch(device: b.local.id, key: reinstalled.local.publicKey)], "先撤旧钥匙、再开通新的")
+        let events = fake(a).events[mac.id] ?? []
+        let revokedAt = try XCTUnwrap(events.lastIndex(of: .revoke(device: b.local.id, key: oldKey)))
+        let vouchedAt = try XCTUnwrap(events.firstIndex(of: .vouch(device: b.local.id, key: reinstalled.local.publicKey)))
+        XCTAssertGreaterThan(vouchedAt, revokedAt, "先撤旧钥匙、再开通新的")
+        let afterRevoke = events.suffix(from: revokedAt + 1)
+        XCTAssertFalse(afterRevoke.contains { if case .revoke = $0 { true } else { false } },
+                       "撤成功之后只剩开通（连同把别的组员再问一遍）")
 
         await converge(a, c, reinstalled)
         XCTAssertFalse(isMember(b, of: c))
@@ -401,6 +406,78 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
         await converge(mini)
         XCTAssertNil(controlled.peers[phone.local.id])
         XCTAssertTrue(controlled.blocked.isEmpty)
+    }
+
+    /// 组里的 Mac：被移除的组员担保过的设备（谁都不知道的钥匙 Z）跟着撤掉；正常的组员被连带撤掉后下一轮由本机记回来；
+    /// 被移除的设备担保回来的，下一轮又被撤掉。都不拉黑。
+    func test_mac_member_drops_what_a_removed_member_vouched_and_re_adds_the_honest_members() async throws {
+        let mini = makeDevice("Mac mini", platform: .mac), phone = makeDevice("iPhone"), thief = makeDevice("被偷的 iPad")
+        let honest = makeDevice("MacBook")
+        let controlled = localHost(mini)
+        join(phone, via: mini)
+        join(thief, via: mini)
+        join(honest, via: mini)
+        await converge(mini, phone, thief, honest)
+        XCTAssertEqual(controlled.peers[thief.local.id]?.isFromGroup, true)
+        // 换成：honest 在这台 Mac 上是 thief 担保的（消息 50）。
+        controlled.peers[honest.local.id] = nil
+        XCTAssertTrue(controlled.vouch(honest.local, by: thief.local.id))
+        let zKey = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let z = RemoteGroupDevice(id: UUID(), name: "Z", model: nil, platform: "mobile", publicKey: zKey,
+                                  signingKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation, updatedAt: clock)
+        XCTAssertTrue(controlled.vouch(z, by: thief.local.id))
+
+        phone.remove([thief.local.id])
+        await converge(phone, mini)
+        XCTAssertNil(controlled.peers[thief.local.id])
+        XCTAssertNil(controlled.peers[z.id], "被移除的组员担保的 Z 一起撤掉")
+        XCTAssertEqual(controlled.dropCalls, [thief.local.id], "一次撤销连带撤掉")
+        // 刚记过它的一分钟内不再问；之后记回来。
+        tick(61)
+        await converge(mini)
+        XCTAssertNotNil(controlled.peers[honest.local.id], "被连带撤掉的正常组员记回来")
+        XCTAssertEqual(controlled.peers[honest.local.id]?.isFromGroup, true)
+        XCTAssertTrue(controlled.blocked.isEmpty)
+
+        // 被移除的设备又被担保回来（比如另一台被移除的设备还连着时做的）：下一轮再撤掉，它担保的也一样。
+        controlled.peers[z.id] = RemoteGroupLocalController(id: z.id, publicKey: zKey, isVouched: true, isFromGroup: false,
+                                                            vouchedBy: thief.local.id)
+        await converge(mini, rounds: 1)
+        XCTAssertNil(controlled.peers[z.id], "由被移除的设备担保的，下一轮就撤掉")
+        XCTAssertNotNil(controlled.peers[phone.local.id])
+        XCTAssertNotNil(controlled.peers[honest.local.id])
+    }
+
+    /// 组员在一台 Mac 上撤成功（`revoked`）之后，把这台 Mac 上别的组员都再问一遍（Mac 可能连带撤掉了正常的组员），
+    /// 只问一遍；撤不动（`not-trusted`）不补问。
+    func test_member_re_asks_the_mac_once_after_a_successful_revoke_and_not_after_a_no_op() async {
+        let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C"), d = makeDevice("D")
+        let mac = fake(a).addMac("Mac mini")
+        join(b, via: a)
+        join(c, via: a)
+        join(d, via: a)
+        await converge(a, b, c, d)
+        XCTAssertEqual(Set(fake(a).calls(at: mac.id)), [b.local.id, c.local.id, d.local.id])
+        let before = fake(a).calls(at: mac.id).count
+
+        tick(61)
+        a.remove([c.local.id])
+        await converge(a, rounds: 1)
+        XCTAssertEqual(Set(fake(a).calls(at: mac.id).dropFirst(before)), [b.local.id, d.local.id],
+                       "撤成功后把还在组里的再问一遍")
+        let after = fake(a).calls(at: mac.id).count
+        for _ in 0..<3 {
+            tick(7 * 3600)
+            await converge(a, b, d, rounds: 1)
+        }
+        XCTAssertEqual(fake(a).calls(at: mac.id).count, after, "只补问一遍")
+
+        fake(a).revokeReplies[mac.id] = .outcome(.notTrusted)
+        tick(61)
+        a.remove([d.local.id])
+        await converge(a)
+        XCTAssertEqual(fake(a).calls(at: mac.id).count, after, "Mac 本来就不认它：没有连带，不补问")
+        XCTAssertTrue(a.removedDevices.isEmpty)
     }
 
     func test_grant_that_claims_a_member_mac_with_another_key_is_ignored() async throws {

@@ -158,6 +158,50 @@ nonisolated enum RemoteVouchPolicy {
         vouches[id]?.family ?? id
     }
 
+    /// 同组撤销（消息 52）、设备组撤掉被移除的组员时要撤的：`root` 自己，加上一层层由它担保的设备（只看此刻还被信任的；
+    /// 担保链按 `vouchedBy` 走），但不含 `keeping`（发请求的那台），也不顺着 `keeping` 往下走。
+    ///
+    /// 为什么连带：被偷的设备在被移除之前可以替攻击者的设备担保（组里的、谁都不知道的新钥匙都行）；只撤它一台的话，
+    /// 那些设备还被信任，撤销又不拉黑，它们马上能把它担保回来。为什么留下请求者：`root` 往往是唯一一台在 Mac 上手动
+    /// 配对的设备，组里别的设备都是它担保的；全撤掉就没人能再替正常的组员开通，只能到 Mac 上重新配对。请求者留着，
+    /// 它会替正常的组员重新开通（被移除者签的开通结果不再算数）。
+    /// 手动配对的设备没有担保记录，永远不在连带里（`root` 自己除外：它是请求点名要撤的）。
+    static func cascade(from root: UUID, keeping: UUID?, trusted: [UUID], vouches: [UUID: RemotePeerVouch]) -> [UUID] {
+        var removed: [UUID] = [root]
+        var reached: Set<UUID> = [root]
+        var frontier = [root]
+        while let next = frontier.popLast() {
+            for id in trusted where id != keeping && !reached.contains(id) && vouches[id]?.vouchedBy == next {
+                reached.insert(id)
+                removed.append(id)
+                frontier.append(id)
+            }
+        }
+        return removed
+    }
+
+    /// 请求者留下了，但它原来的担保者在这次要撤的设备里：它的来路改挂到哪。`root` 的担保者还在（没被撤、此刻还被信任，
+    /// 或者就是这台 Mac 自己）就挂到它下面；否则挂在请求者自己身上（成了这一组的锚点）。组号不改，
+    /// `familyMembers` / `decideRevoke` 照旧把它和同组的设备算在一起；担保者的名字（`voucherName`）是给界面的来历。
+    static func reanchor(_ record: RemotePeerVouch, root: UUID, removed: [UUID], hostID: UUID, trusted: [RemotePeer],
+                         vouches: [UUID: RemotePeerVouch]) -> RemotePeerVouch {
+        var record = record
+        guard removed.contains(record.vouchedBy) else { return record }
+        if let voucher = vouches[root]?.vouchedBy, !removed.contains(voucher) {
+            if voucher == hostID {
+                record.vouchedBy = hostID
+                return record
+            }
+            if let peer = trusted.first(where: { $0.id == voucher }) {
+                record.vouchedBy = voucher
+                record.voucherName = peer.displayName
+                return record
+            }
+        }
+        record.vouchedBy = record.deviceID
+        return record
+    }
+
     /// 和这台设备同组、此刻还被信任的设备（含它自己）。
     static func familyMembers(of id: UUID, trusted: [RemotePeer], vouches: [UUID: RemotePeerVouch]) -> [UUID] {
         let root = family(of: id, vouches: vouches)

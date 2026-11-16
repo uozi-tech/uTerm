@@ -431,6 +431,222 @@ final class RemoteVouchTests: XCTestCase {
                                   platform: entry.platform, publicKey: entry.publicKey)
     }
 
+    // MARK: - 同组撤销连带（G3 补：被撤的设备不能被它担保过的设备担保回来）
+
+    /// 不经审批、只是连着（担保过的设备）；连不上的话返回的客户端不是 connected。
+    private func trusted(_ server: RemoteHostServer, _ device: Device) -> Bool {
+        server.identity.peer(id: device.id) != nil
+    }
+
+    /// 一台已不被信任的设备再来连：Mac 弹审批（不认它），这里拒掉，它连不上。
+    private func assertNeedsApproval(_ device: Device, at server: RemoteHostServer,
+                                     file: StaticString = #filePath, line: UInt = #line) async throws {
+        let client = try client(device, to: server)
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { server.pairingRequests.contains { $0.deviceName == device.name } }
+        XCTAssertTrue(asked, "\(device.name) 不该再被认出来", file: file, line: line)
+        if let request = server.pairingRequests.first(where: { $0.deviceName == device.name }) {
+            server.rejectPairing(request.id)
+        }
+        await connecting.value
+        XCTAssertNotEqual(client.state, .connected, file: file, line: line)
+        client.disconnect()
+    }
+
+    /// 反例：M 手动配对，M 担保了 X；被偷的 X 在被移除前担保了 Y（它加进组的设备）、Z（谁都不知道的钥匙）和正常的
+    /// M2。M 请 Mac 撤 X → 这一次请求之后 X、Y、Z、M2 都不再被信任、都没拉黑，M 还在；X、Y、Z 都没有信任了，
+    /// 谁也担保不回谁；M 再替 M2 开通能成。
+    func test_family_revoke_takes_everything_the_revoked_device_vouched_with_it() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let m = Device("M"), x = Device("X"), y = Device("Y"), z = Device("Z"), m2 = Device("M2")
+        let mClient = try await pairByApproval(m, to: server)
+        _ = try await mClient.vouch(for: x.groupDevice)
+        let xClient = try await connectWithoutApproval(x, to: server)
+        for device in [y, z, m2] { _ = try await xClient.vouch(for: device.groupDevice) }
+        let yClient = try await connectWithoutApproval(y, to: server)
+        let zClient = try await connectWithoutApproval(z, to: server)
+        XCTAssertEqual(server.peerVouches[z.id]?.vouchedBy, x.id)
+
+        let result = try await mClient.revokeSibling(x.id, publicKey: x.groupDevice.publicKey)
+        XCTAssertEqual(result.kind, .revoked)
+        let swept = await waitUntil { [x, y, z, m2].allSatisfy { !self.trusted(server, $0) } }
+        XCTAssertTrue(swept, "一次请求连带撤掉 X 担保过的全部")
+        for device in [x, y, z, m2] { XCTAssertFalse(server.identity.isBlocked(device.id), "\(device.name) 不拉黑") }
+        XCTAssertTrue(trusted(server, m))
+        XCTAssertTrue(server.peerVouches.isEmpty, "被撤的来路一并去掉（M 是手动配对的，本来就没有）")
+        let disconnected = await waitUntil { [xClient, yClient, zClient].allSatisfy { $0.state != .connected } }
+        XCTAssertTrue(disconnected, "连着的都断开")
+        XCTAssertEqual(mClient.state, .connected)
+
+        // 它们没有信任了：谁也连不上，更担保不了谁。
+        try await assertNeedsApproval(y, at: server)
+        try await assertNeedsApproval(z, at: server)
+
+        let back = try await mClient.vouch(for: m2.groupDevice)
+        XCTAssertEqual(back.kind, .added, "M 替正常的 M2 重新开通")
+        XCTAssertEqual(server.peerVouches[m2.id]?.vouchedBy, m.id)
+        mClient.disconnect()
+    }
+
+    /// 只有 X 在 Mac 上手动配对过，组里别的设备都是它担保的：M 撤 X 时 M 留下（来路改挂在自己身上，组号不变），
+    /// M2 被连带撤掉，M 再替它开通就回来了；之后 M 还能撤同组的设备。
+    func test_requester_keeps_access_when_the_revoked_device_was_the_only_one_paired_on_the_mac() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let x = Device("X"), m = Device("M"), m2 = Device("M2")
+        let xClient = try await pairByApproval(x, to: server)
+        _ = try await xClient.vouch(for: m.groupDevice)
+        _ = try await xClient.vouch(for: m2.groupDevice)
+        let mClient = try await connectWithoutApproval(m, to: server)
+
+        let result = try await mClient.revokeSibling(x.id, publicKey: x.groupDevice.publicKey)
+        XCTAssertEqual(result.kind, .revoked)
+        let swept = await waitUntil { !self.trusted(server, x) && !self.trusted(server, m2) }
+        XCTAssertTrue(swept)
+        XCTAssertTrue(trusted(server, m), "发请求的那台留下")
+        let record = try XCTUnwrap(server.peerVouches[m.id])
+        XCTAssertEqual(record.vouchedBy, m.id, "担保者不在了：来路挂在它自己身上")
+        XCTAssertEqual(record.family, x.id, "组号不变")
+        XCTAssertEqual(record.voucherName, "X", "界面上照旧写当初添加它的那台")
+        XCTAssertEqual(mClient.state, .connected)
+        XCTAssertEqual(vouched.count, 2, "改挂来路不发通知")
+
+        let back = try await mClient.vouch(for: m2.groupDevice)
+        XCTAssertEqual(back.kind, .added)
+        XCTAssertEqual(server.peerVouches[m2.id]?.family, x.id, "回来的 M2 和 M 同一组")
+        XCTAssertEqual(Set(server.familyMembers(of: m.id)), [m.id, m2.id])
+        let again = try await mClient.revokeSibling(m2.id, publicKey: m2.groupDevice.publicKey)
+        XCTAssertEqual(again.kind, .revoked, "M 还能撤同组的设备")
+        mClient.disconnect()
+    }
+
+    /// 攻击者的 Y 抢先撤 X、想保住自己。
+    /// (1) M 是 X 的担保者（不在 X 担保的那一串里）：Y 留下（来路改挂到 M），M 随后撤 Y → Mac 上只剩 M。
+    /// (2) X 是唯一手动配对的、M 和 Y 都是 X 担保的：Y 抢先撤 X，M 被连带撤掉，Y 留下；M 已经没有信任，撤不了 Y。
+    ///     这台 Mac 上 Y 一直留着（见设计文档 §15「仍然不严的地方」）。
+    func test_attacker_revoking_first_keeps_itself_only_until_an_ancestor_revokes_it() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let m = Device("M"), x = Device("X"), y = Device("Y")
+        let mClient = try await pairByApproval(m, to: server)
+        _ = try await mClient.vouch(for: x.groupDevice)
+        let xClient = try await connectWithoutApproval(x, to: server)
+        _ = try await xClient.vouch(for: y.groupDevice)
+        let yClient = try await connectWithoutApproval(y, to: server)
+
+        let first = try await yClient.revokeSibling(x.id, publicKey: x.groupDevice.publicKey)
+        XCTAssertEqual(first.kind, .revoked)
+        _ = await waitUntil { !self.trusted(server, x) }
+        XCTAssertTrue(trusted(server, y), "抢先的 Y 保住了自己")
+        XCTAssertEqual(server.peerVouches[y.id]?.vouchedBy, m.id, "来路改挂到 X 的担保者 M")
+        XCTAssertTrue(trusted(server, m))
+
+        let late = try await mClient.revokeSibling(x.id, publicKey: x.groupDevice.publicKey)
+        XCTAssertEqual(late.kind, .notTrusted)
+        let cleanup = try await mClient.revokeSibling(y.id, publicKey: y.groupDevice.publicKey)
+        XCTAssertEqual(cleanup.kind, .revoked)
+        let clean = await waitUntil { server.trustedPeers.map(\.id) == [m.id] }
+        XCTAssertTrue(clean, "M 撤完 X、Y 之后只剩 M")
+        mClient.disconnect()
+        yClient.disconnect()
+    }
+
+    func test_attacker_revoking_first_strands_a_sibling_when_the_revoked_device_was_the_only_one_paired() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let x = Device("X"), m = Device("M"), y = Device("Y")
+        let xClient = try await pairByApproval(x, to: server)
+        _ = try await xClient.vouch(for: m.groupDevice)
+        _ = try await xClient.vouch(for: y.groupDevice)
+        let mClient = try await connectWithoutApproval(m, to: server)
+        let yClient = try await connectWithoutApproval(y, to: server)
+
+        let first = try await yClient.revokeSibling(x.id, publicKey: x.groupDevice.publicKey)
+        XCTAssertEqual(first.kind, .revoked)
+        let swept = await waitUntil { !self.trusted(server, x) && !self.trusted(server, m) }
+        XCTAssertTrue(swept, "Y 抢先：X 和正常的 M 都被撤掉")
+        XCTAssertTrue(trusted(server, y), "已知的不严之处：Y 留在这台 Mac 上")
+        let mGone = await waitUntil { mClient.state != .connected }
+        XCTAssertTrue(mGone, "M 没有信任了，撤不了 Y，只能到 Mac 上处理")
+        XCTAssertFalse(server.identity.isBlocked(m.id))
+        yClient.disconnect()
+    }
+
+    /// 连带不碰手动配对的设备，也不解除 Mac 主人的拉黑。
+    func test_family_cascade_never_touches_manual_pairings_or_owner_blocks() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let m = Device("M"), x = Device("X"), manual = Device("Manual"), blocked = Device("Blocked")
+        let mClient = try await pairByApproval(m, to: server)
+        let manualClient = try await pairByApproval(manual, to: server)
+        _ = try await mClient.vouch(for: x.groupDevice)
+        let xClient = try await connectWithoutApproval(x, to: server)
+        _ = try await xClient.vouch(for: blocked.groupDevice)
+        server.revoke(blocked.id)
+        XCTAssertTrue(server.identity.isBlocked(blocked.id))
+
+        let result = try await mClient.revokeSibling(x.id, publicKey: x.groupDevice.publicKey)
+        XCTAssertEqual(result.kind, .revoked)
+        _ = await waitUntil { !self.trusted(server, x) }
+        XCTAssertTrue(trusted(server, manual), "手动配对的不在连带里")
+        XCTAssertEqual(manualClient.state, .connected)
+        XCTAssertTrue(server.identity.isBlocked(blocked.id), "拉黑的照旧拉黑")
+        let refused = try await mClient.vouch(for: blocked.groupDevice)
+        XCTAssertEqual(refused.kind, .rejected)
+        mClient.disconnect()
+        manualClient.disconnect()
+    }
+
+    /// 组里的 Mac 撤掉被移除的组员时同样连带（请求者是 Mac 自己，没有要留的）：由它担保的谁都不知道的钥匙一起撤掉。
+    func test_group_drop_on_a_member_mac_cascades_to_what_the_removed_member_vouched() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let x = Device("X"), z = Device("Z"), manual = Device("Manual")
+        let manualClient = try await pairByApproval(manual, to: server)
+        _ = await server.groupAddController(vouchRequest(x))
+        let xClient = try await connectWithoutApproval(x, to: server)
+        _ = try await xClient.vouch(for: z.groupDevice)
+        let dropped = await server.groupDropController(RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: x.id,
+                                                                                   publicKey: x.groupDevice.publicKey))
+        XCTAssertEqual(dropped?.kind, .revoked)
+        XCTAssertFalse(trusted(server, x))
+        XCTAssertFalse(trusted(server, z), "X 担保的 Z 一起撤掉")
+        XCTAssertFalse(server.identity.isBlocked(z.id))
+        XCTAssertTrue(trusted(server, manual))
+        manualClient.disconnect()
+    }
+
+    func test_cascade_policy_walks_the_vouch_chain_but_not_through_the_requester() {
+        let host = UUID(), x = UUID(), y = UUID(), z = UUID(), r = UUID(), rChild = UUID(), manual = UUID()
+        func vouch(_ id: UUID, by voucher: UUID) -> RemotePeerVouch {
+            RemotePeerVouch(deviceID: id, deviceName: "", vouchedBy: voucher, voucherName: "", family: x, vouchedAt: Date())
+        }
+        let vouches = [y: vouch(y, by: x), z: vouch(z, by: y), r: vouch(r, by: x), rChild: vouch(rChild, by: r)]
+        let all = [x, y, z, r, rChild, manual]
+        XCTAssertEqual(Set(RemoteVouchPolicy.cascade(from: x, keeping: r, trusted: all, vouches: vouches)), [x, y, z],
+                       "一层层往下，不经过请求者")
+        XCTAssertEqual(Set(RemoteVouchPolicy.cascade(from: x, keeping: nil, trusted: all, vouches: vouches)),
+                       [x, y, z, r, rChild])
+        XCTAssertEqual(RemoteVouchPolicy.cascade(from: manual, keeping: nil, trusted: all, vouches: vouches), [manual])
+        // 环（重新担保过）也停得下来。
+        var looped = vouches
+        looped[x] = vouch(x, by: z)
+        XCTAssertEqual(Set(RemoteVouchPolicy.cascade(from: y, keeping: nil, trusted: all, vouches: looped)), [x, y, z, r, rChild])
+        // 改挂：根的担保者还在就挂过去，是 Mac 自己就挂到 Mac，否则挂自己。
+        let peers = [RemotePeer(id: host, name: "H", publicKey: Data(), pairedAt: Date()),
+                     RemotePeer(id: manual, name: "Manual", publicKey: Data(), pairedAt: Date())]
+        var withVoucher = vouches
+        withVoucher[x] = vouch(x, by: manual)
+        XCTAssertEqual(RemoteVouchPolicy.reanchor(vouches[r]!, root: x, removed: [x, y, z], hostID: host, trusted: peers,
+                                                  vouches: withVoucher).vouchedBy, manual)
+        withVoucher[x] = vouch(x, by: host)
+        XCTAssertEqual(RemoteVouchPolicy.reanchor(vouches[r]!, root: x, removed: [x, y, z], hostID: host, trusted: peers,
+                                                  vouches: withVoucher).vouchedBy, host)
+        XCTAssertEqual(RemoteVouchPolicy.reanchor(vouches[r]!, root: x, removed: [x, y, z], hostID: host, trusted: peers,
+                                                  vouches: vouches).vouchedBy, r)
+    }
+
     func test_old_mac_is_never_sent_a_revocation() async throws {
         let server = try await makeServer(features: RemoteConstants.localFeatures.filter { $0 != RemoteFeature.siblingRevoke })
         defer { server.stop() }

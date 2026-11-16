@@ -790,7 +790,7 @@ final class RemoteHostServer {
             Task { @MainActor [weak self] in
                 // 这一拍之间被重新配对、换了钥匙的不撤。
                 guard let self, self.identity.peer(id: id)?.publicKey == key else { return }
-                self.removeTrust(id, blocks: false)
+                self.removeVouchedSubtree(of: id, keeping: requesterID)
             }
             return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked)
         case .notTrusted:
@@ -845,15 +845,35 @@ final class RemoteHostServer {
                                              reason: String(localized: "它是在这台 Mac 上手动配对的，要在这里撤销"))
         }
         AppLogger.notice("远控：「\(peer.displayName)」已被移出设备组，撤掉", category: RemoteLog.category)
-        removeTrust(request.deviceID, blocks: false)
+        // 请求者是这台 Mac 自己（不是主控端），没有要留的；被连带撤掉的组员下一轮由设备组重新记下。
+        removeVouchedSubtree(of: request.deviceID, keeping: nil)
         return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked)
+    }
+
+    /// 同组撤销、设备组撤掉被移除的组员：撤 `root`，连同一层层由它担保的主控端，都不拉黑、各自吊销中继证书、断开
+    /// （`RemoteVouchPolicy.cascade`）；`keeping`（发请求的那台）留下，它的来路改挂（`RemoteVouchPolicy.reanchor`）。
+    /// 手动配对的、Mac 主人拉黑过的都不受影响（拉黑的本来就不在信任表里，`revoke(blocks: false)` 也不解除拉黑）。
+    private func removeVouchedSubtree(of root: UUID, keeping: UUID?) {
+        let vouches = identity.vouches()
+        let trusted = identity.trustedPeers()
+        let removed = RemoteVouchPolicy.cascade(from: root, keeping: keeping, trusted: trusted.map(\.id), vouches: vouches)
+        if let keeping, let record = vouches[keeping] {
+            let anchored = RemoteVouchPolicy.reanchor(record, root: root, removed: removed, hostID: localID, trusted: trusted,
+                                                      vouches: vouches)
+            if anchored != record { try? identity.recordVouch(anchored) }
+        }
+        if removed.count > 1 {
+            AppLogger.notice("远控：连带撤掉由它担保的 \(removed.count - 1) 台设备", category: RemoteLog.category)
+        }
+        for id in removed { removeTrust(id, blocks: false) }
     }
 
     /// 重读担保记录；`notify` 时对新出现的每一条回调 `onDeviceVouched`。
     private func refreshVouches(notify: Bool) {
         let now = identity.vouches()
         guard now != peerVouches else { return }
-        let added = now.values.filter { peerVouches[$0.deviceID] != $0 }
+        // 只算新记下的（以前没有、或重新担保过）：同组撤销后改挂来路不算，不然 App 会为它再发一次通知。
+        let added = now.values.filter { peerVouches[$0.deviceID]?.vouchedAt != $0.vouchedAt }
         peerVouches = now
         guard notify else { return }
         for vouch in added.sorted(by: { $0.vouchedAt < $1.vouchedAt }) { onDeviceVouched(vouch) }

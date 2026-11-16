@@ -97,7 +97,9 @@ struct RemotePairedDevicesGroup: View {
             if vouch.isFromDeviceGroup(hostID: server.localID) {
                 parts.append(String(localized: "由设备组添加"))
             } else {
-                let voucher = server.trustedPeers.first { $0.id == vouch.vouchedBy }?.displayName ?? vouch.voucherName
+                // 同组撤销后担保者已经不在、来路挂在它自己身上（`RemoteVouchPolicy.reanchor`）：写当初添加它的那台。
+                let voucher = server.trustedPeers.first { $0.id == vouch.vouchedBy && $0.id != peer.id }?.displayName
+                    ?? vouch.voucherName
                 parts.append(String(localized: "由「\(voucher)」添加"))
             }
         }
