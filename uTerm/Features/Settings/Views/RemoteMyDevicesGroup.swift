@@ -4,6 +4,7 @@ import UDesignKit
 /// 设置 › 远程控制 › 我的设备：同一 Apple ID 下的其它设备，在这里确认（两台设备核对同一个 6 位数）。
 /// 状态与操作在共享的 `RemoteSiblingDevices`；页面开着时才轮询名册。
 struct RemoteMyDevicesGroup: View {
+    @Environment(RemoteMacDirectory.self) private var directory
     @State private var model = RemoteSiblingDevices.live()
 
     var body: some View {
@@ -14,17 +15,37 @@ struct RemoteMyDevicesGroup: View {
                 SettingsEmptyRow(symbol: "exclamationmark.triangle", text: String(localized: "读不到这台 Mac 的远程控制身份（钥匙串不可用）"))
             }
         }
+        // 替别的设备开通要问到配对过的 Mac：页面开着时找局域网里的 Mac、问中继谁在线。
         .task {
             guard let model else { return }
-            await model.run()
+            if directory.isActivated { directory.startBrowsing() }
+            await model.run(hosts: directory)
+        }
+        .task { await directory.keepLiveStatusFresh() }
+        if let model, !model.received.isEmpty {
+            SettingsGroup(title: RemoteSiblingCopy.receivedHeader, footer: RemoteSiblingCopy.receivedFooter) {
+                ForEach(model.received) { item in
+                    SettingsListRow(icon: "desktopcomputer", tint: item.status.isUsable ? UD.accent : UD.text3,
+                                    title: item.hostName, subtitle: item.subtitle) { EmptyView() }
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func content(_ model: RemoteSiblingDevices) -> some View {
         ForEach(model.incoming) { incoming in
-            SettingsCenteredBlock(caption: RemoteSiblingCopy.incomingDetail(incoming.voucher)) {
-                codeBlock(title: RemoteSiblingCopy.incomingTitle(incoming.voucher), code: incoming.code)
+            SettingsCenteredBlock(caption: incoming.accepted ? RemoteSiblingCopy.incomingAccepted
+                                                             : RemoteSiblingCopy.incomingDetail(incoming.voucher)) {
+                VStack(spacing: 10) {
+                    codeBlock(title: RemoteSiblingCopy.incomingTitle(incoming.voucher), code: incoming.code)
+                    if !incoming.accepted {
+                        HStack(spacing: 8) {
+                            UDButton(title: "不一致", style: .secondary) { model.dismissIncoming(incoming.voucher.id) }
+                            UDButton(title: "一致", style: .primary) { model.acceptIncoming(incoming.voucher.id) }
+                        }
+                    }
+                }
             }
             .settingsDivider(inset: nil)
         }

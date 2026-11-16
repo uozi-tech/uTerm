@@ -54,6 +54,8 @@ final class SettingsPageSnapshotTests: XCTestCase {
         let background: BackgroundServiceSettings
         let remoteSettings: RemoteControlSettings
         let remoteServer: RemoteHostServer
+        /// 「我的设备」那组要它（替别的设备开通时问配对过的 Mac）。没配对过 Mac、不浏览。
+        let remoteMacs: RemoteMacDirectory
     }
 
     private struct Options {
@@ -148,7 +150,9 @@ final class SettingsPageSnapshotTests: XCTestCase {
                        lanSync: lanSync, cloudSync: CloudKitSyncMonitor(),
                        control: ControlSettings(defaults: defaults),
                        background: BackgroundServiceSettings(defaults: defaults),
-                       remoteSettings: remoteSettings, remoteServer: remoteServer)
+                       remoteSettings: remoteSettings, remoteServer: remoteServer,
+                       remoteMacs: RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
+                                                      adoptsRelayAsDefault: false))
     }
 
     private func environment<Content: View>(_ content: Content, _ fixture: Fixture, dark: Bool) -> some View {
@@ -162,6 +166,9 @@ final class SettingsPageSnapshotTests: XCTestCase {
             .environment(fixture.background)
             .environment(fixture.remoteSettings)
             .environment(fixture.remoteServer)
+            .environment(fixture.remoteMacs)
+            // 公网接入那一组读它（main 上早就要了，夹具一直没给，打开截图开关就崩）。
+            .environment(TerminalSessionRegistry())
             .environment(\.colorScheme, dark ? .dark : .light)
     }
 

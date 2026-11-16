@@ -3,6 +3,7 @@ import SwiftUI
 /// 设置 › 远程控制 › 我的设备：同一 Apple ID 下的其它设备，在这里确认（两台设备核对同一个 6 位数）。
 /// 状态与操作在共享的 `RemoteSiblingDevices`；这一页开着时才轮询名册。
 struct RemoteMyDevicesScreen: View {
+    @Environment(RemoteMacDirectory.self) private var directory
     @State private var model = RemoteSiblingDevices.live()
 
     var body: some View {
@@ -24,21 +25,36 @@ struct RemoteMyDevicesScreen: View {
         .background(M.canvas)
         .navigationTitle("我的设备")
         .navigationBarTitleDisplayMode(.inline)
+        // 替别的设备开通要问到配对过的 Mac：页面开着时问中继谁在线（局域网浏览要用户在主机页打开过，这里不替他打开）。
         .task {
             guard let model else { return }
-            await model.run()
+            await model.run(hosts: directory)
         }
+        .task { await directory.keepLiveStatusFresh() }
     }
 
     @ViewBuilder
     private func content(_ model: RemoteSiblingDevices) -> some View {
         ForEach(model.incoming) { incoming in
-            MInsetGroup(footer: RemoteSiblingCopy.incomingDetail(incoming.voucher)) {
+            MInsetGroup(footer: incoming.accepted ? RemoteSiblingCopy.incomingAccepted
+                                                  : RemoteSiblingCopy.incomingDetail(incoming.voucher)) {
                 codeBlock(title: RemoteSiblingCopy.incomingTitle(incoming.voucher), code: incoming.code)
+                if !incoming.accepted {
+                    MInsetRow(icon: "check", iconColor: M.success, label: "一致") { model.acceptIncoming(incoming.voucher.id) }
+                    MInsetRow(icon: "x", label: "不一致", danger: true, last: true) { model.dismissIncoming(incoming.voucher.id) }
+                }
             }
         }
         if let confirmation = model.confirmation {
             confirmationGroup(confirmation, model: model)
+        }
+        if !model.received.isEmpty {
+            MInsetGroup(header: RemoteSiblingCopy.receivedHeader, footer: RemoteSiblingCopy.receivedFooter) {
+                ForEach(Array(model.received.enumerated()), id: \.element.id) { index, item in
+                    MInsetRow(icon: "mac", iconColor: item.status.isUsable ? nil : M.text3, label: item.hostName,
+                              sub: item.subtitle, last: index == model.received.count - 1)
+                }
+            }
         }
         MInsetGroup(header: "我的设备", footer: RemoteSiblingCopy.footer) {
             if let error = model.storageError {

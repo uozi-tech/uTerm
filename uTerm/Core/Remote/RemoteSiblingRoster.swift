@@ -85,6 +85,7 @@ nonisolated struct RemoteSiblingMessage: Codable, Equatable, Sendable {
 nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
     case device(RemoteSiblingDevice)
     case message(RemoteSiblingMessage)
+    case grant(RemoteSiblingSealedGrant)
 
     static let version = 1
 
@@ -92,6 +93,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         switch self {
         case .device(let device): return Self.deviceAccount(device.id)
         case .message(let message): return message.account
+        case .grant(let grant): return grant.account
         }
     }
 
@@ -102,6 +104,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         var record: String
         var device: RemoteSiblingDevice?
         var message: RemoteSiblingMessage?
+        var grant: RemoteSiblingSealedGrant?
     }
 
     func encoded() throws -> Data {
@@ -109,6 +112,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
         switch self {
         case .device(let device): envelope = Envelope(v: Self.version, record: "device", device: device)
         case .message(let message): envelope = Envelope(v: Self.version, record: "message", message: message)
+        case .grant(let grant): envelope = Envelope(v: Self.version, record: "grant", grant: grant)
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
@@ -128,6 +132,9 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
             guard let message = envelope.message, message.candidateKey.count == RemoteSiblingCode.keyLength,
                   message.voucherKey.count == RemoteSiblingCode.keyLength, !message.value.isEmpty else { return nil }
             return .message(message)
+        case "grant":
+            guard let grant = envelope.grant, !grant.box.isEmpty else { return nil }
+            return .grant(grant)
         default:
             return nil
         }
@@ -138,6 +145,7 @@ nonisolated enum RemoteSiblingRecord: Equatable, Sendable {
 nonisolated struct RemoteSiblingSnapshot: Equatable, Sendable {
     var devices: [RemoteSiblingDevice] = []
     var messages: [RemoteSiblingMessage] = []
+    var grants: [RemoteSiblingSealedGrant] = []
 
     func device(_ id: UUID) -> RemoteSiblingDevice? {
         devices.first { $0.id == id }
@@ -168,6 +176,8 @@ nonisolated struct RemoteSiblingRoster: Sendable {
                 if seenDevices.insert(device.id).inserted { snapshot.devices.append(device) }
             case .message(let message):
                 snapshot.messages.append(message)
+            case .grant(let grant):
+                snapshot.grants.append(grant)
             }
         }
         return snapshot
@@ -192,6 +202,9 @@ nonisolated struct RemoteSiblingRoster: Sendable {
         delete(account: RemoteSiblingRecord.deviceAccount(id))
         for message in snapshot.messages where message.candidate == id || message.voucher == id {
             delete(account: message.account)
+        }
+        for grant in snapshot.grants where grant.candidate == id || grant.voucher == id {
+            delete(account: grant.account)
         }
     }
 
@@ -302,6 +315,7 @@ nonisolated struct RemoteSiblingCommitState: Codable, Equatable, Sendable {
 nonisolated final class RemoteSiblingLocalStore: @unchecked Sendable {
     private static let approvalsAccount = "siblingApprovals"
     private static let commitsAccount = "siblingCommits"
+    private static let vouchersAccount = "siblingVouchers"
 
     private let storage: any RemoteSecretStorage
     private let lock = NSLock()
@@ -330,6 +344,21 @@ nonisolated final class RemoteSiblingLocalStore: @unchecked Sendable {
         return load(Self.commitsAccount) ?? [:]
     }
 
+    /// 本机（新设备）认可的担保者：确认时在本机也点了「一致」的那几台。只收它们替本机开通的结果。
+    func trustedVouchers() -> [UUID: RemoteSiblingApproval] {
+        lock.lock()
+        defer { lock.unlock() }
+        return load(Self.vouchersAccount) ?? [:]
+    }
+
+    func trustVoucher(_ voucher: RemoteSiblingApproval) throws {
+        try update(Self.vouchersAccount) { (all: inout [UUID: RemoteSiblingApproval]) in all[voucher.id] = voucher }
+    }
+
+    func removeVoucher(_ id: UUID) throws {
+        try update(Self.vouchersAccount) { (all: inout [UUID: RemoteSiblingApproval]) in all[id] = nil }
+    }
+
     func setCommit(_ state: RemoteSiblingCommitState?, voucher: UUID) throws {
         try update(Self.commitsAccount) { (all: inout [UUID: RemoteSiblingCommitState]) in all[voucher] = state }
     }
@@ -345,5 +374,92 @@ nonisolated final class RemoteSiblingLocalStore: @unchecked Sendable {
         var all: [UUID: Value] = load(account) ?? [:]
         change(&all)
         try storage.save(try JSONEncoder().encode(all), account: account)
+    }
+}
+
+// MARK: - 开通结果
+
+/// 已有设备替新设备向一台 Mac 担保的结果，经名册交给新设备。
+///
+/// 封在两台设备长期钥匙协商出的密钥里（`RemoteSiblingSeal`）：名册谁都能写、谁都能读，不封的话钥匙串圈里的人
+/// 能伪造一台「Mac」让新设备去连（新设备会往它的终端里打字），也能拿走里面的中继成员证书。新设备只收它认可的
+/// 担保者（`RemoteSiblingLocalStore.trustedVouchers`）封的结果。
+nonisolated struct RemoteSiblingSealedGrant: Codable, Equatable, Sendable {
+    var candidate: UUID
+    var voucher: UUID
+    var host: UUID
+    /// `RemoteSiblingGrant` 的 JSON，ChaChaPoly 封好（combined）。
+    var box: Data
+    var createdAt: Date
+
+    var account: String { Self.account(candidate: candidate, voucher: voucher, host: host) }
+
+    static func account(candidate: UUID, voucher: UUID, host: UUID) -> String {
+        "grant.\(candidate.uuidString).\(voucher.uuidString).\(host.uuidString)"
+    }
+}
+
+/// 封在里面的内容。
+nonisolated struct RemoteSiblingGrant: Codable, Equatable, Sendable {
+    /// 那台 Mac 的公开身份。
+    var hostID: UUID
+    var hostName: String
+    var hostKey: Data
+    var hostModel: String?
+    var hostPlatform: String?
+    /// `RemoteVouchResult.Outcome` 的原始值，另加 `unsupported`（Mac 版本太旧，没问）。
+    var outcome: String
+    var reason: String?
+    var internetAccess: Bool?
+    /// 新设备连这台 Mac 用的中继：Mac 发的成员证书，或担保者给这台 Mac 单独记的中继。
+    var relay: RemoteRelayConfig?
+
+    static let unsupported = "unsupported"
+
+    /// Mac 记下了新设备（或早就认识它）：新设备可以把这台 Mac 记进自己的信任表。
+    var isUsable: Bool {
+        outcome == RemoteVouchResult.Outcome.added.rawValue || outcome == RemoteVouchResult.Outcome.alreadyTrusted.rawValue
+    }
+
+    /// 不用再问这台 Mac 了。`not-allowed` 与 `unsupported` 过一阵再问（Mac 的主人可能会打开开关、更新 uTerm）。
+    var isFinal: Bool {
+        isUsable || outcome == RemoteVouchResult.Outcome.rejected.rawValue
+    }
+}
+
+nonisolated enum RemoteSiblingSeal {
+    /// 两台设备之间的密钥：X25519(本机私钥, 对方公钥) 经 HKDF。只有这两台算得出来。
+    static func key(local: Curve25519.KeyAgreement.PrivateKey, remote: Data) throws -> SymmetricKey {
+        let publicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: remote)
+        let secret = try local.sharedSecretFromKeyAgreement(with: publicKey)
+        let bytes = secret.withUnsafeBytes { Data($0) }
+        // 小阶点会让共享秘密退化成全 0。
+        guard bytes.contains(where: { $0 != 0 }) else { throw RemoteSignalError.invalidKey }
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: bytes), salt: Data("uterm-sibling-grant-v1".utf8),
+                                      info: Data("grant".utf8), outputByteCount: 32)
+    }
+
+    /// 绑定新设备、担保者、Mac：一条结果不能被搬成另一台 Mac 的，也不能搬给另一台设备。
+    private static func additionalData(candidate: UUID, voucher: UUID, host: UUID) -> Data {
+        Data("uterm-sibling-grant-v1\n\(candidate.uuidString)\n\(voucher.uuidString)\n\(host.uuidString)".utf8)
+    }
+
+    static func seal(_ grant: RemoteSiblingGrant, candidate: UUID, voucher: UUID, key: SymmetricKey,
+                     now: Date = Date()) throws -> RemoteSiblingSealedGrant {
+        let plain = try JSONEncoder().encode(grant)
+        let box = try ChaChaPoly.seal(plain, using: key,
+                                      authenticating: additionalData(candidate: candidate, voucher: voucher, host: grant.hostID))
+        return RemoteSiblingSealedGrant(candidate: candidate, voucher: voucher, host: grant.hostID, box: box.combined,
+                                        createdAt: now)
+    }
+
+    /// 解不开、被改过、里面的 Mac 与外面写的不是同一台，都返回 nil。
+    static func open(_ sealed: RemoteSiblingSealedGrant, key: SymmetricKey) -> RemoteSiblingGrant? {
+        guard let box = try? ChaChaPoly.SealedBox(combined: sealed.box),
+              let plain = try? ChaChaPoly.open(box, using: key, authenticating: additionalData(
+                candidate: sealed.candidate, voucher: sealed.voucher, host: sealed.host)),
+              let grant = try? JSONDecoder().decode(RemoteSiblingGrant.self, from: plain),
+              grant.hostID == sealed.host, grant.hostKey.count == RemoteSiblingCode.keyLength else { return nil }
+        return grant
     }
 }

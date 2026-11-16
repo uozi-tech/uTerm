@@ -228,6 +228,8 @@ struct uTermApp: App {
         appServicesGate.install {
             installTerminalWindowOpener()
             presentPermissionGuideIfNeeded()
+            // 「我的设备」：别的设备替本机开通的 Mac，启动时收一次（只读名册，不连网）。
+            if !BackgroundLaunchMode.isRunningInTestHost { RemoteSiblingDevices.receivePendingGrants(into: remoteMacs) }
         }
     }
 
@@ -681,6 +683,7 @@ struct uTermApp: App {
                 .environment(backgroundSettings)
                 .environment(remoteSettings)
                 .environment(remoteServer)
+                .environment(remoteMacs)
                 .environment(terminalRegistry)
                 .bootstrapsAppServices(bootstrapAppServices)
         }

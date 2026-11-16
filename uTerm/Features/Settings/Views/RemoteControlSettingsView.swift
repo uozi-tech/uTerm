@@ -13,7 +13,7 @@ struct RemoteControlSettingsView: View {
             SettingsPageHeader(title: "远程控制", subtitle: String(localized: "让 iPhone、iPad 接入这台 Mac"))
 
             SettingsGroup(title: "远程控制",
-                          footer: String(localized: "打开后，同一局域网里配对过的设备可以接入这台 Mac 上已打开的终端，接入期间终端按对方的尺寸运行。每台设备第一次连接都要配对，同一 Apple ID 的也一样：在这台 Mac 上核对 6 位数字后点「允许」，或扫二维码。")) {
+                          footer: String(localized: "打开后，同一局域网里配对过的设备可以接入这台 Mac 上已打开的终端，接入期间终端按对方的尺寸运行。每台设备第一次连接都要配对，同一 Apple ID 本身不算数：在这台 Mac 上核对 6 位数字后点「允许」、扫二维码，或由同一个人已配对的设备替它开通。")) {
                 SettingsRow(label: "允许手机远程控制") {
                     UDToggle(Binding(get: { settings.isEnabled }, set: { settings.isEnabled = $0 }))
                 }

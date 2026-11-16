@@ -86,6 +86,13 @@ extension RemoteMacDirectory {
         let directory = RemoteMacDirectory(relayStore: relayStore,
                                            startsInForeground: UIApplication.shared.applicationState != .background)
         directory.lifecycle = RemoteMacDirectoryLifecycle(directory: directory)
+        // 「我的设备」：别的设备替本机开通的 Mac，启动时收一次（只读名册，不连网）。
+        // 放到启动之后，不占 App.init 的时间。
+        if !TestHostEnvironment.isActive {
+            Task { @MainActor [weak directory] in
+                if let directory { RemoteSiblingDevices.receivePendingGrants(into: directory) }
+            }
+        }
         return directory
     }
 }

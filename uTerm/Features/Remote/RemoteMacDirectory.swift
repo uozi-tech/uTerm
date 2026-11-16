@@ -632,6 +632,44 @@ final class RemoteMacDirectory {
         return macs.first { $0.deviceID == invitation.macID }
     }
 
+    /// 本机信任表里记的这台 Mac（「我的设备」替别的设备开通时取它的名字、机型、单独记的中继）。
+    func pairedPeer(id: UUID) -> RemotePeer? {
+        identity.peer(id: id)
+    }
+
+    /// 别的设备替本机开通了一台 Mac（「我的设备」，`RemoteSiblingDevices.receiveGrants`）：记进信任表。
+    /// 本机记着的公钥不一样就不覆盖；本机忘记过（拉黑）的不加回来——那是在这台设备上做的决定。
+    /// 不替用户打开局域网浏览（iOS 上会弹本地网络授权框），等用户自己进主机页。
+    func adopt(_ grant: RemoteSiblingGrant) -> RemoteSiblingAdoption {
+        if var existing = identity.peer(id: grant.hostID) {
+            guard existing.publicKey == grant.hostKey else { return .conflict }
+            // 早就配对过：本机还没有这台的中继时补上（凭担保开通后 Mac 发的证书）。
+            if existing.relay == nil, let relay = grant.relay,
+               RemoteRelayPlacement.place(relay, current: defaultRelayConfig(), adoptsAsDefault: false) == .perHost {
+                existing.relay = relay
+                try? identity.trust(existing)
+                rebuild()
+                startRelayPolling()
+            }
+            return .alreadyKnown
+        }
+        guard !identity.isBlocked(grant.hostID) else { return .forgotten }
+        var peer = RemotePeer(id: grant.hostID, name: grant.hostName, publicKey: grant.hostKey, pairedAt: Date(),
+                              model: grant.hostModel, platform: grant.hostPlatform ?? RemoteDevicePlatform.mac.rawValue)
+        if let relay = grant.relay {
+            switch RemoteRelayPlacement.place(relay, current: defaultRelayConfig(), adoptsAsDefault: adoptsRelayAsDefault) {
+            case .setDefault: importRelayConfig(relay)
+            case .perHost: peer.relay = relay
+            case .keep: break
+            }
+        }
+        guard (try? identity.trust(peer)) != nil else { return .conflict }
+        AppLogger.notice("我的设备：收下「\(grant.hostName)」", category: RemoteLog.category)
+        refreshPaired()
+        startRelayPolling()
+        return .added
+    }
+
     /// 按 `Mac.id` 找：配对过的，或附近还没配对的。
     func mac(id: String) -> Mac? {
         macs.first { $0.id == id } ?? nearbyMacs.first { $0.id == id }
