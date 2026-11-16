@@ -230,10 +230,11 @@ final class WelcomeServerListContractTests: XCTestCase {
         let source = try String(contentsOf: Self.repoRoot.appendingPathComponent(
             "uTerm/Features/Welcome/Views/ServerRow.swift"), encoding: .utf8)
 
-        XCTAssertFalse(source.contains(".help(profile.name)"))
-        XCTAssertFalse(source.contains(".help(profile.displayEndpoint)"))
-        XCTAssertTrue(source.contains(".help(whenHovering: hover, profile.name)"))
-        XCTAssertTrue(source.contains(".help(whenHovering: hover, profile.displayEndpoint)"))
+        // 行体读的是抄好的 `info`（`ServerRowInfo`），不是 `ServerProfile`。
+        XCTAssertFalse(source.contains(".help(info.name)"))
+        XCTAssertFalse(source.contains(".help(info.displayEndpoint)"))
+        XCTAssertTrue(source.contains(".help(whenHovering: hover, info.name)"))
+        XCTAssertTrue(source.contains(".help(whenHovering: hover, info.displayEndpoint)"))
     }
 
     /// 相对时间是纯函数：`ServerRow` 逐行调用它，不能现建任何 formatter。
