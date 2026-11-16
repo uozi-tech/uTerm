@@ -352,12 +352,26 @@ struct RemoteMacSheet: View {
 
     private func openDesktop() {
         let tapped = ContinuousClock.now
+        let session = Self.startDesktopEarly(client: client, tappedAt: tapped)
         dismiss()
         let client = self.client
-        // 同终端：等面板收起再盖全屏，避免两个转场叠在一起。
+        // 同终端：等面板收起再盖全屏，避免两个转场叠在一起。知道要多大时流已经在开了（`startDesktopEarly`）。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            store.remoteDesktop = MRemoteDesktopRequest(client: client, tappedAt: tapped)
+            store.remoteDesktop = MRemoteDesktopRequest(client: client, tappedAt: tapped, session: session)
         }
+    }
+
+    /// 这块屏幕开过屏、记得要多大：点按钮就开流，不等面板收起、全屏页排版（见 `RemoteDesktopRequestSizeMemory`）。
+    private static func startDesktopEarly(client: RemoteMacClient, tappedAt: ContinuousClock.Instant)
+        -> RemoteDesktopSession? {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive })?.keyWindow else { return nil }
+        let scale = window.screen.scale
+        guard let size = RemoteDesktopRequestSizeMemory.load(screen: window.bounds.size, scale: scale) else { return nil }
+        let session = RemoteDesktopSession(client: client, maxWidth: size.width, maxHeight: size.height, pointScale: scale)
+        session.openRequestedAt = tappedAt
+        Task { await session.start() }
+        return session
     }
 
     private func openFiles() {

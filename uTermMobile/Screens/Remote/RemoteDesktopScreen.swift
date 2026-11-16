@@ -9,10 +9,19 @@ import UIKit
 struct RemoteDesktopScreen: View {
     let client: RemoteMacClient
     /// 用户点开屏幕的时刻（交给开屏时间线，见 `RemoteDesktopSession.openRequestedAt`）。
-    var tappedAt: ContinuousClock.Instant? = nil
+    var tappedAt: ContinuousClock.Instant?
     let onClose: () -> Void
 
     @State private var session: RemoteDesktopSession?
+
+    /// `started`：点按钮时就开了流的会话（`RemoteDesktopRequestSizeMemory`），这一屏接着用，不另开。
+    init(client: RemoteMacClient, tappedAt: ContinuousClock.Instant? = nil, started: RemoteDesktopSession? = nil,
+         onClose: @escaping () -> Void) {
+        self.client = client
+        self.tappedAt = tappedAt
+        self.onClose = onClose
+        _session = State(initialValue: started)
+    }
     @State private var keys = RemoteDesktopKeyState()
     /// 键盘条开着（顶栏的键盘按钮）。软键盘另算：键盘条上可以收起 / 弹出，面板开着时也收起。
     @State private var keyBarShown = false
@@ -117,6 +126,10 @@ struct RemoteDesktopScreen: View {
             }
         }
         .onChange(of: requestedSize) { _, size in
+            // 记下这块屏幕要多大：下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。
+            if let size, let screenSize {
+                RemoteDesktopRequestSizeMemory.save(size, screen: screenSize, scale: displayScale)
+            }
             // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
             // 不动，不然 Mac 上的虚拟屏跟着换尺寸、窗口来回搬。
             guard let size, let session else { return }
@@ -141,6 +154,11 @@ struct RemoteDesktopScreen: View {
         .onAppear {
             onScreen = true
             UIApplication.shared.isIdleTimerDisabled = Self.keepsScreenAwake(session?.state)
+            // 点按钮时就开了流的会话：补上这一屏的回调。
+            if let session, session.onClipboard == nil {
+                session.onClipboard = { content in copyFromMac(content) }
+                refreshVault()
+            }
         }
         .onDisappear {
             onScreen = false

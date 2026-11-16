@@ -64,7 +64,9 @@ struct MobileRootView: View {
         }
         // 远程桌面：看 / 控制 Mac 的屏幕，全屏覆盖（横竖屏都可用）。
         .fullScreenCover(item: $store.remoteDesktop) { req in
-            RemoteDesktopScreen(client: req.client, tappedAt: req.tappedAt) { store.remoteDesktop = nil }
+            RemoteDesktopScreen(client: req.client, tappedAt: req.tappedAt, started: req.session) {
+                store.remoteDesktop = nil
+            }
                 .environment(\.mAccent, M.accent)
                 .tint(M.accent)
         }
