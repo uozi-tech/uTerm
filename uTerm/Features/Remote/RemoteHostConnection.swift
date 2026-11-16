@@ -654,12 +654,15 @@ extension RemoteHostConnection {
         await environment.prepareDisplays((request.maxWidth, request.maxHeight), request.pointScale)
         let preparedAt = millis()
         guard generation == desktopStartGeneration, !isClosed else { return }
-        guard let display = environment.display(request.displayID) ?? environment.display(nil) else {
+        guard var display = environment.display(request.displayID) ?? environment.display(nil) else {
             return reject(.captureFailed, "找不到 Mac 的显示器")
         }
         // 息屏时先把显示器叫醒再采集，否则 ScreenCaptureKit 找不到它。等的这会儿可能又来了新请求或断了。
         await earlyWake.value
         await environment.wakeDisplay(display.id)
+        // 叫醒时系统可能换掉这块屏（无显示器的 Mac：睡着时放掉的虚拟屏、睡着的占位屏醒来都换成新号）。
+        // 按醒来后的再取一次，别拿着已经撤掉的号去采。
+        if let awake = environment.display(request.displayID) ?? environment.display(nil) { display = awake }
         AppLogger.notice("远程桌面开流计时：授权 \(authorizedAt) ms · 准备显示器 \(preparedAt) ms · 显示器就绪 \(millis()) ms",
                          category: RemoteLog.category)
         guard generation == desktopStartGeneration, !isClosed else { return }

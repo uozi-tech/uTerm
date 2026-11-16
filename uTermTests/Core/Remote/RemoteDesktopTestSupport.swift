@@ -612,6 +612,9 @@ final class FakeDesktopMac {
     let secondDisplay = RemoteDesktopDisplay(id: 9, bounds: CGRect(x: 1512, y: 0, width: 1920, height: 1080),
                                              pixelWidth: 1920, pixelHeight: 1080)
     var hasSecondDisplay = false
+    /// 设了就模拟无显示器的 Mac：叫醒主显示器（7）时系统把它换成这块新号的屏，之后只报这块。
+    var displayAfterWake: RemoteDesktopDisplay?
+    private var mainReplaced = false
     /// 光标此刻的样子（nil = 不报形状）。
     var cursorShape: RemoteDesktopCursorImage?
     /// 取了几次图（指纹没变就不该取）。
@@ -642,6 +645,9 @@ final class FakeDesktopMac {
             canPostEvents: { [weak self] in self?.canControl ?? false },
             display: { [weak self] requested in
                 guard let self else { return nil }
+                if self.mainReplaced, let replacement = self.displayAfterWake {
+                    return requested == nil || requested == replacement.id ? replacement : nil
+                }
                 return requested == self.secondDisplay.id && self.hasSecondDisplay ? self.secondDisplay : self.display
             },
             prepareDisplays: { [weak self] viewer, scale in
@@ -673,6 +679,10 @@ final class FakeDesktopMac {
             clipboard: clipboard,
             makeScreenController: { [weak self] in self?.screen ?? FakeScreenController() },
             isUnlockEnabled: { [weak self] in self?.unlockEnabled ?? false },
+            wakeDisplay: { [weak self] id in
+                guard let self, id == self.display.id, self.displayAfterWake != nil else { return }
+                self.mainReplaced = true
+            },
             isAudioEnabled: { [weak self] in self?.audioEnabled ?? false },
             makeAudioSource: { [weak self] _ in
                 let source = SyntheticAudioSource()

@@ -153,6 +153,22 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(rig.mac.openedDisplays, [7, 9], "已经在看这块就不重开")
     }
 
+    /// 叫醒显示器时它被换了号（无显示器的 Mac：睡着时放掉的虚拟屏醒来才撤，换回新号的占位屏）：
+    /// 开流采醒来后的那块，不拿已经撤掉的号去采（2026-11-16 mini：采集报「找不到要采集的显示器」）。
+    func test_stream_uses_the_display_that_replaced_the_woken_one() async throws {
+        let rig = try await makeRig()
+        defer { rig.client.disconnect() }
+        rig.mac.displayAfterWake = RemoteDesktopDisplay(id: 8, bounds: CGRect(x: 0, y: 0, width: 1280, height: 828),
+                                                        pixelWidth: 2560, pixelHeight: 1656)
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 2560, maxHeight: 1656)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(session.info?.displayID, 8)
+        XCTAssertEqual(session.info?.displayWidth, 1280)
+        XCTAssertEqual(rig.mac.openedDisplays, [8])
+    }
+
     /// 无显示器的 Mac：能建虚拟屏就建（按看的设备像素来）；建不了时占位屏有同点数 2 倍模式就换过去。
     /// 接着真显示器、不止一块屏时不动。
     func test_headless_placeholder_becomes_hidpi() {

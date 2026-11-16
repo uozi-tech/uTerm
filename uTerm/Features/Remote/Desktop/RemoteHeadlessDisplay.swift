@@ -47,6 +47,8 @@ enum RemoteHeadlessDisplay {
     /// 5120×2880：盖住 5K 屏的 Mac、iPad 13（约 2920×2064）、MacBook（3024×1964…）、iPhone 横屏（约 4040×1600；
     /// 老的主控端按老下限是约 4694×2160）。
     nonisolated static let minimumMaxPixels = (width: 5120, height: 2880)
+    /// 主屏是不归本进程管的 uTerm 虚拟屏时，等它被系统撤掉最多多久（见 `ensureHiDPI`）。实测醒来后 23 ms 就撤。
+    nonisolated static let orphanWithdrawalLimit: Duration = .milliseconds(600)
     /// 最后一个人走后多久拆虚拟屏。
     nonisolated static let releaseGrace: Duration = .seconds(30)
 
@@ -117,7 +119,8 @@ enum RemoteHeadlessDisplay {
         case createVirtual
         /// 主屏是 uTerm 自己的虚拟屏，可这个进程手上没有它：上一个远控进程建的，进程结束了屏却没撤
         ///（2026-11-15/16 真机两次实测：换包、重启远控进程后它都留着）。改不了它的设置，只能用公开接口
-        /// 在它现有的模式里切到要的 2 倍模式。
+        /// 在它现有的模式里切到要的 2 倍模式。睡着时放掉的那种醒来就会被撤，`ensureHiDPI` 先等它撤，
+        /// 等不到才走这里。
         case adoptOrphan
     }
 
@@ -271,9 +274,18 @@ enum RemoteHeadlessDisplay {
         // 拆掉虚拟屏后占位屏会睡着；睡着的屏读不到模式，原先这里直接放弃、不建虚拟屏，开流去采一块睡着的屏，
         // 手机上报「没有可用的屏幕」，再连一次才好（2026-11-09 mini：拆屏一分钟后再连，准备显示器 2 ms 就返回）。
         // 先叫醒，等系统报出主屏的模式再判断。
-        guard let (main, current, count) = await awakeMainDisplay() else {
+        guard var (main, current, count) = await awakeMainDisplay() else {
             AppLogger.notice("远程桌面：主屏 3 秒内没醒来或读不到模式，没准备虚拟屏", category: RemoteLog.category)
             return
+        }
+        // 主屏是 uTerm 的虚拟屏、可这个进程手上没有它：多半是睡着时被放掉的（本进程没人看了拆屏时它睡着，
+        // 或建它的进程结束了），系统要等它醒来才真正撤掉。醒来那一刻它还报在线、醒着，二十来毫秒后才被撤、
+        // 换回新号的占位屏（2026-11-16 mini：0x15 醒来后 23 ms 被撤；照它判断去「接手」，开流采的是一块已经
+        // 没了的屏，手机 2.4 秒后报「找不到要采集的显示器」再重试）。先等一下，撤了就按新的主屏判断。
+        if CGDisplayVendorNumber(main) == virtualVendor, CGDisplayModelNumber(main) == virtualModel,
+           await waitForWithdrawal(of: main), let settled = await awakeMainDisplay() {
+            AppLogger.notice("远程桌面：放掉的虚拟屏醒来后撤了，按新的主屏准备", category: RemoteLog.category)
+            (main, current, count) = settled
         }
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
@@ -314,6 +326,17 @@ enum RemoteHeadlessDisplay {
             return (main, mode, count)
         }
         return nil
+    }
+
+    /// 等 `display` 从在线的显示器里撤掉（最多 `orphanWithdrawalLimit`）。撤了返回 true；一直在就是真留下来的那块。
+    private static func waitForWithdrawal(of display: CGDirectDisplayID) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + orphanWithdrawalLimit
+        while clock.now < deadline {
+            if !onlineDisplays().contains(where: { $0.id == display }) || CGMainDisplayID() != display { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return false
     }
 
     /// 拆了旧屏要等系统把占位屏接回来，再建新的；不然两块屏的配置变化叠在一起，窗口会被搬两遍（最多 2 秒）。
