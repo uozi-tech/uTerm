@@ -4,7 +4,11 @@ import SwiftUI
 /// 状态与操作在共享的 `RemoteSiblingDevices`；这一页开着时才轮询名册。
 struct RemoteMyDevicesScreen: View {
     @Environment(RemoteMacDirectory.self) private var directory
-    @State private var model = RemoteSiblingDevices.live()
+    @Environment(RemoteSiblingService.self) private var service
+    /// 输入框里的核对码。
+    @State private var codeText = ""
+
+    private var model: RemoteSiblingDevices? { service.model }
     /// 等确认要报告丢失的那台。
     @State private var reportingLost: RemoteSiblingDevice?
 
@@ -29,8 +33,8 @@ struct RemoteMyDevicesScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         // 替别的设备开通要问到配对过的 Mac：页面开着时问中继谁在线（局域网浏览要用户在主机页打开过，这里不替他打开）。
         .task {
-            guard let model else { return }
-            await model.run(hosts: directory)
+            service.ensureModel()
+            await service.keepActive()
         }
         .task { await directory.keepLiveStatusFresh() }
         .confirmationDialog(RemoteSiblingCopy.lostConfirmTitle(reportingLost?.name ?? ""),
@@ -48,16 +52,6 @@ struct RemoteMyDevicesScreen: View {
 
     @ViewBuilder
     private func content(_ model: RemoteSiblingDevices) -> some View {
-        ForEach(model.incoming) { incoming in
-            MInsetGroup(footer: incoming.accepted ? RemoteSiblingCopy.incomingAccepted
-                                                  : RemoteSiblingCopy.incomingDetail(incoming.voucher)) {
-                codeBlock(title: RemoteSiblingCopy.incomingTitle(incoming.voucher), code: incoming.code)
-                if !incoming.accepted {
-                    MInsetRow(icon: "check", iconColor: M.success, label: "一致") { model.acceptIncoming(incoming.voucher.id) }
-                    MInsetRow(icon: "x", label: "不一致", danger: true, last: true) { model.dismissIncoming(incoming.voucher.id) }
-                }
-            }
-        }
         if let confirmation = model.confirmation {
             confirmationGroup(confirmation, model: model)
         }
@@ -129,11 +123,30 @@ struct RemoteMyDevicesScreen: View {
                           trailing: AnyView(ProgressView()))
                 MInsetRow(icon: "x", label: "取消", danger: true, last: true) { model.cancel() }
             }
-        case .comparing(let device, let code):
-            MInsetGroup(footer: RemoteSiblingCopy.comparingDetail) {
-                codeBlock(title: RemoteSiblingCopy.comparingTitle(device), code: code)
-                MInsetRow(icon: "check", iconColor: M.success, label: "一致") { model.accept() }
-                MInsetRow(icon: "x", label: "不一致", danger: true, last: true) { model.cancel() }
+        case .entering(let device, let attemptsLeft):
+            MInsetGroup(footer: RemoteSiblingCopy.enteringDetail(attemptsLeft: attemptsLeft)) {
+                VStack(spacing: 12) {
+                    Text(RemoteSiblingCopy.enteringTitle(device))
+                        .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
+                        .multilineTextAlignment(.center)
+                    TextField("000000", text: $codeText)
+                        .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
+                        .font(.system(size: 32, weight: .semibold, design: .monospaced))
+                        .multilineTextAlignment(.center)
+                        .onChange(of: codeText) { _, text in
+                            // 输满 6 位就核对，不用再点按钮。
+                            guard text.filter(\.isNumber).count == RemoteSiblingCode.codeLength else { return }
+                            model.submitCode(text)
+                            codeText = ""
+                        }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                MInsetRow(icon: "x", label: "取消", danger: true, last: true) {
+                    codeText = ""
+                    model.cancel()
+                }
             }
         case .failed(_, let reason):
             MInsetGroup(footer: reason) {
@@ -141,19 +154,6 @@ struct RemoteMyDevicesScreen: View {
                 MInsetRow(icon: "check", label: "好", last: true) { model.cancel() }
             }
         }
-    }
-
-    private func codeBlock(title: String, code: String) -> some View {
-        VStack(spacing: 10) {
-            Text(title).font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
-                .multilineTextAlignment(.center)
-            Text(RemotePairingCode.grouped(code))
-                .font(.system(size: 40, weight: .semibold, design: .monospaced))
-                .foregroundStyle(M.text)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-        .padding(.horizontal, 16)
     }
 
     private func glyph(for device: RemoteSiblingDevice) -> String {

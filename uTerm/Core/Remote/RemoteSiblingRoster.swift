@@ -55,6 +55,8 @@ nonisolated struct RemoteSiblingMessage: Codable, Equatable, Sendable {
         case commitment
         case challenge
         case reveal
+        /// 已有设备上输对了核对码（`RemoteSiblingSeal.sealConfirmation`）：新设备看到它才请你点「允许」。
+        case confirmed
     }
 
     var kind: Kind
@@ -64,7 +66,8 @@ nonisolated struct RemoteSiblingMessage: Codable, Equatable, Sendable {
     /// 确认它的设备（已有的设备）。
     var voucher: UUID
     var voucherKey: Data
-    /// `commitment`：承诺值；`challenge`：已有设备的随机数；`reveal`：新设备的随机数 ‖ 它回答的那个 `challenge` 的随机数。
+    /// `commitment`：承诺值；`challenge`：已有设备的随机数；`reveal`：新设备的随机数 ‖ 它回答的那个 `challenge` 的随机数；
+    /// `confirmed`：封好的「核对通过」，绑定那一次的 `challenge`。
     var value: Data
     var createdAt: Date
 
@@ -266,6 +269,8 @@ nonisolated extension RemoteSiblingDevice {
 nonisolated enum RemoteSiblingCode {
     static let keyLength = 32
     static let nonceLength = 16
+    /// 核对码几位。
+    static let codeLength = 6
 
     static func newNonce() -> Data {
         var bytes = [UInt8](repeating: 0, count: nonceLength)
@@ -488,6 +493,24 @@ nonisolated enum RemoteSiblingSeal {
                                       authenticating: additionalData(candidate: candidate, voucher: voucher, host: grant.hostID))
         return RemoteSiblingSealedGrant(candidate: candidate, voucher: voucher, host: grant.hostID, box: box.combined,
                                         createdAt: now)
+    }
+
+    /// 「核对通过」：已有设备上输对了核对码之后写给新设备。只有这两台算得出密钥，冒充者做不出来；绑定那一次的
+    /// challenge 随机数，旧的搬不过来。内容是空的，能打开就算数。
+    static func sealConfirmation(candidate: UUID, voucher: UUID, challenge: Data, key: SymmetricKey) throws -> Data {
+        try ChaChaPoly.seal(Data(), using: key,
+                            authenticating: confirmationData(candidate: candidate, voucher: voucher, challenge: challenge)).combined
+    }
+
+    static func openConfirmation(_ value: Data, candidate: UUID, voucher: UUID, challenge: Data, key: SymmetricKey) -> Bool {
+        guard let box = try? ChaChaPoly.SealedBox(combined: value) else { return false }
+        return (try? ChaChaPoly.open(box, using: key,
+                                     authenticating: confirmationData(candidate: candidate, voucher: voucher,
+                                                                      challenge: challenge))) != nil
+    }
+
+    private static func confirmationData(candidate: UUID, voucher: UUID, challenge: Data) -> Data {
+        Data("uterm-sibling-confirmed-v1\n\(candidate.uuidString)\n\(voucher.uuidString)\n".utf8) + challenge
     }
 
     /// 解不开、被改过、里面的 Mac 与外面写的不是同一台，都返回 nil。

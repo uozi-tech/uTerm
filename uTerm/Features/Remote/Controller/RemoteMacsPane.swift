@@ -270,7 +270,7 @@ private struct RemoteMacDetailPanel: View {
             header
             statusLine.padding(.top, 6)
             if isNearby {
-                Text("同一局域网里打开了远程控制、还没配对的 Mac。点「配对」后在那台 Mac 上核对数字并点「允许」。")
+                Text("同一局域网里打开了远程控制、还没配对的 Mac。点「配对」后在那台 Mac 上输入这里显示的 6 位数。")
                     .font(.system(size: 12))
                     .foregroundStyle(UD.text3)
                     .lineSpacing(3)

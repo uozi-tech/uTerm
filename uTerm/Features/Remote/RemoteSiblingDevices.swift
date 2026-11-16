@@ -4,16 +4,15 @@ import Observation
 
 /// 设置里「我的设备」的状态与操作，两端共用（Mac 是设置 › 远程控制里的一组，iOS 是单独一页）。
 ///
-/// 页面开着时每隔几秒读一次名册（`run()`），每次都做三件事（`refresh()`）：
+/// App 级的 `RemoteSiblingService` 定时调 `refresh()`（全 App 只有一个实例），每次都做这几件事：
 /// - 把本机登记进去；
 /// - 作为**新设备**：给名册里的每台已有设备写好承诺，回答发给本机的确认；
 /// - 作为**已有设备**：推进本机正在做的那次确认。
 ///
-/// 协议见 `RemoteSiblingMessage`；只有页面开着才轮询，确认时两台设备都要打开这一页。iCloud 钥匙串同步要几秒到
-/// 几十秒，所以整个过程不会是瞬时的。
+/// 协议见 `RemoteSiblingMessage`。iCloud 钥匙串同步要几秒到几十秒，所以整个过程不会是瞬时的。
 ///
 /// 确认之后（`RemoteSiblingDevices+Grants.swift`）：已有设备逐台向配对过的 Mac 担保新设备，把结果封好写进名册；
-/// 新设备收下它认可的担保者封的结果，把 Mac 记进自己的信任表。两头都在页面开着时做，新设备启动时也收一次。
+/// 新设备收下它认可的担保者封的结果，把 Mac 记进自己的信任表。
 @MainActor
 @Observable
 final class RemoteSiblingDevices {
@@ -83,27 +82,30 @@ final class RemoteSiblingDevices {
 
     /// 本机正在确认另一台设备。
     enum Confirmation: Equatable {
-        /// 等对方打开「我的设备」、回答。
+        /// 等对方回答（它的 App 开着就会自动答）。
         case waiting(RemoteSiblingDevice)
-        /// 两边都有数了，等你核对。
-        case comparing(RemoteSiblingDevice, code: String)
+        /// 对方已经显示出 6 位数，等你在本机输入。本机不显示这个数：要你从对方那里抄过来，才算真的核对过。
+        case entering(RemoteSiblingDevice, attemptsLeft: Int)
         case failed(RemoteSiblingDevice, reason: String)
 
         var device: RemoteSiblingDevice {
             switch self {
-            case .waiting(let device), .comparing(let device, _), .failed(let device, _): return device
+            case .waiting(let device), .entering(let device, _), .failed(let device, _): return device
             }
         }
     }
 
-    /// 另一台设备正在确认本机，本机要显示的数。
+    /// 另一台设备正在确认本机：本机显示 6 位数，你在那台设备上输入；它输对后本机再请你点「允许」。
     struct Incoming: Identifiable, Equatable {
         let voucher: RemoteSiblingDevice
         let code: String
-        /// 本机这边也点了「一致」：之后收它替本机开通的结果。
-        let accepted: Bool
+        /// 那台设备上已经输对了（收到了它封的「核对通过」）。
+        let verified: Bool
         var id: UUID { voucher.id }
     }
+
+    /// 核对码最多输错几次。
+    static let codeAttempts = 3
 
     static let pollInterval: Duration = .seconds(2)
     /// 确认等这么久没有回应就放弃。
@@ -149,6 +151,7 @@ final class RemoteSiblingDevices {
         /// 本机写进 `challenge` 的随机数。
         var nonce: Data?
         var code: String?
+        var attemptsLeft = RemoteSiblingDevices.codeAttempts
         var failure: String?
     }
 
@@ -172,19 +175,6 @@ final class RemoteSiblingDevices {
     }
 
     var localDevice: RemoteSiblingDevice { local }
-
-    /// 页面开着时一直轮询，页面关掉（任务取消）就停。`hosts` 给了才做开通（问 Mac、收结果）。
-    func run(hosts: (any RemoteSiblingHostAccess)? = nil) async {
-        self.hosts = hosts
-        defer {
-            vouchTask?.cancel()
-            vouchTask = nil
-        }
-        while !Task.isCancelled {
-            refresh()
-            try? await Task.sleep(for: Self.pollInterval)
-        }
-    }
 
     // MARK: - 每一轮
 
@@ -251,11 +241,13 @@ final class RemoteSiblingDevices {
                 current = RemoteSiblingCommitState(voucherKey: voucher.publicKey, nonce: RemoteSiblingCode.newNonce(),
                                                    answeredChallenge: challenge.value, answeredCode: code)
             }
-            if let challenge, challenge.value == current.answeredChallenge, let code = current.answeredCode,
-               now().timeIntervalSince(challenge.createdAt) < Self.incomingLifetime,
+            if let challenge, now().timeIntervalSince(challenge.createdAt) >= Self.incomingLifetime {
+                // 过期了没人管：本机清掉这一次的记录。
+                clearIncoming(from: voucher.id)
+            } else if let challenge, challenge.value == current.answeredChallenge, let code = current.answeredCode,
                !dismissedChallenges.contains(challenge.value) {
-                let accepted = store.trustedVouchers()[voucher.id]?.publicKey == voucher.publicKey
-                shown.append(Incoming(voucher: voucher, code: code, accepted: accepted))
+                shown.append(Incoming(voucher: voucher, code: code,
+                                      verified: isConfirmed(by: voucher, challenge: challenge.value, snapshot: snapshot)))
             } else if challenge == nil, current.answeredChallenge != nil {
                 // 对方做完或放弃了：不再显示。
                 current.answeredChallenge = nil
@@ -286,6 +278,23 @@ final class RemoteSiblingDevices {
         if sorted != incoming { incoming = sorted }
     }
 
+    /// 那台设备封的「核对通过」打得开，并且是这一次的。
+    private func isConfirmed(by voucher: RemoteSiblingDevice, challenge: Data, snapshot: RemoteSiblingSnapshot) -> Bool {
+        guard let localKey,
+              let message = snapshot.message(.confirmed, candidate: local.id, voucher: voucher.id),
+              message.pairs(candidate: local, voucher: voucher),
+              let key = try? RemoteSiblingSeal.key(local: localKey, remote: voucher.publicKey) else { return false }
+        return RemoteSiblingSeal.openConfirmation(message.value, candidate: local.id, voucher: voucher.id,
+                                                  challenge: challenge, key: key)
+    }
+
+    /// 撤掉一次确认在名册里留下的记录（本机是新设备）。
+    private func clearIncoming(from voucher: UUID) {
+        for kind in [RemoteSiblingMessage.Kind.challenge, .reveal, .confirmed] {
+            roster.delete(account: RemoteSiblingMessage.account(kind, candidate: local.id, voucher: voucher))
+        }
+    }
+
     private func message(_ kind: RemoteSiblingMessage.Kind, voucher: RemoteSiblingDevice, value: Data) -> RemoteSiblingMessage {
         RemoteSiblingMessage(kind: kind, candidate: local.id, candidateKey: local.publicKey, voucher: voucher.id,
                              voucherKey: voucher.publicKey, value: value, createdAt: now())
@@ -302,21 +311,44 @@ final class RemoteSiblingDevices {
         advanceSession(snapshot)
     }
 
-    /// 两边的数一致：记下这台设备。
-    func accept() {
-        guard let session, session.code != nil else { return }
+    /// 输入对方显示的 6 位数。对了：记下这台设备，告诉它「核对通过」（它那边再请你点「允许」）；
+    /// 错了：少一次机会，用完就停。返回输对没有。
+    @discardableResult
+    func submitCode(_ text: String) -> Bool {
+        guard var session, let code = session.code, session.failure == nil else { return false }
+        let digits = text.filter(\.isNumber)
+        guard digits == code else {
+            session.attemptsLeft -= 1
+            if session.attemptsLeft <= 0 {
+                session.failure = String(localized: "输错了 \(Self.codeAttempts) 次，这次确认已停止。数字对不上的话，名单里可能有别的设备冒充它。")
+                cleanUp(session.device)
+            }
+            self.session = session
+            publishConfirmation()
+            return false
+        }
+        let device = session.device
         do {
-            try store.approve(RemoteSiblingApproval(id: session.device.id, publicKey: session.device.publicKey,
-                                                    name: session.device.name, approvedAt: now()))
+            try store.approve(RemoteSiblingApproval(id: device.id, publicKey: device.publicKey,
+                                                    name: device.name, approvedAt: now()))
         } catch {
             self.session?.failure = String(localized: "没能保存确认结果：\(error.localizedDescription)")
             publishConfirmation()
-            return
+            return false
         }
-        cleanUp(session.device)
+        // 告诉对方：这里输对了。challenge 留着给对方核对「核对通过」是哪一次的，由对方点完后清掉。
+        if let localKey, let nonce = session.nonce,
+           let key = try? RemoteSiblingSeal.key(local: localKey, remote: device.publicKey),
+           let sealed = try? RemoteSiblingSeal.sealConfirmation(candidate: device.id, voucher: local.id,
+                                                                challenge: nonce, key: key) {
+            write(.message(RemoteSiblingMessage(kind: .confirmed, candidate: device.id, candidateKey: device.publicKey,
+                                                voucher: local.id, voucherKey: local.publicKey, value: sealed,
+                                                createdAt: now())))
+        }
         self.session = nil
         publishConfirmation()
         rebuildRows(roster.load())
+        return true
     }
 
     /// 数不一致、放弃等待，或看过失败原因：结束这次确认，什么都不记。
@@ -334,9 +366,9 @@ final class RemoteSiblingDevices {
         rebuildRows(roster.load())
     }
 
-    /// 本机是新设备：数一致，记下这台担保者，之后收它替本机开通的结果。
+    /// 本机是新设备：那台设备上输对了，你点了「允许」。记下这台担保者，之后收它替本机开通的结果。
     func acceptIncoming(_ voucherID: UUID) {
-        guard let shown = incoming.first(where: { $0.voucher.id == voucherID }) else { return }
+        guard let shown = incoming.first(where: { $0.voucher.id == voucherID }), shown.verified else { return }
         do {
             try store.trustVoucher(RemoteSiblingApproval(id: shown.voucher.id, publicKey: shown.voucher.publicKey,
                                                          name: shown.voucher.name, approvedAt: now()))
@@ -344,16 +376,18 @@ final class RemoteSiblingDevices {
             storageError = String(localized: "没能保存确认结果：\(error.localizedDescription)")
             return
         }
+        clearIncoming(from: voucherID)
+        incoming.removeAll { $0.voucher.id == voucherID }
         refresh()
     }
 
-    /// 本机是新设备：数不一致（或不是你发起的），不再显示，什么都不记。
+    /// 本机是新设备：不是你发起的（或不想让它开通），不再显示，什么都不记。
     func dismissIncoming(_ voucherID: UUID) {
-        guard let challenge = roster.load().message(.challenge, candidate: local.id, voucher: voucherID) else {
-            incoming.removeAll { $0.voucher.id == voucherID }
-            return
+        if let challenge = roster.load().message(.challenge, candidate: local.id, voucher: voucherID) {
+            dismissedChallenges.insert(challenge.value)
         }
-        dismissedChallenges.insert(challenge.value)
+        clearIncoming(from: voucherID)
+        incoming.removeAll { $0.voucher.id == voucherID }
         refresh()
     }
 
@@ -465,14 +499,15 @@ final class RemoteSiblingDevices {
 
     /// 撤掉这次确认在名册里留下的记录。新设备看到 challenge 没了就不再显示数字。
     private func cleanUp(_ device: RemoteSiblingDevice) {
-        roster.delete(account: RemoteSiblingMessage.account(.challenge, candidate: device.id, voucher: local.id))
-        roster.delete(account: RemoteSiblingMessage.account(.reveal, candidate: device.id, voucher: local.id))
+        for kind in [RemoteSiblingMessage.Kind.challenge, .reveal, .confirmed] {
+            roster.delete(account: RemoteSiblingMessage.account(kind, candidate: device.id, voucher: local.id))
+        }
     }
 
     private func publishConfirmation() {
         let value: Confirmation? = session.map { session in
             if let failure = session.failure { return .failed(session.device, reason: failure) }
-            if let code = session.code { return .comparing(session.device, code: code) }
+            if session.code != nil { return .entering(session.device, attemptsLeft: session.attemptsLeft) }
             return .waiting(session.device)
         }
         if value != confirmation { confirmation = value }
@@ -563,41 +598,52 @@ extension RemoteSiblingDevices.Lost {
 }
 
 enum RemoteSiblingCopy {
+    static let footer = String(localized: "同一 Apple ID 下打开过 uTerm 的设备。点「确认…」，在本机输入对方弹出的 6 位数，就能替它开通你配对过的 Mac。")
+
+    static let receivedHeader = String(localized: "替这台设备开通的 Mac")
+    static let receivedFooter = String(localized: "开通后照常在 Mac 列表里连接。那台 Mac 的主人可以随时撤销。")
+
     static let lostHeader = String(localized: "报告丢失的设备")
-    static let lostFooter = String(localized: "你的设备会逐台请配对过的 Mac 撤销它（打开这一页、Mac 在线时进行）。只撤得掉由你的设备开通的那些；它自己在 Mac 上手动配对过的，要到那台 Mac 上撤销。找回来了就取消报告，但已经撤掉的 Mac 要重新开通。")
-    static let localLost = String(localized: "这台设备被你的另一台设备报告丢失，已不再参与「我的设备」。找回来的话，在那台设备上取消报告。")
+    static let lostFooter = String(localized: "你的设备会逐台请 Mac 撤销它。它自己手动配对过的 Mac，要到那台 Mac 上撤销。")
+    static let localLost = String(localized: "这台设备被你的另一台设备报告丢失。找回来的话，在那台设备上取消报告。")
 
     static func lostConfirmTitle(_ name: String) -> String {
         String(localized: "把「\(name)」报告为丢失？")
     }
 
-    static let lostConfirmMessage = String(localized: "你所有的设备都会马上不再信任它，并逐台请配对过的 Mac 撤销它。撤销后它要重新配对才能连接。")
-
-    static let footer = String(localized: "同一 Apple ID 下打开过 uTerm 的 iPhone、iPad 和 Mac 会出现在这里（要打开 iCloud 钥匙串）。确认一台新设备：两台都打开这一页，在已有的那台上点「确认…」，两台上的 6 位数一致就都点「一致」。之后已有的那台会替它向配对过的 Mac 开通，不用再到每台 Mac 上配对。只出现在名单里的设备连不上任何 Mac。")
-
-    static let receivedHeader = String(localized: "替这台设备开通的 Mac")
-    static let receivedFooter = String(localized: "别的设备替这台设备开通的 Mac。开通后照常在主机列表里连接；那台 Mac 的主人可以随时撤销。")
-    static let incomingAccepted = String(localized: "已记下。等对方也点了「一致」，它会替这台设备开通它配对过的 Mac。")
+    static let lostConfirmMessage = String(localized: "你所有的设备都会马上不再信任它，并逐台请配对过的 Mac 撤销它。")
 
     static func waitingTitle(_ device: RemoteSiblingDevice) -> String {
         String(localized: "正在确认「\(device.name)」")
     }
 
     static func waitingDetail(_ device: RemoteSiblingDevice) -> String {
-        String(localized: "在「\(device.name)」上打开设置 › 远程控制 › 我的设备，两台设备会显示同一个 6 位数。iCloud 同步可能要几十秒。")
+        String(localized: "「\(device.name)」会弹出一个 6 位数。它的 uTerm 要开着；iCloud 同步可能要几十秒。")
     }
 
-    static func comparingTitle(_ device: RemoteSiblingDevice) -> String {
-        String(localized: "「\(device.name)」上显示的也是这个数吗？")
+    static func enteringTitle(_ device: RemoteSiblingDevice) -> String {
+        String(localized: "输入「\(device.name)」上显示的 6 位数")
     }
 
-    static let comparingDetail = String(localized: "一致才点「一致」。不一致说明名单里可能有别的设备冒充它，点「不一致」。")
+    static func enteringDetail(attemptsLeft: Int) -> String {
+        attemptsLeft < RemoteSiblingDevices.codeAttempts
+            ? String(localized: "不对，还能再试 \(attemptsLeft) 次。")
+            : String(localized: "数字对上才会记下它。")
+    }
 
     static func incomingTitle(_ voucher: RemoteSiblingDevice) -> String {
-        String(localized: "「\(voucher.name)」正在确认这台设备")
+        String(localized: "「\(voucher.name)」想替这台设备开通远程控制")
     }
 
     static func incomingDetail(_ voucher: RemoteSiblingDevice) -> String {
-        String(localized: "和「\(voucher.name)」上的数一样就在两台上都点「一致」。不是你发起的、或数不一样，点「不一致」。")
+        String(localized: "在「\(voucher.name)」上输入这个数。不是你发起的，点「拒绝」。")
+    }
+
+    static func verifiedTitle(_ voucher: RemoteSiblingDevice) -> String {
+        String(localized: "「\(voucher.name)」上已核对通过")
+    }
+
+    static func verifiedDetail(_ voucher: RemoteSiblingDevice) -> String {
+        String(localized: "允许后，它会替这台设备开通它配对过的 Mac。")
     }
 }

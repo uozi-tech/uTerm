@@ -39,15 +39,20 @@ final class RemoteSiblingGrantTests: XCTestCase {
         return model
     }
 
-    /// 走完一次确认：已有设备点「一致」，`candidateAccepts` 时新设备也点。
-    private func confirm(_ voucher: RemoteSiblingDevices, _ candidate: RemoteSiblingDevices, candidateAccepts: Bool = true) {
+    /// 走完一次确认：在已有设备上输入新设备显示的数；`candidateAccepts` 时新设备随后点「允许」。
+    private func confirm(_ voucher: RemoteSiblingDevices, _ candidate: RemoteSiblingDevices, candidateAccepts: Bool = true,
+                         file: StaticString = #filePath, line: UInt = #line) {
         voucher.refresh()
         candidate.refresh()
         voucher.confirm(candidate.localDevice.id)
         candidate.refresh()
         voucher.refresh()
+        let code = candidate.incoming.first?.code ?? ""
+        XCTAssertFalse(candidate.incoming.first?.verified ?? true, "还没输入，新设备不能先允许", file: file, line: line)
+        XCTAssertTrue(voucher.submitCode(code), file: file, line: line)
+        candidate.refresh()
+        XCTAssertEqual(candidate.incoming.first?.verified, true, "输对后新设备看到「核对通过」", file: file, line: line)
         if candidateAccepts { candidate.acceptIncoming(voucher.localDevice.id) }
-        voucher.accept()
         candidate.refresh()
     }
 
@@ -132,6 +137,59 @@ final class RemoteSiblingGrantTests: XCTestCase {
         pad.refresh()
         XCTAssertTrue(padHosts.adopted.isEmpty, "新设备没认可这台担保者，不收它的结果")
         XCTAssertTrue(pad.received.isEmpty)
+    }
+
+    func test_candidate_cannot_allow_before_the_voucher_typed_the_code() {
+        let phone = model(identity("iPhone"))
+        let pad = model(identity("iPad"))
+        phone.refresh()
+        pad.refresh()
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        pad.acceptIncoming(phone.localDevice.id)
+        XCTAssertFalse(pad.rows.first?.isTrustedVoucher ?? true, "没有「核对通过」就点不了允许")
+        XCTAssertEqual(pad.incoming.count, 1)
+    }
+
+    func test_forged_or_stale_confirmation_does_not_verify() throws {
+        let phoneIdentity = identity("iPhone")
+        let phone = model(phoneIdentity)
+        let padIdentity = identity("iPad")
+        let pad = model(padIdentity)
+        phone.refresh()
+        pad.refresh()
+        phone.confirm(pad.localDevice.id)
+        pad.refresh()
+        let challenge = try XCTUnwrap(roster.load().message(.challenge, candidate: padIdentity.device.id, voucher: phoneIdentity.device.id))
+        func write(_ value: Data) throws {
+            try roster.save(.message(RemoteSiblingMessage(kind: .confirmed, candidate: padIdentity.device.id,
+                                                          candidateKey: padIdentity.device.publicKey,
+                                                          voucher: phoneIdentity.device.id, voucherKey: phoneIdentity.device.publicKey,
+                                                          value: value, createdAt: clock)))
+        }
+        // 钥匙串圈里的冒充者：没有 iPhone 的私钥，封不出 iPad 打得开的。
+        let impostor = Curve25519.KeyAgreement.PrivateKey()
+        try write(RemoteSiblingSeal.sealConfirmation(candidate: padIdentity.device.id, voucher: phoneIdentity.device.id,
+                                                     challenge: challenge.value,
+                                                     key: RemoteSiblingSeal.key(local: impostor, remote: padIdentity.device.publicKey)))
+        pad.refresh()
+        XCTAssertEqual(pad.incoming.first?.verified, false)
+        // 真 iPhone 封的、但属于上一次确认的：也不算。
+        try write(RemoteSiblingSeal.sealConfirmation(candidate: padIdentity.device.id, voucher: phoneIdentity.device.id,
+                                                     challenge: RemoteSiblingCode.newNonce(),
+                                                     key: RemoteSiblingSeal.key(local: phoneIdentity.key, remote: padIdentity.device.publicKey)))
+        pad.refresh()
+        XCTAssertEqual(pad.incoming.first?.verified, false)
+    }
+
+    func test_allowing_clears_the_records_and_trusts_the_voucher() {
+        let phone = model(identity("iPhone"))
+        let pad = model(identity("iPad"))
+        confirm(phone, pad)
+        XCTAssertTrue(pad.incoming.isEmpty)
+        XCTAssertTrue(pad.rows.first?.isTrustedVoucher ?? false)
+        let left = roster.load().messages.filter { $0.candidate == pad.localDevice.id && $0.kind != .commitment }
+        XCTAssertTrue(left.isEmpty, "challenge / reveal / confirmed 都清掉：\(left.map(\.kind))")
     }
 
     func test_dismissing_the_code_on_the_candidate_hides_it_and_trusts_nothing() {

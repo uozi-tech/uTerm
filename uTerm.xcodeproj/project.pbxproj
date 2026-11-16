@@ -326,6 +326,7 @@
 				Features/Remote/RemoteRelayHostLink.swift,
 				Features/Remote/RemoteRelayManager.swift,
 				Features/Remote/RemoteRelayUpdateMonitor.swift,
+				Features/Remote/RemoteSiblingPrompt.swift,
 				Features/Remote/RemoteVouchNotifier.swift,
 				Features/Security/Views/KnownHostsManagerView.swift,
 				Features/Settings/Model/RemoteControlPresentation.swift,

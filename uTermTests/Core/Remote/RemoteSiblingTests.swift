@@ -22,17 +22,17 @@ final class RemoteSiblingTests: XCTestCase {
                              now: { [unowned self] in self.clock })
     }
 
-    /// 走到两边都显示数字为止，返回已有设备上的数。
-    private func runUntilComparing(voucher: RemoteSiblingDevices, candidate: RemoteSiblingDevices,
-                                   file: StaticString = #filePath, line: UInt = #line) -> String? {
+    /// 走到新设备显示数字、已有设备等你输入为止，返回新设备上显示的数（你要抄到已有设备上的那个）。
+    private func runUntilEntering(voucher: RemoteSiblingDevices, candidate: RemoteSiblingDevices,
+                                  file: StaticString = #filePath, line: UInt = #line) -> String {
         voucher.refresh()
         candidate.refresh()
         voucher.confirm(candidate.localDevice.id)
         candidate.refresh()
         voucher.refresh()
-        guard case .comparing(_, let code) = voucher.confirmation else {
-            XCTFail("已有设备应当进入核对：\(String(describing: voucher.confirmation))", file: file, line: line)
-            return nil
+        guard case .entering = voucher.confirmation, let code = candidate.incoming.first?.code else {
+            XCTFail("已有设备应当等着输入：\(String(describing: voucher.confirmation))", file: file, line: line)
+            return ""
         }
         return code
     }
@@ -98,17 +98,19 @@ final class RemoteSiblingTests: XCTestCase {
         XCTAssertEqual(shown.voucher.id, phone.localDevice.id)
 
         phone.refresh()
-        XCTAssertEqual(phone.confirmation, .comparing(pad.localDevice, code: shown.code), "两边的数一样")
+        XCTAssertEqual(phone.confirmation, .entering(pad.localDevice, attemptsLeft: RemoteSiblingDevices.codeAttempts),
+                       "已有设备不显示数，等你从新设备上抄过来")
 
-        phone.accept()
+        XCTAssertTrue(phone.submitCode(String(shown.code.prefix(3)) + " " + String(shown.code.suffix(3))), "空格不算")
         XCTAssertNil(phone.confirmation)
         guard case .confirmed = phone.rows.first?.status else { return XCTFail("确认后记下：\(phone.rows)") }
+
+        // 新设备那边拒绝（或允许）之后清掉这一次的记录。
+        pad.dismissIncoming(phone.localDevice.id)
+        XCTAssertTrue(pad.incoming.isEmpty)
         let after = roster.load()
         XCTAssertNil(after.message(.challenge, candidate: pad.localDevice.id, voucher: phone.localDevice.id))
         XCTAssertNil(after.message(.reveal, candidate: pad.localDevice.id, voucher: phone.localDevice.id))
-
-        pad.refresh()
-        XCTAssertTrue(pad.incoming.isEmpty, "已有设备做完，新设备不再显示数字")
         XCTAssertEqual(pad.rows.first?.status, .unconfirmed, "确认是单向的：iPad 没确认过 iPhone")
     }
 
@@ -116,23 +118,36 @@ final class RemoteSiblingTests: XCTestCase {
         let phoneStore = RemoteSiblingLocalStore(storage: RemoteMemoryStorage())
         let phone = model(device("iPhone"), store: phoneStore)
         let pad = model(device("iPad"))
-        _ = runUntilComparing(voucher: phone, candidate: pad)
-        phone.accept()
+        XCTAssertTrue(phone.submitCode(runUntilEntering(voucher: phone, candidate: pad)))
         XCTAssertNotNil(phoneStore.approvals()[pad.localDevice.id])
         for data in syncedStorage.loadAll() {
             XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("approvedAt"), "同步的名册里没有确认结果")
         }
     }
 
-    func test_mismatch_records_nothing() {
+    func test_cancel_records_nothing() {
         let phone = model(device("iPhone"))
         let pad = model(device("iPad"))
-        _ = runUntilComparing(voucher: phone, candidate: pad)
+        _ = runUntilEntering(voucher: phone, candidate: pad)
         phone.cancel()
         XCTAssertNil(phone.confirmation)
         XCTAssertEqual(phone.rows.first?.status, .unconfirmed)
         pad.refresh()
         XCTAssertTrue(pad.incoming.isEmpty)
+    }
+
+    func test_wrong_code_uses_up_attempts_then_stops_and_records_nothing() {
+        let phone = model(device("iPhone"))
+        let pad = model(device("iPad"))
+        let code = runUntilEntering(voucher: phone, candidate: pad)
+        let wrong = code == "000000" ? "111111" : "000000"
+        XCTAssertFalse(phone.submitCode(wrong))
+        XCTAssertEqual(phone.confirmation, .entering(pad.localDevice, attemptsLeft: RemoteSiblingDevices.codeAttempts - 1))
+        for _ in 1..<RemoteSiblingDevices.codeAttempts { XCTAssertFalse(phone.submitCode(wrong)) }
+        guard case .failed = phone.confirmation else { return XCTFail("输错用完应当停止：\(String(describing: phone.confirmation))") }
+        XCTAssertFalse(phone.submitCode(code), "停了之后输对也不算")
+        XCTAssertEqual(phone.rows.first?.status, .unconfirmed)
+        XCTAssertNil(roster.load().message(.challenge, candidate: pad.localDevice.id, voucher: phone.localDevice.id))
     }
 
     func test_candidate_keeps_showing_the_same_code_after_a_restart_and_does_not_answer_twice() throws {
@@ -153,7 +168,7 @@ final class RemoteSiblingTests: XCTestCase {
         XCTAssertEqual(roster.load().message(.reveal, candidate: padDevice.id, voucher: phone.localDevice.id), reveal,
                        "同一次确认只答一次")
         phone.refresh()
-        XCTAssertEqual(phone.confirmation, .comparing(padDevice, code: first))
+        XCTAssertTrue(phone.submitCode(first), "重开后显示的数仍然是这一次的")
     }
 
     func test_commitment_is_renewed_after_answering() throws {
@@ -217,8 +232,8 @@ final class RemoteSiblingTests: XCTestCase {
         impostor.refresh()
         pad.refresh()
         phone.refresh()
-        guard case .comparing = phone.confirmation else { return XCTFail("冒充者照样能答到这一步") }
-        XCTAssertTrue(pad.incoming.isEmpty, "真 iPad 上什么数都不显示：你看不到两边一致的数，就不该点「一致」")
+        guard case .entering = phone.confirmation else { return XCTFail("冒充者照样能答到这一步") }
+        XCTAssertTrue(pad.incoming.isEmpty, "真 iPad 上什么数都不显示：你没有数可抄，输不对")
     }
 
     func test_forged_challenge_only_makes_the_candidate_show_a_code() throws {
@@ -258,8 +273,7 @@ final class RemoteSiblingTests: XCTestCase {
         let phone = model(device("iPhone"))
         let padDevice = device("iPad")
         let pad = model(padDevice)
-        _ = runUntilComparing(voucher: phone, candidate: pad)
-        phone.accept()
+        XCTAssertTrue(phone.submitCode(runUntilEntering(voucher: phone, candidate: pad)))
 
         var reinstalled = padDevice
         reinstalled.publicKey = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
@@ -286,8 +300,7 @@ final class RemoteSiblingTests: XCTestCase {
     func test_removed_device_disappears_with_its_messages_and_comes_back_when_it_registers_again() {
         let phone = model(device("iPhone"))
         let pad = model(device("iPad"))
-        _ = runUntilComparing(voucher: phone, candidate: pad)
-        phone.accept()
+        XCTAssertTrue(phone.submitCode(runUntilEntering(voucher: phone, candidate: pad)))
         phone.remove(pad.localDevice.id)
         XCTAssertTrue(phone.rows.isEmpty)
         XCTAssertFalse(roster.load().messages.contains { $0.candidate == pad.localDevice.id || $0.voucher == pad.localDevice.id })

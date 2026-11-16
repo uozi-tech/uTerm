@@ -48,13 +48,6 @@ extension RemoteSiblingDevices {
     /// Mac 不允许、版本太旧：隔这么久再问。
     static let vouchRefusedRetryInterval: TimeInterval = 6 * 3600
 
-    /// 新设备启动时收一次别的设备替它开通的 Mac（不问 Mac、不连网，只读名册）。还没有远控身份就什么都不做。
-    static func receivePendingGrants(into hosts: any RemoteSiblingHostAccess) {
-        guard let model = live(createsIdentity: false) else { return }
-        model.hosts = hosts
-        model.receiveGrants(model.roster.load())
-    }
-
     // MARK: - 本机是新设备
 
     func receiveGrants(_ snapshot: RemoteSiblingSnapshot) {

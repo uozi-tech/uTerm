@@ -1,13 +1,18 @@
 import SwiftUI
 import UDesignKit
 
-/// 设置 › 远程控制 › 我的设备：同一 Apple ID 下的其它设备，在这里确认（两台设备核对同一个 6 位数）。
-/// 状态与操作在共享的 `RemoteSiblingDevices`；页面开着时才轮询名册。
+/// 设置 › 远程控制 › 我的设备：同一 Apple ID 下的其它设备，在这里确认（在本机输入对方显示的 6 位数）。
+/// 状态在 App 级的 `RemoteSiblingService`（全 App 一个、后台一直在读名册）；别的设备来确认本机时由
+/// `RemoteSiblingPrompt` 单独弹面板，不在这一页。页面开着时轮询改快。
 struct RemoteMyDevicesGroup: View {
     @Environment(RemoteMacDirectory.self) private var directory
-    @State private var model = RemoteSiblingDevices.live()
+    @Environment(RemoteSiblingService.self) private var service
     /// 等确认要报告丢失的那台。
     @State private var reportingLost: RemoteSiblingDevice?
+    /// 输入框里的核对码。
+    @State private var codeText = ""
+
+    private var model: RemoteSiblingDevices? { service.model }
 
     var body: some View {
         SettingsGroup(title: "我的设备", footer: RemoteSiblingCopy.footer) {
@@ -19,9 +24,9 @@ struct RemoteMyDevicesGroup: View {
         }
         // 替别的设备开通要问到配对过的 Mac：页面开着时找局域网里的 Mac、问中继谁在线。
         .task {
-            guard let model else { return }
+            service.ensureModel()
             if directory.isActivated { directory.startBrowsing() }
-            await model.run(hosts: directory)
+            await service.keepActive()
         }
         .task { await directory.keepLiveStatusFresh() }
         .alert(RemoteSiblingCopy.lostConfirmTitle(reportingLost?.name ?? ""),
@@ -60,21 +65,6 @@ struct RemoteMyDevicesGroup: View {
 
     @ViewBuilder
     private func content(_ model: RemoteSiblingDevices) -> some View {
-        ForEach(model.incoming) { incoming in
-            SettingsCenteredBlock(caption: incoming.accepted ? RemoteSiblingCopy.incomingAccepted
-                                                             : RemoteSiblingCopy.incomingDetail(incoming.voucher)) {
-                VStack(spacing: 10) {
-                    codeBlock(title: RemoteSiblingCopy.incomingTitle(incoming.voucher), code: incoming.code)
-                    if !incoming.accepted {
-                        HStack(spacing: 8) {
-                            UDButton(title: "不一致", style: .secondary) { model.dismissIncoming(incoming.voucher.id) }
-                            UDButton(title: "一致", style: .primary) { model.acceptIncoming(incoming.voucher.id) }
-                        }
-                    }
-                }
-            }
-            .settingsDivider(inset: nil)
-        }
         if let confirmation = model.confirmation {
             confirmationBlock(confirmation, model: model)
                 .settingsDivider(inset: nil)
@@ -135,13 +125,21 @@ struct RemoteMyDevicesGroup: View {
                     UDButton(title: "取消", style: .secondary) { model.cancel() }
                 }
             }
-        case .comparing(let device, let code):
-            SettingsCenteredBlock(caption: RemoteSiblingCopy.comparingDetail) {
+        case .entering(let device, let attemptsLeft):
+            SettingsCenteredBlock(caption: RemoteSiblingCopy.enteringDetail(attemptsLeft: attemptsLeft)) {
                 VStack(spacing: 10) {
-                    codeBlock(title: RemoteSiblingCopy.comparingTitle(device), code: code)
+                    Text(RemoteSiblingCopy.enteringTitle(device))
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(UD.text)
                     HStack(spacing: 8) {
-                        UDButton(title: "不一致", style: .secondary) { model.cancel() }
-                        UDButton(title: "一致", style: .primary) { model.accept() }
+                        UDTextField(placeholder: "000 000", text: $codeText, autoFocus: true)
+                            .frame(width: 140)
+                            .onSubmit { submit(model) }
+                        UDButton(title: "核对", style: .primary) { submit(model) }
+                            .disabled(codeText.filter(\.isNumber).count != RemoteSiblingCode.codeLength)
+                        UDButton(title: "取消", style: .secondary) {
+                            codeText = ""
+                            model.cancel()
+                        }
                     }
                 }
             }
@@ -155,14 +153,8 @@ struct RemoteMyDevicesGroup: View {
         }
     }
 
-    private func codeBlock(title: String, code: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(UD.text)
-            Text(RemotePairingCode.grouped(code))
-                .font(.system(size: 30, weight: .semibold, design: .monospaced))
-                .foregroundStyle(UD.text)
-                .textSelection(.enabled)
-        }
+    private func submit(_ model: RemoteSiblingDevices) {
+        if model.submitCode(codeText) || model.confirmation == nil { codeText = "" }
     }
 
     private func symbol(for device: RemoteSiblingDevice) -> String {

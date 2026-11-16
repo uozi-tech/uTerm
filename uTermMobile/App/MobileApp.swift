@@ -24,6 +24,9 @@ struct MobileApp: App {
     /// 远控：配对过的 Mac 及其连接。不会自己开始浏览（要「本地网络」授权），
     /// 等用户在主机页点「控制我的 Mac 上的终端」。测试宿主不碰真实的 iCloud 钥匙串。
     @State private var remoteMacs = RemoteMacDirectory.mobile(relayStore: TestHostEnvironment.isActive ? nil : RemoteRelayConfigStore())
+    /// 「我的设备」：前台时一直读名册，别的设备来确认这台时弹单子（`RemoteSiblingConfirmHandler`）。全 App 一个。
+    @State private var siblingService = RemoteSiblingService()
+    @Environment(\.scenePhase) private var scenePhase
 
     let modelContainer: ModelContainer
 
@@ -55,8 +58,15 @@ struct MobileApp: App {
             MobileLaunchRoot(appearance: appearance, lock: lock)
                 .modifier(RemoteRelayLinkHandler())
                 .modifier(RemotePairingLinkHandler())
+                .modifier(RemoteSiblingConfirmHandler())
                 .environment(lanSync)
                 .environment(remoteMacs)
+                .environment(siblingService)
+                // 只在前台读名册；退到后台就停，回来接着。测试宿主里不跑（名册在内存，跑了也只会干扰用例）。
+                .onChange(of: scenePhase, initial: true) { _, phase in
+                    guard !TestHostEnvironment.isActive else { return }
+                    if phase == .active { siblingService.start(hosts: remoteMacs) } else if phase == .background { siblingService.stop() }
+                }
                 .environment(cloudKitSync)
                 .task {
                     sharedPreferences.startForAppLaunch()

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 主机页的「我的 Mac」：配对过的 Mac，在线的点进 `RemoteMacSheet`；下面「附近的 Mac」列局域网里还没配对的，
-/// 点了同样进 `RemoteMacSheet`，先在 Mac 上核对 6 位码并点「允许」。不在同一局域网的 Mac 扫它的二维码配对。
+/// 点了同样进 `RemoteMacSheet`，先在 Mac 上输入这里显示的 6 位码。不在同一局域网的 Mac 扫它的二维码配对。
 struct RemoteMacSection: View {
     /// 可选：样式画廊、探针等直接渲染主机页的地方不注入它，那时整块不显示。
     @Environment(RemoteMacDirectory.self) private var injected: RemoteMacDirectory?
@@ -36,7 +36,7 @@ struct RemoteMacSection: View {
             }
             if directory.isActivated, !directory.nearbyMacs.isEmpty {
                 MInsetGroup(header: "附近的 Mac",
-                            footer: "同一局域网里打开了远程控制、还没和这台手机配对的 Mac。点一下，在 Mac 上核对数字并点「允许」即可配对。") {
+                            footer: "同一局域网里打开了远程控制、还没和这台手机配对的 Mac。点一下，在 Mac 上输入这里显示的 6 位数即可配对。") {
                     ForEach(directory.nearbyMacs) { mac in
                         MInsetRow(icon: "mac", label: mac.name, value: "配对", chevron: true,
                                   last: mac.id == directory.nearbyMacs.last?.id) {
@@ -123,7 +123,7 @@ struct RemoteMacSection: View {
     }
 }
 
-/// 一台 Mac：首次连接走配对（两端核对 6 位码，在 Mac 上点「允许」），之后列出 Mac 上的终端。
+/// 一台 Mac：首次连接走配对（这里显示 6 位码，在 Mac 上输入），之后列出 Mac 上的终端。
 struct RemoteMacSheet: View {
     let client: RemoteMacClient
     /// 「忘记这台 Mac」：由目录做（拉黑、丢掉客户端）。没给时只让客户端自己撤销信任。
@@ -230,11 +230,12 @@ struct RemoteMacSheet: View {
 
     private func pairing(_ code: String) -> some View {
         VStack(spacing: 14) {
-            Text("在 Mac 上确认配对").font(M.sans(18, weight: .bold)).foregroundStyle(M.text)
+            Text(RemotePairingCopy.controllerTitle(client.macName)).font(M.sans(18, weight: .bold)).foregroundStyle(M.text)
+                .multilineTextAlignment(.center)
             Text(RemotePairingCode.grouped(code))
                 .font(.system(size: 40, weight: .semibold, design: .monospaced))
                 .foregroundStyle(M.text)
-            Text("Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接可能被截获，点「拒绝」。")
+            Text(RemotePairingCopy.controllerDetail)
                 .font(M.sans(13)).foregroundStyle(M.text3)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)

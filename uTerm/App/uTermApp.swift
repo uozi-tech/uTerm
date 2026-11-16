@@ -42,6 +42,10 @@ struct uTermApp: App {
     @State private var remoteMacs = RemoteMacDirectory(
         relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
         adoptsRelayAsDefault: false)
+    /// 「我的设备」（同一 Apple ID 的设备互相确认、替对方开通 Mac）。全 App 一个。
+    @State private var siblingService: RemoteSiblingService
+    /// 别的设备来确认这台时弹的面板。
+    private let siblingPrompt: RemoteSiblingPrompt?
     /// 本机共享给被控 Mac 的文件夹：那台 Mac 终端里的程序可以经远控链路反过来读写它们。
     @State private var remoteFileSharing = RemoteFileSharingStore()
     /// 配对审批面板。独立 NSPanel，无窗口的后台模式下也能弹。
@@ -133,6 +137,9 @@ struct uTermApp: App {
         let usesRemoteHostAgent = RemoteHostAgentBridge.isEligible()
         let showsRemotePanels = !BackgroundLaunchMode.isRunningInTestHost && !usesRemoteHostAgent
         remotePairingPrompt = showsRemotePanels ? RemotePairingPrompt(server: remoteServer) : nil
+        let siblings = RemoteSiblingService()
+        _siblingService = State(initialValue: siblings)
+        siblingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteSiblingPrompt(service: siblings)
         remoteDesktopIndicator = showsRemotePanels ? RemoteDesktopIndicator(server: remoteServer) : nil
 
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
@@ -228,8 +235,8 @@ struct uTermApp: App {
         appServicesGate.install {
             installTerminalWindowOpener()
             presentPermissionGuideIfNeeded()
-            // 「我的设备」：别的设备替本机开通的 Mac，启动时收一次（只读名册，不连网）。
-            if !BackgroundLaunchMode.isRunningInTestHost { RemoteSiblingDevices.receivePendingGrants(into: remoteMacs) }
+            // 「我的设备」后台轮询：回答别的设备发来的确认（弹面板）、收下替本机开通的 Mac、替确认过的设备去开通。
+            if !BackgroundLaunchMode.isRunningInTestHost { siblingService.start(hosts: remoteMacs) }
         }
     }
 
@@ -684,6 +691,7 @@ struct uTermApp: App {
                 .environment(remoteSettings)
                 .environment(remoteServer)
                 .environment(remoteMacs)
+                .environment(siblingService)
                 .environment(terminalRegistry)
                 .bootstrapsAppServices(bootstrapAppServices)
         }

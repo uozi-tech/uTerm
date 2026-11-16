@@ -335,18 +335,19 @@ private struct RemoteTerminalPaneView: View {
     }
 }
 
-/// 第一次连：两边显示同一组数字，在那台 Mac 上点「允许」。
+/// 第一次连：本机显示 6 位数，在那台 Mac 弹出的输入框里输入。
 struct RemoteMacPairingCodeView: View {
     let macName: String
     let code: String
 
     var body: some View {
         VStack(spacing: 14) {
-            Text("在「\(macName)」上确认配对").font(.system(size: 17, weight: .semibold)).foregroundStyle(UD.text)
+            Text(RemotePairingCopy.controllerTitle(macName)).font(.system(size: 17, weight: .semibold)).foregroundStyle(UD.text)
             Text(RemotePairingCode.grouped(code))
                 .font(.system(size: 40, weight: .semibold, design: .monospaced))
                 .foregroundStyle(UD.text)
-            Text("那台 Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接可能被截获，点「拒绝」。")
+                .textSelection(.enabled)
+            Text(RemotePairingCopy.controllerDetail)
                 .font(.system(size: 12.5)).foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)

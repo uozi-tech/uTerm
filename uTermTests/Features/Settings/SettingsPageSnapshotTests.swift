@@ -167,6 +167,8 @@ final class SettingsPageSnapshotTests: XCTestCase {
             .environment(fixture.remoteSettings)
             .environment(fixture.remoteServer)
             .environment(fixture.remoteMacs)
+            // 「我的设备」的状态（截图里不读名册）。
+            .environment(RemoteSiblingService { _ in nil })
             // 公网接入那一组读它（main 上早就要了，夹具一直没给，打开截图开关就崩）。
             .environment(TerminalSessionRegistry())
             .environment(\.colorScheme, dark ? .dark : .light)
