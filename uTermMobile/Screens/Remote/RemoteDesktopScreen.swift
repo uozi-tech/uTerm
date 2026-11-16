@@ -276,22 +276,24 @@ struct RemoteDesktopScreen: View {
 
     @ViewBuilder private var moreActions: some View {
         if let session, !displays.isEmpty {
+            // 用系统的选择器：勾单独占一列，几块屏的名字左边对齐（自己画勾图标时没勾的那行会往左缩）。
+            // iOS 菜单的勾只能在左边，放不到右侧。
             Section {
-                Menu {
+                Picker(selection: Binding(
+                    get: { session.info?.displayID ?? 0 },
+                    set: { id in Task { await session.switchDisplay(to: id) } }
+                )) {
                     ForEach(displays, id: \.id) { display in
-                        Button {
-                            Task { await session.switchDisplay(to: display.id) }
-                        } label: {
-                            if display.id == session.info?.displayID {
-                                Label(display.menuTitle, systemImage: "checkmark")
-                            } else {
-                                Text(display.menuTitle)
-                            }
+                        Button {} label: {
+                            Text(display.name)
+                            Text(display.menuDetail)
                         }
+                        .tag(display.id)
                     }
                 } label: {
-                    Label("切换显示器", systemImage: "display.2")
+                    Text("切换显示器")
                 }
+                .pickerStyle(.inline)
             }
         }
         if canPaste {

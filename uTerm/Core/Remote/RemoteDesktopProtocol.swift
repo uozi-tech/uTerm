@@ -128,6 +128,12 @@ extension RemoteDesktopDisplaySummary {
         return isMain ? String(localized: "\(name)（主显示器，\(size)）")
                       : String(localized: "\(name)（\(size)）")
     }
+
+    /// 两行写法的第二行（手机菜单：名字一行，这一行放「主显示器」和尺寸）。
+    nonisolated var menuDetail: String {
+        let size = "\(Int(width))×\(Int(height))"
+        return isMain ? String(localized: "主显示器 · \(size)") : size
+    }
 }
 
 /// Mac → 手机：锁屏与帘幕状态（`desktopScreenState`，桌面通道）。只发给声明了 `desktop-unlock` 的手机。
