@@ -33,7 +33,8 @@
 
             @objc func handleSelectionTap(_ gesture: UITapGestureRecognizer) {
                 guard usesInlineTextSelection, gesture.state == .ended, surface != nil else { return }
-                // uTerm 本地补丁：这一下若是「点一下停住惯性」，停在半行的视口稍后缓动回整行，不当场跳。
+                // A tap that stopped a moving scroll leaves the viewport
+                // where it stopped, to be aligned in a moment, not at once.
                 stopMomentumScrolling(settle: touchSelection.tapStopsMomentum ? .later : .now)
                 let point = gesture.location(in: self)
                 defer {

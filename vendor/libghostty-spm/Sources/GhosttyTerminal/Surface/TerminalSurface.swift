@@ -29,6 +29,11 @@ public final class TerminalSurface {
     var sendsCommandChords: (() -> Bool)?
     /// 按下时丢掉的键码：它们的重复、抬起也丢，成对。
     private var droppedCommandKeycodes: Set<UInt32> = []
+    /// A precision scroll went to the surface: `y`, positive toward the
+    /// scrollback. Every one goes through here, a host's included, so the
+    /// view can bring a viewport left between rows back to a row
+    /// (`TerminalSmoothScrollSettler`).
+    var onPrecisionScroll: ((Double) -> Void)?
 
     init(_ surface: ghostty_surface_t) {
         self.surface = surface
@@ -192,6 +197,9 @@ public final class TerminalSurface {
             "surface scroll x=\(String(format: "%.2f", x)) y=\(String(format: "%.2f", y)) mods=0x\(String(mods, radix: 16))",
         )
         ghostty_surface_mouse_scroll(s, x, y, mods)
+        if TerminalScrollModifiers(rawValue: mods).precision, y != 0 {
+            onPrecisionScroll?(y)
+        }
     }
 
     /// Whether the application currently owns the mouse (DEC 1000/1002/1003).

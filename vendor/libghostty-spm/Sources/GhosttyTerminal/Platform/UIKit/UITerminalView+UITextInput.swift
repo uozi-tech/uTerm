@@ -419,11 +419,11 @@
             for _: UITextRange,
         ) {}
 
-        /// 光标所在格子（组字从这里画起），视图坐标。
+        /// The cursor cell's row. Ghostty's ime point y is the cell's bottom
+        /// edge, so the rect starts one cell height above it.
         ///
-        /// uTerm 本地补丁：上游把 `ghostty_surface_ime_point` 的 y 当成格子顶边、宽度原样用，候选框低一行、组字时的插入点
-        /// 越走越远。y 其实是格子底边（Ghostty 的 macOS 前端、本包 Mac 那份 `firstRect` 都按底边用），宽度是像素、要除屏幕倍率
-        ///（实测组字画在 y=76、锚点报 y=90.67，正好差一行 14.67）。
+        /// uTerm 本地补丁：宽度是像素（Ghostty 的 macOS 前端按像素用），要除屏幕倍率，否则组字时的插入点按三倍宽往右走。
+        /// 上游（#109）只收了 y 那一半。
         private func imeRect() -> CGRect {
             guard let surface else { return .zero }
             let point = surface.imePoint()

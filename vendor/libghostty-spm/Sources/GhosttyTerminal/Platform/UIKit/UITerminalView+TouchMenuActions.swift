@@ -9,7 +9,7 @@
     extension UITerminalView {
         func defaultTouchMenuItems(at point: CGPoint, selecting: Bool) -> [UIMenuElement] {
             let paste = UIAction(
-                title: String(localized: "Paste", bundle: .module),
+                title: String(localized: "Paste", bundle: .ghosttyTerminal),
                 image: UIImage(systemName: "doc.on.clipboard"),
                 identifier: UIAction.Identifier("terminal.paste"),
             ) { [weak self] _ in
@@ -19,7 +19,7 @@
                 self?.paste(nil)
             }
             let select = UIAction(
-                title: String(localized: "Select", bundle: .module),
+                title: String(localized: "Select", bundle: .ghosttyTerminal),
                 image: UIImage(systemName: "selection.pin.in.out"),
                 identifier: UIAction.Identifier("terminal.select"),
             ) { [weak self] _ in
@@ -28,7 +28,7 @@
                 }
             }
             let selectAll = UIAction(
-                title: String(localized: "Select All", bundle: .module),
+                title: String(localized: "Select All", bundle: .ghosttyTerminal),
                 image: UIImage(systemName: "character.textbox"),
                 identifier: UIAction.Identifier("terminal.selectAll"),
             ) { [weak self] _ in
@@ -37,7 +37,7 @@
                 }
             }
             let copy = UIAction(
-                title: String(localized: "Copy", bundle: .module),
+                title: String(localized: "Copy", bundle: .ghosttyTerminal),
                 image: UIImage(systemName: "doc.on.doc"),
                 identifier: UIAction.Identifier("terminal.copy"),
             ) { [weak self] _ in

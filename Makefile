@@ -244,7 +244,7 @@ bump-major-mobile:
 
 # 终端引擎（GhosttyKit + libghostty-vt）的两个 xcframework 不进版本库：按 vendor/libghostty-spm/ENGINE.lock 取 zip、
 # 校验 sha256、解到 vendor/libghostty-spm/BinaryTarget/。已是清单要的那一份时什么都不做，所以挂在每个会编工程的目标前面。
-# zip 默认从 <workspace>/uTerm-ghostty-artifacts/2026-11-09 取，换地方传 UTERM_GHOSTTY_ARTIFACTS=<目录>。
+# zip 默认从 <workspace>/uTerm-ghostty-artifacts/2026-11-15 取，换地方传 UTERM_GHOSTTY_ARTIFACTS=<目录>。
 # `make clean` 只清 build/，不动 vendor/ 下的这两份。
 engine:
 	@scripts/fetch-ghostty-engine.sh

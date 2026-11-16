@@ -55,7 +55,8 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     }
 
     /// Test seam: the surface handed to `setSurface` is a stand-in, so every
-    /// C call on it is injected, and the tick defaults to a no-op.
+    /// C call on it is injected, and the tick defaults to a no-op. A replay
+    /// goes to `surfaceWrite` unless `surfaceReplay` is given.
     init(
         write: @escaping @Sendable (Data) -> Void,
         resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void,
@@ -231,7 +232,61 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         )
     }
 
-    /// Bytes passed to ``receive(_:)`` that the terminal has not parsed yet.
+    /// Enqueue reconstructed history: bytes the terminal has seen before, fed
+    /// again to rebuild its state — a snapshot restored into a new surface, a
+    /// session reattached to a daemon, a screen brought up to date after the
+    /// host held output back.
+    ///
+    /// The bytes take the same serial queue as ``receive(_:)`` and keep their
+    /// place among the live output around them. They are parsed exactly as
+    /// live output is; only the replies they would trigger — device
+    /// attributes, status and cursor reports, OSC 10/11 colour queries,
+    /// title reports — are dropped where they are produced
+    /// (`ghostty_surface_write_buffer_replay`). Those queries were answered
+    /// when the bytes were live; a second answer reaches the shell as typed
+    /// input. The replies are generated on Ghostty's IO thread some time
+    /// after the write returns, so a host cannot filter them reliably in its
+    /// `write` closure, which is why this is a separate entry point.
+    ///
+    /// One call is one write to the surface, parsed with the terminal lock
+    /// held (the parser lets go of it only to hand a message to a full
+    /// mailbox), so a replay that starts with a reset goes from the old
+    /// screen to the new one without the renderer drawing the blank state
+    /// between. Pass a whole screen in one call.
+    ///
+    /// A replay received with no surface attached waits for the next one
+    /// like any other output, and is exempt from the 1 MiB cap that bounds
+    /// live output there: cutting the front off a reconstruction leaves a
+    /// state that never existed.
+    public func receiveReplay(_ data: Data) {
+        guard !data.isEmpty else { return }
+        surfaceAccess.enqueueReplay(data)
+        TerminalDebugLog.log(
+            .output,
+            "terminal <- host replay bytes=\(data.count)",
+        )
+    }
+
+    /// Drops every byte passed to ``receive(_:)`` or ``receiveReplay(_:)``
+    /// that the terminal has not started parsing, and returns how many.
+    ///
+    /// For a host that keeps the terminal's state somewhere else and is
+    /// about to replace the screen with a replay of it: output queued for a
+    /// surface that is not drawing (the app is in the background, the view
+    /// is hidden) would otherwise be parsed first, every title and bell in
+    /// it going through the app mailbox a tick at a time, only to be
+    /// overwritten. The write a surface is parsing when this is called runs
+    /// to its end, and a queued ``finish(exitCode:runtimeMilliseconds:)``
+    /// stays queued. Queries in the dropped bytes are never answered.
+    @discardableResult
+    public func discardPendingOutput() -> Int {
+        let dropped = surfaceAccess.discardPendingOutput()
+        TerminalDebugLog.log(.output, "pending output discarded bytes=\(dropped)")
+        return dropped
+    }
+
+    /// Bytes passed to ``receive(_:)`` or ``receiveReplay(_:)`` that the
+    /// terminal has not parsed yet.
     ///
     /// `receive(_:)` never blocks, so a transport faster than the parser
     /// queues output here without limit while a surface is attached. A host
@@ -259,33 +314,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         surfaceAccess.setBacklogObserver(handler.map {
             .init(highWater: highWater, lowWater: lowWater, handler: $0)
         })
-    }
-
-    /// uTerm 本地补丁（迁移计划 §6 的 PR 1，上游还没有）：把一段**重建出来的历史**交给终端——影子终端的快照回放、
-    /// holder 检查点回放。和 ``receive(_:)`` 走同一条串行队列、保持先后，解析与终端状态的更新也完全一样，区别只在
-    /// 这段字节引出的协议应答（DA、DSR、OSC 10/11 查询、标题上报……）在源头就被丢掉
-    ///（`ghostty_surface_write_buffer_replay`，libghostty-spm 补丁 0011）：这些查询当初已经答过一次，再答一遍等于往
-    /// shell 里敲垃圾。应答是在 termio 线程上异步产生的，宿主自己在 write 回调里按时间窗丢不干净，所以必须走这个入口。
-    ///
-    /// 一次调用的数据由 surface 拿着终端锁一口气解析完，渲染线程看不到中间状态；要整屏替换就一次给全。
-    /// 没挂 surface 时排着等下一个，不受 1 MiB 离线上限裁剪。
-    public func receiveReplay(_ data: Data) {
-        guard !data.isEmpty else { return }
-        surfaceAccess.enqueueReplay(data)
-        TerminalDebugLog.log(
-            .output,
-            "terminal <- host replay bytes=\(data.count)",
-        )
-    }
-
-    /// uTerm 本地补丁：丢掉所有 ``receive(_:)`` / ``receiveReplay(_:)`` 进来、还没交给 surface 解析的字节，返回丢了多少。
-    /// 给「surface 暂时不吃字节、之后用回放整屏补齐」的宿主用（App 进后台）：留着这些字节，回前台时它们会先被解析
-    /// 一遍（连同它们带的标题、bell 一条条过 app mailbox）再被回放盖掉。正在解析的那一块不受影响。
-    @discardableResult
-    public func discardPendingOutput() -> Int {
-        let dropped = surfaceAccess.discardPendingOutput()
-        TerminalDebugLog.log(.output, "pending output discarded bytes=\(dropped)")
-        return dropped
     }
 
     /// uTerm 本地补丁：和 ``discardPendingOutput()`` 一样丢掉还没交给 surface 解析的输出，但把其中的实时字节按先后
@@ -341,11 +369,12 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     // MARK: - C Callbacks
 
     static let receiveBufferCallback: ghostty_surface_receive_buffer_cb = { userdata, ptr, len in
-        guard let userdata, let ptr else { return }
+        let bufferPointer: UnsafePointer<UInt8>? = ptr
+        guard let userdata, let bufferPointer else { return }
         let session = Unmanaged<InMemoryTerminalSession>
             .fromOpaque(userdata)
             .takeUnretainedValue()
-        let data = Data(bytes: ptr, count: len)
+        let data = Data(bytes: bufferPointer, count: len)
         TerminalDebugLog.log(
             .input,
             "host <- terminal \(TerminalDebugLog.describe(data))",
@@ -492,7 +521,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         }
     }
 
-    /// uTerm 本地补丁：见 ``receiveReplay(_:)``。
     private static func replayToSurface(_ surface: ghostty_surface_t, _ data: Data) {
         data.withUnsafeBytes { buffer in
             guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {

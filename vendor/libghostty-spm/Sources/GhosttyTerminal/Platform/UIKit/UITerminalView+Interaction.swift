@@ -39,6 +39,9 @@
                 return
             }
             #if targetEnvironment(macCatalyst)
+                // A finger on a touch display: it stops a glide the way it
+                // does on iOS, and claims the keyboard the way a click does.
+                stopMomentumScrolling()
                 becomeFirstResponder()
             #else
                 if momentumScroll.displayLink != nil || systemScrollInMotion {
@@ -156,10 +159,32 @@
             hover.delegate = self
             addGestureRecognizer(hover)
             pointer.hoverRecognizer = hover
-            #if !targetEnvironment(macCatalyst)
+            #if targetEnvironment(macCatalyst)
+                setupDirectTouchInput()
+            #else
                 setupTouchScrollInput()
             #endif
         }
+
+        #if targetEnvironment(macCatalyst)
+            /// A Mac with a touch display (or a Sidecar iPad) hands a
+            /// finger to a Catalyst app as a `.direct` touch, the type no
+            /// mouse or trackpad reports here: those are `.indirectPointer`
+            /// and scroll events. One finger scrolls with the same pan and
+            /// glide as on iOS and two pinch the font size. Neither
+            /// recognizer can begin on a Mac without touch input.
+            func setupDirectTouchInput() {
+                let gesture = UIPanGestureRecognizer(
+                    target: self,
+                    action: #selector(handleTouchScrollGesture(_:)),
+                )
+                gesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                gesture.maximumNumberOfTouches = 1
+                gesture.delegate = self
+                addGestureRecognizer(gesture)
+                setupPinchZoomGesture()
+            }
+        #endif
 
         #if !targetEnvironment(macCatalyst)
             func setupTouchScrollInput() {
@@ -252,7 +277,11 @@
             }
             if usesInlineTextSelection, gestureRecognizer === touchSelection.tapRecognizers.first {
                 touchSelection.tapBeganWithMenu = isTouchMenuVisible
-                touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil || systemScrollInMotion
+                #if targetEnvironment(macCatalyst)
+                    touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil
+                #else
+                    touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil || systemScrollInMotion
+                #endif
                 if touchSelection.tapStopsMomentum {
                     stopMomentumForTouchDown()
                 }
@@ -271,8 +300,11 @@
                 return usesInlineTextSelection
             }
             #if !targetEnvironment(macCatalyst)
-                // uTerm 本地补丁：单指滚动归 UIScrollView 的 pan 时，自写的 pan 让位（双指、选区拖动、没有回滚可滚的照旧归它）。
-                if gestureRecognizer === touchSelection.scrollGesture, gestureRecognizer.numberOfTouches == 1, systemPanWouldBegin {
+                // One finger over scrollback is the scroll view's
+                // (+SystemScroll); the view's own pan stands aside for it.
+                if gestureRecognizer === touchSelection.scrollGesture,
+                   gestureRecognizer.numberOfTouches == 1, systemPanWouldBegin
+                {
                     return false
                 }
             #endif

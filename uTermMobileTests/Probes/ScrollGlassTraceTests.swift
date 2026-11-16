@@ -267,7 +267,7 @@ final class ScrollGlassTraceTests: XCTestCase {
         let driver = LinkDriver()
         /// `velocityPx` 正 = 手指往下 = 往回滚区走（contentOffset 变小）。
         func fling(_ velocityPx: Double) async {
-            view.scrollViewWillBeginDragging(scrollView)
+            view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
             // 手指先拖 dragLead 秒：每个显示帧挪一次 contentOffset，位移 = 速度 × 这一帧的时长。
             await ticker.run(seconds: Self.dragLead) { dt in
                 scrollView.contentOffset.y -= CGFloat(velocityPx * dt / scale)
@@ -278,13 +278,13 @@ final class ScrollGlassTraceTests: XCTestCase {
             // 0.998 / 0.002 ms：`.normal` 减速率的投影距离系数（这个函数里 `log` 是下面那个 CommitLog，不写对数）。
             let projected = velocityPx / 1000 * 0.998 / 0.002
             var target = CGPoint(x: 0, y: min(max(0, from - projected), maxOffset) / scale)
-            view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -velocityPx / scale / 1000), targetContentOffset: &target)
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: true)
+            view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: CGPoint(x: 0, y: -velocityPx / scale / 1000), targetContentOffset: &target)
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: true)
             let glide = Glide(total: Double(target.y) * scale - from, velocityPx: -velocityPx)
             driver.run(glide, velocity: -velocityPx, from: from, lead: 0) { position in
                 scrollView.contentOffset = CGPoint(x: 0, y: position / scale)
             } finished: {
-                view.scrollViewDidEndDecelerating(scrollView)
+                view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView)
             }
         }
         // 预热。

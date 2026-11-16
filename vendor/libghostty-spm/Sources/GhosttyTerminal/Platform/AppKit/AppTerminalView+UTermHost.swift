@@ -86,4 +86,34 @@
             reportDisplayID()
         }
     }
+    public extension AppTerminalView {
+        /// uTerm 测试用：视口此刻的位置（读引擎，`ghostty_surface_smooth_scroll`）和吸附在不在跑。
+        struct UTermScrollState: Equatable, Sendable {
+            /// 视口首行行号。
+            public let row: Int
+            /// 首行顶边之上滚出去的像素（引擎记的小数，`[0, 格子高)`）。
+            public let fraction: Double
+            public let isSnapping: Bool
+            /// `fraction` 四舍五入到整像素。
+            public var fractionPixels: Int { Int(fraction.rounded()) }
+            /// 没有吸附在跑，视口在整行上。
+            public var isAtRest: Bool { fraction == 0 && !isSnapping }
+        }
+
+        /// 没有 surface、或引擎还没有格子高时：行号取滚动条报的、小数为 0。
+        var uTermScrollState: UTermScrollState {
+            let position = surface?.smoothScrollPosition()
+            return UTermScrollState(row: position?.row ?? uTermScrollbarOffset ?? 0, fraction: position?.fraction ?? 0,
+                                    isSnapping: core.scrollSettler.isSnapping)
+        }
+
+        /// uTerm 测试用：引擎最近一次报的滚动条行号（视口首行）；还没报过时为 nil。
+        var uTermScrollbarOffset: Int? { core.bridge.scrollbar.map { Int($0.offset) } }
+
+        /// uTerm 测试用：Ghostty 报的一个格子的物理像素尺寸；还没有 surface 时为 nil。
+        var uTermCellPixels: CGSize? {
+            guard let metrics = surface?.size(), metrics.cellWidthPixels > 0, metrics.cellHeightPixels > 0 else { return nil }
+            return CGSize(width: Int(metrics.cellWidthPixels), height: Int(metrics.cellHeightPixels))
+        }
+    }
 #endif

@@ -33,8 +33,8 @@ nonisolated struct TerminalScrollbackLimits: Equatable, Sendable {
     /// surface 答 XTVERSION 的串：「ghostty」+ GhosttyKit 自己报的版本。
     static let surfaceVersionReport: String = {
         let info = ghostty_info()
-        guard let version = info.version, info.version_len > 0 else { return "" }
-        let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(version).assumingMemoryBound(to: UInt8.self),
+        guard info.version_len > 0 else { return "" }
+        let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(info.version).assumingMemoryBound(to: UInt8.self),
                                         count: Int(info.version_len))
         return "ghostty " + String(decoding: bytes, as: UTF8.self)
     }()

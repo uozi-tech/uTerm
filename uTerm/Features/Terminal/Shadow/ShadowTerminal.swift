@@ -8,8 +8,8 @@ import GhosttyVt
 // 检查点、surface 补齐 / 回前台回放）、读屏、光标与备用屏、OSC / 未知序列回调、kitty 键盘标志、整段回滚读文本
 // 都在这个类型上（事件见 `Event`，读屏见「读文字」，标记见 `Marker`）。只依赖 Foundation 与 GhosttyVt，不碰 UIKit / AppKit / GhosttyKit。
 //
-// vt 的 C API 是 Ghostty `042b16b6` 时的版本（1.0 之前）：选项一次性传结构体、没有读画笔的接口，不能照官方 vt-1.0.0 的
-// 文档写。头文件在 `vendor/libghostty-spm/BinaryTarget/ghostty-vt.xcframework/*/Headers/ghostty/vt/`。vt 必须和 GhosttyKit 是同一棵打过补丁的
+// vt 的 C API 是 Ghostty `cf5519b2` 时的版本（1.0 之前）：formatter 的选项逐项 `ghostty_formatter_set`、结构体不再带 `size`，
+// 不能照官方 vt-1.0.0 的文档写，也不能照 `042b16b6` 那一版（选项整体传结构体）写。头文件在 `vendor/libghostty-spm/BinaryTarget/ghostty-vt.xcframework/*/Headers/ghostty/vt/`。vt 必须和 GhosttyKit 是同一棵打过补丁的
 // 源码树编的，影子和画面才一致（M4：576 个检查点 0 差异；前提是下面三条：默认开 mode 2027、resize 跟着 surface 的终端自己
 // 报的尺寸、回滚上限两边设成同一个值）。
 
@@ -207,7 +207,6 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         var usage = GhosttyTerminalMemoryUsage()
-        usage.size = MemoryLayout<GhosttyTerminalMemoryUsage>.size
         guard ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MEMORY_USAGE, &usage) == GHOSTTY_SUCCESS else { return 0 }
         return usage.primary_resident_bytes + usage.alternate_resident_bytes
     }
@@ -602,7 +601,10 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         var term: OpaquePointer?
         guard ghostty_terminal_new(nil, &term, cols(source), rows(source)) == GHOSTTY_SUCCESS, let scratch = term else { return false }
         defer { ghostty_terminal_free(scratch) }
-        ghostty_terminal_set(scratch, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, nil)   // NULL = 不限
+        // 不限要传 SIZE_MAX。Ghostty `cf5519b2` 起 NULL 是「恢复默认」（10,000 字节，实际一页），不再是不限：
+        // 传 NULL 的话长回滚在临时终端里被裁掉，总行数对不上，自查永远不过。
+        var unlimited = UInt.max   // size_t 的 SIZE_MAX
+        ghostty_terminal_set(scratch, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &unlimited)
         if graphemeClusters { setGraphemeClustersByDefault(scratch) }
         stream.withUnsafeBytes { raw in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
@@ -648,7 +650,6 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             let at = cursor(probe)
             write(probe, "X")
             var style = GhosttyStyle()
-            style.size = MemoryLayout<GhosttyStyle>.size
             ghostty_style_default(&style)
             var protected = false
             if var ref = gridRef(probe, x: at.x, y: UInt32(at.y)) {
@@ -695,30 +696,13 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
 
     /// formatter 的 VT 输出：活动屏（含回滚）、不去行尾空白、除调色板外的全部附加状态。`unwrap`：软折行并回一行。
     private static func appendFormatted(_ out: inout Data, _ terminal: OpaquePointer, unwrap: Bool) throws {
-        var options = GhosttyFormatterTerminalOptions()
-        options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
-        options.emit = GHOSTTY_FORMATTER_FORMAT_VT
-        options.unwrap = unwrap
-        options.trim = false
-        options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
-        options.extra.palette = false
-        options.extra.modes = true
-        options.extra.scrolling_region = true
-        options.extra.tabstops = true
-        options.extra.pwd = true
-        options.extra.keyboard = true
-        options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
-        options.extra.screen.cursor = true
-        options.extra.screen.style = true
-        options.extra.screen.hyperlink = true
-        options.extra.screen.protection = true
-        options.extra.screen.kitty_keyboard = true
-        options.extra.screen.charsets = true
-        options.selection = nil
         var formatter: OpaquePointer?
-        var result = ghostty_formatter_terminal_new(nil, &formatter, terminal, options)
+        var result = ghostty_formatter_terminal_new(nil, &formatter, terminal)
         guard result == GHOSTTY_SUCCESS, let formatter else { throw SnapshotError.format(result.rawValue) }
         defer { ghostty_formatter_free(formatter) }
+        result = configure(formatter, emit: GHOSTTY_FORMATTER_FORMAT_VT, unwrap: unwrap, trim: false,
+                           extras: GhosttyFormatterExtras(GHOSTTY_FORMATTER_EXTRAS_ALL) & ~GhosttyFormatterExtras(GHOSTTY_FORMATTER_EXTRA_PALETTE))
+        guard result == GHOSTTY_SUCCESS else { throw SnapshotError.format(result.rawValue) }
         var pointer: UnsafeMutablePointer<UInt8>?
         var length = 0
         result = ghostty_formatter_format_alloc(formatter, nil, &pointer, &length)
@@ -727,6 +711,19 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             out.append(pointer, count: length)
             ghostty_free(nil, pointer, length)
         }
+    }
+
+    /// formatter 的选项（Ghostty `cf5519b2` 起逐项 `ghostty_formatter_set`，不再在创建时整体传结构体）。
+    private static func configure(_ formatter: OpaquePointer, emit: GhosttyFormatterFormat, unwrap: Bool, trim: Bool,
+                                  extras: GhosttyFormatterExtras) -> GhosttyResult {
+        var emit = emit, unwrap = unwrap, trim = trim, extras = extras
+        let results = [
+            ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_EMIT, &emit),
+            ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap),
+            ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_TRIM, &trim),
+            ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_EXTRAS, &extras),
+        ]
+        return results.first { $0 != GHOSTTY_SUCCESS } ?? GHOSTTY_SUCCESS
     }
 
     private static func appendColorOverride(_ out: inout Data, _ terminal: OpaquePointer,
@@ -754,14 +751,17 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 能重建一个 `GhosttyStyle` 的 SGR（给 DECSC 存的画笔用）。
     private static func appendSGR(_ out: inout Data, _ style: GhosttyStyle) {
         var text = "\u{1B}[0"
-        let flags: [(Bool, Int)] = [(style.bold, 1), (style.italic, 3), (style.faint, 2), (style.blink, 5),
-                                    (style.inverse, 7), (style.invisible, 8), (style.strikethrough, 9), (style.overline, 53)]
-        for (on, code) in flags where on { text += ";\(code)" }
-        if style.underline != 0 { text += ";4:\(style.underline)" }
+        // `GhosttyStyle.flags` 的位（vt/style.h 里定死的布局；那几个 GHOSTTY_STYLE_FLAG_* 宏带类型转换，Swift 导不进来）：
+        // 0 粗、1 斜、2 淡、3 闪、4 反显、5 隐藏、6 删除线、7 上划线，8–10 下划线样式。
+        let bits = Int(style.flags)
+        let flags: [(Int, Int)] = [(0, 1), (1, 3), (2, 2), (3, 5), (4, 7), (5, 8), (6, 9), (7, 53)]
+        for (bit, code) in flags where bits & (1 << bit) != 0 { text += ";\(code)" }
+        let underline = (bits >> 8) & 0x7
+        if underline != 0 { text += ";4:\(underline)" }
         func color(_ base: Int, _ value: GhosttyStyleColor) {
-            if value.tag == GHOSTTY_STYLE_COLOR_PALETTE {
+            if Int(value.tag) == Int(GHOSTTY_STYLE_COLOR_PALETTE.rawValue) {
                 text += ";\(base):5:\(value.value.palette)"
-            } else if value.tag == GHOSTTY_STYLE_COLOR_RGB {
+            } else if Int(value.tag) == Int(GHOSTTY_STYLE_COLOR_RGB.rawValue) {
                 text += ";\(base):2::\(value.value.rgb.r):\(value.value.rgb.g):\(value.value.rgb.b)"
             }
         }
@@ -1168,7 +1168,6 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             point.tag = GHOSTTY_POINT_TAG_SCREEN
             point.value.coordinate = GhosttyPointCoordinate(x: x, y: UInt32(y))
             var ref = GhosttyGridRef()
-            ref.size = MemoryLayout<GhosttyGridRef>.size
             guard ghostty_terminal_grid_ref(terminal, point, &ref) == GHOSTTY_SUCCESS else { return nil }
             return ref
         }
@@ -1236,7 +1235,6 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         point.tag = tag
         point.value.coordinate = GhosttyPointCoordinate(x: x, y: y)
         var ref = GhosttyGridRef()
-        ref.size = MemoryLayout<GhosttyGridRef>.size
         guard ghostty_terminal_grid_ref(terminal, point, &ref) == GHOSTTY_SUCCESS else { return nil }
         return ref
     }
@@ -1265,23 +1263,18 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     private static func formatPlain(_ terminal: OpaquePointer, from start: GhosttyGridRef, to end: GhosttyGridRef,
                                     unwrap: Bool) -> String {
         var selection = GhosttySelection()
-        selection.size = MemoryLayout<GhosttySelection>.size
         selection.start = start
         selection.end = end
         selection.rectangle = false
         return withUnsafePointer(to: &selection) { selectionPointer in
-            var options = GhosttyFormatterTerminalOptions()
-            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
-            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.unwrap = unwrap
-            options.trim = true
-            options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
-            options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
-            options.selection = selectionPointer
             var formatter: OpaquePointer?
-            guard ghostty_formatter_terminal_new(nil, &formatter, terminal, options) == GHOSTTY_SUCCESS,
+            guard ghostty_formatter_terminal_new(nil, &formatter, terminal) == GHOSTTY_SUCCESS,
                   let formatter else { return "" }
             defer { ghostty_formatter_free(formatter) }
+            guard configure(formatter, emit: GHOSTTY_FORMATTER_FORMAT_PLAIN, unwrap: unwrap, trim: true,
+                            extras: GhosttyFormatterExtras(GHOSTTY_FORMATTER_EXTRAS_NONE)) == GHOSTTY_SUCCESS,
+                  ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, selectionPointer) == GHOSTTY_SUCCESS
+            else { return "" }
             var pointer: UnsafeMutablePointer<UInt8>?
             var length = 0
             guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,

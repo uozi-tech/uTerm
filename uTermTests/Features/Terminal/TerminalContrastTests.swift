@@ -85,15 +85,21 @@ final class TerminalContrastTests: XCTestCase {
         if let bg { sgr += "\u{1b}[48;2;\(bg.r);\(bg.g);\(bg.b)m" }
         let text = "\u{1b}[\(row + 1);1H\(sgr)████\u{1b}[0m"
         let cellBackground = bg ?? terminalBackground
-        // 等到这一格不再是底色（画出来了）。前景被钳成和底色一样是不可能的（那就没有对比度了）。
+        // 等到这一格既不是底色、也不再是写之前画面上的颜色（画出来了）。前景被钳成和底色一样是不可能的（那就没有对比度了）。
+        // 只看「不是底色」不够：这一格自带底色、或者刚切完深浅色时，写之前的那一帧里它是默认底色（浅色下 #FFFFFF），
+        // 同样不等于期望的底色，旧帧会被当成结果（换到 Ghostty cf5519b2 之后新帧晚到几毫秒，这样读错过）。
         // 刚切完深浅色时渲染器偶尔不为紧跟着的这次输出再出一帧：没等到就把同样的内容再写一遍（幂等），催它重画。
+        let before = rig.pixel(col: 1, row: row)
+        func isDrawn(_ p: RGB) -> Bool {
+            !near(p, cellBackground, tolerance: 2) && !(before.map { near(p, $0, tolerance: 0) } ?? false)
+        }
         var pixel: RGB?
         for _ in 0..<5 {
             await rig.feed(text)
-            pixel = await rig.waitForPixel(col: 1, row: row, timeout: 1) { !self.near($0, cellBackground, tolerance: 2) }
-            if let pixel, !near(pixel, cellBackground, tolerance: 2) { break }
+            pixel = await rig.waitForPixel(col: 1, row: row, timeout: 1) { isDrawn($0) }
+            if let pixel, isDrawn(pixel) { break }
         }
-        guard let pixel, !near(pixel, cellBackground, tolerance: 2) else {
+        guard let pixel, isDrawn(pixel) else {
             XCTFail("第 \(row + 1) 行没画出来（读到 \(describe(pixel))）；测试窗口被遮挡时引擎不出帧", file: file, line: line)
             return cellBackground
         }

@@ -759,8 +759,8 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         }
     }
 
-    /// 滚轮 / 触控板走的是另一个入口（`handleScrollWheelGesture:`，不回弹、不吸附）：它滚过之后镜像也要跟得上，
-    /// 接着用手指拖到顶照样落在真正的顶上。
+    /// 滚轮 / 触控板走的是另一个入口（`handleScrollWheelGesture:`，不回弹，停下后由 settler 吸附到整行）：它滚过之后
+    /// 系统滚动那边也要跟得上，接着用手指拖到顶照样落在真正的顶上。
     func testWheelScrollKeepsTheMirrorInStep() async throws {
         try await runWheelScrollKeepsTheMirrorInStep()
     }
@@ -778,7 +778,8 @@ final class GhosttyScrollEdgeTests: XCTestCase {
             rig.pan.fakeTranslation = CGPoint(x: 0, y: dy)
             _ = rig.view.perform(NSSelectorFromString("handleScrollWheelGesture:"), with: rig.pan)
         }
-        // 往回滚方向滚 7 步、每步 4⅓ pt（3x 屏上 13 px，共 91 px = 2 行 + 13 px；别的倍率按实际像素算）。滚轮不吸附，停在半行上。
+        // 往回滚方向滚 7 步、每步 4⅓ pt（3x 屏上 13 px，共 91 px = 2 行 + 13 px；别的倍率按实际像素算）。
+        // 滚轮停下 120 ms 后由上游的 settler 吸附到整行：停的那一刻还在动（最后一步 ≥ 3 px），顺着滚动方向补，不往回退。
         let stepPt: CGFloat = 4 + 1.0 / 3
         wheel(.began)
         for _ in 0..<7 { wheel(.changed, dy: stepPt); try await Task.sleep(for: .milliseconds(16)) }
@@ -788,9 +789,12 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         let state = rig.view.uTermScrollState
         let wheeled = Int((7 * stepPt * rig.scale).rounded())
         print(describe("wheel +\(wheeled)px", rig, shot))
-        XCTAssertEqual(state.row * cell + state.fractionPixels, 9 * cell - wheeled, accuracy: 1, "滚轮滚了 \(wheeled) px，镜像应当正好少这么多")
-        XCTAssertEqual(state.row, Int(rig.bar?.offset ?? 0), "镜像行号和引擎报的不一致")
-        XCTAssertEqual(try XCTUnwrap(rig.cleaned(shot.bands).first).height, cell - state.fractionPixels, accuracy: rig.tolerance, "画面上第一行露出的高度应当等于镜像算出来的")
+        let landed = (9 * cell - wheeled) / cell * cell
+        XCTAssertEqual(state.row * cell + state.fractionPixels, landed, accuracy: 1,
+                       "滚轮滚了 \(wheeled) px，停下后应当顺着滚动方向吸附到整行")
+        XCTAssertEqual(state.fractionPixels, 0, "滚轮停下后视口应当在整行上：\(state)")
+        XCTAssertEqual(state.row, Int(rig.bar?.offset ?? 0), "视口行号和引擎报的滚动条不一致")
+        XCTAssertEqual(try XCTUnwrap(rig.cleaned(shot.bands).first).height, cell - state.fractionPixels, accuracy: rig.tolerance, "画面上第一行露出的高度应当等于引擎报的位置算出来的")
         // 接着手指慢拖到顶、越过去、松手。
         try await drag(rig, stepPt: 5, extra: 8) { rig.view.uTermScrollState.overscrollPixels > 0 }
         rig.end(velocity: 0)
@@ -1042,7 +1046,7 @@ final class EdgeSystemFinger {
     /// 手指按下并拖起来。上一次松手的减速 / 回弹到此为止（UIKit 在按下时也是这样停的）。
     func begin() {
         if decelerator.isRunning { touchDown() }
-        view.scrollViewWillBeginDragging(scrollView)
+        view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
     }
 
     /// 手指挪 `dy` pt（正 = 往下，内容跟着下移）。
@@ -1057,21 +1061,21 @@ final class EdgeSystemFinger {
         // UIKit 的投影（.normal 减速率，每毫秒 0.998）：落点 = 现在的位置 − 速度 × 0.998 / 0.002，再夹进范围。
         let projected = velocity / 1000 * 0.998 / 0.002
         var target = CGPoint(x: 0, y: min(max(0, current - projected), maxOffset))
-        view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -velocity / 1000), targetContentOffset: &target)
+        view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: CGPoint(x: 0, y: -velocity / 1000), targetContentOffset: &target)
         let decelerates = abs(velocity) > 0 || outOfRange
-        view.scrollViewDidEndDragging(scrollView, willDecelerate: decelerates)
+        view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: decelerates)
         if decelerates {
-            decelerator.run(scrollView, to: target.y, seconds: seconds) { [view, scrollView] in view.scrollViewDidEndDecelerating(scrollView) }
+            decelerator.run(scrollView, to: target.y, seconds: seconds) { [view, scrollView] in view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
         }
     }
 
     /// 手势被系统打断。
     func cancel() {
         let outOfRange = isOutOfRange
-        view.scrollViewDidEndDragging(scrollView, willDecelerate: outOfRange)
+        view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: outOfRange)
         if outOfRange {
             decelerator.run(scrollView, to: min(max(0, scrollView.contentOffset.y), maxOffset)) { [view, scrollView] in
-                view.scrollViewDidEndDecelerating(scrollView)
+                view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView)
             }
         }
     }

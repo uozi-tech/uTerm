@@ -8,7 +8,7 @@
 #   fetch-ghostty-engine.sh --check      只核对，不改任何东西；不是最新就非零退出
 #   fetch-ghostty-engine.sh --print KEY  打印清单里某一项的值（例如 engine_version）
 #
-# zip 从哪来：默认 <workspace>/uTerm-ghostty-artifacts/2026-11-09，环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from 可改。
+# zip 从哪来：默认 <workspace>/uTerm-ghostty-artifacts/2026-11-15，环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from 可改。
 # 清单里的 download_base 现在只是待办（还没上传），这里不联网。
 # 测试用：--lock PATH 换清单，--dest PATH 换输出目录。
 set -euo pipefail
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCK="$REPO_ROOT/vendor/libghostty-spm/ENGINE.lock"
 DEST="$REPO_ROOT/vendor/libghostty-spm/BinaryTarget"
-FROM="${UTERM_GHOSTTY_ARTIFACTS:-<workspace>/uTerm-ghostty-artifacts/2026-11-09}"
+FROM="${UTERM_GHOSTTY_ARTIFACTS:-<workspace>/uTerm-ghostty-artifacts/2026-11-15}"
 MODE=fetch
 PRINT_KEY=
 

@@ -1,11 +1,12 @@
-uTerm minimum contrast for GhosttyKit (libghostty-spm patch 0022)
+uTerm minimum contrast for GhosttyKit (libghostty-spm patch 0023)
 
-Drop this file into libghostty-spm's Patches/ghostty/ (after 0021); build.sh
-applies it with `git apply` on every target. It is cut against the tree with
-0001-0021 applied (generic.zig is also touched by 0015), Ghostty 042b16b6.
+Drop this file into libghostty-spm's Patches/ghostty/ (after upstream's 0022);
+build.sh applies it with `git apply` on every target. It is cut against
+libghostty-spm 2.2.2026111501 with 0001-0022 applied, Ghostty cf5519b22f91
+(generic.zig and shaders.metal are also touched by upstream's 0015 and 0022).
+Until 2.2.2026111501 this was patch 0022, cut against Ghostty 042b16b6.
 
-What it does (matches vendor/SwiftTerm .../MinimumContrast.swift and
-UTERM-PATCHES.md §1):
+What it does (UTERM-PATCHES.md, "保色相的最低对比度"):
   - shaders.metal contrasted_color: hue-preserving OKLCH lightness search
     toward the WCAG target, direction by background luminance, opposite
     direction as fallback, chroma capped by the original and the sRGB gamut.
@@ -20,18 +21,36 @@ UTERM-PATCHES.md §1):
 Use with `minimum-contrast = 3` in the surface config. Measurements:
 docs/ghostty-eval/measure-build-consistency.md (M13).
 
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 050a8f1bccd4f7be053455b25d48e9ba41d5d22b..25ba3fdc5fc569ff65f7b7a561a12f8c2455b184 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -3523,7 +3523,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                     },
+ 
+                     // Not selected
+-                    .false => if (style.flags.inverse != isCovering(cell.codepoint()))
++                    // uTerm (patch 0023): with a minimum contrast the covering
++                    // swap is off. It makes a full block's cell background its
++                    // own fg, so the shader would clamp the glyph against itself
++                    // instead of against the real background (padding extension
++                    // then uses the real background for those cells).
++                    .false => if (style.flags.inverse != (isCovering(cell.codepoint()) and self.config.min_contrast <= 1.0))
+                         // Two cases cause us to invert (use the fg color as the bg)
+                         // - The "inverse" style flag.
+                         // - A "covering" glyph; we use fg for bg in that
 diff --git a/src/renderer/shaders/shaders.metal b/src/renderer/shaders/shaders.metal
-index 4e02b63..a7ae237 100644
+index c90077780796550cc6ed66a1cabc145229d90949..3f3deeff32fbf16db5fe07bbed027d57ddb30fbe 100644
 --- a/src/renderer/shaders/shaders.metal
 +++ b/src/renderer/shaders/shaders.metal
-@@ -102,25 +102,121 @@ float contrast_ratio(float3 color1, float3 color2) {
+@@ -104,25 +104,121 @@ float contrast_ratio(float3 color1, float3 color2) {
    return (max(l1, l2) + 0.05f) / (min(l1, l2) + 0.05f);
  }
  
 -// Return the fg if the contrast ratio is greater than min, otherwise
 -// return a color that satisfies the contrast ratio. Currently, the color
 -// is always white or black, whichever has the highest contrast ratio.
-+// uTerm: minimum contrast that keeps the hue (libghostty-spm patch 0022).
++// uTerm: minimum contrast that keeps the hue (libghostty-spm patch 0023).
  //
 -// Takes colors in linear RGB space. If your colors are gamma
 -// encoded, linearize them before using them with this function.
@@ -45,8 +64,8 @@ index 4e02b63..a7ae237 100644
 -    } else {
 -      return float4(0.0f, 0.0f, 0.0f, 1.0f);
 +// Upstream jumps to white or black, which bleaches a colored prompt segment.
-+// This is uTerm's algorithm (vendor/SwiftTerm .../MinimumContrast.swift,
-+// TerminalContrast.ensureContrast), ported 1:1:
++// This is uTerm's algorithm, ported 1:1 from its previous terminal engine
++// (TerminalContrast.ensureContrast, removed with that engine):
 +//
 +//   - WCAG 2.x luminance and contrast ratio, in linear sRGB;
 +//   - the direction keys off the background (lighten on bg luminance < 0.5,
@@ -161,7 +180,7 @@ index 4e02b63..a7ae237 100644
  }
  
  // Load a 4 byte RGBA non-premultiplied color and linearize
-@@ -650,7 +746,12 @@ vertex CellTextVertexOut cell_text_vertex(
+@@ -694,7 +790,12 @@ vertex CellTextVertexOut cell_text_vertex(
    // If we have a minimum contrast, we need to check if we need to
    // change the color of the text to ensure it has enough contrast
    // with the background.
@@ -175,21 +194,3 @@ index 4e02b63..a7ae237 100644
      // Ensure our minimum contrast
      out.color = contrasted_color(uniforms.min_contrast, out.color, out.bg_color);
    }
-diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
-index 2e4dc84..1165df6 100644
---- a/src/renderer/generic.zig
-+++ b/src/renderer/generic.zig
-@@ -3474,7 +3474,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
-                     },
- 
-                     // Not selected
--                    .false => if (style.flags.inverse != isCovering(cell.codepoint()))
-+                    // uTerm (patch 0022): with a minimum contrast the covering
-+                    // swap is off. It makes a full block's cell background its
-+                    // own fg, so the shader would clamp the glyph against itself
-+                    // instead of against the real background (padding extension
-+                    // then uses the real background for those cells).
-+                    .false => if (style.flags.inverse != (isCovering(cell.codepoint()) and self.config.min_contrast <= 1.0))
-                         // Two cases cause us to invert (use the fg color as the bg)
-                         // - The "inverse" style flag.
-                         // - A "covering" glyph; we use fg for bg in that

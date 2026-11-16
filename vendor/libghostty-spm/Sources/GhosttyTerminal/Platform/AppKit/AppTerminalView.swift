@@ -24,8 +24,7 @@
         var pointer: PointerSelectionState = .init()
         var focusBridge: FocusBridgeState = .init()
         var drop: DropState = .init()
-        // uTerm 本地补丁：触控板平滑滚动的镜像与吸附（见 AppTerminalView+SmoothScroll.swift）。
-        var smoothScroll: SmoothScrollState = .init()
+        var directTouch: DirectTouchState = .init()
         /// uTerm 本地补丁：宿主放掉了 surface（`uTermReleaseSurface()`），回窗口、布局都不自己重建。
         var uTermSurfaceReleased = false
         /// uTerm 本地补丁：把所在显示器报给引擎的记录（见 AppTerminalView+DisplayID.swift）。
@@ -89,6 +88,7 @@
             inputHandler = TerminalKeyEventHandler(view: self)
             setupTrackingArea()
             setupDropInput()
+            setupDirectTouchInput()
 
             // uTerm 本地补丁：放掉 surface 期间不算挂着（不自己重建）。
             core.isAttached = { [weak self] in
@@ -142,7 +142,7 @@
         open func selectionContextMenu() -> NSMenu {
             let menu = NSMenu()
             let copyItem = NSMenuItem(
-                title: String(localized: "Copy", bundle: .module),
+                title: String(localized: "Copy", bundle: .ghosttyTerminal),
                 action: #selector(copy(_:)),
                 keyEquivalent: "",
             )

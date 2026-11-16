@@ -13,7 +13,8 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         qos: .userInitiated,
     )
     private let write: Write
-    /// uTerm 本地补丁：回放用的写入口（`ghostty_surface_write_buffer_replay`）。
+    /// The write that parses without answering
+    /// (`ghostty_surface_write_buffer_replay`).
     private let replay: Write
     private let processExit: ProcessExit
     private let tick: Tick
@@ -133,8 +134,10 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         backlogChange?()
     }
 
-    /// uTerm 本地补丁：把一段重建出来的历史排进同一条队列（和实时输出保持先后），轮到它时用不产生应答的入口交给
-    /// surface。没挂 surface 时也排着等，不受离线 1 MiB 上限裁剪。
+    /// Queues reconstructed history behind everything received so far, so it
+    /// keeps its place among the live writes. Never coalesced into a write
+    /// and never trimmed: with no surface attached it waits whole for the
+    /// next one.
     func enqueueReplay(_ data: Data) {
         condition.lock()
         operations.append(.replay(data))
@@ -146,7 +149,8 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         backlogChange?()
     }
 
-    /// uTerm 本地补丁：丢掉所有还没交给 surface 的输出，返回丢了多少字节。已经交出去、正在解析的那一块不受影响。
+    /// Drops the output still queued, attached or not, and returns its byte
+    /// count. A write a surface is already parsing runs to its end.
     @discardableResult
     func discardPendingOutput() -> Int {
         condition.lock()
@@ -180,7 +184,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         condition.unlock()
     }
 
-    /// Bytes received and not yet handed to a surface.
+    /// Bytes received and not yet handed to a surface, live and replayed.
     var pendingByteCount: Int {
         condition.lock()
         defer { condition.unlock() }

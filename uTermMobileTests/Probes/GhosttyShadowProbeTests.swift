@@ -57,7 +57,6 @@ final class GhosttyShadowProbeTests: XCTestCase {
         /// primary + alternate 的常驻字节（页），不含 Kitty 图片。
         var residentBytes: UInt64 {
             var usage = GhosttyTerminalMemoryUsage()
-            usage.size = MemoryLayout<GhosttyTerminalMemoryUsage>.size
             guard ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MEMORY_USAGE, &usage) == GHOSTTY_SUCCESS else { return 0 }
             return usage.primary_resident_bytes + usage.alternate_resident_bytes
         }

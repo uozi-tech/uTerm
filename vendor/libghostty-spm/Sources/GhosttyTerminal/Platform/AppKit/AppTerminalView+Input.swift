@@ -138,6 +138,9 @@
 
         override open func mouseDown(with event: NSEvent) {
             window?.makeFirstResponder(self)
+            // Hit testing counts whole rows: a viewport smooth scrolling
+            // left between two is brought to one before the click lands.
+            core.scrollSettler.settleNow()
             let (x, y) = mousePoint(from: event)
             let mods = TerminalInputModifiers(from: event.modifierFlags)
             pointer.pendingSelectionMenuPoint = nil
@@ -162,6 +165,7 @@
 
         override open func rightMouseDown(with event: NSEvent) {
             window?.makeFirstResponder(self)
+            core.scrollSettler.settleNow()
             let (x, y) = mousePoint(from: event)
             let mods = TerminalInputModifiers(from: event.modifierFlags)
             surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
@@ -202,6 +206,7 @@
 
         override open func otherMouseDown(with event: NSEvent) {
             window?.makeFirstResponder(self)
+            core.scrollSettler.settleNow()
             let (x, y) = mousePoint(from: event)
             let mods = TerminalInputModifiers(from: event.modifierFlags)
             surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
@@ -251,8 +256,27 @@
         }
 
         override open func scrollWheel(with event: NSEvent) {
-            // uTerm 本地补丁：精确位移按屏幕倍率换成像素、停手后吸附整行（见 AppTerminalView+SmoothScroll.swift）。
-            handleScrollWheel(event)
+            smoothScrollWillScroll(event)
+            defer { smoothScrollDidScroll(event) }
+            let scrollMods = TerminalScrollModifiers(
+                precision: event.hasPreciseScrollingDeltas,
+                momentum: TerminalScrollModifiers.momentumFrom(phase: event.momentumPhase),
+            )
+            // A precise delta is in view points and Ghostty reads it as
+            // pixels (`TerminalScrollDistance`). A wheel notch is a line
+            // count and takes no scale.
+            var delta = CGPoint(x: event.scrollingDeltaX, y: event.scrollingDeltaY)
+            if event.hasPreciseScrollingDeltas {
+                delta = TerminalScrollDistance.scrollPixels(
+                    for: delta,
+                    displayScale: CGFloat(currentScaleFactor()),
+                )
+            }
+            surface?.sendMouseScroll(
+                x: Double(delta.x),
+                y: Double(delta.y),
+                mods: scrollMods.rawValue,
+            )
         }
 
         private func showSelectionCopyMenu(with event: NSEvent) {

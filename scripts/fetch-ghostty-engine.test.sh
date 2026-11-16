@@ -124,12 +124,12 @@ if [ -f "$real" ]; then
 		v="$("$FETCH" --lock "$real" --print "$key")"
 		[[ "$v" =~ ^[0-9a-f]{64}$ ]] && ok "$key 是 64 位十六进制" || bad "$key 形状不对：$v"
 	done
-	swift_file="$REPO_ROOT/uTerm/Features/Terminal/Shadow/TerminalEngine.swift"
+	swift_file="$REPO_ROOT/uTerm/Features/Terminal/Shadow/TerminalEngineVersion.swift"
 	want="$("$FETCH" --lock "$real" --print engine_version)"
 	if grep -qF "static let current = \"$want\"" "$swift_file"; then
 		ok "engine_version 与 TerminalEngineVersion.current 一致"
 	else
-		bad "engine_version（$want）与 TerminalEngine.swift 里的 TerminalEngineVersion.current 不一致"
+		bad "engine_version（$want）与 TerminalEngineVersion.swift 里的 TerminalEngineVersion.current 不一致"
 	fi
 	if grep -qE '^download_base=' "$real"; then bad "download_base 还没上传，应当保持注释状态"; else ok "download_base 仍是注释（没上传，不下载）"; fi
 else

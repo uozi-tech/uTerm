@@ -182,7 +182,7 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
 
         /// 往一个方向拖（pt/s，正 = 内容往下 = 往回滚顶），拖过边 0.2 s 后松手，带速度时走减速，最后弹回。
         func gesture(_ label: String, speed: Double, release: Double) async {
-            view.scrollViewWillBeginDragging(scrollView)
+            view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
             recorder.group += 1
             recorder.phase = "\(label)-drag"
             var elapsed = 0.0
@@ -198,11 +198,11 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
             }
             let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
             var target = CGPoint(x: 0, y: min(max(0, scrollView.contentOffset.y - CGFloat(release) / 1000 * 0.998 / 0.002), maxOffset))
-            view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -release / 1000), targetContentOffset: &target)
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: true)
+            view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: CGPoint(x: 0, y: -release / 1000), targetContentOffset: &target)
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: true)
             recorder.group += 1
             recorder.phase = "\(label)-release"
-            decel.run(scrollView, to: target.y) { view.scrollViewDidEndDecelerating(scrollView) }
+            decel.run(scrollView, to: target.y) { view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
             try? await Task.sleep(for: .milliseconds(700))
             recorder.phase = "idle"
         }
@@ -212,16 +212,16 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         // 中段甩：不拖到边，松手带速度。
         _ = view.surface?.scrollToRow(300)
         try await Task.sleep(for: .milliseconds(400))
-        view.scrollViewWillBeginDragging(scrollView)
+        view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
         recorder.group += 1
         recorder.phase = "fling-mid-drag"
         var elapsed = 0.0
         await ticker.run { dt in scrollView.contentOffset.y -= CGFloat(2000 * dt); elapsed += dt; return elapsed < 0.15 }
         var target = CGPoint(x: 0, y: scrollView.contentOffset.y - 2000 / 1000 * 0.998 / 0.002)
-        view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -2), targetContentOffset: &target)
-        view.scrollViewDidEndDragging(scrollView, willDecelerate: true)
+        view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: CGPoint(x: 0, y: -2), targetContentOffset: &target)
+        view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: true)
         recorder.phase = "fling-mid-glide"
-        decel.run(scrollView, to: target.y) { view.scrollViewDidEndDecelerating(scrollView) }
+        decel.run(scrollView, to: target.y) { view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
         try await Task.sleep(for: .milliseconds(700))
         recorder.phase = "idle"
 
@@ -275,7 +275,7 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         for speed in [600.0, 2400.0] {           // pt/s
             _ = view.surface?.scrollToRow(40)
             try await Task.sleep(for: .milliseconds(300))
-            view.scrollViewWillBeginDragging(scrollView)
+            view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
             recorder.group += 1
             recorder.phase = "drag-mid@\(Int(speed))"
             var crossed = false
@@ -292,11 +292,11 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
                 return inBand < 0.25
             }
             var target = CGPoint.zero
-            view.scrollViewWillEndDragging(scrollView, withVelocity: .zero, targetContentOffset: &target)
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: true)
+            view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: .zero, targetContentOffset: &target)
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: true)
             recorder.group += 1
             recorder.phase = "bounce-top@\(Int(speed))"
-            decel.run(scrollView, to: target.y) { view.scrollViewDidEndDecelerating(scrollView) }
+            decel.run(scrollView, to: target.y) { view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
             try await Task.sleep(for: .milliseconds(700))
             recorder.phase = "idle"
         }
@@ -312,7 +312,7 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
             _ = view.surface?.scrollToRow(UInt(max(0, 600 - host.grid.rows - 30)))
             try await Task.sleep(for: .milliseconds(400))
             let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
-            view.scrollViewWillBeginDragging(scrollView)
+            view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
             recorder.group += 1
             recorder.phase = "drag-mid-down@\(Int(speed))"
             var crossed = false
@@ -328,11 +328,11 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
                 return inBand < 0.25
             }
             var target = CGPoint(x: 0, y: maxOffset)
-            view.scrollViewWillEndDragging(scrollView, withVelocity: .zero, targetContentOffset: &target)
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: true)
+            view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: .zero, targetContentOffset: &target)
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: true)
             recorder.group += 1
             recorder.phase = "bounce-bottom@\(Int(speed))"
-            decel.run(scrollView, to: target.y) { view.scrollViewDidEndDecelerating(scrollView) }
+            decel.run(scrollView, to: target.y) { view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
             try await Task.sleep(for: .milliseconds(700))
             recorder.phase = "idle"
         }
@@ -357,12 +357,12 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         var catchSamples: [Sample] = []
         for attempt in 0..<4 {
-            view.scrollViewWillBeginDragging(scrollView)
+            view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
             // 往活动区拖半行多一点再松手：落点离下一行更近，对齐动画往活动区走，接着手指往反方向拖。
             scrollView.contentOffset.y += CGFloat(cell.height) * 0.7 / CGFloat(scale)
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: false)
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: false)
             try await Task.sleep(for: .milliseconds(30 + attempt * 25))
-            view.scrollViewWillBeginDragging(scrollView)
+            view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
             recorder.group += 1
             recorder.phase = "catch-align#\(attempt)"
             var elapsed = 0.0
@@ -373,8 +373,8 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
             }
             recorder.phase = "idle"
             var target = scrollView.contentOffset
-            view.scrollViewWillEndDragging(scrollView, withVelocity: .zero, targetContentOffset: &target)
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: false)
+            view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: .zero, targetContentOffset: &target)
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: false)
             try await Task.sleep(for: .milliseconds(500))
             catchSamples += recorder.samples
             recorder.samples.removeAll()
@@ -383,7 +383,6 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         print("JITTER 对齐动画中接着拖 头 24 帧：" + catchSamples.prefix(24).map {
             String(format: "%@ e=%.0f t=%.0f v=%.0f o=%.1f", $0.phase, $0.engine, $0.translation, $0.visible, $0.offset)
         }.joined(separator: " | "))
-        let writes = UTermScrollTrace.drain().filter { $0.kind == "sv-write" }.map { Int($0.value) }
 
         func line(_ r: [String: (count: Int, max: Double)]) -> String {
             r.isEmpty ? "无" : r.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.count)次/最大\(String(format: "%.0f", $0.value.max))px" }.joined(separator: " ")
@@ -395,7 +394,6 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
         print("JITTER 底部弹回 往回走：\(line(bounceBottom))")
         print("JITTER 中段滑行 往回走：\(line(glide))")
         print("JITTER 对齐动画中接着拖 往回走：\(line(caught))")
-        print("JITTER 我们主动写的次数（原因码→次数）：\(Dictionary(grouping: writes, by: { $0 }).mapValues(\.count).sorted { $0.key < $1.key })")
         // 跨进回弹那几帧：逐帧打出来看（引擎位置、平移、看得见的位置、滚动视图位置）。
         for samples in [topSamples, bottomSamples] {
             if let index = samples.firstIndex(where: { $0.phase.hasPrefix("cross") && $0.phase.hasSuffix("2400") }) {

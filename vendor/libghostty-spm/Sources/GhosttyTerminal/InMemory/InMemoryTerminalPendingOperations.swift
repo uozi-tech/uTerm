@@ -9,7 +9,8 @@ import Foundation
 struct InMemoryTerminalPendingOperations {
     enum Operation {
         case write(Data)
-        /// uTerm 本地补丁：重建出来的历史（`receiveReplay`），交给 surface 时不产生应答。
+        /// Reconstructed history: handed to the surface through the entry
+        /// that parses it without answering its queries.
         case replay(Data)
         case processExit(exitCode: UInt32, runtimeMilliseconds: UInt64)
         /// uTerm 本地补丁：排在这之前的输出都交给 surface 解析完了，在输出队列上调一下（`afterPendingOutput`）。
@@ -28,8 +29,9 @@ struct InMemoryTerminalPendingOperations {
     private var head = 0
     private(set) var count = 0
     private(set) var writeByteCount = 0
-    /// uTerm 本地补丁：排着的回放字节。单独记：离线上限（`trimWrites`）只管实时输出，不能因为
-    /// 排着一段大回放就把后面的实时输出裁掉。
+    /// Replay bytes are counted apart from live writes: the detached cap
+    /// (`trimWrites`) bounds live output only, so a large replay waiting for
+    /// a surface neither gets cut nor pushes the live output behind it out.
     private(set) var replayByteCount = 0
     /// Numbers every append, so a waiter can tell when everything appended
     /// before it has left the queue — handed over or trimmed away.
@@ -78,7 +80,7 @@ struct InMemoryTerminalPendingOperations {
             case let .replay(data): replayByteCount -= data.count
             case .processExit, .marker: break
             }
-            retiredSequence = entry.sequence
+            retiredSequence = max(retiredSequence, entry.sequence)
             compact()
             return entry.operation
         }
@@ -86,7 +88,8 @@ struct InMemoryTerminalPendingOperations {
         return nil
     }
 
-    /// Drops the oldest queued bytes past `limit`; process exits are kept.
+    /// Drops the oldest queued live bytes past `limit`; replays and process
+    /// exits are kept.
     mutating func trimWrites(toLimit limit: Int) {
         var excess = writeByteCount - limit
         var index = head

@@ -31,11 +31,4 @@ final class TerminalWakeupGate: @unchecked Sendable {
         isScheduled = false
         lock.unlock()
     }
-
-    /// uTerm 本地补丁：有没有一次 tick 还排在主队列里没跑。没有 = 引擎到现在为止发的消息（滚动条回报在内）都已经处理过。
-    var isPending: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return isScheduled
-    }
 }

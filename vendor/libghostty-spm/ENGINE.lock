@@ -8,25 +8,25 @@
 #      两端的 TerminalEngineLockTests 拦着）。
 
 # 引擎版本串：Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控握手和 holder 检查点靠它判断是不是同一个引擎。
-engine_version=ghostty-042b16b6+p0023/snapshot-1
+engine_version=ghostty-cf5519b2+p0023/snapshot-1
 
 # 来源（只是记录，脚本不读）。
-libghostty_spm_tag=2.2.2026110702
-libghostty_spm_commit=1d84cf66
-ghostty_commit=042b16b6146ada29877dfeeea9f286889e4adeb1
+libghostty_spm_tag=2.2.2026111501
+libghostty_spm_commit=4220412e
+ghostty_commit=cf5519b22f910ddc7885d2ef62deb94d38d43f22
 zig_version=0.17.0
 
-# GhosttyKit（完整的 libghostty：解析 + 渲染）。21 个上游补丁 + 0022 最低对比度 + 0023 逐像素平滑滚动。
-ghosttykit_zip=GhosttyKit-0023.xcframework.zip
-ghosttykit_sha256=5cf2e5d9975a6ce62ae5d0af2a21f752568817d3130a5ec6548181513f768c98
+# GhosttyKit（完整的 libghostty：解析 + 渲染）。22 个上游补丁（0022 是逐像素平滑滚动）+ 0023 最低对比度。
+ghosttykit_zip=GhosttyKit-cf5519b2-0023.xcframework.zip
+ghosttykit_sha256=5bdd732e673ea5a51503344bc6790f7fa0354fff584f82c1e137e1a0418a6d39
 ghosttykit_dir=GhosttyKit.xcframework
 
 # libghostty-vt（影子终端）。和 GhosttyKit 同一棵打过补丁的源码树编的，每个 slice 预链接、只导出 ghostty_*。
-ghosttyvt_zip=ghostty-vt.xcframework.zip
-ghosttyvt_sha256=45e5f5670c9b7ea9adc7edd0d4156ffdc0d7362f3753f69e9db11167b8e40011
+ghosttyvt_zip=ghostty-vt-cf5519b2-0023.xcframework.zip
+ghosttyvt_sha256=874dacd6aef77d6713643e51ae8687301552b56819d74cb183c6f3b8ce14f328
 ghosttyvt_dir=ghostty-vt.xcframework
 
 # 待办：两个 zip 还没有上传。上传之后的地址是 <download_base>/<zip 文件名>，对象传上去就不再覆盖（换二进制 = 换文件名）。
-# 现在脚本只从本地目录取（默认 <workspace>/uTerm-ghostty-artifacts/2026-11-09，环境变量 UTERM_GHOSTTY_ARTIFACTS 可改），
+# 现在脚本只从本地目录取（默认 <workspace>/uTerm-ghostty-artifacts/2026-11-15，环境变量 UTERM_GHOSTTY_ARTIFACTS 可改），
 # 不读这一项、也不联网。
 # download_base=https://downloads.example.com/uTerm/ghostty

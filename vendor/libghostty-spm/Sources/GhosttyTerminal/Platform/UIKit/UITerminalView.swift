@@ -28,10 +28,9 @@
         var focusBridge: FocusBridgeState = .init()
         var textInputBridge: TextInputBridgeState = .init()
         var touchSelection: TouchSelectionState = .init()
+        var fontZoom: FontZoomState = .init()
         #if !targetEnvironment(macCatalyst)
             var softwareKeyboard: SoftwareKeyboardState = .init()
-            var fontZoom: FontZoomState = .init()
-            /// uTerm 本地补丁：单指滚动交给 UIScrollView（见 +SystemScroll）。
             var systemScroll: SystemScrollState = .init()
         #endif
         /// uTerm 本地补丁：宿主把 surface 放掉了（见 +UTermHost）。放掉期间视图照常挂着，只是不重建 surface。
@@ -171,7 +170,7 @@
                 dismissTouchSelection()
             }
             #if !targetEnvironment(macCatalyst)
-                // uTerm 本地补丁：不显示的终端（后台标签）不接系统滚动的手势。
+                // A surface that is not drawn takes no scroll gesture.
                 systemScroll.driver?.panGestureRecognizer.isEnabled = visible
             #endif
             core.setDisplayVisible(visible)
@@ -236,17 +235,11 @@
                     self?.systemScrollSyncFromEngine()
                 #endif
             }
-            // uTerm 本地补丁：滚动条回报一到就让系统滚动那边的 contentSize / contentOffset 跟上引擎。
-            core.bridge.onScrollbarChange = { [weak self] in
-                #if !targetEnvironment(macCatalyst)
-                    guard let self else { return }
-                    if let bar = core.bridge.scrollbar {
-                        UTermScrollTrace.signpostEngineBar(offset: bar.offset, total: bar.total, len: bar.len,
-                                                           modelRow: momentumScroll.modelRow, modelFrac: momentumScroll.modelFrac)
-                    }
-                    systemScrollBarChanged()
-                #endif
-            }
+            #if !targetEnvironment(macCatalyst)
+                core.bridge.onScrollbarChange = { [weak self] in
+                    self?.systemScrollBarChanged()
+                }
+            #endif
             core.onMouseShape = { [weak self] shape in
                 self?.applyMouseShape(shape)
             }
@@ -374,7 +367,7 @@
 
         open func selectionContextMenuElements() -> [UIMenuElement] {
             let copy = UIAction(
-                title: String(localized: "Copy", bundle: .module),
+                title: String(localized: "Copy", bundle: .ghosttyTerminal),
                 image: UIImage(systemName: "doc.on.doc"),
             ) { [weak self] _ in
                 self?.copySelectedTextToPasteboard()

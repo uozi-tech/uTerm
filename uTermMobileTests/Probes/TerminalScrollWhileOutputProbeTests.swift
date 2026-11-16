@@ -189,7 +189,7 @@ final class TerminalScrollWhileOutputProbeTests: XCTestCase {
             step += 1
         }
         // 手指按下：从这里到 didEndDragging，终端不该自己写 contentOffset（来了输出也不把视口拽回底部）。
-        view.scrollViewWillBeginDragging(scrollView)
+        view.uTermSystemScrollDelegate?.scrollViewWillBeginDragging?(scrollView)
         GhosttyPresentLog.reset()
         let threads0 = ThreadCPU.snapshot()
         let mainID = ThreadCPU.currentThreadID()
@@ -214,7 +214,7 @@ final class TerminalScrollWhileOutputProbeTests: XCTestCase {
         where presents.filter({ $0 >= a && $0 < b }).count > 1 { multi += 1 }
         // 手指拖回底部再抬起，等对齐收尾。
         scrollView.contentOffset = CGPoint(x: 0, y: bottom)
-        view.scrollViewDidEndDragging(scrollView, willDecelerate: false)
+        view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: false)
         rig.layout()
         try await Task.sleep(for: .milliseconds(400))
         return Reading(label: label, ticks: counter.ticks, intervals: counter.intervals, work: counter.workMS,
