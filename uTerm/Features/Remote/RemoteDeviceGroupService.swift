@@ -7,8 +7,9 @@ import Observation
 /// `RemoteGroupJoinSheet`）；新设备核对通过后的回执、补签、移除也在后台照常推进。全 App 只有这一个
 /// `RemoteDeviceGroup`：两个实例会各自记一份「我在等谁的 Ta」，互相清掉对方回出去的记录。
 ///
-/// 轮询间隔：有页面开着、本机在显示核对码、有别的设备想加入、本机在等别的设备的下一步（`isAwaitingOthers`）时
-/// 2 秒，否则 10 秒（读一次名册是一次本地钥匙串查询）。Mac 一直跑；iOS 只在前台跑（`start` / `stop` 跟着前后台）。
+/// 轮询间隔：有页面开着、本机在显示核对码、有别的设备想加入、本机在等别的设备的下一步（`isAwaitingOthers`）、
+/// 组里的 Mac 在开通（刚进组的 10 分钟、本机正在替组员问 Mac，`isOpeningHosts`）时 2 秒，否则 10 秒（读一次名册是一次
+/// 本地钥匙串查询）。Mac 一直跑；iOS 只在前台跑（`start` / `stop` 跟着前后台，`stop` 时取消还在问 Mac 的请求）。
 @MainActor
 @Observable
 final class RemoteDeviceGroupService {
@@ -21,7 +22,7 @@ final class RemoteDeviceGroupService {
     private(set) var hiddenRequests: [UUID: RemoteDeviceGroup.JoinRequest.Status] = [:]
 
     @ObservationIgnored private let makeModel: (_ createsIdentity: Bool) -> RemoteDeviceGroup?
-    /// 本机配对过的 Mac。G1b 只是拿着：替组员开通（G2）要用。
+    /// 本机配对过的 Mac，交给模型（`RemoteDeviceGroup.hosts`）：发 `host`、替组员开通、收别人替本机开通的结果。
     @ObservationIgnored private(set) weak var hosts: (any RemoteGroupHostAccess)?
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var wake: CheckedContinuation<Void, Never>?
@@ -36,6 +37,7 @@ final class RemoteDeviceGroupService {
     /// 开始后台轮询。重复调用无害。
     func start(hosts: any RemoteGroupHostAccess) {
         self.hosts = hosts
+        handHosts()
         guard loop == nil else { return }
         loop = Task { [weak self] in
             while !Task.isCancelled {
@@ -50,6 +52,7 @@ final class RemoteDeviceGroupService {
     func stop() {
         loop?.cancel()
         loop = nil
+        model?.cancelHostWork()
         wakeUp()
     }
 
@@ -57,6 +60,7 @@ final class RemoteDeviceGroupService {
     @discardableResult
     func ensureModel() -> RemoteDeviceGroup? {
         if model == nil { model = makeModel(true) }
+        handHosts()
         refresh()
         return model
     }
@@ -118,14 +122,21 @@ final class RemoteDeviceGroupService {
 
     static func isBusy(demand: Int, model: RemoteDeviceGroup?) -> Bool {
         guard let model else { return demand > 0 }
-        if demand > 0 || model.isAwaitingOthers { return true }
+        if demand > 0 || model.isAwaitingOthers || model.isOpeningHosts { return true }
         if case .showingCode = model.joinState { return true }
         return model.joinRequests.contains { $0.status != .admitted }
     }
 
     func tick() {
         if model == nil { model = makeModel(false) }
+        handHosts()
         refresh()
+    }
+
+    /// 把本机配对过的 Mac 交给模型。还没 `start` 时不动它（不拿 nil 冲掉别处交进去的）。
+    private func handHosts() {
+        guard let hosts, let model, model.hosts !== hosts else { return }
+        model.hosts = hosts
     }
 
     private func refresh() {

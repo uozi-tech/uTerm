@@ -128,7 +128,10 @@ final class RemoteDeviceGroupServiceTests: XCTestCase {
         phoneService.tick()
         padService.tick()
         XCTAssertNil(pad.awaitingAcknowledgement)
-        XCTAssertEqual(padService.interval, RemoteDeviceGroupService.idleInterval)
+        // G2：刚进组的 10 分钟里仍是快的（等各台 Mac 的开通结果），10 分钟后回到慢的见
+        // `RemoteDeviceGroupHostsTests.test_fast_polling_for_ten_minutes_after_joining_then_idle`。
+        XCTAssertTrue(pad.isOpeningHosts)
+        XCTAssertEqual(padService.interval, RemoteDeviceGroupService.activeInterval, "刚进组，等 Mac 的结果")
         XCTAssertEqual(phoneService.interval, RemoteDeviceGroupService.idleInterval)
     }
 

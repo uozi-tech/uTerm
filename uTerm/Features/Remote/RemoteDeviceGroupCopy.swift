@@ -55,6 +55,35 @@ enum RemoteDeviceGroupCopy {
     static let leaveTitle = String(localized: "离开设备组？")
     static let leaveMessage = String(localized: "离开后这台设备要重新加入才能用，组里别的设备不受影响。")
 
+    // MARK: 还没通的 Mac
+
+    static let pendingHostsHeader = String(localized: "还没通的 Mac")
+    static let pendingHostsFooter = String(localized: "组里有设备连得上这台 Mac 时，会自动替这台设备开通。")
+
+    /// 「还没通的 Mac」一行右边那几个字。
+    static func pendingHostStatus(_ status: RemoteDeviceGroup.PendingHost.Status) -> String {
+        switch status {
+        case .opening:
+            return String(localized: "正在开通")
+        case .needsPairing(.notAllowed):
+            return String(localized: "Mac 上没允许，要单独配对")
+        case .needsPairing(.tooOld):
+            return String(localized: "Mac 上的 uTerm 太旧，要单独配对")
+        case .needsPairing(.rejected):
+            return String(localized: "Mac 拒绝了，要单独配对")
+        case .needsPairing(.conflict):
+            return String(localized: "和这台设备记着的对不上，要重新配对")
+        case .needsPairing(.forgotten):
+            return String(localized: "你在这台设备上忘记过它")
+        }
+    }
+
+    /// 要单独配对的用警示色。
+    static func isWarning(_ status: RemoteDeviceGroup.PendingHost.Status) -> Bool {
+        if case .needsPairing = status { return true }
+        return false
+    }
+
     // MARK: 弹窗（组员一侧输码）
 
     static func requestTitle(_ device: RemoteGroupDevice) -> String {

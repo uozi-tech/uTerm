@@ -63,6 +63,8 @@ final class RemoteGroupHostAccessTests: XCTestCase {
         XCTAssertEqual(identity.peer(id: host.id)?.relay, relay, "成员证书只给这台 Mac 用")
         XCTAssertTrue(directory.macs.contains { $0.deviceID == host.id })
         XCTAssertEqual(directory.pairedHostNames()[host.id], host.name)
+        XCTAssertEqual(directory.pairedHosts().map(\.publicKey), [host.publicKey], "不在线也列出来（发 host 用）")
+        XCTAssertEqual(directory.pairedHosts().first?.platform, "mac")
         XCTAssertTrue(directory.vouchTargets().isEmpty, "不在线的 Mac 不去问")
         XCTAssertEqual(directory.adopt(grant), .alreadyKnown)
 
@@ -128,6 +130,113 @@ final class RemoteGroupHostAccessTests: XCTestCase {
         let padClient = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: padHostsTable,
                                         expectedPeer: adopted)
         padClient.localDeviceOverride = (pad.device.id, "iPad")
+        let padConnecting = Task { await padClient.connect() }
+        _ = await waitUntil(3) { padClient.state == .connected || !server.pairingRequests.isEmpty }
+        XCTAssertTrue(server.pairingRequests.isEmpty, "不弹审批")
+        await padConnecting.value
+        XCTAssertEqual(padClient.state, .connected)
+        padClient.disconnect()
+    }
+
+    // MARK: - 真服务端 + 设备组
+
+    /// 问一台真测试服务端的「本机配对过的 Mac」：iPhone 那条已认证的 `RemoteMacClient`。
+    @MainActor
+    private final class ClientHosts: RemoteGroupHostAccess {
+        let target: RemoteGroupVouchTarget
+        let client: RemoteMacClient
+
+        init(target: RemoteGroupVouchTarget, client: RemoteMacClient) {
+            self.target = target
+            self.client = client
+        }
+
+        func vouchTargets() -> [RemoteGroupVouchTarget] { [target] }
+        func pairedHosts() -> [RemoteGroupVouchTarget] { [target] }
+        func vouch(_ device: RemoteGroupDevice, at host: UUID) async throws -> RemoteVouchResult {
+            try await client.vouch(for: device)
+        }
+        func adopt(_ grant: RemoteGroupGrant) -> RemoteGroupAdoption { .alreadyKnown }
+        func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
+            throw RemoteAttachError.rejected("不用")
+        }
+    }
+
+    /// 两台设备经核对码组成设备组 → 组员 iPhone 在真服务端上替新设备 iPad 担保、写下签名的 grant →
+    /// iPad 读到、它的目录收下这台 Mac → iPad 不经审批连上。
+    func test_end_to_end_group_member_vouches_the_new_device_which_then_connects_without_approval() async throws {
+        let server = RemoteHostServer(registry: TerminalSessionRegistry(),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
+                                      localName: "测试 Mac", localID: UUID(), advertises: false)
+        server.vouchPolicy = { true }
+        server.start()
+        defer { server.stop() }
+        _ = await waitUntil { server.port != nil }
+        let port = try XCTUnwrap(server.port)
+        let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
+        let serverKey = try server.identity.localIdentity().publicKey.rawRepresentation
+
+        let roster = RemoteGroupRoster(storage: RemoteMemorySyncedStorage())
+        func member(_ name: String) -> (group: RemoteDeviceGroup, key: Curve25519.KeyAgreement.PrivateKey) {
+            let key = Curve25519.KeyAgreement.PrivateKey()
+            let store = RemoteGroupLocalStore(storage: RemoteMemoryStorage())
+            let signing = try! store.signingKey()
+            let local = RemoteGroupDevice(id: UUID(), name: name, model: nil, platform: RemoteDevicePlatform.mobile.rawValue,
+                                          publicKey: key.publicKey.rawRepresentation,
+                                          signingKey: signing.publicKey.rawRepresentation, updatedAt: Date())
+            return (RemoteDeviceGroup(local: local, signingKey: signing, identityKey: key, roster: roster, store: store), key)
+        }
+        let (phone, phoneKey) = member("iPhone")
+        let (pad, padKey) = member("iPad")
+
+        // iPhone：在 Mac 上审批配对过。
+        let phoneHostsTable = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try phoneHostsTable.saveRaw(phoneKey.rawRepresentation, account: "identity")
+        let phoneClient = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: phoneHostsTable)
+        phoneClient.localDeviceOverride = (phone.local.id, "iPhone")
+        let connecting = Task { await phoneClient.connect() }
+        _ = await waitUntil { !server.pairingRequests.isEmpty }
+        server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(phoneClient.state, .connected)
+        defer { phoneClient.disconnect() }
+        let phoneHosts = ClientHosts(target: RemoteGroupVouchTarget(id: server.localID, name: "测试 Mac", publicKey: serverKey,
+                                                                    model: "Mac mini", platform: "mac"),
+                                     client: phoneClient)
+        phone.hosts = phoneHosts
+
+        // iPad：从没连过这台 Mac。目录是真的 `RemoteMacDirectory`。
+        let padHostsTable = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try padHostsTable.saveRaw(padKey.rawRepresentation, account: "identity")
+        let padDirectory = RemoteMacDirectory(identity: padHostsTable, adoptsRelayAsDefault: false)
+        pad.hosts = padDirectory
+
+        // 加入：iPad 显示数，iPhone 输入，iPad 核对，iPhone 核对 Ta、认下它，这一轮就去问 Mac。
+        phone.refresh()
+        pad.startJoin()
+        phone.refresh()
+        guard case .showingCode(let code, _) = pad.joinState else { return XCTFail("iPad 没显示核对码") }
+        XCTAssertTrue(phone.submitCode(code, for: pad.local.id))
+        pad.refresh()
+        XCTAssertEqual(pad.joinState, .joined)
+        XCTAssertTrue(pad.pendingHosts.isEmpty, "iPhone 还没认 iPad，目录也还没发")
+        phone.refresh()
+        XCTAssertEqual(phone.vouchesInFlight, 1)
+        let written = await waitUntil { roster.load().grants.contains { $0.isFor(pad.local) } }
+        XCTAssertTrue(written)
+        let grant = try XCTUnwrap(roster.load().grants.first { $0.isFor(pad.local) })
+        XCTAssertEqual(grant.outcome, RemoteVouchResult.Outcome.added.rawValue, grant.reason ?? "")
+        XCTAssertEqual(grant.signer, phone.local.id)
+        XCTAssertNotNil(server.peerVouches[pad.local.id], "Mac 记下了 iPad，来路是 iPhone")
+
+        pad.refresh()
+        let adopted = try XCTUnwrap(padHostsTable.peer(id: server.localID))
+        XCTAssertEqual(adopted.publicKey, serverKey)
+        XCTAssertTrue(pad.pendingHosts.isEmpty)
+        XCTAssertEqual(padDirectory.pairedHostNames()[server.localID], "测试 Mac")
+
+        let padClient = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: padHostsTable, expectedPeer: adopted)
+        padClient.localDeviceOverride = (pad.local.id, "iPad")
         let padConnecting = Task { await padClient.connect() }
         _ = await waitUntil(3) { padClient.state == .connected || !server.pairingRequests.isEmpty }
         XCTAssertTrue(server.pairingRequests.isEmpty, "不弹审批")

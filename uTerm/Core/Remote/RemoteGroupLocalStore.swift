@@ -147,13 +147,14 @@ nonisolated final class RemoteGroupLocalStore: @unchecked Sendable {
 }
 
 nonisolated extension RemoteGroupDevice {
-    /// 本机的条目与签名私钥。远控身份（X25519）与设备 ID 跟主控方向是同一份（握手里报的就是它们）。
+    /// 本机的条目、签名私钥与远控身份私钥（G2 封、开中继包用）。远控身份（X25519）与设备 ID 跟主控方向是同一份（握手里报的就是它们）。
     /// `createsIdentity` 为 false（后台）时，身份或设备 ID 缺一样就抛错、什么都不生成：启动时别的地方可能正在
     /// 第一次生成身份，后台再生成一把会顶掉它。两样都有、只缺签名私钥时照样生成签名私钥：它只归设备组用，
     /// 没有别处会同时生成；不生成的话，用着远程控制、但从没打开过「我的设备」的设备永远不会登记，也弹不出加入请求。
     static func local(name: String, model: String?, identity: RemoteIdentityStore, store: RemoteGroupLocalStore,
                       createsIdentity: Bool, now: Date = Date()) throws
-        -> (device: RemoteGroupDevice, signingKey: Curve25519.Signing.PrivateKey) {
+        -> (device: RemoteGroupDevice, signingKey: Curve25519.Signing.PrivateKey,
+            identityKey: Curve25519.KeyAgreement.PrivateKey) {
         let identityKey: Curve25519.KeyAgreement.PrivateKey
         let signingKey: Curve25519.Signing.PrivateKey
         if createsIdentity {
@@ -172,6 +173,6 @@ nonisolated extension RemoteGroupDevice {
                                        publicKey: identityKey.publicKey.rawRepresentation,
                                        signingKey: signingKey.publicKey.rawRepresentation,
                                        updatedAt: RemoteGroupTime(now).date)
-        return (device, signingKey)
+        return (device, signingKey, identityKey)
     }
 }

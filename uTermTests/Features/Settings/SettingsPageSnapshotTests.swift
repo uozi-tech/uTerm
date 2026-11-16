@@ -315,14 +315,22 @@ final class SettingsPageSnapshotTests: XCTestCase {
     private final class GroupRig {
         let synced = RemoteMemorySyncedStorage()
         lazy var roster = RemoteGroupRoster(storage: synced)
+        /// 模型只弱引用 `hosts`：这里拿着。
+        var hosts: [RemoteGroupFakeHosts] = []
 
-        func device(_ name: String, model: String?, platform: RemoteDevicePlatform) -> RemoteDeviceGroup {
+        func device(_ name: String, model: String?, platform: RemoteDevicePlatform,
+                    hosts fake: RemoteGroupFakeHosts? = nil) -> RemoteDeviceGroup {
             let store = RemoteGroupLocalStore(storage: RemoteMemoryStorage())
             let key = try! store.signingKey()
+            let identity = Curve25519.KeyAgreement.PrivateKey()
             let local = RemoteGroupDevice(id: UUID(), name: name, model: model, platform: platform.rawValue,
-                                          publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
+                                          publicKey: identity.publicKey.rawRepresentation,
                                           signingKey: key.publicKey.rawRepresentation, updatedAt: Date())
-            let group = RemoteDeviceGroup(local: local, signingKey: key, roster: roster, store: store)
+            let group = RemoteDeviceGroup(local: local, signingKey: key, identityKey: identity, roster: roster, store: store)
+            if let fake {
+                hosts.append(fake)
+                group.hosts = fake
+            }
             group.refresh()
             return group
         }
@@ -423,6 +431,24 @@ final class SettingsPageSnapshotTests: XCTestCase {
         ipad.refresh()
         service.tick()
         try await shootPrompt("my-devices-prompt-wrong", service, request.id, into: dir)
+
+        // 还没通的 Mac（G2）：新设备经 mini 加入，mini 配对过四台 Mac——一台睡着（正在开通）、一台没允许、一台太旧、
+        // 一台通了（不列）。
+        let macs = GroupRig()
+        let directory = RemoteGroupFakeHosts()
+        directory.addMac("家里的 iMac", online: false)
+        let closed = directory.addMac("工作室 Mac Studio")
+        let old = directory.addMac("旧的 MacBook Air")
+        directory.addMac("办公室 Mac mini")
+        directory.replies = [closed.id: .outcome(.notAllowed), old.id: .tooOld]
+        let owner = macs.device("Mac mini", model: "Mac mini", platform: .mac, hosts: directory)
+        let newcomer = macs.device("iPhone Duo", model: "iPhone 17 Pro", platform: .mobile, hosts: RemoteGroupFakeHosts())
+        try macs.join(newcomer, via: owner)
+        let deadline = Date().addingTimeInterval(5)
+        while owner.vouchesInFlight > 0, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        newcomer.refresh()
+        XCTAssertEqual(newcomer.pendingHosts.map(\.name), ["家里的 iMac", "工作室 Mac Studio", "旧的 MacBook Air"])
+        try await shootGroup("my-devices-pending-macs", newcomer, height: 560, into: dir)
     }
 
     private func shootPrompt(_ name: String, _ service: RemoteDeviceGroupService, _ id: UUID, into dir: URL) async throws {

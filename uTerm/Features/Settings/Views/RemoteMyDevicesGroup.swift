@@ -5,7 +5,8 @@ import UDesignKit
 ///
 /// - 还没进组：一句说明、这台设备一行带「加入」、你的其它设备（只显示）。
 /// - 点了「加入」：这一行下面大字显示 6 位数和「取消」，作废过就说一声；失败写原因。
-/// - 已进组：组员名单，每行一个操作（别的设备「移除…」，这台「离开…」）；下面是还没进组的设备。
+/// - 已进组：组员名单，每行一个操作（别的设备「移除…」，这台「离开…」）；下面是组里这台设备还不能用的 Mac
+///   （「还没通的 Mac」，有才显示），再下面是还没进组的设备。
 /// - 这台被移出了：说一声，再给「加入」。
 ///
 /// 状态在 App 级的 `RemoteDeviceGroupService`（全 App 一个、后台一直在读名册）；别的设备想加入时由
@@ -41,6 +42,18 @@ struct RemoteMyDevicesGroup: View {
             Button("离开", role: .destructive) { model?.leave() }
         } message: {
             Text(RemoteDeviceGroupCopy.leaveMessage)
+        }
+        if let model, model.isInGroup, !model.isSelfRemoved, !model.pendingHosts.isEmpty {
+            SettingsGroup(title: RemoteDeviceGroupCopy.pendingHostsHeader, footer: RemoteDeviceGroupCopy.pendingHostsFooter) {
+                ForEach(model.pendingHosts) { host in
+                    SettingsListRow(icon: "desktopcomputer", tint: UD.text3, title: host.name) {
+                        Text(RemoteDeviceGroupCopy.pendingHostStatus(host.status))
+                            .font(.system(size: 12))
+                            .foregroundStyle(RemoteDeviceGroupCopy.isWarning(host.status) ? UD.warning : UD.text3)
+                            .lineLimit(1)
+                    }
+                }
+            }
         }
         if let model, model.isInGroup, !model.isSelfRemoved, !model.otherDevices.isEmpty {
             SettingsGroup(title: RemoteDeviceGroupCopy.outsideHeader, footer: RemoteDeviceGroupCopy.outsideFooter) {

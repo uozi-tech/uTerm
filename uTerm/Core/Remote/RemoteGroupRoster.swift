@@ -8,7 +8,8 @@ import Foundation
 // 记录放在哪个 account 下也不可信）。所以每种记录各有各的验法，验不过的当没有：
 // - `device`：只用来列出「你的其它设备」，不影响谁是组员；
 // - `join` / `answer` / `done`：靠新设备屏幕上的一次性码（CPace，`RemoteGroupJoinCrypto`）；
-// - `admit` / `remove`：靠 Ed25519 签名，而且签名者必须是本机此刻认的组员（`RemoteGroupMembership`）。
+// - `admit` / `remove`：靠 Ed25519 签名，而且签名者必须是本机此刻认的组员（`RemoteGroupMembership`）；
+// - `host` / `grant`（组里的 Mac，`RemoteGroupHostRecords.swift`）：同上。
 // 被控的远控进程不读这份名册。
 
 /// 记录里各字段的定长。
@@ -442,6 +443,8 @@ nonisolated enum RemoteGroupRecord: Equatable, Sendable {
     case done(RemoteGroupDone)
     case admit(RemoteGroupAdmit)
     case remove(RemoteGroupRemove)
+    case host(RemoteGroupHost)
+    case grant(RemoteGroupHostGrant)
 
     static let version = 1
 
@@ -453,6 +456,8 @@ nonisolated enum RemoteGroupRecord: Equatable, Sendable {
         case .done(let done): return done.account
         case .admit(let admit): return admit.account
         case .remove(let remove): return remove.account
+        case .host(let host): return host.account
+        case .grant(let grant): return grant.account
         }
     }
 
@@ -467,6 +472,8 @@ nonisolated enum RemoteGroupRecord: Equatable, Sendable {
         var done: RemoteGroupDone?
         var admit: RemoteGroupAdmit?
         var remove: RemoteGroupRemove?
+        var host: RemoteGroupHost?
+        var grant: RemoteGroupHostGrant?
     }
 
     func encoded() throws -> Data {
@@ -478,6 +485,8 @@ nonisolated enum RemoteGroupRecord: Equatable, Sendable {
         case .done(let done): envelope.record = "done"; envelope.done = done
         case .admit(let admit): envelope.record = "admit"; envelope.admit = admit
         case .remove(let remove): envelope.record = "remove"; envelope.remove = remove
+        case .host(let host): envelope.record = "host"; envelope.host = host
+        case .grant(let grant): envelope.record = "grant"; envelope.grant = grant
         }
         return try RemoteGroupFormat.encoder().encode(envelope)
     }
@@ -522,6 +531,23 @@ nonisolated enum RemoteGroupRecord: Equatable, Sendable {
                   remove.signature.count == RemoteGroupFormat.signatureLength, remove.hasValidSignature,
                   remove.admission == nil || remove.verifiedAdmission != nil else { return nil }
             return .remove(remove)
+        case "host":
+            // Mac 自己不是签名者：组员签的是「我配对过它」。
+            guard let host = envelope.host, host.host.hasValidKey,
+                  host.signerKey.count == RemoteGroupFormat.keyLength,
+                  host.signature.count == RemoteGroupFormat.signatureLength, host.host.id != host.signer,
+                  host.hasValidSignature else { return nil }
+            return .host(host)
+        case "grant":
+            // 不替自己开通，也不替 Mac 向它自己开通；结果不能是空的，中继包有就不能是空的。
+            guard let grant = envelope.grant, grant.publicKey.count == RemoteGroupFormat.keyLength,
+                  grant.signingKey.count == RemoteGroupFormat.keyLength, grant.host.hasValidKey,
+                  grant.signerKey.count == RemoteGroupFormat.keyLength,
+                  grant.signature.count == RemoteGroupFormat.signatureLength,
+                  grant.signerKey != grant.signingKey, grant.signer != grant.deviceID, grant.deviceID != grant.host.id,
+                  !grant.outcome.isEmpty, grant.relay.map({ !$0.isEmpty }) ?? true,
+                  grant.hasValidSignature else { return nil }
+            return .grant(grant)
         default:
             return nil
         }
@@ -536,6 +562,8 @@ nonisolated struct RemoteGroupSnapshot: Equatable, Sendable {
     var dones: [RemoteGroupDone] = []
     var admits: [RemoteGroupAdmit] = []
     var removes: [RemoteGroupRemove] = []
+    var hosts: [RemoteGroupHost] = []
+    var grants: [RemoteGroupHostGrant] = []
 
     func device(_ id: UUID) -> RemoteGroupDevice? {
         devices.first { $0.id == id }
@@ -568,6 +596,8 @@ nonisolated struct RemoteGroupRoster: Sendable {
             case .done(let done): snapshot.dones.append(done)
             case .admit(let admit): snapshot.admits.append(admit)
             case .remove(let remove): snapshot.removes.append(remove)
+            case .host(let host): snapshot.hosts.append(host)
+            case .grant(let grant): snapshot.grants.append(grant)
             }
         }
         return snapshot

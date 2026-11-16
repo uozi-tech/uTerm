@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 设置 › 远程控制 › 我的设备：设备组（docs/remote-device-group-design.md §6），状态与 Mac 那一页相同：
 /// 还没进组（说明、「加入」、你的其它设备）、显示核对码、加入失败、已进组（组员名单，「移除…」/「离开…」，
-/// 还没进组的设备）、这台被移出了。状态与操作在共享的 `RemoteDeviceGroup`，文案在 `RemoteDeviceGroupCopy`；
+/// 还没通的 Mac，还没进组的设备）、这台被移出了。状态与操作在共享的 `RemoteDeviceGroup`，文案在 `RemoteDeviceGroupCopy`；
 /// 别的设备想加入时由根视图上的 `RemoteGroupJoinHandler` 弹输码单子，不在这一页。
 struct RemoteMyDevicesScreen: View {
     @Environment(RemoteDeviceGroupService.self) private var service
@@ -59,6 +59,15 @@ struct RemoteMyDevicesScreen: View {
         }
         if model.isInGroup, !model.isSelfRemoved {
             memberGroup(model)
+            if !model.pendingHosts.isEmpty {
+                MInsetGroup(header: RemoteDeviceGroupCopy.pendingHostsHeader, footer: RemoteDeviceGroupCopy.pendingHostsFooter) {
+                    ForEach(Array(model.pendingHosts.enumerated()), id: \.element.id) { index, host in
+                        MInsetRow(icon: "mac", iconColor: M.text3, label: host.name,
+                                  value: RemoteDeviceGroupCopy.pendingHostStatus(host.status),
+                                  last: index == model.pendingHosts.count - 1)
+                    }
+                }
+            }
             if !model.otherDevices.isEmpty {
                 MInsetGroup(header: RemoteDeviceGroupCopy.outsideHeader, footer: RemoteDeviceGroupCopy.outsideFooter) {
                     deviceRows(model.otherDevices)

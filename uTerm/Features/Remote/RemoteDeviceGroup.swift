@@ -9,7 +9,9 @@ import Observation
 /// 2. 按 `admit` / `remove` 算组员名单（`RemoteGroupMembership`）。本机被移出了就到此为止，之后什么都不写；
 /// 3. 组员一侧：核对新设备回的 Ta，对了才认它；
 /// 4. 给认的每台组员补签一条自己的 `admit`，删掉不再认的；
-/// 5. 登记本机条目（只给别的设备列「你的其它设备」用）、清掉本机写过的过期 `join` / `answer` / `done`。
+/// 5. 登记本机条目（只给别的设备列「你的其它设备」用）、清掉本机写过的过期 `join` / `answer` / `done`；
+/// 6. 组里的 Mac（§7.2，`RemoteDeviceGroup+Hosts.swift`）：发本机配对过的 Mac 的 `host`、替别的组员问 Mac 并写 `grant`、
+///    收别的组员写给本机的 `grant`。
 ///
 /// 每一跳都是 iCloud 钥匙串同步，几秒到几十秒。
 @MainActor
@@ -79,6 +81,10 @@ final class RemoteDeviceGroup {
     private(set) var awaitingAcknowledgement: RemoteGroupDevice?
     /// 有一次加入在进行（本机在等别的设备的下一步）：轮询该改快。
     private(set) var isAwaitingOthers = false
+    /// 组里的 Mac 里本机还不能用的（正在开通，或要单独配对及原因）；都通了就是空的（`RemoteDeviceGroup+Hosts.swift`）。
+    private(set) var pendingHosts: [PendingHost] = []
+    /// 开通在进行（本机刚进组的 10 分钟里、本机正在替组员问 Mac）：轮询该改快。
+    private(set) var isOpeningHosts = false
     /// 写不进名册或本机钥匙串（多半是钥匙串不可用）。
     var storageError: String?
 
@@ -86,6 +92,9 @@ final class RemoteDeviceGroup {
 
     @ObservationIgnored let local: RemoteGroupDevice
     @ObservationIgnored let signingKey: Curve25519.Signing.PrivateKey
+    /// 本机的远控身份私钥（X25519）：给组员封中继包、打开组员封给本机的包。没有（测试里、或取不到）时
+    /// 本机不替别人开通，收到的结果照收、只是不带中继。
+    @ObservationIgnored let identityKey: Curve25519.KeyAgreement.PrivateKey?
     @ObservationIgnored let roster: RemoteGroupRoster
     @ObservationIgnored let store: RemoteGroupLocalStore
     @ObservationIgnored let now: () -> Date
@@ -97,14 +106,30 @@ final class RemoteDeviceGroup {
     @ObservationIgnored var dismissedJoins: Set<Data> = []
     /// 本机核对通过、认下的新设备：显示「已加入」直到你关掉。
     @ObservationIgnored var admittedJoins: [UUID: RemoteGroupDevice] = [:]
+    /// 本机配对过的 Mac（App 里是 `RemoteMacDirectory`），由 `RemoteDeviceGroupService` 交进来。nil 时不发 `host`、
+    /// 不替别人开通、也不收结果。
+    @ObservationIgnored weak var hosts: (any RemoteGroupHostAccess)?
+    /// 正在问的 Mac（每台一次只问一个组员）。模型释放时一起取消。
+    @ObservationIgnored let vouches = RemoteGroupVouchTasks()
+    /// 连不上的 Mac 与那一刻：60 秒内不再问它。
+    @ObservationIgnored var hostFailures: [UUID: Date] = [:]
+    /// 每一对（组员的签名公钥, Mac）最近一次问完的时刻：60 秒内不再问同一对。
+    @ObservationIgnored var lastAsked: [String: Date] = [:]
+    /// 每台 Mac 上一次交给 `hosts.adopt` 的结果与它的结果：同一条、本机配对状态也没变时不再交。
+    @ObservationIgnored var adoptions: [UUID: AdoptionMemo] = [:]
+    /// 别的设备写给本机、已经读到过的记录（记一次耗时用）。nil = 还没读过第一轮。
+    @ObservationIgnored var arrivals: Set<Data>?
     /// 这一轮有没有写失败过：没失败才清掉 `storageError`。
     @ObservationIgnored private var failedThisRound = false
 
     init(local: RemoteGroupDevice, signingKey: Curve25519.Signing.PrivateKey,
+         identityKey: Curve25519.KeyAgreement.PrivateKey? = nil,
          roster: RemoteGroupRoster = RemoteGroupRoster(), store: RemoteGroupLocalStore = RemoteGroupLocalStore(),
          now: @escaping () -> Date = Date.init) {
         self.local = local
         self.signingKey = signingKey
+        // 和本机条目里的公钥不是一对就当没有：封出去的包对方打不开，收到的也打不开。
+        self.identityKey = identityKey.flatMap { $0.publicKey.rawRepresentation == local.publicKey ? $0 : nil }
         self.roster = roster
         self.store = store
         self.now = now
@@ -122,7 +147,8 @@ final class RemoteDeviceGroup {
                      createsIdentity: Bool, now: @escaping () -> Date = Date.init) -> RemoteDeviceGroup? {
         guard let local = try? RemoteGroupDevice.local(name: name, model: model, identity: identity, store: store,
                                                        createsIdentity: createsIdentity, now: now()) else { return nil }
-        return RemoteDeviceGroup(local: local.device, signingKey: local.signingKey, roster: roster, store: store, now: now)
+        return RemoteDeviceGroup(local: local.device, signingKey: local.signingKey, identityKey: local.identityKey,
+                                 roster: roster, store: store, now: now)
     }
 
     // MARK: - 每一轮
@@ -131,15 +157,18 @@ final class RemoteDeviceGroup {
         failedThisRound = false
         defer { if !failedThisRound, storageError != nil { storageError = nil } }
         let snapshot = roster.load()
+        noteArrivals(snapshot)
         guard var state = loadState() else { return }
         let original = state
         // 被移出的设备什么都不写；只有你在它上面点了「加入」，才推进那一次加入。
         guard !state.selfRemoved || candidate != nil else {
+            haltHostWork()
             publish(state, snapshot)
             return
         }
         advanceCandidate(snapshot, &state)
         guard !state.selfRemoved else {
+            haltHostWork()
             persist(state, from: original)
             publish(state, snapshot)
             return
@@ -151,6 +180,7 @@ final class RemoteDeviceGroup {
         if state.selfRemoved {
             AppLogger.notice("设备组：本机被移出了，停止参与", category: RemoteLog.category)
             sentDone = nil
+            haltHostWork()
             persist(state, from: original)
             publish(state, snapshot)
             return
@@ -160,6 +190,8 @@ final class RemoteDeviceGroup {
         publishAdmits(snapshot, state)
         register(snapshot)
         cleanUp(snapshot, state)
+        // 刚认下的新设备也在 state 里：这一轮就去问 Mac，不等下一轮。
+        syncHosts(snapshot, state)
         publish(state, snapshot)
     }
 
@@ -346,6 +378,12 @@ final class RemoteDeviceGroup {
             $0.device.signingKey == local.signingKey && $0.signerKey != local.signingKey && $0.admission == admission
                 && signers.accepts($0.signer, key: $0.signerKey, at: $0.signedAt)
         }
+    }
+
+    /// 组里 Mac 的状态只在变了时才写。
+    func updateHostState(pending: [PendingHost], opening: Bool) {
+        if pending != pendingHosts { pendingHosts = pending }
+        if opening != isOpeningHosts { isOpeningHosts = opening }
     }
 
     /// 加入进度只在变了时才写（`@Observable` 每次赋值都会通知界面）。
