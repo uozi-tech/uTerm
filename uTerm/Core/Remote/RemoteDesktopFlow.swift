@@ -569,6 +569,22 @@ nonisolated enum RemoteDesktopGeometry {
     }
 }
 
+/// 只看一个窗口时，请 Mac 把窗口调成多大。
+///
+/// 窗口的点数和画布一样时，窗口里的字在设备上和在 Mac 上一样大（Mac 的 13 pt 就是这里的 13 pt）。想让字更大，
+/// 就让窗口比画布小：窗口里排得下的内容少了，整个画面放大铺满画布，字跟着变大。App 有最小窗口尺寸
+///（2026-11-17：Chrome 500×375、Xcode 400×350、Claude 600×400），要的比它小时得到的是它的最小尺寸。
+nonisolated enum RemoteDesktopWindowFit {
+    /// 可选的字的大小：窗口的点数 = 画布的点数 ÷ 它。
+    static let textScales: [Double] = [0.8, 1, 1.25, 1.5]
+
+    static func size(canvas: CGSize, textScale: Double) -> CGSize? {
+        guard canvas.width > 0, canvas.height > 0, textScale.isFinite else { return nil }
+        let scale = min(2, max(0.5, textScale))
+        return CGSize(width: (canvas.width / scale).rounded(), height: (canvas.height / scale).rounded())
+    }
+}
+
 /// 主控端放大后，Mac 该取哪一块画面。
 ///
 /// 视频帧的像素数是固定的，比被看的那块显示器的原生像素少（手机的屏幕没那么多像素）。整块取时是缩小了的；
@@ -613,6 +629,19 @@ nonisolated enum RemoteDesktopRegionPolicy {
         let y = min(max(0, even((visible.y + visible.height / 2) * targetHeight - height / 2)), targetHeight - height)
         return RemoteDesktopRegion(x: x / targetWidth, y: y / targetHeight,
                                    width: width / targetWidth, height: height / targetHeight)
+    }
+
+    /// 放大到这个倍数以上主控端才向 Mac 要区域：只放大一点点时整块的画面够用，不值得换。
+    static let zoomThreshold: CGFloat = 1.15
+
+    /// 画面（整块显示器在视图里的位置）露在视图里的那一块，归一化到画面。没放大、或一点都没露出来时是 nil。
+    static func visibleRegion(picture: CGRect, view: CGRect, zoom: CGFloat) -> RemoteDesktopRegion? {
+        guard zoom >= zoomThreshold, picture.width > 0, picture.height > 0 else { return nil }
+        let visible = picture.intersection(view)
+        guard !visible.isNull, visible.width > 0, visible.height > 0 else { return nil }
+        return RemoteDesktopRegion(x: Double((visible.minX - picture.minX) / picture.width),
+                                   y: Double((visible.minY - picture.minY) / picture.height),
+                                   width: Double(visible.width / picture.width), height: Double(visible.height / picture.height))
     }
 
     /// 归一化的一块 → 采集帧里的像素矩形。`contentFraction`：只看一个窗口时内容只占帧的左上角一部分。

@@ -257,6 +257,19 @@ final class RemoteDesktopWindowTests: XCTestCase {
                                                      scaleFactor: 2, screenRect: .zero, frameSize: CGSize(width: 800, height: 664)))
     }
 
+    func test_window_fit_shrinks_the_window_for_bigger_text() {
+        let canvas = CGSize(width: 951, height: 619)
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: canvas, textScale: 1), CGSize(width: 951, height: 619))
+        // 字大 1.25 倍：窗口只有画布的 0.8，画面放大 1.25 倍铺满。
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: canvas, textScale: 1.25), CGSize(width: 761, height: 495))
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: canvas, textScale: 0.8), CGSize(width: 1189, height: 774))
+        // 离谱的值夹住；画布还没量出来时没有尺寸。
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: canvas, textScale: 10), CGSize(width: 476, height: 310))
+        XCTAssertNil(RemoteDesktopWindowFit.size(canvas: .zero, textScale: 1))
+        XCTAssertNil(RemoteDesktopWindowFit.size(canvas: canvas, textScale: .nan))
+        XCTAssertTrue(RemoteDesktopWindowFit.textScales.contains(1))
+    }
+
     func test_listable_windows_skip_overlays_and_tiny_ones() {
         func entry(_ id: UInt32, layer: Int = 0, alpha: Double = 1, size: CGSize = CGSize(width: 800, height: 600),
                    app: String = "App", title: String = "") -> RemoteDesktopWindows.Entry {

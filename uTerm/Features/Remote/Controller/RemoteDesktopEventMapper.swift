@@ -25,6 +25,24 @@ nonisolated enum RemoteDesktopEventMapper {
         return (Float(min(1, max(0, p.x))), Float(min(1, max(0, p.y))))
     }
 
+    /// 放大时画面该画在哪儿：指针底下那一点不动，整块画面绕着它放大。
+    ///
+    /// 指针到那台 Mac 的坐标换算和没放大时一样（指针在适配框里的相对位置 = 那台屏幕上的相对位置），所以指针
+    /// 扫过整个窗口就扫过了整块屏幕，画面跟着指针走，不用另外的平移手势（同系统「缩放」的跟随指针）。
+    /// `fit` 是没放大时画面在视图里的位置；指针在黑边里时按最近的边算。
+    static func lensFrame(fit: CGRect, pointer: CGPoint, zoom: CGFloat) -> CGRect {
+        guard zoom > 1, fit.width > 0, fit.height > 0 else { return fit }
+        let px = min(1, max(0, (pointer.x - fit.minX) / fit.width))
+        let py = min(1, max(0, (pointer.y - fit.minY) / fit.height))
+        return CGRect(x: fit.minX - px * fit.width * (zoom - 1), y: fit.minY - py * fit.height * (zoom - 1),
+                      width: fit.width * zoom, height: fit.height * zoom)
+    }
+
+    /// 点一下放大镜按钮：1 倍 → 2 倍 → 3 倍 → 回到 1 倍。捏合出来的中间值按最近的下一档走。
+    static func nextZoomStep(after zoom: CGFloat) -> CGFloat {
+        zoom < 1.5 ? 2 : zoom < 2.5 ? 3 : 1
+    }
+
     /// 指针是否落在画面上（不在黑边里）。
     static func isOnDisplay(_ point: CGPoint, in viewport: RemoteDesktopViewport) -> Bool {
         let p = viewport.normalized(viewPoint: point)

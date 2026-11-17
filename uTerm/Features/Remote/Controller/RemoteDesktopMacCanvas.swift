@@ -15,6 +15,10 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
     var sendSystemShortcuts = true
     /// 截取系统快捷键挂不上（没有「辅助功能」授权）。
     var onShortcutCaptureFailed: () -> Void = {}
+    /// 递增一次 = 放大镜换下一档（1 → 2 → 3 → 1 倍）。触控板上双指捏合也能放大。
+    var zoomStepToken = 0
+    /// 放大倍数变了（外面的按钮据此高亮）。
+    var onZoomChanged: (CGFloat) -> Void = { _ in }
 
     func makeNSView(context: Context) -> RemoteDesktopCanvasNSView {
         RemoteDesktopCanvasNSView(session: session)
@@ -24,6 +28,11 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
         view.onPasteNote = onPasteNote
         view.onShortcutCaptureFailed = onShortcutCaptureFailed
         view.sendSystemShortcuts = sendSystemShortcuts
+        view.onZoomChanged = onZoomChanged
+        if view.zoomStepToken != zoomStepToken {
+            view.zoomStepToken = zoomStepToken
+            view.stepZoom()
+        }
         view.update(displaySize: displaySize)
         view.update(contentFraction: contentFraction)
         view.update(cursorImage: session.cursorImage)
@@ -56,6 +65,17 @@ final class RemoteDesktopCanvasNSView: NSView {
     /// 由它裁掉。
     private let pictureLayer = CALayer()
     private var contentFraction = CGSize(width: 1, height: 1)
+    /// 放大后那台 Mac 只送来看得见的那一块（按原生像素）：画在这层上，盖住下面那张整块的（同手机画布）。
+    private let regionLayer = AVSampleBufferDisplayLayer()
+    private let regionSpace = CALayer()
+    private var regionReport: DispatchWorkItem?
+    private var lastRegionReport = Date.distantPast
+    /// 放大倍数（1 = 整块适配进窗口）与指针最近的位置：放大时画面绕着指针走（`RemoteDesktopEventMapper.lensFrame`）。
+    private var zoom: CGFloat = 1
+    private var pointerLocation = CGPoint.zero
+    var zoomStepToken = 0
+    var onZoomChanged: (CGFloat) -> Void = { _ in }
+    static let maxZoom: CGFloat = 8
     private let cursorLayer = CAShapeLayer()
     var onPasteNote: (String) -> Void = { _ in }
     var onShortcutCaptureFailed: () -> Void = {}
@@ -91,6 +111,10 @@ final class RemoteDesktopCanvasNSView: NSView {
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = NSColor.black.cgColor
         pictureLayer.addSublayer(displayLayer)
+        regionLayer.videoGravity = .resize
+        regionLayer.isHidden = true
+        regionSpace.addSublayer(regionLayer)
+        pictureLayer.addSublayer(regionSpace)
         layer?.addSublayer(pictureLayer)
         cursorLayer.path = RemoteDesktopArrowCursor.path()
         cursorLayer.fillColor = NSColor.black.cgColor
@@ -103,7 +127,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         layer?.addSublayer(cursorLayer)
         cornerProbe.onChange = { [weak self] in self?.cornersChanged() }
         addSubview(cornerProbe)
-        session.attachCanvas(displayLayer) { [weak self] cursor in self?.macCursorArrived(cursor) }
+        session.attachCanvas(displayLayer, regionLayer: regionLayer) { [weak self] cursor in self?.macCursorArrived(cursor) }
         AppLogger.info("远程桌面画布：建立", category: RemoteLog.category)
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(windowResignedKey),
@@ -127,6 +151,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         capture.set(active: false)
         releaseAll()
         NotificationCenter.default.removeObserver(self)
+        regionReport?.cancel()
         session.detachCanvas()
     }
 
@@ -239,21 +264,76 @@ final class RemoteDesktopCanvasNSView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
+    // MARK: - 放大
+
+    /// 画面此刻画在哪儿：没放大时是适配框；放大时绕着指针放大。
+    private var pictureFrame: CGRect {
+        RemoteDesktopEventMapper.lensFrame(fit: viewport.contentFrame, pointer: pointerLocation, zoom: zoom)
+    }
+
+    private func setZoom(_ value: CGFloat) {
+        let clamped = min(Self.maxZoom, max(1, value))
+        // 捏到接近 1 倍就吸回去，不留一个 1.03 倍的半糊状态。
+        let next = clamped < 1.05 ? 1 : clamped
+        guard next != zoom else { return }
+        zoom = next
+        layoutContent()
+        onZoomChanged(zoom)
+    }
+
+    /// 放大镜按钮：换下一档。
+    func stepZoom() {
+        setZoom(RemoteDesktopEventMapper.nextZoomStep(after: zoom))
+    }
+
+    override func magnify(with event: NSEvent) {
+        pointerLocation = location(of: event)
+        setZoom(zoom * (1 + event.magnification))
+    }
+
+    /// 双指轻点两下：在 1 倍和 2 倍之间切换。
+    override func smartMagnify(with event: NSEvent) {
+        pointerLocation = location(of: event)
+        setZoom(zoom > 1 ? 1 : 2)
+    }
+
+    /// 视口变了：停稳一小会儿把看得见的那一块报给那台 Mac，一直在动时隔一段也报一次（同手机画布）。
+    private func reportVisibleRegionSoon() {
+        guard session.supportsRegions else { return }
+        regionReport?.cancel()
+        if Date().timeIntervalSince(lastRegionReport) >= 0.3 {
+            reportVisibleRegion()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in self?.reportVisibleRegion() }
+        regionReport = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func reportVisibleRegion() {
+        lastRegionReport = Date()
+        session.requestRegion(RemoteDesktopRegionPolicy.visibleRegion(picture: pictureFrame, view: bounds, zoom: zoom))
+    }
+
     private func layoutContent() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let frame = viewport.contentFrame
+        let frame = pictureFrame
         if pictureLayer.frame != frame { pictureLayer.frame = frame }
         let video = CGRect(x: 0, y: 0, width: frame.width / contentFraction.width, height: frame.height / contentFraction.height)
         if displayLayer.frame != video { displayLayer.frame = video }
-        pictureLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
+        // 放大后画面的角早就在窗口外面了：不切圆角。
+        pictureLayer.applyRemoteDesktopCorners(zoom > 1 ? .square : viewport.pictureCorners)
         // 圆角那一步在四角都是直角时会把裁切关掉；视频层比画面区域大时一定要裁。
         if contentFraction.width < 1 || contentFraction.height < 1 { pictureLayer.masksToBounds = true }
-        cursorLayer.position = viewport.viewPoint(normalized: CGPoint(x: CGFloat(macCursor.x), y: CGFloat(macCursor.y)))
+        RemoteDesktopRegionPlacement.layout(regionSpace, in: CGRect(origin: .zero, size: frame.size))
+        cursorLayer.position = CGPoint(x: frame.minX + CGFloat(macCursor.x) * frame.width,
+                                       y: frame.minY + CGFloat(macCursor.y) * frame.height)
         // 本机指针在画面上并且能控制时，本机光标就是那台 Mac 的光标，不再画一个。
         let localIsCursor = session.canControl && mouseInside
         cursorLayer.isHidden = session.info == nil || !macCursor.visible || localIsCursor
         CATransaction.commit()
+        reportVisibleRegionSoon()
     }
 
     // MARK: - 光标形状
@@ -329,7 +409,11 @@ final class RemoteDesktopCanvasNSView: NSView {
     }
 
     private func pointerMoved(_ event: NSEvent) {
-        sendMove(to: location(of: event))
+        let point = location(of: event)
+        pointerLocation = point
+        // 放大着：画面跟着指针走。
+        if zoom > 1 { layoutContent() }
+        sendMove(to: point)
     }
 
     private func sendMove(to point: CGPoint) {

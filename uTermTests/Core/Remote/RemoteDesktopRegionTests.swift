@@ -75,6 +75,42 @@ final class RemoteDesktopRegionTests: XCTestCase {
                        CGRect(x: 1600, y: 450, width: 800, height: 900))
     }
 
+    func test_visible_region_and_mac_lens_frame() throws {
+        // 手机：画面放大 2 倍、左上角对齐视图：看得见左上四分之一。
+        let view = CGRect(x: 0, y: 0, width: 900, height: 600)
+        let picture = CGRect(x: 0, y: 0, width: 1800, height: 1200)
+        let visible = try XCTUnwrap(RemoteDesktopRegionPolicy.visibleRegion(picture: picture, view: view, zoom: 2))
+        XCTAssertEqual(visible, RemoteDesktopRegion(x: 0, y: 0, width: 0.5, height: 0.5))
+        // 没放大（或只放大一点点）不报；画面整个在视图外不报。
+        XCTAssertNil(RemoteDesktopRegionPolicy.visibleRegion(picture: view, view: view, zoom: 1))
+        XCTAssertNil(RemoteDesktopRegionPolicy.visibleRegion(picture: picture, view: view, zoom: 1.1))
+        XCTAssertNil(RemoteDesktopRegionPolicy.visibleRegion(picture: picture.offsetBy(dx: 5000, dy: 0), view: view, zoom: 2))
+
+        // Mac 主控端：放大时画面绕着指针走，指针底下那一点不动。
+        let fit = CGRect(x: 0, y: 50, width: 900, height: 500)
+        XCTAssertEqual(RemoteDesktopEventMapper.lensFrame(fit: fit, pointer: CGPoint(x: 450, y: 300), zoom: 1), fit)
+        let centered = RemoteDesktopEventMapper.lensFrame(fit: fit, pointer: CGPoint(x: 450, y: 300), zoom: 2)
+        XCTAssertEqual(centered, CGRect(x: -450, y: -200, width: 1800, height: 1000))
+        // 指针在左上角：画面左上角对齐适配框；在右下角：右下角对齐。指针扫过整个窗口就看得到整块屏幕。
+        XCTAssertEqual(RemoteDesktopEventMapper.lensFrame(fit: fit, pointer: fit.origin, zoom: 3).origin, fit.origin)
+        let corner = RemoteDesktopEventMapper.lensFrame(fit: fit, pointer: CGPoint(x: fit.maxX, y: fit.maxY), zoom: 3)
+        XCTAssertEqual(corner.maxX, fit.maxX, accuracy: 0.001)
+        XCTAssertEqual(corner.maxY, fit.maxY, accuracy: 0.001)
+        // 指针在黑边里：按最近的边算，画面不会跑出去。
+        XCTAssertEqual(RemoteDesktopEventMapper.lensFrame(fit: fit, pointer: CGPoint(x: -40, y: 10), zoom: 3).origin, fit.origin)
+        // 放大后看得见的那一块，正是要报给那台 Mac 的。
+        let seen = try XCTUnwrap(RemoteDesktopRegionPolicy.visibleRegion(picture: centered, view: CGRect(x: 0, y: 0, width: 900, height: 600), zoom: 2))
+        XCTAssertEqual(seen.x, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(seen.width, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(seen.y, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(seen.height, 0.6, accuracy: 1e-9)
+
+        XCTAssertEqual(RemoteDesktopEventMapper.nextZoomStep(after: 1), 2)
+        XCTAssertEqual(RemoteDesktopEventMapper.nextZoomStep(after: 2), 3)
+        XCTAssertEqual(RemoteDesktopEventMapper.nextZoomStep(after: 3), 1)
+        XCTAssertEqual(RemoteDesktopEventMapper.nextZoomStep(after: 1.7), 3, "捏合出来的中间值按下一档走")
+    }
+
     // MARK: - 缩放器的裁切
 
     /// 四个象限四种颜色的 BGRA 图：左上红、右上绿、左下蓝、右下白。

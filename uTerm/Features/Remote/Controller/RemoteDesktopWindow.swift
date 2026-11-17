@@ -173,6 +173,9 @@ struct RemoteDesktopContent: View {
     @State private var windowChoices: [RemoteDesktopWindowSummary] = []
     @State private var windowNote: String?
     @State private var loadingWindows = false
+    /// 放大镜：点一下换一档（画布自己记倍数，这里只留着给按钮高亮）。
+    @State private var zoomStepToken = 0
+    @State private var zoomLevel: CGFloat = 1
 
     private var session: RemoteDesktopSession { model.session }
     private var client: RemoteMacClient { model.client }
@@ -190,7 +193,9 @@ struct RemoteDesktopContent: View {
                     onShortcutCaptureFailed: {
                         show(String(localized: "在「系统设置 › 隐私与安全性 › 辅助功能」里允许 uTerm，才能把 ⌘Tab 等系统快捷键发过去"),
                              seconds: 6)
-                    })
+                    },
+                    zoomStepToken: zoomStepToken,
+                    onZoomChanged: { zoomLevel = $0 })
                 stateOverlay
                 lockOverlay
             }
@@ -255,6 +260,12 @@ struct RemoteDesktopContent: View {
                                                       : String(localized: "打开声音：在本机播放那台 Mac 的声音")) {
                         session.toggleAudio()
                     }
+                }
+                barButton(zoomLevel > 1 ? "minus.magnifyingglass" : "plus.magnifyingglass", active: zoomLevel > 1,
+                          help: zoomLevel > 1
+                            ? String(localized: "已放大，画面跟着指针走（点按换下一档；触控板上双指捏合也可以）")
+                            : String(localized: "放大画面：画面跟着指针走（触控板上双指捏合也可以）")) {
+                    zoomStepToken += 1
                 }
                 barButton("gauge.with.dots.needle.33percent", active: showStats,
                           help: showStats ? String(localized: "隐藏延迟与帧率") : String(localized: "显示延迟与帧率")) {

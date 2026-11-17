@@ -109,6 +109,8 @@ nonisolated enum DefaultsKey {
     static let remoteDesktopSendSystemShortcuts = "remote.desktop.sendSystemShortcuts"
     /// iOS：远程桌面只看一个窗口时，请 Mac 把那个窗口调成手机画布的大小（默认开）。
     static let remoteDesktopFitWindow = "remote.desktop.fitWindow"
+    /// iOS：调窗口大小时字要多大（`RemoteDesktopWindowFit.textScales` 里的一个，1 = 和在 Mac 上一样大）。
+    static let remoteDesktopWindowTextScale = "remote.desktop.windowTextScale"
     /// macOS：中继 relayID → 装着它的已保存主机（ServerProfile.id），本机自己管，不同步。
     static let remoteRelayManagedHosts = "remote.relay.managedHosts"
     /// macOS：最近一次从 OSS 取到的中继最新版本与取的时间。

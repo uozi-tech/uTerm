@@ -77,8 +77,6 @@ final class RemoteDesktopCanvasView: UIView {
     /// 向 Mac 报「此刻看得见哪一块」：停稳一小会儿才报，拖着不放时隔一段也报一次。
     private var regionReport: DispatchWorkItem?
     private var lastRegionReport = Date.distantPast
-    /// 放大到这个倍数以上才向 Mac 要区域：只放大一点点时整块的画面够用，不值得换。
-    static let regionZoomThreshold: CGFloat = 1.15
     static let regionSettle: TimeInterval = 0.12
     static let regionMaxWait: TimeInterval = 0.3
     /// 角落让开（画面朝对角缩小）时空出来的那两条窄缝用画面自己的边延伸补满（系统的背景延伸：边缘镜像再模糊），
@@ -268,16 +266,8 @@ final class RemoteDesktopCanvasView: UIView {
 
     private func reportVisibleRegion() {
         lastRegionReport = Date()
-        session.requestRegion(Self.visibleRegion(picture: viewport.displayedFrame, view: bounds, zoom: viewport.zoom))
-    }
-
-    /// 画面（整块显示器在视图里的位置）露在视图里的那一块，归一化到画面。没放大、或一点都没露出来时是 nil。
-    static func visibleRegion(picture: CGRect, view: CGRect, zoom: CGFloat) -> RemoteDesktopRegion? {
-        guard zoom >= regionZoomThreshold, picture.width > 0, picture.height > 0 else { return nil }
-        let visible = picture.intersection(view)
-        guard !visible.isNull, visible.width > 0, visible.height > 0 else { return nil }
-        return RemoteDesktopRegion(x: (visible.minX - picture.minX) / picture.width, y: (visible.minY - picture.minY) / picture.height,
-                                   width: visible.width / picture.width, height: visible.height / picture.height)
+        session.requestRegion(RemoteDesktopRegionPolicy.visibleRegion(picture: viewport.displayedFrame, view: bounds,
+                                                                      zoom: viewport.zoom))
     }
 
     private func layoutContent() {

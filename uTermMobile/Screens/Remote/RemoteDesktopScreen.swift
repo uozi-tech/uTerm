@@ -40,6 +40,7 @@ struct RemoteDesktopScreen: View {
     /// 画布（顶栏下面那块）此刻的点尺寸：只看一个窗口时请 Mac 把窗口调成这么大。
     @State private var canvasSize = CGSize.zero
     @State private var refitTask: Task<Void, Never>?
+    @AppStorage(DefaultsKey.remoteDesktopWindowTextScale) private var windowTextScale = 1.0
     @State private var pickedPhoto: PhotosPickerItem?
     /// 粘贴的进度（读取 / 压缩 / 发送，带进度条）与结果（「已粘贴到 Mac」/「已复制到手机」/ 失败原因）；
     /// 结果几秒后自己消失。
@@ -224,8 +225,9 @@ struct RemoteDesktopScreen: View {
         guard let session, session.windowID != nil, session.windowFit != nil, !keyBarShown else { return }
         refitTask = Task {
             try? await Task.sleep(for: .milliseconds(800))
-            guard !Task.isCancelled, canvasSize == size, !keyBarShown else { return }
-            await session.refitWindow(to: size)
+            guard !Task.isCancelled, canvasSize == size, !keyBarShown,
+                  let fit = RemoteDesktopWindowFit.size(canvas: size, textScale: windowTextScale) else { return }
+            await session.refitWindow(to: fit)
         }
     }
 

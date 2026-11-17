@@ -9,6 +9,7 @@ struct RemoteDesktopWindowPicker: View {
     let canvasSize: CGSize
     @Environment(\.dismiss) private var dismiss
     @AppStorage(DefaultsKey.remoteDesktopFitWindow) private var fitsWindow = true
+    @AppStorage(DefaultsKey.remoteDesktopWindowTextScale) private var textScale = 1.0
     @State private var windows: [RemoteDesktopWindowSummary] = []
     /// Mac 列不出来时给的原因，或请求本身失败的原因。
     @State private var note: String?
@@ -22,9 +23,22 @@ struct RemoteDesktopWindowPicker: View {
                 }
                 Section {
                     Toggle("把窗口调成这里的大小", isOn: $fitsWindow)
+                    if fitsWindow {
+                        // 字越大，窗口调得越小（排得下的内容越少），整个画面放大铺满这里。
+                        Picker("文字大小", selection: $textScale) {
+                            Text("小").tag(0.8)
+                            Text("标准").tag(1.0)
+                            Text("大").tag(1.25)
+                            Text("特大").tag(1.5)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                 } footer: {
-                    Text("Mac 上的窗口会改成和这里的画面一样大，里面的内容重新排版，字和在 Mac 上一样大。看完后窗口恢复原来的大小。")
+                    Text("Mac 上的窗口会改成适合这里的大小，里面的内容重新排版。「标准」时字和在 Mac 上一样大；字越大，窗口里排得下的内容越少。看完后窗口恢复原来的大小。")
                 }
+                // 正看着一个窗口时改这两项：马上按新的重调。
+                .onChange(of: fitsWindow) { _, _ in refit() }
+                .onChange(of: textScale) { _, _ in refit() }
                 Section {
                     if loading, windows.isEmpty {
                         HStack {
@@ -78,9 +92,19 @@ struct RemoteDesktopWindowPicker: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    private var fit: CGSize? {
+        fitsWindow ? RemoteDesktopWindowFit.size(canvas: canvasSize, textScale: textScale) : nil
+    }
+
     private func choose(_ id: UInt32?) {
         dismiss()
-        let fit = fitsWindow && canvasSize.width > 0 && canvasSize.height > 0 ? canvasSize : nil
+        let fit = fit
+        Task { await session.switchWindow(to: id, fit: fit) }
+    }
+
+    private func refit() {
+        guard let id = session.windowID else { return }
+        let fit = fit
         Task { await session.switchWindow(to: id, fit: fit) }
     }
 
