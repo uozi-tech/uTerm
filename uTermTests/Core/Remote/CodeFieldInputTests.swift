@@ -86,6 +86,39 @@ final class CodeFieldInputTests: XCTestCase {
         XCTAssertEqual(submits, 1, "回车回调")
     }
 
+    /// ⌘V：面板是 key 窗口而 App 不在前台时菜单接不到，视图自己在 `performKeyEquivalent` 里接。
+    func test_command_v_pastes_the_whole_code_from_the_pasteboard() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 80), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = UCodeKeyView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        view.pasteboard = pasteboard
+        window.contentView?.addSubview(view)
+        view.insertText("12")
+
+        func commandV() throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 0,
+                                           windowNumber: window.windowNumber, context: nil, characters: "v",
+                                           charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9))
+        }
+        pasteboard.clearContents()
+        pasteboard.setString("654 321", forType: .string)
+        XCTAssertFalse(view.performKeyEquivalent(with: try commandV()), "焦点不在这里时不接 ⌘V")
+        XCTAssertEqual(view.code, "12")
+
+        XCTAssertTrue(window.makeFirstResponder(view))
+        XCTAssertTrue(view.performKeyEquivalent(with: try commandV()))
+        XCTAssertEqual(view.code, "654321", "粘贴整串换掉输了一半的")
+
+        pasteboard.clearContents()
+        pasteboard.setString("没有数字", forType: .string)
+        XCTAssertTrue(view.performKeyEquivalent(with: try commandV()))
+        XCTAssertEqual(view.code, "654321", "剪贴板里没有数字就不动")
+    }
+
     func test_key_view_stops_at_its_length() {
         let view = UCodeKeyView()
         view.length = 4

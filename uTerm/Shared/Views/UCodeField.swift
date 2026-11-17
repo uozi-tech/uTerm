@@ -125,6 +125,8 @@ final class UCodeKeyView: NSView {
     var onChange: (String) -> Void = { _ in }
     var onFocus: (Bool) -> Void = { _ in }
     var onSubmit: () -> Void = {}
+    /// ⌘V 读的剪贴板（测试里换成自己的一块，不碰系统那块）。
+    var pasteboard: NSPasteboard = .general
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -223,7 +225,7 @@ final class UCodeKeyView: NSView {
     }
 
     @objc func paste(_ sender: Any?) {
-        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        guard let text = pasteboard.string(forType: .string) else { return }
         set(CodeFieldInput.pasting(text, over: code, length: length))
     }
 
