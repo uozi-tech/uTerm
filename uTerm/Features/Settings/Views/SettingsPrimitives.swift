@@ -226,10 +226,13 @@ struct SettingsRow<Trailing: View>: View {
                     .frame(width: 20)
             }
             VStack(alignment: .leading, spacing: 3) {
+                // 标签按一行的宽度占位、不折行：右侧控件有布局优先级，窗口一窄（设置窗只剩一栏宽），
+                // 输入框会先把自己撑到理想宽度，标签被挤到近乎零宽、一个字一行竖着排——行被撑得很高，
+                // 字又被裁得看不见（「模型服务」里的 Base URL / API Key）。标签都是短语，窄的时候该缩的是输入框。
                 Text(label)
                     .font(.system(size: 13))
                     .foregroundStyle(UD.text)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fixedSize()
                 if let hint {
                     hintText(hint)
                 }
