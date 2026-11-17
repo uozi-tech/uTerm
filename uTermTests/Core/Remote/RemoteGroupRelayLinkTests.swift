@@ -459,6 +459,30 @@ final class RemoteGroupRelayLinkTests: XCTestCase {
         pipe.read { XCTAssertEqual($0.clientFrames, (0..<5).map { Data([UInt8($0)]) }) }
     }
 
+    /// 本机拨出去、建成已久的那条，对方又拨进来：对方手里已经没有线路，换成新的（不论 ID 大小）；建成不久的仍按 ID 规则。
+    func test_an_inbound_dial_replaces_an_old_outbound_link_but_not_a_fresh_one() throws {
+        let c = Party("C"), m = Party("M")
+        let mine = Pipe(client: c, mailbox: m)       // C 拨 M：C 手里的是 `client` 那头
+        let theirs = Pipe(client: m, mailbox: c)     // M 拨 C：C 手里的是信箱那头
+        mine.start()
+        theirs.start()
+        established(mine)
+        established(theirs)
+        let existing = mine.client!, candidate = try XCTUnwrap(theirs.read { $0.mailbox })
+        let since = try XCTUnwrap(existing.establishedAt)
+        let local = c.device.id, peer = m.device.id
+        XCTAssertTrue(RemoteGroupRelayService.prefers(candidate, over: existing, local: local, peer: peer,
+                                                      now: since.addingTimeInterval(6), raceWindow: 5),
+                      "建成 6 秒的旧线路：换成对方新拨进来的")
+        let byRule = RemoteGroupLANService.leads(peer, over: local)
+        XCTAssertEqual(RemoteGroupRelayService.prefers(candidate, over: existing, local: local, peer: peer,
+                                                       now: since.addingTimeInterval(1), raceWindow: 5), byRule,
+                       "竞争窗口之内：按 ID 规则")
+        // 反过来（本机新拨出的顶对方拨进来的旧线路）不适用：本机有活的线路就不会拨。
+        XCTAssertEqual(RemoteGroupRelayService.prefers(existing, over: candidate, local: local, peer: peer,
+                                                       now: since.addingTimeInterval(60), raceWindow: 5), !byRule)
+    }
+
     func test_two_links_between_the_same_pair_keep_the_one_dialed_by_the_smaller_id() {
         let a = Party("A"), b = Party("B")
         let (small, large) = a.device.id.uuidString < b.device.id.uuidString ? (a, b) : (b, a)

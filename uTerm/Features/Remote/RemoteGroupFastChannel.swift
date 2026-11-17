@@ -24,7 +24,7 @@ nonisolated final class RemoteGroupFastChannel: @unchecked Sendable {
          onReceive: @escaping @Sendable (RemoteGroupFastSync.Received) -> Void) {
         let reference = RelayReference()
         let sync = RemoteGroupFastSync(overlay: overlay, coalesceDelay: syncCoalesceDelay, syncInterval: syncInterval,
-                                       onLinkClosed: { peer, _ in reference.service?.linkLost(peer) },
+                                       onLinkClosed: { peer, kind in reference.service?.linkLost(peer, kind: kind) },
                                        onReceive: onReceive)
         self.sync = sync
         // 只认钥匙串名册里的设备：叠加层收到的 `device` 记录不给人进快通道的资格。

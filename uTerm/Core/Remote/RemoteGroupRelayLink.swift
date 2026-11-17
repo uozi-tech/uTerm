@@ -301,6 +301,8 @@ nonisolated final class RemoteGroupRelaySession: RemoteGroupPeerLink, @unchecked
     private var receiveCipher: RemoteGroupLANCipher?
     private var reassembler = RemoteGroupRelayReassembler()
     private(set) var isEstablished = false
+    /// 握好手的时刻（去重时据此分「两边同时拨的竞争」和「旧的那条早就死了」）。
+    private(set) var establishedAt: Date?
     private(set) var isEnded = false
     private var onEstablished: ((RemoteGroupRelaySession) -> Void)?
     private var onEnded: ((RemoteGroupRelaySession, _ wasEstablished: Bool, Error) -> Void)?
@@ -525,6 +527,7 @@ nonisolated final class RemoteGroupRelaySession: RemoteGroupPeerLink, @unchecked
 
     private func establish() {
         isEstablished = true
+        establishedAt = lastReceived
         let callback = onEstablished
         onEstablished = nil
         callback?(self)

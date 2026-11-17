@@ -18,6 +18,11 @@ nonisolated final class RemoteGroupLANService: @unchecked Sendable {
     static let fallbackDialDelay: TimeInterval = 5
     static let maxBackoff: TimeInterval = 30
     static let maxHandshaking = 8
+    /// 两台同时互连的竞争窗口：本机发起的那条建成超过这么久，对方又连进来，说明对方手里已经没有连接（有活的它就不会连），
+    /// 本机那条多半已经死了（对方换了网络、睡过），换成新的。窗口之内按 ID 规则挑。
+    static let raceWindow: TimeInterval = 5
+    /// 一条连接活过这么久才算稳：之后断开，退避从头算；比这短就断的照常翻倍。
+    static let stableAfter: TimeInterval = 10
 
     private struct Peer {
         var endpoint: NWEndpoint
@@ -41,6 +46,8 @@ nonisolated final class RemoteGroupLANService: @unchecked Sendable {
     private var active: [UUID: RemoteGroupLANConnection] = [:]
     /// 每条留下的连接一个令牌：断开的回调按它认是不是还是那一条。
     private var activeTokens: [UUID: UUID] = [:]
+    /// 留下的那条什么时候建成的。
+    private var activeSince: [UUID: Date] = [:]
     private var timer: DispatchSourceTimer?
     private var running = false
     private var listenerPort: UInt16?
@@ -92,6 +99,7 @@ nonisolated final class RemoteGroupLANService: @unchecked Sendable {
             handshaking = [:]
             active = [:]
             activeTokens = [:]
+            activeSince = [:]
             for connection in all { connection.close() }
         }
     }
@@ -239,32 +247,38 @@ nonisolated final class RemoteGroupLANService: @unchecked Sendable {
         if let dialed { dialing.remove(dialed) }
         guard running else { return connection.close() }
         let peer = connection.peer.id
+        let now = Date()
         if let existing = active[peer] {
-            guard Self.prefers(connection, over: existing, local: local.id, peer: peer) else { return connection.close() }
+            guard Self.prefers(connection, over: existing, existingSince: activeSince[peer], local: local.id, peer: peer,
+                               now: now) else { return connection.close() }
             existing.close()
         }
         active[peer] = connection
         let token = UUID()
         activeTokens[peer] = token
-        if var known = peers[peer] {
-            known.backoff = 1
-            peers[peer] = known
-        }
+        activeSince[peer] = now
+        // 退避不在这里清零：连上又马上被关掉的（被对端去重掉）照样要退避，活够 `stableAfter` 才清零。
         let wrapper = ClosingLink(connection: connection) { [weak self] in
             guard let self else { return }
             self.queue.async {
                 guard self.activeTokens[peer] == token else { return }
                 self.active[peer] = nil
                 self.activeTokens[peer] = nil
-                self.backOff(peer, initial: true)
+                self.activeSince[peer] = nil
+                self.backOff(peer, initial: Date().timeIntervalSince(now) >= Self.stableAfter)
             }
         }
         onLink(wrapper)
     }
 
-    /// 同一对设备之间留哪条：发起方是 ID 小的那台的优先，同一方发起的留新的。两边按同一条规则挑，结果一样。
-    private static func prefers(_ candidate: RemoteGroupLANConnection, over existing: RemoteGroupLANConnection,
-                                local: UUID, peer: UUID) -> Bool {
+    /// 同一对设备之间留哪条：对方发起的、而本机那条是本机发起且建成超过 `raceWindow` 的，换成新的（见 `raceWindow`）；
+    /// 否则发起方是 ID 小的那台的优先，同一方发起的留新的。两边按同一条规则挑，结果一样。
+    static func prefers(_ candidate: RemoteGroupLANConnection, over existing: RemoteGroupLANConnection,
+                        existingSince: Date?, local: UUID, peer: UUID, now: Date = Date()) -> Bool {
+        if candidate.initiatorID == peer, existing.initiatorID == local,
+           let existingSince, now.timeIntervalSince(existingSince) >= raceWindow {
+            return true
+        }
         let leader = leads(local, over: peer) ? local : peer
         let candidateLeads = candidate.initiatorID == leader, existingLeads = existing.initiatorID == leader
         if candidateLeads != existingLeads { return candidateLeads }

@@ -162,8 +162,15 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
         var fallbackDialDelay: TimeInterval = 5
         /// 控制连接断了以后重连的退避上限。
         var maxBackoff: TimeInterval = 60
-        /// 一台对端拨不通时的退避上限。
+        /// 一台对端拨不通（或拨通了很快又断）时的退避上限。
         var maxDialBackoff: TimeInterval = 30
+        /// 同一台对端两次拨号之间至少隔多久（无论什么原因）。
+        var minDialInterval: TimeInterval = 1
+        /// 一条线路活过这么久才算稳：之后断开，退避从头算；比这短就断的照常翻倍。
+        var stableAfter: TimeInterval = 10
+        /// 两边同时拨的竞争窗口：本机那条建成不到这么久时，对方拨进来的按 ID 规则挑；超过了说明对方手里已经没有线路
+        ///（有活的线路它就不会拨），本机那条多半已经死了，换成新的。
+        var raceWindow: TimeInterval = 5
         /// 被中继拒绝（满了、信箱 ID 绑着别的钥匙、成员密钥不认）或被顶替之后多久再试，每次翻倍。
         var refusedRetry: TimeInterval = 300
         var maxRefusedRetry: TimeInterval = 3600
@@ -188,6 +195,23 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
             Options(config: { RemoteRelayConfigStore().load() }, mailboxKey: { try RemoteGroupMailbox.hostKey() },
                     dialer: RemoteGroupRelayNetworkDialer(), watchesNetwork: true)
         }
+    }
+
+    /// 本进程里认证通过过的中继配置（relayID + 成员密钥的摘要）：它们之后「发了请求对端一言不发就断开」多半是网络没好
+    ///（睡眠中短暂唤醒、刚换网），按普通的网络失败重试，不当成配置被拒。
+    private static let confirmedLock = NSLock()
+    nonisolated(unsafe) private static var confirmedConfigs: Set<Data> = []
+
+    static func fingerprint(_ config: RemoteRelayConfig) -> Data {
+        Data(SHA256.hash(data: Data("\(config.relayID)\n\(config.key)".utf8)))
+    }
+
+    static func markConfirmed(_ config: RemoteRelayConfig) {
+        _ = confirmedLock.withLock { confirmedConfigs.insert(fingerprint(config)) }
+    }
+
+    static func wasConfirmed(_ config: RemoteRelayConfig) -> Bool {
+        confirmedLock.withLock { confirmedConfigs.contains(fingerprint(config)) }
     }
 
     /// 同时在握手的拨进来的线路最多几条。
@@ -224,6 +248,7 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
         var retryAt = Date.distantPast
         var backoff: TimeInterval = 1
         var attempts = 0
+        var lastDial = Date.distantPast
     }
 
     let local: RemoteGroupDevice
@@ -260,6 +285,9 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
     /// 握好手、交给了同步层的（每台对端一条）。
     private var active: [UUID: RemoteGroupRelaySession] = [:]
     private var resetsSent: [Data] = []
+    /// 测试用：拨进来的一建好就关掉（模拟对端每次都 `bye`）；不往外拨。
+    private var closesInboundForTesting = false
+    private var dialsForTesting = true
     /// 网络变化的监听（只在主线程上碰）。
     nonisolated(unsafe) private var networkWatcher: RemoteNetworkWatcher?
 
@@ -299,6 +327,14 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
                 control?.close()
             }
             tearDown()
+        }
+    }
+
+    /// 测试用：拨进来的线路一建好就关掉（对端会收到 `bye`）、本机不往外拨。
+    func setTestingBehavior(closesInbound: Bool, dials: Bool) {
+        queue.sync {
+            closesInboundForTesting = closesInbound
+            dialsForTesting = dials
         }
     }
 
@@ -354,8 +390,10 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
         }
     }
 
-    /// 同步层说和这台对端的线路（局域网）断了：信箱在线就马上拨中继，不等下一拍。
-    func linkLost(_ peer: UUID) {
+    /// 同步层说和这台对端的线路断了。断的是局域网：信箱在线就马上拨中继，不等下一拍（仍受两次拨号的最小间隔约束）。
+    /// 断的是中继线路自己：什么都不做，`ended` 已经按退避排好了下一次（以前这里也清零，结果每 60 毫秒拨一轮）。
+    func linkLost(_ peer: UUID, kind: RemoteGroupLinkKind) {
+        guard kind != .relay else { return }
         queue.async { [self] in
             guard running, peers[peer] != nil else { return }
             peers[peer]?.retryAt = .distantPast
@@ -522,6 +560,7 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
             $0.lastPing = now
             $0.pingAsked = nil
         }
+        Self.markConfirmed(config)
         let instance = state(line).instance
         registration.control.start(onMessage: { [weak self] message in
             guard let self else { return }
@@ -554,8 +593,13 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
             case "hostKey": reason = "这个信箱 ID（\(mailboxID.uuidString)）在中继上绑着别的钥匙，可在中继上 uterm-relay forget 它"
             default: reason = "中继拒绝了（\(code)）"
             }
-        } else if case RemoteRelayError.rejected = error {
-            refused = true
+        } else if case RemoteRelayError.rejected = error, let config {
+            if Self.wasConfirmed(config) {
+                // 这份配置之前认证通过过：一言不发就断开多半是网络还没好，按普通失败重试。
+                reason = "中继在认证之前断开了（这份配置之前连上过，多半是网络还没好）"
+            } else {
+                refused = true
+            }
         } else if case RemoteRelayError.notConfigured = error {
             refused = true
         } else if line == .mailbox, mailboxKeyCache == nil {
@@ -720,7 +764,8 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
             var peer = peers[id] ?? PeerState()
             if peer.onlineSince == nil { peer.onlineSince = now }
             peers[id] = peer
-            guard active[id] == nil, peer.retryAt <= now,
+            guard dialsForTesting, active[id] == nil, peer.retryAt <= now,
+                  now.timeIntervalSince(peer.lastDial) >= timing.minDialInterval,
                   !outbound.values.contains(where: { $0.peer.id == id }),
                   !inbound.values.contains(where: { $0.peer.id == id }) else { continue }
             let leads = RemoteGroupLANService.leads(local.id, over: id)
@@ -731,6 +776,7 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
             peerSessions[id] = session
             let entry = entries[peer.attempts % entries.count]
             peers[id]?.attempts += 1
+            peers[id]?.lastDial = now
             let link = RemoteGroupRelaySession(
                 dialing: entry, session: session, local: local, identityKey: identityKey, queue: queue, timing: timing.link,
                 now: now, emit: { [weak self] box in self?.emitFromClient(box, session: session, to: id) })
@@ -759,15 +805,17 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
     private func established(_ link: RemoteGroupRelaySession) {
         guard running else { return link.end(RemoteGroupRelayLinkError.closed) }
         let peer = link.peer.id
+        if link.role == .mailbox, closesInboundForTesting { return link.end(RemoteGroupRelayLinkError.replaced) }
         if let existing = active[peer], existing !== link {
-            guard Self.prefers(link, over: existing, local: local.id, peer: peer) else {
+            guard Self.prefers(link, over: existing, local: local.id, peer: peer, now: Date(),
+                               raceWindow: timing.raceWindow) else {
                 return link.end(RemoteGroupRelayLinkError.replaced)
             }
             active[peer] = nil
             existing.end(RemoteGroupRelayLinkError.replaced)
         }
         active[peer] = link
-        peers[peer, default: PeerState()].backoff = 1
+        // 退避不在这里清零：建好了又马上断的（被对端去重掉、bye、reset）照样要退避，活够 `stableAfter` 才清零（见 `ended`）。
         let direction = link.role == .client ? "本机拨出" : "对方拨入"
         AppLogger.notice("设备组：和「\(link.peer.name)」的中继线路已连上（\(direction)）", category: RemoteLog.category)
         onLink(link)
@@ -788,20 +836,31 @@ nonisolated final class RemoteGroupRelayService: @unchecked Sendable {
         }
         guard link.role == .client, var state = peers[peer] else { return }
         let now = Date()
-        // 握好手又被对端关掉的（多半是对端那边局域网还连着），也按退避来，免得每秒拨一次。
-        if wasEstablished, (error as? RemoteGroupRelayLinkError) != .closedByPeer {
+        let lived = link.establishedAt.map { now.timeIntervalSince($0) } ?? 0
+        if wasEstablished, lived >= timing.stableAfter {
+            // 稳稳地用过一阵才断的：退避从头算，1 秒后再拨。
             state.backoff = 1
-            state.retryAt = now.addingTimeInterval(1)
+            state.retryAt = now.addingTimeInterval(timing.minDialInterval)
         } else {
+            // 没拨通，或拨通了很快又断（被对端去重掉、bye、reset、对方不在线）：翻倍退避。
             state.retryAt = now.addingTimeInterval(state.backoff)
             state.backoff = min(state.backoff * 2, timing.maxDialBackoff)
         }
         peers[peer] = state
     }
 
-    /// 同一对设备之间留哪条：拨号的是 ID 小的那台的优先，同一方拨的留新的。两边按同一条规则挑，结果一样。
+    /// 同一对设备之间留哪条。
+    ///
+    /// - 对方拨进来的（`candidate` 在本机的信箱上），而本机手里那条是本机拨出去的、建成超过 `raceWindow`：换成新的。
+    ///   对方有活的线路就不会拨，拨进来本身就说明对方手里已经没有线路；本机那条多半已经死了（对方的信箱重连过），
+    ///   只是本机还没往上发东西、没收到 reset。不换的话对方每拨一次就被本机按下面的规则关掉。
+    /// - 否则（两边同时拨的竞争）：拨号的是 ID 小的那台的优先，同一方拨的留新的。两边按同一条规则挑，结果一样。
     static func prefers(_ candidate: RemoteGroupRelaySession, over existing: RemoteGroupRelaySession,
-                        local: UUID, peer: UUID) -> Bool {
+                        local: UUID, peer: UUID, now: Date = Date(), raceWindow: TimeInterval = Timing.standard.raceWindow) -> Bool {
+        if candidate.role == .mailbox, existing.opener == local,
+           let since = existing.establishedAt, now.timeIntervalSince(since) >= raceWindow {
+            return true
+        }
         let leader = RemoteGroupLANService.leads(local, over: peer) ? local : peer
         let candidateLeads = candidate.opener == leader, existingLeads = existing.opener == leader
         if candidateLeads != existingLeads { return candidateLeads }

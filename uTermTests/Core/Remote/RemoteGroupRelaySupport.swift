@@ -20,7 +20,11 @@ final class FakeGroupRelay: RemoteGroupRelayDialer, @unchecked Sendable {
     private var largest = 0
     private var oversizedCount = 0
     private var registrations = 0
+    private var clientOpens = 0
     private var resets = 0
+    private var hellos: [String: Int] = [:]
+    private var silentRejections = 0
+    private var rejectsEverything = false
 
     var maxHosts: Int {
         get { lock.withLock { maxHostsValue } }
@@ -37,13 +41,36 @@ final class FakeGroupRelay: RemoteGroupRelayDialer, @unchecked Sendable {
     var registrationAttempts: Int { lock.withLock { registrations } }
     /// 信箱回给拨号方的 reset 有几个（看中继上过的 `box`）。
     var resetCount: Int { lock.withLock { resets } }
+    /// 开过几次 `client` 连接（含被拒的）。
+    var clientAttempts: Int { lock.withLock { clientOpens } }
+    /// `from` 往信箱 `to` 发过几个 hello（= 拨过几次）。
+    func helloCount(from: UUID, to mailbox: UUID) -> Int {
+        lock.withLock { hellos["\(from.uuidString)>\(mailbox.uuidString)", default: 0] }
+    }
+    var totalHellos: Int { lock.withLock { hellos.values.reduce(0, +) } }
+
+    /// 接下来几次连接（`host` 或 `client`）在认证前一言不发就断开：真实连接上报成 `RemoteRelayError.rejected`。
+    /// 认证不过是这样，刚睡醒、网络没好也是这样。
+    func rejectSilently(next count: Int) { lock.withLock { silentRejections = count } }
+    /// 之后的连接全部这样断开（配置从来就不对）。
+    func rejectSilentlyForever() { lock.withLock { rejectsEverything = true } }
+
+    private func takeRejection() -> Bool {
+        lock.withLock {
+            if rejectsEverything { return true }
+            guard silentRejections > 0 else { return false }
+            silentRejections -= 1
+            return true
+        }
+    }
 
     func registerMailbox(_ mailbox: UUID, hostKey: P256.Signing.PrivateKey,
                          config: RemoteRelayConfig) async throws -> RemoteGroupRelayRegistration {
         let id = mailbox.uuidString, key = hostKey.publicKey.derRepresentation
         let control = FakeRelayControl(relay: self, hostID: id)
+        lock.withLock { registrations += 1 }
+        if takeRejection() { throw RemoteRelayError.rejected }
         let previous: FakeRelayControl? = try lock.withLock {
-            registrations += 1
             if let bound = bindings[id], bound != key { throw RemoteRelayError.refused("hostKey") }
             if hosts[id] == nil, hosts.count >= maxHostsValue { throw RemoteRelayError.refused("full") }
             bindings[id] = key
@@ -60,6 +87,8 @@ final class FakeGroupRelay: RemoteGroupRelayDialer, @unchecked Sendable {
     }
 
     func openClient(config: RemoteRelayConfig) async throws -> RemoteGroupRelayRegistration {
+        lock.withLock { clientOpens += 1 }
+        if takeRejection() { throw RemoteRelayError.rejected }
         let control = FakeRelayControl(relay: self, hostID: nil)
         _ = lock.withLock { clients.insert(ObjectIdentifier(control)) }
         return RemoteGroupRelayRegistration(control: control, server: "fake")
@@ -105,6 +134,10 @@ final class FakeGroupRelay: RemoteGroupRelayDialer, @unchecked Sendable {
                 return .some(message.to.flatMap { hosts[$0] })
             }
             guard let host else { return }
+            if let box = message.box.flatMap({ Data(base64Encoded: $0) }), case .hello = RemoteGroupRelayBox.decode(box),
+               let from = message.from, let to = message.to {
+                lock.withLock { hellos["\(from)>\(to)", default: 0] += 1 }
+            }
             if let host {
                 host.deliver(RemoteRelayMessage(type: "signal", session: session, from: message.from, box: message.box))
             } else {
@@ -218,6 +251,9 @@ enum RelayFixtures {
         timing.fallbackDialDelay = fallback
         timing.maxBackoff = 0.3
         timing.maxDialBackoff = 0.3
+        timing.minDialInterval = 0.1
+        timing.stableAfter = 1
+        timing.raceWindow = 0.5
         timing.refusedRetry = 30
         timing.maxRefusedRetry = 30
         timing.link = RemoteGroupRelaySession.Timing(handshake: 2, ping: 0.4, idle: idle)
@@ -241,7 +277,7 @@ final class RelayNode: @unchecked Sendable {
     let mailboxKey: P256.Signing.PrivateKey
 
     init(_ name: String, relay: (any RemoteGroupRelayDialer)?, config: RelayConfigBox? = nil,
-         timing: RemoteGroupRelayService.Timing = RelayFixtures.fastTiming()) {
+         timing: RemoteGroupRelayService.Timing = RelayFixtures.fastTiming(), syncInterval: TimeInterval = 0.5) {
         let identity = Curve25519.KeyAgreement.PrivateKey(), mailboxKey = P256.Signing.PrivateKey()
         let device = RemoteGroupDevice(id: UUID(), name: name, model: nil, platform: RemoteDevicePlatform.mobile.rawValue,
                                        publicKey: identity.publicKey.rawRepresentation,
@@ -259,7 +295,7 @@ final class RelayNode: @unchecked Sendable {
         self.device = device
         self.overlay = overlay
         channel = RemoteGroupFastChannel(local: device, identityKey: identity, overlay: overlay, advertises: false,
-                                         browses: false, relay: options, syncCoalesceDelay: 0.005, syncInterval: 0.5) { _ in }
+                                         browses: false, relay: options, syncCoalesceDelay: 0.005, syncInterval: syncInterval) { _ in }
     }
 
     var id: UUID { device.id }
@@ -297,8 +333,9 @@ final class RelayNode: @unchecked Sendable {
 
 extension XCTestCase {
     func relayNode(_ name: String, relay: (any RemoteGroupRelayDialer)?, config: RelayConfigBox? = nil,
-                   timing: RemoteGroupRelayService.Timing = RelayFixtures.fastTiming()) -> RelayNode {
-        let node = RelayNode(name, relay: relay, config: config, timing: timing)
+                   timing: RemoteGroupRelayService.Timing = RelayFixtures.fastTiming(),
+                   syncInterval: TimeInterval = 0.5) -> RelayNode {
+        let node = RelayNode(name, relay: relay, config: config, timing: timing, syncInterval: syncInterval)
         let channel = node.channel
         addTeardownBlock { channel.stop() }
         return node

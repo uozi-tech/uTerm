@@ -13,8 +13,9 @@ final class RemoteGroupRelayServiceTests: XCTestCase {
     private var clock = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func node(_ name: String, relay: FakeGroupRelay?, config: RelayConfigBox? = nil,
-                      timing: RemoteGroupRelayService.Timing = RelayFixtures.fastTiming()) -> RelayNode {
-        relayNode(name, relay: relay, config: config, timing: timing)
+                      timing: RemoteGroupRelayService.Timing = RelayFixtures.fastTiming(),
+                      syncInterval: TimeInterval = 0.5) -> RelayNode {
+        relayNode(name, relay: relay, config: config, timing: timing, syncInterval: syncInterval)
     }
 
     /// 等到两台之间经中继连上（两边的同步层都用着中继那条）。
@@ -188,6 +189,87 @@ final class RemoteGroupRelayServiceTests: XCTestCase {
         let record = FastSyncFixtures.join(leader.device, at: t0)
         try leader.save(record)
         awaitFast("新的那条能用") { follower.accounts.contains(record.account) }
+    }
+
+    /// 真机上的重拨风暴（§17「重拨风暴」）：B 拨出的那条，A 的信箱重连后已经死了，B 还不知道（旧线路上一直没东西发、
+    /// 收不到 reset）。A 往 B 的信箱拨，B 要认出「对方拨进来 = 它手里没有线路」，用新的换掉旧的，而不是按 ID 规则拒掉。
+    func test_a_dial_from_a_peer_whose_link_died_replaces_the_stale_link_on_the_first_try() throws {
+        let relay = FakeGroupRelay()
+        // 同步层 60 秒才对一次账、线路 60 秒才探活：旧线路上一直没东西发，留着它的那台发现不了它已经死了。
+        var timing = RelayFixtures.fastTiming(idle: 60)
+        timing.link.ping = 60
+        let a = node("A", relay: relay, timing: timing, syncInterval: 60)
+        let b = node("B", relay: relay, timing: timing, syncInterval: 60)
+        try RelayNode.registerEverywhere([a, b])
+        a.startRelay()
+        b.startRelay()
+        awaitRelayLink(a, b)
+        let (leader, follower) = leaderAndFollower(a, b)
+        awaitFast("留下的是 leader 拨的") {
+            leader.relay.opener(for: follower.id) == leader.id && follower.relay.opener(for: leader.id) == leader.id
+        }
+        idleFast(0.7)  // 过了竞争窗口（0.5 秒）
+        let before = relay.helloCount(from: follower.id, to: leader.mailboxID)
+
+        follower.relay.forgetInboundForTesting()
+        awaitFast("follower 拨一次就进去、leader 的旧线路被换下", timeout: 3) {
+            follower.relay.opener(for: leader.id) == follower.id && leader.relay.opener(for: follower.id) == follower.id
+        }
+        XCTAssertEqual(relay.helloCount(from: follower.id, to: leader.mailboxID) - before, 1, "第一次拨号就被接受")
+        idleFast(1)
+        XCTAssertEqual(relay.helloCount(from: follower.id, to: leader.mailboxID) - before, 1, "之后不再拨")
+        XCTAssertEqual(relay.helloCount(from: leader.id, to: follower.mailboxID), 1, "leader 一共只拨过最初那一次")
+        XCTAssertLessThan(relay.totalHellos, 10)
+        let record = FastSyncFixtures.join(leader.device, at: t0)
+        try leader.save(record)
+        awaitFast("新的那条能用") { follower.accounts.contains(record.account) }
+    }
+
+    /// 对端每次握好手就 `bye`：拨号按退避（1 秒起翻倍）来，几秒里只拨几次，不是每 60 毫秒一轮。
+    func test_a_peer_that_closes_every_link_at_once_is_redialed_with_backoff() throws {
+        let relay = FakeGroupRelay()
+        var timing = RelayFixtures.fastTiming()
+        timing.maxDialBackoff = 30
+        timing.minDialInterval = 1
+        timing.stableAfter = 10
+        let a = node("A", relay: relay, timing: timing), b = node("B", relay: relay, timing: timing)
+        try RelayNode.registerEverywhere([a, b])
+        b.relay.setTestingBehavior(closesInbound: true, dials: false)
+        a.startRelay()
+        b.startRelay()
+        awaitFast("拨过一次") { relay.helloCount(from: a.id, to: b.mailboxID) >= 1 }
+        idleFast(4.5)
+        // 第 0、1、3 秒各一次，下一次在第 7 秒。
+        let dials = relay.helloCount(from: a.id, to: b.mailboxID)
+        XCTAssertGreaterThanOrEqual(dials, 2)
+        XCTAssertLessThanOrEqual(dials, 4, "按退避压住了（之前是 10 秒 170 轮）")
+        XCTAssertTrue(a.relay.connectedPeers.isEmpty)
+    }
+
+    func test_a_silent_close_after_the_config_has_worked_is_retried_like_a_network_failure() throws {
+        let relay = FakeGroupRelay()
+        let a = node("A", relay: relay)
+        a.startRelay()
+        awaitFast("注册上") { a.relay.isRegistered }
+        let attempts = relay.registrationAttempts
+        // 睡眠中短暂唤醒、网络没好：重连时中继那头一言不发就断开（和认证不过一个样子）。
+        relay.rejectSilently(next: 1)
+        relay.kick(host: a.mailboxID)
+        awaitFast("按普通退避重试、注册上（不等 5 分钟）", timeout: 3) {
+            a.relay.isRegistered && relay.registrationAttempts >= attempts + 2
+        }
+    }
+
+    func test_a_silent_close_with_a_config_that_never_worked_is_treated_as_refused() throws {
+        let relay = FakeGroupRelay()
+        relay.rejectSilentlyForever()
+        let a = node("A", relay: relay)
+        a.startRelay()
+        awaitFast("两条各试过一次") { relay.registrationAttempts == 1 && relay.clientAttempts == 1 }
+        idleFast(1)
+        XCTAssertEqual(relay.registrationAttempts, 1, "从没连上过的配置：按被拒处理，过 5 分钟再试")
+        XCTAssertEqual(relay.clientAttempts, 1)
+        XCTAssertFalse(a.relay.isRegistered)
     }
 
     func test_after_the_relay_drops_a_mailbox_both_sides_reconnect() throws {
