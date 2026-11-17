@@ -155,6 +155,25 @@ final class RemoteDesktopWindowTests: XCTestCase {
         XCTAssertEqual(session.info?.displayWidth, 1512)
     }
 
+    func test_static_window_stream_stays_connected() async throws {
+        // 2026-11-17 真机：切到只看一个窗口后画面一静止，手机每隔 4–10 秒就判定连接已死、重连重开流。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 200, y: 100, width: 951, height: 615))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        await session.switchWindow(to: 42, fit: CGSize(width: 951, height: 615))
+        XCTAssertEqual(session.state, .streaming)
+        let sourcesBefore = mac.sources.count
+        // 画面完全不动 7 秒：连接要一直在，流不该被重开。
+        try await Task.sleep(for: .seconds(7))
+        XCTAssertEqual(client.state, .connected)
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(mac.sources.count, sourcesBefore, "静止期间流被重开了 \(mac.sources.count - sourcesBefore) 次")
+    }
+
     func test_window_gone_is_rejected_and_connection_survives() async throws {
         let (server, mac, client) = try await makeRig()
         defer { server.stop() }

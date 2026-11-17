@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import XCTest
 @preconcurrency import Network
@@ -110,6 +111,48 @@ final class RemoteDesktopClipboardTests: XCTestCase {
         mac.clipboard.copy("停流之后拷贝的")
         try await Task.sleep(for: Self.quietWait)
         XCTAssertEqual(inbox.all.count, 3)
+    }
+
+    func test_slow_clipboard_read_does_not_stall_the_link() async throws {
+        // 2026-11-17 真机：手机上拷的图经接力出现在 Mac 的剪贴板里，Mac 一读就卡几十秒。当时读取在连接队列上，
+        // 手机的心跳没人回，画面静止时每 4 秒判一次连接已死、重连重开流。
+        let mac = FakeDesktopMac()
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        let (session, inbox) = await startSession(client)
+        defer { session.stop() }
+        session.send(.move(x: 0.5, y: 0.5))
+        let moved = await waitUntil { mac.injector.all.count == 1 }
+        XCTAssertTrue(moved)
+        let sources = mac.sources.count
+
+        // Mac 的剪贴板变了，读它要 8 秒；这期间屏幕完全不动（没有画面可发，全靠心跳撑着连接）。
+        mac.clipboard.readDelay = 8
+        mac.clipboard.copy("要等很久才读得到的字")
+        try await Task.sleep(for: .seconds(6))
+        XCTAssertEqual(client.state, .connected, "读剪贴板卡住时连接不能断")
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(mac.sources.count, sources, "流被重开了：手机判定连接已死")
+        // 卡住期间输入照常到 Mac。
+        session.send(.move(x: 0.6, y: 0.6))
+        let stillWorks = await waitUntil(2) { mac.injector.all.count == 2 }
+        XCTAssertTrue(stillWorks, "读剪贴板卡住时输入应照常送达")
+        // 读完了，文字照样回传。
+        let arrived = await waitUntil(6) { inbox.all == [.text("要等很久才读得到的字")] }
+        XCTAssertTrue(arrived, "读完之后剪贴板应回传：\(inbox.all)")
+    }
+
+    func test_handoff_and_non_text_clipboards_are_not_read() {
+        let text = NSPasteboard.PasteboardType.string.rawValue
+        XCTAssertTrue(RemoteSystemClipboard.shouldReadText(types: [text]))
+        XCTAssertTrue(RemoteSystemClipboard.shouldReadText(types: ["public.html", text]))
+        // 接力（通用剪贴板）来的：内容在别的设备上，一读就要等系统去取。不读。
+        XCTAssertFalse(RemoteSystemClipboard.shouldReadText(types: [RemoteSystemClipboard.remoteClipboardType, text]))
+        XCTAssertFalse(RemoteSystemClipboard.shouldReadText(types: [RemoteSystemClipboard.remoteClipboardType, "public.png"]))
+        // 只有图片 / 文件：没有文字可回传，也不去读（读文字会让系统去试各种转换）。
+        XCTAssertFalse(RemoteSystemClipboard.shouldReadText(types: ["public.png", "public.tiff"]))
+        XCTAssertFalse(RemoteSystemClipboard.shouldReadText(types: []))
     }
 
     func test_view_only_phone_gets_no_clipboard() async throws {

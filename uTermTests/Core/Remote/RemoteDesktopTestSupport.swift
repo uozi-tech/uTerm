@@ -501,7 +501,22 @@ final class FakeClipboard: RemoteDesktopClipboardSource, @unchecked Sendable {
 
     var changeCount: Int { lock.lock(); defer { lock.unlock() }; return count }
 
-    func text() -> String? { lock.lock(); defer { lock.unlock() }; return content }
+    /// 读文字要卡多久（模拟接力来的内容：系统去别的设备取，取不到要等超时）。
+    var readDelay: TimeInterval {
+        get { lock.lock(); defer { lock.unlock() }; return _readDelay }
+        set { lock.lock(); _readDelay = newValue; lock.unlock() }
+    }
+    private var _readDelay: TimeInterval = 0
+    /// 读过几次文字。
+    private(set) var reads = 0
+
+    func text() -> String? {
+        let delay = readDelay
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+        lock.lock(); defer { lock.unlock() }
+        reads += 1
+        return content
+    }
 
     /// 模拟 Mac 上的一次拷贝；nil = 拷贝了不是文字的东西（图片、文件）。
     func copy(_ text: String?) {

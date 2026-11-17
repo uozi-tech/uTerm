@@ -209,7 +209,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var pendingGeometry: RemoteDesktopFrameGeometry?
     private var clipboardTimer: DispatchSourceTimer?
     /// 已经处理过（发过、或不该发）的剪贴板版本。
-    private var seenClipboardChange = 0
+    /// 读系统剪贴板可能卡很久（接力来的内容要等系统去别的设备取），所以不在连接队列上读：定时器和读取都在这条
+    /// 队列上，读到了再回连接队列发。卡住时只是剪贴板回传晚到，画面、输入、心跳都不受影响。
+    private let clipboardQueue = DispatchQueue(label: "com.uozi.uTerm.remote.clipboard", qos: .utility)
+    private let clipboardState = RemoteClipboardWatchState()
     /// 码控日志：上一次打印时的读数（真机 Wi-Fi 上看码率为什么上不去，只有这一个来源）。
     private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
     /// 手机开流时要了画面往返读数：随码控日志每 2 s 发一条 `desktopLatency`。
@@ -351,16 +354,12 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             injector.inject(input)
         case .desktopPaste:
             guard let content = try? RemoteDesktopPaste(decoding: message.payload), let injector else { return }
-            injector.paste(content)
-            // 粘贴已经同步写好了剪贴板：这一版是手机自己送来的，不回传。
-            if let clipboard { seenClipboardChange = clipboard.changeCount }
+            pasteWithoutEcho(content, injector)
         case .desktopPasteChunk:
             // 只能看时不攒：这些内容不会被用到，不能白占内存。
             guard let injector, let chunk = try? RemoteDesktopPasteChunk(decoding: message.payload),
                   let content = pasteAssembler.receive(chunk) else { return }
-            injector.paste(content)
-            // 同上：拼好的粘贴写好了剪贴板，不回传。
-            if let clipboard { seenClipboardChange = clipboard.changeCount }
+            pasteWithoutEcho(content, injector)
         case .desktopKeyframe:
             forceKeyframe = true
             awaitingRecovery = true
@@ -1075,10 +1074,15 @@ nonisolated extension RemoteDesktopStreamer {
 
     /// 手机第一次操作时开始看剪贴板：只查看的手机拿不到 Mac 的剪贴板。起点是此刻的版本，开流前就在剪贴板里的
     /// 东西不发。
+    ///
+    /// 读剪贴板全在 `clipboardQueue` 上（见它的注释）：2026-11-17 之前在连接队列上读，手机上拷的图经接力出现在
+    /// Mac 的剪贴板里时，这一读卡了几十秒，手机的心跳没人回，每 4 秒判一次连接已死、重连重开流。
     private func startClipboardWatch() {
         guard let clipboard, clipboardTimer == nil else { return }
-        seenClipboardChange = clipboard.changeCount
-        let timer = DispatchSource.makeTimerSource(queue: link.queue)
+        let state = clipboardState
+        // 起点排在定时器第一拍之前（同一条串行队列）。
+        clipboardQueue.async { state.setSeen(clipboard.changeCount) }
+        let timer = DispatchSource.makeTimerSource(queue: clipboardQueue)
         let interval = Int(Self.clipboardIntervalNanos)
         timer.schedule(deadline: .now() + .nanoseconds(interval), repeating: .nanoseconds(interval),
                        leeway: .milliseconds(50))
@@ -1087,13 +1091,55 @@ nonisolated extension RemoteDesktopStreamer {
         clipboardTimer = timer
     }
 
+    /// 在 `clipboardQueue` 上。
     private func pollClipboard(_ clipboard: any RemoteDesktopClipboardSource) {
-        guard isLive else { return }
-        let change = clipboard.changeCount
-        guard change != seenClipboardChange else { return }
-        seenClipboardChange = change
-        guard let text = clipboard.text(), let content = RemoteDesktopClipboard.message(for: text) else { return }
-        link.sendOnQueue(RemoteMessage(.desktopClipboard, channel: channel, payload: content.encoded()))
+        guard clipboardState.shouldRead(change: clipboard.changeCount),
+              let text = clipboard.text(), let content = RemoteDesktopClipboard.message(for: text) else { return }
+        link.queue.async { [weak self] in
+            guard let self, self.isLive else { return }
+            self.link.sendOnQueue(RemoteMessage(.desktopClipboard, channel: self.channel, payload: content.encoded()))
+        }
+    }
+
+    /// 粘贴手机送来的内容，并且不把它当成 Mac 上的新拷贝回传：写剪贴板期间监视先停一下，写完把新的版本号记成
+    /// 已经看过。在连接队列上；版本号在 `clipboardQueue` 上读。
+    private func pasteWithoutEcho(_ content: RemoteDesktopPaste, _ injector: any RemoteDesktopInputSink) {
+        guard let clipboard else { return injector.paste(content) }
+        let state = clipboardState
+        state.beginPaste()
+        injector.paste(content)
+        clipboardQueue.async { state.endPaste(seen: clipboard.changeCount) }
+    }
+}
+
+/// 剪贴板回传记的账：看过的版本号、有没有粘贴正在写剪贴板。连接队列和剪贴板队列都会碰，带锁。
+nonisolated final class RemoteClipboardWatchState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen = 0
+    private var pastes = 0
+
+    func setSeen(_ change: Int) {
+        lock.lock(); defer { lock.unlock() }
+        seen = change
+    }
+
+    /// 这个版本号是新的、而且不是我们自己粘贴写进去的：记成看过，返回 true（该去读了）。
+    func shouldRead(change: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard pastes == 0, change != seen else { return false }
+        seen = change
+        return true
+    }
+
+    func beginPaste() {
+        lock.lock(); defer { lock.unlock() }
+        pastes += 1
+    }
+
+    func endPaste(seen change: Int) {
+        lock.lock(); defer { lock.unlock() }
+        pastes = max(0, pastes - 1)
+        seen = change
     }
 }
 
