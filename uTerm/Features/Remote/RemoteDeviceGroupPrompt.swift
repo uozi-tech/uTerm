@@ -45,7 +45,9 @@ final class RemoteDeviceGroupPrompt {
         }
         close()
         shown = request.id
-        let hosting = NSHostingView(rootView: RemoteDeviceGroupPromptView(service: service, candidateID: request.id))
+        let hosting = NSHostingView(rootView: RemoteDeviceGroupPromptView(service: service, candidateID: request.id) { [weak self] in
+            self?.refocus()
+        })
         hosting.frame.size = hosting.fittingSize
         let panel = NSPanel(contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
                             styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
@@ -73,6 +75,13 @@ final class RemoteDeviceGroupPrompt {
         panel.setFrame(frame, display: true)
     }
 
+    /// 系统验证框（另一个进程的窗口）关掉之后，key 窗口不一定回到这个面板（App 不在前台时回到原来那个 App）：
+    /// 把面板重新设成 key，输码格子是它的第一响应者，接着打字就能重输。面板不激活 App，`makeKey` 也不激活。
+    private func refocus() {
+        guard let panel, panel.isVisible else { return }
+        panel.makeKey()
+    }
+
     private func close() {
         panel?.orderOut(nil)
         panel = nil
@@ -83,9 +92,13 @@ final class RemoteDeviceGroupPrompt {
 struct RemoteDeviceGroupPromptView: View {
     let service: RemoteDeviceGroupService
     let candidateID: UUID
+    /// 验证本人之后让面板重新拿到键盘（`RemoteDeviceGroupPrompt.refocus`）。
+    var refocus: () -> Void = {}
 
     @State private var text = ""
     @State private var shakes = 0
+    /// 在验证本人 / 核对：这期间再输满、按回车都不再提交。
+    @State private var submitting = false
 
     private var request: RemoteDeviceGroup.JoinRequest? {
         service.pendingRequest.flatMap { $0.id == candidateID ? $0 : nil }
@@ -150,8 +163,16 @@ struct RemoteDeviceGroupPromptView: View {
         return false
     }
 
+    /// 先验证本人（`service.submit` 里），再核对。发出去了、验证没过都清掉输入：没过时面板留着，重输即再验一次。
     private func submit(_ request: RemoteDeviceGroup.JoinRequest) {
-        guard RemoteGroupJoinCrypto.normalizedCode(text) != nil else { return }
-        if service.submit(text, for: request) { text = "" }
+        guard !submitting, RemoteGroupJoinCrypto.normalizedCode(text) != nil else { return }
+        let code = text
+        submitting = true
+        Task {
+            _ = await service.submit(code, for: request)
+            submitting = false
+            if text == code { text = "" }
+            refocus()
+        }
     }
 }

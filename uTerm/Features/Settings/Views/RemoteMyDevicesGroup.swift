@@ -33,14 +33,14 @@ struct RemoteMyDevicesGroup: View {
             await service.keepActive()
         }
         .sheet(item: $removing) { plan in
-            RemoteGroupRemoveSheet(plan: plan) { ids in
-                removing = nil
-                if let ids { model?.remove(ids) }
+            // 验证本人通过、移除做了才关；验证没过单子留着，可以再点或取消。
+            RemoteGroupRemoveSheet(plan: plan, onCancel: { removing = nil }) { ids in
+                if await service.remove(ids) { removing = nil }
             }
         }
         .alert(RemoteDeviceGroupCopy.leaveTitle, isPresented: $confirmingLeave) {
             Button("取消", role: .cancel) {}
-            Button("离开", role: .destructive) { model?.leave() }
+            Button("离开", role: .destructive) { Task { await service.leave() } }
         } message: {
             Text(RemoteDeviceGroupCopy.leaveMessage)
         }
@@ -72,7 +72,9 @@ struct RemoteMyDevicesGroup: View {
             SettingsGroup(title: RemoteDeviceGroupCopy.outsideHeader, footer: RemoteDeviceGroupCopy.outsideFooter) {
                 ForEach(model.otherDevices) { device in
                     SettingsListRow(icon: symbol(for: device), tint: UD.text3, title: device.name,
-                                    subtitle: device.modelDetail) { EmptyView() }
+                                    subtitle: RemoteDeviceGroupCopy.outsideSubtitle(device, pairedHosts: model.pairedHostIDs)) {
+                        EmptyView()
+                    }
                 }
             }
         }
@@ -96,6 +98,9 @@ struct RemoteMyDevicesGroup: View {
         if model.isInGroup, !model.isSelfRemoved {
             memberList(model)
         } else {
+            if model.suggestsJoiningLocalMac {
+                SettingsInlineNote(tone: .neutral, text: RemoteDeviceGroupCopy.joinThisMacHint)
+            }
             joinRow(model)
             joinProgress(model)
             ForEach(model.listedOtherDevices) { device in
@@ -188,10 +193,13 @@ struct RemoteMyDevicesGroup: View {
     }
 }
 
-/// 移除前的确认：列出由它加进来的设备（默认一起移除，可以取消勾选）。`onDone(nil)` 是取消。
+/// 移除前的确认：列出由它加进来的设备（默认一起移除，可以取消勾选）。「移除」交给 `onRemove`（先验证本人），
+/// 等它的时候按钮不再响应。
 struct RemoteGroupRemoveSheet: View {
     @State var plan: RemoteGroupRemovalPlan
-    let onDone: ([UUID]?) -> Void
+    let onCancel: () -> Void
+    let onRemove: ([UUID]) async -> Void
+    @State private var isRemoving = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -212,10 +220,17 @@ struct RemoteGroupRemoveSheet: View {
             }
             HStack {
                 Spacer()
-                UDButton(title: "取消", style: .secondary) { onDone(nil) }
+                UDButton(title: "取消", style: .secondary) { onCancel() }
                     .keyboardShortcut(.cancelAction)
-                UDButton(title: "移除", style: .danger) { onDone(plan.ids) }
-                    .keyboardShortcut(.defaultAction)
+                UDButton(title: "移除", style: .danger) {
+                    guard !isRemoving else { return }
+                    isRemoving = true
+                    Task {
+                        await onRemove(plan.ids)
+                        isRemoving = false
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)

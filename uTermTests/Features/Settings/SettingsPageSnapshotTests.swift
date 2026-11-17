@@ -315,8 +315,17 @@ final class SettingsPageSnapshotTests: XCTestCase {
     private final class GroupRig {
         let synced = RemoteMemorySyncedStorage()
         lazy var roster = RemoteGroupRoster(storage: synced)
-        /// 模型只弱引用 `hosts`：这里拿着。
+        /// 模型只弱引用 `hosts` / `localHost`：这里拿着。
         var hosts: [RemoteGroupFakeHosts] = []
+        var localHosts: [RemoteGroupFakeLocalHost] = []
+
+        /// 这台 Mac 开着被控（§19 的「加入」提示要它）。
+        func host(_ group: RemoteDeviceGroup) {
+            let local = RemoteGroupFakeLocalHost()
+            local.hostID = group.local.id
+            localHosts.append(local)
+            group.localHost = local
+        }
 
         func device(_ name: String, model: String?, platform: RemoteDevicePlatform,
                     hosts fake: RemoteGroupFakeHosts? = nil) -> RemoteDeviceGroup {
@@ -376,6 +385,12 @@ final class SettingsPageSnapshotTests: XCTestCase {
         mac.refresh()
         try await shootGroup("my-devices-solo", mac, into: dir)
 
+        // 这台 Mac 开着被控：「加入」上方提示把它加进设备组（§19）。
+        solo.host(mac)
+        mac.refresh()
+        XCTAssertTrue(mac.suggestsJoiningLocalMac)
+        try await shootGroup("my-devices-solo-hint", mac, height: 460, into: dir)
+
         mac.startJoin()
         try await shootGroup("my-devices-code", mac, height: 520, into: dir)
 
@@ -403,7 +418,7 @@ final class SettingsPageSnapshotTests: XCTestCase {
         for dark in [false, true] {
             let fixture = try groupFixture(mini)
             try await shoot("my-devices-remove", size: NSSize(width: 400, height: 240), dark: dark, into: dir) {
-                environment(RemoteGroupRemoveSheet(plan: plan) { _ in }, fixture, dark: dark)
+                environment(RemoteGroupRemoveSheet(plan: plan, onCancel: {}) { _ in }, fixture, dark: dark)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .background(UD.bg)
             }
@@ -426,7 +441,8 @@ final class SettingsPageSnapshotTests: XCTestCase {
         try await shootPrompt("my-devices-prompt-waiting", service, request.id, into: dir)
         guard case .showingCode(let ipadCode, _) = ipad.joinState else { return XCTFail("iPad 没显示核对码") }
         let wrong = String(format: "%06d", ((Int(ipadCode) ?? 0) + 1) % 1_000_000)
-        XCTAssertTrue(service.submit(wrong, for: request))
+        let sentWrong = await service.submit(wrong, for: request)
+        XCTAssertTrue(sentWrong)
         try await shootPrompt("my-devices-prompt-verifying", service, request.id, into: dir)
         ipad.refresh()
         service.tick()
@@ -482,6 +498,21 @@ final class SettingsPageSnapshotTests: XCTestCase {
         XCTAssertEqual(keeper.removedDevices.map(\.waitingHosts), [[home.name], [home.name, studio.name]])
         XCTAssertTrue(keeper.isInGroup)
         try await shootGroup("my-devices-removed-devices", keeper, height: 460, into: dir)
+
+        // 「未加入的设备」里有一台本机配对过的 Mac：那一行多一句（§19）；另一台 iPad 照旧只写机型。
+        // Mac 不在线，不替谁开通。
+        let outside = GroupRig()
+        let studioDirectory = RemoteGroupFakeHosts()
+        let member = outside.device("Mac mini", model: "Mac mini", platform: .mac, hosts: studioDirectory)
+        let partner = outside.device("iPhone Duo", model: "iPhone 17 Pro", platform: .mobile)
+        let studioMac = outside.device("工作室 Mac Studio", model: "Mac Studio", platform: .mac)
+        _ = outside.device("工作室 iPad Pro", model: "iPad Pro", platform: .mobile)
+        studioDirectory.addMac(studioMac.local.name, id: studioMac.local.id, publicKey: studioMac.local.publicKey, online: false)
+        try outside.join(partner, via: member)
+        member.refresh()
+        XCTAssertEqual(member.pairedHostIDs, [studioMac.local.id])
+        XCTAssertEqual(Set(member.otherDevices.map(\.name)), ["工作室 Mac Studio", "工作室 iPad Pro"])
+        try await shootGroup("my-devices-outside-paired-mac", member, height: 520, into: dir)
     }
 
     private func shootPrompt(_ name: String, _ service: RemoteDeviceGroupService, _ id: UUID, into dir: URL) async throws {

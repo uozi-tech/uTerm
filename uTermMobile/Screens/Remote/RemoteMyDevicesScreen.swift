@@ -35,15 +35,15 @@ struct RemoteMyDevicesScreen: View {
             await service.keepActive()
         }
         .sheet(item: $removing) { plan in
-            RemoveMemberSheet(plan: plan) { ids in
-                removing = nil
-                if let ids { model?.remove(ids) }
+            // 验证本人通过、移除做了才收起；验证没过单子留着，可以再点或取消。
+            RemoveMemberSheet(plan: plan, onCancel: { removing = nil }) { ids in
+                if await service.remove(ids) { removing = nil }
             }
             .presentationDetents([.medium, .large])
             .presentationBackground(M.canvas)
         }
         .confirmationDialog(RemoteDeviceGroupCopy.leaveTitle, isPresented: $confirmingLeave, titleVisibility: .visible) {
-            Button("离开", role: .destructive) { model?.leave() }
+            Button("离开", role: .destructive) { Task { await service.leave() } }
             Button("取消", role: .cancel) {}
         } message: {
             Text(RemoteDeviceGroupCopy.leaveMessage)
@@ -72,7 +72,12 @@ struct RemoteMyDevicesScreen: View {
             removedGroup(model)
             if !model.otherDevices.isEmpty {
                 MInsetGroup(header: RemoteDeviceGroupCopy.outsideHeader, footer: RemoteDeviceGroupCopy.outsideFooter) {
-                    deviceRows(model.otherDevices)
+                    // 本机配对过的 Mac 多一句话，放在名字下面、可以折行。
+                    ForEach(Array(model.otherDevices.enumerated()), id: \.element.id) { index, device in
+                        MInsetRow(icon: glyph(for: device), iconColor: M.text3, label: device.name,
+                                  sub: RemoteDeviceGroupCopy.outsideSubtitle(device, pairedHosts: model.pairedHostIDs),
+                                  subMono: false, wraps: true, last: index == model.otherDevices.count - 1)
+                    }
                 }
             }
         } else {
@@ -190,10 +195,13 @@ struct RemoteMyDevicesScreen: View {
     private func glyph(for device: RemoteGroupDevice) -> String { device.mGlyph }
 }
 
-/// 移除前的确认：列出由它加进来的设备（默认一起移除，可以取消勾选）。`onDone(nil)` 是取消。
+/// 移除前的确认：列出由它加进来的设备（默认一起移除，可以取消勾选）。「移除」交给 `onRemove`（先验证本人），
+/// 等它的时候按钮不再响应。
 private struct RemoveMemberSheet: View {
     @State var plan: RemoteGroupRemovalPlan
-    let onDone: ([UUID]?) -> Void
+    let onCancel: () -> Void
+    let onRemove: ([UUID]) async -> Void
+    @State private var isRemoving = false
 
     var body: some View {
         ScrollView {
@@ -217,8 +225,15 @@ private struct RemoveMemberSheet: View {
                     }
                 }
                 VStack(spacing: 10) {
-                    MBtn(title: String(localized: "移除"), kind: .danger, full: true) { onDone(plan.ids) }
-                    MBtn(title: String(localized: "取消"), kind: .secondary, full: true) { onDone(nil) }
+                    MBtn(title: String(localized: "移除"), kind: .danger, full: true) {
+                        guard !isRemoving else { return }
+                        isRemoving = true
+                        Task {
+                            await onRemove(plan.ids)
+                            isRemoving = false
+                        }
+                    }
+                    MBtn(title: String(localized: "取消"), kind: .secondary, full: true) { onCancel() }
                 }
                 .padding(.horizontal, 16)
             }

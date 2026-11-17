@@ -89,6 +89,8 @@ final class RemoteDeviceGroup {
     private(set) var isOpeningHosts = false
     /// 被移除的设备里还有 Mac 没撤完的（「已移除的设备」，都撤完了就是空的；`RemoteDeviceGroup+Revoke.swift`）。
     private(set) var removedDevices: [RemovedDevice] = []
+    /// 本机配对过的 Mac（`hosts.pairedHosts()`，每轮刷新）：「未加入的设备」里是本机配对过的 Mac 时多一句提示（§19）。
+    private(set) var pairedHostIDs: Set<UUID> = []
     /// 写不进名册或本机钥匙串（多半是钥匙串不可用）。
     var storageError: String?
 
@@ -419,6 +421,11 @@ final class RemoteDeviceGroup {
     func updateHostState(pending: [PendingHost], opening: Bool) {
         if pending != pendingHosts { pendingHosts = pending }
         if opening != isOpeningHosts { isOpeningHosts = opening }
+    }
+
+    /// 本机配对过的 Mac 只在变了时才写。
+    func setPairedHostIDs(_ ids: Set<UUID>) {
+        if ids != pairedHostIDs { pairedHostIDs = ids }
     }
 
     /// 「已移除的设备」只在变了时才写。

@@ -92,13 +92,48 @@ final class RemoteMyDevicesSnapshotTests: XCTestCase {
         try await shootSheet("ios-join-sheet-waiting", service, into: dir)
         guard case .showingCode(let code, _) = newcomer.joinState else { return XCTFail("新设备没显示核对码") }
         let wrong = String(format: "%06d", ((Int(code) ?? 0) + 1) % 1_000_000)
-        XCTAssertTrue(service.submit(wrong, for: request))
+        let sentWrong = await service.submit(wrong, for: request)
+        XCTAssertTrue(sentWrong)
         try await shootSheet("ios-join-sheet-verifying", service, into: dir)
         newcomer.refresh()
         service.tick()
         try await shootSheet("ios-join-sheet-wrong", service, into: dir)
 
+        // 「未加入的设备」里有一台本机配对过的 Mac：那一行多一句（§19）；iPad 照旧只写机型。Mac 不在线，不替谁开通。
+        let outside = Rig()
+        let owner = try outside.device("iPhone Duo", model: "iPhone 17 Pro", platform: .mobile)
+        let partner = try outside.device("Mac mini", model: "Mac mini", platform: .mac)
+        let studio = try outside.device("工作室 Mac Studio", model: "Mac Studio", platform: .mac)
+        _ = try outside.device("工作室 iPad Pro", model: "iPad Pro", platform: .mobile)
+        let macs = PairedMacs()
+        macs.paired = [RemoteGroupVouchTarget(id: studio.local.id, name: studio.local.name, publicKey: studio.local.publicKey,
+                                              model: "Mac Studio", platform: RemoteDevicePlatform.mac.rawValue)]
+        owner.hosts = macs
+        try outside.join(partner, via: owner)
+        owner.refresh()
+        XCTAssertEqual(owner.pairedHostIDs, [studio.local.id])
+        XCTAssertEqual(Set(owner.otherDevices.map(\.name)), ["工作室 Mac Studio", "工作室 iPad Pro"])
+        try await shootScreen("ios-my-devices-outside-paired-mac", owner, into: dir)
+        _ = macs
+
         print("RemoteMyDevicesSnapshotTests 的图在：\(dir.path)")
+    }
+
+    /// 本机配对过的 Mac（只给「未加入的设备」那句提示用）：都不在线，问不到、也不收开通结果。
+    @MainActor
+    private final class PairedMacs: RemoteGroupHostAccess {
+        var paired: [RemoteGroupVouchTarget] = []
+        func vouchTargets() -> [RemoteGroupVouchTarget] { [] }
+        func pairedHosts() -> [RemoteGroupVouchTarget] { paired }
+        func vouch(_ device: RemoteGroupDevice, at host: UUID) async throws -> RemoteVouchResult { throw RemoteProtocolError.closed }
+        func adopt(_ grant: RemoteGroupGrant) -> RemoteGroupAdoption { .alreadyKnown }
+        func revokeSibling(_ deviceID: UUID, publicKey: Data, at host: UUID) async throws -> RemoteSiblingRevokeResult {
+            throw RemoteProtocolError.closed
+        }
+        func trustedHost(_ id: UUID) -> RemoteGroupTrustedHost? {
+            paired.first { $0.id == id }.map { RemoteGroupTrustedHost(publicKey: $0.publicKey, pairedAt: Date(timeIntervalSince1970: 0)) }
+        }
+        func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool { false }
     }
 
     // MARK: - 画图

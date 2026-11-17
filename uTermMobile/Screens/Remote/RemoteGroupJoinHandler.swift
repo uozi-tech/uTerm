@@ -31,6 +31,8 @@ struct RemoteGroupJoinSheet: View {
     @Environment(RemoteDeviceGroupService.self) private var service
     @Environment(\.mAccent) private var accent
     @State private var code = ""
+    /// 在验证本人 / 核对：这期间不再提交。
+    @State private var submitting = false
 
     var body: some View {
         if let request = service.pendingRequest {
@@ -47,10 +49,8 @@ struct RemoteGroupJoinSheet: View {
                 if RemoteDeviceGroupCopy.acceptsCode(request.status) {
                     MCodeField(code: $code, length: RemoteGroupJoinCrypto.codeLength, groupSize: 3,
                                isError: isWrong(request.status) && code.isEmpty) { full in
-                        // 让最后一位显示出来再核对。
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                            if service.submit(full, for: request) { code = "" }
-                        }
+                        // 让最后一位显示出来，再验证本人、核对（`service.submit`）。验证没过单子不收，清掉输入可以重输。
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { submit(full, for: request) }
                     }
                 } else if request.status == .verifying {
                     ProgressView()
@@ -68,6 +68,16 @@ struct RemoteGroupJoinSheet: View {
             // 换了一台设备、输错了要输新数：清掉上一次的。
             .onChange(of: request.id) { _, _ in code = "" }
             .onChange(of: request.status) { _, _ in code = "" }
+        }
+    }
+
+    private func submit(_ full: String, for request: RemoteDeviceGroup.JoinRequest) {
+        guard !submitting else { return }
+        submitting = true
+        Task {
+            _ = await service.submit(full, for: request)
+            submitting = false
+            if code == full { code = "" }
         }
     }
 

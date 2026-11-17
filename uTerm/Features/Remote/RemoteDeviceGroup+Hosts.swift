@@ -76,10 +76,12 @@ extension RemoteDeviceGroup {
         guard let hosts else {
             updateHostState(pending: [], opening: isOpening(state))
             updateRemovedDevices(state, paired: [])
+            setPairedHostIDs([])
             return
         }
         let paired = hosts.pairedHosts().filter { $0.id != local.id }
         let pairedIDs = Set(paired.map(\.id))
+        setPairedHostIDs(pairedIDs)
         settleRevocations(&state, paired: pairedIDs)
         let inGroup = !state.members.isEmpty
         publishHostRecords(snapshot, state, paired: inGroup ? paired : [])

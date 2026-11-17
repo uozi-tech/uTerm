@@ -13,6 +13,9 @@ import Observation
 ///
 /// 快通道（`RemoteGroupFastChannel`，§7.4）也跟着 `start` / `stop` 起停：别的设备经局域网直接送来记录时马上
 /// `refresh()`，不等下一拍。
+///
+/// 移除、输码加入、离开走这里带验证的入口（`remove` / `submit` / `leave`，先 `RemoteGroupOwnerCheck` 验证本人，§19）；
+/// 模型上的同名方法不验证，界面别直接调。
 @MainActor
 @Observable
 final class RemoteDeviceGroupService {
@@ -39,13 +42,17 @@ final class RemoteDeviceGroupService {
     /// 有几处界面要它勤快些（「我的设备」开着）。
     @ObservationIgnored private var demand = 0
     @ObservationIgnored private var sleepGeneration = 0
+    /// 移除、输码加入、离开之前验证本人（§19）。
+    @ObservationIgnored let ownerCheck: RemoteGroupOwnerCheck
 
     init(makeModel: @escaping (_ createsIdentity: Bool) -> RemoteDeviceGroup? = { RemoteDeviceGroup.live(createsIdentity: $0) },
          makeFastChannel: @escaping (RemoteDeviceGroup, @escaping @Sendable () -> Void) -> RemoteGroupFastChannel? = {
              model, received in RemoteGroupFastChannel.live(for: model) { _ in received() }
-         }) {
+         },
+         ownerCheck: RemoteGroupOwnerCheck = RemoteGroupOwnerCheck()) {
         self.makeModel = makeModel
         self.makeFastChannel = makeFastChannel
+        self.ownerCheck = ownerCheck
     }
 
     /// 开始后台轮询。重复调用无害。
@@ -123,13 +130,39 @@ final class RemoteDeviceGroupService {
         hiddenRequests[request.id] = nil
     }
 
-    /// 弹窗上的「核对」。返回有没有发出去（格式不对、请求过期、次数用完时为 false）。
+    /// 弹窗上输满 6 位：先验证本人，再核对。返回有没有发出去（格式不对、验证没过、请求过期、次数用完时为 false，
+    /// 弹窗不关，清掉输入可以重输）。
     @discardableResult
-    func submit(_ code: String, for request: RemoteDeviceGroup.JoinRequest) -> Bool {
-        guard let model else { return false }
+    func submit(_ code: String, for request: RemoteDeviceGroup.JoinRequest) async -> Bool {
+        guard let model, RemoteGroupJoinCrypto.normalizedCode(code) != nil else { return false }
+        guard await ownerCheck.confirm(.admit(name: request.candidate.name)) else { return false }
         let sent = model.submitCode(code, for: request.id)
         wakeUp()
         return sent
+    }
+
+    // MARK: - 带验证的操作（界面只调这几个，不直接调模型：`RemoteGroupOwnerCheckLintTests`）
+
+    /// 移除确认里的「移除」：你点的那台在第一个，后面是勾着的连带设备（`RemoteGroupRemovalPlan.ids`）。
+    /// 一次移除只验证一次。验证没过什么都不做，返回 false。
+    @discardableResult
+    func remove(_ ids: [UUID]) async -> Bool {
+        guard let model, let first = ids.first else { return false }
+        let name = model.members.first { $0.device.id == first }?.device.name ?? RemoteDeviceGroupCopy.unnamedDevice
+        guard await ownerCheck.confirm(.remove(name: name, count: ids.count)) else { return false }
+        model.remove(ids)
+        wakeUp()
+        return true
+    }
+
+    /// 离开确认里的「离开」。验证没过什么都不做，返回 false。
+    @discardableResult
+    func leave() async -> Bool {
+        guard let model else { return false }
+        guard await ownerCheck.confirm(.leave) else { return false }
+        model.leave()
+        wakeUp()
+        return true
     }
 
     // MARK: - 轮询

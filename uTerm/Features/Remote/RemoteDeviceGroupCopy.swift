@@ -13,6 +13,8 @@ enum RemoteDeviceGroupCopy {
     static let thisDevice = String(localized: "本机")
     static let notJoined = String(localized: "未加入")
     static let unavailable = String(localized: "无法读取本机的远程控制身份（钥匙串不可用）")
+    /// 这台 Mac 开着被控、还没进组、名册里有别的设备时（`RemoteDeviceGroup.suggestsJoiningLocalMac`），「加入」上方那句说明。
+    static let joinThisMacHint = String(localized: "本机加入设备组后，可远程控制本机的设备由设备组统一管理，移除设备立即生效。")
 
     // MARK: 新设备一侧
 
@@ -37,6 +39,20 @@ enum RemoteDeviceGroupCopy {
 
     static let outsideHeader = String(localized: "未加入的设备")
     static let outsideFooter = String(localized: "在该设备的「我的设备」中点「加入」，本机会弹出输入框。")
+    /// 「未加入的设备」里本机配对过的 Mac：副标题里多这一句。
+    static let pairedMacOutsideHint = String(localized: "加入后，组内设备无需单独配对即可控制它")
+
+    /// 「未加入的设备」一行的副标题：机型；是本机配对过的 Mac 时再加一句（`isPairedMacOutside`）。都没有时为 nil。
+    static func outsideSubtitle(_ device: RemoteGroupDevice, pairedHosts: Set<UUID>) -> String? {
+        var parts = [device.modelDetail].compactMap(\.self)
+        if isPairedMacOutside(device, pairedHosts: pairedHosts) { parts.append(pairedMacOutsideHint) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 没进组的这台设备是 Mac，本机配对过它（`RemoteDeviceGroup.pairedHostIDs`）。
+    static func isPairedMacOutside(_ device: RemoteGroupDevice, pairedHosts: Set<UUID>) -> Bool {
+        device.isMac && pairedHosts.contains(device.id)
+    }
 
     /// 名单里一行的副标题：机型、「这台设备」、谁加的。都没有时为 nil。
     static func memberSubtitle(_ row: RemoteDeviceGroup.MemberRow) -> String? {
@@ -56,6 +72,19 @@ enum RemoteDeviceGroupCopy {
     static let cascadeHeader = String(localized: "同时移除由该设备添加的设备：")
     static let leaveTitle = String(localized: "离开设备组？")
     static let leaveMessage = String(localized: "离开后，本机需重新加入才能使用；组内其他设备不受影响。")
+
+    // MARK: 验证本人（系统验证框上的说明，`RemoteGroupOwnerCheck`）
+
+    /// 一句动宾短语：macOS 会在前面加「“uTerm”正在尝试」。
+    static func ownerCheckRemove(name: String, count: Int) -> String {
+        count > 1 ? String(localized: "移除「\(name)」等 \(count) 台设备") : String(localized: "移除「\(name)」")
+    }
+
+    static func ownerCheckAdmit(name: String) -> String {
+        String(localized: "将「\(name)」加入设备组")
+    }
+
+    static let ownerCheckLeave = String(localized: "离开设备组")
 
     // MARK: 还没通的 Mac
 
@@ -143,6 +172,14 @@ enum RemoteDeviceGroupCopy {
 }
 
 extension RemoteDeviceGroup {
+    /// 提示把这台 Mac 加进设备组（§19）：本机是 Mac、开着被控且允许担保（`localHost.acceptsGroupControllers`：
+    /// 关着担保时进了组也不按名单记主控端，这句话不成立）、还没进组、没被移出（那时另有一句「已被移出」）、
+    /// 没在加入（显示着验证码或失败原因时不加）、名册里有别的设备。只有 Mac 交了 `localHost`，iOS 上恒为 false。
+    var suggestsJoiningLocalMac: Bool {
+        guard local.isMac, localHost?.acceptsGroupControllers == true else { return false }
+        return !isInGroup && !isSelfRemoved && joinState == nil && !otherDevices.isEmpty
+    }
+
     /// 「你的其它设备」那一列（还没进组、或这台被移出时）：名册里不在本机组里的设备，被移出时再加上原来组里的设备
     /// （本机还记着它们，`otherDevices` 不列，不然被移出后它们哪儿都看不到）。按名字排，同一个 ID 只列一次。
     var listedOtherDevices: [RemoteGroupDevice] {

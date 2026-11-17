@@ -41,7 +41,7 @@ final class RemoteDeviceGroupServiceTests: XCTestCase {
         XCTAssertTrue(roster.load().devices.contains { $0.id == device.local.id }, "打开页面时登记本机")
     }
 
-    func test_popup_shows_the_join_request_until_it_is_hidden_and_again_when_its_status_changes() throws {
+    func test_popup_shows_the_join_request_until_it_is_hidden_and_again_when_its_status_changes() async throws {
         let phone = makeDevice("iPhone")
         let pad = makeDevice("iPad")
         let service = RemoteDeviceGroupService { _ in phone }
@@ -57,7 +57,8 @@ final class RemoteDeviceGroupServiceTests: XCTestCase {
         // 输错：组员这边先是「正在核对」，关掉就不弹。
         let shown = try XCTUnwrap(code(pad))
         let wrong = String(format: "%06d", ((Int(shown) ?? 0) + 1) % 1_000_000)
-        XCTAssertTrue(service.submit(wrong, for: request))
+        let sentWrong = await service.submit(wrong, for: request)
+        XCTAssertTrue(sentWrong)
         let verifying = try XCTUnwrap(service.pendingRequest)
         XCTAssertEqual(verifying.status, .verifying)
         service.hidePrompt(verifying)
@@ -72,7 +73,8 @@ final class RemoteDeviceGroupServiceTests: XCTestCase {
         XCTAssertEqual(retry.status, .wrongCode(attemptsLeft: RemoteDeviceGroup.submissionLimit - 1))
 
         // 输对：核对通过的不弹，也不留在名单里（不然轮询一直是快的）。
-        XCTAssertTrue(service.submit(try XCTUnwrap(code(pad)), for: retry))
+        let sentRight = await service.submit(try XCTUnwrap(code(pad)), for: retry)
+        XCTAssertTrue(sentRight)
         pad.refresh()
         service.tick()
         XCTAssertNil(service.pendingRequest)
@@ -104,7 +106,7 @@ final class RemoteDeviceGroupServiceTests: XCTestCase {
         XCTAssertNil(RemoteDeviceGroupService.pending(in: [], hidden: [:]))
     }
 
-    func test_polls_faster_while_showing_a_code_or_someone_wants_to_join() {
+    func test_polls_faster_while_showing_a_code_or_someone_wants_to_join() async {
         let phone = makeDevice("iPhone")
         let pad = makeDevice("iPad")
         let padService = RemoteDeviceGroupService { _ in pad }
@@ -120,7 +122,8 @@ final class RemoteDeviceGroupServiceTests: XCTestCase {
         phoneService.tick()
         XCTAssertEqual(phoneService.interval, RemoteDeviceGroupService.activeInterval, "有设备想加入")
 
-        XCTAssertTrue(phoneService.submit(code(pad) ?? "", for: phoneService.pendingRequest!))
+        let sent = await phoneService.submit(code(pad) ?? "", for: phoneService.pendingRequest!)
+        XCTAssertTrue(sent)
         padService.tick()
         XCTAssertEqual(pad.joinState, .joined)
         XCTAssertNotNil(pad.awaitingAcknowledgement)
