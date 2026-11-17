@@ -49,6 +49,7 @@ enum MGlyph {
         case "iphone":     return "iphone"
         case "ipad":       return "ipad"
         case "display":    return "display"
+        case "window":     return "macwindow"
         case "keyboard":   return "keyboard"
         case "file":       return "doc"
         case "link":       return "link"

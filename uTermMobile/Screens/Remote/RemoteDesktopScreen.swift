@@ -18,13 +18,19 @@ struct RemoteDesktopScreen: View {
 
     /// 这一屏用的是点按钮时就开了流的会话（按记下的尺寸开的）。
     private let startedEarly: Bool
+    /// 一进来就只看这个窗口（nil = 整个屏幕）。
+    private let initialWindow: UInt32?
+    @AppStorage(DefaultsKey.remoteDesktopFitWindow) private var fitsWindow = true
 
     /// `started`：点按钮时就开了流的会话（`RemoteDesktopRequestSizeMemory`），这一屏接着用，不另开。
+    ///
+    /// `initialWindow`：一进来就只看这个窗口（在 Mac 的面板里直接点了它），不先开整个屏幕。
     init(client: RemoteMacClient, tappedAt: ContinuousClock.Instant? = nil, started: RemoteDesktopSession? = nil,
-         onClose: @escaping () -> Void) {
+         initialWindow: UInt32? = nil, onClose: @escaping () -> Void) {
         self.client = client
         self.tappedAt = tappedAt
         self.onClose = onClose
+        self.initialWindow = initialWindow
         startedEarly = started != nil
         _session = State(initialValue: started)
     }
@@ -37,6 +43,8 @@ struct RemoteDesktopScreen: View {
     @State private var pickingPhoto = false
     /// 正在选「只看哪一个窗口」。
     @State private var pickingWindow = false
+    /// 只看一个窗口时工具栏默认收着，点角上的按钮才浮出来。
+    @State private var windowBarShown = false
     /// 画布（顶栏下面那块）此刻的点尺寸：只看一个窗口时请 Mac 把窗口调成这么大。
     @State private var canvasSize = CGSize.zero
     @State private var refitTask: Task<Void, Never>?
@@ -88,9 +96,16 @@ struct RemoteDesktopScreen: View {
             // 顶栏、画面、键盘条自上而下排在安全区里：顶栏不进摄像头开孔 / 圆角，「适配屏幕」把整块
             // Mac 屏幕放在顶栏之下的可见区；软键盘弹起时安全区底边抬到键盘上方，画面跟着缩到键盘之上，
             // 不被挡住。只有黑底铺满整屏。
+            let barWidth = geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
+                - barInsets.leading - barInsets.trailing
             VStack(spacing: 0) {
-                topBar(width: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
-                       - barInsets.leading - barInsets.trailing)
+                if windowMode {
+                    // 只看一个窗口：顶栏不占一行（Mac 窗口自己的标题栏就在最上面），画面顶到安全区上沿；
+                    // 工具栏收成角上的小按钮，点开时浮在画面上（见 `windowBar`）。
+                    Color.clear.frame(height: geometry.safeAreaInsets.top)
+                } else {
+                    topBar(width: barWidth)
+                }
                 ZStack {
                     if let session {
                         RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
@@ -111,6 +126,10 @@ struct RemoteDesktopScreen: View {
                     RemoteDesktopKeyBar(keys: keys, keyboardShown: $keyboardVisible) { session.send($0) }
                 }
             }
+            .overlay(alignment: .top) {
+                if windowMode { windowBar(width: barWidth) }
+            }
+            .onChange(of: windowMode) { _, _ in windowBarShown = false }
             // 整列铺满屏幕，顶栏的边距按离屏幕边缘的绝对距离给（`barInsets`），不与安全区混算。
             // 画面左右也就铺满：有的机型（Duo 外屏竖握）把一侧摄像头算成整条安全区，让出去就白白少两成宽度，
             // 开孔压住画面一角可以接受。只忽略容器安全区，软键盘弹起时整列照样缩到键盘上方。
@@ -139,7 +158,16 @@ struct RemoteDesktopScreen: View {
                 created.openRequestedAt = tappedAt
                 session = created
                 refreshVault()
-                await created.start()
+                guard let initialWindow else {
+                    await created.start()
+                    return
+                }
+                // 直接开某个窗口：要把窗口调成画布那么大，等画布量出来再开（第一次排版之后就有，最多等半秒）。
+                for _ in 0..<25 where canvasSize.width <= 0 || canvasSize.height <= 0 {
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                let fit = fitsWindow ? RemoteDesktopWindowFit.size(canvas: canvasSize, textScale: windowTextScale) : nil
+                await created.switchWindow(to: initialWindow, fit: fit)
             }
         }
         .onChange(of: canvasSize) { _, size in refitWindowWhenSettled(size) }
@@ -258,6 +286,42 @@ struct RemoteDesktopScreen: View {
 
     // MARK: - 顶栏
 
+    /// 正在（或正要）只看一个窗口：排版换成画面顶到上沿、工具栏收起来的那一种。
+    private var windowMode: Bool {
+        if let session, session.windowID != nil { return true }
+        // 从 Mac 的面板直接点了某个窗口进来、流还没开起来的那一小会儿。
+        return initialWindow != nil && session?.state != .streaming && session?.info == nil
+    }
+
+    /// 只看一个窗口时的工具栏：收着时是右上角一个小按钮；点开后整条浮在画面上沿（不占排版的地方，画布大小不变，
+    /// Mac 上的窗口也就不用跟着重调）。
+    @ViewBuilder private func windowBar(width barWidth: CGFloat) -> some View {
+        if windowBarShown {
+            topBar(width: barWidth)
+                .background(Color.black.opacity(0.82))
+                .transition(.opacity)
+        } else {
+            HStack {
+                Spacer()
+                Button { windowBarShown = true } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 24)
+                        .background(Color.black.opacity(0.5), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
+                        // 看着小，点得到：四周多给一圈可点的范围。
+                        .padding(8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MPressStyle())
+                .accessibilityLabel("显示工具栏")
+            }
+            .padding(.top, max(0, barInsets.top - 8))
+            .padding(.trailing, max(0, barInsets.trailing - 8))
+        }
+    }
+
     private func topBar(width barWidth: CGFloat) -> some View {
         // 读数只在画面在传时有；宽屏放进这一行的空当，窄屏另起一行（按宽度定，不按内容定：
         // 读数每秒都在变宽变窄，按内容定会在两种排法之间来回跳，画面高度跟着抖）。
@@ -304,6 +368,10 @@ struct RemoteDesktopScreen: View {
                 if hasMoreActions {
                     MMenu { moreActions } label: { barIcon("ellipsis") }
                         .accessibilityLabel("更多")
+                }
+                if windowMode {
+                    barButton("chevron.up") { windowBarShown = false }
+                        .accessibilityLabel("收起工具栏")
                 }
             }
             if !inline, let stats {

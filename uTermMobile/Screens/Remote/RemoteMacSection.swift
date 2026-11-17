@@ -287,6 +287,11 @@ struct RemoteMacSheet: View {
                     MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "需要更新 Mac 上的 uTerm", last: true)
                 }
             }
+            if client.supportsDesktop, client.supportsDesktopWindows {
+                section("只看一个窗口", footer: "只把 Mac 上的一个窗口投到这里，并调成适合这里的大小；看完后窗口恢复原样。列的是 Mac 上此刻开着的窗口。") {
+                    MacWindowRows(client: client) { openDesktop(window: $0) }
+                }
+            }
             section("文件", footer: client.supportsFiles
                         ? "从主目录开始浏览这台 Mac 上的文件，可以上传、下载、改名和删除。Mac 不用打开 SSH。"
                         : "Mac 上的 uTerm 版本过旧，不支持浏览文件。将其更新到最新版本后即可使用。") {
@@ -363,14 +368,15 @@ struct RemoteMacSheet: View {
         return parts.joined(separator: " · ")
     }
 
-    private func openDesktop() {
+    /// `window`：直接只看这个窗口（不先开整个屏幕）。窗口要按画布的大小调，得等全屏页排好版才知道，所以不提前开流。
+    private func openDesktop(window: UInt32? = nil) {
         let tapped = ContinuousClock.now
-        let session = Self.startDesktopEarly(client: client, tappedAt: tapped)
+        let session = window == nil ? Self.startDesktopEarly(client: client, tappedAt: tapped) : nil
         dismiss()
         let client = self.client
         // 同终端：等面板收起再盖全屏，避免两个转场叠在一起。知道要多大时流已经在开了（`startDesktopEarly`）。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            store.remoteDesktop = MRemoteDesktopRequest(client: client, tappedAt: tapped, session: session)
+            store.remoteDesktop = MRemoteDesktopRequest(client: client, tappedAt: tapped, session: session, windowID: window)
         }
     }
 
@@ -461,6 +467,47 @@ extension RemoteMacClient {
 }
 
 /// 新建终端抽屉里的「这台 Mac 的本机终端」：每台配对过的 Mac 一行，点一下在 Mac 上开一个新的登录 shell。
+/// Mac 面板里「只看一个窗口」那一组：面板出现时向 Mac 要一次窗口列表，点一行直接只看那个窗口。
+struct MacWindowRows: View {
+    let client: RemoteMacClient
+    let onOpen: (UInt32) -> Void
+
+    @State private var windows: [RemoteDesktopWindowSummary] = []
+    @State private var note: String?
+    @State private var loading = true
+
+    var body: some View {
+        Group {
+            if loading, windows.isEmpty {
+                MInsetRow(icon: "window", iconColor: M.text3, label: String(localized: "正在读取窗口…"), last: true)
+            } else if windows.isEmpty {
+                MInsetRow(icon: "window", iconColor: M.text3,
+                          label: note ?? String(localized: "那台 Mac 上此刻没有可以单独看的窗口。"), wraps: true, last: true)
+            } else {
+                ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
+                    MInsetRow(icon: "window", label: window.menuTitle, sub: window.menuDetail, subMono: false,
+                              chevron: true, last: index == windows.count - 1) {
+                        onOpen(window.id)
+                    }
+                }
+            }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        do {
+            let list = try await client.desktopWindows()
+            windows = list.windows
+            note = list.message
+        } catch {
+            note = error.localizedDescription
+        }
+    }
+}
+
 struct MacTerminalRows: View {
     let directory: RemoteMacDirectory
     let onOpen: (RemoteMacClient, UUID) -> Void

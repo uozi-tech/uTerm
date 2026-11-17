@@ -47,6 +47,8 @@ struct MRemoteDesktopRequest: Identifiable {
     var tappedAt: ContinuousClock.Instant? = nil
     /// 点按钮时就已经开流的会话（知道这块屏幕上次要多大时，见 `RemoteDesktopRequestSizeMemory`）。
     var session: RemoteDesktopSession? = nil
+    /// 一进去就只看这个窗口（在 Mac 的面板里直接点了某个窗口）。nil = 整个屏幕。
+    var windowID: UInt32? = nil
 }
 
 /// 全局 UI 状态（Pinia 等价物）。导航、当前标签、活动会话目标。
