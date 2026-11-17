@@ -115,7 +115,7 @@ struct TerminalPhrasesScreen: View {
     }
 
     private var resetMenu: some View {
-        Menu {
+        MMenu {
             ForEach(TerminalPhraseKind.allCases) { kind in
                 Button {
                     update { $0.reset(kind) }

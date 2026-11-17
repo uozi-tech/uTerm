@@ -178,8 +178,9 @@ final class SplitLayoutProbeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         let scroll = try XCTUnwrap(Self.firstScrollView(in: win))
         let frame = scroll.convert(scroll.bounds, to: win)
-        XCTAssertEqual(frame.minX, 0, accuracy: 0.5, "左边不能有固定不动的键")
-        // 右边只固定收起键盘按钮（741b31e4）：要先滚过一整排键才够得到的话，就收不了键盘了。
+        // 两头各固定一个键（`MKeyBar`）：左边是面板入口（按键 / AI 共用，拇指最顺手），右边是收起键盘按钮（741b31e4）。
+        // 要先滚过一整排键才够得到的话，就打不开面板、收不了键盘了。分屏后一格很窄，固定的键不能再多。
+        XCTAssertLessThanOrEqual(frame.minX, 60, "左边只留面板入口")
         XCTAssertLessThanOrEqual(width - frame.maxX, 60, "右边只留键盘按钮")
         XCTAssertGreaterThan(scroll.contentSize.width, frame.width)
     }
