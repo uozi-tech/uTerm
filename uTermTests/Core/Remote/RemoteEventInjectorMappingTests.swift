@@ -38,6 +38,22 @@ final class RemoteEventInjectorMappingTests: XCTestCase {
         XCTAssertEqual(RemoteEventInjector.flags([.command, .shift]), [.maskCommand, .maskShift])
     }
 
+    /// ⌃← 切换桌面在系统里登记成 ⌃fn←：方向键事件要留着 `CGEvent` 自带的 fn 与小键盘标志。
+    func testArrowKeysKeepTheirIntrinsicFunctionAndKeypadFlags() throws {
+        let source = CGEventSource(stateID: .hidSystemState)
+        let arrow = try XCTUnwrap(CGEvent(keyboardEventSource: source, virtualKey: RemoteKeyMap.Key.left, keyDown: true))
+        XCTAssertEqual(RemoteEventInjector.keyFlags(intrinsic: arrow.flags, modifiers: .control),
+                       [.maskControl, .maskSecondaryFn, .maskNumericPad])
+        let letter = try XCTUnwrap(CGEvent(keyboardEventSource: source, virtualKey: RemoteKeyMap.Key.v, keyDown: true))
+        XCTAssertEqual(RemoteEventInjector.keyFlags(intrinsic: letter.flags, modifiers: .command), [.maskCommand])
+    }
+
+    func testIntrinsicFlagsNeverAddModifiers() {
+        let intrinsic: CGEventFlags = [.maskSecondaryFn, .maskNumericPad, .maskShift, .maskNonCoalesced]
+        XCTAssertEqual(RemoteEventInjector.keyFlags(intrinsic: intrinsic, modifiers: []),
+                       [.maskSecondaryFn, .maskNumericPad], "修饰键只来自手机")
+    }
+
     // MARK: - 一次按键成组（macOS 27）
 
     private func makeInjector() -> RemoteEventInjector {

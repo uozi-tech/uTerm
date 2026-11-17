@@ -351,4 +351,77 @@ final class RemoteTrackpadGestureTests: XCTestCase {
         _ = gesture.update([touch(4, 100)], at: 1)
         XCTAssertEqual(gesture.update([], at: 1.05), [.click(.left)])
     }
+
+    // MARK: - 三指扫动
+
+    private func three(_ dx: CGFloat, _ dy: CGFloat = 0, ids: [Int] = [1, 2, 3]) -> [RemoteTrackpadTouch] {
+        [touch(ids[0], 100 + dx, 300 + dy), touch(ids[1], 150 + dx, 290 + dy), touch(ids[2], 200 + dx, 310 + dy)]
+    }
+
+    func test_three_finger_swipe_fires_once_in_the_finger_direction() {
+        let cases: [(CGFloat, CGFloat, RemoteSwipeDirection)] = [
+            (-60, 5, .left), (60, -5, .right), (4, -60, .up), (-4, 60, .down),
+        ]
+        for (dx, dy, direction) in cases {
+            var gesture = RemoteTrackpadGesture()
+            XCTAssertEqual(gesture.update(three(0), at: 0), [])
+            XCTAssertEqual(gesture.update(three(dx / 2, dy / 2), at: 0.05), [], "没走够 \(direction)")
+            XCTAssertEqual(gesture.update(three(dx, dy), at: 0.1), [.swiped(direction)])
+            XCTAssertEqual(gesture.update(three(dx * 3, dy * 3), at: 0.15), [], "一次接触只扫一次")
+            XCTAssertEqual(gesture.update(Array(three(dx * 3, dy * 3).prefix(1)), at: 0.2), [])
+            XCTAssertEqual(gesture.update([], at: 0.25), [], "抬手不算点击")
+            _ = gesture.update([touch(9, 100)], at: 1)
+            XCTAssertEqual(gesture.update([], at: 1.05), [.click(.left)], "抬手后照常接受新手势")
+        }
+    }
+
+    func test_three_fingers_landing_one_by_one_still_swipe() {
+        _ = gesture.update([touch(1, 100, 300)], at: 0)
+        _ = gesture.update([touch(1, 101, 300), touch(2, 150, 290)], at: 0.02)
+        XCTAssertEqual(gesture.update(three(2), at: 0.04), [])
+        XCTAssertEqual(gesture.update(three(-50), at: 0.1), [.swiped(.left)])
+    }
+
+    func test_third_finger_after_pointer_started_moving_still_swipes() {
+        _ = gesture.update([touch(1, 100, 300)], at: 0)
+        let moved = gesture.update([touch(1, 106, 300)], at: 0.02)
+        guard case .movePointer? = moved.first else { return XCTFail("第一根先动了光标: \(moved)") }
+        _ = gesture.update([touch(1, 106, 300), touch(2, 150, 290), touch(3, 200, 310)], at: 0.04)
+        let swiped = gesture.update([touch(1, 166, 300), touch(2, 210, 290), touch(3, 260, 310)], at: 0.1)
+        XCTAssertEqual(swiped, [.swiped(.right)])
+    }
+
+    func test_short_three_finger_touch_does_nothing() {
+        _ = gesture.update(three(0), at: 0)
+        XCTAssertEqual(gesture.update(three(20, 3), at: 0.05), [])
+        XCTAssertEqual(gesture.update([], at: 0.1), [], "三指轻点不点击")
+    }
+
+    func test_diagonal_three_finger_swipe_does_nothing() {
+        _ = gesture.update(three(0), at: 0)
+        XCTAssertEqual(gesture.update(three(50, 45), at: 0.1), [])
+        XCTAssertEqual(gesture.update([], at: 0.15), [])
+    }
+
+    func test_lifting_a_finger_before_the_swipe_cancels_it() {
+        _ = gesture.update(three(0), at: 0)
+        _ = gesture.update(Array(three(10).prefix(2)), at: 0.05)
+        XCTAssertEqual(gesture.update([touch(1, 40, 300), touch(2, 90, 290)], at: 0.1), [], "剩两指不改判滚动")
+        XCTAssertEqual(gesture.update([], at: 0.15), [])
+    }
+
+    func test_four_fingers_do_not_swipe() {
+        _ = gesture.update(three(0) + [touch(4, 250, 300)], at: 0)
+        XCTAssertEqual(gesture.update(three(-80) + [touch(4, 170, 300)], at: 0.1), [])
+    }
+
+    func test_swipe_maps_to_mission_control_shortcuts() {
+        XCTAssertEqual(RemoteSwipeDirection.left.shortcut.code, RemoteKeyMap.Key.right, "手指往左 = 去右边的桌面")
+        XCTAssertEqual(RemoteSwipeDirection.right.shortcut.code, RemoteKeyMap.Key.left)
+        XCTAssertEqual(RemoteSwipeDirection.up.shortcut.code, RemoteKeyMap.Key.up)
+        XCTAssertEqual(RemoteSwipeDirection.down.shortcut.code, RemoteKeyMap.Key.down)
+        for direction in [RemoteSwipeDirection.left, .right, .up, .down] {
+            XCTAssertEqual(direction.shortcut.modifiers, .control)
+        }
+    }
 }

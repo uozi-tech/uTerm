@@ -379,6 +379,8 @@ final class RemoteDesktopCanvasView: UIView {
             viewport.pan(by: delta)
             keepPointerInView()
             layoutContent()
+        case .swiped(let direction):
+            swipe(direction)
         }
     }
 
@@ -527,6 +529,16 @@ final class RemoteDesktopCanvasView: UIView {
     }
 
     /// 点击 / 拖拽前先把最新的指针位置发出去（不等下一帧合并），保证点在手指看到的位置上。
+    /// 三指扫动 = Mac 触控板的三指扫动：按对应的系统快捷键（见 `RemoteSwipeDirection.shortcut`）。
+    /// 不吃键盘条上了膛的修饰键：再叠一个 ⌥ / ⌘ 就不是那个快捷键了。
+    private func swipe(_ direction: RemoteSwipeDirection) {
+        guard session.canControl else { return }
+        let (code, modifiers) = direction.shortcut
+        send(.key(code: code, down: true, modifiers: modifiers))
+        send(.key(code: code, down: false, modifiers: modifiers))
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.5)
+    }
+
     private func flushPointer() {
         guard lastSentPointer != pointer else { return }
         lastSentPointer = pointer

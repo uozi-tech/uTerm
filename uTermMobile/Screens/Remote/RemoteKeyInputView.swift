@@ -101,6 +101,10 @@ final class RemoteKeyInputView: UIView, UITextInput {
 
     override var canBecomeFirstResponder: Bool { true }
 
+    /// 关掉系统的三指编辑手势（三指左右扫 = 撤销 / 重做、捏合 = 拷贝粘贴）：键盘弹着时它会抢走画布上的
+    /// 三指扫动（切换桌面），还会弹出撤销的提示。远程桌面里撤销用 ⌘Z。
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
 
     // 远程桌面里自动更正、自动大写、智能标点都只会帮倒忙。

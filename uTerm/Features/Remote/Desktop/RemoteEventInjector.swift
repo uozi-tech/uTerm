@@ -56,7 +56,7 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
             post(event)
         case .key(let code, let down, let modifiers):
             let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
-            event?.flags = Self.flags(modifiers)
+            if let event { event.flags = Self.keyFlags(intrinsic: event.flags, modifiers: modifiers) }
             post(event)
         case .text(let text):
             typeText(text)
@@ -174,6 +174,13 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
         if modifiers.contains(.capsLock) { flags.insert(.maskAlphaShift) }
         if modifiers.contains(.function) { flags.insert(.maskSecondaryFn) }
         return flags
+    }
+
+    /// 按键事件的标志：修饰键 + 这个键自带的标志。`CGEvent` 给方向键自带 fn 与小键盘、给 F 键与
+    /// home / end / 翻页 / 向前删除自带 fn，和真键盘一样；系统快捷键是连这些一起登记的（⌃← 切换桌面
+    /// 登记成 ⌃fn←），只填修饰键会对不上，按了没反应。
+    static func keyFlags(intrinsic: CGEventFlags, modifiers: RemoteKeyModifiers) -> CGEventFlags {
+        intrinsic.intersection([.maskSecondaryFn, .maskNumericPad]).union(flags(modifiers))
     }
 
     /// 单次滚动像素上限：远大于任何真实手势，又远小于 Int32 上限。

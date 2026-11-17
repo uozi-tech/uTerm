@@ -19,6 +19,25 @@ nonisolated enum RemoteTrackpadAction: Equatable {
     case scrollEnded(velocity: CGPoint)
     case zoomed(by: CGFloat, anchor: CGPoint)
     case panned(CGSize)
+    /// 三指扫了一下（手指走的方向），一次接触只发一次。
+    case swiped(RemoteSwipeDirection)
+}
+
+/// 三指扫动的方向（手指走的方向）。
+nonisolated enum RemoteSwipeDirection: Equatable {
+    case left, right, up, down
+
+    /// Mac 触控板三指扫动对应的系统快捷键：左右切换桌面（内容跟着手指走：手指往左是去右边那个桌面）、
+    /// 上是调度中心、下是应用程序窗口。都是「系统设置 › 键盘 › 键盘快捷键 › 调度中心」里的默认键，
+    /// 用户在那里改过就不灵。
+    var shortcut: (code: UInt16, modifiers: RemoteKeyModifiers) {
+        switch self {
+        case .left: return (RemoteKeyMap.Key.right, .control)
+        case .right: return (RemoteKeyMap.Key.left, .control)
+        case .up: return (RemoteKeyMap.Key.up, .control)
+        case .down: return (RemoteKeyMap.Key.down, .control)
+        }
+    }
 }
 
 /// 把触摸序列判定成触控板手势。
@@ -28,7 +47,9 @@ nonisolated enum RemoteTrackpadAction: Equatable {
 /// - 没有「轻点拖移」（点一下紧接着按住拖）：点完马上接着滑是常见的操作，真机上它屡屡变成意外的拖拽、
 ///   把窗口拖走。拖拽只靠按住不动，与 Windows App 的鼠标指针模式一致。
 /// - 双指：不动就抬起是右键；动了就看每根手指的方向选定滚动或捏合（规则见 `twoFingerIntent`）。
-/// - 三指及以上：不产生动作，全部抬起后才接受新手势。
+/// - 三指：一起走过 `swipeThreshold` 判成扫动，按主方向发一次 `swiped`，之后到全部抬起都不再有动作。
+///   手指不会同时落下，单指 / 双指还没判定时来了第三根照样算三指。
+/// - 四指及以上、三指中途抬起或加指：不产生动作，全部抬起后才接受新手势。
 nonisolated struct RemoteTrackpadGesture {
     static let moveThreshold: CGFloat = 3
     static let holdDuration: TimeInterval = 0.45
@@ -43,6 +64,10 @@ nonisolated struct RemoteTrackpadGesture {
     static let alongLineIntentThreshold: CGFloat = 32
     /// 另一根手指没「起步」（不到 `fingerStillThreshold`）但已被带着朝同一方向挪了这么多：是跟着滚，不是捏合的支点。
     static let followThreshold: CGFloat = 1.5
+    /// 三指的中心走到这么远才算扫动。
+    static let swipeThreshold: CGFloat = 40
+    /// 主方向要比另一个方向大这么多倍，斜着扫不算。
+    static let swipeDominance: CGFloat = 1.5
     private static let velocityWindow: TimeInterval = 0.1
 
     private enum Phase {
@@ -54,6 +79,7 @@ nonisolated struct RemoteTrackpadGesture {
         case releasingTwo(id: Int, start: CGPoint, startTime: TimeInterval)
         case scrolling(ids: Set<Int>)
         case pinching(ids: Set<Int>, distance: CGFloat)
+        case pendingThree(ids: Set<Int>, start: CGPoint)
         case ignored
     }
 
@@ -127,6 +153,8 @@ nonisolated struct RemoteTrackpadGesture {
             return advanceScrolling(touches, ids: ids, at: time)
         case .pinching(let ids, let distance):
             return advancePinching(touches, ids: ids, distance: distance, at: time)
+        case .pendingThree(let ids, let start):
+            return advancePendingThree(touches, ids: ids, start: start)
         case .ignored:
             if touches.isEmpty { phase = .idle }
             return []
@@ -144,9 +172,17 @@ nonisolated struct RemoteTrackpadGesture {
         case 2:
             beginTwo(touches, at: time)
         default:
-            phase = .ignored
+            beginThreeOrIgnore(touches)
         }
         return []
+    }
+
+    private mutating func beginThreeOrIgnore(_ touches: [RemoteTrackpadTouch]) {
+        guard touches.count == 3 else {
+            phase = .ignored
+            return
+        }
+        phase = .pendingThree(ids: Set(touches.map(\.id)), start: Self.centroid(touches))
     }
 
     private mutating func beginTwo(_ touches: [RemoteTrackpadTouch], at time: TimeInterval) {
@@ -160,7 +196,7 @@ nonisolated struct RemoteTrackpadGesture {
             return suppressesTap ? [] : [.click(.left)]
         }
         guard touches.count == 1, touches[0].id == id else {
-            if touches.count == 2 { beginTwo(touches, at: time) } else { phase = .ignored }
+            if touches.count == 2 { beginTwo(touches, at: time) } else { beginThreeOrIgnore(touches) }
             return []
         }
         let location = touches[0].location
@@ -179,6 +215,8 @@ nonisolated struct RemoteTrackpadGesture {
             phase = .idle
         case 2:
             beginTwo(touches, at: time)
+        case 3:
+            beginThreeOrIgnore(touches)
         default:
             guard touches.count == 1, touches[0].id == id else {
                 phase = .ignored
@@ -217,6 +255,10 @@ nonisolated struct RemoteTrackpadGesture {
             return []
         default:
             break
+        }
+        if touches.count == 3, Set(touches.map(\.id)).isSuperset(of: [first.id, second.id]) {
+            beginThreeOrIgnore(touches)
+            return []
         }
         guard touches.count == 2,
               let firstNow = touches.first(where: { $0.id == first.id }),
@@ -290,6 +332,26 @@ nonisolated struct RemoteTrackpadGesture {
         let location = touches[0].location
         if hypot(location.x - start.x, location.y - start.y) > Self.intentThreshold { phase = .ignored }
         return []
+    }
+
+    /// 起点取第三根落下那一刻三指的中心：之前单指 / 双指没判定时走的那几点不算。
+    private mutating func advancePendingThree(_ touches: [RemoteTrackpadTouch], ids: Set<Int>,
+                                              start: CGPoint) -> [RemoteTrackpadAction] {
+        guard touches.count == 3, Set(touches.map(\.id)) == ids else {
+            phase = touches.isEmpty ? .idle : .ignored
+            return []
+        }
+        guard let direction = Self.swipeDirection(from: start, to: Self.centroid(touches)) else { return [] }
+        phase = .ignored
+        return [.swiped(direction)]
+    }
+
+    static func swipeDirection(from start: CGPoint, to end: CGPoint) -> RemoteSwipeDirection? {
+        let dx = end.x - start.x, dy = end.y - start.y
+        guard hypot(dx, dy) >= swipeThreshold else { return nil }
+        if abs(dx) >= abs(dy) * swipeDominance { return dx < 0 ? .left : .right }
+        if abs(dy) >= abs(dx) * swipeDominance { return dy < 0 ? .up : .down }
+        return nil
     }
 
     private func twoFingerTap(startTime: TimeInterval, at time: TimeInterval) -> [RemoteTrackpadAction] {
