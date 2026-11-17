@@ -510,7 +510,8 @@ final class RemoteMacDirectory {
 
     /// 读在线列表时结果已经旧了、又没有在问：补问一次。新建终端抽屉在工作区里打开，那里挂不上
     /// `keepLiveStatusFresh`（抽屉里一台在线的 Mac 都没有时没有可挂的行），靠这里保证打开时状态是新的。
-    private func refreshRelayHostsIfStale() {
+    /// 设备组有事要在一台此刻不算在线的 Mac 上做时也走这里（`refreshReachability`）。
+    func refreshRelayHostsIfStale() {
         guard isActivated, isInForeground, relayPoll == nil else { return }
         if let lastRelayPoll, ContinuousClock.now - lastRelayPoll < relayPollInterval { return }
         // 多半是在视图求值时读到的：不在这一拍里改状态，挪到下一拍。

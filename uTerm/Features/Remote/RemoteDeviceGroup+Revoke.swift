@@ -28,6 +28,15 @@ extension RemoteDeviceGroup {
     /// 每条移除（不含本机自己签的离开）一条撤销进度。同一把钥匙后来又被移除一次（重新加入之后），从头再撤一遍。
     /// 要问哪几台 Mac 在这一刻定下（之后才配对的不问）；还不知道本机配对了哪些 Mac 时先空着，下一轮补。
     /// 设备 ID 就是本机的（本机重装之前的那一份）：不去撤，那台设备已经不在了，本机也不该请 Mac 撤销自己的 ID。
+    ///
+    /// 移除之后同一把钥匙又进了组（离开后又加入，`rejoined`）：这条进度作废，不再问任何 Mac、不在「已移除的设备」里
+    /// 显示。不然等那台 Mac 在线时，本机会去撤一台此刻的组员（再替它重新开通一遍；那台 Mac 不在组里时还可能连带撤掉
+    /// 由它担保的别的设备），而且撤完之前 `scheduleHostWork` 也不替它开通这台 Mac。
+    /// 作废照「处理完了」落盘（`hosts = []`，不加字段）：之后的判断都只看 `isSettled` / `isUnfinished`，作废和撤完不用区分。
+    /// 已经在某几台 Mac 上撤成功的不补救：撤成功时 `finishRevoke` 记下了 `revalidateFrom`，本机按 §15 把组员在那台 Mac 上
+    /// 再问一遍，重新加入的这台跟着被记回去（别的组员读到它重新加入后也会照常替它开通）。
+    /// 同一把钥匙之后再被移除，那条移除更晚（`writeRemoval` 取的时间不早于它这次的加入时间），走上面「从头再撤」那条路。
+    /// 正在路上的那一次撤销回来时，`finishRevoke` 只改还没做完的进度，作废的不会被写活。
     func trackRevocations(_ state: inout RemoteGroupLocalState, names: [Data: String]) {
         var cached: [UUID]??
         func paired() -> [UUID]? {
@@ -39,19 +48,30 @@ extension RemoteDeviceGroup {
         func initialHosts(_ removal: RemoteGroupRemoval) -> [UUID]? {
             removal.deviceID == local.id ? [] : paired()
         }
+        /// 这条移除之后，同一把钥匙又是本机认的组员了（加入时间晚于这条移除）。
+        func rejoined(_ removal: RemoteGroupRemoval) -> Bool {
+            state.member(signingKey: removal.signingKey).map { $0.admission.admittedAt > removal.removedAt } ?? false
+        }
         for removal in state.removals where removal.signingKey != local.signingKey {
             let name = names[removal.signingKey]
+            let isBack = rejoined(removal)
             guard let index = state.revocations.firstIndex(where: { $0.signingKey == removal.signingKey }) else {
                 state.revocations.append(RemoteGroupRevocation(deviceID: removal.deviceID, name: name ?? "",
                                                                publicKey: removal.publicKey, signingKey: removal.signingKey,
-                                                               removedAt: removal.removedAt, hosts: initialHosts(removal)))
+                                                               removedAt: removal.removedAt,
+                                                               hosts: isBack ? [] : initialHosts(removal)))
                 continue
             }
             var entry = state.revocations[index]
             if removal.removedAt > entry.removedAt {
                 entry = RemoteGroupRevocation(deviceID: removal.deviceID, name: name ?? entry.name,
                                               publicKey: removal.publicKey, signingKey: removal.signingKey,
-                                              removedAt: removal.removedAt, hosts: initialHosts(removal))
+                                              removedAt: removal.removedAt, hosts: isBack ? [] : initialHosts(removal))
+            } else if isBack, !entry.isSettled {
+                entry.hosts = []
+                entry.finished = []
+                entry.retryAfter = [:]
+                AppLogger.notice("设备组：「\(entry.name)」移除之后又加入了，不再请 Mac 撤销", category: RemoteLog.category)
             } else if entry.hosts == nil {
                 entry.hosts = initialHosts(removal)
             }
@@ -150,19 +170,23 @@ extension RemoteDeviceGroup {
                                category: RemoteLog.category)
             }
         }
-        guard var state = loadState(), !state.selfRemoved,
-              let index = state.revocations.firstIndex(where: {
-                  $0.signingKey == revocation.signingKey && $0.removedAt == revocation.removedAt
-              }), state.revocations[index].isUnfinished(at: target.id) else { return }
+        guard var state = loadState(), !state.selfRemoved else { return }
         let original = state
-        if let retry {
-            state.revocations[index].retryAfter[target.id] = now().addingTimeInterval(retry)
-        } else {
-            state.revocations[index].finished.append(target.id)
-            state.revocations[index].retryAfter[target.id] = nil
+        // 只改这台 Mac 上还没做完的那条进度。请求在路上时它可能已经作废（设备又加入了组）、被更晚的移除换掉、
+        // 或别处记成了做完：这些都不写，免得把作废的进度写活。
+        if let index = state.revocations.firstIndex(where: {
+            $0.signingKey == revocation.signingKey && $0.removedAt == revocation.removedAt
+        }), state.revocations[index].isUnfinished(at: target.id) {
+            if let retry {
+                state.revocations[index].retryAfter[target.id] = now().addingTimeInterval(retry)
+            } else {
+                state.revocations[index].finished.append(target.id)
+                state.revocations[index].retryAfter[target.id] = nil
+            }
         }
+        // 本机在这台 Mac 上被一起撤了是 Mac 上已经发生的事，进度作废了也照样记下（不然本机会去连一台已经不认它的 Mac）。
         if pause { pauseHost(target.id, in: &state) }
-        guard persist(state, from: original) else { return }
+        guard state != original, persist(state, from: original) else { return }
         refresh()
     }
 

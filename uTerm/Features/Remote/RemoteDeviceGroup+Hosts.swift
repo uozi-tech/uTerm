@@ -97,7 +97,7 @@ extension RemoteDeviceGroup {
         pending.sort { ($0.name, $0.id.uuidString) < ($1.name, $1.id.uuidString) }
         // 撤销不看在不在组里（移除了最后一台别的组员，本机就只剩自己一台）；开通要在组里，而且有远控身份私钥
         // （封不了中继包就不替别人问：没有私钥 = 不担保、不开包）。
-        scheduleHostWork(snapshot, state, hosts: hosts, vouching: inGroup && identityKey != nil)
+        scheduleHostWork(snapshot, state, hosts: hosts, paired: paired, vouching: inGroup && identityKey != nil)
         updateHostState(pending: pending, opening: isOpening(state))
         updateRemovedDevices(state, paired: paired)
     }
@@ -304,32 +304,50 @@ extension RemoteDeviceGroup {
 
     // MARK: - 问
 
+    /// 一台 Mac 上下一件要做的事。
+    private enum HostWork {
+        case revoke(RemoteGroupRevocation)
+        case vouch(RemoteGroupDevice)
+    }
+
     /// 每台此刻问得到、没在问、没在 60 秒冷却里、本机没在上面被撤掉（`RemoteGroupPausedHost`）的 Mac：
     /// 有没撤完的移除先撤（`RemoteDeviceGroup+Revoke.swift`），否则挑一个还需要问的组员去开通。刚进组的排前面。同一个设备 ID 在这台 Mac 上还有没撤完的，先不开通它
     /// （重装过的设备：先撤旧钥匙、再开新的）；组里同一个 ID 有两份钥匙时（旧的那份的移除还没读到）也先不开通。
+    ///
+    /// 配对过、此刻不算在线、上面又有事要做的 Mac：请目录补问一次它在不在（`refreshReachability`）。目录的中继在线表
+    /// 是按需问的（只在界面显示在线状态时），设备组在后台干活时没人去问，只经中继够得着的 Mac 就一直算不在线、
+    /// 撤销和开通都排不上。没事要做时不问（iOS 省电）；问的频率由目录按它自己的间隔限住。
     private func scheduleHostWork(_ snapshot: RemoteGroupSnapshot, _ state: RemoteGroupLocalState,
-                                  hosts: any RemoteGroupHostAccess, vouching: Bool) {
+                                  hosts: any RemoteGroupHostAccess, paired: [RemoteGroupVouchTarget], vouching: Bool) {
         let signers = RemoteGroupMembership.Signers(state: state, local: local)
         let results = snapshot.grants.filter { signers.accepts($0.signer, key: $0.signerKey, at: $0.signedAt) }
         let members = state.members.sorted {
             ($0.admission.admittedAt, $0.device.id.uuidString) > ($1.admission.admittedAt, $1.device.id.uuidString)
         }
         let paused = Set(state.pausedHosts.map(\.hostID))
-        for target in hosts.vouchTargets() where target.id != local.id && !vouches.isAsking(target.id) {
-            if isCoolingDown(target.id) { continue }
-            // 本机在这台 Mac 上已经被撤了（§18）：连它会让 Mac 弹配对审批框，等别的组员重新开通再说。
-            if paused.contains(target.id) { continue }
-            if let revocation = nextRevocation(at: target.id, in: state) {
-                startRevoke(revocation, at: target, hosts: hosts)
-                continue
-            }
-            guard vouching else { continue }
+        func work(at target: RemoteGroupVouchTarget) -> HostWork? {
+            guard target.id != local.id, !vouches.isAsking(target.id), !isCoolingDown(target.id),
+                  // 本机在这台 Mac 上已经被撤了（§18）：连它会让 Mac 弹配对审批框，等别的组员重新开通再说。
+                  !paused.contains(target.id) else { return nil }
+            if let revocation = nextRevocation(at: target.id, in: state) { return .revoke(revocation) }
+            guard vouching else { return nil }
             let revoking = Set(state.revocations.filter { $0.isUnfinished(at: target.id) }.map(\.deviceID))
             // 组员就是这台 Mac 时不问；自称本机 ID 的组员（只有被偷的组员加得进来）也不问。
-            guard let member = members.first(where: { $0.device.id != target.id && $0.device.id != local.id
+            return members.first(where: { $0.device.id != target.id && $0.device.id != local.id
                 && !revoking.contains($0.device.id) && !hasTwin($0, in: state)
-                && needsVouch($0.device, at: target, results: results) }) else { continue }
-            startVouch(member.device, at: target, hosts: hosts)
+                && needsVouch($0.device, at: target, results: results) }).map { .vouch($0.device) }
+        }
+        let reachable = hosts.vouchTargets()
+        for target in reachable {
+            switch work(at: target) {
+            case .revoke(let revocation)?: startRevoke(revocation, at: target, hosts: hosts)
+            case .vouch(let device)?: startVouch(device, at: target, hosts: hosts)
+            case nil: break
+            }
+        }
+        let reachableIDs = Set(reachable.map(\.id))
+        if paired.contains(where: { !reachableIDs.contains($0.id) && work(at: $0) != nil }) {
+            hosts.refreshReachability()
         }
     }
 

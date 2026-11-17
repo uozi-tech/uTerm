@@ -52,6 +52,8 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
     var pairedAt: [UUID: Date] = [:]
     /// `dropAdoptedHost` 拿掉的 Mac。
     private(set) var dropped: [UUID] = []
+    /// 设备组请目录补问在不在线的次数（`refreshReachability`）。
+    private(set) var reachabilityRefreshes = 0
 
     /// 加一台配对过的 Mac（默认在线）。
     @discardableResult
@@ -138,6 +140,8 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
         guard let target = paired.first(where: { $0.id == id }) else { return nil }
         return RemoteGroupTrustedHost(publicKey: target.publicKey, pairedAt: pairedAt[id] ?? .distantPast)
     }
+
+    func refreshReachability() { reachabilityRefreshes += 1 }
 
     func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool {
         guard let trusted = trustedHost(id), trusted.matches(publicKey: publicKey, pairedAt: pairedAt) else { return false }

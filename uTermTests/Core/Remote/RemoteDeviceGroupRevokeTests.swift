@@ -313,6 +313,152 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
         XCTAssertTrue(fake(reinstalled).revokeCalls.isEmpty)
     }
 
+    // MARK: - 离开后用同一把钥匙又加入（§20）
+
+    /// 真机上的情形：设备自己点了「离开」、随后又加入。它离开时本机的 Mac 不在线，这条撤销一直等着；它又加入之后
+    /// 撤销作废：「已移除的设备」里不再显示，Mac 上线也不去撤一台此刻的组员，照常替它开通。
+    func test_device_that_left_and_rejoined_with_the_same_key_is_not_revoked() async throws {
+        let a = makeDevice("A"), b = makeDevice("B")
+        let mini = fake(a).addMac("Mac mini", online: false)
+        join(b, via: a)
+        await converge(a, b)
+        tick(61)
+        b.leave()
+        await converge(a, b)
+        XCTAssertFalse(isMember(b, of: a))
+        XCTAssertEqual(a.removedDevices.first?.waitingHosts, ["Mac mini"], "离开时 Mac 不在线，等着撤")
+
+        tick(11)
+        join(b, via: a)
+        XCTAssertTrue(a.removedDevices.isEmpty, "又加入了：不再显示「尚未撤销」")
+        let entry = try XCTUnwrap(try a.store.state().revocation(of: b.local.signingKey))
+        XCTAssertEqual(entry.hosts, [], "作废照「处理完了」落盘")
+
+        fake(a).online.insert(mini.id)
+        await converge(a, b)
+        for _ in 0..<2 {
+            tick(7 * 3600)
+            await converge(a, b, rounds: 1)
+        }
+        XCTAssertTrue(fake(a).revokeCalls.isEmpty, "不去撤此刻的组员")
+        XCTAssertEqual(fake(a).calls(at: mini.id), [b.local.id], "照常替它开通（撤销没在挡着）")
+        XCTAssertTrue(a.removedDevices.isEmpty)
+    }
+
+    /// 一台 Mac 在它离开时已经撤了、另一台还没撤：又加入之后没撤的那台作废，撤过的那台由本机补问时记回去
+    /// （撤成功后的 `revalidateFrom`）。之后它再被移除：新的一条移除，两台都从头撤。
+    func test_rejoined_device_is_re_opened_where_it_was_already_revoked_and_a_later_removal_revokes_again() async throws {
+        let a = makeDevice("A"), b = makeDevice("B")
+        let mini = fake(a).addMac("Mac mini"), laptop = fake(a).addMac("MacBook Pro")
+        join(b, via: a)
+        await converge(a, b)
+        fake(a).online.remove(laptop.id)
+        tick(61)
+        b.leave()
+        await converge(a, b)
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.id), [b.local.id])
+        XCTAssertEqual(a.removedDevices.first?.waitingHosts, ["MacBook Pro"])
+
+        tick(11)
+        join(b, via: a)
+        XCTAssertTrue(a.removedDevices.isEmpty)
+        fake(a).online.insert(laptop.id)
+        await converge(a, b)
+        XCTAssertTrue(fake(a).revokeCalls(at: laptop.id).isEmpty, "没撤的那台不再撤")
+        let miniEvents = fake(a).events[mini.id] ?? []
+        let revokedAt = try XCTUnwrap(miniEvents.lastIndex(of: .revoke(device: b.local.id, key: b.local.publicKey)))
+        XCTAssertTrue(miniEvents.suffix(from: revokedAt + 1).contains(.vouch(device: b.local.id, key: b.local.publicKey)),
+                      "撤过的那台：又加入之后替它重新开通")
+        XCTAssertEqual(fake(a).calls(at: laptop.id).count, 2, "没撤的那台照常再问一遍（Mac 回已认识）")
+
+        tick(61)
+        a.remove([b.local.id])
+        await converge(a)
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.id), [b.local.id, b.local.id], "再被移除：从头撤")
+        XCTAssertEqual(fake(a).revokeCalls(at: laptop.id), [b.local.id])
+        XCTAssertTrue(a.removedDevices.isEmpty)
+        let entry = try XCTUnwrap(try a.store.state().revocation(of: b.local.signingKey))
+        XCTAssertGreaterThan(entry.removedAt, try XCTUnwrap(b.store.state().selfAdmission?.admittedAt))
+    }
+
+    /// 撤销请求在路上时设备又加入了：请求回来不把作废的进度写活，也不再撤第二次。
+    func test_revoke_reply_arriving_after_the_device_rejoined_does_not_revive_the_progress() async throws {
+        let a = makeDevice("A"), b = makeDevice("B")
+        let mini = fake(a).addMac("Mac mini")
+        join(b, via: a)
+        await converge(a, b)
+        fake(a).held = [mini.id]
+        tick(61)
+        b.leave()
+        refresh(a)
+        XCTAssertEqual(a.vouchesInFlight, 1)
+        let deadline = Date().addingTimeInterval(5)
+        while fake(a).revokeCalls.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(2)) }
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.id), [b.local.id], "请求发出去了，卡在路上")
+
+        tick(11)
+        join(b, via: a)
+        XCTAssertTrue(a.removedDevices.isEmpty)
+        fake(a).held = []
+        await settle(a)
+        let entry = try XCTUnwrap(try a.store.state().revocation(of: b.local.signingKey))
+        XCTAssertEqual(entry.hosts, [])
+        XCTAssertEqual(entry.finished, [], "回来的结果没写进作废的进度")
+        XCTAssertTrue(entry.retryAfter.isEmpty)
+
+        await converge(a, b)
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.id), [b.local.id], "不再撤第二次")
+        XCTAssertTrue(a.removedDevices.isEmpty)
+        XCTAssertEqual(fake(a).events[mini.id]?.last, .vouch(device: b.local.id, key: b.local.publicKey),
+                       "那次撤成功了：替又加入的它重新开通")
+    }
+
+    // MARK: - 有事要做时补问 Mac 在不在线（§20）
+
+    /// 有没撤完的撤销、那台 Mac 此刻不算在线：请目录补问。没事要做、或 Mac 已在线（直接去撤）时不问。
+    func test_pending_revoke_at_an_offline_mac_asks_for_reachability_and_nothing_else_does() async {
+        let a = makeDevice("A"), b = makeDevice("B")
+        let mini = fake(a).addMac("Mac mini")
+        join(b, via: a)
+        await converge(a, b)
+        fake(a).online.remove(mini.id)
+        await converge(a, b)
+        XCTAssertEqual(fake(a).reachabilityRefreshes, 0, "开通都做完了：没事要做，不问")
+
+        tick(61)
+        a.remove([b.local.id])
+        await converge(a, rounds: 2)
+        XCTAssertEqual(fake(a).reachabilityRefreshes, 2, "有没撤完的、Mac 不在线：每轮请目录补问（目录自己限速）")
+        XCTAssertTrue(fake(a).revokeCalls.isEmpty)
+
+        fake(a).online.insert(mini.id)
+        await converge(a)
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.id), [b.local.id])
+        XCTAssertEqual(fake(a).reachabilityRefreshes, 2, "Mac 在线：直接去撤，不问")
+        XCTAssertTrue(a.removedDevices.isEmpty)
+
+        fake(a).online.remove(mini.id)
+        await converge(a)
+        XCTAssertEqual(fake(a).reachabilityRefreshes, 2, "撤完了：不再问")
+    }
+
+    /// 等着重试的（Mac 太旧，6 小时后再问）不算眼下有事，不问。
+    func test_revoke_waiting_for_its_retry_does_not_ask_for_reachability() async {
+        let a = makeDevice("A"), b = makeDevice("B")
+        let mini = fake(a).addMac("旧的 Mac")
+        fake(a).revokeReplies[mini.id] = .tooOld
+        join(b, via: a)
+        await converge(a, b)
+        tick(61)
+        a.remove([b.local.id])
+        await converge(a)
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.id), [b.local.id])
+        fake(a).online.remove(mini.id)
+        await converge(a)
+        XCTAssertEqual(fake(a).reachabilityRefreshes, 0)
+        XCTAssertFalse(a.removedDevices.isEmpty, "还没撤完")
+    }
+
     // MARK: - 组里的 Mac 互认
 
     func test_mac_member_records_the_others_as_controllers_only_when_in_the_group_and_allowed() async throws {

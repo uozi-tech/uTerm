@@ -77,6 +77,9 @@ protocol RemoteGroupHostAccess: AnyObject {
     /// 拿掉一台只因为别的组员开通才记下的 Mac（G3）：**不拉黑**，不算「忘记」，以后别的组员再开通还能记回来。
     /// 本机此刻记着的公钥与记下的时间都和收下时一样才拿（你在这台设备上重新配对过的不动）。返回拿掉没有。
     func dropAdoptedHost(_ id: UUID, publicKey: Data, pairedAt: Date) -> Bool
+    /// 配对过的 Mac 里有不在 `vouchTargets` 里、设备组却有事要在它上面做的：补问一次哪些 Mac 在线。
+    /// 实现自己限速（App 里不比目录问中继的间隔更勤），可以什么都不做。
+    func refreshReachability()
 }
 
 /// 信任表里的一台 Mac（只要回滚时核对的那两项）。
@@ -120,6 +123,9 @@ struct RemoteGroupLocalController: Equatable {
 }
 
 extension RemoteGroupHostAccess {
+    /// 默认什么都不做（测试里的假件）。
+    func refreshReachability() {}
+
     /// 所有配对过的 Mac：id → 名字。
     func pairedHostNames() -> [UUID: String] {
         Dictionary(pairedHosts().map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
@@ -135,6 +141,14 @@ extension RemoteMacDirectory: RemoteGroupHostAccess {
 
     func pairedHosts() -> [RemoteGroupVouchTarget] {
         groupTargets(macs)
+    }
+
+    /// 中继在线表是按需问的（见 `startRelayPolling` 的注释）：设备组在后台干活时
+    /// 没有界面挂着 `keepLiveStatusFresh`，只经中继够得着的 Mac 永远算不在线。走读在线列表时那条补问的路：
+    /// 已启用、在前台（Mac 上一直算前台，只有 iOS 的生命周期桥接会翻它）、没在问、离上次问过满 `relayPollInterval` 才问一次。
+    /// 局域网那一半看 Bonjour，这里不动它。
+    func refreshReachability() {
+        refreshRelayHostsIfStale()
     }
 
     /// 名字取 Mac 自己报的（不取本机起的别名，也不取 Bonjour 看到的电脑名：两样都会变，变一次就重签一次 `host`）。

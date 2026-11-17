@@ -206,6 +206,30 @@ final class RemoteDeviceGroupHostsTests: XCTestCase {
         XCTAssertTrue(written, "不用再调 refresh，问完就写")
     }
 
+    /// 组员还要在一台此刻不算在线的 Mac 上开通：请目录补问在不在线（§20）；Mac 在线了直接去问，之后没事要做不再补问。
+    func test_member_still_to_be_opened_at_an_offline_mac_asks_for_reachability() async {
+        let a = makeDevice("A"), b = makeDevice("B")
+        let mini = fake(b).addMac("Mac mini", online: false)
+        refresh(b)
+        XCTAssertEqual(fake(b).reachabilityRefreshes, 0, "只有自己一台：没事要做")
+        join(a, via: b)
+        XCTAssertEqual(fake(b).reachabilityRefreshes, 1, "认下新组员的这一轮：它在这台 Mac 上还没开通")
+        XCTAssertTrue(fake(b).calls.isEmpty)
+
+        fake(b).online.insert(mini.id)
+        refresh(b)
+        await settle(b)
+        XCTAssertEqual(fake(b).calls(at: mini.id), [a.local.id])
+        XCTAssertEqual(fake(b).reachabilityRefreshes, 1, "在线：直接去问")
+
+        fake(b).online.remove(mini.id)
+        for _ in 0..<3 {
+            refresh(b)
+            await settle(b)
+        }
+        XCTAssertEqual(fake(b).reachabilityRefreshes, 1, "开通好了：没事要做，不问")
+    }
+
     func test_offline_mac_is_retried_after_a_minute_and_refusals_after_six_hours() async {
         let a = makeDevice("A"), b = makeDevice("B")
         let offline = fake(b).addMac("睡着的 Mac")

@@ -47,6 +47,73 @@ final class RemoteGroupHostAccessTests: XCTestCase {
         XCTAssertFalse(grant(RemoteGroupGrant.unsupported).isUsable)
     }
 
+    // MARK: - 设备组请目录补问在不在线（§20）
+
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.withLock { value += 1 } }
+        var count: Int { lock.withLock { value } }
+    }
+
+    /// 已启用远控（或没启用）、没有真实钥匙串与 Bonjour 的目录；问中继的次数记在 `counter` 里。
+    private func pollingDirectory(activated: Bool = true, interval: Duration,
+                                  counter: Counter) throws -> RemoteMacDirectory {
+        let suite = "RemoteGroupHostAccessTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        // 直接写「已启用」，不调 activate()：那会开始 Bonjour 浏览。
+        if activated { defaults.set(true, forKey: DefaultsKey.remoteBrowseActivated) }
+        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
+                                           defaults: defaults, adoptsRelayAsDefault: false,
+                                           relayPollInterval: interval) { _ in
+            counter.increment()
+            return []
+        }
+        let relay = RemoteRelayConfig(name: "测试中继", host: "relay.invalid", port: 47310, relayID: "test",
+                                      key: Data(count: 32).base64EncodedString())
+        XCTAssertTrue(directory.importRelayConfig(relay))
+        return directory
+    }
+
+    /// 走读在线列表时那条补问的路：离上次问过满间隔才问、反复调也只问一次；退到后台不问。
+    /// Mac 上没人调 `enteredBackground`（只有 iOS 的生命周期桥接调），App 开着就一直算前台。
+    func test_directory_re_asks_the_relay_for_the_group_at_most_once_per_interval_and_not_in_background() async throws {
+        let counter = Counter()
+        let directory = try pollingDirectory(interval: .milliseconds(300), counter: counter)
+        let access: any RemoteGroupHostAccess = directory
+        let firstPoll = await waitUntil { counter.count == 1 }
+        XCTAssertTrue(firstPoll, "导入中继时问一次")
+
+        access.refreshReachability()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(counter.count, 1, "刚问过不再问")
+
+        try await Task.sleep(for: .milliseconds(300))
+        for _ in 0..<5 { access.refreshReachability() }
+        let secondPoll = await waitUntil { counter.count == 2 }
+        XCTAssertTrue(secondPoll, "过了间隔：补问一次")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(counter.count, 2, "一轮里反复调也只问一次")
+
+        directory.enteredBackground()
+        try await Task.sleep(for: .milliseconds(400))
+        access.refreshReachability()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(counter.count, 2, "后台不问")
+    }
+
+    func test_directory_not_activated_does_not_ask_the_relay_for_the_group() async throws {
+        let counter = Counter()
+        let directory = try pollingDirectory(activated: false, interval: .milliseconds(50), counter: counter)
+        let firstPoll = await waitUntil { counter.count == 1 }
+        XCTAssertTrue(firstPoll)
+        try await Task.sleep(for: .milliseconds(100))
+        (directory as any RemoteGroupHostAccess).refreshReachability()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(counter.count, 1, "没启用远控（还没点「控制我的 Mac」）时不替设备组问")
+    }
+
     // MARK: - 目录收下 Mac
 
     func test_directory_adopts_new_macs_but_never_overrides_or_brings_back_forgotten_ones() throws {
