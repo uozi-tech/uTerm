@@ -27,7 +27,7 @@ struct RemoteGroupJoinHandler: ViewModifier {
     }
 }
 
-private struct RemoteGroupJoinSheet: View {
+struct RemoteGroupJoinSheet: View {
     @Environment(RemoteDeviceGroupService.self) private var service
     @Environment(\.mAccent) private var accent
     @State private var code = ""
@@ -45,7 +45,8 @@ private struct RemoteGroupJoinSheet: View {
                     .foregroundStyle(RemoteDeviceGroupCopy.isWarning(request.status) ? M.danger : M.text3)
                     .multilineTextAlignment(.center)
                 if RemoteDeviceGroupCopy.acceptsCode(request.status) {
-                    MCodeField(code: $code, length: RemoteGroupJoinCrypto.codeLength) { full in
+                    MCodeField(code: $code, length: RemoteGroupJoinCrypto.codeLength, groupSize: 3,
+                               isError: isWrong(request.status) && code.isEmpty) { full in
                         // 让最后一位显示出来再核对。
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                             if service.submit(full, for: request) { code = "" }
@@ -68,5 +69,10 @@ private struct RemoteGroupJoinSheet: View {
             .onChange(of: request.id) { _, _ in code = "" }
             .onChange(of: request.status) { _, _ in code = "" }
         }
+    }
+
+    private func isWrong(_ status: RemoteDeviceGroup.JoinRequest.Status) -> Bool {
+        if case .wrongCode = status { return true }
+        return false
     }
 }

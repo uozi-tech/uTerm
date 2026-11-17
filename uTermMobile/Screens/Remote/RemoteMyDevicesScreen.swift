@@ -19,7 +19,7 @@ struct RemoteMyDevicesScreen: View {
                     content(model)
                 } else {
                     MInsetGroup(footer: RemoteDeviceGroupCopy.intro) {
-                        MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.unavailable, last: true)
+                        MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.unavailable, wraps: true, last: true)
                     }
                 }
             }
@@ -54,7 +54,7 @@ struct RemoteMyDevicesScreen: View {
     private func content(_ model: RemoteDeviceGroup) -> some View {
         if let error = model.storageError {
             MInsetGroup {
-                MInsetRow(icon: "warn", iconColor: M.danger, label: error, last: true)
+                MInsetRow(icon: "warn", iconColor: M.danger, label: error, wraps: true, last: true)
             }
         }
         if model.isInGroup, !model.isSelfRemoved {
@@ -62,8 +62,9 @@ struct RemoteMyDevicesScreen: View {
             if !model.pendingHosts.isEmpty {
                 MInsetGroup(header: RemoteDeviceGroupCopy.pendingHostsHeader, footer: RemoteDeviceGroupCopy.pendingHostsFooter) {
                     ForEach(Array(model.pendingHosts.enumerated()), id: \.element.id) { index, host in
+                        // 状态是一句话（「Mac 上没允许，要单独配对」），放在名字下面：放右边手机上一行排不下。
                         MInsetRow(icon: "mac", iconColor: M.text3, label: host.name,
-                                  value: RemoteDeviceGroupCopy.pendingHostStatus(host.status),
+                                  sub: RemoteDeviceGroupCopy.pendingHostStatus(host.status), subMono: false, wraps: true,
                                   last: index == model.pendingHosts.count - 1)
                     }
                 }
@@ -77,7 +78,7 @@ struct RemoteMyDevicesScreen: View {
         } else {
             if model.isSelfRemoved {
                 MInsetGroup {
-                    MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.selfRemoved, last: true)
+                    MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.selfRemoved, wraps: true, last: true)
                 }
             }
             joinGroup(model)
@@ -85,7 +86,8 @@ struct RemoteMyDevicesScreen: View {
             MInsetGroup(header: String(localized: "你的其它设备")) {
                 if model.listedOtherDevices.isEmpty {
                     MInsetRow(icon: "icloud", iconColor: M.text3, label: String(localized: "还没有你的其它设备"),
-                              sub: String(localized: "在另一台登录同一 Apple ID 的设备上打开 uTerm"), last: true)
+                              sub: String(localized: "在另一台登录同一 Apple ID 的设备上打开 uTerm"), subMono: false, wraps: true,
+                              last: true)
                 } else {
                     deviceRows(model.listedOtherDevices)
                 }
@@ -100,7 +102,7 @@ struct RemoteMyDevicesScreen: View {
             MInsetGroup(header: RemoteDeviceGroupCopy.removedHeader, footer: RemoteDeviceGroupCopy.removedFooter) {
                 ForEach(Array(model.removedDevices.enumerated()), id: \.element.id) { index, device in
                     MInsetRow(icon: "clock", iconColor: M.text3, label: device.name,
-                              value: RemoteDeviceGroupCopy.removedStatus(device),
+                              sub: RemoteDeviceGroupCopy.removedStatus(device), subMono: false, wraps: true,
                               last: index == model.removedDevices.count - 1)
                 }
             }
@@ -110,7 +112,7 @@ struct RemoteMyDevicesScreen: View {
     private func deviceRows(_ devices: [RemoteGroupDevice]) -> some View {
         ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
             MInsetRow(icon: glyph(for: device), iconColor: M.text3, label: device.name, sub: device.modelDetail,
-                      last: index == devices.count - 1)
+                      subMono: false, last: index == devices.count - 1)
         }
     }
 
@@ -137,14 +139,14 @@ struct RemoteMyDevicesScreen: View {
             }
         case .failed(let reason):
             MInsetGroup(footer: reason) {
-                MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.failedTitle)
+                MInsetRow(icon: "warn", iconColor: M.danger, label: RemoteDeviceGroupCopy.failedTitle, wraps: true)
                 MInsetRow(icon: "check", label: String(localized: "好"), last: true) { model.cancelJoin() }
             }
         case .joined, nil:
             MInsetGroup(footer: RemoteDeviceGroupCopy.intro + RemoteDeviceGroupCopy.howToJoin) {
                 MInsetRow(icon: glyph(for: model.local), label: model.local.name,
                           sub: [RemoteDeviceGroupCopy.thisDevice, RemoteDeviceGroupCopy.notJoined].joined(separator: " · "),
-                          last: false)
+                          subMono: false, last: false)
                 MInsetRow(icon: "plus", label: String(localized: "加入"), last: true) {
                     model.startJoin()
                     service.poke()
@@ -158,11 +160,12 @@ struct RemoteMyDevicesScreen: View {
     private func memberGroup(_ model: RemoteDeviceGroup) -> some View {
         MInsetGroup(header: String(localized: "设备组"), footer: RemoteDeviceGroupCopy.groupFooter) {
             if let waiting = model.awaitingAcknowledgement {
-                MInsetRow(icon: "clock", iconColor: M.text3, label: RemoteDeviceGroupCopy.awaiting(waiting))
+                MInsetRow(icon: "clock", iconColor: M.text3, label: RemoteDeviceGroupCopy.awaiting(waiting), wraps: true)
             }
             ForEach(Array(model.members.enumerated()), id: \.element.id) { index, row in
                 MInsetRow(icon: glyph(for: row.device), label: row.device.name,
-                          sub: RemoteDeviceGroupCopy.memberSubtitle(row), last: index == model.members.count - 1,
+                          sub: RemoteDeviceGroupCopy.memberSubtitle(row), subMono: false, wraps: true,
+                          last: index == model.members.count - 1,
                           trailing: AnyView(menu(for: row, model: model)))
             }
         }
@@ -208,7 +211,7 @@ private struct RemoveMemberSheet: View {
                 if !plan.cascade.isEmpty {
                     MInsetGroup(header: RemoteDeviceGroupCopy.cascadeHeader) {
                         ForEach(Array(plan.cascade.enumerated()), id: \.element.id) { index, device in
-                            MInsetRow(label: device.name, sub: device.modelDetail, last: index == plan.cascade.count - 1,
+                            MInsetRow(label: device.name, sub: device.modelDetail, subMono: false, last: index == plan.cascade.count - 1,
                                       trailing: AnyView(MCheck(checked: plan.includes(device.id)) { plan.set(device.id, included: $0) }))
                         }
                     }

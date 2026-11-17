@@ -383,6 +383,10 @@ struct MInsetRow: View {
     var iconColor: Color? = nil
     var label: String
     var sub: String? = nil
+    /// 副标题是地址、路径这类要逐字看的内容时用等宽（默认）；是一句话（「由某某添加」）时关掉。
+    var subMono: Bool = true
+    /// 标题和副标题是整句话、截断了就看不懂时打开：标题不限行，副标题最多三行。默认各一行。
+    var wraps: Bool = false
     var value: String? = nil
     var valueMono: Bool = false
     var chevron: Bool = false
@@ -406,9 +410,12 @@ struct MInsetRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(M.sans(15, weight: .medium))
                     .foregroundStyle(danger ? M.danger : M.text)
-                    .lineLimit(1)
+                    .lineLimit(wraps ? nil : 1)
+                    .fixedSize(horizontal: false, vertical: wraps)
                 if let sub {
-                    Text(sub).font(M.mono(12)).foregroundStyle(M.text3).lineLimit(1)
+                    Text(sub).font(subMono ? M.mono(12) : M.sans(12)).foregroundStyle(M.text3)
+                        .lineLimit(wraps ? 3 : 1)
+                        .fixedSize(horizontal: false, vertical: wraps)
                 }
             }
             Spacer(minLength: 8)

@@ -10,6 +10,10 @@ import SwiftUI
 struct MCodeField: View {
     @Binding var code: String
     var length: Int = 6
+    /// 每几位空开一点（显示端是「123 456」时填 3）。0 = 不分组。
+    var groupSize: Int = 0
+    /// 上一次输的不对、还没开始输下一次：格子描红。
+    var isError: Bool = false
     var onComplete: (String) -> Void = { _ in }
 
     @Environment(\.mAccent) private var accent
@@ -31,8 +35,10 @@ struct MCodeField: View {
                 .frame(width: 1, height: 1)
                 .accessibilityHidden(true)
 
-            HStack(spacing: 10) {
-                ForEach(0..<length, id: \.self) { index in cell(index) }
+            HStack(spacing: 0) {
+                ForEach(0..<length, id: \.self) { index in
+                    cell(index).padding(.leading, leading(before: index))
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture { focused = true }
@@ -49,6 +55,11 @@ struct MCodeField: View {
         .accessibilityAction { focused = true }
     }
 
+    private func leading(before index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        return groupSize > 0 && index % groupSize == 0 ? 18 : 10
+    }
+
     private func cell(_ index: Int) -> some View {
         let digits = Array(code)
         let digit = index < digits.count ? String(digits[index]) : ""
@@ -61,7 +72,7 @@ struct MCodeField: View {
             .background(M.card, in: RoundedRectangle(cornerRadius: MRadius.lg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: MRadius.lg, style: .continuous)
-                    .strokeBorder(isCurrent ? accent : M.divider, lineWidth: isCurrent ? 2 : 1)
+                    .strokeBorder(isError ? M.danger : (isCurrent ? accent : M.divider), lineWidth: isCurrent || isError ? 2 : 1)
             }
             .animation(.easeOut(duration: 0.12), value: isCurrent)
     }
