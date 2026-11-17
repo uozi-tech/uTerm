@@ -42,12 +42,6 @@ struct RemoteMyDevicesScreen: View {
             .presentationDetents([.medium, .large])
             .presentationBackground(M.canvas)
         }
-        .confirmationDialog(RemoteDeviceGroupCopy.leaveTitle, isPresented: $confirmingLeave, titleVisibility: .visible) {
-            Button("离开", role: .destructive) { Task { await service.leave() } }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text(RemoteDeviceGroupCopy.leaveMessage)
-        }
     }
 
     @ViewBuilder
@@ -190,9 +184,28 @@ struct RemoteMyDevicesScreen: View {
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
+        // 确认框挂在触发它的「…」上：宽屏下它是 popover，箭头指着所挂的视图，挂在整页上会弹在屏幕正中。
+        .modifier(LeaveGroupDialog(isPresented: row.isLocal ? $confirmingLeave : .constant(false)) {
+            Task { await service.leave() }
+        })
     }
 
     private func glyph(for device: RemoteGroupDevice) -> String { device.mGlyph }
+}
+
+/// 离开设备组前的确认。窄屏是底部操作表，宽屏是从所挂的那个「…」弹出的 popover。
+struct LeaveGroupDialog: ViewModifier {
+    @Binding var isPresented: Bool
+    let onLeave: () -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(RemoteDeviceGroupCopy.leaveTitle, isPresented: $isPresented, titleVisibility: .visible) {
+            Button("离开", role: .destructive, action: onLeave)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(RemoteDeviceGroupCopy.leaveMessage)
+        }
+    }
 }
 
 /// 移除前的确认：列出由它加进来的设备（默认一起移除，可以取消勾选）。「移除」交给 `onRemove`（先验证本人），

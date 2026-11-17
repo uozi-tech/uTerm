@@ -325,13 +325,14 @@ struct RemotePathHistoryScreen: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
-            }
-        }
-        .confirmationDialog("清空全部诊断记录？", isPresented: $confirmsClear, titleVisibility: .visible) {
-            Button("清空", role: .destructive) {
-                log.clear()
-                runs = []
-                onCleared()
+                // 挂在触发它的按钮上：宽屏下是 popover，挂在整页上会弹在屏幕正中。
+                .confirmationDialog("清空全部诊断记录？", isPresented: $confirmsClear, titleVisibility: .visible) {
+                    Button("清空", role: .destructive) {
+                        log.clear()
+                        runs = []
+                        onCleared()
+                    }
+                }
             }
         }
         .onAppear { runs = RemotePathMatrixLog.runs(log.load()) }
