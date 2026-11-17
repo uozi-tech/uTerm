@@ -5,38 +5,38 @@ import Foundation
 enum RemoteDeviceGroupCopy {
     static let title = String(localized: "我的设备")
     /// 还没进组时的那句说明。
-    static let intro = String(localized: "加入后，你在任何一台设备上配对过的 Mac，这台设备都能用。")
+    static let intro = String(localized: "加入设备组后，本机可使用组内任一设备已配对的 Mac。")
     /// 已进组时的那句说明。
-    static let groupFooter = String(localized: "组里任何一台设备配对过的 Mac，组里的设备都能用。移除的设备要重新加入。")
-    static let howToJoin = String(localized: "在要加入的设备上点「加入」，再在组里任意一台设备上输入它显示的 6 位数。")
-    static let noOtherDevices = String(localized: "还没有你的其它设备。在另一台登录同一 Apple ID 的设备上打开 uTerm。")
-    static let thisDevice = String(localized: "这台设备")
-    static let notJoined = String(localized: "还没加入")
-    static let unavailable = String(localized: "读不到这台设备的远程控制身份（钥匙串不可用）")
+    static let groupFooter = String(localized: "组内任一设备已配对的 Mac，所有成员均可使用。被移除的设备需重新加入。")
+    static let howToJoin = String(localized: "在待加入的设备上点「加入」，再在组内任一设备上输入它显示的 6 位验证码。")
+    static let noOtherDevices = String(localized: "未发现其他设备。在登录同一 Apple ID 的另一台设备上打开 uTerm。")
+    static let thisDevice = String(localized: "本机")
+    static let notJoined = String(localized: "未加入")
+    static let unavailable = String(localized: "无法读取本机的远程控制身份（钥匙串不可用）")
 
     // MARK: 新设备一侧
 
-    static let codeTitle = String(localized: "在你的另一台设备上输入这个数")
+    static let codeTitle = String(localized: "在另一台设备上输入此验证码")
 
     /// 显示核对码时的说明：作废过的话说一声换了新数。
     static func codeCaption(attemptsLeft: Int) -> String {
         attemptsLeft < RemoteDeviceGroup.codeAttempts
-            ? String(localized: "上一个数没对上，换成了这个新数。还能再试 \(attemptsLeft) 次。")
-            : String(localized: "组里的设备会弹出输入框。10 分钟内有效。")
+            ? String(localized: "上一个验证码未通过核对，已更换。还可重试 \(attemptsLeft) 次。")
+            : String(localized: "其他设备会弹出输入框。验证码 10 分钟内有效。")
     }
 
-    static let failedTitle = String(localized: "没有加入")
+    static let failedTitle = String(localized: "加入失败")
 
     static func awaiting(_ device: RemoteGroupDevice) -> String {
-        String(localized: "还在等「\(device.name)」确认。")
+        String(localized: "正在等待「\(device.name)」确认。")
     }
 
-    static let selfRemoved = String(localized: "这台设备已被移出你的设备组。要再用，重新加入。")
+    static let selfRemoved = String(localized: "本机已被移出设备组，需重新加入。")
 
     // MARK: 组员一侧
 
-    static let outsideHeader = String(localized: "不在组里的设备")
-    static let outsideFooter = String(localized: "在那台设备的「我的设备」里点「加入」，这里会弹出输入框。")
+    static let outsideHeader = String(localized: "未加入的设备")
+    static let outsideFooter = String(localized: "在该设备的「我的设备」中点「加入」，本机会弹出输入框。")
 
     /// 名单里一行的副标题：机型、「这台设备」、谁加的。都没有时为 nil。
     static func memberSubtitle(_ row: RemoteDeviceGroup.MemberRow) -> String? {
@@ -50,17 +50,17 @@ enum RemoteDeviceGroupCopy {
         String(localized: "移除「\(device.name)」？")
     }
 
-    static let removeMessage = String(localized: "被移除的设备要重新加入才能用。")
+    static let removeMessage = String(localized: "移除后，该设备需重新加入才能使用。")
     /// 移除确认里的第二句：Mac 上的撤销是自动的（§7.3）。
-    static let removeRevokesMacs = String(localized: "你的 Mac 也会撤销它的远程控制。")
-    static let cascadeHeader = String(localized: "由它加进来的设备也一起移除：")
+    static let removeRevokesMacs = String(localized: "你的 Mac 也将撤销其远程控制权限。")
+    static let cascadeHeader = String(localized: "同时移除由该设备添加的设备：")
     static let leaveTitle = String(localized: "离开设备组？")
-    static let leaveMessage = String(localized: "离开后这台设备要重新加入才能用，组里别的设备不受影响。")
+    static let leaveMessage = String(localized: "离开后，本机需重新加入才能使用；组内其他设备不受影响。")
 
     // MARK: 还没通的 Mac
 
-    static let pendingHostsHeader = String(localized: "还没通的 Mac")
-    static let pendingHostsFooter = String(localized: "组里有设备连得上这台 Mac 时，会自动替这台设备开通。")
+    static let pendingHostsHeader = String(localized: "待开通的 Mac")
+    static let pendingHostsFooter = String(localized: "组内有设备可连接这些 Mac 时，将自动为本机开通。")
 
     /// 「还没通的 Mac」一行右边那几个字。
     static func pendingHostStatus(_ status: RemoteDeviceGroup.PendingHost.Status) -> String {
@@ -68,15 +68,15 @@ enum RemoteDeviceGroupCopy {
         case .opening:
             return String(localized: "正在开通")
         case .needsPairing(.notAllowed):
-            return String(localized: "Mac 上没允许，要单独配对")
+            return String(localized: "Mac 未允许开通，需单独配对")
         case .needsPairing(.tooOld):
-            return String(localized: "Mac 上的 uTerm 太旧，要单独配对")
+            return String(localized: "Mac 上的 uTerm 版本过旧，需单独配对")
         case .needsPairing(.rejected):
-            return String(localized: "Mac 拒绝了，要单独配对")
+            return String(localized: "Mac 已拒绝，需单独配对")
         case .needsPairing(.conflict):
-            return String(localized: "和这台设备记着的对不上，要重新配对")
+            return String(localized: "与本机保存的记录不一致，需重新配对")
         case .needsPairing(.forgotten):
-            return String(localized: "你在这台设备上忘记过它")
+            return String(localized: "你已在本机忘记这台 Mac")
         }
     }
 
@@ -89,37 +89,37 @@ enum RemoteDeviceGroupCopy {
     // MARK: 已移除的设备
 
     static let removedHeader = String(localized: "已移除的设备")
-    static let removedFooter = String(localized: "这些 Mac 连得上时会自动撤销，多半在等它们开机或上线。")
+    static let removedFooter = String(localized: "相关 Mac 上线后将自动撤销。")
     /// 撤销进度里没记下名字时的叫法。
-    static let unnamedDevice = String(localized: "一台已移除的设备")
+    static let unnamedDevice = String(localized: "未命名设备")
 
     /// 「已移除的设备」一行右边那几个字：还有几台 Mac 没撤（只剩一台时写它的名字）。
     static func removedStatus(_ device: RemoteDeviceGroup.RemovedDevice) -> String {
         if device.waitingHosts.count == 1, let host = device.waitingHosts.first {
-            return String(localized: "「\(host)」还没撤销")
+            return String(localized: "「\(host)」尚未撤销")
         }
-        return String(localized: "还有 \(device.waitingHosts.count) 台 Mac 没撤销")
+        return String(localized: "\(device.waitingHosts.count) 台 Mac 尚未撤销")
     }
 
     // MARK: 弹窗（组员一侧输码）
 
     static func requestTitle(_ device: RemoteGroupDevice) -> String {
-        String(localized: "「\(device.name)」想加入你的设备")
+        String(localized: "「\(device.name)」请求加入设备组")
     }
 
-    static let verifyingTitle = String(localized: "正在核对…")
+    static let verifyingTitle = String(localized: "正在核对")
 
     static func requestDetail(_ request: RemoteDeviceGroup.JoinRequest) -> String {
         let name = request.candidate.name
         switch request.status {
         case .waitingForCode:
-            return String(localized: "输入它屏幕上显示的 6 位数。不是你发起的，点「拒绝」。")
+            return String(localized: "输入该设备上显示的 6 位验证码。如非本人操作，点「拒绝」。")
         case .verifying:
-            return String(localized: "等「\(name)」回话。可以先关掉，核对会在后台继续。")
+            return String(localized: "正在等待「\(name)」响应。可先关闭，核对将在后台继续。")
         case .wrongCode(let left):
-            return String(localized: "不对，「\(name)」上已经换了新数。还能再试 \(left) 次。")
+            return String(localized: "验证码有误，「\(name)」已更换验证码。还可重试 \(left) 次。")
         case .limitReached:
-            return String(localized: "输错的次数太多了。过 10 分钟再试，或者在另一台设备上输入。")
+            return String(localized: "错误次数过多。10 分钟后重试，或改在另一台设备上输入。")
         case .admitted:
             return String(localized: "「\(name)」已加入。")
         }

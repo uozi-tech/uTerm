@@ -121,8 +121,8 @@ final class RemoteDeviceGroupCopyTests: XCTestCase {
         func row(_ hosts: [String]) -> RemoteDeviceGroup.RemovedDevice {
             RemoteDeviceGroup.RemovedDevice(id: Data([1]), deviceID: UUID(), name: "iPad", waitingHosts: hosts)
         }
-        XCTAssertEqual(RemoteDeviceGroupCopy.removedStatus(row(["Mac mini"])), "「Mac mini」还没撤销")
-        XCTAssertEqual(RemoteDeviceGroupCopy.removedStatus(row(["Mac mini", "iMac"])), "还有 2 台 Mac 没撤销")
+        XCTAssertEqual(RemoteDeviceGroupCopy.removedStatus(row(["Mac mini"])), "「Mac mini」尚未撤销")
+        XCTAssertEqual(RemoteDeviceGroupCopy.removedStatus(row(["Mac mini", "iMac"])), "2 台 Mac 尚未撤销")
     }
 
     /// G3 给本机状态加了两个字段：老版本存下的状态（没有这两个键）照样解得开，不当成空的（当成空的会清掉组员名单）。

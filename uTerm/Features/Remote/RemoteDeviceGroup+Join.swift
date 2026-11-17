@@ -53,7 +53,7 @@ extension RemoteDeviceGroup {
             updateJoinState(.showingCode(code, attemptsLeft: Self.codeAttempts - burns))
         } catch {
             candidate = nil
-            updateJoinState(.failed(String(localized: "没能生成核对码：\(error.localizedDescription)")))
+            updateJoinState(.failed(String(localized: "无法生成验证码：\(error.localizedDescription)")))
         }
     }
 
@@ -62,7 +62,7 @@ extension RemoteDeviceGroup {
         advanceSentDone(snapshot, state)
         guard let session = candidate else { return }
         guard now().timeIntervalSince(session.join.createdAt) <= Self.codeLifetime else {
-            stopJoin(String(localized: "这个数已经过期。要加入的话，重新点「加入」。"))
+            stopJoin(String(localized: "验证码已过期。如需加入，重新点「加入」。"))
             return
         }
         let answers = snapshot.answers
@@ -150,7 +150,7 @@ extension RemoteDeviceGroup {
         let burns = session.burns + 1
         AppLogger.notice("设备组：组员回的核对没对上，这个数作废（第 \(burns) 次）", category: RemoteLog.category)
         guard burns < Self.codeAttempts else {
-            stopJoin(String(localized: "连续 \(Self.codeAttempts) 个数都没核对上，这次加入已停止。可能是输错了数，也可能有别的设备在冒充。"))
+            stopJoin(String(localized: "连续 \(Self.codeAttempts) 次核对失败，本次加入已中止。可能是验证码输入有误，也可能有设备冒充。"))
             return
         }
         issueCode(burns: burns)

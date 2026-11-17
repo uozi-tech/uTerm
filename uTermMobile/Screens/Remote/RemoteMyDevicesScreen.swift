@@ -83,10 +83,10 @@ struct RemoteMyDevicesScreen: View {
             }
             joinGroup(model)
             if !model.isSelfRemoved { removedGroup(model) }
-            MInsetGroup(header: String(localized: "你的其它设备")) {
+            MInsetGroup(header: String(localized: "其他设备")) {
                 if model.listedOtherDevices.isEmpty {
-                    MInsetRow(icon: "icloud", iconColor: M.text3, label: String(localized: "还没有你的其它设备"),
-                              sub: String(localized: "在另一台登录同一 Apple ID 的设备上打开 uTerm"), subMono: false, wraps: true,
+                    MInsetRow(icon: "icloud", iconColor: M.text3, label: String(localized: "未发现其他设备"),
+                              sub: String(localized: "在登录同一 Apple ID 的另一台设备上打开 uTerm"), subMono: false, wraps: true,
                               last: true)
                 } else {
                     deviceRows(model.listedOtherDevices)
