@@ -570,6 +570,8 @@
 				Features/Terminal/ProgramStatus.swift,
 				Features/Terminal/Shadow/TerminalEngineVersion.swift,
 				Services/SSH/TerminalImage.swift,
+				Shared/Views/CodeFieldInput.swift,
+				Shared/Views/UCodeField.swift,
 			);
 			target = 52484F53540000000000000E /* uTermRemoteHost */;
 		};

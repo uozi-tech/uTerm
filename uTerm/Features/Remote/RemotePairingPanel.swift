@@ -82,6 +82,9 @@ private struct RemotePairingPanelView: View {
 
     @State private var text = ""
     @State private var attemptsLeft = RemotePairingCopy.attempts
+    /// 上一次输的不对，还没开始输下一次：格子描红。
+    @State private var wrong = false
+    @State private var shakes = 0
 
     private var digits: String { text.filter(\.isNumber) }
 
@@ -102,19 +105,22 @@ private struct RemotePairingPanelView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            UDTextField(placeholder: "000 000", text: $text, autoFocus: true)
-                .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                .onSubmit(check)
+            // 输满六位自动核对：对了就是「允许」，不用再点按钮。
+            UCodeField(code: $text, isError: wrong, shakes: shakes) { _ in
+                // 让最后一位显示出来再核对。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { check() }
+            }
             HStack {
                 Spacer()
                 UDButton(title: "拒绝", style: .secondary, action: onReject)
-                UDButton(title: "允许", style: .primary, action: check)
-                    .disabled(digits.count != 6)
             }
         }
         .padding(20)
         .frame(width: 400)
         .background(UD.panel)
+        .onChange(of: text) { _, value in
+            if !value.isEmpty { wrong = false }
+        }
     }
 
     private func check() {
@@ -124,6 +130,8 @@ private struct RemotePairingPanelView: View {
             return
         }
         text = ""
+        wrong = true
+        shakes += 1
         attemptsLeft -= 1
         if attemptsLeft <= 0 { onReject() }
     }

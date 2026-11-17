@@ -85,6 +85,7 @@ struct RemoteDeviceGroupPromptView: View {
     let candidateID: UUID
 
     @State private var text = ""
+    @State private var shakes = 0
 
     private var request: RemoteDeviceGroup.JoinRequest? {
         service.pendingRequest.flatMap { $0.id == candidateID ? $0 : nil }
@@ -119,9 +120,12 @@ struct RemoteDeviceGroupPromptView: View {
                 }
             }
             if acceptsCode {
-                UDTextField(placeholder: "000 000", text: $text, autoFocus: true)
-                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                    .onSubmit { submit(request) }
+                // 输满六位自动核对，不用再点按钮。上一个数没对上时描红，开始输新数就不红了。
+                UCodeField(code: $text, length: RemoteGroupJoinCrypto.codeLength,
+                           isError: isWrong(request.status) && text.isEmpty, shakes: shakes) { _ in
+                    // 让最后一位显示出来再核对。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { submit(request) }
+                }
             } else if request.status == .verifying {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity)
             }
@@ -129,15 +133,21 @@ struct RemoteDeviceGroupPromptView: View {
                 Spacer()
                 if acceptsCode {
                     UDButton(title: "拒绝", style: .secondary) { service.reject(request) }
-                    UDButton(title: "核对", style: .primary) { submit(request) }
-                        .disabled(RemoteGroupJoinCrypto.normalizedCode(text) == nil)
                 } else {
                     UDButton(title: "关闭", style: .secondary) { service.hidePrompt(request) }
                 }
             }
         }
-        // 输错后要输新数：清掉上一次的。
-        .onChange(of: request.status) { _, _ in text = "" }
+        // 输错后要输新数：清掉上一次的，晃一下。
+        .onChange(of: request.status) { _, status in
+            text = ""
+            if isWrong(status) { shakes += 1 }
+        }
+    }
+
+    private func isWrong(_ status: RemoteDeviceGroup.JoinRequest.Status) -> Bool {
+        if case .wrongCode = status { return true }
+        return false
     }
 
     private func submit(_ request: RemoteDeviceGroup.JoinRequest) {

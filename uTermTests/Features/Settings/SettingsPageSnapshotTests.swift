@@ -487,7 +487,7 @@ final class SettingsPageSnapshotTests: XCTestCase {
     private func shootPrompt(_ name: String, _ service: RemoteDeviceGroupService, _ id: UUID, into dir: URL) async throws {
         let fixture = try makeFixture(Options())
         for dark in [false, true] {
-            try await shoot(name, size: NSSize(width: 400, height: 200), dark: dark, into: dir) {
+            try await shoot(name, size: NSSize(width: 400, height: 220), dark: dark, into: dir) {
                 environment(RemoteDeviceGroupPromptView(service: service, candidateID: id), fixture, dark: dark)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .background(UD.panel)

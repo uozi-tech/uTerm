@@ -15,9 +15,9 @@ struct MCodeField: View {
     @Environment(\.mAccent) private var accent
     @FocusState private var focused: Bool
 
-    /// 只留 ASCII 数字、截到 `length` 位。
+    /// 只留数字、截到 `length` 位（规则在两端共用的 `CodeFieldInput`）。
     nonisolated static func normalize(_ text: String, length: Int) -> String {
-        String(text.filter { $0.isASCII && $0.isNumber }.prefix(length))
+        CodeFieldInput.normalize(text, length: length)
     }
 
     var body: some View {
@@ -45,7 +45,7 @@ struct MCodeField: View {
         .onAppear { focused = true }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(length) 位数字码"))
-        .accessibilityValue(Text(code.isEmpty ? "未输入" : code.map(String.init).joined(separator: " ")))
+        .accessibilityValue(Text(code.isEmpty ? "未输入" : CodeFieldInput.spoken(code)))
         .accessibilityAction { focused = true }
     }
 
