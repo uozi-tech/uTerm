@@ -372,7 +372,7 @@ struct TerminalModeToggle: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(active ? UD.accent : .clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityLabel(Text(label))
         .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
     }

@@ -71,7 +71,7 @@ struct TerminalAgentView: View {
                     .font(.system(size: 12)).foregroundStyle(UD.text3)
                     .frame(width: 26, height: 26).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).help("新建对话").accessibilityLabel("新建对话")
+            .buttonStyle(.udPlain).help("新建对话").accessibilityLabel("新建对话")
         }
         .padding(.horizontal, 12)
         // v3：上下文条并入卡片顶部（40 高，与终端模式的标签条同高），无底色、无底线。
@@ -178,7 +178,7 @@ struct TerminalAgentView: View {
                     .background(Capsule().fill(UD.fillSoft))
                     .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .accessibilityLabel("显示更早的消息，还有 \(hidden) 条")
                 Spacer(minLength: 0)
             }
@@ -295,7 +295,7 @@ struct TerminalAgentView: View {
                         HStack(spacing: 8) {
                             ForEach(group.items, id: \.self) { item in
                                 Button { model.input = item } label: { exampleChip(item) }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.udPlain)
                             }
                         }
                     }
@@ -359,7 +359,7 @@ struct TerminalAgentView: View {
     private var commandReturnShortcut: some View {
         Button("", action: handleCommandReturn)
             .keyboardShortcut(.return, modifiers: .command)
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)

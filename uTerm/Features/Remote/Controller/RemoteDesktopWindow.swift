@@ -361,7 +361,7 @@ struct RemoteDesktopContent: View {
                 .background(Color.white.opacity(active ? 0.16 : 0), in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .help(help)
         .accessibilityLabel(Text(help))
     }

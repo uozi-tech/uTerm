@@ -170,7 +170,7 @@ struct WSIconButton: View {
                         .fill(selected ? UD.accentTint : (hover ? UD.rowHover : .clear))
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hover = $0 }
         .help(help)
         // 纯图标按钮：用 help 文案兜底无障碍标签（去掉「（⌘…）」快捷键后缀更干净）。
@@ -230,7 +230,7 @@ struct WSCanvasTab<Leading: View>: View {
                         .fill(closeHovered ? UD.panelHover : Color.clear))
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .onHover { closeHovered = $0 }
             .help(closeHelp)
         }

@@ -102,7 +102,7 @@ struct GlobalForwardingWindowView: View {
             .frame(height: 22)
             .background(RoundedRectangle(cornerRadius: 6).fill(UD.accentSoft))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .popover(isPresented: $newPickerOpen, arrowEdge: .bottom) { newHostPicker }
     }
 
@@ -155,7 +155,7 @@ struct GlobalForwardingWindowView: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     /// 空态（无任何规则时列表区显示）。列表组件复用它。
@@ -532,7 +532,7 @@ struct StartupAutomationBanner: View {
                     .padding(.horizontal, 10).frame(height: 24)
                     .background(RoundedRectangle(cornerRadius: 6).fill(UD.panelHover))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
             }
 
             UDToggle($model.autoStartEnabled)

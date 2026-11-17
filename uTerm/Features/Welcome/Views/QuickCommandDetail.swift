@@ -213,7 +213,7 @@ struct QuickCommandDetail: View {
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .padding(.top, 10)
 
                 if showEquivalent {
@@ -250,7 +250,7 @@ struct QuickCommandDetail: View {
                     .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(UD.panel))
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .padding(8)
         }
     }
@@ -319,7 +319,7 @@ struct QuickCommandDetail: View {
                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(runTint))
                 .opacity(isRunning ? 0.7 : 1)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .disabled(isRunning)
             .keyboardShortcut(.return, modifiers: [])
 
@@ -380,7 +380,7 @@ private struct SquareActionButton: View {
                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(fill))
                 .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(border, lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hover = $0 }
         .help(help)
     }

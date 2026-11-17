@@ -70,7 +70,7 @@ struct ParallelRunTitleBar: View {
             .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .disabled(running)
         .help("重新运行")
     }
@@ -83,7 +83,7 @@ struct ParallelRunTitleBar: View {
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .help("关闭")
     }
 }
@@ -117,7 +117,7 @@ private struct ParModeToggle: View {
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(active ? tint : .clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 }
 

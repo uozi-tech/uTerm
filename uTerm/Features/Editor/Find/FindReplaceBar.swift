@@ -16,7 +16,7 @@ struct FindReplaceBar: View {
                     Image(systemName: controller.isReplaceShown ? "chevron.down" : "chevron.right")
                         .frame(width: 16, height: 16)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
 
                 queryField
                 toggleStrip
@@ -24,7 +24,7 @@ struct FindReplaceBar: View {
                 Button(action: onClose) {
                     Image(systemName: "xmark").frame(width: 16, height: 16)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .keyboardShortcut(.escape, modifiers: [])
             }
             if controller.isReplaceShown {
@@ -80,7 +80,7 @@ struct FindReplaceBar: View {
                         .fill(isOn ? UD.accent.opacity(0.6) : Color.clear)
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     private var matchCounter: some View {
@@ -107,12 +107,12 @@ struct FindReplaceBar: View {
                 controller.replaceCurrent()
             } label: {
                 Image(systemName: "arrow.turn.up.left").frame(width: 22, height: 18)
-            }.buttonStyle(.plain).help("Replace")
+            }.buttonStyle(.udPlain).help("Replace")
             Button {
                 controller.replaceAll()
             } label: {
                 Image(systemName: "text.badge.checkmark").frame(width: 22, height: 18)
-            }.buttonStyle(.plain).help("Replace All (⌘Enter)")
+            }.buttonStyle(.udPlain).help("Replace All (⌘Enter)")
         }
     }
 }

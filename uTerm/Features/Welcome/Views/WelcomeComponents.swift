@@ -42,7 +42,7 @@ struct DetailActionButton: View {
         Button(action: action) {
             if prominent { primaryLabel } else { secondaryLabel }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .opacity(isEnabled ? 1 : 0.45)
     }
 

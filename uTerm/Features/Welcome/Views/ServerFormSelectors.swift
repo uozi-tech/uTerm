@@ -31,7 +31,7 @@ struct KeySelectorView: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : .clear, lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 0) {
                 if keys.isEmpty {
@@ -57,7 +57,7 @@ struct KeySelectorView: View {
                     .foregroundStyle(UD.text2)
                     .padding(.horizontal, 10).padding(.vertical, 9)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
             }
             .frame(width: 320)
             .background(UD.panelHi)
@@ -85,7 +85,7 @@ struct KeySelectorView: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accentSoft : Color.clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 }
 
@@ -113,7 +113,7 @@ struct JumpHostSelectorView: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : .clear, lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 0) {
                 Text("已有主机")
@@ -161,7 +161,7 @@ struct JumpHostSelectorView: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accentSoft : Color.clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     private func endpoint(_ h: ServerProfile) -> String {

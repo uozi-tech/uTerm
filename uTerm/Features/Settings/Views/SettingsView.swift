@@ -163,7 +163,7 @@ private struct SettingsSidebarRow: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hovering = $0 }
         // 原生 Button 本就键盘可达，不再叠 .focusable()（会多生一个可聚焦元素 + 系统焦点环）。
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)

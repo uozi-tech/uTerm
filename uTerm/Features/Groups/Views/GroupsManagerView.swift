@@ -158,7 +158,7 @@ struct GroupsManagerView: View {
                     .background(RoundedRectangle(cornerRadius: 5)
                         .fill(canCreate ? UD.accent : UD.fillSoft))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .disabled(!canCreate)
         }
         .padding(.leading, 8)
@@ -420,7 +420,7 @@ private func rowIconButton(_ symbol: String, danger: Bool = false, action: @esca
                height: GroupRowDeleteButtonLayout.hitHeight)
         .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.udPlain)
     .accessibilityLabel(danger ? "删除分组" : "")
     .help(danger ? "删除分组" : "")
 }
@@ -500,7 +500,7 @@ private struct GroupDetailView: View {
                         .frame(width: 22, height: 22)
                         .background(RoundedRectangle(cornerRadius: 5).fill(UD.fillFaint))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .help("重命名")
                 .accessibilityLabel("重命名")
             }
@@ -546,7 +546,7 @@ private struct GroupDetailView: View {
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityLabel("颜色 \(hex)")
         .accessibilityAddTraits(active ? .isSelected : [])
         .help("颜色 \(hex)")
@@ -591,7 +591,7 @@ private struct GroupDetailView: View {
                 .background(RoundedRectangle(cornerRadius: 5)
                     .fill(tab == index ? UD.fillMed : Color.clear))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     private func memberList(_ items: [ServerProfile], action: MemberRowView.Action, scroll: Bool) -> some View {

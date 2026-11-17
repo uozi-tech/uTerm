@@ -272,7 +272,7 @@ private struct RemoteMacTerminalArea: View {
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .iconButtonHover(cornerRadius: 6)
         .disabled(model.client.state != .connected)
         .help(String(localized: "在新窗口里浏览这台 Mac 的文件"))
@@ -285,7 +285,7 @@ private struct RemoteMacTerminalArea: View {
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .iconButtonHover(cornerRadius: 6)
         .disabled(model.client.state != .connected)
         .help(String(localized: "在新窗口里查看这台 Mac 的屏幕"))
@@ -298,7 +298,7 @@ private struct RemoteMacTerminalArea: View {
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .iconButtonHover(cornerRadius: 6)
         .disabled(!canOpenShell)
         .macWorkspaceDialog(stripChoices) { open(in: $0) }

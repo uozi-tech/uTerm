@@ -259,7 +259,7 @@ struct SFTPTabBar: View {
                         Image(systemName: "plus")
                             .frame(width: 26, height: 26)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.udPlain)
                     .iconButtonHover(cornerRadius: 6)
                     .help("新建 SFTP 标签页")
                     .accessibilityLabel(Text("新建 SFTP 标签页"))

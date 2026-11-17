@@ -115,7 +115,7 @@ struct RemoteDesktopIndicatorView: View {
                     .accessibilityLabel("含声音")
             }
             Button("断开", action: onDisconnect)
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(UD.danger)
                 .padding(.horizontal, 10)

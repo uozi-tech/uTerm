@@ -82,7 +82,7 @@ struct SFTPPathBar: View {
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .disabled(!enabled)
         .hoverBackground(enabled ? UD.rowHover : .clear, cornerRadius: 7)
         .accessibilityLabel(label)
@@ -128,7 +128,7 @@ struct SFTPPathBar: View {
         .help(i == 0 ? "根目录 /" : full)
         .accessibilityLabel(i == 0 ? "根目录" : "进入目录 \(name)")
         .accessibilityValue(full)
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .background(RoundedRectangle(cornerRadius: 7)
             .fill(isLast ? UD.fillSoft : .clear))
         .hoverBackground(isLast ? .clear : UD.rowHover, cornerRadius: 7, isActive: isLast)
@@ -191,7 +191,7 @@ struct SFTPToolButton: View {
                 .background(RoundedRectangle(cornerRadius: 8)
                     .fill(hover ? UD.panelHover : UD.fillFaint))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hover = $0 }
         .help(help)
         .accessibilityLabel(help)
@@ -216,7 +216,7 @@ struct SFTPOpenWorkspaceButton: View {
             .background(RoundedRectangle(cornerRadius: 8)
                 .fill(hover ? UD.accent.opacity(0.22) : UD.accentSoft))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hover = $0 }
         .fixedSize()
         .help("在工作区中打开此连接（终端 + Agent）")

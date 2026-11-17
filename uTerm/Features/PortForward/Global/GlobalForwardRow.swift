@@ -130,7 +130,7 @@ struct GlobalForwardRow: View {
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .help(whenHovering: hover, help)
         .accessibilityLabel(help)
     }
@@ -242,7 +242,7 @@ struct TunnelStatusBadge: View {
                     }
                     .foregroundStyle(UD.danger)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
             }
         }
         .frame(width: 74, alignment: .trailing)

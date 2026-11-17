@@ -113,7 +113,7 @@ struct SFTPTransfersDock: View {
                 Text(UTermFormat.transferRate(s.speedBytesPerSec)).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(s.direction == .up ? "上传" : "下载") \(s.fileName)")
         .accessibilityValue(queued ? "排队中" : pctText)
@@ -137,7 +137,7 @@ struct SFTPTransfersDock: View {
             .font(.system(size: 11))
             .padding(.horizontal, 8).frame(height: 22)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("正在\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
         .accessibilityValue(UTermFormat.progress(aggPct))
@@ -159,7 +159,7 @@ struct SFTPTransfersDock: View {
             .font(.system(size: 11))
             .padding(.horizontal, 8).frame(height: 22)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     @ViewBuilder private var idleChip: some View {
@@ -172,7 +172,7 @@ struct SFTPTransfersDock: View {
             .font(.system(size: 11))
             .padding(.horizontal, 8).frame(height: 22)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     private func arrow(_ d: FileBrowserModel.TransferDirection) -> some View {
@@ -210,7 +210,7 @@ private struct DockCancelButton: View {
                 .frame(width: 20, height: 20)
                 .background(hover ? UD.danger.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 5))
         }
-        .buttonStyle(.plain).help(title).accessibilityLabel(title).onHover { hover = $0 }
+        .buttonStyle(.udPlain).help(title).accessibilityLabel(title).onHover { hover = $0 }
     }
 }
 
@@ -300,7 +300,7 @@ private struct PanelLinkButton: View {
             Text(title).font(.system(size: 12))
                 .foregroundStyle(hover ? (danger ? UD.danger : UD.text2) : UD.text3)
         }
-        .buttonStyle(.plain).onHover { hover = $0 }
+        .buttonStyle(.udPlain).onHover { hover = $0 }
     }
 }
 
@@ -395,6 +395,6 @@ private struct RowControlButton: View {
                 .background(hover ? (redOnHover ? UD.danger.opacity(0.12) : UD.fillSoft) : .clear,
                             in: RoundedRectangle(cornerRadius: 6))
         }
-        .buttonStyle(.plain).help(title).accessibilityLabel(title).onHover { hover = $0 }
+        .buttonStyle(.udPlain).help(title).accessibilityLabel(title).onHover { hover = $0 }
     }
 }

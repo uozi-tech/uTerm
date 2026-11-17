@@ -107,7 +107,7 @@ struct SSHConfigImportView: View {
             }
             Rectangle().fill(UD.border).frame(height: 1)
             HStack {
-                Button("返回") { phase = .pick }.buttonStyle(.plain).foregroundStyle(UD.text3)
+                Button("返回") { phase = .pick }.buttonStyle(.udPlain).foregroundStyle(UD.text3)
                 Spacer()
                 Button("导入 \(selection.count) 台") { runImport() }
                     .buttonStyle(.borderedProminent)
@@ -219,7 +219,7 @@ struct SSHConfigImportView: View {
             Text("新建 \(result.created) · 更新 \(result.updated) · 导入密钥 \(result.keysImported) · 关联已有密钥 \(result.keysLinked) · 跳过密钥 \(result.keysSkipped)")
                 .font(UD.caption).foregroundStyle(UD.text3)
             HStack(spacing: 10) {
-                Button("再次导入") { phase = .pick; rows = []; selection = [] }.buttonStyle(.plain).foregroundStyle(UD.accent)
+                Button("再次导入") { phase = .pick; rows = []; selection = [] }.buttonStyle(.udPlain).foregroundStyle(UD.accent)
             }
             .padding(.top, 8)
             Spacer()

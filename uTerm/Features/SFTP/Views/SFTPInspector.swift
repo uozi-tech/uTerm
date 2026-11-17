@@ -147,7 +147,7 @@ struct SFTPInspector: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(UD.accent))
             .shadow(color: UD.accent.opacity(0.45), radius: 7, y: 4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 }
 
@@ -173,7 +173,7 @@ struct SFTPSecondaryButton: View {
                     .fill(danger ? UD.danger.opacity(hover ? 0.18 : 0.12)
                                  : (hover ? UD.rowHover : UD.fillFaint)))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hover = $0 }
     }
 }

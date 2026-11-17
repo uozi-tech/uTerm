@@ -60,7 +60,7 @@ private struct ExternalOpenToastView: View {
                         .foregroundStyle(UD.text4)
                         .frame(width: 16, height: 16)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .help("关闭")
             }
         }

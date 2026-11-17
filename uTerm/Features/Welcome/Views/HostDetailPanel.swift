@@ -106,7 +106,7 @@ struct HostDetailPanel: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .help("拷贝 \(fullEndpoint)")
     }
 
@@ -258,7 +258,7 @@ private struct EndpointCopyChip: View {
                 )
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hover = $0 }
         .help("点击拷贝：\(text)")
     }
@@ -286,7 +286,7 @@ private struct NameCopyButton: View {
                 )
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .padding(.horizontal, -4)
         .onHover { hover = $0 }
         .help("点击拷贝：\(name)")

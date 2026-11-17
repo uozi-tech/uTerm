@@ -53,7 +53,7 @@ struct SFTPPermissionSheet: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.udPlain)
                 }
             }
             .padding(.horizontal, 18).padding(.vertical, 16)
@@ -169,7 +169,7 @@ private struct PermCheckbox: View {
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityLabel(label ?? "")
         .accessibilityValue(on ? "已勾选" : "未勾选")
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)

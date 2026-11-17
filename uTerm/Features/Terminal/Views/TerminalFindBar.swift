@@ -52,7 +52,7 @@ struct TerminalFindBar: View {
                 .opacity(0)
                 .accessibilityHidden(true)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .padding(.leading, 10)
         .padding(.trailing, 6)
         .padding(.vertical, 5)

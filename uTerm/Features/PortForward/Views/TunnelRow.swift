@@ -235,7 +235,7 @@ struct TunnelRow: View {
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .help(whenHovering: hover, help)
         .accessibilityLabel(help)
     }
@@ -254,7 +254,7 @@ struct TunnelRow: View {
             .frame(width: Self.actionWidth, height: 24)
             .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 }
 

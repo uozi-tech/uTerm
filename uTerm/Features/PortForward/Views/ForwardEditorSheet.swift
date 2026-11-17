@@ -266,7 +266,7 @@ struct ForwardEditorSheet: View {
                         .frame(height: 22)
                         .background(RoundedRectangle(cornerRadius: 5).fill(UD.accentSoft))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
             }
             Spacer(minLength: 0)
         }

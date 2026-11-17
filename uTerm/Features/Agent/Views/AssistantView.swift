@@ -142,7 +142,7 @@ struct AssistantView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .accessibilityLabel("对话历史")
             .help("对话历史")
 
@@ -157,7 +157,7 @@ struct AssistantView: View {
                     .background(RoundedRectangle(cornerRadius: 7).fill(UD.uw04))
                     .contentShape(RoundedRectangle(cornerRadius: 7))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .accessibilityLabel("新建对话")
             .help("新建对话")
         }
@@ -213,7 +213,7 @@ struct AssistantView: View {
                 .padding(.horizontal, 10)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .overlay(alignment: .top) {
                 Rectangle().fill(UD.border).frame(height: 1)
             }
@@ -259,7 +259,7 @@ struct AssistantView: View {
                     .fill(isActive ? UD.accentSoft : .clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             Button("删除", role: .destructive) { delete(s) }
@@ -421,7 +421,7 @@ struct AssistantView: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(UD.uw03))
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.udPlain)
                 }
             }
         }
@@ -487,7 +487,7 @@ struct AssistantView: View {
                     .background(Capsule().fill(UD.fillSoft))
                     .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .accessibilityLabel("显示更早的消息，还有 \(hidden) 条")
                 Spacer(minLength: 0)
             }
@@ -612,7 +612,7 @@ struct AssistantView: View {
     private var commandReturnShortcut: some View {
         Button("", action: handleCommandReturn)
             .keyboardShortcut(.return, modifiers: .command)
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -781,7 +781,7 @@ private struct AgentToolCallCard: View {
                 .frame(height: 30)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .contextMenu {
                 Button("拷贝命令", action: copyCommand)
                     .disabled(call.command.isEmpty)
@@ -899,7 +899,7 @@ private struct AgentToolCallCard: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(UD.uw04))
                     .contentShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .disabled(call.command.isEmpty)
             .accessibilityLabel(isCommandCopied ? "命令已拷贝" : "拷贝命令")
             .help(whenHovering: isHoveringCommandRow, isCommandCopied ? "已拷贝" : "拷贝命令")
@@ -942,7 +942,7 @@ private struct AgentToolCallCard: View {
                 .frame(height: 31)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
 
             if isResultExpanded, let output = call.output {
                 outputText(output)
@@ -1004,7 +1004,7 @@ private struct AgentToolCallCard: View {
                         .fill(approvalEnabled ? UD.accentTint : UD.accentTintDisabled))
                     .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .disabled(!approvalEnabled)
 
                 Button(action: onSkip) {
@@ -1016,7 +1016,7 @@ private struct AgentToolCallCard: View {
                         .background(RoundedRectangle(cornerRadius: 7).fill(UD.uw04))
                         .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .disabled(!approvalEnabled)
             }
         }
@@ -1169,12 +1169,12 @@ private struct UserMessageRow: View {
                     Text("✕").font(.system(size: 12)).foregroundStyle(UD.text3)
                         .frame(width: 26, height: 24).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).accessibilityLabel("取消").help("取消")
+                .buttonStyle(.udPlain).accessibilityLabel("取消").help("取消")
                 Button { onCommit(draft) } label: {
                     Text("✓").font(.system(size: 12)).foregroundStyle(UD.accent)
                         .frame(width: 26, height: 24).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).accessibilityLabel("重发").help("重发（截断其后并重新生成）")
+                .buttonStyle(.udPlain).accessibilityLabel("重发").help("重发（截断其后并重新生成）")
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }

@@ -155,7 +155,7 @@ struct TerminalArea: View {
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .iconButtonHover(cornerRadius: 6)
             .help("新建终端标签页（⌘T）")
             .accessibilityLabel(Text("新建终端标签页"))

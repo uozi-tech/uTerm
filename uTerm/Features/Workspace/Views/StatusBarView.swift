@@ -113,7 +113,7 @@ struct StatusBarView: View {
                              label: Self.percent(cpu), iconSize: 11)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityLabel(Text(Self.cpuLoadSummary(load: load, cpuPercent: cpu, cores: cores)))
         .help("查看 CPU 与负载历史")
         .popover(isPresented: $cpuPopover, arrowEdge: .bottom) {
@@ -130,7 +130,7 @@ struct StatusBarView: View {
             UDFooterItem(systemImage: "memorychip", color: UD.mMem,
                          label: "\(text) · \(Self.percent(pct))", iconSize: 11)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityLabel(Text("内存 \(text) · \(Self.percent(pct))"))
         .help("查看内存占用历史")
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {

@@ -557,7 +557,7 @@ private struct LocalShellNewTabButton: View {
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .iconButtonHover(cornerRadius: 6)
             .help("新建本机终端（⌘T）")
             .accessibilityLabel(Text("新建本机终端"))

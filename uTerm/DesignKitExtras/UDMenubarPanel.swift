@@ -125,7 +125,7 @@ private struct UDMenubarIconButton: View {
                 )
                 .contentShape(RoundedRectangle(cornerRadius: UD.Radius.sm))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hovered = $0 }
     }
 }
@@ -150,7 +150,7 @@ private struct UDMenubarPill: View {
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 7))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 }
 
@@ -193,7 +193,7 @@ private struct UDMenubarRunningRow: View {
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 7))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
@@ -240,7 +240,7 @@ private struct UDMenubarActionRow: View {
             )
             .contentShape(RoundedRectangle(cornerRadius: UD.Radius.sm))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .onHover { hovered = $0 }
     }
 }

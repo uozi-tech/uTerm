@@ -71,7 +71,7 @@ struct EmptyServersState: View {
                 .font(.system(size: 11.5))
                 .foregroundColor(UD.text3.opacity(0.8))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 }
 

@@ -255,7 +255,7 @@ struct ParallelAILane: View {
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
 
             if rawOpen {
                 ParTermLinesView(lines: state.lines)
@@ -284,7 +284,7 @@ struct ParallelAILane: View {
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
 
             if stepsOpen {
                 VStack(alignment: .leading, spacing: 6) {

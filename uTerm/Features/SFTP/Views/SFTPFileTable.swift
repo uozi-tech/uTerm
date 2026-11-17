@@ -282,7 +282,7 @@ struct SFTPFileTable: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .accessibilityLabel("按\(label)排序")
         .help("按\(label)排序")
     }

@@ -246,7 +246,7 @@ struct WelcomeSidebar: View {
                                 .frame(width: 20, height: 20)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.udPlain)
                         .iconButtonHover(cornerRadius: 5)
                         // 20pt 命中框比图标宽约 4pt：外边距相应减 4，图标位置不变。
                         .padding(.trailing, 10)

@@ -153,7 +153,7 @@ struct QuickCommandForm: View {
                 .strokeBorder(serverPopoverOpen ? UD.accent : .clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .popover(isPresented: $serverPopoverOpen, arrowEdge: .bottom) {
             serverPopoverContent
         }
@@ -186,7 +186,7 @@ struct QuickCommandForm: View {
                     Button(allSelected ? "清空" : "全选") {
                         selected = allSelected ? [] : Set(hostRefs.map(\.id))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.udPlain)
                     .font(.system(size: 11.5))
                     .foregroundStyle(UD.text2)
                     .padding(.horizontal, 9)
@@ -234,7 +234,7 @@ struct QuickCommandForm: View {
                 .padding(.vertical, 6)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
 
             ForEach(hosts) { host in
                 hostRow(host)
@@ -270,7 +270,7 @@ struct QuickCommandForm: View {
                 .fill(on ? UD.accentSoft : .clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
     }
 
     // MARK: AI 指令（自然语言）

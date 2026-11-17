@@ -56,7 +56,7 @@ struct MarkdownRenderer: View {
                 .background(Capsule().fill(UD.fillSoft))
                 .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.udPlain)
             .accessibilityLabel("继续渲染，还有 \(remaining) 块未渲染")
             Spacer(minLength: 0)
         }

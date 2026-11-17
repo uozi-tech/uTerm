@@ -20,7 +20,7 @@ struct TrueColorOfferBanner: View {
             actions
         }
         .font(.system(size: 11.5, weight: .semibold))
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(UD.overlay, in: RoundedRectangle(cornerRadius: 8, style: .continuous))

@@ -51,7 +51,7 @@ struct RemoteControlBanner: View {
                 .lineLimit(1)
             Spacer(minLength: 8)
             Button("断开", action: onDisconnect)
-                .buttonStyle(.plain)
+                .buttonStyle(.udPlain)
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(UD.accent)
         }

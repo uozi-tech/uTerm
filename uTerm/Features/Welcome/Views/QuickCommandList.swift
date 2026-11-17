@@ -252,7 +252,7 @@ struct QuickCommandRow: View {
             .frame(minHeight: 60)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.udPlain)
         .background(rowBackground)
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.14), value: hover)
