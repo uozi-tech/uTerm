@@ -219,4 +219,25 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
         let empty = RemoteDesktopRequestSize.fitting(screen: .zero, scale: 2, barHeight: 0, topInset: 0)
         XCTAssertEqual(empty, RemoteDesktopRequestSize(width: 1920, height: 1080))
     }
+
+    /// 点按钮时就开流用的记忆：按屏幕大小和像素倍数分开记，横竖不混；最多留几条。
+    func testRequestSizeMemoryIsKeyedByScreenAndOrientation() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "uTerm.tests.requestSizeMemory.\(UUID().uuidString)"))
+        typealias Memory = RemoteDesktopRequestSizeMemory
+        let landscape = CGSize(width: 1000, height: 703.5), portrait = CGSize(width: 703.5, height: 1000)
+        XCTAssertNil(Memory.load(screen: landscape, scale: 2, defaults: defaults))
+        Memory.save(RemoteDesktopRequestSize(width: 3104, height: 2007), screen: landscape, scale: 2, defaults: defaults)
+        XCTAssertEqual(Memory.load(screen: landscape, scale: 2, defaults: defaults),
+                       RemoteDesktopRequestSize(width: 3104, height: 2007))
+        XCTAssertNil(Memory.load(screen: portrait, scale: 2, defaults: defaults), "竖着的另算")
+        XCTAssertNil(Memory.load(screen: landscape, scale: 3, defaults: defaults), "像素倍数不同另算")
+        Memory.save(RemoteDesktopRequestSize(width: 3100, height: 2000), screen: landscape, scale: 2, defaults: defaults)
+        XCTAssertEqual(Memory.load(screen: landscape, scale: 2, defaults: defaults)?.width, 3100, "后量出来的为准")
+        for index in 0..<20 {
+            Memory.save(RemoteDesktopRequestSize(width: index, height: 1), screen: CGSize(width: 300 + index, height: 600),
+                        scale: 2, defaults: defaults)
+        }
+        let kept = (0..<20).filter { Memory.load(screen: CGSize(width: 300 + $0, height: 600), scale: 2, defaults: defaults) != nil }
+        XCTAssertLessThanOrEqual(kept.count, 8)
+    }
 }

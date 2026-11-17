@@ -157,7 +157,9 @@ final class GhosttyTerminalBridge {
         view.configuration = TerminalSurfaceOptions(
             backend: .inMemory(link.io),
             fontSize: Self.ghosttyFontSize(points: MGhosttyTerminalView.defaultFontSize))
+        delegateProxy.search = link.search
         view.delegate = delegateProxy
+        view.search = link.search
         link.attach(view)
         // 收起键盘后用户还在看这个终端，光标不该变成表示失焦的空心框：surface 一直聚焦，1004 由这里报（`focusReportChanged`）。
         view.uTermKeepsSurfaceFocused = true
@@ -347,7 +349,9 @@ final class GhosttyTerminalBridge {
     // MARK: 输入
 
     /// 发给远端的原始字节（键盘条上的文字、提示词、回车）。和 surface 出来的击键、应答走同一条 FIFO。
+    /// 这些字节不经过终端视图，那一行跟着变了：视图记着的听写那段字作废。
     func write(_ data: Data) {
+        view.resetRewritableTextInput()
         input.write(data)
     }
 
@@ -436,11 +440,19 @@ final class GhosttyTerminalBridge {
     }
 }
 
-/// 视图的委托：只管点链接。surface 的生灭与网格走视图上不经 delegate 的回调（`uTermOnSurfaceAttached` 等）：
+/// 视图的委托：点链接，和回滚区查找的回报。surface 的生灭与网格走视图上不经 delegate 的回调（`uTermOnSurfaceAttached` 等）：
 /// 探针会把 delegate 换成自己的对象。
 @MainActor
-private final class SurfaceDelegate: TerminalSurfaceOpenURLDelegate {
+private final class SurfaceDelegate: TerminalSurfaceOpenURLDelegate, TerminalSurfaceSearchDelegate {
+    weak var search: TerminalSearch?
+
     func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
         if let url = URL(string: url) { UIApplication.shared.open(url) }
     }
+
+    // 引擎报来的查找事件一律交给两端共用的 `TerminalSearch`。
+    func terminalDidStartSearch(needle: String?) { search?.handle(.started(needle: needle)) }
+    func terminalDidEndSearch() { search?.handle(.ended) }
+    func terminalDidUpdateSearchTotal(_ total: Int?) { search?.handle(.total(total)) }
+    func terminalDidUpdateSearchSelected(_ selected: Int?) { search?.handle(.selected(selected)) }
 }

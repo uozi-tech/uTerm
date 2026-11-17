@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// 手机向 Mac 要多大的画面（`RemoteDesktopStartRequest.maxWidth` / `maxHeight`，与方向无关）。
 ///
@@ -10,7 +11,7 @@ import CoreGraphics
 /// 像素：接着显示器的 Mac 上视频尺寸不比原来小。
 ///
 /// Mac 的屏总是横的，一律按横过来看时的画布算：竖着开的，转过来之后也正好铺满。
-nonisolated struct RemoteDesktopRequestSize: Equatable, Sendable {
+nonisolated struct RemoteDesktopRequestSize: Equatable, Sendable, Codable {
     var width: Int
     var height: Int
 
@@ -41,5 +42,39 @@ nonisolated struct RemoteDesktopRequestSize: Equatable, Sendable {
         let aspect = canvas.width / canvas.height
         let height = max(CGFloat(box.height), (CGFloat(box.width) / aspect).rounded(.up))
         return RemoteDesktopRequestSize(width: Int((height * aspect).rounded()), height: Int(height))
+    }
+}
+
+/// 上次开屏实际要的画面尺寸，按这台设备的屏幕（视图点、现在的方向、像素倍数）记。
+///
+/// 要多大要等全屏页排完版（顶栏多高）才量得出来，点「查看并控制屏幕」那一刻还不知道，原先要先等面板收起、全屏页
+/// 盖上来、排完版才开流（2026-11-16 Duo：点按钮之后 670 ms 才开流）。同一块屏幕、同一个方向每次都一样，记下来
+/// 下次点按钮时就开流，和界面动画同时走；全屏页量出来的不一样时，还没开始放就按量出来的改（`setRequestedSize`）。
+nonisolated enum RemoteDesktopRequestSizeMemory {
+    private static let limit = 8
+
+    static func key(screen: CGSize, scale: CGFloat) -> String {
+        "\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))@\(Int((scale * 100).rounded()))"
+    }
+
+    static func load(screen: CGSize, scale: CGFloat,
+                     defaults: UserDefaults = RemoteLocalState.defaults) -> RemoteDesktopRequestSize? {
+        all(defaults)[key(screen: screen, scale: scale)]
+    }
+
+    static func save(_ size: RemoteDesktopRequestSize, screen: CGSize, scale: CGFloat,
+                     defaults: UserDefaults = RemoteLocalState.defaults) {
+        var sizes = all(defaults)
+        let key = key(screen: screen, scale: scale)
+        guard sizes[key] != size else { return }
+        sizes[key] = size
+        // 一台设备只有几种屏幕（Duo 内外屏、横竖），留几条就够。
+        if sizes.count > limit { sizes = Dictionary(uniqueKeysWithValues: sizes.sorted { $0.key < $1.key }.suffix(limit)) }
+        if let data = try? JSONEncoder().encode(sizes) { defaults.set(data, forKey: DefaultsKey.remoteDesktopRequestSizes) }
+    }
+
+    private static func all(_ defaults: UserDefaults) -> [String: RemoteDesktopRequestSize] {
+        guard let data = defaults.data(forKey: DefaultsKey.remoteDesktopRequestSizes) else { return [:] }
+        return (try? JSONDecoder().decode([String: RemoteDesktopRequestSize].self, from: data)) ?? [:]
     }
 }

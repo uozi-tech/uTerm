@@ -97,6 +97,7 @@ struct ServerList: View {
                                           onContextAction(.connect, profile)
                                       },
                                       rowHover: rowHover)
+                                .equatable()
                                 .id(profile.id)
                                 .modifier(ServerRowDragModifier(
                                     dragEnabled: rowDragEnabled,

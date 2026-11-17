@@ -33,6 +33,10 @@
             committingMarkedText: Bool = false,
         ) -> Bool {
             guard let surface else { return false }
+            if event.action == GHOSTTY_ACTION_PRESS || event.action == GHOSTTY_ACTION_REPEAT {
+                // uTerm 本地补丁：别的按键改了终端那一行，听写留着的那段字作废（自己发的改写不算）。
+                inputHandler.resetCommittedText()
+            }
             if event.action == GHOSTTY_ACTION_PRESS {
                 hardwareKeyboard.touchCopyKeycodes.remove(event.keycode)
             } else if hardwareKeyboard.touchCopyKeycodes.contains(event.keycode) {

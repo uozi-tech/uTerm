@@ -28,8 +28,16 @@ enum ServerRowLayout {
 ///    区域表按 `.onHover` 个数变长，鼠标位置或几何一变就要过一遍。悬停走
 ///    `ServerList` 那一个整表跟踪层（`.rowHover(_:id:)`）。
 /// 3. **别在行体里现建 `Formatter`**。相对时间走 `UTermFormat.relative`（纯函数，不经 formatter）。
-struct ServerRow: View {
-    let profile: ServerProfile
+/// 4. **行体不读 `ServerProfile`**，只读 `ServerRowInfo`（见那里）。
+///
+/// 按「字段值 + 搜索词 + 选中 + 组色」判等（闭包不比），列表重算时没变的行不重算。
+struct ServerRow: View, Equatable {
+    static func == (lhs: ServerRow, rhs: ServerRow) -> Bool {
+        lhs.info == rhs.info && lhs.query == rhs.query && lhs.isSelected == rhs.isSelected
+            && lhs.groupColor == rhs.groupColor && lhs.rowHover === rhs.rowHover
+    }
+
+    let info: ServerRowInfo
     let query: String
     let isSelected: Bool
     let groupColor: Color?
@@ -41,37 +49,48 @@ struct ServerRow: View {
 
     @State private var hover = false
 
+    init(profile: ServerProfile, query: String, isSelected: Bool, groupColor: Color?,
+         onTap: @escaping () -> Void, onDoubleTap: @escaping () -> Void, rowHover: RowHoverState? = nil) {
+        info = ServerRowInfo(profile)
+        self.query = query
+        self.isSelected = isSelected
+        self.groupColor = groupColor
+        self.onTap = onTap
+        self.onDoubleTap = onDoubleTap
+        self.rowHover = rowHover
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            HostAvatar(monogram: profile.monogram,
+            HostAvatar(monogram: info.monogram,
                        tint: groupColor,
-                       reachability: HostReachabilityMonitor.shared.entry(for: profile))
+                       reachability: info.reachabilityKey.map(HostReachabilityMonitor.shared.entry(for:)))
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(HighlightedText.attributed(profile.name, highlighting: query))
+                    Text(HighlightedText.attributed(info.name, highlighting: query))
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(UD.text)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(whenHovering: hover, profile.name)
-                    if profile.isPinned {
+                        .help(whenHovering: hover, info.name)
+                    if info.isPinned {
                         Image(systemName: "star.fill")
                             .font(.system(size: 9))
                             .foregroundStyle(UD.warning)
                     }
                 }
-                Text(HighlightedText.attributed(profile.displayEndpoint, highlighting: query))
+                Text(HighlightedText.attributed(info.displayEndpoint, highlighting: query))
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(UD.text3)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .help(whenHovering: hover, profile.displayEndpoint)
+                    .help(whenHovering: hover, info.displayEndpoint)
             }
 
             Spacer(minLength: 6)
 
-            Text(UTermFormat.relative(profile.lastConnectedAt))
+            Text(UTermFormat.relative(info.lastConnectedAt))
                 .font(.system(size: 11))
                 .foregroundStyle(UD.text3)
                 .lineLimit(1)
@@ -87,16 +106,16 @@ struct ServerRow: View {
         // 挂在 `LazyVStack` 上的**一个**跟踪层按行高算出来
         // （`UAppKitBridge/RowHoverTracker.swift`），滚动期间由 `ScrollHoverGate`
         // 停更、停下补算一次。
-        .rowHover(rowHover, id: profile.id) { hover = $0 }
+        .rowHover(rowHover, id: info.id) { hover = $0 }
         // 在线角标：只在行可见期间登记探测，滚出屏幕 task 取消即注销（见 `HostReachabilityMonitor`）。
-        .watchesReachability(of: profile)
+        .watchesReachability(of: info.reachabilityKey)
         // 鼠标单击 / 双击**不在这里**接 —— 两个 `onTapGesture` 链式会让 SwiftUI
         // 等满系统双击间隔才发单击（实测选中要 390~510ms）。改由 `ServerList`
         // 在整个 `LazyVStack` 上挂一个透明 AppKit 层，按 `NSEvent.clickCount`
         // 分派：第一下按下即选中、第二下即连接（见 `ClickSelectActivate.swift`）。
         // 行本身仍保留 `onTap` / `onDoubleTap`，它们是下面 AX 动作的落点。
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(profile.name)，\(profile.displayEndpoint)")
+        .accessibilityLabel("\(info.name)，\(info.displayEndpoint)")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         // 行不再是 `Button`，AX 的默认动作（VoiceOver ⌃⌥space / 全键盘控制）
         // 必须手工补回，否则整份列表在辅助功能下按不动。
@@ -104,7 +123,7 @@ struct ServerRow: View {
         .accessibilityAction(named: Text("打开")) { onDoubleTap() }
     }
 
-    private var groupLabel: String { profile.groupLabel }
+    private var groupLabel: String { info.groupLabel }
 
     /// 选中 > hover > 透明。用 `Color.primary` 透明叠底，浅色下变深、深色下变浅，
     /// 与设计稿的 white-alpha 叠底等效且自适应外观设置。
@@ -114,5 +133,34 @@ struct ServerRow: View {
         if isSelected { return Color.primary.opacity(0.06) }
         if hover { return Color.primary.opacity(0.028) }
         return .clear
+    }
+}
+
+/// 一行要画的字段，在父视图建行时从 `ServerProfile` 抄一份值。
+///
+/// 行体不直接读 SwiftData 对象：iCloud 合并数据时 SwiftData 对每台主机都发「跳板机变了」，凡是读过这台主机
+/// 任何一个字段的视图都跟着重算，不管读的是哪个字段、值变没变（iOS 主机页回前台的头 1.4 秒里 22 张卡重算
+/// 480 次，2026-11-16 Duo 实测，同一个模型）。抄成值以后，列表照样会被叫醒重算一遍，行按这份值判等，
+/// 没变就不重算。
+struct ServerRowInfo: Equatable {
+    let id: UUID
+    let name: String
+    let displayEndpoint: String
+    let monogram: String
+    let groupLabel: String
+    let isPinned: Bool
+    let lastConnectedAt: Date?
+    /// 在线探测的端点；走跳板机 / 没填地址时为 nil，不探也不画角标。
+    let reachabilityKey: HostEndpointKey?
+
+    init(_ profile: ServerProfile) {
+        id = profile.id
+        name = profile.name
+        displayEndpoint = profile.displayEndpoint
+        monogram = profile.monogram
+        groupLabel = profile.groupLabel
+        isPinned = profile.isPinned
+        lastConnectedAt = profile.lastConnectedAt
+        reachabilityKey = HostEndpointKey(profile)
     }
 }

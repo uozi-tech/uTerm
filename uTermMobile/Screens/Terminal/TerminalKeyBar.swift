@@ -148,10 +148,11 @@ struct TerminalKeyBar: View {
 
     @ViewBuilder private var keyRow: some View {
         keyButtons(TerminalKeyCatalog.leading)
-        // 贴图常用（给 AI 命令行看截图），紧跟 esc / tab，不用滚就点得到；固定键不再加（分屏后一格太窄）。
+        // 贴图常用（给 AI 命令行看截图）、查找也是，都紧跟 esc / tab，不用滚就点得到；固定键不再加（分屏后一格太窄）。
         if controller.acceptsImages {
             imageMenu
         }
+        searchKey
         MKeyBarGap()
         ForEach(TerminalKeyCatalog.arrows) { key in
             MRepeatingKeyButton(label: key.label) { send(key) }
@@ -163,6 +164,17 @@ struct TerminalKeyBar: View {
         keyButtons(TerminalKeyCatalog.trailing)
         MKeyBarGap()
         keyButtons(TerminalKeyCatalog.shellSymbols)
+    }
+
+    /// 回滚区查找：开着时再点一下关掉。
+    private var searchKey: some View {
+        Button {
+            if controller.search.isPresented { controller.search.dismiss() } else { controller.search.present() }
+        } label: {
+            MKeyIconCap(symbol: "magnifyingglass", active: controller.search.isPresented)
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityLabel("查找")
     }
 
     /// 上膛之后多半是要接着在系统键盘上打一个字符（Ctrl+C），所以顺手把键盘弹出来；接着点键盘条上的键也行（Ctrl+←）。

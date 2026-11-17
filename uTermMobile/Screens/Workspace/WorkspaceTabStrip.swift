@@ -366,6 +366,14 @@ struct WorkspaceTabChip: View {
             return WorkspaceTabDrag.itemProvider(tabID: tab.id)
         }
         .mContextMenu(preview: pillShape) {
+            if case .terminal(let terminal) = tab, terminal.mode == .terminal {
+                Button {
+                    onSelect()
+                    terminal.controller.search.present()
+                } label: {
+                    Label("查找", systemImage: "magnifyingglass")
+                }
+            }
             if canMove {
                 Button(action: onMove) {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")

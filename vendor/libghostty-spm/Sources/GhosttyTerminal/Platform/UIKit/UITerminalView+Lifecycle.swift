@@ -328,6 +328,7 @@
         @discardableResult
         override open func resignFirstResponder() -> Bool {
             let result = super.resignFirstResponder()
+            inputHandler.resetCommittedText()
             #if !targetEnvironment(macCatalyst)
                 // A handoff to another responder keeps the keyboard up, so
                 // `keyboardDidHide` never fires for this view; the flag means

@@ -80,8 +80,13 @@ extension View {
     /// 视图可见期间登记这台主机的在线探测，消失即注销（见 `HostReachabilityMonitor`）。
     /// 跳板机主机 key 为 nil，不探。只是一层 `task(id:)`，不给行视图多加层级。
     func watchesReachability(of host: ServerProfile) -> some View {
-        task(id: HostEndpointKey(host)) {
-            guard let key = HostEndpointKey(host) else { return }
+        watchesReachability(of: HostEndpointKey(host))
+    }
+
+    /// 同上，调用方已经算好了端点（nil = 不探）。
+    func watchesReachability(of key: HostEndpointKey?) -> some View {
+        task(id: key) {
+            guard let key else { return }
             await HostReachabilityMonitor.shared.watch(key)
         }
     }

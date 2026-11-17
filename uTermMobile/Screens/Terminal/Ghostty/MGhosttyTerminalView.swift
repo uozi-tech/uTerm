@@ -18,6 +18,8 @@ final class MGhosttyTerminalView: UITerminalView {
     var onPasteImage: (() -> Void)?
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，见 `MTerminalContainerView`。
     var hasHostedLayout = false
+    /// 这片终端的回滚区查找（`TerminalSurfaceLink.search`）：硬件键盘的 ⌘F / ⌘G / ⇧⌘G 落到它上面。
+    weak var search: TerminalSearch?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -84,18 +86,12 @@ final class MGhosttyTerminalView: UITerminalView {
 
     // MARK: 输入法：默认英文，用户切了就记住
 
-    /// 用户在这个终端里切到的输入法；nil = 还没切过，用英文。每个标签各记各的。
-    private var chosenInputMode: UITextInputMode?
     private var observesInputMode = false
 
     /// 系统在终端成为第一响应者时按它挑键盘。命令行默认要英文；用户用地球键切走（中文写提交说明、跟 Claude Code 说话）
-    /// 之后，回到这个终端还是用户选的那个。
+    /// 之后，所有终端都用他选的那个，重开 App 也是（`KeyboardLanguageMemory`）。
     override var textInputMode: UITextInputMode? {
-        chosenInputMode ?? Self.englishInputMode ?? super.textInputMode
-    }
-
-    private static var englishInputMode: UITextInputMode? {
-        UITextInputMode.activeInputModes.first { $0.primaryLanguage?.hasPrefix("en") == true }
+        KeyboardLanguageMemory.terminal.inputMode(current: super.textInputMode)
     }
 
     @discardableResult
@@ -125,10 +121,38 @@ final class MGhosttyTerminalView: UITerminalView {
     }
 
     @objc private func inputModeDidChange() {
-        // 只记自己是第一响应者时的切换：别的标签抢到键盘时系统把键盘换成英文，那不是用户在这里选的。
-        guard isFirstResponder, let mode = super.textInputMode else { return }
-        chosenInputMode = mode
+        // 只记自己是第一响应者时的切换：别处抢到键盘时系统换的键盘，不是用户在这里选的。
+        guard isFirstResponder else { return }
+        KeyboardLanguageMemory.terminal.record(super.textInputMode)
     }
+
+    // MARK: 硬件键盘的查找键
+
+    /// ⌘F 打开查找栏，⌘G / ⇧⌘G 往上 / 往下找（同 Mac）。按键绑定表里清掉了 Ghostty 自己的 ⌘F，这几个组合不会发给程序。
+    override var keyCommands: [UIKeyCommand]? {
+        var commands = super.keyCommands ?? []
+        guard search != nil else { return commands }
+        commands += Self.findKeyCommands
+        return commands
+    }
+
+    private static let findKeyCommands: [UIKeyCommand] = [
+        findKeyCommand(String(localized: "查找"), input: "f", modifiers: .command, action: #selector(showTerminalFind)),
+        findKeyCommand(String(localized: "往上找"), input: "g", modifiers: .command, action: #selector(terminalFindNext)),
+        findKeyCommand(String(localized: "往下找"), input: "g", modifiers: [.command, .shift],
+                       action: #selector(terminalFindPrevious)),
+    ]
+
+    private static func findKeyCommand(_ title: String, input: String, modifiers: UIKeyModifierFlags,
+                                       action: Selector) -> UIKeyCommand {
+        let command = UIKeyCommand(title: title, action: action, input: input, modifierFlags: modifiers)
+        command.wantsPriorityOverSystemBehavior = true
+        return command
+    }
+
+    @objc private func showTerminalFind() { search?.present() }
+    @objc private func terminalFindNext() { search?.next() }
+    @objc private func terminalFindPrevious() { search?.previous() }
 
     // MARK: 粘贴：剪贴板里只有图片时当贴图
 

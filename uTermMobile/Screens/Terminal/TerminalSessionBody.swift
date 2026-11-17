@@ -138,7 +138,16 @@ struct TerminalSessionBody: View {
                     // 底色（同 M.surface）则铺满安全区。
                     .padding(.horizontal, Self.terminalInset.horizontal)
                     .background(terminalBg, ignoresSafeAreaEdges: .mSessionBody)
-                    .overlay(alignment: .top) { statusBanner }
+                    .overlay(alignment: .top) {
+                        VStack(spacing: 0) {
+                            if tab.controller.search.isPresented {
+                                MTerminalFindBar(search: tab.controller.search) { hadFocus in
+                                    if hadFocus { tab.controller.focusKeyboard() }
+                                }
+                            }
+                            statusBanner
+                        }
+                    }
                     TerminalKeyBar(controller: tab.controller, agentInForeground: tab.agentInForeground)
                 }
             }

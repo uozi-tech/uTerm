@@ -51,6 +51,9 @@ final class GhosttySpikeInputTests: XCTestCase {
         guard UITextInputMode.activeInputModes.contains(where: { $0.primaryLanguage?.hasPrefix("en") == true }) else {
             throw XCTSkip("模拟器没开英文键盘")
         }
+        let saved = KeyboardLanguageMemory.terminal.savedLanguage
+        KeyboardLanguageMemory.terminal.clear()
+        defer { UserDefaults.standard.set(saved, forKey: DefaultsKey.mobileTerminalKeyboardLanguage) }
         let host = try await ready()
         defer { host.close() }
         XCTAssertEqual(host.view.textInputMode?.primaryLanguage?.hasPrefix("en"), true)
@@ -109,6 +112,12 @@ final class GhosttySpikeInputTests: XCTestCase {
     func testRealPinyinEngine() async throws {
         guard let chinese = UITextInputMode.activeInputModes.first(where: { $0.primaryLanguage?.hasPrefix("zh") == true }) else {
             throw XCTSkip("模拟器没开中文键盘")
+        }
+        let saved = KeyboardLanguageMemory.terminal.savedLanguage
+        KeyboardLanguageMemory.terminal.clear()
+        defer {
+            KeyboardLanguageMemory.terminal.clear()
+            UserDefaults.standard.set(saved, forKey: DefaultsKey.mobileTerminalKeyboardLanguage)
         }
         let host = try await ready()
         defer { host.close() }

@@ -384,6 +384,7 @@
 				Features/Terminal/TerminalWindowID.swift,
 				Features/Terminal/TerminalWindowRouter.swift,
 				Features/Terminal/Views/TerminalAgentView.swift,
+				Features/Terminal/Views/TerminalFindBar.swift,
 				Features/Terminal/Views/TerminalWindowView.swift,
 				Features/Terminal/Views/TrueColorOfferBanner.swift,
 				Features/Tweaks/MockServerFactory.swift,

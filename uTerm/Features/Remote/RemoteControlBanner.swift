@@ -24,8 +24,11 @@ struct RemoteControlledTerminal: View {
             }
             terminalHost
                 .overlay(alignment: .topTrailing) {
-                    if let offer = session.trueColorOffer {
-                        TrueColorOfferBanner(session: session, offer: offer)
+                    VStack(alignment: .trailing, spacing: 0) {
+                        TerminalFindBarSlot(session: session)
+                        if let offer = session.trueColorOffer {
+                            TrueColorOfferBanner(session: session, offer: offer)
+                        }
                     }
                 }
         }

@@ -55,6 +55,8 @@ final class RemoteDesktopSession {
     /// Mac 上拷贝的文字回传过来了（手机控制桌面时，Mac 认得 `desktopClipboard` 才会发）。界面在这里写系统
     /// 剪贴板并提示；共享目录里不碰 `UIPasteboard`，Mac 单测才能端到端驱动。
     @ObservationIgnored var onClipboard: (@MainActor (RemoteDesktopClipboard) -> Void)?
+    /// 用户点开屏幕的时刻。第一次开流时记进时间线：「点按钮 → 开流」这段界面上的等待不在开屏时间线里。
+    @ObservationIgnored var openRequestedAt: ContinuousClock.Instant?
     /// Mac 报来的画面往返（≈ 一次操作到看见结果）；老 Mac 不报，一直是 nil。
     private(set) var latency: RemoteDesktopLatency?
     /// Mac 的锁屏 / 帘幕状态（支持远程解锁的 Mac 才发）。
@@ -210,6 +212,10 @@ final class RemoteDesktopSession {
         let trace = RemoteConnectTrace(kind: .desktop, macName: client.macName, attempt: openAttempt)
         openTrace = trace
         trace.setNetwork(client.path?.label ?? String(localized: "未连接"))
+        if let tapped = openRequestedAt {
+            openRequestedAt = nil
+            trace.event("点开屏幕之后 \(RemoteConnectTrace.millis(ContinuousClock.now - tapped)) ms 才开流")
+        }
         awaitingFirstFrame = false
         receiver.expectFirstImage(trace: trace) { [weak self] in
             DispatchQueue.main.async {

@@ -1519,6 +1519,10 @@ int agent_process_stun_binding(juice_agent_t *agent, const stun_message_t *msg,
 			pair->state = ICE_CANDIDATE_PAIR_STATE_PENDING;
 			entry->state = AGENT_STUN_ENTRY_STATE_PENDING;
 			agent_arm_transmission(agent, entry, STUN_PACING_TIME);
+			// uTerm patch #1 (see UTERM-PATCHES.md): send the triggered check right away instead of after
+			// STUN_PACING_TIME plus whatever slot search adds. The peer is already sending to us, so this is
+			// the check most likely to succeed; waiting 50+ ms here delays the moment this side can send.
+			entry->next_transmission = current_timestamp();
 		}
 		break;
 	}

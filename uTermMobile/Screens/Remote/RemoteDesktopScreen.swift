@@ -8,9 +8,26 @@ import UIKit
 /// 连接状态的遮罩（连接中 / 重连中 / 失败 / 已结束 / Mac 版本太旧）、键盘条、前后台切换。
 struct RemoteDesktopScreen: View {
     let client: RemoteMacClient
+    /// 用户点开屏幕的时刻（交给开屏时间线，见 `RemoteDesktopSession.openRequestedAt`）。
+    var tappedAt: ContinuousClock.Instant?
     let onClose: () -> Void
 
     @State private var session: RemoteDesktopSession?
+    /// 等画面尺寸稳住再记下来（`rememberRequestedSizeWhenSettled`）。
+    @State private var sizeMemoryTask: Task<Void, Never>?
+
+    /// 这一屏用的是点按钮时就开了流的会话（按记下的尺寸开的）。
+    private let startedEarly: Bool
+
+    /// `started`：点按钮时就开了流的会话（`RemoteDesktopRequestSizeMemory`），这一屏接着用，不另开。
+    init(client: RemoteMacClient, tappedAt: ContinuousClock.Instant? = nil, started: RemoteDesktopSession? = nil,
+         onClose: @escaping () -> Void) {
+        self.client = client
+        self.tappedAt = tappedAt
+        self.onClose = onClose
+        startedEarly = started != nil
+        _session = State(initialValue: started)
+    }
     @State private var keys = RemoteDesktopKeyState()
     /// 键盘条开着（顶栏的键盘按钮）。软键盘另算：键盘条上可以收起 / 弹出，面板开着时也收起。
     @State private var keyBarShown = false
@@ -108,15 +125,20 @@ struct RemoteDesktopScreen: View {
                 let created = RemoteDesktopSession(client: client, maxWidth: requestedSize.width,
                                                    maxHeight: requestedSize.height, pointScale: displayScale)
                 created.onClipboard = { content in copyFromMac(content) }
+                created.openRequestedAt = tappedAt
                 session = created
                 refreshVault()
                 await created.start()
             }
         }
         .onChange(of: requestedSize) { _, size in
+            rememberRequestedSizeWhenSettled(size)
             // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
             // 不动，不然 Mac 上的虚拟屏跟着换尺寸、窗口来回搬。
-            guard let size, let session else { return }
+            // 点按钮时就开了流的（`startedEarly`）用的是上次量好的最终尺寸，不跟着排版途中的中间值改：
+            // 中间值（状态栏还在时顶栏更高）一发过去，Mac 就把虚拟屏换成别的比例（2026-11-16 Duo：
+            // 1280×828 → 1280×900，多等 342 ms，画面上下留黑边）。
+            guard let size, let session, !startedEarly else { return }
             switch session.state {
             case .idle, .connecting, .failed, .ended: session.setRequestedSize(width: size.width, height: size.height)
             case .streaming, .reconnecting, .unsupported: break
@@ -138,10 +160,16 @@ struct RemoteDesktopScreen: View {
         .onAppear {
             onScreen = true
             UIApplication.shared.isIdleTimerDisabled = Self.keepsScreenAwake(session?.state)
+            // 点按钮时就开了流的会话：补上这一屏的回调。
+            if let session, session.onClipboard == nil {
+                session.onClipboard = { content in copyFromMac(content) }
+                refreshVault()
+            }
         }
         .onDisappear {
             onScreen = false
             UIApplication.shared.isIdleTimerDisabled = false
+            sizeMemoryTask?.cancel()
             session?.stop()
         }
         .onChange(of: session?.screen.locked ?? false) { _, locked in
@@ -177,6 +205,23 @@ struct RemoteDesktopScreen: View {
         guard let state else { return true }
         return !state.isTerminal
     }
+
+    /// 记下这块屏幕要多大，下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。等它在屏幕上稳住
+    /// `sizeMemorySettle` 才记：排版途中会先量出中间值（状态栏还在、顶栏更高），关页时状态栏回来又量出一个，
+    /// 都只停几百毫秒。每量一次就记、或离开时才记，记下的都可能是这种值（2026-11-16 Duo：横屏记成 2853×2007，
+    /// 也就是整块屏幕的比例，Mac 按它建出 1280×900 的屏，左右留黑边）。
+    private func rememberRequestedSizeWhenSettled(_ size: RemoteDesktopRequestSize?) {
+        sizeMemoryTask?.cancel()
+        guard let size, let screenSize else { return }
+        let scale = displayScale
+        sizeMemoryTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.sizeMemorySettle)
+            guard !Task.isCancelled, onScreen, requestedSize == size, self.screenSize == screenSize else { return }
+            RemoteDesktopRequestSizeMemory.save(size, screen: screenSize, scale: scale)
+        }
+    }
+
+    private static let sizeMemorySettle: Duration = .seconds(1)
 
     /// 向 Mac 要多大的画面：比例按顶栏下面的画布，大小不小于屏幕像素（见 `RemoteDesktopRequestSize`）。
     /// 屏幕或顶栏还没量出来时为 nil。

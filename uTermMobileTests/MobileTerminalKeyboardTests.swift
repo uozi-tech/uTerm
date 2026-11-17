@@ -293,7 +293,10 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         a.focusKeyboard()
 
         if UITextInputMode.activeInputModes.contains(where: { $0.primaryLanguage?.hasPrefix("en") == true }) {
+            let saved = KeyboardLanguageMemory.terminal.savedLanguage
+            KeyboardLanguageMemory.terminal.clear()
             XCTAssertEqual(view.textInputMode?.primaryLanguage?.hasPrefix("en"), true)
+            UserDefaults.standard.set(saved, forKey: DefaultsKey.mobileTerminalKeyboardLanguage)
         }
 
         let before = await fake.writes.count

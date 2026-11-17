@@ -1,3 +1,4 @@
+import GhosttyTerminal
 import UIKit
 
 /// 手机键盘打出来的东西怎么发给 Mac。
@@ -10,17 +11,6 @@ nonisolated enum RemoteKeyboardRouting {
     /// 这个键盘语言的字要不要发成按键。拿不到语言时按英文算，与之前的行为一致。
     static func usesKeyPresses(language: String?) -> Bool {
         language?.hasPrefix("en") ?? true
-    }
-
-    /// 打开键盘时用哪种语言：上次切到的（还在系统键盘列表里的话），否则英文。
-    static func preferredLanguage(saved: String?, available: [String]) -> String? {
-        if let saved, available.contains(saved) { return saved }
-        return available.first { $0.hasPrefix("en") }
-    }
-
-    /// 切到这些键盘不算选了输入语言，不记住。
-    static func isRememberable(language: String) -> Bool {
-        language != "emoji" && language != "dictation"
     }
 
     /// 一段文字对应的输入。上膛的修饰键只作用于第一个字符（⌘C、⌃A……），这个字符一律发成按键。
@@ -68,7 +58,9 @@ nonisolated enum RemoteKeyboardRouting {
 
 /// 隐藏的文字输入：弹软键盘、收字、组字。外接键盘的物理按键也在这里翻成 Mac 键码。
 ///
-/// 发法见 `RemoteKeyboardRouting`。文档内容只有正在组的字：已上屏的字都在 Mac 上，手机这边不留。
+/// 发法见 `RemoteKeyboardRouting`。文档内容是正在组的字，前面加上听写还可能改写的那段已上屏的字
+///（`TerminalCommittedTail`，同终端）：流式听写每出一版结果都要在文档里找到上一版再换掉，找不到就取消，
+/// 原来手机这边一个字都不留，听写每说一个词就停。别的按键、上膛的快捷键、外接键盘、收起键盘都清掉那一段。
 /// 视图铺在画布底边显示组字内容，不接触摸，候选框（iPad 的浮动候选）也贴着它。
 @MainActor
 final class RemoteKeyInputView: UIView, UITextInput {
@@ -82,7 +74,12 @@ final class RemoteKeyInputView: UIView, UITextInput {
     var languageOverride: String?
 
     private var composition: String?
+    /// 组字里的选区（组字内的偏移）。
     private var selection = NSRange(location: 0, length: 0)
+    /// 听写还可能改写的那段已上屏的字，文档里排在组字前面。
+    private var tail = TerminalCommittedTail()
+    /// 正在把那一段的改写发给 Mac：这期间的按键是自己发的，不清那一段。
+    private var applyingTailEdit = false
     private var dismissing = false
     private var observesInputMode = false
     /// 按下时留给系统的外接键盘按键，抬起也要交给系统，否则系统那边这个键一直按着。
@@ -120,11 +117,7 @@ final class RemoteKeyInputView: UIView, UITextInput {
     // MARK: - 键盘语言：默认英文，切过就记住
 
     override var textInputMode: UITextInputMode? {
-        let modes = UITextInputMode.activeInputModes
-        let language = RemoteKeyboardRouting.preferredLanguage(
-            saved: UserDefaults.standard.string(forKey: Self.languageKey),
-            available: modes.compactMap(\.primaryLanguage))
-        return modes.first { $0.primaryLanguage == language } ?? super.textInputMode
+        KeyboardLanguageMemory.remoteDesktop.inputMode(current: super.textInputMode)
     }
 
     private var sendsKeyPresses: Bool {
@@ -144,15 +137,15 @@ final class RemoteKeyInputView: UIView, UITextInput {
 
     @objc private func inputModeDidChange() {
         // 只记自己是第一响应者时的切换：别处抢到键盘时系统换的语言，不是用户在这里选的。
-        guard isFirstResponder, let language = super.textInputMode?.primaryLanguage,
-              RemoteKeyboardRouting.isRememberable(language: language) else { return }
-        UserDefaults.standard.set(language, forKey: Self.languageKey)
+        guard isFirstResponder else { return }
+        KeyboardLanguageMemory.remoteDesktop.record(super.textInputMode)
     }
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         guard resigned else { return false }
         if composition != nil { clearComposition() }
+        resetTail()
         if !dismissing { onResign?() }
         return true
     }
@@ -173,10 +166,21 @@ final class RemoteKeyInputView: UIView, UITextInput {
         if composition != nil {
             // 输入法上屏，替换掉正在组的字。修饰键留给下一次按键。
             setComposition(nil, selectedRange: NSRange(location: 0, length: 0))
-            deliver(text, armed: [], asKeys: false)
+            commit(text, armed: [], asKeys: false)
         } else {
-            deliver(text, armed: keys?.consume() ?? [], asKeys: sendsKeyPresses)
+            commit(text, armed: keys?.consume() ?? [], asKeys: sendsKeyPresses)
         }
+    }
+
+    /// 上屏一段字。留着听写那一段时接在它后面；带上膛修饰的是快捷键，那一段作废。
+    private func commit(_ text: String, armed: RemoteKeyModifiers, asKeys: Bool) {
+        guard !tail.isEmpty, armed.isEmpty else {
+            resetTail()
+            deliver(text, armed: armed, asKeys: asKeys)
+            return
+        }
+        applyTailEdit { deliver(text, armed: [], asKeys: asKeys) }
+        if text.contains(where: \.isNewline) { tail.clear() } else { tail.append(text) }
     }
 
     func deleteBackward() {
@@ -184,14 +188,37 @@ final class RemoteKeyInputView: UIView, UITextInput {
             composing.removeLast()
             let length = composing.utf16.count
             setComposition(composing.isEmpty ? nil : composing, selectedRange: NSRange(location: length, length: 0))
-        } else {
-            tap(RemoteKeyMap.Key.delete, modifiers: keys?.consume() ?? [])
+            return
         }
+        let modifiers = keys?.consume() ?? []
+        guard modifiers.isEmpty, tail.removeLast() else {
+            tap(RemoteKeyMap.Key.delete, modifiers: modifiers)
+            return
+        }
+        applyTailEdit { tap(RemoteKeyMap.Key.delete, modifiers: []) }
     }
 
     func tap(_ code: UInt16, modifiers: RemoteKeyModifiers) {
+        resetTail()
         send?(.key(code: code, down: true, modifiers: modifiers))
         send?(.key(code: code, down: false, modifiers: modifiers))
+    }
+
+    private func applyTailEdit(_ body: () -> Void) {
+        let was = applyingTailEdit
+        applyingTailEdit = true
+        defer { applyingTailEdit = was }
+        body()
+    }
+
+    /// Mac 上那一行被别的输入改了：清掉听写那一段。听写进行中清掉会让系统取消这次听写——用户确实做了别的事。
+    private func resetTail() {
+        guard !applyingTailEdit, !tail.isEmpty else { return }
+        inputDelegate?.textWillChange(self)
+        inputDelegate?.selectionWillChange(self)
+        tail.clear()
+        inputDelegate?.selectionDidChange(self)
+        inputDelegate?.textDidChange(self)
     }
 
     private func deliver(_ text: String, armed: RemoteKeyModifiers, asKeys: Bool) {
@@ -200,13 +227,16 @@ final class RemoteKeyInputView: UIView, UITextInput {
 
     // MARK: - 组字
 
-    private(set) var markedTextRange: UITextRange?
+    var markedTextRange: UITextRange? {
+        composition.map { RemoteTextRange(tail.length, tail.length + $0.utf16.count) }
+    }
     var markedTextStyle: [NSAttributedString.Key: Any]?
 
     func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
         // 中文键盘上按键条上膛的 ⌘ + C：这一键是快捷键，不是开始拼字。
         if composition == nil, let keys, !keys.modifiers.isEmpty,
            let first = markedText?.first, RemoteKeyMap.keyCode(for: first) != nil {
+            resetTail()
             deliver(String(first), armed: keys.consume(), asKeys: true)
             clearComposition()
             return
@@ -218,7 +248,7 @@ final class RemoteKeyInputView: UIView, UITextInput {
     func unmarkText() {
         guard let text = composition else { return }
         setComposition(nil, selectedRange: NSRange(location: 0, length: 0))
-        deliver(text, armed: [], asKeys: false)
+        commit(text, armed: [], asKeys: false)
     }
 
     private func setComposition(_ text: String?, selectedRange: NSRange) {
@@ -226,7 +256,6 @@ final class RemoteKeyInputView: UIView, UITextInput {
         let length = text?.utf16.count ?? 0
         let location = min(max(selectedRange.location, 0), length)
         selection = NSRange(location: location, length: min(max(selectedRange.length, 0), length - location))
-        markedTextRange = text == nil ? nil : RemoteTextRange(0, length)
         updateCompositionLabel()
     }
 
@@ -261,16 +290,18 @@ final class RemoteKeyInputView: UIView, UITextInput {
         compositionLabel.frame = CGRect(x: (bounds.width - width) / 2, y: bounds.height - 40, width: width, height: 32)
     }
 
-    // MARK: - UITextInput：文档就是正在组的字
+    // MARK: - UITextInput：文档是听写那一段加上正在组的字
 
-    private var documentLength: Int { composition?.utf16.count ?? 0 }
+    private var documentLength: Int { tail.length + (composition?.utf16.count ?? 0) }
 
+    /// 选区只落在组字里（光标前面那一段已经在 Mac 上了，挪不动）。
     var selectedTextRange: UITextRange? {
-        get { RemoteTextRange(selection.location, selection.location + selection.length) }
+        get { RemoteTextRange(tail.length + selection.location, tail.length + selection.location + selection.length) }
         set {
             guard let range = newValue as? RemoteTextRange else { return }
-            let start = min(range.lower, documentLength)
-            selection = NSRange(location: start, length: min(range.upper, documentLength) - start)
+            let length = composition?.utf16.count ?? 0
+            let start = min(max(range.lower - tail.length, 0), length)
+            selection = NSRange(location: start, length: min(max(range.upper - tail.length, start), length) - start)
         }
     }
 
@@ -280,13 +311,29 @@ final class RemoteKeyInputView: UIView, UITextInput {
     var endOfDocument: UITextPosition { RemoteTextPosition(documentLength) }
 
     func text(in range: UITextRange) -> String? {
-        guard let range = range as? RemoteTextRange, let composition else { return "" }
-        let units = Array(composition.utf16)
-        let lower = min(range.lower, units.count), upper = min(range.upper, units.count)
+        guard let range = range as? RemoteTextRange else { return "" }
+        let units = Array((tail.text + (composition ?? "")).utf16)
+        let lower = min(max(range.lower, 0), units.count), upper = min(range.upper, units.count)
         return String(decoding: units[lower..<max(lower, upper)], as: UTF16.self)
     }
 
-    func replace(_ range: UITextRange, withText text: String) { insertText(text) }
+    /// 没在组字时按范围改：听写改写那一段已上屏的字，先退格删掉新旧不同的部分，再补发新字。
+    /// 原来忽略范围直接插入，就算听写没停也会把上一版再打一遍。
+    func replace(_ range: UITextRange, withText text: String) {
+        guard composition == nil, let range = range as? RemoteTextRange else {
+            insertText(text)
+            return
+        }
+        let lower = min(max(range.lower, 0), tail.length)
+        let upper = min(max(range.upper, lower), tail.length)
+        let edit = tail.replace(NSRange(location: lower, length: upper - lower), with: text)
+        let asKeys = sendsKeyPresses
+        applyTailEdit {
+            for _ in 0..<edit.deletions { tap(RemoteKeyMap.Key.delete, modifiers: []) }
+            deliver(edit.typed, armed: [], asKeys: asKeys)
+        }
+        if edit.typed.contains(where: \.isNewline) { tail.clear() }
+    }
 
     func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
         guard let from = fromPosition as? RemoteTextPosition, let to = toPosition as? RemoteTextPosition else { return nil }
@@ -394,6 +441,7 @@ final class RemoteKeyInputView: UIView, UITextInput {
                 continue
             }
             guard let code = RemoteKeyMap.keyCode(hidUsage: key.keyCode.rawValue) else { continue }
+            if down { resetTail() }
             var modifiers = Self.modifiers(key.modifierFlags)
             if down { modifiers.formUnion(keys?.consume() ?? []) }
             send?(.key(code: code, down: down, modifiers: modifiers))

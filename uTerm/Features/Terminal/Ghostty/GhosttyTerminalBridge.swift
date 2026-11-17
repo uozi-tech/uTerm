@@ -79,6 +79,7 @@ final class GhosttyTerminalBridge {
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
         view.onResizeSettled = { [weak self] in self?.resizeDidSettle() }
         view.onWindowChange = { [weak self] inWindow in self?.setOnScreen(inWindow) }
+        view.search = link.search
         view.onFocusGained = { [weak self] in self?.owner?.acknowledgeProgramStatus() }
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
@@ -340,8 +341,14 @@ final class GhosttyTerminalBridge {
     /// Ghostty 的各个回调协议。单独一个对象：`TerminalSession` 不必知道这些协议。标题、铃、OSC 7 都以影子终端为准
     /// （标签藏着、surface 没在吃字节时它照样更新），surface 的那几个回调不接；surface 的生灭由 `TerminalSurfaceLink` 接。
     private final class DelegateProxy: TerminalSurfaceFocusDelegate,
-        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceScrollbarDelegate {
+        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceScrollbarDelegate, TerminalSurfaceSearchDelegate {
         weak var bridge: GhosttyTerminalBridge?
+
+        // 回滚区查找：引擎报来的一律交给会话的查找状态（两端共用的 `TerminalSearch`）。
+        func terminalDidStartSearch(needle: String?) { bridge?.link.search.handle(.started(needle: needle)) }
+        func terminalDidEndSearch() { bridge?.link.search.handle(.ended) }
+        func terminalDidUpdateSearchTotal(_ total: Int?) { bridge?.link.search.handle(.total(total)) }
+        func terminalDidUpdateSearchSelected(_ selected: Int?) { bridge?.link.search.handle(.selected(selected)) }
 
         /// 视口滚了或者内容变长了：给容器画滚动条用。
         func terminalDidUpdateScrollbar(_ scrollbar: TerminalScrollbar) {
@@ -393,6 +400,8 @@ final class GhosttySurfaceView: AppTerminalView {
     /// 引擎报来的滚动条（总行数、视口首行、一屏行数），和用户刚滚了一下：容器据此画滚动条。
     var onScrollbar: (@MainActor (TerminalScrollbar) -> Void)?
     var onScrollActivity: (@MainActor () -> Void)?
+    /// 这片终端的回滚区查找（会话的 `TerminalSurfaceLink.search`）：⌘F / ⌘G / ⇧⌘G / ⌘E 与「编辑 ▸ 查找」菜单都落到它上面。
+    weak var search: TerminalSearch?
 
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
@@ -436,6 +445,12 @@ final class GhosttySurfaceView: AppTerminalView {
         if event.type == .keyDown, window?.firstResponder === self, Self.isControlReturn(event), onControlReturn?() == true {
             return true
         }
+        // 查找：在问主菜单之前接，菜单里有没有「查找」都一样（SwiftUI 的「编辑」菜单不一定带）。绑定表里清掉了 Ghostty 的
+        // ⌘F（`TerminalKeyBindings`），查找栏是 uTerm 自己画的。
+        if event.type == .keyDown, window?.firstResponder === self, let command = Self.findCommand(for: event),
+           performFind(command) {
+            return true
+        }
         // ⌘ 组合先问主菜单。key equivalent 是先问视图层级、没人要才轮到菜单；终端视图留着的那几条绑定
         // （⌘C / ⌘V / ⌘A、⌘← / ⌘→ / ⌘⌫，见 `TerminalKeyBindings`）一旦先认下，「编辑」菜单里的同名项就永远轮不到。
         // 官方 Ghostty 的 macOS 视图也是先试菜单，菜单不要的组合再回到终端。Ghostty 其余的默认绑定已经在配置里清掉，
@@ -455,6 +470,61 @@ final class GhosttySurfaceView: AppTerminalView {
         }
         // 没有菜单、没有绑定接的 ⌘ 组合：程序没开 kitty 键盘协议时由本地包丢掉（`uTermSendsCommandChords`）。
         super.keyDown(with: event)
+    }
+
+    // MARK: 查找
+
+    enum FindCommand: Equatable { case show, next, previous, useSelection }
+
+    /// ⌘F 打开查找栏、⌘G / ⇧⌘G 往上 / 往下找、⌘E 用所选内容查找（Mac 上的通用键位）。
+    static func findCommand(for event: NSEvent) -> FindCommand? {
+        let mods = event.modifierFlags.intersection([.shift, .control, .option, .command])
+        switch (Int(event.keyCode), mods) {
+        case (kVK_ANSI_F, .command): return .show
+        case (kVK_ANSI_G, .command): return .next
+        case (kVK_ANSI_G, [.command, .shift]): return .previous
+        case (kVK_ANSI_E, .command): return .useSelection
+        default: return nil
+        }
+    }
+
+    /// 做成了返回 true。「用所选内容查找」没有选区时做不成，按键交回去（菜单、程序）。
+    @discardableResult
+    func performFind(_ command: FindCommand) -> Bool {
+        guard let search else { return false }
+        switch command {
+        case .show: search.present()
+        case .next: search.next()
+        case .previous: search.previous()
+        case .useSelection:
+            guard selectionRegion != nil else { return false }
+            search.presentWithSelection()
+        }
+        return true
+    }
+
+    @objc func showTerminalFind(_ sender: Any?) {
+        performFind(.show)
+    }
+
+    /// 「编辑 ▸ 查找」菜单（`NSTextFinder.Action` 与 `NSFindPanelAction` 的这几个取值相同：1 显示、2 下一个、3 上一个、
+    /// 7 用所选内容）。
+    override func performTextFinderAction(_ sender: Any?) {
+        if let command = Self.findCommand(forMenuTag: (sender as? NSMenuItem)?.tag ?? 0) { performFind(command) }
+    }
+
+    @objc func performFindPanelAction(_ sender: Any?) {
+        performTextFinderAction(sender)
+    }
+
+    static func findCommand(forMenuTag tag: Int) -> FindCommand? {
+        switch tag {
+        case 1: .show
+        case 2: .next
+        case 3: .previous
+        case 7: .useSelection
+        default: nil
+        }
     }
 
     private static func pageScrollAction(for event: NSEvent) -> String? {
@@ -478,6 +548,12 @@ final class GhosttySurfaceView: AppTerminalView {
         let menu = TerminalSession.makeContextMenu(for: self)
         menu.autoenablesItems = false
         menu.items.first { $0.action == #selector(NSText.copy(_:)) }?.isEnabled = selectionRegion != nil
+        if search != nil {
+            menu.addItem(.separator())
+            let find = NSMenuItem(title: String(localized: "查找…"), action: #selector(showTerminalFind(_:)), keyEquivalent: "f")
+            find.target = self
+            menu.addItem(find)
+        }
         return menu
     }
 
@@ -515,5 +591,18 @@ extension TerminalSession {
     func shadowGridDidChange() {
         mirrorTap.invalidateAll()
         heldCheckpoints?.noteScreenChanged()
+    }
+}
+
+extension GhosttySurfaceView: NSMenuItemValidation {
+    /// 「编辑 ▸ 查找」里只有显示 / 上一个 / 下一个 / 用所选内容这几项能用（替换类的置灰）；其余菜单项照旧。
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(performTextFinderAction(_:)), #selector(performFindPanelAction(_:)):
+            guard search != nil, let command = Self.findCommand(forMenuTag: menuItem.tag) else { return false }
+            return command != .useSelection || selectionRegion != nil
+        default:
+            return true
+        }
     }
 }
