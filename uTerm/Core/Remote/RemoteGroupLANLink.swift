@@ -113,13 +113,17 @@ nonisolated enum RemoteGroupLANError: Error, Equatable, LocalizedError {
 }
 
 /// 一个方向的逐帧加解密：随机数 = 4 字节 0 + 8 字节大端帧序号，序号两边各自数，不随帧发送。
+/// 中继信箱（`RemoteGroupRelaySession`）也用它，换一个 AAD 标签。
 nonisolated struct RemoteGroupLANCipher {
-    private let key: SymmetricKey
-    private(set) var counter: UInt64 = 0
-    private static let associatedData = Data("uTerm device-group lan frame v1".utf8)
+    static let lanAssociatedData = Data("uTerm device-group lan frame v1".utf8)
 
-    init(key: SymmetricKey) {
+    private let key: SymmetricKey
+    private let associatedData: Data
+    private(set) var counter: UInt64 = 0
+
+    init(key: SymmetricKey, associatedData: Data = Self.lanAssociatedData) {
         self.key = key
+        self.associatedData = associatedData
     }
 
     private func nonce() throws -> ChaChaPoly.Nonce {
@@ -129,7 +133,7 @@ nonisolated struct RemoteGroupLANCipher {
 
     /// 密文 ‖ 16 字节标签。
     mutating func seal(_ plain: Data) throws -> Data {
-        let box = try ChaChaPoly.seal(plain, using: key, nonce: nonce(), authenticating: Self.associatedData)
+        let box = try ChaChaPoly.seal(plain, using: key, nonce: nonce(), authenticating: associatedData)
         counter += 1
         // 拷成从 0 起的 Data：`box.ciphertext` 是 combined 的切片，下标不从 0 开始。
         return Data(box.ciphertext) + Data(box.tag)
@@ -138,7 +142,7 @@ nonisolated struct RemoteGroupLANCipher {
     mutating func open(_ sealed: Data) throws -> Data {
         guard sealed.count >= 16 else { throw RemoteGroupLANError.frame("太短") }
         let box = try ChaChaPoly.SealedBox(nonce: nonce(), ciphertext: sealed.dropLast(16), tag: sealed.suffix(16))
-        guard let plain = try? ChaChaPoly.open(box, using: key, authenticating: Self.associatedData) else {
+        guard let plain = try? ChaChaPoly.open(box, using: key, authenticating: associatedData) else {
             throw RemoteGroupLANError.frame("解不开（被改、重放或乱序）")
         }
         counter += 1

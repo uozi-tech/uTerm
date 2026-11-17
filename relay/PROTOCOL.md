@@ -137,6 +137,15 @@ Mac 每 60 秒 ping 一次，20 秒没有回应就重连。中继 200 秒听不�
 
 只有 ticket 发给的那台主机能签。回 `{"ok":true}` 后进入转发。
 
+## 设备组信箱（服务端没改，1.3.0 可用）
+
+设备组（同一个人的几台设备，见 `docs/remote-device-group-design.md` §7.4、§17）不在同一网络时，经中继互相送名册记录。中继只会把 `client` 的信令转给 `host`，所以每台设备（Mac 和手机都算）拿默认配置里的成员密钥以 `host` 注册一个**信箱**：
+
+- 主机 ID = SHA-256(`uterm-group-mailbox-v1` ‖ 设备 ID 的 16 字节) 取前 16 字节、版本位记成 8 的 UUID，不是设备 ID 本身（Mac 的远控已经用设备 ID 注册着，同一个 ID 会互相顶掉）。主机密钥是另一把只存本机的 P-256（和远控那把分开）。成员证书注册不了，只有证书的设备不开信箱。
+- 别的设备开一条 `client` 连接，`list` 看哪些信箱在线，往在线的信箱发 `signal`（`from` 是自己的设备 ID），信箱在同一个 `session` 上回。每台对端在一条 `client` 连接上固定用一个 `session`（中继给每条连接最多记 64 个、断开才清），重新握手也在同一个 `session` 上。`box` 是设备之间端到端加密的二进制再 base64（握手、分片见 `uTerm/Core/Remote/RemoteGroupRelayLink.swift`），一帧最大 30 KiB 明文，整条 JSON 约 42 KiB，在 64 KiB 以内。
+- 信箱收到 `incoming` 不理（没有人会往信箱拨 `dial`）。被顶替（`superseded`）照上面的规矩不马上重连，5 分钟起翻倍再试。和 Mac 一样 60 秒 ping 一次。
+- **信箱也占在线主机的名额**（默认 64 台，`full`）和主机绑定（1024 个，`uterm-relay forget` 可删）：现在每台开着 uTerm 的设备占一个（手机只在前台时），Mac 若同时开着远控的公网接入就占两个（远控主机 + 信箱）。`list` 返回的主机里会有信箱的 ID，别的成员（持成员密钥的，不是持证书的）看得到有几个信箱、什么时候在线；看不出是哪台设备，也算不出（要知道设备 ID）。
+
 ## 信令（中继看不懂）
 
 `box` 是 `base64(nonce ‖ 密文 ‖ tag)`，ChaChaPoly，密钥由两端长期密钥的 X25519 经 HKDF 派生，AAD 绑定方向与 `session`。内容见 `uTerm/Core/Remote/RemoteSignaling.swift`。

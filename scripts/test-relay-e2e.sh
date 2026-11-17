@@ -1,5 +1,6 @@
 #!/bin/bash
-# 起一个真实的 uterm-relay，跑经它的端到端用例（RemoteRelayEndToEndTests），结束后关掉。
+# 起一个真实的 uterm-relay，跑经它的端到端用例（RemoteRelayEndToEndTests、设备组信箱的
+# RemoteGroupRelayMailboxEndToEndTests），结束后关掉。
 #
 # 用法：scripts/test-relay-e2e.sh [传给 xcodebuild 的其余参数...]
 set -euo pipefail
@@ -34,7 +35,8 @@ done
 config=$("$work/uterm-relay" config)
 set +e
 TEST_RUNNER_UTERM_RELAY_CONFIG="$config" TEST_RUNNER_UTERM_RELAY_VERSION="$("$work/uterm-relay" version)" xcodebuild test \
-    -only-testing:uTermTests/RemoteRelayEndToEndTests "$@"
+    -only-testing:uTermTests/RemoteRelayEndToEndTests \
+    -only-testing:uTermTests/RemoteGroupRelayMailboxEndToEndTests "$@"
 status=$?
 set -e
 if [ "$status" -ne 0 ]; then
