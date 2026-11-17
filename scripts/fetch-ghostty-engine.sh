@@ -8,7 +8,7 @@
 #   fetch-ghostty-engine.sh --check      只核对，不改任何东西；不是最新就非零退出
 #   fetch-ghostty-engine.sh --print KEY  打印清单里某一项的值（例如 engine_version）
 #
-# zip 从哪来：默认 <workspace>/uTerm-ghostty-artifacts/2026-11-15，环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from 可改。
+# zip 从哪来：默认 <workspace>/uTerm-ghostty-artifacts/2026-11-17，环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from 可改。
 # 清单里的 download_base 现在只是待办（还没上传），这里不联网。
 # 本机现编的（scripts/build-ghostty-engine.sh，stamp 是 `local-build <engine_version>`）也算就位：和清单的 engine_version
 # 一致就不动、不去找 zip。zip 找不到时退出码是 3（其余错误是 1），`make engine` 据此退到现编。
@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCK="$REPO_ROOT/vendor/libghostty-spm/ENGINE.lock"
 DEST="$REPO_ROOT/vendor/libghostty-spm/BinaryTarget"
-FROM="${UTERM_GHOSTTY_ARTIFACTS:-<workspace>/uTerm-ghostty-artifacts/2026-11-15}"
+FROM="${UTERM_GHOSTTY_ARTIFACTS:-<workspace>/uTerm-ghostty-artifacts/2026-11-17}"
 MODE=fetch
 PRINT_KEY=
 

@@ -9,27 +9,27 @@
 #      两端的 TerminalEngineLockTests 拦着）。
 
 # 引擎版本串：Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控握手和 holder 检查点靠它判断是不是同一个引擎。
-engine_version=ghostty-cf5519b2+p0023/snapshot-1
+engine_version=ghostty-5ebe501a+p0023/snapshot-1
 
 # 来源。fetch 脚本不读；build-ghostty-engine.sh 按它们现编：克隆这个 tag 并核对提交前缀、核对它的 Ghostty.ref 等于
 # ghostty_commit（写全 40 位），用这一版 Zig（没有就从 ziglang.org 下，按 zig_aarch64_macos_sha256 核）。
-libghostty_spm_tag=2.2.2026111501
-libghostty_spm_commit=4220412e
-ghostty_commit=cf5519b22f910ddc7885d2ef62deb94d38d43f22
-zig_version=0.17.0
-zig_aarch64_macos_sha256=b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a
+libghostty_spm_tag=2.2.2026111701
+libghostty_spm_commit=b9694b50
+ghostty_commit=5ebe501a63425b13d9952e8c54682c046386e5af
+zig_version=0.17.1
+zig_aarch64_macos_sha256=75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d
 
-# GhosttyKit（完整的 libghostty：解析 + 渲染）。22 个上游补丁（0022 是逐像素平滑滚动）+ 0023 最低对比度。
-ghosttykit_zip=GhosttyKit-cf5519b2-0023.xcframework.zip
-ghosttykit_sha256=5bdd732e673ea5a51503344bc6790f7fa0354fff584f82c1e137e1a0418a6d39
+# GhosttyKit（完整的 libghostty：解析 + 渲染）。22 个上游补丁（0022 是逐像素平滑滚动；0014、0015 在 2.2.2026111701 里改过）+ 0023 最低对比度。
+ghosttykit_zip=GhosttyKit-5ebe501a-0023.xcframework.zip
+ghosttykit_sha256=a58ceb55adce49f03178fcad45609013a02f4d1762cfc9bae3ec4965ed528614
 ghosttykit_dir=GhosttyKit.xcframework
 
 # libghostty-vt（影子终端）。和 GhosttyKit 同一棵打过补丁的源码树编的，每个 slice 预链接、只导出 ghostty_*。
-ghosttyvt_zip=ghostty-vt-cf5519b2-0023.xcframework.zip
-ghosttyvt_sha256=874dacd6aef77d6713643e51ae8687301552b56819d74cb183c6f3b8ce14f328
+ghosttyvt_zip=ghostty-vt-5ebe501a-0023.xcframework.zip
+ghosttyvt_sha256=4d418119fbdd525e3e72bcbd3dfd8eb6b74866c105816790ed06ef9d2ea6c5c8
 ghosttyvt_dir=ghostty-vt.xcframework
 
 # 待办：两个 zip 还没有上传。上传之后的地址是 <download_base>/<zip 文件名>，对象传上去就不再覆盖（换二进制 = 换文件名）。
-# 现在脚本只从本地目录取（默认 <workspace>/uTerm-ghostty-artifacts/2026-11-15，环境变量 UTERM_GHOSTTY_ARTIFACTS 可改），
+# 现在脚本只从本地目录取（默认 <workspace>/uTerm-ghostty-artifacts/2026-11-17，环境变量 UTERM_GHOSTTY_ARTIFACTS 可改），
 # 不读这一项、也不联网。
 # download_base=https://downloads.example.com/uTerm/ghostty
