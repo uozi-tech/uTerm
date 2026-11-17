@@ -35,6 +35,11 @@ struct RemoteDesktopScreen: View {
     @State private var fitToken = 0
     @State private var showStats = false
     @State private var pickingPhoto = false
+    /// 正在选「只看哪一个窗口」。
+    @State private var pickingWindow = false
+    /// 画布（顶栏下面那块）此刻的点尺寸：只看一个窗口时请 Mac 把窗口调成这么大。
+    @State private var canvasSize = CGSize.zero
+    @State private var refitTask: Task<Void, Never>?
     @State private var pickedPhoto: PhotosPickerItem?
     /// 粘贴的进度（读取 / 压缩 / 发送，带进度条）与结果（「已粘贴到 Mac」/「已复制到手机」/ 失败原因）；
     /// 结果几秒后自己消失。
@@ -88,12 +93,14 @@ struct RemoteDesktopScreen: View {
                 ZStack {
                     if let session {
                         RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
-                                            displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) })
+                                            displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) },
+                                            contentFraction: session.contentFraction)
                         overlay(session)
                         lockOverlay(session)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
                 .overlay(alignment: .top) { pasteToast }
                 // 整列从屏幕顶边排起：画布上沿离屏幕顶边多远，顶栏就多高。
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
@@ -114,6 +121,9 @@ struct RemoteDesktopScreen: View {
             .sheet(isPresented: $enteringPassword) {
                 if let session { passwordSheet(session) }
             }
+            .sheet(isPresented: $pickingWindow) {
+                if let session { RemoteDesktopWindowPicker(session: session, canvasSize: canvasSize) }
+            }
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
@@ -131,6 +141,7 @@ struct RemoteDesktopScreen: View {
                 await created.start()
             }
         }
+        .onChange(of: canvasSize) { _, size in refitWindowWhenSettled(size) }
         .onChange(of: requestedSize) { _, size in
             rememberRequestedSizeWhenSettled(size)
             // 状态栏藏起来后安全区才变、顶栏跟着变矮：还没开流就按新的要。已经在放（或正在重连）的
@@ -204,6 +215,18 @@ struct RemoteDesktopScreen: View {
     static func keepsScreenAwake(_ state: RemoteDesktopSession.State?) -> Bool {
         guard let state else { return true }
         return !state.isTerminal
+    }
+
+    /// 画布大小变了（转屏、折叠屏开合）：正在看一个调过大小的窗口时，等它稳住再请 Mac 按新的画布调一次。
+    /// 键盘条开着时不调：它只是暂时占掉一截，收起来画布就回去了。
+    private func refitWindowWhenSettled(_ size: CGSize) {
+        refitTask?.cancel()
+        guard let session, session.windowID != nil, session.windowFit != nil, !keyBarShown else { return }
+        refitTask = Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, canvasSize == size, !keyBarShown else { return }
+            await session.refitWindow(to: size)
+        }
     }
 
     /// 记下这块屏幕要多大，下次点按钮时就能开流（`RemoteDesktopRequestSizeMemory`）。等它在屏幕上稳住
@@ -317,7 +340,10 @@ struct RemoteDesktopScreen: View {
         return displays
     }
 
-    private var hasMoreActions: Bool { !displays.isEmpty || canPaste || canCurtain || canManagePassword }
+    /// 那台 Mac 的 uTerm 能不能只看一个窗口（老版本不能）。
+    private var canPickWindow: Bool { session?.supportsWindows == true }
+
+    private var hasMoreActions: Bool { !displays.isEmpty || canPickWindow || canPaste || canCurtain || canManagePassword }
 
     @ViewBuilder private var moreActions: some View {
         if let session, !displays.isEmpty {
@@ -339,6 +365,13 @@ struct RemoteDesktopScreen: View {
                     Text("切换显示器")
                 }
                 .pickerStyle(.inline)
+            }
+        }
+        if canPickWindow {
+            Section {
+                Button { pickingWindow = true } label: {
+                    Label("只看一个窗口…", systemImage: "macwindow")
+                }
             }
         }
         if canPaste {

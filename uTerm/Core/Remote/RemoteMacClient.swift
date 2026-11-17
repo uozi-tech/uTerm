@@ -220,6 +220,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var vouchWaiters: [UUID: CheckedContinuation<RemoteVouchResult, Error>] = [:]
+    @ObservationIgnored private var windowListWaiters: [UUID: CheckedContinuation<RemoteDesktopWindowList, Error>] = [:]
     @ObservationIgnored private var revokeWaiters: [UUID: CheckedContinuation<RemoteSiblingRevokeResult, Error>] = [:]
     /// 等文件应答的请求。应答在连接队列上直接交付，不经主线程（传文件时一秒几十条）。
     @ObservationIgnored nonisolated let fileWaiters = RemoteFileWaiters()
@@ -669,6 +670,8 @@ final class RemoteMacClient: Identifiable {
         imageWaiters.removeAll()
         for (_, waiter) in vouchWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         vouchWaiters.removeAll()
+        for (_, waiter) in windowListWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        windowListWaiters.removeAll()
         for (_, waiter) in revokeWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         revokeWaiters.removeAll()
         fileWaiters.failAll(RemoteFileError(.unreachable, "与 Mac 的连接已断开"))
@@ -688,7 +691,7 @@ final class RemoteMacClient: Identifiable {
                 table.sink(message.channel)?.onSnapshot?(piece.data, piece.isFirst, piece.isLast)
             }
         case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult,
-             .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame:
+             .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame, .desktopGeometry:
             table.sink(message.channel)?.onMessage?(message, link)
         case .desktopStarted:
             // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。
@@ -781,6 +784,10 @@ final class RemoteMacClient: Identifiable {
             guard let result = try? RemoteJSON.decode(RemoteVouchResult.self, from: message.payload),
                   let waiter = vouchWaiters.removeValue(forKey: result.requestID) else { return }
             waiter.resume(returning: result)
+        case .desktopWindowList:
+            guard let list = try? RemoteJSON.decode(RemoteDesktopWindowList.self, from: message.payload),
+                  let waiter = windowListWaiters.removeValue(forKey: list.requestID) else { return }
+            waiter.resume(returning: list)
         case .revokeSiblingResult:
             guard let result = try? RemoteJSON.decode(RemoteSiblingRevokeResult.self, from: message.payload),
                   let waiter = revokeWaiters.removeValue(forKey: result.requestID) else { return }
@@ -857,6 +864,29 @@ final class RemoteMacClient: Identifiable {
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteVouchResult, Error>) in
             vouchWaiters[request.requestID] = continuation
             link.send(RemoteMessage(.vouchDevice, payload: RemoteJSON.encode(request)))
+        }
+    }
+
+    /// 远程桌面放大后能不能按看得见的那块重新取画面（老 Mac 收到 `desktopRegion` 会断开整条连接）。
+    var supportsDesktopRegion: Bool { macFeatures.contains(RemoteFeature.desktopRegion) }
+
+    /// 远程桌面能不能只看一个窗口（老 Mac 不认开流请求里的 `windowID`，收到 `desktopWindows` 会断开整条连接）。
+    var supportsDesktopWindows: Bool { macFeatures.contains(RemoteFeature.desktopWindows) }
+
+    /// 那台 Mac 上此刻能单独看的窗口，最前面的在前。Mac 版本太旧抛 `RemoteAttachError.rejected`；列不出来
+    ///（没开远程桌面、没授权）不算错误，看结果里的 `message`。
+    func desktopWindows() async throws -> RemoteDesktopWindowList {
+        await connect()
+        guard state == .connected, let link else {
+            throw connectionFailure
+        }
+        guard supportsDesktopWindows else {
+            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能只看一个窗口。把 Mac 上的 uTerm 更新到最新版")
+        }
+        let request = RemoteDesktopWindowListRequest(requestID: UUID())
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteDesktopWindowList, Error>) in
+            windowListWaiters[request.requestID] = continuation
+            link.send(RemoteMessage(.desktopWindows, payload: RemoteJSON.encode(request)))
         }
     }
 

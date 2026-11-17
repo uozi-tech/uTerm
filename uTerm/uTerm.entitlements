@@ -10,6 +10,12 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- 远程桌面只看一个窗口时，用辅助功能接口把那个窗口提到最前（RemoteDesktopWindows.raise）。沙盒默认拦着
+	     别的进程的辅助功能端口，没有这一条时读窗口列表报 -25204（2026-11-17 探针）。授权仍是「辅助功能」那一项。 -->
+	<key>com.apple.security.temporary-exception.mach-lookup.local-name</key>
+	<array>
+		<string>com.apple.axserver</string>
+	</array>
 	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>

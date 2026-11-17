@@ -365,6 +365,36 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
         started = true
     }
 
+    private var onGeometry: (@Sendable (RemoteDesktopFrameGeometry) -> Void)?
+
+    func observeGeometry(_ handler: @escaping @Sendable (RemoteDesktopFrameGeometry) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        onGeometry = handler
+    }
+
+    /// 主控端报来的「看得见的那一块」（按顺序；nil = 回到整块）。
+    private var regionRequests: [RemoteDesktopRegion?] = []
+    var requestedRegions: [RemoteDesktopRegion?] { lock.lock(); defer { lock.unlock() }; return regionRequests }
+    /// 设了它，之后 `emit` 出的帧都标成只画了这一块（模拟来源按区域取画面）。
+    var emittedRegion: RemoteDesktopRegion? {
+        get { lock.lock(); defer { lock.unlock() }; return _emittedRegion }
+        set { lock.lock(); _emittedRegion = newValue; lock.unlock() }
+    }
+    private var _emittedRegion: RemoteDesktopRegion?
+
+    func setRegion(_ visible: RemoteDesktopRegion?) {
+        lock.lock(); regionRequests.append(visible); lock.unlock()
+    }
+
+    /// 有没有人订了几何（只看一个窗口的流才订）。
+    var observesGeometry: Bool { lock.lock(); defer { lock.unlock() }; return onGeometry != nil }
+
+    /// 模拟按窗口采集时系统报来的新范围（窗口挪了、改了大小、菜单伸出窗口）。
+    func report(_ geometry: RemoteDesktopFrameGeometry) {
+        lock.lock(); let handler = onGeometry; lock.unlock()
+        queue.sync { handler?(geometry) }
+    }
+
     func stop() {
         lock.lock(); defer { lock.unlock() }
         stopped = true
@@ -390,9 +420,11 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
         seed += 1
         let current = seed
         let handler = onFrame
+        let region = _emittedRegion
         emitted.append(current)
         lock.unlock()
         let image = RemoteDesktopFixture.makeFrame(width: width, height: height, seed: current, detail: detail)
+        RemoteFrameRegionTag.set(region, on: image)
         handler?(image, DispatchTime.now().uptimeNanoseconds)
         return current
     }
@@ -504,6 +536,15 @@ final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
     func releaseButtons() {
         lock.lock(); releases += 1; lock.unlock()
     }
+
+    private var boundsUpdates: [CGRect] = []
+
+    func updateBounds(_ bounds: CGRect) {
+        lock.lock(); boundsUpdates.append(bounds); lock.unlock()
+    }
+
+    /// 只看一个窗口时发送端报来的范围（按顺序）。
+    var allBounds: [CGRect] { lock.lock(); defer { lock.unlock() }; return boundsUpdates }
 
     var releaseCount: Int { lock.lock(); defer { lock.unlock() }; return releases }
     var all: [RemoteDesktopInput] { lock.lock(); defer { lock.unlock() }; return inputs }
@@ -621,6 +662,17 @@ final class FakeDesktopMac {
     private(set) var cursorImageReads = 0
     /// 每次开流用的是哪块显示器。
     private(set) var openedDisplays: [UInt32] = []
+    /// 能单独看的窗口：号 → 位置（全局坐标，点）。按 2 倍屏算像素。
+    var windows: [(id: UInt32, app: String, title: String, bounds: CGRect)] = []
+    /// 每次开流采的是哪个窗口（nil = 整块显示器）。
+    private(set) var openedWindows: [UInt32?] = []
+    /// 被提到最前的窗口（按顺序）。
+    private(set) var raisedWindows: [UInt32] = []
+    /// 被调过大小的窗口和要的尺寸、被还原的窗口和位置（按顺序）。
+    private(set) var fittedWindows: [(id: UInt32, size: CGSize)] = []
+    private(set) var restoredWindows: [(id: UInt32, frame: CGRect)] = []
+    /// App 的最小窗口尺寸：要的比它小时只能调到它。
+    var minimumWindowSize = CGSize(width: 400, height: 350)
     /// 开流前整理过几次显示器（无显示器换 2 倍模式那一步）。
     private(set) var preparedDisplays = 0
     /// 每次整理显示器时看的设备要的像素。
@@ -666,8 +718,38 @@ final class FakeDesktopMac {
                                                 width: $0.bounds.width, height: $0.bounds.height, isMain: $0.id == 7)
                 }
             },
+            listWindows: { [weak self] in
+                (self?.windows ?? []).map {
+                    RemoteDesktopWindowSummary(id: $0.id, app: $0.app, title: $0.title,
+                                               width: $0.bounds.width, height: $0.bounds.height)
+                }
+            },
+            window: { [weak self] id in
+                guard let self, let window = self.windows.first(where: { $0.id == id }) else { return nil }
+                let display = RemoteDesktopDisplay(id: self.display.id, bounds: window.bounds,
+                                                   pixelWidth: Int(window.bounds.width * 2),
+                                                   pixelHeight: Int(window.bounds.height * 2), windowID: id)
+                return (display, window.title.isEmpty ? window.app : window.title)
+            },
+            raiseWindow: { [weak self] id in self?.raisedWindows.append(id) },
+            fitWindow: { [weak self] id, size in
+                guard let self, let index = self.windows.firstIndex(where: { $0.id == id }) else { return nil }
+                self.fittedWindows.append((id, size))
+                let original = self.windows[index].bounds
+                let fitted = CGSize(width: max(size.width, self.minimumWindowSize.width),
+                                    height: max(size.height, self.minimumWindowSize.height))
+                guard fitted != original.size else { return nil }
+                self.windows[index].bounds = CGRect(origin: original.origin, size: fitted)
+                return original
+            },
+            restoreWindow: { [weak self] id, frame in
+                guard let self else { return }
+                self.restoredWindows.append((id, frame))
+                if let index = self.windows.firstIndex(where: { $0.id == id }) { self.windows[index].bounds = frame }
+            },
             makeSource: { [weak self] display, width, height, _ in
                 self?.openedDisplays.append(display.id)
+                self?.openedWindows.append(display.windowID)
                 let source = SyntheticFrameSource(width: width, height: height, detail: self?.detail ?? false)
                 self?.sources.append(source)
                 return source

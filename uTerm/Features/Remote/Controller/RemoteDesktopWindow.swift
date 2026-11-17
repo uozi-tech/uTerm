@@ -168,6 +168,11 @@ struct RemoteDesktopContent: View {
     @State private var password = ""
     @State private var unlocking = false
     @State private var unlockError: String?
+    /// 「只看一个窗口」的弹层和它的内容。
+    @State private var pickingWindow = false
+    @State private var windowChoices: [RemoteDesktopWindowSummary] = []
+    @State private var windowNote: String?
+    @State private var loadingWindows = false
 
     private var session: RemoteDesktopSession { model.session }
     private var client: RemoteMacClient { model.client }
@@ -179,6 +184,7 @@ struct RemoteDesktopContent: View {
                 RemoteDesktopMacCanvas(
                     session: session,
                     displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) },
+                    contentFraction: session.contentFraction,
                     onPasteNote: { show($0) },
                     sendSystemShortcuts: sendSystemShortcuts,
                     onShortcutCaptureFailed: {
@@ -226,6 +232,14 @@ struct RemoteDesktopContent: View {
             if session.state == .streaming {
                 if let displays = session.info?.displays, displays.count > 1 {
                     displayMenu(displays)
+                }
+                if session.supportsWindows {
+                    barButton("macwindow", active: session.windowID != nil,
+                              help: session.windowID != nil ? String(localized: "正在只看一个窗口（点按换一个，或回到整个屏幕）")
+                                                            : String(localized: "只看一个窗口")) {
+                        pickingWindow = true
+                    }
+                    .popover(isPresented: $pickingWindow, arrowEdge: .bottom) { windowPicker }
                 }
                 if session.canControl {
                     barButton("command", active: sendSystemShortcuts,
@@ -287,6 +301,77 @@ struct RemoteDesktopContent: View {
         .fixedSize()
         .help(String(localized: "切换显示器"))
         .accessibilityLabel(Text("切换显示器"))
+    }
+
+    /// 选「只看哪一个窗口」：打开时向那台 Mac 要一次列表。选中后重开这路画面，那台 Mac 会先把窗口提到最前。
+    private var windowPicker: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            windowRow(title: String(localized: "整个屏幕"), detail: nil, selected: session.windowID == nil) { chooseWindow(nil) }
+            Divider().padding(.vertical, 4)
+            if loadingWindows, windowChoices.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取窗口…").font(UD.font(12)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(windowChoices, id: \.id) { window in
+                        windowRow(title: window.menuTitle, detail: window.menuDetail,
+                                  selected: session.windowID == window.id) { chooseWindow(window.id) }
+                    }
+                }
+            }
+            .frame(maxHeight: 360)
+            if let windowNote {
+                Text(verbatim: windowNote).font(UD.font(11.5)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+            } else if !loadingWindows, windowChoices.isEmpty {
+                Text("那台 Mac 上此刻没有可以单独看的窗口。").font(UD.font(11.5)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+            }
+        }
+        .padding(6)
+        .frame(width: 320)
+        .task { await loadWindows() }
+    }
+
+    private func windowRow(title: String, detail: String?, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark").font(.system(size: 10.5, weight: .semibold)).opacity(selected ? 1 : 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: title).font(UD.font(12.5)).lineLimit(1)
+                    if let detail {
+                        Text(verbatim: detail).font(UD.font(11)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.udPlain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func chooseWindow(_ id: UInt32?) {
+        pickingWindow = false
+        Task { await session.switchWindow(to: id) }
+    }
+
+    private func loadWindows() async {
+        loadingWindows = true
+        defer { loadingWindows = false }
+        do {
+            let list = try await client.desktopWindows()
+            windowChoices = list.windows
+            windowNote = list.message
+        } catch {
+            windowNote = error.localizedDescription
+        }
     }
 
     /// 读数：盖在画面左上角，点顶栏的仪表按钮开关。

@@ -29,6 +29,8 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
     let fitToken: Int
     /// Mac 显示器的点尺寸（开流后才有）。作为参数传进来，SwiftUI 才会在它变化时调 `updateUIView`。
     let displaySize: CGSize?
+    /// 内容占视频帧的比例（只看一个窗口时可能小于 1，见 `RemoteDesktopSession.contentFraction`）。
+    var contentFraction = CGSize(width: 1, height: 1)
 
     func makeUIView(context: Context) -> RemoteDesktopCanvasView {
         let view = RemoteDesktopCanvasView(session: session, keys: keys)
@@ -44,6 +46,7 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
             view.resetViewport()
         }
         view.updateContentSize(displaySize)
+        view.updateContentFraction(contentFraction)
     }
 
     static func dismantleUIView(_ view: RemoteDesktopCanvasView, coordinator: ()) {
@@ -66,6 +69,18 @@ final class RemoteDesktopCanvasView: UIView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     /// 画面挂在这个视图上（位置大小 = `displayedFrame`）。iOS 26 起它是 `extensionView` 的内容视图。
     private let pictureView = UIView()
+    private var contentFraction = CGSize(width: 1, height: 1)
+    /// 放大后 Mac 只送来看得见的那一块（按原生像素）：画在这层上，盖住下面那张整块的。它放在单位坐标的父图层里，
+    /// 位置由每帧自己带的区域定（`RemoteDesktopRegionPlacement`）。
+    private let regionLayer = AVSampleBufferDisplayLayer()
+    private let regionSpace = CALayer()
+    /// 向 Mac 报「此刻看得见哪一块」：停稳一小会儿才报，拖着不放时隔一段也报一次。
+    private var regionReport: DispatchWorkItem?
+    private var lastRegionReport = Date.distantPast
+    /// 放大到这个倍数以上才向 Mac 要区域：只放大一点点时整块的画面够用，不值得换。
+    static let regionZoomThreshold: CGFloat = 1.15
+    static let regionSettle: TimeInterval = 0.12
+    static let regionMaxWait: TimeInterval = 0.3
     /// 角落让开（画面朝对角缩小）时空出来的那两条窄缝用画面自己的边延伸补满（系统的背景延伸：边缘镜像再模糊），
     /// 不露黑底。它的范围是「不让开时的画面 ∪ 让开后的画面」：平时两者重合、什么也不补（系统也不挂镜像和模糊层，
     /// 见 `BackgroundExtensionProbeTests`），看真显示器留的黑边照旧是黑的；只有让开时空出的缝在它的范围里。
@@ -117,6 +132,10 @@ final class RemoteDesktopCanvasView: UIView {
         displayLayer.backgroundColor = UIColor.black.cgColor
         pictureView.isUserInteractionEnabled = false
         pictureView.layer.addSublayer(displayLayer)
+        regionLayer.videoGravity = .resize
+        regionLayer.isHidden = true
+        regionSpace.addSublayer(regionLayer)
+        pictureView.layer.addSublayer(regionSpace)
         if #available(iOS 26.0, *) {
             let extensionView = UIBackgroundExtensionView()
             extensionView.isUserInteractionEnabled = false
@@ -144,7 +163,7 @@ final class RemoteDesktopCanvasView: UIView {
         keyInput.keys = keys
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
-        session.attachCanvas(displayLayer) { [weak self] cursor in self?.macCursor(cursor) }
+        session.attachCanvas(displayLayer, regionLayer: regionLayer) { [weak self] cursor in self?.macCursor(cursor) }
     }
 
     @available(*, unavailable)
@@ -155,6 +174,7 @@ final class RemoteDesktopCanvasView: UIView {
         stopMomentum()
         displayLink?.invalidate()
         displayLink = nil
+        regionReport?.cancel()
         session.detachCanvas()
     }
 
@@ -218,9 +238,46 @@ final class RemoteDesktopCanvasView: UIView {
         layoutContent()
     }
 
+    /// 视频帧里只有左上角这一部分是内容：把视频层按比例放大、让内容正好铺满画面区域，多出来的由画面区域裁掉。
+    func updateContentFraction(_ fraction: CGSize) {
+        guard fraction.width > 0, fraction.height > 0, fraction != contentFraction else { return }
+        contentFraction = fraction
+        pictureView.clipsToBounds = fraction.width < 1 || fraction.height < 1
+        layoutContent()
+    }
+
     func resetViewport() {
         viewport.reset()
         layoutContent()
+    }
+
+    // MARK: - 放大后要区域
+
+    /// 视口变了（捏合、拖动、转屏）：停稳 `regionSettle` 后把看得见的那一块报给 Mac；一直在动时最多隔 `regionMaxWait` 报一次。
+    private func reportVisibleRegionSoon() {
+        guard session.supportsRegions else { return }
+        regionReport?.cancel()
+        if Date().timeIntervalSince(lastRegionReport) >= Self.regionMaxWait {
+            reportVisibleRegion()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in self?.reportVisibleRegion() }
+        regionReport = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.regionSettle, execute: work)
+    }
+
+    private func reportVisibleRegion() {
+        lastRegionReport = Date()
+        session.requestRegion(Self.visibleRegion(picture: viewport.displayedFrame, view: bounds, zoom: viewport.zoom))
+    }
+
+    /// 画面（整块显示器在视图里的位置）露在视图里的那一块，归一化到画面。没放大、或一点都没露出来时是 nil。
+    static func visibleRegion(picture: CGRect, view: CGRect, zoom: CGFloat) -> RemoteDesktopRegion? {
+        guard zoom >= regionZoomThreshold, picture.width > 0, picture.height > 0 else { return nil }
+        let visible = picture.intersection(view)
+        guard !visible.isNull, visible.width > 0, visible.height > 0 else { return nil }
+        return RemoteDesktopRegion(x: (visible.minX - picture.minX) / picture.width, y: (visible.minY - picture.minY) / picture.height,
+                                   width: visible.width / picture.width, height: visible.height / picture.height)
     }
 
     private func layoutContent() {
@@ -234,8 +291,11 @@ final class RemoteDesktopCanvasView: UIView {
         } else {
             pictureView.frame = frame
         }
-        displayLayer.frame = pictureView.bounds
+        displayLayer.frame = CGRect(x: 0, y: 0, width: pictureView.bounds.width / contentFraction.width,
+                                    height: pictureView.bounds.height / contentFraction.height)
         displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
+        RemoteDesktopRegionPlacement.layout(regionSpace, in: pictureView.bounds)
+        reportVisibleRegionSoon()
         cursorLayer.position = CGPoint(x: frame.minX + pointer.x * frame.width, y: frame.minY + pointer.y * frame.height)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
         CATransaction.commit()

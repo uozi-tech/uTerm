@@ -45,7 +45,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
                                           RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus,
                                           RemoteFeature.files, RemoteFeature.deviceVouch,
-                                          RemoteFeature.siblingRevoke]
+                                          RemoteFeature.siblingRevoke, RemoteFeature.desktopWindows,
+                                          RemoteFeature.desktopRegion]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -134,6 +135,14 @@ nonisolated enum RemoteFeature {
     static let deviceVouch = "device-vouch"
     /// 认得 `revokeSibling`：同一组（经担保添加的）设备可以请这台 Mac 撤销其中丢了的那台。
     static let siblingRevoke = "sibling-revoke"
+    /// 远程桌面只看一个窗口：认得 `desktopWindows` / `desktopWindowList` / `desktopGeometry`，开流请求里的
+    /// `windowID` 生效。老 Mac 不认 `windowID`（照旧给整块显示器）、收到 `desktopWindows` 会断开整条连接，
+    /// 所以主控端只对声明了这一项的 Mac 列窗口、按窗口开流；Mac 只在按窗口开的流上发 `desktopGeometry`。
+    static let desktopWindows = "desktop-windows"
+    /// 远程桌面放大后按看得见的那块重新取画面：Mac 认得 `desktopRegion`，主控端认得视频帧头里的区域
+    ///（`RemoteDesktopFrame.Flags.hasRegion`）。老 Mac 收到 `desktopRegion` 会断开整条连接，所以主控端只对声明了的
+    /// Mac 发；Mac 只在收到过 `desktopRegion` 的流上发带区域的帧（老主控端不发，也就收不到）。
+    static let desktopRegion = "desktop-region"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -284,6 +293,17 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case revokeSibling = 52
         /// Mac → 主控端：撤销的结果（通道 0）。负载 = `RemoteSiblingRevokeResult`（JSON）。
         case revokeSiblingResult = 53
+        /// 主控端 → Mac：要此刻能单独看的窗口（通道 0）。负载 = `RemoteDesktopWindowListRequest`（JSON）。
+        /// 只发给 `features` 带 `desktop-windows` 的 Mac。
+        case desktopWindows = 54
+        /// Mac → 主控端：窗口列表（通道 0）。负载 = `RemoteDesktopWindowList`（JSON）。
+        case desktopWindowList = 55
+        /// Mac → 主控端：只看一个窗口时，画面对应的范围变了（桌面通道）。负载 = `RemoteDesktopGeometryUpdate`（JSON）。
+        /// 窗口改了大小、弹出的菜单伸出窗口时发；只在按窗口开的流上发。
+        case desktopGeometry = 56
+        /// 主控端 → Mac：画面放大了，此刻只看得见这一块（桌面通道）。负载 = `RemoteDesktopRegionRequest`（JSON）。
+        /// Mac 改成只取这一块（加一圈余量）、按原生像素出，帧头里带上取的是哪一块。只发给带 `desktop-region` 的 Mac。
+        case desktopRegion = 57
     }
 
     var kind: Kind

@@ -93,6 +93,13 @@ final class RemoteDesktopSession {
     private let pointScale: Double?
     /// 要看的显示器（nil = 那台 Mac 的主显示器）。`switchDisplay` 改它再重开流。
     private(set) var displayID: UInt32?
+    /// 只看这一个窗口（nil = 整块显示器）。`switchWindow` 改它再重开流。
+    private(set) var windowID: UInt32?
+    /// 只看一个窗口时，请 Mac 先把窗口调成这么大（点）。nil = 不动窗口。
+    private(set) var windowFit: CGSize?
+    /// 只看一个窗口时，内容占视频帧的比例（从左上角算）：窗口改了大小、菜单伸出窗口后，视频帧的右边或下边会空出来，
+    /// 画布把空的那截裁掉。整块显示器时恒为 1。
+    private(set) var contentFraction = CGSize(width: 1, height: 1)
     /// 要不要光标形状（Mac 主控端要，拿它当本机光标；手机自己画箭头，不要）。
     private let wantsCursorImages: Bool
     /// Mac 报来的光标此刻的样子（开流时要了才有）。
@@ -197,10 +204,52 @@ final class RemoteDesktopSession {
 
     /// 换一块显示器看：停掉当前这路，按新的 id 重开（Mac 那边换采集源与注入坐标系）。
     func switchDisplay(to id: UInt32) async {
-        guard id != info?.displayID else { return }
+        guard id != info?.displayID || windowID != nil else { return }
         displayID = id
+        windowID = nil
+        windowFit = nil
         stop()
         await start()
+    }
+
+    /// 只看一个窗口（`id` 取自 `client.desktopWindows()`），或回到整块显示器（nil）。和换显示器一样重开流。
+    ///
+    /// `fit`：请 Mac 先把窗口调成这么大（点，一般是本机画布的点尺寸），窗口里的内容按它重排；流结束后 Mac 把窗口
+    /// 还原。nil = 不动窗口。
+    func switchWindow(to id: UInt32?, fit: CGSize? = nil) async {
+        let fit = id == nil ? nil : fit
+        guard id != windowID || fit != windowFit else { return }
+        windowID = id
+        windowFit = fit
+        stop()
+        await start()
+    }
+
+    /// 画布大小变了（转屏、折叠屏开合）：正在看一个调过大小的窗口时，按新的画布再调一次。差不到 8 点不动。
+    func refitWindow(to size: CGSize) async {
+        guard windowID != nil, let current = windowFit, size.width > 0, size.height > 0,
+              abs(current.width - size.width) >= 8 || abs(current.height - size.height) >= 8 else { return }
+        await switchWindow(to: windowID, fit: size)
+    }
+
+    /// 那台 Mac 的 uTerm 支不支持只看一个窗口。
+    var supportsWindows: Bool { client.supportsDesktopWindows }
+
+    /// 画面放大了，此刻只看得见这一块（归一化，相对被看的那块显示器或窗口）；nil = 没放大。Mac 改成只取这一块、
+    /// 按原生像素给，放大后的字才是锐的。和上次发的一样就不重发；流重开后自动补发。老 Mac 不支持，什么都不做。
+    func requestRegion(_ visible: RemoteDesktopRegion?) {
+        wantedRegion = visible
+        sendWantedRegion()
+    }
+
+    /// 那台 Mac 的 uTerm 支不支持放大后按区域取画面。
+    var supportsRegions: Bool { client.supportsDesktopRegion }
+
+    private func sendWantedRegion() {
+        guard client.supportsDesktopRegion, state == .streaming, let attachment, wantedRegion != sentRegion else { return }
+        sentRegion = wantedRegion
+        attachment.link.send(RemoteMessage(.desktopRegion, channel: attachment.channel,
+                                           payload: RemoteJSON.encode(RemoteDesktopRegionRequest(visible: wantedRegion))))
     }
 
     /// 开一条流。失败（Mac 拒绝）抛 `RemoteAttachError.rejected`。
@@ -217,6 +266,9 @@ final class RemoteDesktopSession {
             trace.event("点开屏幕之后 \(RemoteConnectTrace.millis(ContinuousClock.now - tapped)) ms 才开流")
         }
         awaitingFirstFrame = false
+        contentFraction = CGSize(width: 1, height: 1)
+        pendingGeometry = nil
+        sentRegion = nil
         receiver.expectFirstImage(trace: trace) { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.firstImageArrived(generation: current) }
@@ -253,6 +305,11 @@ final class RemoteDesktopSession {
                 case .desktopUnlockResult:
                     guard let result = try? RemoteJSON.decode(RemoteDesktopUnlockResult.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.unlockResultArrived(result) } }
+                case .desktopGeometry:
+                    guard let update = try? RemoteJSON.decode(RemoteDesktopGeometryUpdate.self, from: message.payload) else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { self?.geometryArrived(update, generation: current) }
+                    }
                 case .desktopAudioFrame:
                     audioReceiver.receive(frame: message.payload)
                 case .desktopAudioFormat:
@@ -268,7 +325,10 @@ final class RemoteDesktopSession {
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
                                                 displayID: displayID, sidecarRefine: true, latencyStats: true,
-                                                cursorImages: wantsCursorImages ? true : nil, pointScale: pointScale)
+                                                cursorImages: wantsCursorImages ? true : nil, pointScale: pointScale,
+                                                windowID: client.supportsDesktopWindows ? windowID : nil,
+                                                windowFit: client.supportsDesktopWindows && windowID != nil
+                                                    ? windowFit.map { RemoteDesktopFit(width: $0.width, height: $0.height) } : nil)
         let wasConnected = client.state == .connected
         let startStep = trace.begin(.desktopStart, detail: wasConnected ? nil : String(localized: "含建连"))
         let attached: RemoteAttachment
@@ -303,17 +363,41 @@ final class RemoteDesktopSession {
             awaitingFirstFrame = true
         }
         self.info = info
+        applyPendingGeometry()
         attachment = attached
         receiver.attach(link: attached.link, channel: attached.channel, generation: current)
         // 流在走、有人在看：静默断开几秒内就要发现（见 `RemoteLink.expectSteadyTraffic`）。
         attached.link.expectSteadyTraffic(!backgrounded)
         state = .streaming
+        // 开流前画布就放大着（重连、换显示器）：新的流从整块起步，把想要的那一块补发过去。
+        sendWantedRegion()
         // 后台里重连上的（一般是回前台前最后那几秒）：新流照样请 Mac 停下，别在没人看时推满码率。
         if backgrounded { sendPause(true) }
         // 重连后重新要声音：Mac 那边的声音流随旧的桌面流一起结束了。第一次开流时，上次看这台 Mac 开着声音就照样打开。
         if wantsAudio { requestAudio(true) } else { restoreAudioIfWanted() }
     }
 
+    /// 只看一个窗口时画面对应的范围变了：点尺寸换掉（画布的比例与「1 点多大」跟着变），占比交给画布裁切。
+    /// 几何可能比开流回复先到（`info` 还没有）：先记着，`open` 收到回复后套上。
+    private func geometryArrived(_ update: RemoteDesktopGeometryUpdate, generation arrived: Int) {
+        guard arrived == generation, !isStopped, update.width > 0, update.height > 0,
+              update.contentWidth > 0, update.contentHeight > 0 else { return }
+        pendingGeometry = update
+        applyPendingGeometry()
+    }
+
+    private func applyPendingGeometry() {
+        guard let update = pendingGeometry, info != nil else { return }
+        pendingGeometry = nil
+        info?.displayWidth = update.width
+        info?.displayHeight = update.height
+        contentFraction = CGSize(width: min(1, update.contentWidth), height: min(1, update.contentHeight))
+    }
+
+    @ObservationIgnored private var pendingGeometry: RemoteDesktopGeometryUpdate?
+    /// 画布此刻想要的那一块，和已经告诉这条流的那一块（新开的流从整块起步）。
+    @ObservationIgnored private var wantedRegion: RemoteDesktopRegion?
+    @ObservationIgnored private var sentRegion: RemoteDesktopRegion?
     @ObservationIgnored private var firstFrameStep: Int?
     @ObservationIgnored private var firstImageGeneration: Int?
 

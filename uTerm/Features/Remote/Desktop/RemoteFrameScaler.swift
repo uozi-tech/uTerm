@@ -43,13 +43,19 @@ nonisolated final class RemoteFrameScaler: @unchecked Sendable {
     }
 
     /// `image` 是 BGRA（Display P3 码值）。返回视频尺寸的 4:2:0，标注与编码器一致；失败返回 nil（这一帧丢掉）。
-    func scale(_ image: CVPixelBuffer) -> CVPixelBuffer? {
+    /// `crop`：只取 `image` 里的这一块（像素，左上角原点）铺满输出；nil = 整张。
+    func scale(_ image: CVPixelBuffer, crop: CGRect? = nil) -> CVPixelBuffer? {
         var created: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, outputPool, &created) == kCVReturnSuccess, let output = created,
               let filter = CIFilter(name: "CILanczosScaleTransform") else { return nil }
         // 先标好：Core Image 按输出缓冲上的矩阵转 YUV。
         Self.tag(output)
-        let input = CIImage(cvPixelBuffer: image, options: [.colorSpace: Self.colorSpace])
+        var input = CIImage(cvPixelBuffer: image, options: [.colorSpace: Self.colorSpace])
+        if let crop {
+            // Core Image 是左下角原点：把要的那块裁出来，挪到原点。
+            let flipped = CGRect(x: crop.minX, y: input.extent.height - crop.maxY, width: crop.width, height: crop.height)
+            input = input.cropped(to: flipped).transformed(by: CGAffineTransform(translationX: -flipped.minX, y: -flipped.minY))
+        }
         let scale = CGFloat(height) / input.extent.height
         filter.setValue(input, forKey: kCIInputImageKey)
         filter.setValue(scale, forKey: kCIInputScaleKey)
@@ -113,13 +119,58 @@ nonisolated final class RemoteFastFrameScaler: @unchecked Sendable {
 
     deinit { VTPixelTransferSessionInvalidate(session) }
 
+    /// 现在是不是「只取源图的 clean aperture」那一档（只在调用的队列上读写）。
+    private var cropping = false
+
     /// `image` 是 BGRA（Display P3 码值）。失败返回 nil（这一帧丢掉）。
-    func scale(_ image: CVPixelBuffer) -> CVPixelBuffer? {
+    /// `crop`：只取 `image` 里的这一块（像素，左上角原点）铺满输出；nil = 整张。裁的那块写在源图的 clean aperture
+    /// 上，转换时只取它。
+    func scale(_ image: CVPixelBuffer, crop: CGRect? = nil) -> CVPixelBuffer? {
         var created: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, outputPool, &created) == kCVReturnSuccess, let output = created else {
             return nil
         }
         RemoteFrameScaler.tag(output)
-        return VTPixelTransferSessionTransferImage(session, from: image, to: output) == noErr ? output : nil
+        if let crop {
+            // 偏移量是这一块的中心相对整张图中心的位置。
+            let aperture: [CFString: Any] = [
+                kCVImageBufferCleanApertureWidthKey: crop.width,
+                kCVImageBufferCleanApertureHeightKey: crop.height,
+                kCVImageBufferCleanApertureHorizontalOffsetKey: crop.midX - CGFloat(CVPixelBufferGetWidth(image)) / 2,
+                kCVImageBufferCleanApertureVerticalOffsetKey: crop.midY - CGFloat(CVPixelBufferGetHeight(image)) / 2,
+            ]
+            CVBufferSetAttachment(image, kCVImageBufferCleanApertureKey, aperture as CFDictionary, .shouldNotPropagate)
+        } else {
+            CVBufferRemoveAttachment(image, kCVImageBufferCleanApertureKey)
+        }
+        if cropping != (crop != nil) {
+            cropping = crop != nil
+            VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_ScalingMode,
+                                 value: cropping ? kVTScalingMode_CropSourceToCleanAperture : kVTScalingMode_Normal)
+        }
+        let status = VTPixelTransferSessionTransferImage(session, from: image, to: output)
+        // 源图还会被别人用（精修时重缩）：标记用完就摘掉。
+        if crop != nil { CVBufferRemoveAttachment(image, kCVImageBufferCleanApertureKey) }
+        return status == noErr ? output : nil
+    }
+}
+
+/// 缩好的帧画的是哪一块：挂在帧上，从采集源带到发送端（写进视频帧头）。
+nonisolated enum RemoteFrameRegionTag {
+    private static var key: CFString { "com.uozi.uTerm.remote.frameRegion" as CFString }
+
+    /// 缩放器的输出缓冲是池里轮着用的：整块的帧也要调一次，把上一轮的标记摘掉。
+    static func set(_ region: RemoteDesktopRegion?, on image: CVPixelBuffer) {
+        guard let region else {
+            CVBufferRemoveAttachment(image, key)
+            return
+        }
+        let values = [region.x, region.y, region.width, region.height] as CFArray
+        CVBufferSetAttachment(image, key, values, .shouldNotPropagate)
+    }
+
+    static func region(of image: CVPixelBuffer) -> RemoteDesktopRegion? {
+        guard let values = CVBufferCopyAttachment(image, key, nil) as? [Double], values.count == 4 else { return nil }
+        return RemoteDesktopRegion(x: values[0], y: values[1], width: values[2], height: values[3])
     }
 }

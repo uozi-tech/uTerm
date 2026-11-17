@@ -52,6 +52,8 @@ final class RemoteHostConnection {
     private var peerSendsHeartbeat = false
     /// 手机认得 `desktopClipboard`（老手机收到会当未知消息断开整条连接）。
     private var peerTakesClipboard = false
+    /// 为当前这条桌面流调过大小的窗口和它原来的位置：流结束时放回去。
+    var desktopWindowRestore: (id: UInt32, frame: CGRect)?
     /// 手机认得远程解锁 / 帘幕相关消息（`desktopScreenState` 等）。
     private var peerSupportsUnlock = false
     /// 对端认得解锁结果里的 `inputBlocked`。
@@ -388,6 +390,9 @@ final class RemoteHostConnection {
             Task { await startDesktop(request) }
         case .desktopStop:
             stopDesktop(channel: message.channel, notify: false)
+        case .desktopWindows:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopWindowListRequest.self, from: message.payload) else { return }
+            Task { await listDesktopWindows(request) }
         case .desktopUnlock:
             guard var request = try? RemoteJSON.decode(RemoteDesktopUnlockRequest.self, from: message.payload) else { return }
             let password = request.password
@@ -406,13 +411,14 @@ final class RemoteHostConnection {
                 stopAudio(notify: nil)
             }
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
-             .desktopPause:
+             .desktopPause, .desktopRegion:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
-             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult, .revokeSiblingResult:
+             .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult, .revokeSiblingResult,
+             .desktopWindowList, .desktopGeometry:
             break
         }
     }
@@ -582,6 +588,12 @@ final class RemoteHostConnection {
         if let desktop {
             stopDesktop(channel: desktop.channel, notify: false)
         }
+        if let pending = desktopWindowRestore {
+            // 调过大小、流却没开起来（或已经停了）的窗口：连接断了也要放回去。
+            desktopWindowRestore = nil
+            let environment = server.desktopEnvironment
+            Task { await environment.restoreWindow(pending.id, pending.frame) }
+        }
         server.connectionClosed(self)
     }
 }
@@ -679,11 +691,36 @@ extension RemoteHostConnection {
         AppLogger.notice("远程桌面开流计时：授权 \(authorizedAt) ms · 准备显示器 \(preparedAt) ms · 显示器就绪 \(millis()) ms",
                          category: RemoteLog.category)
         guard generation == desktopStartGeneration, !isClosed else { return }
+        // 只看一个窗口：先把它提到最前（盖住的窗口点不到，有时也采不到），再按它此刻的位置和大小当采集目标。
+        var windowTitle: String?
+        // 上一条流调过大小的窗口：这次还是它、还要调，就留着它最初的位置（结束时还原到那儿）；否则现在就还原。
+        if let pending = desktopWindowRestore, pending.id != request.windowID || request.windowFit == nil {
+            desktopWindowRestore = nil
+            await environment.restoreWindow(pending.id, pending.frame)
+            guard generation == desktopStartGeneration, !isClosed else { return }
+        }
+        if let windowID = request.windowID {
+            if canControl {
+                await environment.raiseWindow(windowID)
+                if let fit = request.windowFit,
+                   let original = await environment.fitWindow(windowID, CGSize(width: fit.width, height: fit.height)),
+                   desktopWindowRestore == nil {
+                    desktopWindowRestore = (windowID, original)
+                }
+            }
+            guard generation == desktopStartGeneration, !isClosed else { return }
+            guard let window = environment.window(windowID) else {
+                return reject(.captureFailed, "找不到要看的窗口，它可能已经关闭或挪到了别的桌面")
+            }
+            display = window.display
+            windowTitle = window.title
+        }
         let size = RemoteDesktopGeometry.streamSize(
             displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),
             maxWidth: request.maxWidth, maxHeight: request.maxHeight)
         if let current = desktop {
-            stopDesktop(channel: current.channel, notify: false)
+            // 换流：调过大小的窗口上面已经处理过了（还原，或留给新的这条流），这里不再还原。
+            stopDesktop(channel: current.channel, notify: false, restoresWindow: false)
         }
         let device = peerName
         // 新手机（能解旁路精修帧）+ HEVC：10-bit 主流 + 旁路精修。老手机照旧，免得它把旁路帧当主流解。
@@ -722,7 +759,8 @@ extension RemoteHostConnection {
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
             controlNote: canControl ? nil : "Mac 上还没有给远程控制「辅助功能」权限，只能查看。在 Mac 的 uTerm「设置 › 远程控制」里授权，并按提示重新启动 uTerm，即可控制。",
             videoDatagrams: video != nil ? true : nil,
-            displays: { let all = environment.listDisplays(); return all.isEmpty ? nil : all }())
+            displays: { let all = environment.listDisplays(); return all.isEmpty ? nil : all }(),
+            windowID: display.windowID, windowTitle: windowTitle)
         AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
                        category: RemoteLog.category)
         Task {
@@ -745,9 +783,32 @@ extension RemoteHostConnection {
         }
     }
 
+    /// 回窗口列表。没开远程桌面、没有屏幕录制授权时回空表加一句原因（没授权时系统不给窗口标题）。
+    fileprivate func listDesktopWindows(_ request: RemoteDesktopWindowListRequest) async {
+        let environment = server.desktopEnvironment
+        func reply(_ windows: [RemoteDesktopWindowSummary], _ message: String? = nil) {
+            guard !isClosed else { return }
+            link.send(RemoteMessage(.desktopWindowList, payload: RemoteJSON.encode(
+                RemoteDesktopWindowList(requestID: request.requestID, windows: windows, message: message))))
+        }
+        guard environment.isEnabled() else {
+            return reply([], "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。")
+        }
+        guard await environment.screenCaptureAuthorized() else {
+            return reply([], "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
+        }
+        reply(environment.listWindows())
+    }
+
     /// 结束桌面流。`notify` = 告诉手机（Mac 上断开、被别的设备接管、采集停了）。
-    func stopDesktop(channel: UInt32, notify: Bool, reason: String = "") {
+    func stopDesktop(channel: UInt32, notify: Bool, reason: String = "", restoresWindow: Bool = true) {
         guard let current = desktop, current.channel == channel else { return }
+        if restoresWindow, let pending = desktopWindowRestore {
+            // 为这条流调过大小的窗口放回去。
+            desktopWindowRestore = nil
+            let environment = server.desktopEnvironment
+            Task { await environment.restoreWindow(pending.id, pending.frame) }
+        }
         stopAudio(notify: nil)
         desktop = nil
         desktopRoute.set(nil)

@@ -7,6 +7,8 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
     let session: RemoteDesktopSession
     /// 那台 Mac 的显示器点尺寸（开流后才有）。作为参数传进来，SwiftUI 才会在它变化时调 `updateNSView`。
     let displaySize: CGSize?
+    /// 内容占视频帧的比例（只看一个窗口时可能小于 1，见 `RemoteDesktopSession.contentFraction`）。
+    var contentFraction = CGSize(width: 1, height: 1)
     /// ⌘V 时本机剪贴板里的内容粘过去了（或读不出来）：外面显示一句提示。
     var onPasteNote: (String) -> Void = { _ in }
     /// 把 ⌘Tab、⌘空格、⌘W 这些系统 / 本机快捷键也发过去（要「辅助功能」授权）。
@@ -23,6 +25,7 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
         view.onShortcutCaptureFailed = onShortcutCaptureFailed
         view.sendSystemShortcuts = sendSystemShortcuts
         view.update(displaySize: displaySize)
+        view.update(contentFraction: contentFraction)
         view.update(cursorImage: session.cursorImage)
     }
 
@@ -49,6 +52,10 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
 final class RemoteDesktopCanvasNSView: NSView {
     private let session: RemoteDesktopSession
     private let displayLayer = AVSampleBufferDisplayLayer()
+    /// 画面区域：视频层放在它里面。视频帧里只有左上角一部分是内容时（只看一个窗口），视频层按比例放大，多出来的
+    /// 由它裁掉。
+    private let pictureLayer = CALayer()
+    private var contentFraction = CGSize(width: 1, height: 1)
     private let cursorLayer = CAShapeLayer()
     var onPasteNote: (String) -> Void = { _ in }
     var onShortcutCaptureFailed: () -> Void = {}
@@ -83,7 +90,8 @@ final class RemoteDesktopCanvasNSView: NSView {
         wantsLayer = true
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = NSColor.black.cgColor
-        layer?.addSublayer(displayLayer)
+        pictureLayer.addSublayer(displayLayer)
+        layer?.addSublayer(pictureLayer)
         cursorLayer.path = RemoteDesktopArrowCursor.path()
         cursorLayer.fillColor = NSColor.black.cgColor
         cursorLayer.strokeColor = NSColor.white.cgColor
@@ -131,6 +139,12 @@ final class RemoteDesktopCanvasNSView: NSView {
     }
 
     // MARK: - 布局
+
+    func update(contentFraction fraction: CGSize) {
+        guard fraction.width > 0, fraction.height > 0, fraction != contentFraction else { return }
+        contentFraction = fraction
+        layoutContent()
+    }
 
     /// 画面总是整块适配进窗口（留黑边，不裁不拉伸）。
     func update(displaySize: CGSize?) {
@@ -229,8 +243,12 @@ final class RemoteDesktopCanvasNSView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let frame = viewport.contentFrame
-        if displayLayer.frame != frame { displayLayer.frame = frame }
-        displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
+        if pictureLayer.frame != frame { pictureLayer.frame = frame }
+        let video = CGRect(x: 0, y: 0, width: frame.width / contentFraction.width, height: frame.height / contentFraction.height)
+        if displayLayer.frame != video { displayLayer.frame = video }
+        pictureLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
+        // 圆角那一步在四角都是直角时会把裁切关掉；视频层比画面区域大时一定要裁。
+        if contentFraction.width < 1 || contentFraction.height < 1 { pictureLayer.masksToBounds = true }
         cursorLayer.position = viewport.viewPoint(normalized: CGPoint(x: CGFloat(macCursor.x), y: CGFloat(macCursor.y)))
         // 本机指针在画面上并且能控制时，本机光标就是那台 Mac 的光标，不再画一个。
         let localIsCursor = session.canControl && mouseInside

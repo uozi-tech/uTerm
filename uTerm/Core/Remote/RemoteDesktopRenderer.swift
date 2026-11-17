@@ -32,11 +32,26 @@ nonisolated final class RemoteDesktopRenderer: @unchecked Sendable {
 extension RemoteDesktopSession {
     /// 画布接上这一路流：画面直接送进 `layer`，光标位置回主线程交给 `onCursor`。
     /// 画布拆除时调 `detachCanvas()`。
-    func attachCanvas(_ layer: AVSampleBufferDisplayLayer,
+    ///
+    /// `regionLayer`：放大后 Mac 只送来其中一块的帧（`RemoteDesktopFrame.region`）画在它上面。它要放在一个
+    /// 「单位坐标」的父图层里（见 `RemoteDesktopRegionPlacement`），盖在 `layer` 上面；`layer` 留着最后一张整块的
+    /// 画面垫底。不给就只认整块的帧（不支持放大取区域的画布）。
+    func attachCanvas(_ layer: AVSampleBufferDisplayLayer, regionLayer: AVSampleBufferDisplayLayer? = nil,
                       onCursor: @escaping @MainActor (RemoteDesktopCursor) -> Void) {
         let renderer = RemoteDesktopRenderer(layer.sampleBufferRenderer)
+        let regional = regionLayer.map { (layer: RemoteDesktopRegionLayer($0), renderer: RemoteDesktopRenderer($0.sampleBufferRenderer)) }
         receiver.setHandlers(
-            onImage: { image, _ in renderer.enqueue(image) },
+            onImage: { image, frame in
+                guard let regional else { return renderer.enqueue(image) }
+                if let region = frame.region {
+                    // 先把图层摆到这一帧画的那一块上，再送帧：两件事都在解码队列上做，不会有一帧画在旧位置上。
+                    regional.layer.show(region)
+                    regional.renderer.enqueue(image)
+                } else {
+                    regional.layer.hide()
+                    renderer.enqueue(image)
+                }
+            },
             onCursor: { cursor in
                 DispatchQueue.main.async { MainActor.assumeIsolated { onCursor(cursor) } }
             })
@@ -44,6 +59,55 @@ extension RemoteDesktopSession {
 
     func detachCanvas() {
         receiver.setHandlers(onImage: nil, onCursor: nil)
+    }
+}
+
+/// 放大后那一块画面的图层放在哪儿。
+///
+/// 父图层用「单位坐标」：bounds 固定是 `unit`×`unit`，代表整块显示器（或窗口），由画布按画面在屏幕上的位置和大小
+/// 缩放、摆好。这样图层在父图层里的位置只由帧头里的区域决定，解码队列上就能摆，不用回主线程问画布的缩放。
+nonisolated enum RemoteDesktopRegionPlacement {
+    static let unit: CGFloat = 10_000
+
+    static func frame(for region: RemoteDesktopRegion) -> CGRect {
+        CGRect(x: region.x * unit, y: region.y * unit, width: region.width * unit, height: region.height * unit)
+    }
+
+    /// 把单位坐标的父图层摆成占满 `bounds`（画面区域自己的坐标）。在主线程上、画布排版时调。
+    @MainActor static func layout(_ unitLayer: CALayer, in bounds: CGRect) {
+        unitLayer.anchorPoint = .zero
+        unitLayer.bounds = CGRect(x: 0, y: 0, width: unit, height: unit)
+        unitLayer.position = bounds.origin
+        unitLayer.setAffineTransform(CGAffineTransform(scaleX: bounds.width / unit, y: bounds.height / unit))
+    }
+}
+
+/// 解码队列上摆那一块画面的图层（显式事务，不带动画）。
+nonisolated final class RemoteDesktopRegionLayer: @unchecked Sendable {
+    private let layer: AVSampleBufferDisplayLayer
+    private var shown: RemoteDesktopRegion?
+
+    init(_ layer: AVSampleBufferDisplayLayer) { self.layer = layer }
+
+    func show(_ region: RemoteDesktopRegion) {
+        guard region != shown else { return }
+        shown = region
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = RemoteDesktopRegionPlacement.frame(for: region)
+        layer.isHidden = false
+        CATransaction.commit()
+    }
+
+    /// 回到整块：藏起来，并把里面那张清掉——下次再露出来时不该先闪一下上一回的画面。
+    func hide() {
+        guard shown != nil else { return }
+        shown = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.isHidden = true
+        CATransaction.commit()
+        layer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 }
 

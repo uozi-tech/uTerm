@@ -25,6 +25,16 @@ struct RemoteDesktopEnvironment {
     var displaysInUse: @MainActor (_ inUse: Bool) -> Void = { _ in }
     /// 此刻接着的全部显示器（主显示器在前）。
     var listDisplays: @MainActor () -> [RemoteDesktopDisplaySummary] = { [] }
+    /// 此刻能单独看的窗口，最前面的在前。
+    var listWindows: @MainActor () -> [RemoteDesktopWindowSummary] = { [] }
+    /// 只看一个窗口时的采集目标（把窗口当成一块「显示器」，`windowID` 不为 nil）和窗口标题。窗口没了返回 nil。
+    var window: @MainActor (_ id: UInt32) -> (display: RemoteDesktopDisplay, title: String)? = { _ in nil }
+    /// 把窗口提到最前（要「辅助功能」授权）。点击只会落到最上面的窗口上，被盖住的窗口点不到。
+    var raiseWindow: @MainActor (_ id: UInt32) async -> Void = { _ in }
+    /// 把窗口调成这么大（点，要「辅助功能」授权）。返回改之前的位置，没改返回 nil。
+    var fitWindow: @MainActor (_ id: UInt32, _ size: CGSize) async -> CGRect? = { _, _ in nil }
+    /// 把调过大小的窗口放回原来的位置和大小。
+    var restoreWindow: @MainActor (_ id: UInt32, _ frame: CGRect) async -> Void = { _, _ in }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
         -> any RemoteDesktopFrameSource
     var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
@@ -68,6 +78,16 @@ struct RemoteDesktopEnvironment {
                 if inUse { RemoteHeadlessDisplay.cancelRelease() } else { RemoteHeadlessDisplay.scheduleRelease() }
             },
             listDisplays: { RemoteDesktopEnvironment.activeDisplays() },
+            listWindows: { RemoteDesktopWindows.list() },
+            window: { id in
+                RemoteDesktopWindows.target(id: id).map { ($0.display, $0.entry.title.isEmpty ? $0.entry.app : $0.entry.title) }
+            },
+            raiseWindow: { id in
+                // 同步等辅助功能接口（对方卡住时最多 1 秒），不占主线程。
+                _ = await Task.detached { RemoteDesktopWindows.raise(id: id) }.value
+            },
+            fitWindow: { id, size in await Task.detached { RemoteDesktopWindows.resize(id: id, to: size) }.value },
+            restoreWindow: { id, frame in await Task.detached { RemoteDesktopWindows.restore(id: id, frame: frame) }.value },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
             },

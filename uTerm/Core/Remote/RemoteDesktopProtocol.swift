@@ -57,6 +57,19 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     /// 拿它把 `maxWidth` / `maxHeight` 换成点数，定虚拟屏多大（`RemoteHeadlessDisplay.virtualSize`）。
     /// 老 Mac 不认这个键；老的主控端不发，被控端按 2 算、下限照旧。
     var pointScale: Double? = nil
+    /// 只看这一个窗口（`RemoteDesktopWindowList` 里的 id）。nil = 整块显示器。只发给声明了 `desktop-windows`
+    /// 的 Mac：老 Mac 不认这个键，会照旧给整块显示器。
+    var windowID: UInt32? = nil
+    /// 只看一个窗口时，先把那个窗口调成这么大（点）再开流：一般是看的设备上画布的点尺寸，窗口里的内容按它重排，
+    /// 字和在 Mac 上一样大。要「辅助功能」授权，没有就不调；App 有最小窗口尺寸时得到的可能更大。流结束后 Mac 把
+    /// 窗口还原。nil = 不动窗口。
+    var windowFit: RemoteDesktopFit? = nil
+}
+
+/// 一个点尺寸。
+nonisolated struct RemoteDesktopFit: Codable, Equatable, Sendable {
+    var width: Double
+    var height: Double
 }
 
 /// Mac → 主控端：光标此刻的样子（I 形、调整大小的箭头…）。图是 PNG，尺寸与热点都按点算。
@@ -109,6 +122,59 @@ nonisolated struct RemoteDesktopInfo: Codable, Equatable, Sendable {
     var videoDatagrams: Bool? = nil
     /// Mac 上此刻接着的全部显示器（老 Mac 不报，为 nil）。看哪一块由开流请求的 `displayID` 定。
     var displays: [RemoteDesktopDisplaySummary]? = nil
+    /// 这条流只看一个窗口时是它的 id 与标题；此时 `displayWidth` / `displayHeight` 是窗口的点尺寸，
+    /// 归一化坐标按窗口算。之后窗口改大小由 `desktopGeometry` 更新。
+    var windowID: UInt32? = nil
+    var windowTitle: String? = nil
+}
+
+/// 主控端 → Mac：要窗口列表（`desktopWindows`，通道 0）。
+nonisolated struct RemoteDesktopWindowListRequest: Codable, Equatable, Sendable {
+    var requestID: UUID
+}
+
+/// Mac → 主控端：此刻能单独看的窗口（`desktopWindowList`，通道 0），最前面的窗口在前。
+nonisolated struct RemoteDesktopWindowList: Codable, Equatable, Sendable {
+    var requestID: UUID
+    var windows: [RemoteDesktopWindowSummary]
+    /// 列不出来时给人看的原因（没开远程桌面、没有屏幕录制授权）。
+    var message: String? = nil
+}
+
+/// 一个窗口的简介：给主控端的「只看一个窗口」菜单用。
+nonisolated struct RemoteDesktopWindowSummary: Codable, Equatable, Hashable, Sendable {
+    var id: UInt32
+    /// 所属 App 的名字（「Xcode」）。
+    var app: String
+    /// 窗口标题，可能为空。
+    var title: String
+    /// 点尺寸。
+    var width: Double
+    var height: Double
+}
+
+extension RemoteDesktopWindowSummary {
+    /// 菜单里的第一行：有标题用标题，没有用 App 名。
+    nonisolated var menuTitle: String { title.isEmpty ? app : title }
+
+    /// 第二行：App 名（标题为空时不重复）和尺寸。
+    nonisolated var menuDetail: String {
+        let size = "\(Int(width))×\(Int(height))"
+        return title.isEmpty ? size : "\(app) · \(size)"
+    }
+}
+
+/// Mac → 主控端：只看一个窗口时画面对应的范围（`desktopGeometry`，桌面通道）。
+///
+/// 视频帧的尺寸开流后不变。窗口改了大小、或者弹出的菜单伸出了窗口，系统把新的范围等比缩进同一帧、靠左上角放，
+/// 右边或下边空出来。这里告诉主控端：现在画面对应多大一块（点），以及它占视频帧的多大一部分。
+nonisolated struct RemoteDesktopGeometryUpdate: Codable, Equatable, Sendable {
+    /// 画面对应范围的点尺寸（替换 `RemoteDesktopInfo.displayWidth` / `displayHeight`）。
+    var width: Double
+    var height: Double
+    /// 内容占视频帧的比例（0…1，从左上角算）。
+    var contentWidth: Double
+    var contentHeight: Double
 }
 
 /// 一块显示器的简介：给主控端的「切换显示器」菜单用。
@@ -194,8 +260,39 @@ nonisolated struct RemoteDesktopPauseRequest: Codable, Equatable, Sendable {
     var paused: Bool
 }
 
+/// 归一化的一块矩形：相对被看的那块显示器（或窗口），左上角原点，0…1。
+nonisolated struct RemoteDesktopRegion: Codable, Equatable, Sendable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    static let whole = RemoteDesktopRegion(x: 0, y: 0, width: 1, height: 1)
+
+    /// 夹进 0…1；宽高不是正数返回 nil。
+    var clamped: RemoteDesktopRegion? {
+        guard x.isFinite, y.isFinite, width.isFinite, height.isFinite else { return nil }
+        let x0 = min(1, max(0, x)), y0 = min(1, max(0, y))
+        let x1 = min(1, max(0, x + width)), y1 = min(1, max(0, y + height))
+        guard x1 > x0, y1 > y0 else { return nil }
+        return RemoteDesktopRegion(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    }
+
+    /// `other` 整个落在这一块里（留一点浮点余量）。
+    func contains(_ other: RemoteDesktopRegion, tolerance: Double = 1e-6) -> Bool {
+        other.x >= x - tolerance && other.y >= y - tolerance
+            && other.x + other.width <= x + width + tolerance && other.y + other.height <= y + height + tolerance
+    }
+}
+
+/// 主控端 → Mac：此刻看得见的那一块（`desktopRegion`，桌面通道）。`visible` 为 nil = 没放大，回到整块。
+nonisolated struct RemoteDesktopRegionRequest: Codable, Equatable, Sendable {
+    var visible: RemoteDesktopRegion?
+}
+
 /// 一帧视频（`desktopFrame`）：
 /// `[u8 标志][u8 编码][u32 序号][u64 Mac 采集时刻 ns][u16 宽][u16 高]`
+/// + 带 `hasLTRToken` 时 `[u64 令牌]`，带 `hasRegion` 时 `[u16 x][u16 y][u16 宽][u16 高]`（各乘 65535）
 /// + 关键帧时 `[u8 参数集个数]{[u16 长度][参数集]}`（H.264 = SPS/PPS，HEVC = VPS/SPS/PPS）
 /// + AVCC 码流（每个 NAL 前 4 字节大端长度，即 VideoToolbox 直接吐出来的格式）。
 nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
@@ -212,6 +309,9 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         static let ltrRefresh = Flags(rawValue: 1 << 3)
         /// 带 `ltrToken`。
         static let hasLTRToken = Flags(rawValue: 1 << 4)
+        /// 带 `region`：这一帧不是整块画面，只是其中一块（主控端放大后 Mac 按看得见的那块取的）。
+        /// 只发给发过 `desktopRegion` 的主控端。
+        static let hasRegion = Flags(rawValue: 1 << 5)
     }
 
     var flags: Flags
@@ -225,6 +325,8 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
     var data: Data
     /// 这一帧是长期参考帧：手机解出来后把它带回确认，Mac 才知道以后可以参考它。
     var ltrToken: UInt64? = nil
+    /// 这一帧画的是哪一块（nil = 整块）。每帧各带各的，换区域的那一帧起就按新的摆，不会错位。
+    var region: RemoteDesktopRegion? = nil
 
     var isKeyframe: Bool { flags.contains(.keyframe) }
 
@@ -239,6 +341,11 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         writer.u16(width)
         writer.u16(height)
         if flags.contains(.hasLTRToken) { writer.u64(ltrToken ?? 0) }
+        if flags.contains(.hasRegion), let region {
+            for value in [region.x, region.y, region.width, region.height] {
+                writer.u16(UInt16(clamping: Int((min(1, max(0, value)) * 65535).rounded())))
+            }
+        }
         if isKeyframe {
             writer.u8(UInt8(parameterSets.count))
             for set in parameterSets {
@@ -251,9 +358,13 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
     }
 
     init(flags: Flags, codec: RemoteVideoCodec, sequence: UInt32, captureNanos: UInt64,
-         width: UInt16, height: UInt16, parameterSets: [Data], data: Data, ltrToken: UInt64? = nil) {
+         width: UInt16, height: UInt16, parameterSets: [Data], data: Data, ltrToken: UInt64? = nil,
+         region: RemoteDesktopRegion? = nil) {
         self.ltrToken = ltrToken
-        self.flags = ltrToken == nil ? flags.subtracting(.hasLTRToken) : flags.union(.hasLTRToken)
+        self.region = region
+        var flags = ltrToken == nil ? flags.subtracting(.hasLTRToken) : flags.union(.hasLTRToken)
+        flags = region == nil ? flags.subtracting(.hasRegion) : flags.union(.hasRegion)
+        self.flags = flags
         self.codec = codec
         self.sequence = sequence
         self.captureNanos = captureNanos
@@ -273,6 +384,11 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         width = try reader.u16()
         height = try reader.u16()
         if flags.contains(.hasLTRToken) { ltrToken = try reader.u64() }
+        if flags.contains(.hasRegion) {
+            let x = Double(try reader.u16()) / 65535, y = Double(try reader.u16()) / 65535
+            let width = Double(try reader.u16()) / 65535, height = Double(try reader.u16()) / 65535
+            region = RemoteDesktopRegion(x: x, y: y, width: width, height: height)
+        }
         var sets: [Data] = []
         if flags.contains(.keyframe) {
             let count = Int(try reader.u8())

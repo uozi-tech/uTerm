@@ -2,13 +2,16 @@ import CoreGraphics
 import CoreVideo
 import Foundation
 
-/// 被看的那块显示器。
+/// 被看的那块显示器；只看一个窗口时是那个窗口（`windowID` 不为 nil）。
 nonisolated struct RemoteDesktopDisplay: Equatable, Sendable {
+    /// 显示器号；只看一个窗口时是窗口所在的那块显示器。
     var id: UInt32
-    /// 全局坐标（左上角原点，点），`CGEvent` 用的那套。
+    /// 全局坐标（左上角原点，点），`CGEvent` 用的那套。只看一个窗口时是窗口开流那一刻的位置，之后窗口挪动、
+    /// 改大小由画面来源报上来（`RemoteDesktopFrameSource.observeGeometry`）。
     var bounds: CGRect
     var pixelWidth: Int
     var pixelHeight: Int
+    var windowID: UInt32? = nil
 }
 
 /// 画面来源：生产是 ScreenCaptureKit，测试是合成画面。
@@ -21,10 +24,18 @@ nonisolated protocol RemoteDesktopFrameSource: AnyObject, Sendable {
     /// 静止精修用的那张：`frame`（之前交出去的某一帧）的高画质版本，没有就是 nil（照用 `frame`）。
     /// 采集要再缩一截时，运动帧用快的缩法，这里换成 Lanczos 从原始采集重缩。在连接队列上调用。
     func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer?
+    /// 只看一个窗口时：画面对应的范围变了（窗口挪动、改大小、菜单伸出窗口）就调 `handler`，在来源自己的队列上。
+    /// `start` 之前调用。整块显示器的来源范围不变，不用管（默认实现什么都不做）。
+    func observeGeometry(_ handler: @escaping @Sendable (RemoteDesktopFrameGeometry) -> Void)
+    /// 主控端放大了，此刻只看得见这一块（nil = 没放大）。来源可以改成只取这一块、按原生像素出，出的帧上带着取的
+    /// 是哪一块（`RemoteFrameRegionTag`）。取不取、取多大由来源定；默认实现不理会，照旧出整块。任何线程。
+    func setRegion(_ visible: RemoteDesktopRegion?)
 }
 
 nonisolated extension RemoteDesktopFrameSource {
     func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer? { nil }
+    func observeGeometry(_ handler: @escaping @Sendable (RemoteDesktopFrameGeometry) -> Void) {}
+    func setRegion(_ visible: RemoteDesktopRegion?) {}
 }
 
 /// 输入落点：生产是 `CGEvent` 注入，测试是记录器。在连接队列上调用。
@@ -34,6 +45,12 @@ nonisolated protocol RemoteDesktopInputSink: AnyObject, Sendable {
     func paste(_ content: RemoteDesktopPaste)
     /// 松开还按着的鼠标键。停流时调用：手机断开后发不来抬起事件。
     func releaseButtons()
+    /// 只看一个窗口时：归一化坐标对应的范围变了（窗口挪动、改大小、菜单伸出窗口）。
+    func updateBounds(_ bounds: CGRect)
+}
+
+nonisolated extension RemoteDesktopInputSink {
+    func updateBounds(_ bounds: CGRect) {}
 }
 
 /// Mac 的系统剪贴板（只读）：生产是 `NSPasteboard.general`，测试是内存里的假剪贴板。在连接队列上调用。
@@ -50,6 +67,8 @@ nonisolated struct RemoteCapturedFrame: @unchecked Sendable {
     let captureNanos: UInt64
     /// 跟上一张采集帧比，抽样点里变了几成（0…1）；nil = 没量（第一张、格式不认）。只用于诊断日志。
     var change: Double? = nil
+    /// 这一帧画的是哪一块（nil = 整块），写进视频帧头。
+    var region: RemoteDesktopRegion? = nil
 }
 
 /// 量相邻两张采集帧变了多少：在亮度平面（单平面格式就是整张图）上按 256×256 的格子抽字节，数有几成不一样。
@@ -183,6 +202,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var sawInput = false
     private var cursorTimer: DispatchSourceTimer?
     private var lastCursor: RemoteDesktopCursor?
+    /// 归一化坐标对应的范围（全局坐标）。整块显示器时不变；只看一个窗口时由画面来源报上来。连接队列上读写。
+    private var targetBounds: CGRect
+    /// 只看一个窗口时最近告诉主控端的那份几何。
+    private var sentGeometry: RemoteDesktopFrameGeometry?
+    private var pendingGeometry: RemoteDesktopFrameGeometry?
     private var clipboardTimer: DispatchSourceTimer?
     /// 已经处理过（发过、或不该发）的剪贴板版本。
     private var seenClipboardChange = 0
@@ -218,6 +242,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.width = width
         self.height = height
         self.display = display
+        targetBounds = display.bounds
         self.sidecarRefine = sidecarRefine
         self.sendsLatency = sendsLatency
         self.video = video
@@ -243,11 +268,18 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         appliedRate = rate.bitrate
         encoderFrameRate = rate.frameRate
         stats.setBitrate(rate.bitrate)
+        if display.windowID != nil {
+            source.observeGeometry { [weak self] geometry in
+                guard let self else { return }
+                self.link.queue.async { self.geometryChanged(geometry) }
+            }
+        }
         try await source.start(
             onFrame: { [weak self] image, nanos in
                 guard let self else { return }
                 let frame = RemoteCapturedFrame(image: image, captureNanos: nanos,
-                                                change: self.changeProbe.measure(image))
+                                                change: self.changeProbe.measure(image),
+                                                region: RemoteFrameRegionTag.region(of: image))
                 self.link.queue.async { self.captured(frame) }
             },
             onStop: { [weak self] error in
@@ -268,6 +300,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                                           onLinkState: { [weak self] in self?.linkChanged($0) },
                                           onExpired: { [weak self] in self?.framesLost($0) })
             self.isLive = true
+            self.sendGeometryIfNeeded()
             self.startCursorTimer()
             if let frame = self.lastFrame {
                 self.offer(frame)
@@ -340,6 +373,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         case .desktopPause:
             guard let request = try? RemoteJSON.decode(RemoteDesktopPauseRequest.self, from: message.payload) else { return }
             setPaused(request.paused)
+        case .desktopRegion:
+            // 主控端放大 / 拖动 / 缩回去了：交给来源决定取哪一块。画面换成另一块，之前的静止精修不算数了。
+            guard let request = try? RemoteJSON.decode(RemoteDesktopRegionRequest.self, from: message.payload) else { return }
+            source.setRegion(request.visible)
         default:
             break
         }
@@ -721,7 +758,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         // 采集要再缩一截时运动帧用的是快缩法：精修换成来源从原始采集用 Lanczos 重缩的那张（采集时刻不变，
         // `encodeStill` 据此判断画面变没变）。
         let still = source.refinedImage(of: frame.image)
-            .map { RemoteCapturedFrame(image: $0, captureNanos: frame.captureNanos, change: frame.change) } ?? frame
+            .map { RemoteCapturedFrame(image: $0, captureNanos: frame.captureNanos, change: frame.change,
+                                       region: RemoteFrameRegionTag.region(of: $0)) } ?? frame
         if sidecarRefine {
             encodeStill(sequence, still, quality: quality)
         } else {
@@ -751,7 +789,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                 }
                 self.refineBytes[quality] = encoded.data.count
                 self.send(encoded, sequence: sequence, captureNanos: frame.captureNanos,
-                          flags: [.keyframe, .refine, .sidecar], encodeNanos: encodeNanos)
+                          flags: [.keyframe, .refine, .sidecar], encodeNanos: encodeNanos, region: frame.region)
             }
         }
     }
@@ -865,7 +903,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     if refine { flags.insert(.refine) }
                     if refresh, !encoded.isKeyframe { flags.insert(.ltrRefresh) }
                     self.send(encoded, sequence: sequence, captureNanos: captureNanos, flags: flags,
-                              encodeNanos: encodeNanos, size: encodedSize)
+                              encodeNanos: encodeNanos, size: encodedSize, region: frame.region)
                 }
             }
         }
@@ -873,7 +911,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 编好的一帧发出去，计入在途。在连接队列上调用。
     private func send(_ encoded: RemoteEncodedFrame, sequence: UInt32, captureNanos: UInt64,
-                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64, size: (width: Int, height: Int)? = nil) {
+                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64, size: (width: Int, height: Int)? = nil,
+                      region: RemoteDesktopRegion? = nil) {
         // 暂停那一刻还在编码器里的帧：编好也不发。手机不看了，恢复时反正从关键帧接上，参考链断了无所谓。
         guard !isPaused else {
             pacer.abandon(sequence)
@@ -889,7 +928,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                                          width: UInt16(clamping: size?.width ?? width),
                                          height: UInt16(clamping: size?.height ?? height),
                                          parameterSets: encoded.parameterSets, data: encoded.data,
-                                         ltrToken: encoded.ltrToken).encoded()
+                                         ltrToken: encoded.ltrToken, region: region).encoded()
         // 单帧超过分帧上限（几乎不可能：码率上限下一帧远小于 4 MB）：不发，降码率、下一帧重来。
         guard payload.count + RemoteMessage.headerSize + 64 <= RemoteConstants.maxFrameBytes else {
             pacer.abandon(sequence)
@@ -989,15 +1028,36 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
+    // MARK: - 只看一个窗口时的几何
+
+    /// 窗口挪了、改了大小，或者菜单伸出了窗口：注入与光标回报立刻按新的范围算；尺寸或占比变了才告诉主控端
+    ///（光挪位置主控端不用知道）。开流成功的消息发出去之前先记着，`activate` 里补发。
+    private func geometryChanged(_ geometry: RemoteDesktopFrameGeometry) {
+        guard !isStopped else { return }
+        targetBounds = geometry.bounds
+        injector?.updateBounds(geometry.bounds)
+        pendingGeometry = geometry
+        if isLive { sendGeometryIfNeeded() }
+    }
+
+    private func sendGeometryIfNeeded() {
+        guard let geometry = pendingGeometry else { return }
+        pendingGeometry = nil
+        let previous = sentGeometry ?? .whole(display.bounds)
+        guard geometry.differsVisibly(from: previous) else { return }
+        sentGeometry = geometry
+        link.sendOnQueue(RemoteMessage(.desktopGeometry, channel: channel, payload: RemoteJSON.encode(geometry.update)))
+    }
+
     // MARK: - 光标
 
     private func startCursorTimer() {
         guard let cursorLocation, cursorTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: link.queue)
         timer.schedule(deadline: .now(), repeating: .nanoseconds(Int(Self.cursorIntervalNanos)), leeway: .milliseconds(2))
-        let bounds = display.bounds
         timer.setEventHandler { [weak self] in
             guard let self, self.isLive, !self.isPaused, let location = cursorLocation() else { return }
+            let bounds = self.targetBounds
             let point = RemoteDesktopGeometry.normalized(location, displayBounds: bounds)
             let visible = bounds.contains(location)
             let cursor = RemoteDesktopCursor(x: point.x, y: point.y, visible: visible)
@@ -1122,7 +1182,7 @@ nonisolated final class RemoteDesktopRoute: @unchecked Sendable {
     func handle(_ message: RemoteMessage) -> Bool {
         switch message.kind {
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
-             .desktopPause:
+             .desktopPause, .desktopRegion:
             if let streamer, streamer.channel == message.channel { streamer.handle(message) }
             return true
         default:

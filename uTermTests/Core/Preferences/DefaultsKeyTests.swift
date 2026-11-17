@@ -71,6 +71,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteBrowseActivated, "remote.browseActivated"),
         (DefaultsKey.remoteDesktopKeyboardLanguage, "remote.desktop.keyboardLanguage"),
         (DefaultsKey.remoteDesktopSendSystemShortcuts, "remote.desktop.sendSystemShortcuts"),
+        (DefaultsKey.remoteDesktopFitWindow, "remote.desktop.fitWindow"),
         (DefaultsKey.remoteRelayManagedHosts, "remote.relay.managedHosts"),
         (DefaultsKey.remoteRelayLatestVersion, "remote.relay.latestVersion"),
         (DefaultsKey.remoteRelayPendingRevocations, "remote.relay.pendingRevocations"),

@@ -13,7 +13,8 @@ import Foundation
 ///
 /// 只在连接队列上调用（串行），按键状态（哪个键按着、上次点击位置）因此不用加锁。
 nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked Sendable {
-    private let display: RemoteDesktopDisplay
+    /// 归一化坐标对应的那块范围（全局坐标）。整块显示器时不变；只看一个窗口时跟着窗口走（`updateBounds`）。
+    private var bounds: CGRect
     private let source: CGEventSource? = {
         let source = CGEventSource(stateID: .hidSystemState)
         // 帘幕模式靠这个标记认出「手机注入的事件」并放行，本机键鼠则拦掉。
@@ -31,8 +32,12 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
     private var scrollRemainder = CGPoint.zero
 
     init(display: RemoteDesktopDisplay) {
-        self.display = display
+        bounds = display.bounds
         location = CGPoint(x: display.bounds.midX, y: display.bounds.midY)
+    }
+
+    func updateBounds(_ bounds: CGRect) {
+        self.bounds = bounds
     }
 
     func inject(_ input: RemoteDesktopInput) {
@@ -78,14 +83,14 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
     func mouseEvent(for input: RemoteDesktopInput) -> CGEvent? {
         switch input {
         case .move(let x, let y):
-            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: display.bounds)
+            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: bounds)
             let (type, button) = dragType()
             let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
                                 mouseButton: button)
             if !pressed.isEmpty { stampPress(event, flags: pressedFlags) }
             return event
         case .button(let button, let down, let clicks, let x, let y, let modifiers):
-            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: display.bounds)
+            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: bounds)
             let flags = Self.flags(modifiers)
             if down {
                 // 另一个键已按着时（左键拖动中再按右键）不开新的一组：抬起要和最早那次按下配对。

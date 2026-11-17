@@ -569,6 +569,63 @@ nonisolated enum RemoteDesktopGeometry {
     }
 }
 
+/// 主控端放大后，Mac 该取哪一块画面。
+///
+/// 视频帧的像素数是固定的，比被看的那块显示器的原生像素少（手机的屏幕没那么多像素）。整块取时是缩小了的；
+/// 放大后只看得见一小块，改成只取那一小块，同样的像素数就能按原生像素给，字是锐的（调研 §14.1：放大 2 倍时
+/// 27.1 dB → 37.4 dB）。
+nonisolated enum RemoteDesktopRegionPolicy {
+    /// 取的范围比看得见的每边多出这么多（占看得见的宽高）：手指拖一小段不用等新画面。
+    static let margin = 0.25
+    /// 要取的范围快到整块了（任一边达到这个比例）就还是取整块。
+    static let wholeThreshold = 0.9
+
+    /// - Parameters:
+    ///   - visible: 主控端此刻看得见的那一块。
+    ///   - current: 现在取的那一块（nil = 整块）。它还罩得住、大小也对就不动，免得拖一点点就换。
+    ///   - targetPixels: 被看的那块显示器（或窗口）的原生像素。
+    ///   - stream: 视频帧的像素尺寸。
+    /// - Returns: 要取的那一块；nil = 取整块。
+    static func captureRegion(visible: RemoteDesktopRegion, current: RemoteDesktopRegion?, targetPixels: CGSize,
+                              stream: (width: Int, height: Int)) -> RemoteDesktopRegion? {
+        let targetWidth = Double(targetPixels.width), targetHeight = Double(targetPixels.height)
+        guard let visible = visible.clamped, targetWidth > 0, targetHeight > 0, stream.width > 0, stream.height > 0 else {
+            return nil
+        }
+        // 至少取视频帧那么多像素（一比一，不放大）；看得见的加上余量比它大就按后者，比例和视频帧一样。
+        let aspect = Double(stream.width) / Double(stream.height)
+        var width = max(Double(stream.width), visible.width * targetWidth * (1 + 2 * margin))
+        var height = width / aspect
+        let neededHeight = max(Double(stream.height), visible.height * targetHeight * (1 + 2 * margin))
+        if height < neededHeight {
+            height = neededHeight
+            width = height * aspect
+        }
+        guard width < targetWidth * wholeThreshold, height < targetHeight * wholeThreshold else { return nil }
+        if let current, abs(current.width * targetWidth - width) < 2, abs(current.height * targetHeight - height) < 2,
+           current.contains(visible) {
+            return current
+        }
+        // 落在整像素上、取偶数：一比一时每个原生像素正好对上视频帧的一个像素。
+        func even(_ value: Double) -> Double { (value / 2).rounded() * 2 }
+        width = min(even(width), even(targetWidth)); height = min(even(height), even(targetHeight))
+        let x = min(max(0, even((visible.x + visible.width / 2) * targetWidth - width / 2)), targetWidth - width)
+        let y = min(max(0, even((visible.y + visible.height / 2) * targetHeight - height / 2)), targetHeight - height)
+        return RemoteDesktopRegion(x: x / targetWidth, y: y / targetHeight,
+                                   width: width / targetWidth, height: height / targetHeight)
+    }
+
+    /// 归一化的一块 → 采集帧里的像素矩形。`contentFraction`：只看一个窗口时内容只占帧的左上角一部分。
+    static func pixelRect(_ region: RemoteDesktopRegion, frameSize: CGSize,
+                          contentFraction: CGSize = CGSize(width: 1, height: 1)) -> CGRect {
+        let contentWidth = Double(frameSize.width) * Double(contentFraction.width)
+        let contentHeight = Double(frameSize.height) * Double(contentFraction.height)
+        let x = (region.x * contentWidth).rounded(), y = (region.y * contentHeight).rounded()
+        let width = max(2, (region.width * contentWidth).rounded()), height = max(2, (region.height * contentHeight).rounded())
+        return CGRect(x: x, y: y, width: min(width, Double(frameSize.width) - x), height: min(height, Double(frameSize.height) - y))
+    }
+}
+
 /// 手机上看桌面的视口：整块显示器按 `zoom` 放大后，视图里露出哪一块。
 ///
 /// `zoom == 1` 是「适配屏幕」（整块显示器完整放进视图，留黑边）。`center` 是可见区域中心在显示器上的
