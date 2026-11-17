@@ -207,20 +207,6 @@ final class RemoteKeyInputTests: XCTestCase {
         XCTAssertEqual(RemoteKeyInputView().keyboardType, .default, "`.asciiCapable` 的地球键切不到中文")
     }
 
-    func testRemembersTheLanguageWhileItIsStillInstalled() {
-        let available = ["en-US", "zh-Hans", "emoji"]
-        XCTAssertEqual(RemoteKeyboardRouting.preferredLanguage(saved: "zh-Hans", available: available), "zh-Hans")
-        XCTAssertEqual(RemoteKeyboardRouting.preferredLanguage(saved: nil, available: available), "en-US", "没切过默认英文")
-        XCTAssertEqual(RemoteKeyboardRouting.preferredLanguage(saved: "ja-JP", available: available), "en-US", "删掉的键盘回到英文")
-        XCTAssertNil(RemoteKeyboardRouting.preferredLanguage(saved: nil, available: ["zh-Hans"]), "没有英文键盘时交给系统")
-    }
-
-    func testEmojiAndDictationAreNotRememberedAsTheLanguage() {
-        XCTAssertTrue(RemoteKeyboardRouting.isRememberable(language: "zh-Hans"))
-        XCTAssertFalse(RemoteKeyboardRouting.isRememberable(language: "emoji"))
-        XCTAssertFalse(RemoteKeyboardRouting.isRememberable(language: "dictation"))
-    }
-
     // MARK: - 外接键盘
 
     private let hidA = 0x04, hidReturn = 0x28, hidLeft = 0x50, hidSpace = 0x2C
@@ -320,7 +306,7 @@ final class RemoteKeyInputRealKeyboardTests: XCTestCase {
 
     override func setUp() async throws {
         savedLanguage = UserDefaults.standard.string(forKey: RemoteKeyInputView.languageKey)
-        UserDefaults.standard.removeObject(forKey: RemoteKeyInputView.languageKey)
+        KeyboardLanguageMemory.remoteDesktop.clear()
     }
 
     override func tearDown() async throws {

@@ -13,17 +13,6 @@ nonisolated enum RemoteKeyboardRouting {
         language?.hasPrefix("en") ?? true
     }
 
-    /// 打开键盘时用哪种语言：上次切到的（还在系统键盘列表里的话），否则英文。
-    static func preferredLanguage(saved: String?, available: [String]) -> String? {
-        if let saved, available.contains(saved) { return saved }
-        return available.first { $0.hasPrefix("en") }
-    }
-
-    /// 切到这些键盘不算选了输入语言，不记住。
-    static func isRememberable(language: String) -> Bool {
-        language != "emoji" && language != "dictation"
-    }
-
     /// 一段文字对应的输入。上膛的修饰键只作用于第一个字符（⌘C、⌃A……），这个字符一律发成按键。
     /// 换行和单独一个空格也发按键：它们是回车确认、空格预览这样的操作，不是要打出来的字。
     static func inputs(for text: String, armed: RemoteKeyModifiers, asKeys: Bool) -> [RemoteDesktopInput] {
@@ -128,11 +117,7 @@ final class RemoteKeyInputView: UIView, UITextInput {
     // MARK: - 键盘语言：默认英文，切过就记住
 
     override var textInputMode: UITextInputMode? {
-        let modes = UITextInputMode.activeInputModes
-        let language = RemoteKeyboardRouting.preferredLanguage(
-            saved: UserDefaults.standard.string(forKey: Self.languageKey),
-            available: modes.compactMap(\.primaryLanguage))
-        return modes.first { $0.primaryLanguage == language } ?? super.textInputMode
+        KeyboardLanguageMemory.remoteDesktop.inputMode(current: super.textInputMode)
     }
 
     private var sendsKeyPresses: Bool {
@@ -152,9 +137,8 @@ final class RemoteKeyInputView: UIView, UITextInput {
 
     @objc private func inputModeDidChange() {
         // 只记自己是第一响应者时的切换：别处抢到键盘时系统换的语言，不是用户在这里选的。
-        guard isFirstResponder, let language = super.textInputMode?.primaryLanguage,
-              RemoteKeyboardRouting.isRememberable(language: language) else { return }
-        UserDefaults.standard.set(language, forKey: Self.languageKey)
+        guard isFirstResponder else { return }
+        KeyboardLanguageMemory.remoteDesktop.record(super.textInputMode)
     }
 
     override func resignFirstResponder() -> Bool {

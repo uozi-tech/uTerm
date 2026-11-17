@@ -86,18 +86,12 @@ final class MGhosttyTerminalView: UITerminalView {
 
     // MARK: 输入法：默认英文，用户切了就记住
 
-    /// 用户在这个终端里切到的输入法；nil = 还没切过，用英文。每个标签各记各的。
-    private var chosenInputMode: UITextInputMode?
     private var observesInputMode = false
 
     /// 系统在终端成为第一响应者时按它挑键盘。命令行默认要英文；用户用地球键切走（中文写提交说明、跟 Claude Code 说话）
-    /// 之后，回到这个终端还是用户选的那个。
+    /// 之后，所有终端都用他选的那个，重开 App 也是（`KeyboardLanguageMemory`）。
     override var textInputMode: UITextInputMode? {
-        chosenInputMode ?? Self.englishInputMode ?? super.textInputMode
-    }
-
-    private static var englishInputMode: UITextInputMode? {
-        UITextInputMode.activeInputModes.first { $0.primaryLanguage?.hasPrefix("en") == true }
+        KeyboardLanguageMemory.terminal.inputMode(current: super.textInputMode)
     }
 
     @discardableResult
@@ -127,10 +121,9 @@ final class MGhosttyTerminalView: UITerminalView {
     }
 
     @objc private func inputModeDidChange() {
-        // 只记自己是第一响应者时的切换：别的标签抢到键盘时系统把键盘换成英文，那不是用户在这里选的。
-        // 听写也报成一次输入法切换，记下它下次弹出的就不是键盘了（同远程桌面的 `RemoteKeyboardRouting.isRememberable`）。
-        guard isFirstResponder, let mode = super.textInputMode, mode.primaryLanguage != "dictation" else { return }
-        chosenInputMode = mode
+        // 只记自己是第一响应者时的切换：别处抢到键盘时系统换的键盘，不是用户在这里选的。
+        guard isFirstResponder else { return }
+        KeyboardLanguageMemory.terminal.record(super.textInputMode)
     }
 
     // MARK: 硬件键盘的查找键

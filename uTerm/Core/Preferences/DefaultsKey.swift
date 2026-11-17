@@ -103,7 +103,7 @@ nonisolated enum DefaultsKey {
     static let remoteDesktopRequestSizes = "remote.desktopRequestSizes.settled"
     /// iOS：用户点过「控制我的 Mac」之后才在启动时浏览（要「本地网络」授权）。
     static let remoteBrowseActivated = "remote.browseActivated"
-    /// iOS：远程桌面里手机键盘上次用的输入语言。
+    /// iOS：远程桌面里手机键盘上次用的输入语言（`KeyboardLanguageMemory`）。
     static let remoteDesktopKeyboardLanguage = "remote.desktop.keyboardLanguage"
     /// macOS：控制另一台 Mac 时把系统快捷键（⌘Tab、⌘空格、⌘W…）也发过去。
     static let remoteDesktopSendSystemShortcuts = "remote.desktop.sendSystemShortcuts"
@@ -129,6 +129,8 @@ nonisolated enum DefaultsKey {
     static let localNetworkUsed = "localNetwork.used"
     /// iOS：重新打开 App 后要恢复的终端标签（`MobileTerminalTabArchive`，JSON）。只存本机。
     static let mobileRestorableTerminalTabs = "mobile.restorableTerminalTabs"
+    /// iOS：终端里手机键盘上次用的输入语言（`KeyboardLanguageMemory`）。只存本机。
+    static let mobileTerminalKeyboardLanguage = "mobile.terminal.keyboardLanguage"
 
     /// macOS SFTP 浏览器的排序 / 过滤偏好。
     /// 待接线：`FileBrowserModel.PrefKey` 仍写着同值的字面量（该文件本轮不动）。

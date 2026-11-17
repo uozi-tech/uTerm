@@ -84,6 +84,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.lanSyncReceiverActivated, "lanSync.receiverActivated"),
         (DefaultsKey.localNetworkUsed, "localNetwork.used"),
         (DefaultsKey.mobileRestorableTerminalTabs, "mobile.restorableTerminalTabs"),
+        (DefaultsKey.mobileTerminalKeyboardLanguage, "mobile.terminal.keyboardLanguage"),
         (DefaultsKey.fileBrowserSortKey, "fileBrowser.sortKey"),
         (DefaultsKey.fileBrowserSortAscending, "fileBrowser.sortAscending"),
         (DefaultsKey.fileBrowserFoldersFirst, "fileBrowser.foldersFirst"),
