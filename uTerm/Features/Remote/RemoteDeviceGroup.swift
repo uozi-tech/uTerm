@@ -121,7 +121,8 @@ final class RemoteDeviceGroup {
     @ObservationIgnored var hostFailures: [UUID: Date] = [:]
     /// 每一对（组员的签名公钥, Mac）最近一次问完的时刻：60 秒内不再问同一对。
     @ObservationIgnored var lastAsked: [String: Date] = [:]
-    /// 本机在这台 Mac 上撤成功（`revoked`）的时刻：Mac 连带撤掉了由被撤设备担保的主控端（`RemoteVouchPolicy.cascade`），
+    /// 本机在这台 Mac 上撤成功（`revoked`，本机自己没被一起撤）、或撤的时候 Mac 回 `not-trusted`（可能是别的组员刚撤过，
+    /// 那台组员按资历规则可能连自己也撤了，§18）的时刻：Mac 连带撤掉了由被撤设备担保的主控端（`RemoteVouchPolicy.cascade`），
     /// 其中可能有正常的组员。这之前签的开通结果对这台 Mac 都不再算定论，本机把每台组员再问一遍
     /// （还被信任的回 `already-trusted`，被连带撤掉的重新记下）。只在内存：App 重开后不再补问。
     @ObservationIgnored var revalidateFrom: [UUID: RemoteGroupTime] = [:]
@@ -463,7 +464,7 @@ final class RemoteDeviceGroup {
 
     func fail(_ error: Error) {
         failedThisRound = true
-        let message = String(localized: "没法写入 iCloud 钥匙串：\(error.localizedDescription)")
+        let message = String(localized: "无法写入 iCloud 钥匙串：\(error.localizedDescription)")
         if storageError != message { storageError = message }
     }
 }

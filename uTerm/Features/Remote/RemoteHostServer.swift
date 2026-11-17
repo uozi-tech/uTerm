@@ -774,30 +774,47 @@ final class RemoteHostServer {
     /// （docs/remote-device-group-design.md §8）：那是设备组的决定，不是这台 Mac 主人的；设备找回来重新进组后，
     /// 组员再替它开通要能成功。Mac 主人在 Mac 上撤销的照旧拉黑（`revoke`）。
     ///
+    /// 资历（§18）：只能撤自己、自己的上游、比自己晚加到这台 Mac 的（`RemoteVouchPolicy.decideRevoke`，否则 `notSenior`）；
+    /// 撤上游时留下那一串里最早加到这台 Mac 的那台（`RemoteVouchPolicy.survivor`），请求者不是那台就连自己一起撤，
+    /// 回执里带上 `requesterRevoked`。
+    ///
     /// 在连接所在的进程里执行：远控进程在服务时就在远控进程里，信任表的写入经 `persistSecret` 回到 App 的钥匙串，
     /// App 不在时排队（同配对、担保）。XPC 协议没有为此改动。
     func handleSiblingRevoke(_ request: RemoteSiblingRevokeRequest, requesterID: UUID,
                              requesterName: String) -> RemoteSiblingRevokeResult {
+        let trusted = identity.trustedPeers()
+        let vouches = identity.vouches()
         let outcome = RemoteVouchPolicy.decideRevoke(request, requesterID: requesterID,
-                                                     existing: identity.peer(id: request.deviceID), vouches: identity.vouches())
+                                                     existing: trusted.first { $0.id == request.deviceID },
+                                                     vouches: vouches, trusted: trusted)
         switch outcome {
         case .revoked:
-            let name = identity.peer(id: request.deviceID)?.displayName ?? request.deviceID.uuidString
-            AppLogger.notice("远控：\(requesterName) 撤销了同一组的「\(name)」（移出了设备组）", category: RemoteLog.category)
-            // 下一拍再撤：撤的可能是发请求的这台自己，撤销会断开它的连接，先让结果发出去。
             let id = request.deviceID
             let key = request.publicKey
+            let name = trusted.first { $0.id == id }?.displayName ?? id.uuidString
+            let keeper = RemoteVouchPolicy.survivor(revoking: id, requester: requesterID, trusted: trusted, vouches: vouches)
+            let removed = RemoteVouchPolicy.cascade(from: id, keeping: keeper, trusted: trusted.map(\.id), vouches: vouches)
+            let requesterRevoked = removed.contains(requesterID)
+            AppLogger.notice("远控：\(requesterName) 撤销了同一组的「\(name)」（移出了设备组）"
+                             + (requesterRevoked && id != requesterID ? "，留下更早加入的设备，请求者一并撤掉" : ""),
+                             category: RemoteLog.category)
+            // 下一拍再撤：撤的可能是发请求的这台自己（撤自己，或者它不是那一串里最早的），撤销会断开它的连接，先让结果发出去。
             Task { @MainActor [weak self] in
                 // 这一拍之间被重新配对、换了钥匙的不撤。
                 guard let self, self.identity.peer(id: id)?.publicKey == key else { return }
-                self.removeVouchedSubtree(of: id, keeping: requesterID)
+                self.removeVouchedSubtree(of: id, keeping: keeper)
             }
-            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked)
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .revoked, requesterRevoked: requesterRevoked)
         case .notTrusted:
             return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notTrusted)
         case .notInFamily:
             return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notInFamily,
                                              reason: String(localized: "在这台 Mac 上它不是由你的设备开通的，要到 Mac 上撤销"))
+        case .notSenior:
+            let name = trusted.first { $0.id == request.deviceID }?.displayName ?? request.deviceID.uuidString
+            AppLogger.info("远控：\(requesterName) 想撤销更早加入、又不是它上游的「\(name)」，不撤", category: RemoteLog.category)
+            return RemoteSiblingRevokeResult(requestID: request.requestID, outcome: .notSenior,
+                                             reason: String(localized: "它比本机更早加入这台 Mac，需由更早加入的组员或在 Mac 上撤销"))
         }
     }
 
@@ -851,7 +868,8 @@ final class RemoteHostServer {
     }
 
     /// 同组撤销、设备组撤掉被移除的组员：撤 `root`，连同一层层由它担保的主控端，都不拉黑、各自吊销中继证书、断开
-    /// （`RemoteVouchPolicy.cascade`）；`keeping`（发请求的那台）留下，它的来路改挂（`RemoteVouchPolicy.reanchor`）。
+    /// （`RemoteVouchPolicy.cascade`）；`keeping`（`RemoteVouchPolicy.survivor` 挑的那台）留下，它的来路改挂
+    /// （`RemoteVouchPolicy.reanchor`，只改担保记录，信任表里的 `pairedAt` 不动）。
     /// 手动配对的、Mac 主人拉黑过的都不受影响（拉黑的本来就不在信任表里，`revoke(blocks: false)` 也不解除拉黑）。
     private func removeVouchedSubtree(of root: UUID, keeping: UUID?) {
         let vouches = identity.vouches()

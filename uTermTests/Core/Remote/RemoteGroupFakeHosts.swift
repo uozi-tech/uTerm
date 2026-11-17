@@ -27,7 +27,8 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
     }
 
     enum RevokeReply {
-        case outcome(RemoteSiblingRevokeResult.Outcome)
+        /// `requesterRevoked`：Mac 按资历规则把发请求的本机也一起撤了（§18）。
+        case outcome(RemoteSiblingRevokeResult.Outcome, requesterRevoked: Bool? = nil)
         case unreachable
         case tooOld
     }
@@ -124,7 +125,8 @@ final class RemoteGroupFakeHosts: RemoteGroupHostAccess {
             throw CancellationError()
         }
         switch revokeReplies[host] ?? .outcome(.revoked) {
-        case .outcome(let outcome): return RemoteSiblingRevokeResult(requestID: UUID(), outcome: outcome)
+        case let .outcome(outcome, requesterRevoked):
+            return RemoteSiblingRevokeResult(requestID: UUID(), outcome: outcome, requesterRevoked: requesterRevoked)
         case .unreachable: throw RemoteAttachError.unreachable("连不上")
         case .tooOld: throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧")
         }

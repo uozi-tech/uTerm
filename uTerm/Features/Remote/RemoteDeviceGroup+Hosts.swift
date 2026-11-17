@@ -84,8 +84,15 @@ extension RemoteDeviceGroup {
         let inGroup = !state.members.isEmpty
         publishHostRecords(snapshot, state, paired: inGroup ? paired : [])
         cleanUpGrants(snapshot, state, paired: pairedIDs)
-        let pending = inGroup ? receiveGrants(snapshot, &state, hosts: hosts, paired: paired) : []
+        var pending = inGroup ? receiveGrants(snapshot, &state, hosts: hosts, paired: paired) : []
         rollBackAdoptedHosts(snapshot, &state, hosts: hosts)
+        resumePausedHosts(snapshot, &state, hosts: hosts, paired: pairedIDs)
+        // 本机在这台 Mac 上被一起撤了（§18）：之前的结果不算，显示成「开通中」，等别的组员重新开通。
+        for paused in state.pausedHosts where !pending.contains(where: { $0.id == paused.hostID }) {
+            guard let host = paired.first(where: { $0.id == paused.hostID }) else { continue }
+            pending.append(PendingHost(id: host.id, name: host.name, status: .opening))
+        }
+        pending.sort { ($0.name, $0.id.uuidString) < ($1.name, $1.id.uuidString) }
         // 撤销不看在不在组里（移除了最后一台别的组员，本机就只剩自己一台）；开通要在组里，而且有远控身份私钥
         // （封不了中继包就不替别人问：没有私钥 = 不担保、不开包）。
         scheduleHostWork(snapshot, state, hosts: hosts, vouching: inGroup && identityKey != nil)
@@ -112,6 +119,8 @@ extension RemoteDeviceGroup {
     private func isOpening(_ state: RemoteGroupLocalState) -> Bool {
         let window = Self.hostFastPollingWindow
         if vouches.hasAttempt(startedWithin: window, of: now()) { return true }
+        // 本机刚被一台 Mac 一起撤了，在等别的组员重新开通（§18）。
+        if state.pausedHosts.contains(where: { abs(now().timeIntervalSince($0.since)) <= window }) { return true }
         guard let admission = state.selfAdmission, admission.admitterKey != local.signingKey else { return false }
         return abs(now().timeIntervalSince(admission.admittedAt.date)) <= window
     }
@@ -293,8 +302,8 @@ extension RemoteDeviceGroup {
 
     // MARK: - 问
 
-    /// 每台此刻问得到、没在问、没在 60 秒冷却里的 Mac：有没撤完的移除先撤（`RemoteDeviceGroup+Revoke.swift`），
-    /// 否则挑一个还需要问的组员去开通。刚进组的排前面。同一个设备 ID 在这台 Mac 上还有没撤完的，先不开通它
+    /// 每台此刻问得到、没在问、没在 60 秒冷却里、本机没在上面被撤掉（`RemoteGroupPausedHost`）的 Mac：
+    /// 有没撤完的移除先撤（`RemoteDeviceGroup+Revoke.swift`），否则挑一个还需要问的组员去开通。刚进组的排前面。同一个设备 ID 在这台 Mac 上还有没撤完的，先不开通它
     /// （重装过的设备：先撤旧钥匙、再开新的）；组里同一个 ID 有两份钥匙时（旧的那份的移除还没读到）也先不开通。
     private func scheduleHostWork(_ snapshot: RemoteGroupSnapshot, _ state: RemoteGroupLocalState,
                                   hosts: any RemoteGroupHostAccess, vouching: Bool) {
@@ -303,8 +312,11 @@ extension RemoteDeviceGroup {
         let members = state.members.sorted {
             ($0.admission.admittedAt, $0.device.id.uuidString) > ($1.admission.admittedAt, $1.device.id.uuidString)
         }
+        let paused = Set(state.pausedHosts.map(\.hostID))
         for target in hosts.vouchTargets() where target.id != local.id && !vouches.isAsking(target.id) {
             if isCoolingDown(target.id) { continue }
+            // 本机在这台 Mac 上已经被撤了（§18）：连它会让 Mac 弹配对审批框，等别的组员重新开通再说。
+            if paused.contains(target.id) { continue }
             if let revocation = nextRevocation(at: target.id, in: state) {
                 startRevoke(revocation, at: target, hosts: hosts)
                 continue
@@ -341,7 +353,8 @@ extension RemoteDeviceGroup {
             let age = now().timeIntervalSince(asked)
             if age >= 0, age < Self.vouchRetryInterval { return false }
         }
-        // 本机刚在这台 Mac 上撤成功过：那之前签的结果都不算（Mac 可能连带撤掉了这台组员）。
+        // 本机刚在这台 Mac 上撤成功过、或撤的时候 Mac 已经不认它了（别的组员刚撤过）：那之前签的结果都不算
+        // （Mac 可能连带撤掉了这台组员，§15、§18）。
         let since = revalidateFrom[target.id] ?? .distantPast
         let relevant = results.filter {
             $0.isFor(device) && $0.isAbout(target.id, key: target.publicKey) && $0.signedAt >= since

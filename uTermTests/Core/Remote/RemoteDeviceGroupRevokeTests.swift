@@ -449,8 +449,9 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
     }
 
     /// 组员在一台 Mac 上撤成功（`revoked`）之后，把这台 Mac 上别的组员都再问一遍（Mac 可能连带撤掉了正常的组员），
-    /// 只问一遍；撤不动（`not-trusted`）不补问。
-    func test_member_re_asks_the_mac_once_after_a_successful_revoke_and_not_after_a_no_op() async {
+    /// 只问一遍。撤的时候 Mac 已经不认它（`not-trusted`）也补问一遍（§18：可能是别的组员刚撤过，那台按资历规则连自己也
+    /// 撤了，只有后来的组员能把它开通回来）；不是同一组的（`not-in-family`）不补问。
+    func test_member_re_asks_the_mac_once_after_a_revoke_or_a_not_trusted_reply_but_not_after_not_in_family() async {
         let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C"), d = makeDevice("D")
         let mac = fake(a).addMac("Mac mini")
         join(b, via: a)
@@ -476,8 +477,125 @@ final class RemoteDeviceGroupRevokeTests: XCTestCase {
         tick(61)
         a.remove([d.local.id])
         await converge(a)
-        XCTAssertEqual(fake(a).calls(at: mac.id).count, after, "Mac 本来就不认它：没有连带，不补问")
+        XCTAssertEqual(Array(fake(a).calls(at: mac.id).dropFirst(after)), [b.local.id],
+                       "Mac 已经不认它（可能别的组员刚撤过）：还在组里的再问一遍")
         XCTAssertTrue(a.removedDevices.isEmpty)
+        let afterNotTrusted = fake(a).calls(at: mac.id).count
+
+        let e = makeDevice("E")
+        join(e, via: a)
+        await converge(a, e)
+        let beforeNotInFamily = fake(a).calls(at: mac.id).count
+        XCTAssertEqual(Array(fake(a).calls(at: mac.id).dropFirst(afterNotTrusted)), [e.local.id])
+        fake(a).revokeReplies[mac.id] = .outcome(.notInFamily)
+        tick(61)
+        a.remove([e.local.id])
+        await converge(a)
+        XCTAssertEqual(fake(a).calls(at: mac.id).count, beforeNotInFamily, "不是同一组的：Mac 没动它，不补问")
+    }
+
+    // MARK: - §18 资历
+
+    /// 本机撤上游时 Mac 把本机也一起撤了（回执 `requesterRevoked`）：这条撤销照常算这台 Mac 做完，本机之后不再去问
+    /// 这台 Mac（开通、撤销都不问，连它会让 Mac 弹审批框），「还没通的 Mac」里显示它在开通中。留下的 A 随后撤同一台
+    /// 时 Mac 回 `not-trusted`，A 补问一遍、替本机重新开通；本机读到新结果就恢复。
+    func test_requester_revoked_with_its_upstream_waits_for_another_member_to_re_open_the_mac() async {
+        let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C")
+        let mac = fake(a).addMac("Mac mini")
+        fake(c).addMac("Mac mini", id: mac.id, publicKey: mac.publicKey)
+        join(b, via: a)
+        join(c, via: a)
+        await converge(a, b, c)
+        XCTAssertTrue(c.pendingHosts.isEmpty)
+        let cAsks = fake(c).calls.count
+
+        fake(c).revokeReplies[mac.id] = .outcome(.revoked, requesterRevoked: true)
+        tick(61)
+        c.remove([b.local.id])
+        await converge(c, rounds: 1)
+        XCTAssertEqual(fake(c).revokeCalls(at: mac.id), [b.local.id])
+        XCTAssertTrue(c.removedDevices.isEmpty, "撤销进度照常记成这台 Mac 撤完了")
+        XCTAssertEqual(c.pendingHosts.map(\.id), [mac.id])
+        XCTAssertEqual(c.pendingHosts.first?.status, .opening, "本机在那台 Mac 上已经被撤：之前的结果不算")
+        XCTAssertEqual(fake(c).calls.count, cAsks, "本机问不了，不补问")
+
+        // 这期间又有一台新组员：本机不替它问这台 Mac，也不再去撤别的。
+        let d = makeDevice("D")
+        join(d, via: c)
+        for _ in 0..<3 {
+            tick(61)
+            await converge(c, rounds: 1)
+        }
+        XCTAssertEqual(fake(c).calls.count, cAsks, "停着的 Mac 谁都不替问")
+        XCTAssertEqual(fake(c).revokeCalls.count, 1)
+
+        // A（留下的那台）来撤 B：Mac 已经不认 B → A 把这台 Mac 上的组员再问一遍，C 也在里面。
+        fake(a).revokeReplies[mac.id] = .outcome(.notTrusted)
+        await converge(a, d, rounds: 2)
+        XCTAssertTrue(fake(a).calls(at: mac.id).contains(c.local.id))
+        tick(61)
+        await converge(c, rounds: 2)
+        XCTAssertTrue(c.pendingHosts.isEmpty, "A 签的新结果到了：恢复")
+        let state = try? c.store.state()
+        XCTAssertEqual(state?.pausedHosts, [])
+    }
+
+    /// 你在本机重新配对过那台 Mac、或不再配对它：不再等组员。老状态里没有这个字段照样解得开。
+    func test_paused_mac_is_released_when_re_paired_here_and_old_state_decodes() async throws {
+        let a = makeDevice("A"), b = makeDevice("B"), c = makeDevice("C")
+        let mac = fake(a).addMac("Mac mini")
+        fake(c).addMac("Mac mini", id: mac.id, publicKey: mac.publicKey)
+        join(b, via: a)
+        join(c, via: a)
+        await converge(a, b, c)
+        fake(c).revokeReplies[mac.id] = .outcome(.revoked, requesterRevoked: true)
+        tick(61)
+        c.remove([b.local.id])
+        await converge(c, rounds: 1)
+        XCTAssertEqual(c.pendingHosts.map(\.id), [mac.id])
+        XCTAssertEqual(try c.store.state().pausedHosts.count, 1, "存在本机状态里，App 重开后还在")
+
+        fake(c).pairedAt[mac.id] = clock.addingTimeInterval(5)
+        await converge(c, rounds: 1)
+        XCTAssertTrue(c.pendingHosts.isEmpty)
+        XCTAssertTrue(try c.store.state().pausedHosts.isEmpty)
+
+        let json = try RemoteGroupFormat.encoder().encode(try c.store.state())
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: Any])
+        object["pausedHosts"] = nil
+        let old = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertEqual(try RemoteGroupFormat.decoder().decode(RemoteGroupLocalState.self, from: old).pausedHosts, [])
+    }
+
+    /// Mac 回 `not-senior`（它比本机更早加入那台 Mac、又不是本机的上游）：6 小时后再问，「已移除的设备」里那台 Mac
+    /// 还没撤，别的 Mac 照常；那台 Mac 自己是组员时算做完（它自己会撤掉被移除的组员）。
+    func test_not_senior_is_retried_after_six_hours_without_blocking_other_macs() async {
+        let a = makeDevice("A"), b = makeDevice("B"), mini = makeDevice("Mac mini", platform: .mac)
+        let senior = fake(a).addMac("更早的 Mac"), other = fake(a).addMac("别的 Mac")
+        fake(a).addMac("Mac mini", id: mini.local.id, publicKey: mini.local.publicKey)
+        fake(a).revokeReplies = [senior.id: .outcome(.notSenior), mini.local.id: .outcome(.notSenior)]
+        join(b, via: a)
+        join(mini, via: a)
+        await converge(a, b, mini)
+        a.remove([b.local.id])
+        await converge(a, rounds: 1)
+        XCTAssertEqual(fake(a).revokeCalls(at: senior.id), [b.local.id])
+        XCTAssertEqual(fake(a).revokeCalls(at: other.id), [b.local.id])
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.local.id), [b.local.id])
+        XCTAssertEqual(a.removedDevices.first?.waitingHosts, [senior.name], "组员 Mac 自己撤，算做完；别的 Mac 撤完了")
+
+        for _ in 0..<5 {
+            tick(3600)
+            await converge(a, rounds: 1)
+        }
+        XCTAssertEqual(fake(a).revokeCalls(at: senior.id).count, 1, "6 小时内不再问")
+        fake(a).revokeReplies[senior.id] = .outcome(.notTrusted)
+        tick(3600)
+        await converge(a, rounds: 1)
+        XCTAssertEqual(fake(a).revokeCalls(at: senior.id).count, 2, "6 小时后再问")
+        XCTAssertTrue(a.removedDevices.isEmpty)
+        XCTAssertEqual(fake(a).revokeCalls(at: other.id).count, 1)
+        XCTAssertEqual(fake(a).revokeCalls(at: mini.local.id).count, 1)
     }
 
     func test_grant_that_claims_a_member_mac_with_another_key_is_ignored() async throws {

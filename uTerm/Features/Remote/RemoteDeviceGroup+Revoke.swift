@@ -7,6 +7,8 @@ import Foundation
 //    各请一次（消息 52 / 53），进度存在本机（`RemoteGroupRevocation`）：撤了 / 本来就不认识 / 不是同一组的 = 做完；
 //    连不上 60 秒后再问；Mac 太旧 6 小时后再问。和开通共用「每台 Mac 一次一个请求」（`RemoteGroupVouchTasks`），
 //    撤销排在开通前面。被移除的设备自己什么都不做（`refresh()` 在这之前就返回了）。
+//    Mac 按资历规则（§18）回 `not-senior`：本机撤不了，6 小时后再问（那台 Mac 自己是组员时算做完）；回执说本机也被
+//    一起撤了（`requesterRevoked`）：这台 Mac 停下（`RemoteGroupPausedHost`），等别的组员重新开通。
 // 2. 拿掉只凭被移除的组员开通才记下的 Mac（`rollBackAdoptedHosts`）：被偷的组员在移除之前可以签一条假结果，
 //    让本机把攻击者的机器记成一台 Mac。
 
@@ -107,22 +109,35 @@ extension RemoteDeviceGroup {
     private func finishRevoke(_ revocation: RemoteGroupRevocation, at target: RemoteGroupVouchTarget,
                               _ outcome: Result<RemoteSiblingRevokeResult, any Error>) {
         var retry: TimeInterval?
+        var pause = false
         switch outcome {
         case .success(let reply):
             hostFailures[target.id] = nil
             switch reply.kind {
-            case .revoked:
+            case .revoked where reply.requesterRevoked == true:
+                // 撤的是本机的上游，Mac 留下了那一串里更早加入的组员、把本机也撤了（§18）。本机在这台 Mac 上已经没有信任：
+                // 不补问（问不了），停下这台 Mac 上的事，等留下的那台（它随后来撤时回 `not-trusted`，见下）替本机重新开通。
                 retry = nil
-                // Mac 连带撤掉了由它担保的设备，里面可能有正常的组员：这台 Mac 上的开通结果从现在起重新算。
+                pause = true
+            case .revoked, .notTrusted:
+                retry = nil
+                // `revoked`：Mac 连带撤掉了由它担保的设备，里面可能有正常的组员。`not-trusted`：可能是别的组员刚撤过它
+                // （连带了谁，发请求的那台按资历规则可能连自己也撤了，§18），也可能 Mac 本来就不认识它，分不出来。
+                // 两种都让这台 Mac 上的开通结果从现在起重新算：每台组员再问一遍，还被信任的回 `already-trusted`。
                 revalidateFrom[target.id] = RemoteGroupTime(now())
-            case .notTrusted, .notInFamily:
+            case .notInFamily:
                 retry = nil
+            case .notSenior:
+                // 它比本机更早加入这台 Mac、又不是本机的上游：本机撤不了，要等更早的组员去撤。这台 Mac 自己是组员时
+                // 它每轮自己撤掉被移除的组员（§7.3「组里的 Mac 互认」），算做完；否则 6 小时后再问（多半那时已经撤掉，回 `not-trusted`）。
+                let selfManaged = loadState()?.members.contains { $0.device.id == target.id } ?? false
+                retry = selfManaged ? nil : Self.vouchRefusedRetryInterval
             case nil:
                 // 不认识的结果（以后的版本多一种）：当成这一版还撤不了，过一阵再问。
                 retry = Self.vouchRefusedRetryInterval
             }
-            AppLogger.notice("设备组：「\(target.name)」撤销「\(revocation.name)」的结果 \(reply.outcome)",
-                             category: RemoteLog.category)
+            AppLogger.notice("设备组：「\(target.name)」撤销「\(revocation.name)」的结果 \(reply.outcome)"
+                             + (pause ? "，本机也被撤了，等别的组员重新开通" : ""), category: RemoteLog.category)
         case .failure(let error):
             if error is CancellationError { return }
             if case .rejected? = error as? RemoteAttachError {
@@ -146,8 +161,42 @@ extension RemoteDeviceGroup {
             state.revocations[index].finished.append(target.id)
             state.revocations[index].retryAfter[target.id] = nil
         }
+        if pause { pauseHost(target.id, in: &state) }
         guard persist(state, from: original) else { return }
         refresh()
+    }
+
+    // MARK: - 本机被 Mac 一起撤了（§18）
+
+    /// 记下：本机在这台 Mac 上被撤了。此刻名册里写给本机、关于它的结果都作废。
+    private func pauseHost(_ hostID: UUID, in state: inout RemoteGroupLocalState) {
+        let stale = roster.load().grants.filter { $0.isFor(local) && $0.host.id == hostID }.map(\.signature)
+        let paused = RemoteGroupPausedHost(hostID: hostID, since: now(), hostPairedAt: hosts?.trustedHost(hostID)?.pairedAt,
+                                           staleGrants: stale)
+        state.pausedHosts.removeAll { $0.hostID == hostID }
+        state.pausedHosts.append(paused)
+    }
+
+    /// 每轮：别的组员替本机重新开通了（名册里有一条新的、能用的、我认的组员签的结果）、你在本机重新配对过这台 Mac
+    /// （记下时间变了）、本机不再配对它，就解除。
+    func resumePausedHosts(_ snapshot: RemoteGroupSnapshot, _ state: inout RemoteGroupLocalState,
+                           hosts: any RemoteGroupHostAccess, paired: Set<UUID>) {
+        guard !state.pausedHosts.isEmpty else { return }
+        let accepted = acceptedGrants(snapshot, state).map(\.grant)
+        state.pausedHosts.removeAll { paused in
+            guard paired.contains(paused.hostID), let trusted = hosts.trustedHost(paused.hostID) else { return true }
+            if let pairedAt = paused.hostPairedAt, !trusted.matches(publicKey: trusted.publicKey, pairedAt: pairedAt) {
+                AppLogger.notice("设备组：本机重新配对过 \(paused.hostID.uuidString.prefix(8))，不再等组员开通",
+                                 category: RemoteLog.category)
+                return true
+            }
+            guard let fresh = accepted.first(where: {
+                $0.host.id == paused.hostID && $0.isUsable && !paused.staleGrants.contains($0.signature)
+            }) else { return false }
+            AppLogger.notice("设备组：「\(fresh.signer.uuidString.prefix(8))」替本机在「\(fresh.host.name)」上重新开通了",
+                             category: RemoteLog.category)
+            return true
+        }
     }
 
     // MARK: - 给界面

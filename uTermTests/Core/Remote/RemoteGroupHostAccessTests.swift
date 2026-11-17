@@ -390,4 +390,99 @@ final class RemoteGroupHostAccessTests: XCTestCase {
         XCTAssertNotNil(newDirectory.pairedHostNames()[server.localID])
         padClient.disconnect()
     }
+
+    // MARK: - 真服务端 + §18 资历
+
+    /// 连上真服务端的一台组员：自己的远控身份、信任表、客户端，`hosts` 是只问这一台 Mac 的 `ClientHosts`。
+    private func connectMember(_ name: String, roster: RemoteGroupRoster, endpoint: NWEndpoint, serverID: UUID,
+                               serverKey: Data) throws
+        -> (group: RemoteDeviceGroup, client: RemoteMacClient, hosts: ClientHosts, table: RemoteIdentityStore) {
+        let key = Curve25519.KeyAgreement.PrivateKey()
+        let group = makeMember(name, key: key, roster: roster)
+        let table = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try table.saveRaw(key.rawRepresentation, account: "identity")
+        let client = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: table)
+        client.localDeviceOverride = (group.local.id, name)
+        let hosts = ClientHosts(target: RemoteGroupVouchTarget(id: serverID, name: "测试 Mac", publicKey: serverKey,
+                                                               model: "Mac mini", platform: "mac"),
+                                client: client)
+        return (group, client, hosts, table)
+    }
+
+    /// X 是唯一在 Mac 上手动配对的，它先后替 M1、M2 开通。X 被移除，较晚的 M2 先去撤：回执是撤成了、M2 自己也被撤，
+    /// 最早的 M1 留下并改挂；M2 停下这台 Mac（显示开通中、不去连它）。M1 随后来撤 X 时 Mac 回 `not-trusted`，M1 把组员
+    /// 再问一遍、替 M2 重新开通；M2 读到新结果恢复，不经审批连上。
+    func test_end_to_end_later_member_revoking_its_upstream_is_revoked_and_the_earliest_re_opens_it() async throws {
+        let (server, endpoint, serverKey) = try await startServer()
+        defer { server.stop() }
+        let roster = RemoteGroupRoster(storage: RemoteMemorySyncedStorage())
+        let x = try connectMember("X", roster: roster, endpoint: endpoint, serverID: server.localID, serverKey: serverKey)
+        let connecting = Task { await x.client.connect() }
+        _ = await waitUntil { !server.pairingRequests.isEmpty }
+        server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(x.client.state, .connected)
+        x.group.hosts = x.hosts
+
+        let m1 = try connectMember("M1", roster: roster, endpoint: endpoint, serverID: server.localID, serverKey: serverKey)
+        let m2 = try connectMember("M2", roster: roster, endpoint: endpoint, serverID: server.localID, serverKey: serverKey)
+        try joinForReal(m1.group, via: x.group)
+        let m1Opened = await waitUntil { server.identity.peer(id: m1.group.local.id) != nil }
+        XCTAssertTrue(m1Opened, "X 替 M1 开通")
+        _ = await waitUntil { x.group.vouchesInFlight == 0 }
+        try joinForReal(m2.group, via: x.group)
+        let m2Opened = await waitUntil { server.identity.peer(id: m2.group.local.id) != nil }
+        XCTAssertTrue(m2Opened, "X 替 M2 开通（比 M1 晚）")
+        _ = await waitUntil { x.group.vouchesInFlight == 0 }
+        m1.group.refresh()
+        m2.group.refresh()
+        XCTAssertEqual(server.peerVouches[m1.group.local.id]?.vouchedBy, x.group.local.id)
+        XCTAssertEqual(server.peerVouches[m2.group.local.id]?.vouchedBy, x.group.local.id)
+        m1.group.hosts = m1.hosts
+        m2.group.hosts = m2.hosts
+        defer {
+            m1.client.disconnect()
+            m2.client.disconnect()
+        }
+        let m1AddedAt = try XCTUnwrap(server.identity.peer(id: m1.group.local.id)?.pairedAt)
+
+        // M2 移除 X，先去 Mac 上撤。
+        m2.group.remove([x.group.local.id])
+        m2.group.refresh()
+        let swept = await waitUntil {
+            server.identity.peer(id: x.group.local.id) == nil && server.identity.peer(id: m2.group.local.id) == nil
+        }
+        XCTAssertTrue(swept, "X 和发请求的 M2 都撤掉")
+        XCTAssertNotNil(server.identity.peer(id: m1.group.local.id), "留下最早的 M1")
+        XCTAssertEqual(server.peerVouches[m1.group.local.id]?.vouchedBy, m1.group.local.id, "M1 改挂在自己身上")
+        XCTAssertEqual(server.identity.peer(id: m1.group.local.id)?.pairedAt, m1AddedAt, "改挂不改资历")
+        XCTAssertFalse(server.identity.isBlocked(m2.group.local.id))
+        _ = await waitUntil { m2.group.vouchesInFlight == 0 }
+        m2.group.refresh()
+        XCTAssertEqual(m2.group.pendingHosts.map(\.status), [.opening], "M2 知道自己在这台 Mac 上被撤了")
+        XCTAssertTrue(m2.group.removedDevices.isEmpty, "这台 Mac 记成撤完了")
+        XCTAssertEqual(try m2.group.store.state().pausedHosts.map(\.hostID), [server.localID])
+
+        // M1 读到移除、来撤：Mac 回 not-trusted → M1 把组员再问一遍，替 M2 重新开通。
+        let reopened = await waitUntil(10) {
+            m1.group.refresh()
+            return server.identity.peer(id: m2.group.local.id) != nil
+                && roster.load().grants.contains { $0.isFor(m2.group.local) && $0.signer == m1.group.local.id && $0.isUsable }
+        }
+        XCTAssertTrue(reopened, "M1 替 M2 重新开通")
+        XCTAssertEqual(server.peerVouches[m2.group.local.id]?.vouchedBy, m1.group.local.id)
+        XCTAssertTrue(server.pairingRequests.isEmpty, "被撤的 M2 没去连 Mac（不弹审批）")
+
+        m2.group.refresh()
+        XCTAssertTrue(m2.group.pendingHosts.isEmpty, "M2 读到 M1 签的新结果：恢复")
+        XCTAssertTrue(try m2.group.store.state().pausedHosts.isEmpty)
+        let again = RemoteMacClient(macName: "测试 Mac", endpoint: endpoint, identity: m2.table)
+        again.localDeviceOverride = (m2.group.local.id, "M2")
+        let back = Task { await again.connect() }
+        _ = await waitUntil(3) { again.state == .connected || !server.pairingRequests.isEmpty }
+        XCTAssertTrue(server.pairingRequests.isEmpty, "不弹审批")
+        await back.value
+        XCTAssertEqual(again.state, .connected)
+        again.disconnect()
+    }
 }

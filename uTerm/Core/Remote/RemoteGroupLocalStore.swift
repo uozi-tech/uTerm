@@ -63,6 +63,20 @@ nonisolated struct RemoteGroupAdoptedHost: Codable, Equatable, Sendable {
     var signers: [Data]
 }
 
+/// 本机请一台 Mac 撤销被移除的设备时，Mac 按资历规则把本机也一起撤了（回执里 `requesterRevoked`，
+/// docs/remote-device-group-design.md §18）：本机在这台 Mac 上已经没有信任，别再去连它（会让 Mac 弹配对审批框），
+/// 等别的组员替本机重新开通。之前名册里写给本机的、关于这台 Mac 的结果都不算（`staleGrants`），出现一条新的能用结果、
+/// 你在本机重新配对过、或本机不再配对这台 Mac 时解除。
+nonisolated struct RemoteGroupPausedHost: Codable, Equatable, Sendable {
+    var hostID: UUID
+    /// 本机记下这条的时刻（本机的钟，只用来决定读名册要不要快一点）。
+    var since: Date
+    /// 那一刻本机信任表里这台 Mac 的记下时间：变了说明你在本机重新配对过。
+    var hostPairedAt: Date?
+    /// 那一刻名册里写给本机、关于这台 Mac 的结果（签名）：它们说的「能用」已经不对了。
+    var staleGrants: [Data]
+}
+
 /// 本机的设备组状态。
 nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
     /// 本机认的组员（不含本机）。
@@ -85,6 +99,8 @@ nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
     var revocations: [RemoteGroupRevocation] = []
     /// G3：因为别的组员的开通结果才记下的 Mac。
     var adoptedHosts: [RemoteGroupAdoptedHost] = []
+    /// §18：撤上游时被 Mac 一起撤掉、在等别的组员重新开通的 Mac。
+    var pausedHosts: [RemoteGroupPausedHost] = []
 
     func member(signingKey: Data) -> RemoteGroupMember? {
         members.first { $0.device.signingKey == signingKey }
@@ -165,7 +181,7 @@ nonisolated struct RemoteGroupLocalState: Codable, Equatable, Sendable {
 }
 
 nonisolated extension RemoteGroupLocalState {
-    /// G3 加的字段老状态里没有：缺了按空的算（合成的解码会整份解不开，本机名单就被当成空的）。
+    /// G3、§18 加的字段老状态里没有：缺了按空的算（合成的解码会整份解不开，本机名单就被当成空的）。
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         members = try container.decode([RemoteGroupMember].self, forKey: .members)
@@ -177,6 +193,7 @@ nonisolated extension RemoteGroupLocalState {
         submissions = try container.decode([UUID: [Date]].self, forKey: .submissions)
         revocations = try container.decodeIfPresent([RemoteGroupRevocation].self, forKey: .revocations) ?? []
         adoptedHosts = try container.decodeIfPresent([RemoteGroupAdoptedHost].self, forKey: .adoptedHosts) ?? []
+        pausedHosts = try container.decodeIfPresent([RemoteGroupPausedHost].self, forKey: .pausedHosts) ?? []
     }
 }
 

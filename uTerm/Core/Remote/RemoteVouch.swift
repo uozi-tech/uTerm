@@ -75,18 +75,25 @@ nonisolated struct RemoteSiblingRevokeResult: Codable, Equatable, Sendable {
         case notTrusted = "not-trusted"
         /// 它和请求的设备在这台 Mac 上不是同一组（各自手动配对的）：要到 Mac 上撤销。
         case notInFamily = "not-in-family"
+        /// 同一组，但它比请求的设备更早加到这台 Mac、又不是请求者的上游（`RemoteVouchPolicy.decideRevoke` 的资历规则）：
+        /// 什么都没改，要由更早的组员来撤，或到 Mac 上撤。老版本的主控端不认识它，落到「认不出的结果」那一支（过一阵再问）。
+        case notSenior = "not-senior"
     }
 
     var requestID: UUID
     var outcome: String
     var reason: String?
+    /// `revoked` 时：请求者自己也在这次撤掉的设备里（它撤的是自己的上游，留下的是那一串里更早加到这台 Mac 的设备）。
+    /// 回执先发出去，下一拍才断开它。老版本的 Mac 不带（nil）：那时请求者总是留下。
+    var requesterRevoked: Bool?
 
     var kind: Outcome? { Outcome(rawValue: outcome) }
 
-    init(requestID: UUID, outcome: Outcome, reason: String? = nil) {
+    init(requestID: UUID, outcome: Outcome, reason: String? = nil, requesterRevoked: Bool? = nil) {
         self.requestID = requestID
         self.outcome = outcome.rawValue
         self.reason = reason
+        self.requesterRevoked = requesterRevoked
     }
 }
 
@@ -144,13 +151,64 @@ nonisolated enum RemoteVouchPolicy {
 
     /// 同一组的设备可以请 Mac 撤销组里的另一台（丢了）。只会减少信任，所以不看「允许担保」开关；
     /// 但只认这台 Mac 上记着的组：各自手动配对的设备，Mac 没有凭据说它们属于同一个人。
+    ///
+    /// 资历规则（docs/remote-device-group-design.md §18）：同一组里，请求者只能撤 ① 它自己、② 它的上游（担保链上的祖先，
+    /// 见 `ancestors`），或 ③ 比它晚加到这台 Mac 的设备（`isAdded(_:before:addedAt:)`）。撤比自己早、又不是自己上游的
+    /// 回 `notSenior`。被偷的设备在被移除前替攻击者担保的设备都比被偷之前就在的组员晚，撤不了它们。
     static func decideRevoke(_ request: RemoteSiblingRevokeRequest, requesterID: UUID, existing: RemotePeer?,
-                             vouches: [UUID: RemotePeerVouch]) -> RemoteSiblingRevokeResult.Outcome {
+                             vouches: [UUID: RemotePeerVouch], trusted: [RemotePeer]) -> RemoteSiblingRevokeResult.Outcome {
         guard let existing, existing.publicKey == request.publicKey else { return .notTrusted }
         guard family(of: request.deviceID, vouches: vouches) == family(of: requesterID, vouches: vouches) else {
             return .notInFamily
         }
-        return .revoked
+        let target = request.deviceID
+        if target == requesterID { return .revoked }
+        if ancestors(of: requesterID, trusted: Set(trusted.map(\.id)), vouches: vouches).contains(target) { return .revoked }
+        return isAdded(requesterID, before: target, addedAt: addedAt(trusted)) ? .revoked : .notSenior
+    }
+
+    // MARK: - 资历
+
+    /// 每台设备加到这台 Mac 的时间：信任表里的 `pairedAt`。它由 Mac 自己的钟在记下这把钥匙时写下（手动配对、凭邀请、
+    /// 被担保、按设备组记下都一样），之后改名、更新机型、发中继证书、改挂来路都不动它；被撤之后重新加回来、在 Mac 上
+    /// 重新配对的算新加的。从不用请求里带的时间。
+    static func addedAt(_ trusted: [RemotePeer]) -> [UUID: Date] {
+        Dictionary(trusted.map { ($0.id, $0.pairedAt) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// `a` 比 `b` 早加到这台 Mac。没有时间的当最早（`distantPast`；信任表里的设备都有，只有不在信任表里的才缺）；
+    /// 时间相同按设备 ID 的字符串排，小的算早。所以任意两台都分得出先后。
+    static func isAdded(_ a: UUID, before b: UUID, addedAt: [UUID: Date]) -> Bool {
+        (addedAt[a] ?? .distantPast, a.uuidString) < (addedAt[b] ?? .distantPast, b.uuidString)
+    }
+
+    /// 担保链上的祖先，近的在前：它的担保者、担保者的担保者……只走此刻还被信任的设备，碰到这台 Mac 自己、
+    /// 手动配对的（没有担保记录）、挂在自己身上的（`reanchor` 之后）、环，就停。
+    static func ancestors(of id: UUID, trusted: Set<UUID>, vouches: [UUID: RemotePeerVouch]) -> [UUID] {
+        var chain: [UUID] = []
+        var seen: Set<UUID> = [id]
+        var current = id
+        while let voucher = vouches[current]?.vouchedBy, trusted.contains(voucher), !seen.contains(voucher) {
+            chain.append(voucher)
+            seen.insert(voucher)
+            current = voucher
+        }
+        return chain
+    }
+
+    /// 撤 `root` 时留下谁（`cascade` 的 `keeping`）：请求者在 `root` 那一串里（`root` 是它的上游）时，留下的是那一串里
+    /// （不含 `root`）最早加到这台 Mac 的那台，不一定是请求者；请求者不在那一串里（`root` 是它担保的、或者别的分支）、
+    /// 撤的就是自己时，没有要留的（nil，整串撤掉）。留下的那台连同它担保的不撤。
+    ///
+    /// 为什么不留请求者：Mac 分不清 `root` 担保过的设备里哪台是主人的、哪台是偷了 `root` 的人加的；后者都是 `root`
+    /// 被偷之后才担保的，比主人原有的组员晚，留最早的那台，攻击者抢先撤也只能把自己一起撤掉。
+    static func survivor(revoking root: UUID, requester: UUID, trusted: [RemotePeer],
+                         vouches: [UUID: RemotePeerVouch]) -> UUID? {
+        guard requester != root else { return nil }
+        let line = cascade(from: root, keeping: nil, trusted: trusted.map(\.id), vouches: vouches)
+        guard line.contains(requester) else { return nil }
+        let times = addedAt(trusted)
+        return line.filter { $0 != root }.min { isAdded($0, before: $1, addedAt: times) }
     }
 
     /// 一台设备属于哪一组：它是被担保的就取记录里的组号，否则（手动配对的）就是它自己。
@@ -159,12 +217,12 @@ nonisolated enum RemoteVouchPolicy {
     }
 
     /// 同组撤销（消息 52）、设备组撤掉被移除的组员时要撤的：`root` 自己，加上一层层由它担保的设备（只看此刻还被信任的；
-    /// 担保链按 `vouchedBy` 走），但不含 `keeping`（发请求的那台），也不顺着 `keeping` 往下走。
+    /// 担保链按 `vouchedBy` 走），但不含 `keeping`（留下的那台，见 `survivor`），也不顺着 `keeping` 往下走。
     ///
     /// 为什么连带：被偷的设备在被移除之前可以替攻击者的设备担保（组里的、谁都不知道的新钥匙都行）；只撤它一台的话，
-    /// 那些设备还被信任，撤销又不拉黑，它们马上能把它担保回来。为什么留下请求者：`root` 往往是唯一一台在 Mac 上手动
-    /// 配对的设备，组里别的设备都是它担保的；全撤掉就没人能再替正常的组员开通，只能到 Mac 上重新配对。请求者留着，
-    /// 它会替正常的组员重新开通（被移除者签的开通结果不再算数）。
+    /// 那些设备还被信任，撤销又不拉黑，它们马上能把它担保回来。为什么要留一台：`root` 往往是唯一一台在 Mac 上手动
+    /// 配对的设备，组里别的设备都是它担保的；全撤掉就没人能再替正常的组员开通，只能到 Mac 上重新配对。留下的那台
+    /// 会替正常的组员重新开通（被移除者签的开通结果不再算数）。
     /// 手动配对的设备没有担保记录，永远不在连带里（`root` 自己除外：它是请求点名要撤的）。
     static func cascade(from root: UUID, keeping: UUID?, trusted: [UUID], vouches: [UUID: RemotePeerVouch]) -> [UUID] {
         var removed: [UUID] = [root]
@@ -180,9 +238,10 @@ nonisolated enum RemoteVouchPolicy {
         return removed
     }
 
-    /// 请求者留下了，但它原来的担保者在这次要撤的设备里：它的来路改挂到哪。`root` 的担保者还在（没被撤、此刻还被信任，
-    /// 或者就是这台 Mac 自己）就挂到它下面；否则挂在请求者自己身上（成了这一组的锚点）。组号不改，
+    /// 留下的那台（`survivor`）原来的担保者在这次要撤的设备里：它的来路改挂到哪。`root` 的担保者还在（没被撤、此刻还被信任，
+    /// 或者就是这台 Mac 自己）就挂到它下面；否则挂在它自己身上（成了这一组的锚点）。组号不改，
     /// `familyMembers` / `decideRevoke` 照旧把它和同组的设备算在一起；担保者的名字（`voucherName`）是给界面的来历。
+    /// 只改担保记录，不碰信任表：`pairedAt`（资历）、`vouchedAt` 都不变，改挂不会让它变早或变晚。
     static func reanchor(_ record: RemotePeerVouch, root: UUID, removed: [UUID], hostID: UUID, trusted: [RemotePeer],
                          vouches: [UUID: RemotePeerVouch]) -> RemotePeerVouch {
         var record = record
