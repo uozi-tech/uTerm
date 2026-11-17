@@ -256,8 +256,9 @@ final class CopyableTerminalViewTests: XCTestCase {
                                                      eventNumber: 0, clickCount: 1, pressure: 1))
         let menu = try XCTUnwrap(harness.view.menu(for: event))
         let items = menu.items.filter { !$0.isSeparatorItem }
-        XCTAssertEqual(items.map(\.title), ["拷贝", "粘贴", "全选"])
-        XCTAssertEqual(items.map(\.keyEquivalent), ["c", "v", "a"])
+        // 接了回滚区查找（surface 支持搜索时）之后多一项「查找…」。
+        XCTAssertEqual(items.map(\.title), ["拷贝", "粘贴", "全选", "查找…"])
+        XCTAssertEqual(items.map(\.keyEquivalent), ["c", "v", "a", "f"])
         for item in items {
             XCTAssertTrue(item.target === harness.view, "\(item.title) 的目标应当是这个终端")
         }
@@ -265,6 +266,7 @@ final class CopyableTerminalViewTests: XCTestCase {
         XCTAssertFalse(items[0].isEnabled, "没有选区：拷贝置灰")
         XCTAssertTrue(items[1].isEnabled)
         XCTAssertTrue(items[2].isEnabled)
+        XCTAssertTrue(items[3].isEnabled)
     }
 }
 

@@ -60,11 +60,12 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
 
         // 行首从分组色圆点换成了与 iOS 同构的头像（分组色色块 + 首字母，角标 = 在线状态）。
         // 这里钉的是「色块取分组色」与「角标读在线探测」，不钉头像内部怎么画。
-        XCTAssertTrue(source.contains("HostAvatar(monogram: profile.monogram,\n                       tint: groupColor,"),
+        // 行改成按值判等之后（`ServerRowInfo`），这几处读的是 `info`，不再直接读模型。
+        XCTAssertTrue(source.contains("HostAvatar(monogram: info.monogram,\n                       tint: groupColor,"),
                       "服务器行的头像色块必须取分组色")
-        XCTAssertTrue(source.contains("reachability: HostReachabilityMonitor.shared.entry(for: profile)"),
+        XCTAssertTrue(source.contains("reachability: info.reachabilityKey.map(HostReachabilityMonitor.shared.entry(for:))"),
                       "头像角标必须是服务器在线状态")
-        XCTAssertTrue(source.contains(".watchesReachability(of: profile)"),
+        XCTAssertTrue(source.contains(".watchesReachability(of: info.reachabilityKey)"),
                       "行可见期间要登记在线探测")
         XCTAssertTrue(source.contains("UDGroupChip(groupLabel, tint: groupColor)"))
         XCTAssertFalse(source.contains("UDGroupChip(groupLabel)"))
