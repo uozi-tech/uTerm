@@ -30,9 +30,13 @@ nonisolated enum RemoteGroupFormat {
     }
 
     /// 名册与本机状态的 JSON 一律用这一对（日期按 1970 起的秒数，与旧名册相同）。
+    ///
+    /// 键按字母排：JSONEncoder 默认的键序每次编码不一定相同，同一条记录重写一遍字节就变了。快通道的叠加层按字节的摘要
+    /// 认「是不是同一份」（墓碑、去重、钥匙串追上没有，§16），所以同一内容必须编出同样的字节。解码不受影响。
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
+        encoder.outputFormatting = [.sortedKeys]
         return encoder
     }
 

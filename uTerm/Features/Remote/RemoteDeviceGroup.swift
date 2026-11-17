@@ -147,9 +147,11 @@ final class RemoteDeviceGroup {
 
     /// 用本机的远控身份建一个。`createsIdentity` 为 false 时缺身份或设备 ID 就返回 nil、什么都不生成；
     /// 两样都有时缺签名私钥会生成一把（见 `RemoteGroupDevice.local`）。
+    ///
+    /// 名册是包了快通道叠加层的那份（`RemoteGroupOverlayStorage.live`，§7.4）：读到的 = 钥匙串 ∪ 快通道收到的。
     static func live(createsIdentity: Bool = true) -> RemoteDeviceGroup? {
         make(name: LANSyncCoordinator.localDeviceName(), model: RemoteDeviceModel.current(),
-             createsIdentity: createsIdentity)
+             roster: RemoteGroupRoster(storage: RemoteGroupOverlayStorage.live), createsIdentity: createsIdentity)
     }
 
     static func make(name: String, model: String?, identity: RemoteIdentityStore = RemoteIdentityStore(role: .hosts),

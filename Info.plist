@@ -8,6 +8,7 @@
 	<array>
 		<string>_uterm-sync._tcp</string>
 		<string>_uterm-remote._tcp</string>
+		<string>_uterm-group._tcp</string>
 	</array>
 	<key>SUFeedURL</key>
 	<string>https://downloads.example.com/uTerm/appcast.xml</string>

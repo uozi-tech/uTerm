@@ -10,6 +10,9 @@ import Observation
 /// 轮询间隔：有页面开着、本机在显示核对码、有别的设备想加入、本机在等别的设备的下一步（`isAwaitingOthers`）、
 /// 组里的 Mac 在开通（刚进组的 10 分钟、本机正在替组员问 Mac，`isOpeningHosts`）时 2 秒，否则 10 秒（读一次名册是一次
 /// 本地钥匙串查询）。Mac 一直跑；iOS 只在前台跑（`start` / `stop` 跟着前后台，`stop` 时取消还在问 Mac 的请求）。
+///
+/// 快通道（`RemoteGroupFastChannel`，§7.4）也跟着 `start` / `stop` 起停：别的设备经局域网直接送来记录时马上
+/// `refresh()`，不等下一拍。
 @MainActor
 @Observable
 final class RemoteDeviceGroupService {
@@ -22,6 +25,11 @@ final class RemoteDeviceGroupService {
     private(set) var hiddenRequests: [UUID: RemoteDeviceGroup.JoinRequest.Status] = [:]
 
     @ObservationIgnored private let makeModel: (_ createsIdentity: Bool) -> RemoteDeviceGroup?
+    /// 给模型建快通道（App 里是 `RemoteGroupFastChannel.live`，测试宿主里返回 nil）。参数二：收到新东西时调。
+    @ObservationIgnored private let makeFastChannel: (RemoteDeviceGroup, @escaping @Sendable () -> Void) -> RemoteGroupFastChannel?
+    /// 开着的快通道，属于此刻的 `model`。
+    @ObservationIgnored private(set) var fastChannel: RemoteGroupFastChannel?
+    @ObservationIgnored private var fastRefreshQueued = false
     /// 本机配对过的 Mac，交给模型（`RemoteDeviceGroup.hosts`）：发 `host`、替组员开通、收别人替本机开通的结果。
     @ObservationIgnored private(set) weak var hosts: (any RemoteGroupHostAccess)?
     /// 这台 Mac 自己的被控端（只有 Mac 交进来）：把组员记成主控端（`RemoteDeviceGroup.localHost`）。
@@ -32,8 +40,12 @@ final class RemoteDeviceGroupService {
     @ObservationIgnored private var demand = 0
     @ObservationIgnored private var sleepGeneration = 0
 
-    init(makeModel: @escaping (_ createsIdentity: Bool) -> RemoteDeviceGroup? = { RemoteDeviceGroup.live(createsIdentity: $0) }) {
+    init(makeModel: @escaping (_ createsIdentity: Bool) -> RemoteDeviceGroup? = { RemoteDeviceGroup.live(createsIdentity: $0) },
+         makeFastChannel: @escaping (RemoteDeviceGroup, @escaping @Sendable () -> Void) -> RemoteGroupFastChannel? = {
+             model, received in RemoteGroupFastChannel.live(for: model) { _ in received() }
+         }) {
         self.makeModel = makeModel
+        self.makeFastChannel = makeFastChannel
     }
 
     /// 开始后台轮询。重复调用无害。
@@ -55,6 +67,8 @@ final class RemoteDeviceGroupService {
     func stop() {
         loop?.cancel()
         loop = nil
+        fastChannel?.stop()
+        fastChannel = nil
         model?.cancelHostWork()
         wakeUp()
     }
@@ -64,6 +78,7 @@ final class RemoteDeviceGroupService {
     func ensureModel() -> RemoteDeviceGroup? {
         if model == nil { model = makeModel(true) }
         handHosts()
+        startFastChannel()
         refresh()
         return model
     }
@@ -133,7 +148,34 @@ final class RemoteDeviceGroupService {
     func tick() {
         if model == nil { model = makeModel(false) }
         handHosts()
+        startFastChannel()
         refresh()
+    }
+
+    /// 后台轮询在跑、模型有了、快通道还没开时开起来。模型只建一次，快通道也就跟着它。
+    private func startFastChannel() {
+        guard loop != nil, fastChannel == nil, let model else { return }
+        let channel = makeFastChannel(model) { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.fastReceived() } }
+        }
+        fastChannel = channel
+        channel?.start()
+    }
+
+    /// 别的设备经快通道送来了新记录：马上读一次，下一拍也提前（加入的下一步可能就在里面）。刚连上补齐时一下来好几批，
+    /// 合并成一次。
+    private func fastReceived() {
+        guard fastChannel != nil, !fastRefreshQueued else { return }
+        fastRefreshQueued = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.fastRefreshQueued = false
+                guard self.fastChannel != nil else { return }
+                self.refresh()
+                self.wakeUp()
+            }
+        }
     }
 
     /// 把本机配对过的 Mac 交给模型。还没 `start` 时不动它（不拿 nil 冲掉别处交进去的）。
