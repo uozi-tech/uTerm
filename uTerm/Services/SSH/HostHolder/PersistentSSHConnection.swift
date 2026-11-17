@@ -31,7 +31,7 @@ extension RemoteTerminalBackend: ReconnectingTerminalBackend {}
 ///   （`saveCheckpoint`，App 进后台时存），检查点还原进影子终端，之后的输出按历史补上。主机上没有这个会话就新建一个。
 ///
 /// 主机上用不了保持进程时（不是 Linux、装不上、退出登录会清进程）退回 `SSHConnection`，行为与之前相同。
-actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring, ReconnectingTerminalBackend,
+actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTrueColorConfiguring, ReconnectingTerminalBackend,
                                CheckpointingTerminalBackend {
     // MARK: - TerminalBackend
 
@@ -547,6 +547,12 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalTrueColorConfigur
         if let fallback { return try await fallback.deliverImage(image) }
         guard !isClosed, let client else { throw TerminalImageError.notConnected }
         return try await client.uploadTerminalImage(image)
+    }
+
+    func deliverVideo(_ video: TerminalVideo) async throws -> String {
+        if let fallback { return try await fallback.deliverVideo(video) }
+        guard !isClosed, let client else { throw TerminalImageError.notConnected }
+        return try await client.uploadTerminalVideo(video)
     }
 
     nonisolated var trueColorHostKey: String { "\(profile.host):\(profile.port)" }

@@ -194,9 +194,10 @@ final class MobileTerminalController {
         view.canTakeKeyboard = { [weak self] in self?.canTakeKeyboard ?? false }
         view.onFocusChanged = { [weak self] focused in self?.keyboardFocusChanged(focused) }
         terminal.onStickyModifiersChanged = { [weak self] in self?.syncStickyModifiers() }
-        view.onPasteImage = { [weak self] in
+        view.onPasteMedia = { [weak self] in
             guard let self, self.acceptsImages else { return }
-            self.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
+            let allowsVideo = self.acceptsVideos
+            self.sendPaste { try await TerminalPasteSource.clipboard(allowsVideo: allowsVideo) }
         }
         // 程序状态、查询、远控镜像的规则两端共用（`TerminalEventRouter`）。远控标签：Mac 自己回答查询、经远控协议推状态
         // （见 `TermTab.programStatus`），这里不再处理。手机上没有系统通知可发：需要注意的状态只上标签；
@@ -367,6 +368,7 @@ final class MobileTerminalController {
         }
         syncRemoteWatch()
         acceptsImages = conn is any TerminalImageReceiving
+        acceptsVideos = conn is any TerminalVideoReceiving
         if let backend = conn as? any CheckpointingTerminalBackend {
             let pump = terminal.outputPump, events = terminal.events
             backend.setCheckpointHooks(TerminalCheckpointHooks(
@@ -400,36 +402,53 @@ final class MobileTerminalController {
     /// 后端能不能收图片：直连 SSH 传成服务器上的文件；远控 Mac 终端交给 Mac（本机 shell 走剪贴板 +
     /// Ctrl+V，SSH 会话由 Mac 传文件）。测试的假传输不能。
     private(set) var acceptsImages = false
+    /// 后端能不能收视频：只有直连 SSH（传成服务器上的文件）。远控 Mac 的终端不能（见 `TerminalVideoReceiving`），
+    /// 键盘条对它只给贴图片。
+    private(set) var acceptsVideos = false
     /// 贴图的进度 / 结果（键盘条上方的提示）。进行中带进度条；出了结果几秒后自己消失。
     private(set) var imageNote: PasteNote?
     @ObservationIgnored private var imageNoteTask: Task<Void, Never>?
-    /// 一次贴一张：上一张还在路上时再点不另起一次（两条进度会互相盖掉）。
+    /// 一次贴一样：上一个还在路上时再点不另起一次（两条进度会互相盖掉）。
     @ObservationIgnored private var sendingImage = false
 
-    /// 读一张图（剪贴板 / 相册）交给终端里的程序。传成文件时把路径粘进终端，后面带一个空格。
+    /// 读一张图或一段视频（剪贴板 / 相册）交给终端里的程序。传成文件时把路径粘进终端，后面带一个空格。
     /// 读取、压缩、上传都不在主线程上做，各段的进度经 `PasteProgressReporter` 画到提示里的进度条上。
-    func sendImage(_ load: @escaping @MainActor () async throws -> TerminalImage) {
-        guard let receiver = connection as? any TerminalImageReceiving, state == .connected, !sendingImage else { return }
+    /// 视频的本机拷贝送完（成败都算）就删掉。
+    func sendPaste(_ load: @escaping @MainActor () async throws -> TerminalPasteItem) {
+        guard let backend = connection, acceptsImages, state == .connected, !sendingImage else { return }
         sendingImage = true
         showImageNote(PasteProgress(.reading).note)
         let relay = PasteProgressRelay { [weak self] progress in self?.imageProgressChanged(progress) }
         Task { [weak self] in
             defer { self?.sendingImage = false }
             do {
-                let delivery = try await PasteProgressReporter.$sink.withValue(relay.sink) {
-                    let image = try await load()
-                    return try await TerminalPaste.deliver(image: image, to: receiver) { self?.paste($0) }
+                let note = try await PasteProgressReporter.$sink.withValue(relay.sink) {
+                    try await Self.deliver(try await load(), to: backend) { self?.paste($0) }
                 }
-                guard let self else { return }
-                switch delivery {
-                case .clipboard:
-                    self.showImageNote("图片已放入 Mac 剪贴板，并已发送 Ctrl+V")
-                case .file(let path):
-                    self.showImageNote("图片已上传到 \(path)")
-                }
+                self?.showImageNote(note)
             } catch {
                 self?.showImageNote(error.localizedDescription)
             }
+        }
+    }
+
+    /// 送一样东西，返回结果提示。
+    private static func deliver(_ item: TerminalPasteItem, to backend: any TerminalBackend,
+                                paste: @MainActor (String) -> Void) async throws -> String {
+        switch item {
+        case .image(let image):
+            guard let receiver = backend as? any TerminalImageReceiving else { throw TerminalImageError.notConnected }
+            switch try await TerminalPaste.deliver(image: image, to: receiver, paste: paste) {
+            case .clipboard: return String(localized: "图片已放入 Mac 剪贴板，并已发送 Ctrl+V")
+            case .file(let path): return String(localized: "图片已上传到 \(path)")
+            }
+        case .video(let video):
+            defer { video.discardLocalCopy() }
+            guard let receiver = backend as? any TerminalVideoReceiving else {
+                throw TerminalPasteSource.Failure.videoUnsupported
+            }
+            let path = try await TerminalPaste.deliver(video: video, to: receiver, paste: paste)
+            return String(localized: "视频已上传到 \(path)")
         }
     }
 

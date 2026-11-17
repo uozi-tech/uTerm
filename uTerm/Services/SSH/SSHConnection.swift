@@ -31,7 +31,7 @@ import NIOSSH
 /// drain 任务串行消费 —— 每个操作 `await` 完成后才处理下一个。writer 就绪前积压的
 /// 操作与就绪后的新操作进同一队列，因此从"调用 write/resize"到"writer.write"
 /// 只有一条有序路径，绝不会乱序。
-actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
+actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTrueColorConfiguring {
 
     enum SSHConnectionError: Error, LocalizedError {
         case notConnected
@@ -374,6 +374,12 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
         return try await connected.uploadTerminalImage(image)
     }
 
+    /// 视频同上，按段从本机文件读着传。
+    func deliverVideo(_ video: TerminalVideo) async throws -> String {
+        guard !isClosed, let connected = connectedClient else { throw TerminalImageError.notConnected }
+        return try await connected.uploadTerminalVideo(video)
+    }
+
     func verifyConnectionAlive(timeout: Duration) async -> Bool {
         guard !isClosed, let connected = connectedClient else { return false }
         return await withTaskGroup(of: Bool?.self) { group in
@@ -505,20 +511,40 @@ nonisolated extension ConnectedClient {
     /// 把图片传成这台机器 `/tmp` 下的一个文件。SFTP 开在这条连接上（另开一个通道），不另建连接，也不重新认证。
     func uploadTerminalImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         let path = image.temporaryRemotePath()
+        try await uploadPrivateFile(to: path) { file in
+            var buffer = ByteBuffer()
+            buffer.writeBytes(image.data)
+            try await SFTPPipeline.write(file, data: buffer, at: 0) { written, total in
+                PasteProgressReporter.report(.sending(written, of: total))
+            }
+        }
+        return .file(path: path)
+    }
+
+    /// 把视频传成这台机器 `/tmp` 下的一个文件，返回路径。按段从本机文件读，不整份进内存。
+    func uploadTerminalVideo(_ video: TerminalVideo) async throws -> String {
+        let path = video.temporaryRemotePath()
+        try await uploadPrivateFile(to: path) { file in
+            try await SFTPPipeline.write(file, contentsOf: video.localURL) { written, total in
+                PasteProgressReporter.report(PasteProgress(.sending, fraction: total > 0 ? Double(written) / Double(total) : 1))
+            }
+        }
+        return path
+    }
+
+    /// 在这条连接上开 SFTP，新建一个只有自己能读写的文件（/tmp 在共享服务器上大家都能读，截图、视频只给自己看），
+    /// 交给 `write` 写内容，最后关文件、关 SFTP。
+    private func uploadPrivateFile(to path: String,
+                                   write: (CitadelPipelineFile) async throws -> Void) async throws {
         let sftp = try await target.openSFTP()
         do {
-            // /tmp 在共享服务器上大家都能读，截图只给自己看。
             var attributes = SFTPFileAttributes()
             attributes.permissions = 0o600
             let file = try await sftp.openFile(filePath: path,
                                                flags: [.write, .create, .truncate],
                                                attributes: attributes)
             do {
-                var buffer = ByteBuffer()
-                buffer.writeBytes(image.data)
-                try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: 0) { written, total in
-                    PasteProgressReporter.report(.sending(written, of: total))
-                }
+                try await write(CitadelPipelineFile(file))
                 try await file.close()
             } catch {
                 try? await file.close()
@@ -529,7 +555,6 @@ nonisolated extension ConnectedClient {
             throw error
         }
         try? await sftp.close()
-        return .file(path: path)
     }
 }
 

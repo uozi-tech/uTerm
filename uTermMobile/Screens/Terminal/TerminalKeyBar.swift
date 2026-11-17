@@ -124,11 +124,14 @@ struct TerminalKeyBar: View {
         // 贴图的进度 / 结果浮在键盘条上方，不挤终端的行数。
         .overlay(alignment: .top) { imageNote.alignmentGuide(.top) { $0[.bottom] + 8 } }
         .animation(.easeOut(duration: 0.15), value: controller.imageNote)
-        .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
+        // `.current`：视频原样交过来，不先转码（几百 MB 的视频转一遍要很久）；HEIC 图片由编码那步转。
+        .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto,
+                      matching: controller.acceptsVideos ? .any(of: [.images, .videos]) : .images,
+                      preferredItemEncoding: .current)
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
             pickedPhoto = nil
-            controller.sendImage { try await RemoteDesktopPasteSource.terminalImage(photo: item) }
+            controller.sendPaste { try await TerminalPasteSource.picked(item) }
         }
         .onChange(of: panel) { _, panel in panels.remember(panel) }
         .sheet(isPresented: $editingPhrases) {
@@ -191,18 +194,25 @@ struct TerminalKeyBar: View {
         }
     }
 
-    /// 贴图片：剪贴板里的图，或相册里选一张。直连服务器传成 `/tmp` 下的文件并粘上路径；
-    /// Mac 本机终端放进 Mac 剪贴板再按 Ctrl+V（Claude Code 等从剪贴板读图）。
+    /// 贴图片 / 视频：剪贴板里的，或相册里选一项。直连服务器传成 `/tmp` 下的文件并粘上路径（视频按文件流式传）；
+    /// Mac 本机终端放进 Mac 剪贴板再按 Ctrl+V（Claude Code 等从剪贴板读图）。远控 Mac 的终端只收图片，文案也只说图片。
     private var imageMenu: some View {
-        MMenu {
+        let videos = controller.acceptsVideos
+        return MMenu {
             Button {
-                controller.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
-            } label: { Label("粘贴剪贴板里的图片", systemImage: "doc.on.clipboard") }
+                controller.sendPaste { try await TerminalPasteSource.clipboard(allowsVideo: videos) }
+            } label: {
+                if videos {
+                    Label("粘贴剪贴板里的图片或视频", systemImage: "doc.on.clipboard")
+                } else {
+                    Label("粘贴剪贴板里的图片", systemImage: "doc.on.clipboard")
+                }
+            }
             Button { pickingPhoto = true } label: { Label("从相册选择…", systemImage: "photo.on.rectangle") }
         } label: {
             MKeyIconCap(symbol: "photo")
         }
-        .accessibilityLabel("粘贴图片")
+        .accessibilityLabel(videos ? Text("粘贴图片或视频") : Text("粘贴图片"))
     }
 
     /// 发送一个键。上膛的 Ctrl / Alt 作用在这个键上（Ctrl 上膛后点 ← 发 Ctrl+←），用完自己复位。

@@ -16,9 +16,11 @@ enum TerminalPaste {
     /// 图片传成文件后要粘进终端的文字：路径后面带一个空格，接着打字不会粘到路径上。
     /// 交给了 Mac 剪贴板（`.clipboard`）时不用打字，返回 nil。
     nonisolated static func pastedText(for delivery: TerminalImageDelivery) -> String? {
-        if case .file(let path) = delivery { return path + " " }
+        if case .file(let path) = delivery { return pastedText(forFile: path) }
         return nil
     }
+
+    nonisolated static func pastedText(forFile path: String) -> String { path + " " }
 
     /// 把图片交给后端；传成文件时用 `paste` 把路径粘进终端。返回送达方式，失败抛错——
     /// 进度与失败怎么提示由调用方决定（mac 发终端提醒，iOS 显示键盘条上方的提示）。
@@ -30,6 +32,17 @@ enum TerminalPaste {
         let delivery = try await receiver.deliverImage(image)
         if let text = pastedText(for: delivery) { paste(text) }
         return delivery
+    }
+
+    /// 把视频传成终端那台机器上的文件，再把路径粘进终端（同图片，后面带一个空格）。返回路径。
+    @MainActor
+    @discardableResult
+    static func deliver(video: TerminalVideo,
+                        to receiver: any TerminalVideoReceiving,
+                        paste: @MainActor (String) -> Void) async throws -> String {
+        let path = try await receiver.deliverVideo(video)
+        paste(pastedText(forFile: path))
+        return path
     }
 }
 

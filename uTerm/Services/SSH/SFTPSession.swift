@@ -248,41 +248,23 @@ actor SFTPSession: SFTPProviding {
 
     func upload(localURL: URL, toRemotePath: String,
                 onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
-        let values = try localURL.resourceValues(forKeys: [.fileSizeKey])
-        let total = Int64(max(0, values.fileSize ?? 0))
-        let localFile = try FileHandle(forReadingFrom: localURL)
+        // 先确认本地文件读得到，再在远端建文件（读不到就别把远端的同名文件截断了）。
+        let total = Int64(max(0, try localURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0))
+        try FileHandle(forReadingFrom: localURL).close()
+        let remoteFile = try await sftp.openFile(
+            filePath: toRemotePath, flags: [.write, .create, .truncate])
         do {
-            let remoteFile = try await sftp.openFile(
-                filePath: toRemotePath, flags: [.write, .create, .truncate])
-            do {
-                let pipelined = CitadelPipelineFile(remoteFile)
-                var offset: UInt64 = 0
-                var progressEmitter = TransferProgressEmitter(totalBytes: total)
-                func emitProgress(_ bytesDone: Int64) {
-                    if progressEmitter.shouldEmit(bytesDone: bytesDone) {
-                        onProgress?(TransferProgress(bytesDone: bytesDone, bytesTotal: total))
-                    }
+            var progressEmitter = TransferProgressEmitter(totalBytes: total)
+            // 一次读一段本地文件（内存有界），整段交给流水线并发写出去。写完最后一片时报到总数（emitter 必放行）。
+            try await SFTPPipeline.write(CitadelPipelineFile(remoteFile), contentsOf: localURL,
+                                         segmentBytes: Self.segmentBytes) { written, _ in
+                if progressEmitter.shouldEmit(bytesDone: written) {
+                    onProgress?(TransferProgress(bytesDone: written, bytesTotal: total))
                 }
-                emitProgress(0)
-                // 一次读一段本地文件（内存有界），整段交给流水线并发写出去。
-                while let data = try localFile.read(upToCount: Self.segmentBytes),
-                      !data.isEmpty {
-                    try Task.checkCancellation()
-                    var buffer = ByteBuffer()
-                    buffer.writeBytes(data)
-                    try await SFTPPipeline.write(pipelined, data: buffer, at: offset)
-                    offset += UInt64(data.count)
-                    emitProgress(Int64(clamping: offset))
-                }
-                emitProgress(Int64(clamping: offset))
-                try localFile.close()
-                try await remoteFile.close()
-            } catch {
-                try? await remoteFile.close()
-                throw error
             }
+            try await remoteFile.close()
         } catch {
-            try? localFile.close()
+            try? await remoteFile.close()
             throw error
         }
     }

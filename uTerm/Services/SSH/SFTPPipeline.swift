@@ -94,18 +94,23 @@ nonisolated enum SFTPPipeline {
     /// 任一片失败 → TaskGroup 取消其余、等它们收尾，然后把**原错误**抛出去
     ///（不包一层，`ControlFilePayloadBuilder.errorCode(for:)` 还要认服务端状态码）。
     ///
-    /// `progress`：每确认一片报一次「已写字节数 / 总字节数」，在调用方的任务里调（不在子任务里）。
+    /// `progress`：每确认一片报一次「已写字节数 / 总字节数」，在调用方的任务里、调用方的隔离上调（不在子任务里）。
+    /// 跑在调用方的隔离上（`isolation`）：从 actor / 主线程传进来的闭包按它所属的隔离调，不会在别的线程上被调到
+    ///（那样 Swift 的运行时检查直接中断进程）。
     static func write(
         _ file: some SFTPPipelineFile,
         data: ByteBuffer,
         at base: UInt64,
         inFlight: Int = defaultInFlight,
+        isolation: isolated (any Actor)? = #isolation,
         progress: ((_ written: Int, _ total: Int) -> Void)? = nil
     ) async throws {
         let total = data.readableBytes
         guard total > 0 else { return }
         let window = max(1, inFlight)
         try await withThrowingTaskGroup(of: Int.self) { group in
+            // 捕获 `isolation`，闭包才跑在调用方的隔离上（SE-0420），`progress` 才在那里被调。
+            _ = isolation
             var running = 0
             var start = 0
             var written = 0
@@ -138,6 +143,37 @@ nonisolated enum SFTPPipeline {
                 start = end
             }
             while let bytes = try await group.next() { acknowledged(bytes) }
+        }
+    }
+
+    /// 一次从本机文件读多少交给流水线（内存里最多一段）。
+    static let fileSegmentBytes = 4 * 1_048_576
+
+    /// 把本机文件按段读出，逐段交给流水线写到远端从 0 起的位置。几百 MB 的视频也只占一段的内存。
+    ///
+    /// `progress`：每确认一片报一次「已写字节数 / 文件总字节数」，同上在调用方的隔离上调。
+    static func write(
+        _ file: some SFTPPipelineFile,
+        contentsOf localURL: URL,
+        segmentBytes: Int = fileSegmentBytes,
+        inFlight: Int = defaultInFlight,
+        isolation: isolated (any Actor)? = #isolation,
+        progress: ((_ written: Int64, _ total: Int64) -> Void)? = nil
+    ) async throws {
+        let total = Int64(max(0, try localURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0))
+        let local = try FileHandle(forReadingFrom: localURL)
+        defer { try? local.close() }
+        var offset: UInt64 = 0
+        progress?(0, total)
+        while let data = try local.read(upToCount: max(1, segmentBytes)), !data.isEmpty {
+            try Task.checkCancellation()
+            var buffer = ByteBuffer()
+            buffer.writeBytes(data)
+            let base = offset
+            try await write(file, data: buffer, at: base, inFlight: inFlight, isolation: isolation) { written, _ in
+                progress?(Int64(base) + Int64(written), max(total, Int64(base) + Int64(written)))
+            }
+            offset += UInt64(data.count)
         }
     }
 

@@ -14,8 +14,8 @@ final class MGhosttyTerminalView: UITerminalView {
     var onFocusChanged: ((Bool) -> Void)?
     /// 第一响应者变化，给开了 DEC 1004 的程序报 focus in / out 用（`GhosttyTerminalBridge` 接）。surface 一直聚焦，引擎不报。
     var onFocusReport: ((Bool) -> Void)?
-    /// 剪贴板里只有图片时的粘贴交给宿主（传到远端再把路径粘进来）。
-    var onPasteImage: (() -> Void)?
+    /// 剪贴板里只有图片 / 视频时的粘贴交给宿主（传到远端再把路径粘进来）。
+    var onPasteMedia: (() -> Void)?
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，见 `MTerminalContainerView`。
     var hasHostedLayout = false
     /// 这片终端的回滚区查找（`TerminalSurfaceLink.search`）：硬件键盘的 ⌘F / ⌘G / ⇧⌘G 落到它上面。
@@ -154,13 +154,13 @@ final class MGhosttyTerminalView: UITerminalView {
     @objc private func terminalFindNext() { search?.next() }
     @objc private func terminalFindPrevious() { search?.previous() }
 
-    // MARK: 粘贴：剪贴板里只有图片时当贴图
+    // MARK: 粘贴：剪贴板里只有图片 / 视频时当贴图片 / 视频
 
     override func paste(_ sender: Any?) {
         let board = UIPasteboard.general
         // GhosttyKit 自己的做法是把图片存成本机文件、粘本机路径，对远端的程序没用，所以整个接走。
-        if !board.hasStrings, board.hasImages {
-            onPasteImage?()
+        if !board.hasStrings, board.hasImages || TerminalPasteSource.hasVideo(board) {
+            onPasteMedia?()
             return
         }
         super.paste(sender)

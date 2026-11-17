@@ -12,8 +12,7 @@ import UniformTypeIdentifiers
 nonisolated enum RemoteDesktopPasteSource {
     /// 读手机剪贴板，图片优先（同时有图和字时多半是在复制图片）。第一次读时系统会问「允许粘贴」。
     @MainActor
-    static func clipboard() async throws -> RemoteDesktopPaste {
-        let board = UIPasteboard.general
+    static func clipboard(_ board: UIPasteboard = .general) async throws -> RemoteDesktopPaste {
         PasteProgressReporter.report(PasteProgress(.reading))
         if board.hasImages,
            let provider = board.itemProviders.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }),
@@ -44,8 +43,8 @@ nonisolated enum RemoteDesktopPasteSource {
 
     /// 终端贴图：只要剪贴板里的图片。
     @MainActor
-    static func clipboardImage() async throws -> TerminalImage {
-        guard UIPasteboard.general.hasImages, let image = try await clipboard().terminalImage else {
+    static func clipboardImage(_ board: UIPasteboard = .general) async throws -> TerminalImage {
+        guard board.hasImages, let image = try await clipboard(board).terminalImage else {
             throw RemoteDesktopPasteEncoding.Failure.noImage
         }
         return image
@@ -82,7 +81,7 @@ nonisolated enum RemoteDesktopPasteSource {
     }
 
     /// 跑一个带 `Progress` 的系统加载，把它的比例报成「读取」段；完成回调在系统的后台队列上。
-    private static func load<T: Sendable>(
+    static func load<T: Sendable>(
         _ start: (@escaping @Sendable (Result<T, Error>) -> Void) -> Progress
     ) async throws -> T {
         let sink = PasteProgressReporter.sink
@@ -98,7 +97,7 @@ nonisolated enum RemoteDesktopPasteSource {
         }
     }
 
-    private static func result<T>(_ value: T?, _ error: Error?) -> Result<T, Error> {
+    static func result<T>(_ value: T?, _ error: Error?) -> Result<T, Error> {
         if let value { return .success(value) }
         return .failure(error ?? RemoteDesktopPasteEncoding.Failure.unreadableImage)
     }

@@ -78,11 +78,6 @@ nonisolated enum TerminalImageError: LocalizedError {
 nonisolated extension TerminalImage {
     /// 远端临时文件名：`/tmp/uterm-image-20261103-153012-a1b2.png`。不带空格与引号，粘进 shell 不用转义。
     func temporaryRemotePath(now: Date = Date()) -> String {
-        let c = Calendar(identifier: .gregorian).dateComponents(
-            [.year, .month, .day, .hour, .minute, .second], from: now)
-        let stamp = String(format: "%04d%02d%02d-%02d%02d%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0,
-                           c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
-        let suffix = UUID().uuidString.prefix(4).lowercased()
-        return "/tmp/uterm-image-\(stamp)-\(suffix).\(format.fileExtension)"
+        TerminalUploadPath.temporary(kind: "image", fileExtension: format.fileExtension, now: now)
     }
 }
