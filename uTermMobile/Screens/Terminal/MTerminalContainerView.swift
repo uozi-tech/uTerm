@@ -119,8 +119,17 @@ final class MTerminalContainerView: UIView {
         case .hold:
             // 等待期间保持旧尺寸：比容器矮时留在按行填满的下移位置（别先跳到 0 再回来），比容器高时往上挪到提示符和光标
             // 留在屏上为止（`heldOriginY`）。
+            // 比容器矮（键盘收起）时：提交后内容会贴底的话（`growsFromScrollback`）现在就贴底，跟着按键条往下走，
+            // 空出来的在上面、提交后由回滚补上；否则留在顶上。
             let room = bounds.height - terminalView.frame.height
-            terminalView.frame.origin = CGPoint(x: 0, y: room < 0 ? heldOriginY(room: room) : terminal.link.rowFillOffset)
+            let y: CGFloat = if room < 0 {
+                heldOriginY(room: room)
+            } else if terminal.growsFromScrollback {
+                room
+            } else {
+                terminal.link.rowFillOffset
+            }
+            terminalView.frame.origin = CGPoint(x: 0, y: y)
         }
     }
 
@@ -136,13 +145,20 @@ final class MTerminalContainerView: UIView {
     /// 尺寸和字号一起提交：GhosttyKit 的 IO 线程把挨着的两次 resize 合成一次（25 ms 窗口），远端只收到一次 SIGWINCH。
     /// 接着按行填满（`TerminalRowFill`，两端共用）：按新尺寸、新字号重算行高（同一轮里推给 surface，也落在那 25 ms 里），
     /// 拉不完的零头上下均分——视图往下挪上半份，尺寸不变（网格不变），露在容器底边外的下半份被裁掉。
+    ///
+    /// 等停稳期间视图按旧尺寸挪着放（`hold`），提交时挪回来；引擎交出新尺寸的帧之前，层上还是旧帧，会跟着视图挪、按顶边对齐露出来
+    ///（键盘升起时按键条上方闪一下旧内容的顶部）。所以挪位置之前先把旧帧盖上，提交后让它留在屏上原处，等新帧就绪再撤。
     private func commit() {
         let terminalView = terminalView
+        let before = terminalView.frame
+        let moves = isOnScreen && before.height > 0 && before.size != bounds.size
+        if moves { terminal.coverBeforeMoving() }
         terminalView.frame = bounds
         terminalView.setTerminalFontSize(fontSize)
         terminalView.layoutIfNeeded()
         terminal.link.refitRowFill()
         terminalView.frame.origin.y = terminal.link.rowFillOffset
+        if moves { terminal.keepCoverOnScreen(viewMovedBy: terminalView.frame.minY - before.minY) }
         // 不在屏上的终端不建 surface，没有网格可报：先估一个给远端（见 `estimateGridIfNeverSized`）。
         if !isOnScreen { terminal.estimateGridIfNeverSized(for: bounds.size) }
     }

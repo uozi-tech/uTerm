@@ -133,7 +133,8 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
             let layers = Self.allSurfaceLayers(view.layer)
             // 用户看到的：盖着旧帧（`GhosttySwitchBackCover`）就是它，否则是最新的 surface 层。
             let host = view.layer
-            let cover = host.sublayers?.first { $0.name == GhosttySwitchBackCover.layerName }
+            // 盖子里旧帧在它的子层上（盖子随视图挪位置时旧帧要留在屏上原处）。
+            let cover = host.sublayers?.first { $0.name == GhosttySwitchBackCover.layerName }.map { $0.sublayers?.first ?? $0 }
             let shown = cover ?? layers.last
             let info = self.ink(shown)
             let rect = shown.map { host.convert($0.bounds, from: $0) } ?? .zero
@@ -297,6 +298,62 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
     func testReleasedTailNewContainer() async throws { try await run(.releasedTail, newContainer: true) }
     func testReleasedSameContainer() async throws { try await run(.released, newContainer: false) }
     func testReleasedNewContainer() async throws { try await run(.released, newContainer: true) }
+
+    // MARK: 键盘升降（终端一直在屏上）
+
+    /// 键盘升起：等停稳期间终端按旧尺寸往上挪着放（提示符留在屏上），提交时挪回来。引擎交出新帧之前，层上还是旧帧——
+    /// 它不能跟着视图挪回去、按顶边对齐露出旧内容的顶部（实机录屏：按键条上方闪一帧旧内容）。
+    func testKeyboardRiseDoesNotFlashTheOldTop() async throws { try await runKeyboard(rise: true) }
+
+    /// 键盘收起：内容铺满、上面有回滚时，提交后引擎从回滚往下拉行、内容贴底；等停稳期间就贴底跟着走，
+    /// 不先留在顶上（和按键条之间空一截）、提交时再整段往下跳。
+    func testKeyboardDropKeepsTheContentAnchored() async throws { try await runKeyboard(rise: false) }
+
+    private func runKeyboard(rise: Bool) async throws {
+        let (bridge, container) = try await hostedInWindow(fontSize: 10.63)
+        let tall = CGSize(width: 400, height: 620), short = CGSize(width: 400, height: 380)
+        lay(container, rise ? tall : short)
+        await settleAll(bridge)
+        for i in 0..<120 { bridge.feed(Data("line \(i) abcdefghijklmnopqrstuvwxyz 0123456789\r\n".utf8)) }
+        bridge.feed(Data("$ ".utf8))
+        await settleAll(bridge)
+        if !rise { XCTAssertTrue(bridge.growsFromScrollback, "用例前提：内容铺满、有回滚") }
+
+        let recorder = Recorder()
+        recorder.read = sampler(bridge)
+        recorder.begin()
+        // 键盘动画：约 0.3 秒里一点点改高度，每步一个显示帧。
+        let from = rise ? tall : short, to = rise ? short : tall
+        for step in 1...20 {
+            let t = CGFloat(step) / 20
+            lay(container, CGSize(width: 400, height: (from.height + (to.height - from.height) * t).rounded()))
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        try await Task.sleep(for: .milliseconds(900))
+        recorder.end()
+        let samples = recorder.log.map(\.sample)
+        for (ms, sample) in recorder.log { print("KEYBOARD[rise=\(rise)] +\(Int(ms))ms \(sample)") }
+        guard let first = samples.first, let final = samples.last else { return XCTFail("没有采样") }
+        XCTAssertEqual(samples.filter { $0.inkRows == 0 }.count, 0, "出现空白帧")
+
+        // 旧画面（和第一帧同一张）在屏上的位置：等停稳期间跟着容器走，提交后不能再换位置。
+        func screenTop(_ s: Sample) -> Double {
+            Double(s.layerRect.split(separator: ",")[1]).map { $0 + s.frameY } ?? .nan
+        }
+        // 提交：视图挪到最终位置、尺寸换成最终尺寸的那一帧（引擎的新帧可能还没到）。
+        let committed = samples.lastIndex { $0.frameY != final.frameY || !$0.layerRect.hasSuffix(final.layerRect.split(separator: ",").last.map(String.init) ?? "") }
+            .map { $0 + 1 } ?? 0
+        let lastHeld = samples[..<committed].last { $0.hash == first.hash }
+        for s in samples[committed...] where s.hash == first.hash {
+            XCTAssertEqual(screenTop(s), lastHeld.map(screenTop) ?? screenTop(s), accuracy: 0.5,
+                           "提交后旧画面换了位置（闪一下）：\(s)")
+        }
+        if !rise, let held = lastHeld {
+            // 贴底：提交前最后一帧（键盘已经收完）里旧画面的底边贴着容器底边（差不超过按行填满的零头）。
+            let height = Double(held.layerRect.split(separator: ",")[2].split(separator: "x")[1]) ?? 0
+            XCTAssertLessThan(Double(container.bounds.height) - (screenTop(held) + height), 12, "等停稳期间内容没贴底：\(held)")
+        }
+    }
 
     /// 新容器接走视图、尺寸还没停稳（hold）的那段时间里，视图留在按行填满的下移位置，不先跳到 0 再回来。
     func testHoldKeepsRowFillOffset() async throws {

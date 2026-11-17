@@ -65,6 +65,8 @@ final class GhosttyTerminalBridge {
     private let delegateProxy: SurfaceDelegate
     /// 切回标签、surface 重建期间盖着的旧帧（见 `GhosttySwitchBackCover`）。
     private var switchBackCover: GhosttySwitchBackCover?
+    /// 容器提交新尺寸时为它装的那个盖子（`coverBeforeMoving`）；视图没挪的话当场撤掉。
+    private weak var resizeCover: GhosttySwitchBackCover?
     /// 容器还有没落地的布局（等停稳、尺寸 / 字号没跟上）。容器接上，盖子撤之前问。
     var geometryPending: () -> Bool = { false }
     /// surface 放掉时的行高调整与当时的视图尺寸、字号、倍率，重建后尺寸没变就直接补上，不先按自然行高画一帧。
@@ -326,6 +328,35 @@ final class GhosttyTerminalBridge {
     func prepareSwitchBack() {
         guard !isOnScreen else { return }
         installSwitchBackCoverIfNeeded()
+    }
+
+    /// 容器要提交新尺寸、视图会挪位置（键盘升降）：先把屏上的旧帧盖住，提交后由 `keepCoverOnScreen` 把它留在原处。
+    func coverBeforeMoving() {
+        guard isOnScreen, view.surface != nil, !view.uTermIsSurfaceReleased, switchBackCover == nil else { return }
+        installSwitchBackCoverIfNeeded()
+        resizeCover = switchBackCover
+    }
+
+    /// 视图挪了 `dy`：盖着的旧帧留在屏上原处（见 `GhosttySwitchBackCover.keepOnScreen`）。没挪就不用盖：
+    /// 旧帧本来就在原处，盖着反而会在新帧比旧帧大的那部分先露出新内容、和盖着的旧内容拼在一起。
+    func keepCoverOnScreen(viewMovedBy dy: CGFloat) {
+        defer { resizeCover = nil }
+        guard abs(dy) > 0.01 else {
+            resizeCover?.remove()
+            return
+        }
+        let dark = view.traitCollection.userInterfaceStyle == .dark
+        // 只挪这次为提交装的盖子：切回标签时的盖子（`prepareSwitchBack`）跟着视图走——那张旧帧切走前不在这个位置上屏。
+        resizeCover?.keepOnScreen(viewMovedBy: dy, background: TerminalColorScheme.resolve(dark: dark).backgroundColor)
+    }
+
+    /// 键盘收起、终端要变高：提交后引擎从回滚区往下拉行，屏上的内容整体贴底。只在内容铺到最底一行、上面有回滚、
+    /// 不在备用屏时这样；刚登录的 shell（只占上面几行）变高时内容留在原处，下面添空行。
+    var growsFromScrollback: Bool {
+        guard !shadow.isOnAlternateScreen else { return false }
+        let hasScrollback = shadow.readScreen { size, _ in size.totalRows > size.rows }
+        let rows = occupiedRows
+        return hasScrollback && rows.used >= rows.total
     }
 
     private func installSwitchBackCoverIfNeeded() {

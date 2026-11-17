@@ -19,6 +19,9 @@ import UIKit
 /// - 盖子里是旧帧的拷贝：没放掉 surface 时旧层还是活的，它的 IOSurface 随时被引擎的下一帧原地改写，直接引用的话盖子会跟着变。
 ///
 /// 撤不掉的情况（后台、远端迟迟不对齐）由超时兜底。
+///
+/// 也用在容器提交新尺寸、视图要挪位置的时候（键盘升降：等停稳期间视图按旧尺寸挪着放，提交时挪回来）：引擎层上那张还没换掉的
+/// 旧帧会跟着视图一起挪、按顶边对齐露出来，就是按键条上方闪一下旧内容。这时盖子留在屏上原处（`keepOnScreen`）。
 @MainActor
 final class GhosttySwitchBackCover {
     static let layerName = "uterm.switchback.cover"
@@ -29,7 +32,8 @@ final class GhosttySwitchBackCover {
     static let timeout: CFTimeInterval = 0.8
 
     private let cover = UIView()
-    private var layer: CALayer { cover.layer }
+    /// 旧帧本身。起初铺满盖子；视图挪了位置后盖子铺满视图、它留在屏上原处。
+    private let image = CALayer()
     private weak var bridge: GhosttyTerminalBridge?
     private var link: CADisplayLink?
     private var quietSince: CFTimeInterval
@@ -70,13 +74,15 @@ final class GhosttySwitchBackCover {
         cover.isOpaque = true
         cover.translatesAutoresizingMaskIntoConstraints = true
         cover.autoresizingMask = []
-        layer.name = Self.layerName
-        layer.contents = Self.copy(of: stale.contents)
-        layer.contentsGravity = stale.contentsGravity
-        layer.contentsScale = stale.contentsScale
-        layer.contentsRect = stale.contentsRect
-        layer.isOpaque = true
+        cover.layer.name = Self.layerName
+        image.contents = Self.copy(of: stale.contents)
+        image.contentsGravity = stale.contentsGravity
+        image.contentsScale = stale.contentsScale
+        image.contentsRect = stale.contentsRect
+        image.isOpaque = true
         cover.frame = stale.superlayer?.convert(stale.frame, to: root) ?? root.bounds
+        image.frame = cover.bounds
+        cover.layer.addSublayer(image)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bridge.view.addSubview(cover)
@@ -103,6 +109,19 @@ final class GhosttySwitchBackCover {
         if !settled || geometry != lastGeometry { quietSince = now }
         lastGeometry = geometry
         if now - quietSince >= Self.quietTime { remove() }
+    }
+
+    /// 终端视图挪了 `dy`（容器提交新尺寸）：旧帧留在屏上原处，盖子铺满视图，旧帧之外用终端底色填——提交前那里就是空白，
+    /// 不能让引擎层上还没换掉的旧画面（随视图挪了位置）透出来。
+    func keepOnScreen(viewMovedBy dy: CGFloat, background: UIColor) {
+        guard link != nil, dy != 0, let view = bridge?.view, cover.superview === view else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let placed = cover.layer.convert(image.frame, to: view.layer).offsetBy(dx: 0, dy: -dy)
+        cover.frame = view.bounds
+        cover.backgroundColor = background
+        image.frame = view.layer.convert(placed, to: cover.layer)
+        CATransaction.commit()
     }
 
     /// 旧帧的独立拷贝（同尺寸、同像素格式、同色彩空间的新 IOSurface）。拿不到就退回原引用。
