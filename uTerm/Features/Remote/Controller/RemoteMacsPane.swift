@@ -4,8 +4,9 @@ import UDesignKit
 
 /// 欢迎窗口里的「我的 Mac」：从这台 Mac 去控制别的 Mac。与「全部」「快捷命令」同构——左列表、右详情。
 ///
-/// 左列配对过的（在上）与局域网里还没配对的（另起一组），双击打开它的窗口（`RemoteMacWindowView`，
-/// 没配对的在那里走配对）；不在同一网络的，粘贴那台 Mac 设置里拷出的邀请链接配对。
+/// 左列配对过的（在上）与局域网里还没配对、登记在同一个 iCloud 账户里的（另起一组「附近的 Mac」），双击打开它的
+/// 窗口（`RemoteMacWindowView`，没配对的在那里走配对）。不在这个账户里的 Mac 不自动列出来：列表头的「配对其他
+/// Mac」面板里粘贴那台 Mac 设置里拷出的邀请链接，或从同一局域网里挑一台（`RemotePairingOtherMacSheet`）。
 /// 右栏是选中那台的详情：在线状态与路径、打开终端 / 屏幕、网络诊断。「忘记」只在列表的右键菜单里。
 struct RemoteMacsPane: View {
     @Environment(RemoteMacDirectory.self) private var directory
@@ -60,10 +61,11 @@ struct RemoteMacsPane: View {
         }
         .onChange(of: directory.pendingInvitation) { _, _ in takePendingInvitation() }
         .sheet(isPresented: $pasting, onDismiss: { linkText = "" }) {
-            RemotePairingLinkSheet(initialText: linkText) { mac in
+            RemotePairingOtherMacSheet(initialText: linkText) { mac in
                 pasting = false
                 if let mac {
-                    selectedID = mac.id
+                    // 从「附近的其他 Mac」挑的那台配上之前不在列表里：不改选中，只打开它的窗口。
+                    if allMacs.contains(where: { $0.id == mac.id }) { selectedID = mac.id }
                     openWindow(value: RemoteMacWindowID(macID: mac.id))
                 }
             }
@@ -106,9 +108,9 @@ struct RemoteMacsPane: View {
                 sectionTitle("已配对")
                 Spacer()
                 // 列表头只放一个图标钮（同表单头的关闭钮），说明放悬停提示；空态里才是带字的大按钮。
-                UDIconButton(systemImage: "link") { pasting = true }
-                    .help(Text("粘贴邀请链接：不在同一网络的 Mac，在它的「设置 › 远程控制」里显示邀请并拷贝链接。"))
-                    .accessibilityLabel(Text("粘贴邀请链接"))
+                UDIconButton(systemImage: "plus") { pasting = true }
+                    .help(Text("配对其他 Mac：粘贴邀请链接，或从同一局域网里挑一台不在你 iCloud 账户里的 Mac。"))
+                    .accessibilityLabel(Text("配对其他 Mac"))
             }
             .padding(.leading, ServerRowLayout.contentPadding)
             .padding(.trailing, 16)
@@ -270,7 +272,7 @@ private struct RemoteMacDetailPanel: View {
             header
             statusLine.padding(.top, 6)
             if isNearby {
-                Text("同一局域网里打开了远程控制、还没配对的 Mac。点「配对」后在那台 Mac 上输入这里显示的 6 位数。")
+                Text("同一局域网里、和这台 Mac 登录同一个 iCloud 账户、还没配对的 Mac。点「配对」后在那台 Mac 上输入这里显示的 6 位数。")
                     .font(.system(size: 12))
                     .foregroundStyle(UD.text3)
                     .lineSpacing(3)
@@ -382,7 +384,7 @@ private struct RemoteMacDetailPanel: View {
 
 // MARK: - 空态
 
-/// 一台 Mac 都没有（没配对过、局域网里也没看到）时的大空态。
+/// 一台 Mac 都没有（没配对过、局域网里也没看到同一个 iCloud 账户里的）时的大空态。
 struct RemoteMacsEmptyState: View {
     let onPaste: () -> Void
 
@@ -402,14 +404,14 @@ struct RemoteMacsEmptyState: View {
                 .lineSpacing(3)
                 .frame(maxWidth: 380)
                 .padding(.top, 8)
-            Text("同一局域网里打开了远程控制的 Mac 会自动出现在这里；不在同一网络的，在它的「设置 › 远程控制」里显示邀请并拷贝链接，粘贴到这里。")
+            Text("同一局域网里、和这台 Mac 登录同一个 iCloud 账户并打开了远程控制的 Mac 会自动出现在这里。其他 Mac 不会自动出现，点下面的按钮配对。")
                 .font(.system(size: 12))
                 .foregroundStyle(UD.text4)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
                 .frame(maxWidth: 380)
                 .padding(.top, 10)
-            UDButton(title: String(localized: "粘贴邀请链接…"), style: .primary, systemImage: "link", action: onPaste)
+            UDButton(title: String(localized: "配对其他 Mac…"), style: .primary, systemImage: "plus", action: onPaste)
                 .padding(.top, 22)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -417,8 +419,11 @@ struct RemoteMacsEmptyState: View {
     }
 }
 
-/// 粘贴邀请链接：先给人看是哪台 Mac、会不会带上中继，确认后配对。
-private struct RemotePairingLinkSheet: View {
+/// 「配对其他 Mac」：不在本机 iCloud 账户里的 Mac 不自动出现在列表里，要配对都从这里走。两条路：
+/// - 粘贴邀请链接（那台 Mac 的「设置 › 远程控制」里拷出来的）：先给人看是哪台 Mac、会不会带上中继，确认后配对；
+/// - 同一局域网里打开了远程控制的其他 Mac（`RemoteMacDirectory.otherNearbyMacs`）：点「配对…」打开它的窗口，
+///   在那台 Mac 上输入窗口里显示的 6 位数。打开链接带来的邀请（`initialText`）只确认那一张，不列这一段。
+struct RemotePairingOtherMacSheet: View {
     var initialText = ""
     let onDone: (RemoteMacDirectory.Mac?) -> Void
 
@@ -430,15 +435,26 @@ private struct RemotePairingLinkSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("粘贴邀请链接").font(.system(size: 15, weight: .semibold)).foregroundStyle(UD.text)
-            UDTextField(placeholder: "uterm://pair?…", text: $text)
-            if let invitation {
-                SettingsInlineNote(tone: .neutral, text: Self.summary(invitation))
-            } else if !text.isEmpty {
-                SettingsInlineNote(tone: .warning, text: String(localized: "这不是 uTerm 的邀请链接。"))
+            Text("配对其他 Mac").font(.system(size: 15, weight: .semibold)).foregroundStyle(UD.text)
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("邀请链接")
+                UDTextField(placeholder: "uterm://pair?…", text: $text)
+                if let invitation {
+                    SettingsInlineNote(tone: .neutral, text: Self.summary(invitation))
+                } else if !text.isEmpty {
+                    SettingsInlineNote(tone: .warning, text: String(localized: "这不是 uTerm 的邀请链接。"))
+                } else {
+                    Text("在那台 Mac 的「设置 › 远程控制」里显示邀请并拷贝链接，粘贴到这里。不在同一网络也能用。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(UD.text3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let failure {
+                    SettingsInlineNote(tone: .warning, text: failure)
+                }
             }
-            if let failure {
-                SettingsInlineNote(tone: .warning, text: failure)
+            if initialText.isEmpty {
+                nearbySection
             }
             HStack {
                 Spacer()
@@ -460,6 +476,54 @@ private struct RemotePairingLinkSheet: View {
                 text = pasted
             }
         }
+    }
+
+    private var nearbySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("附近的其他 Mac")
+            Text(Self.nearbyNote(isEmpty: directory.otherNearbyMacs.isEmpty))
+                .font(.system(size: 12))
+                .foregroundStyle(UD.text3)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if !directory.otherNearbyMacs.isEmpty {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(directory.otherNearbyMacs) { mac in
+                            HStack(spacing: 10) {
+                                SettingsListIcon.symbol("desktopcomputer", UD.accent)
+                                Text(mac.name)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(UD.text)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer(minLength: 8)
+                                UDButton(title: "配对…", style: .secondary) { onDone(mac) }
+                            }
+                            .padding(.vertical, 6)
+                            .accessibilityElement(children: .contain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 176)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func sectionTitle(_ title: LocalizedStringKey) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(UD.text4)
+            .tracking(0.3)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// 「附近的其他 Mac」下面那句说明（两端同一句话的 Mac 版）。
+    static func nearbyNote(isEmpty: Bool) -> String {
+        isEmpty
+            ? String(localized: "同一局域网里没有找到其他打开了远程控制的 Mac。和这台 Mac 登录同一个 iCloud 账户的 Mac 会直接出现在「附近的 Mac」里。")
+            : String(localized: "同一局域网里打开了远程控制、不在你 iCloud 账户里的 Mac。点「配对…」后在那台 Mac 上输入窗口里显示的 6 位数。")
     }
 
     private func pair() {

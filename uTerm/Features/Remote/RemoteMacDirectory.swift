@@ -8,8 +8,12 @@ import Observation
 ///
 /// 配对过的 Mac 只来自本机信任（局域网审批或邀请配上的），同一 Apple ID 不算数。Bonjour（`_uterm-remote._tcp`）
 /// 回答「哪台此刻在线、地址是什么」：按 TXT 记录里的设备 ID 对号，设备 ID 与公钥在握手里再核对一遍
-///（`RemoteMacClient.expectedPeer`）。对不上号的在线 Mac 列进「附近的 Mac」，点了就发起局域网配对：
-/// Mac 上弹出核对码，人点「允许」之后才记进本机信任。
+///（`RemoteMacClient.expectedPeer`）。对不上号的在线 Mac 分两种：
+/// - 登记在本机同一个 iCloud 账户里的（设备组名册里有它的 `device` 条目，`accountDevices`）自动列进「附近的 Mac」；
+/// - 其余的（别人的 Mac、没开 iCloud 钥匙串的）**不自动列出来**，只在「配对其他 Mac」里给看（`otherNearbyMacs`；
+///   Mac 是列表头「+」打开的面板，iOS 是扫码页里的入口）。别人的 Mac 一进同一个局域网就出现在你的列表里，既打扰，
+///   也让人误点去配对。
+/// 两种点了都是发起局域网配对：Mac 上输入这里显示的核对码之后才记进本机信任。账户只决定列不列，不构成信任。
 ///
 /// 浏览要「本地网络」授权，所以和局域网同步一样推迟：用户第一次点「连接我的 Mac」才开始
 /// （之后每次进主机页自动开始），不会一启动就弹系统授权框。
@@ -51,8 +55,10 @@ final class RemoteMacDirectory {
 
     /// 配对过的 Mac（在线的在前）。
     private(set) var macs: [Mac] = []
-    /// 局域网里此刻在线、还没配对的 Mac。
+    /// 局域网里此刻在线、还没配对、登记在本机同一个 iCloud 账户里的 Mac。自动列进「附近的 Mac」。
     private(set) var nearbyMacs: [Mac] = []
+    /// 局域网里此刻在线、还没配对、不在本机 iCloud 账户里的 Mac。不自动列出来，只在「配对其他 Mac」里给看。
+    private(set) var otherNearbyMacs: [Mac] = []
     /// 刚凭邀请配上、等它一上线就打开的 Mac（`Mac.id`）。主机页的「我的 Mac」负责打开并清掉。
     var pendingOpenMacID: String?
     /// 打开链接收到、还没确认的邀请（Mac 上点开 `uterm://pair`）。「我的 Mac」窗口弹出确认并清掉。
@@ -87,6 +93,13 @@ final class RemoteMacDirectory {
     /// 扫码拿到、还没用掉的令牌：设备 ID → 令牌。
     @ObservationIgnored private var pendingTokens: [UUID: Data] = [:]
     @ObservationIgnored private var networkWatcher: RemoteNetworkWatcher?
+    /// 读「本机 iCloud 账户里登记过哪些设备」（`liveAccountDevices`）。nil = 一台都不认，没配对的全进 `otherNearbyMacs`。
+    @ObservationIgnored private let readAccountDevices: (@MainActor () -> Set<UUID>)?
+    /// 上次读到的那一份。只拿来决定「附近的 Mac」自动列谁：名册里的条目同一个钥匙串圈里谁都能写，不构成信任。
+    @ObservationIgnored private var accountDevices: Set<UUID> = []
+    /// 局域网里有对不上账户的 Mac、又有界面在看时，隔一会儿重读一次名册（它的条目可能还在 iCloud 的路上）。
+    @ObservationIgnored private var accountRecheck: Task<Void, Never>?
+    @ObservationIgnored let accountRecheckInterval: Duration
     /// 平台的前后台监听（iOS 的 `RemoteMacDirectoryLifecycle`），跟着目录活。
     @ObservationIgnored var lifecycle: AnyObject?
     /// 主机带来的中继能不能当本机默认中继（见 `RemoteRelayPlacement`）。iOS 能；Mac 不能：Mac 的默认中继也是
@@ -132,13 +145,18 @@ final class RemoteMacDirectory {
          relayPollInterval: Duration = RemoteMacDirectory.defaultRelayPollInterval,
          fetchRelayHosts: @escaping @Sendable (RemoteRelayClient) async throws -> Set<UUID> = {
              try await $0.onlineHosts()
-         }) {
+         },
+         // 排在 `fetchRelayHosts` 后面：好几处测试把它写成尾随闭包，闭包类型的参数排在它前面会被尾随闭包认走。
+         accountDevices: (@MainActor () -> Set<UUID>)? = RemoteMacDirectory.liveAccountDevices,
+         accountRecheckInterval: Duration = .seconds(5)) {
         self.identity = identity
         self.relayStore = relayStore
         self.defaults = defaults
         self.adoptsRelayAsDefault = adoptsRelayAsDefault
         self.relayPollInterval = relayPollInterval
         self.fetchRelayHosts = fetchRelayHosts
+        self.readAccountDevices = accountDevices
+        self.accountRecheckInterval = accountRecheckInterval
         // 推送把 App 拉起在后台时不该问中继；回到前台由 returnedToForeground 翻过来。
         self.isInForeground = startsInForeground
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
@@ -183,11 +201,14 @@ final class RemoteMacDirectory {
     func enteredBackground() {
         isInForeground = false
         stopRelayPolling()
+        accountRecheck?.cancel()
+        accountRecheck = nil
     }
 
     /// App 回到前台：重读配对、接着问中继，各条连接看看还通不通。
     func returnedToForeground() {
         isInForeground = true
+        refreshAccountDevices()
         refreshPaired()
         // 只在有界面显示在线状态时才接着问中继；没人看时等界面出现（或抽屉读 `pairedMacs`）再问。
         if isActivated, wantsLiveRelayStatus { startRelayPolling() }
@@ -202,6 +223,7 @@ final class RemoteMacDirectory {
     }
 
     func startBrowsing() {
+        refreshAccountDevices()
         refreshPaired()
         startRelayPolling()
         guard browser == nil else { return }
@@ -244,13 +266,62 @@ final class RemoteMacDirectory {
 
     /// 只认 TXT 里带设备 ID 的结果；电脑名只拿来显示。没有设备 ID 的（老版本 Mac）不认。
     private func update(_ results: Set<NWBrowser.Result>) {
-        discovered = Self.onlineMacs(results.compactMap { result in
+        setDiscovered(Self.onlineMacs(results.compactMap { result in
             guard case .service(let name, _, _, _) = result.endpoint,
                   case .bonjour(let txt) = result.metadata else { return nil }
             return (name, txt[RemoteConstants.deviceIDKey], result.endpoint)
-        })
+        }))
+    }
+
+    /// Bonjour 此刻看到的 Mac 换了一批（测试直接调它，`NWBrowser.Result` 造不出来）。
+    func setDiscovered(_ found: [UUID: (name: String, endpoint: NWEndpoint)]) {
+        discovered = found
         online = internetOnly ? [:] : discovered
+        // 新出现的 Mac 可能刚登记进账户：有人在线才读（读一次是一次本机钥匙串查询）。
+        if !found.isEmpty { refreshAccountDevices() }
         rebuild()
+    }
+
+    // MARK: - 同一个 iCloud 账户
+
+    /// 本机 iCloud 账户里登记过的设备：设备组名册（iCloud 钥匙串 `com.uozi.uTerm.remote.group`，加上快通道刚送到的）
+    /// 里的 `device` 条目。每台有远控身份的设备开着 uTerm 时都会登记自己（`RemoteDeviceGroup.register`），进没进
+    /// 设备组都一样。测试宿主里这份名册只在内存，读不到真实钥匙串。
+    nonisolated static func liveAccountDevices() -> Set<UUID> {
+        Set(RemoteGroupRoster(storage: RemoteGroupOverlayStorage.live).load().devices.map(\.id))
+    }
+
+    /// 重读账户里的设备。变了返回 true（调用方接着 `rebuild`）。
+    @discardableResult
+    private func refreshAccountDevices() -> Bool {
+        guard let readAccountDevices else { return false }
+        let devices = readAccountDevices()
+        guard devices != accountDevices else { return false }
+        accountDevices = devices
+        return true
+    }
+
+    /// 局域网里有对不上账户的 Mac：它可能就是你的另一台 Mac，只是条目还没经 iCloud 同步到（一跳约 20 秒）。
+    /// 有界面在显示这份列表、App 在前台时隔 `accountRecheckInterval` 重读一次，对上了就挪进「附近的 Mac」；
+    /// 没有这样的 Mac、没人看时不读。
+    private var wantsAccountRecheck: Bool {
+        readAccountDevices != nil && isInForeground && liveStatusDemand > 0 && !otherNearbyMacs.isEmpty
+    }
+
+    private func scheduleAccountRecheck() {
+        guard accountRecheck == nil, wantsAccountRecheck else { return }
+        let interval = accountRecheckInterval
+        accountRecheck = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self else { return }
+                guard self.wantsAccountRecheck else {
+                    self.accountRecheck = nil
+                    return
+                }
+                if self.refreshAccountDevices() { self.rebuild() }
+            }
+        }
     }
 
     nonisolated static func onlineMacs(_ results: [(name: String, deviceID: String?, endpoint: NWEndpoint)])
@@ -491,6 +562,7 @@ final class RemoteMacDirectory {
     func keepLiveStatusFresh() async {
         liveStatusDemand += 1
         if isActivated, isInForeground, relayPoll == nil { startRelayPolling() }
+        scheduleAccountRecheck()
         defer {
             liveStatusDemand -= 1
             if !wantsLiveRelayStatus { stopRelayPolling() }
@@ -688,9 +760,9 @@ final class RemoteMacDirectory {
         return true
     }
 
-    /// 按 `Mac.id` 找：配对过的，或附近还没配对的。
+    /// 按 `Mac.id` 找：配对过的，或附近还没配对的（不在本机 iCloud 账户里的也算：从「配对其他 Mac」点进来的）。
     func mac(id: String) -> Mac? {
-        macs.first { $0.id == id } ?? nearbyMacs.first { $0.id == id }
+        macs.first { $0.id == id } ?? nearbyMacs.first { $0.id == id } ?? otherNearbyMacs.first { $0.id == id }
     }
 
     /// 配对过、此刻在局域网里能找到的 Mac。新建终端抽屉只列它们。
@@ -712,14 +784,19 @@ final class RemoteMacDirectory {
             (peer.relay?.memberIdentity ?? defaultRelay).flatMap { relayHosts[$0] }?.contains(peer.id) ?? false
         }.map(\.id))
         macs = debugMacs + Self.knownMacs(trusted: trusted, online: online, relayHosts: onRelay)
-        nearbyMacs = Self.nearbyMacs(online: online, paired: Set(trusted.map(\.id)), localID: RemoteLocalDevice.id())
+        let unpaired = Self.nearbyMacs(online: online, paired: Set(trusted.map(\.id)), localID: RemoteLocalDevice.id())
+        let nearby = Self.splitByAccount(unpaired, account: accountDevices)
+        // 没变就不写：名册每隔几秒重读一次，别让没变的列表也触发界面刷新。
+        if nearby.mine != nearbyMacs { nearbyMacs = nearby.mine }
+        if nearby.others != otherNearbyMacs { otherNearbyMacs = nearby.others }
         // 局域网和中继的情况变了，已有的客户端下次重连时按新路走。局域网又找到它、中继报它上线时，
         // 客户端会叫醒正在退避的标签马上重试（Mac 长时间离线后没人看的标签退避可达一分钟）。
-        for mac in macs + nearbyMacs {
+        for mac in macs + nearbyMacs + otherNearbyMacs {
             guard let client = clients[mac.id] else { continue }
             updateRoutes(client, for: mac)
             client.relayPresenceChanged(mac.isOnRelay)
         }
+        scheduleAccountRecheck()
         #if DEBUG && os(iOS)
         runDebugMatrixIfRequested()
         #endif
@@ -785,6 +862,15 @@ final class RemoteMacDirectory {
                        endpoint: seen.endpoint)
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// 没配对的在线 Mac 按账户分开：登记在本机 iCloud 账户里的（自动列出），和其余的（只在「配对其他 Mac」里）。
+    nonisolated static func splitByAccount(_ unpaired: [Mac], account: Set<UUID>) -> (mine: [Mac], others: [Mac]) {
+        var mine: [Mac] = [], others: [Mac] = []
+        for mac in unpaired {
+            if let id = mac.deviceID, account.contains(id) { mine.append(mac) } else { others.append(mac) }
+        }
+        return (mine, others)
     }
 
     /// 忘记一台 Mac：本机不再信任，再连要重新配对。

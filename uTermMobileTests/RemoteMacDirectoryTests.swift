@@ -5,8 +5,8 @@ import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// 「我的 Mac」只列本机配对过的 Mac，按设备 ID 对号在线状态；局域网里没配对的列进「附近的 Mac」，
-/// 点了走审批配对。新建终端抽屉只列配对过且在线的。
+/// 「我的 Mac」只列本机配对过的 Mac，按设备 ID 对号在线状态；局域网里没配对、登记在同一个 iCloud 账户里的列进
+/// 「附近的 Mac」，其余的只在「配对其他 Mac」里给看，点了都走审批配对。新建终端抽屉只列配对过且在线的。
 @MainActor
 final class RemoteMacDirectoryTests: XCTestCase {
     private static let macName = "调试 Mac（127.0.0.1:1）"
@@ -57,6 +57,90 @@ final class RemoteMacDirectoryTests: XCTestCase {
         let online = RemoteMacDirectory.onlineMacs([("本机", me.uuidString, somewhere), ("隔壁", other.uuidString, somewhere)])
         let nearby = RemoteMacDirectory.nearbyMacs(online: online, paired: [], localID: me)
         XCTAssertEqual(nearby.map(\.deviceID), [other], "Mac 当主控时 Bonjour 也看得到自己")
+    }
+
+    // MARK: - 同一个 iCloud 账户才自动列出
+
+    /// 账户里登记过哪些设备由测试给；`accountRecheckInterval` 调短，好等到「条目晚到」那一拍。
+    private func accountDirectory(_ account: @escaping @MainActor () -> Set<UUID>,
+                                  identity: RemoteIdentityStore = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        throws -> RemoteMacDirectory {
+        let suite = "RemoteMacDirectoryTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return RemoteMacDirectory(identity: identity, defaults: defaults, accountDevices: account,
+                                  accountRecheckInterval: .milliseconds(20))
+    }
+
+    func testSplitByAccountKeepsOnlyRegisteredDevicesInTheAutomaticList() {
+        let mine = UUID(), theirs = UUID()
+        let online = RemoteMacDirectory.onlineMacs([("我的 Mac mini", mine.uuidString, somewhere),
+                                                    ("别人的 Mac", theirs.uuidString, somewhere)])
+        let unpaired = RemoteMacDirectory.nearbyMacs(online: online, paired: [], localID: UUID())
+        let split = RemoteMacDirectory.splitByAccount(unpaired, account: [mine])
+        XCTAssertEqual(split.mine.map(\.deviceID), [mine])
+        XCTAssertEqual(split.others.map(\.deviceID), [theirs])
+        let none = RemoteMacDirectory.splitByAccount(unpaired, account: [])
+        XCTAssertTrue(none.mine.isEmpty, "账户里一台都没登记（没开 iCloud 钥匙串）时什么都不自动列")
+        XCTAssertEqual(none.others.count, 2)
+    }
+
+    func testOnlyMacsInMyICloudAccountShowUpNearby() throws {
+        let mine = UUID(), theirs = UUID()
+        let directory = try accountDirectory { [mine] }
+        directory.setDiscovered([mine: ("我的 Mac mini", somewhere), theirs: ("别人的 Mac", somewhere)])
+
+        XCTAssertEqual(directory.nearbyMacs.map(\.deviceID), [mine], "不在本机 iCloud 账户里的 Mac 不自动出现")
+        XCTAssertEqual(directory.otherNearbyMacs.map(\.deviceID), [theirs], "它只在「配对其他 Mac」里给看")
+        XCTAssertEqual(directory.otherNearbyMacs.first?.source, .nearby, "点了照旧走局域网审批配对")
+        XCTAssertNotNil(directory.mac(id: theirs.uuidString), "从「配对其他 Mac」点进去要找得到它")
+        XCTAssertTrue(directory.macs.isEmpty)
+    }
+
+    func testPairingAMacFromOutsideTheAccountMovesItToMyMacs() throws {
+        let theirs = UUID()
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let directory = try accountDirectory({ [] }, identity: identity)
+        directory.setDiscovered([theirs: ("朋友的 Mac", somewhere)])
+        XCTAssertEqual(directory.otherNearbyMacs.map(\.deviceID), [theirs])
+
+        try identity.trust(RemotePeer(id: theirs, name: "朋友的 Mac", publicKey: key(), pairedAt: .now))
+        directory.refreshPaired()
+        XCTAssertEqual(directory.macs.map(\.deviceID), [theirs])
+        XCTAssertTrue(directory.macs[0].isOnline)
+        XCTAssertTrue(directory.otherNearbyMacs.isEmpty)
+        XCTAssertTrue(directory.nearbyMacs.isEmpty)
+    }
+
+    /// 另一台 Mac 的条目晚于 Bonjour 到（iCloud 钥匙串一跳约 20 秒）：有界面在看时隔一会儿重读，对上了就挪过来。
+    func testMacMovesToNearbyOnceItsAccountEntryArrives() async throws {
+        let mine = UUID()
+        var account: Set<UUID> = []
+        var reads = 0
+        let directory = try accountDirectory {
+            reads += 1
+            return account
+        }
+        directory.setDiscovered([mine: ("我的 Mac mini", somewhere)])
+        XCTAssertTrue(directory.nearbyMacs.isEmpty)
+        XCTAssertEqual(directory.otherNearbyMacs.map(\.deviceID), [mine])
+
+        // 没有界面在看：不重读。
+        let idleReads = reads
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(reads, idleReads, "没人看着列表时不去读钥匙串")
+
+        let watching = Task { await directory.keepLiveStatusFresh() }
+        defer { watching.cancel() }
+        account = [mine]
+        try await waitUntil { directory.nearbyMacs.map(\.deviceID) == [mine] }
+        XCTAssertTrue(directory.otherNearbyMacs.isEmpty)
+
+        // 都对上号了：不用再读。
+        try await Task.sleep(for: .milliseconds(60))
+        let settledReads = reads
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(reads, settledReads, "局域网里没有对不上账户的 Mac 时不再重读")
     }
 
     func testSameNameDoesNotMakeAStrangerLookPaired() {

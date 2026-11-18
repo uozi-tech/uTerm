@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import Network
 import SwiftUI
 import UDesignKit
 import XCTest
@@ -90,6 +91,13 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
                     probe(.directIPv6, true, setup: 1240, rtt: 18.4),
                     probe(.directIPv4, false, failure: "打洞超时"),
                     probe(.relay, true, setup: 620, rtt: 42.7)])
+        // 「配对其他 Mac」：局域网里两台不在本机 iCloud 账户里的 Mac（账户里一台都没登记），和一台都没找到。
+        let strangers = RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
+                                           defaults: defaults, adoptsRelayAsDefault: false, accountDevices: { [] })
+        strangers.setDiscovered([UUID(): ("设计部的 iMac", .hostPort(host: "192.168.1.20", port: 4000)),
+                                 UUID(): ("会议室 Mac mini", .hostPort(host: "192.168.1.21", port: 4000))])
+        let nobody = RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
+                                        defaults: defaults, adoptsRelayAsDefault: false, accountDevices: { [] })
         let diagnostics = RemotePathDiagnosticsModel(log: log, networkLabel: { "Wi-Fi · 有 IPv6" })
         diagnostics.reloadHistory()
         for dark in [false, true] {
@@ -110,6 +118,12 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
             // 空态直接画：整个面板一出现就开 Bonjour，本机局域网里的 Mac 会混进来。
             try await shoot("my-macs-empty", size: NSSize(width: 860, height: 560), dark: dark, into: dir) {
                 RemoteMacsEmptyState {}.background(UD.panel)
+            }
+            try await shoot("pair-other-mac", size: NSSize(width: 440, height: 430), dark: dark, into: dir) {
+                RemotePairingOtherMacSheet { _ in }.environment(strangers)
+            }
+            try await shoot("pair-other-mac-none", size: NSSize(width: 440, height: 300), dark: dark, into: dir) {
+                RemotePairingOtherMacSheet { _ in }.environment(nobody)
             }
             try await shoot("pairing-code", size: NSSize(width: 900, height: 600), dark: dark, into: dir) {
                 RemoteMacPairingCodeView(macName: "办公室 Mac Studio", code: "482913").background(UD.bg)
