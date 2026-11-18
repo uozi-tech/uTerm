@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreVideo
+import QuartzCore
 import XCTest
 @preconcurrency import Network
 @testable import uTerm
@@ -221,6 +222,69 @@ final class RemoteDesktopRegionTests: XCTestCase {
         XCTAssertEqual(back.y, 0.5, accuracy: 1.0 / 65535)
         XCTAssertEqual(back.width, 0.125, accuracy: 1.0 / 65535)
         XCTAssertEqual(back.height, 0.375, accuracy: 1.0 / 65535)
+    }
+
+    // MARK: - 画布上的两层
+
+    func test_changing_region_moves_to_the_other_layer_and_keeps_the_old_one_in_place() async throws {
+        // 2026-11-17 真机：捏合途中 Mac 每隔一小会儿换一块，只有一个图层时旧画面会先被拉到新位置上一两帧，画面在闪。
+        // 换一块时新画面进另一层，旧的那层原地留着、过一会儿才收。
+        let space = CALayer()
+        let stage = RemoteDesktopRegionStage(space: space)
+        let layers = try XCTUnwrap(space.sublayers)
+        XCTAssertEqual(layers.count, 2)
+        XCTAssertTrue(layers.allSatisfy(\.isHidden))
+        let image = quadrants(width: 64, height: 64)
+        let first = RemoteDesktopRegion(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        let second = RemoteDesktopRegion(x: 0.5, y: 0.5, width: 0.25, height: 0.25)
+
+        stage.present(image, region: first)
+        stage.present(image, region: first)
+        XCTAssertEqual(stage.placement.front, 0)
+        XCTAssertEqual(layers[0].frame, RemoteDesktopRegionPlacement.frame(for: first))
+        XCTAssertFalse(layers[0].isHidden)
+        XCTAssertTrue(layers[1].isHidden, "同一块的帧只进一层")
+
+        stage.present(image, region: second)
+        XCTAssertEqual(stage.placement.front, 1)
+        XCTAssertEqual(layers[1].frame, RemoteDesktopRegionPlacement.frame(for: second))
+        XCTAssertFalse(layers[1].isHidden)
+        XCTAssertGreaterThan(layers[1].zPosition, layers[0].zPosition, "新的盖在旧的上面")
+        // 旧的那层此刻没动：位置没变（旧画面不会被拉到新位置上），也还没藏。
+        XCTAssertEqual(layers[0].frame, RemoteDesktopRegionPlacement.frame(for: first))
+        XCTAssertFalse(layers[0].isHidden)
+
+        // 过了收走的时间：旧的那层藏起来，新的还在。
+        try await Task.sleep(for: .milliseconds(Int(RemoteDesktopRegionStage.retireDelay * 1000) + 150))
+        XCTAssertTrue(layers[0].isHidden)
+        XCTAssertFalse(layers[1].isHidden)
+        XCTAssertEqual(stage.placement.regions, [nil, second])
+    }
+
+    func test_whole_frame_retires_region_layers_only_after_a_moment() async throws {
+        let space = CALayer()
+        let stage = RemoteDesktopRegionStage(space: space)
+        let layers = try XCTUnwrap(space.sublayers)
+        let image = quadrants(width: 64, height: 64)
+        let region = RemoteDesktopRegion(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        stage.present(image, region: region)
+        // 回到整块：整块那张刚送进底下的显示层，还没显示出来，上面这层先留着。
+        stage.presentedWhole()
+        XCTAssertFalse(layers[0].isHidden)
+        XCTAssertNil(stage.placement.front)
+        try await Task.sleep(for: .milliseconds(Int(RemoteDesktopRegionStage.retireDelay * 1000) + 150))
+        XCTAssertTrue(layers.allSatisfy(\.isHidden))
+        XCTAssertEqual(stage.placement.regions, [nil, nil])
+
+        // 刚回到整块又放大（还没到收走的时间）：排着的那次收走作废，用上的那层不会被收掉。
+        stage.present(image, region: region)
+        stage.presentedWhole()
+        stage.present(image, region: region)
+        let front = try XCTUnwrap(stage.placement.front)
+        try await Task.sleep(for: .milliseconds(Int(RemoteDesktopRegionStage.retireDelay * 1000) + 150))
+        XCTAssertFalse(layers[front].isHidden, "新放大的那层被上一次的收走带走了")
+        XCTAssertEqual(stage.placement.regions[front], region)
+        XCTAssertTrue(layers[1 - front].isHidden)
     }
 
     // MARK: - 端到端

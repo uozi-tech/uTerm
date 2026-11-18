@@ -11,16 +11,25 @@ import Foundation
 /// `mouseEventNumber`。不设的话编号由系统逐个分配，macOS 27 不把抬起认作那次按下的结束，
 /// 点击变成按住不放、窗口也拖不动（Chromium 远程桌面同样的修复：4e33c976af，2026-10）。
 ///
+/// 两条投递路：
+/// - 全局输入通道（`.cghidEventTap`）：看整块显示器时用。等于真的动了鼠标，Mac 上的指针跟着走。
+/// - 按进程投递（`windowTarget` 不为 nil，见 `RemoteWindowInputTarget`）：只看一个窗口、主控端要了「独立键鼠」时用。
+///   Mac 上的指针不动，手机上的指针画在 `virtualPointer`。
+///
+/// 只看一个窗口又走全局通道时（主控端关了独立键鼠、或者建不了投递目标），按下之前先看一眼这个点上最上面的窗口是不是
+/// 别的 App 的：是就先把要看的窗口提到最前再点，免得点到别人头上（`pressGuard`）。
+///
 /// 只在连接队列上调用（串行），按键状态（哪个键按着、上次点击位置）因此不用加锁。
 nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked Sendable {
     /// 归一化坐标对应的那块范围（全局坐标）。整块显示器时不变；只看一个窗口时跟着窗口走（`updateBounds`）。
     private var bounds: CGRect
-    private let source: CGEventSource? = {
-        let source = CGEventSource(stateID: .hidSystemState)
-        // 帘幕模式靠这个标记认出「手机注入的事件」并放行，本机键鼠则拦掉。
-        source?.userData = RemoteInjectedEvent.userDataTag
-        return source
-    }()
+    private let source: CGEventSource? = RemoteEventInjector.makeSource()
+    /// 按进程投递的目标。nil = 走全局输入通道。
+    private let windowTarget: RemoteWindowInputTarget?
+    /// 走全局通道、只看一个窗口时，每次按下之前调一下（参数是按下的位置，全局坐标）。
+    private let pressGuard: (@Sendable (CGPoint) -> Void)?
+    /// 全局输入通道的出口（测试换成记录器，免得真的去动这台机器的鼠标）。
+    private let hidPost: @Sendable (CGEvent) -> Void
     private var location: CGPoint
     private var pressed: Set<UInt8> = []
     /// 当前这次按键的编号：每次按下加一，之后的拖动与抬起沿用。
@@ -31,10 +40,37 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
     /// 像素滚动只收整数：小数部分攒起来，下一次一起发，慢速滚动才不会丢。
     private var scrollRemainder = CGPoint.zero
 
-    init(display: RemoteDesktopDisplay) {
+    init(display: RemoteDesktopDisplay, windowTarget: RemoteWindowInputTarget? = nil,
+         pressGuard: (@Sendable (CGPoint) -> Void)? = nil,
+         hidPost: @escaping @Sendable (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }) {
         bounds = display.bounds
         location = CGPoint(x: display.bounds.midX, y: display.bounds.midY)
+        self.windowTarget = windowTarget
+        self.pressGuard = windowTarget == nil ? pressGuard : nil
+        self.hidPost = hidPost
     }
+
+    /// 生产用的那一个：只看一个窗口时，`independent` 决定走按进程投递还是全局通道加「先提到最前」。
+    @MainActor
+    static func live(display: RemoteDesktopDisplay, independent: Bool) -> RemoteEventInjector {
+        guard let windowID = display.windowID else { return RemoteEventInjector(display: display) }
+        if independent, let target = RemoteWindowInputTarget.live(windowID: windowID, source: makeSource()) {
+            return RemoteEventInjector(display: display, windowTarget: target)
+        }
+        return RemoteEventInjector(display: display, pressGuard: { point in
+            RemoteDesktopWindows.uncover(id: windowID, at: point)
+        })
+    }
+
+    static func makeSource() -> CGEventSource? {
+        let source = CGEventSource(stateID: .hidSystemState)
+        // 帘幕模式靠这个标记认出「手机注入的事件」并放行，本机键鼠则拦掉。
+        source?.userData = RemoteInjectedEvent.userDataTag
+        return source
+    }
+
+    /// 按进程投递时 Mac 上的指针不动：手机上的指针画在我们自己记的位置。
+    var virtualPointer: CGPoint? { windowTarget == nil ? nil : location }
 
     func updateBounds(_ bounds: CGRect) {
         self.bounds = bounds
@@ -42,8 +78,13 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
 
     func inject(_ input: RemoteDesktopInput) {
         switch input {
-        case .move, .button:
-            post(mouseEvent(for: input))
+        case .move:
+            postMouse(mouseEvent(for: input), phase: pressed.isEmpty ? .hover : .drag)
+        case .button(_, let down, _, _, _, _):
+            if down, let pressGuard, case .button(_, _, _, let x, let y, _) = input {
+                pressGuard(RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: bounds))
+            }
+            postMouse(mouseEvent(for: input), phase: down ? .down : .up)
         case .scroll(let dx, let dy, let phase):
             // 增量来自手机：非有限值或超出 Int32 的值转换时会直接崩掉整个 App，先夹住。
             let total = CGPoint(x: Self.clampScroll(scrollRemainder.x + CGFloat(dx)),
@@ -58,11 +99,11 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
             event.setIntegerValueField(.scrollWheelEventScrollPhase, value: scrollPhase)
             event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentumPhase)
             if phase == .ended || phase == .momentumEnded { scrollRemainder = .zero }
-            post(event)
+            if let windowTarget { windowTarget.deliverScroll(event, at: location) } else { post(event) }
         case .key(let code, let down, let modifiers):
             let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
             if let event { event.flags = Self.keyFlags(intrinsic: event.flags, modifiers: modifiers) }
-            post(event)
+            postKey(event)
         case .text(let text):
             typeText(text)
         }
@@ -74,9 +115,11 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
             let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
                                 mouseButton: cgButton)
             stampPress(event, flags: pressedFlags)
-            post(event)
+            postMouse(event, phase: .up)
         }
         pressed = []
+        // 停流时调的：顺手把「让目标以为自己是当前 App」撤掉。
+        windowTarget?.finish()
     }
 
     /// 指针移动 / 按键对应的鼠标事件（不投递），并更新按键状态。其余输入返回 nil。
@@ -129,6 +172,16 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
         case .jpeg(let data):
             RemotePasteboard.write(TerminalImage(format: .jpeg, data: data))
         }
+        pressPaste()
+    }
+
+    /// 文件按「文件」放进剪贴板（同在访达里拷贝）：聊天、邮件、访达这类 app 粘贴出来就是这个视频。
+    func pasteFile(at url: URL) {
+        RemotePasteboard.write(file: url)
+        pressPaste()
+    }
+
+    private func pressPaste() {
         for down in [true, false] {
             inject(.key(code: RemoteKeyMap.Key.v, down: down, modifiers: .command))
         }
@@ -146,7 +199,7 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 event.flags = []
                 chunk.withUnsafeBufferPointer { event.keyboardSetUnicodeString(stringLength: $0.count, unicodeString: $0.baseAddress) }
-                post(event)
+                postKey(event)
             }
         }
     }
@@ -159,7 +212,18 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
     }
 
     private func post(_ event: CGEvent?) {
-        event?.post(tap: .cghidEventTap)
+        guard let event else { return }
+        hidPost(event)
+    }
+
+    private func postMouse(_ event: CGEvent?, phase: RemoteWindowInputTarget.MousePhase) {
+        guard let event else { return }
+        if let windowTarget { windowTarget.deliverMouse(event, at: location, phase: phase) } else { post(event) }
+    }
+
+    private func postKey(_ event: CGEvent?) {
+        guard let event else { return }
+        if let windowTarget { windowTarget.deliverKey(event) } else { post(event) }
     }
 
     static func buttonEvent(_ button: RemoteMouseButton, down: Bool) -> (CGEventType, CGMouseButton) {

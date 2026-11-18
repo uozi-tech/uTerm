@@ -46,7 +46,10 @@ final class RemoteDesktopWindowTests: XCTestCase {
         // 窗口 1902×1278 像素，比手机要的框小：不放大，原样。
         XCTAssertEqual(info.streamWidth, 1902)
         XCTAssertEqual(info.streamHeight, 1278)
-        XCTAssertEqual(mac.raisedWindows, [42])
+        // 默认要「独立键鼠」：输入直接投给窗口所在的进程，开流前不把 App 变成当前 App。
+        XCTAssertEqual(mac.surfacedWindows, [42])
+        XCTAssertTrue(mac.raisedWindows.isEmpty)
+        XCTAssertEqual(mac.independentInputs, [false, true], "整块显示器不要，窗口要")
         XCTAssertEqual(mac.openedWindows, [nil, 42])
         XCTAssertEqual(session.contentFraction, CGSize(width: 1, height: 1))
         let source = try XCTUnwrap(mac.latestSource)
@@ -125,6 +128,308 @@ final class RemoteDesktopWindowTests: XCTestCase {
         session.stop()
         let back = await waitUntil { mac.windows.first { $0.id == 43 }?.bounds == CGRect(x: 0, y: 30, width: 1200, height: 800) }
         XCTAssertTrue(back, "停流后窗口应还原：\(mac.restoredWindows)")
+    }
+
+    func test_refit_never_races_with_restore() async throws {
+        // 2026-11-17 真机：转屏时主控端「停流 → 按新尺寸再开」，Mac 停流时的还原是异步的，和新的调大小互相抢，
+        // 还原落在后面窗口就回到了原来的大尺寸。重调同一个窗口时不该有还原。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let original = CGRect(x: 200, y: 100, width: 1512, height: 874)
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: original)]
+        mac.restoreDelay = .milliseconds(300)
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, fit: CGSize(width: 669, height: 897))
+        XCTAssertEqual(session.state, .streaming)
+        // 连着转两次屏。
+        await session.refitWindow(to: CGSize(width: 951, height: 669))
+        await session.refitWindow(to: CGSize(width: 678, height: 466))
+        XCTAssertEqual(session.state, .streaming)
+        // 等过还原的宽限期和它的耗时：窗口仍是最后要的大小，中间一次还原都没发生。
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 678, height: 466), "窗口被还原抢了回去：\(mac.restoredWindows)")
+        XCTAssertTrue(mac.restoredWindows.isEmpty, "重调同一个窗口时不该还原：\(mac.restoredWindows)")
+        XCTAssertEqual(session.info?.displayWidth, 678)
+        // 真的不看了：放回最初的位置和大小。
+        session.stop()
+        let back = await waitUntil { mac.windows[0].bounds == original }
+        XCTAssertTrue(back, "停流后窗口应还原到最初的大小：\(mac.windows[0].bounds)")
+    }
+
+    // MARK: - 原地换尺寸
+
+    func test_refit_resizes_the_window_in_place_without_reopening_the_stream() async throws {
+        // 转屏、键盘弹出收起：新的 Mac 不停流，改窗口大小、流原地换成新尺寸，新的点尺寸和像素数随几何更新到主控端。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let original = CGRect(x: 200, y: 100, width: 1512, height: 874)
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: original)]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2852, maxHeight: 2006)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, fit: CGSize(width: 1426, height: 1003))
+        let showing = await waitUntil { session.state == .streaming && !session.awaitingFirstFrame }
+        XCTAssertTrue(showing)
+        XCTAssertEqual(session.info?.streamWidth, 2852)
+        XCTAssertEqual(mac.openedWindows.count, 1)
+
+        var left = false
+        let watcher = Task { @MainActor in
+            while !Task.isCancelled {
+                if session.state != .streaming { left = true }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        // 弹出键盘：画布变矮。
+        await session.refitWindow(to: CGSize(width: 1426, height: 535))
+        let resized = await waitUntil { session.info?.displayHeight == 535 && session.info?.streamHeight == 1070 }
+        watcher.cancel()
+        XCTAssertTrue(resized, "新的点尺寸和像素数应随几何更新到：\(String(describing: session.info))")
+        XCTAssertEqual(session.info?.displayWidth, 1426)
+        XCTAssertEqual(session.info?.streamWidth, 2852)
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 1426, height: 535))
+        XCTAssertEqual(mac.openedWindows.count, 1, "没有重开采集")
+        XCTAssertFalse(left, "全程都在放，没有停流")
+        XCTAssertEqual(session.windowFit, CGSize(width: 1426, height: 535))
+        // 换完之后画面接着来。
+        let before = session.stats.totalFrames
+        let more = await waitUntil(6) { session.stats.totalFrames > before }
+        XCTAssertTrue(more, "换完尺寸后应继续收到画面")
+        XCTAssertEqual(session.stats.decodeFailures, 0, "换尺寸的那一帧（新尺寸的关键帧）要解得开")
+        // 不看了：窗口回到最初的位置和大小。
+        session.stop()
+        let back = await waitUntil { mac.windows[0].bounds == original }
+        XCTAssertTrue(back, "停流后窗口应还原到最初的大小：\(mac.windows[0].bounds)")
+    }
+
+    func test_refit_sends_nothing_transitional_while_the_window_is_resizing() async throws {
+        // 改窗口大小到采集换成新尺寸之间有过渡状态：采集还是旧的那套，系统把新窗口缩在旧画面的一角、报来新的范围。
+        // 这些一张都不该到主控端——它停在上一张画面上，等新尺寸的第一帧到了一次换完（2026-11-18 user：换尺寸时闪）。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        // 画面取小一点：测试里现场生成一张大画面要几百毫秒，会把「改窗口期间」这段时间吃掉。
+        mac.minimumWindowSize = CGSize(width: 100, height: 100)
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 200, y: 100, width: 400, height: 300))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 800, maxHeight: 600)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, fit: CGSize(width: 400, height: 300))
+        let showing = await waitUntil { session.state == .streaming && !session.awaitingFirstFrame }
+        XCTAssertTrue(showing)
+        XCTAssertEqual(session.info?.streamHeight, 600)
+        let source = try XCTUnwrap(mac.latestSource)
+
+        mac.fitDelay = .milliseconds(1500)
+        let asked = ContinuousClock.now
+        await session.refitWindow(to: CGSize(width: 400, height: 160))
+        // 等 Mac 收到请求、开始改窗口。
+        try await Task.sleep(for: .milliseconds(200))
+        let framesBefore = session.stats.totalFrames
+        // 过渡状态：采集出的还是旧尺寸的帧，内容只占画面的一角。
+        for _ in 0..<3 {
+            source.emit()
+            source.report(RemoteDesktopFrameGeometry(bounds: CGRect(x: 200, y: 100, width: 400, height: 160),
+                                                     contentFraction: CGSize(width: 1, height: 0.5)))
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        try XCTSkipIf(ContinuousClock.now - asked > .milliseconds(1300), "机器太忙：没赶在窗口改完之前断言")
+        XCTAssertTrue(mac.fittedWindows.count == 1, "窗口还在改：\(mac.fittedWindows)")
+        XCTAssertEqual(session.stats.totalFrames, framesBefore, "改窗口大小期间的过渡画面不该发出来")
+        XCTAssertEqual(session.contentFraction, CGSize(width: 1, height: 1), "过渡状态的几何不该发出来")
+        XCTAssertEqual(session.info?.displayHeight, 300, "主控端还停在旧的排版上")
+        XCTAssertEqual(session.info?.streamHeight, 600)
+
+        // 改完：新的几何和新尺寸的画面一起到。
+        let resized = await waitUntil(6) { session.info?.streamHeight == 320 && session.stats.totalFrames > framesBefore }
+        XCTAssertTrue(resized, "\(String(describing: session.info))")
+        XCTAssertEqual(session.info?.displayHeight, 160)
+        XCTAssertEqual(session.contentFraction, CGSize(width: 1, height: 1))
+        XCTAssertEqual(source.retargetedSizes.map(\.height), [320])
+        XCTAssertEqual(session.stats.decodeFailures, 0)
+    }
+
+    func test_new_layout_waits_for_the_first_frame_of_the_new_shape() async throws {
+        // 主控端：视频帧的形状要变了而新形状的画面还没显示出来时，先不换排版——现在就换，画布会拿新的比例去摆旧的
+        // 画面，拉变形一下才换成新的。等送显示的那一层报「这一帧是新形状的」再一起换。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 200, y: 100, width: 1512, height: 874))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2852, maxHeight: 2006)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, fit: CGSize(width: 1426, height: 1003))
+        let showing = await waitUntil { session.state == .streaming && !session.awaitingFirstFrame }
+        XCTAssertTrue(showing)
+        // 画布上显示着 2852×2006 的画面。
+        session.frameShown(width: 2852, height: 2006)
+
+        await session.refitWindow(to: CGSize(width: 1426, height: 535))
+        let refitted = await waitUntil { mac.latestSource?.retargetedSizes.isEmpty == false }
+        XCTAssertTrue(refitted)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(session.info?.streamHeight, 2006, "新形状的画面还没显示：排版先不动")
+        XCTAssertEqual(session.info?.displayHeight, 1003)
+        // Mac 降了编码分辨率、形状没变的帧：不算。
+        session.frameShown(width: 1426, height: 1003)
+        XCTAssertEqual(session.info?.streamHeight, 2006)
+        // 新形状的第一帧要显示了：排版跟着换。
+        session.frameShown(width: 2852, height: 1070)
+        XCTAssertEqual(session.info?.streamHeight, 1070)
+        XCTAssertEqual(session.info?.displayHeight, 535)
+        XCTAssertEqual(session.info?.displayWidth, 1426)
+    }
+
+    func test_new_layout_is_applied_anyway_if_the_new_frame_never_shows() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 200, y: 100, width: 1512, height: 874))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2852, maxHeight: 2006)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, fit: CGSize(width: 1426, height: 1003))
+        let showing = await waitUntil { session.state == .streaming && !session.awaitingFirstFrame }
+        XCTAssertTrue(showing)
+        session.frameShown(width: 2852, height: 2006)
+        await session.refitWindow(to: CGSize(width: 1426, height: 535))
+        let applied = await waitUntil(4) { session.info?.streamHeight == 1070 }
+        XCTAssertTrue(applied, "新形状的画面一直没报上来：到点照几何换，排版不能一直停在旧的上")
+    }
+
+    func test_same_shape_tolerates_rounding_but_not_a_real_change() {
+        XCTAssertTrue(RemoteDesktopSession.sameShape((2852, 2006), (1426, 1003)))
+        XCTAssertTrue(RemoteDesktopSession.sameShape((2852, 2006), (1900, 1336)), "等比缩小后取偶数")
+        XCTAssertFalse(RemoteDesktopSession.sameShape((2852, 2006), (2852, 1070)), "键盘弹出：矮了一半")
+        XCTAssertFalse(RemoteDesktopSession.sameShape((2852, 2006), (2006, 2852)), "转屏")
+    }
+
+    // MARK: - 换大小时不盖遮罩
+
+    func test_refitting_the_same_window_keeps_the_picture_uncovered() async throws {
+        // 转屏、键盘弹出收起时按新尺寸重开流只要几百毫秒：这期间不盖「正在连接」，画布上留着上一张画面。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 0, y: 0, width: 1200, height: 800))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        // 第一次打开：照常盖「正在连接」。
+        let first = Task { await session.switchWindow(to: 42, fit: CGSize(width: 951, height: 669)) }
+        let coveredWhileOpening = await waitUntil(2) { session.notice(macName: "Mac", showsClose: true) != nil }
+        XCTAssertTrue(coveredWhileOpening, "第一次打开时要有「正在连接」")
+        await first.value
+        let showing = await waitUntil { session.state == .streaming && !session.awaitingFirstFrame }
+        XCTAssertTrue(showing)
+        XCTAssertNil(session.notice(macName: "Mac", showsClose: true))
+        // 换大小（老 Mac 的做法：停流、按新尺寸再开同一个窗口；新 Mac 原地换，见上面那条）：从发起到新画面出来，一直不盖。
+        var covered = false
+        let refit = Task { await session.switchWindow(to: 42, fit: CGSize(width: 669, height: 897)) }
+        let watcher = Task { @MainActor in
+            while !Task.isCancelled {
+                if session.notice(macName: "Mac", showsClose: true) != nil { covered = true }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        await refit.value
+        let back = await waitUntil { session.state == .streaming && !session.awaitingFirstFrame && !session.isRetargeting }
+        watcher.cancel()
+        XCTAssertTrue(back, "换完大小应回到正常在放")
+        XCTAssertFalse(covered, "换大小期间不该盖「正在连接」")
+        XCTAssertEqual(session.info?.displayWidth, 669)
+        // 换到另一个窗口不算换大小：照常盖。
+        mac.windows.append((id: 43, app: "Safari", title: "B", bounds: CGRect(x: 0, y: 0, width: 900, height: 600)))
+        let other = Task { await session.switchWindow(to: 43) }
+        let coveredForOther = await waitUntil(2) { session.notice(macName: "Mac", showsClose: true) != nil }
+        XCTAssertTrue(coveredForOther, "换窗口时照常提示正在连接")
+        await other.value
+    }
+
+    // MARK: - 看着时保持在最前
+
+    func test_keep_front_raises_the_window_again_when_another_app_comes_forward() async throws {
+        // 被别的 App 盖住的窗口 macOS 不让它重绘，画面停在最后一帧：主控端要了「保持在最前」时，Mac 隔一会儿看一眼，
+        // 它的 App 不在最前了就重新提上来。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 0, y: 0, width: 900, height: 600))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, keepFront: true, independentInput: false)
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(mac.raisedWindows, [42], "开流时提一次")
+        // 一直在最前：不反复去提。
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertEqual(mac.raisedWindows, [42])
+        // 别的 App 到前面来了。
+        mac.windowsBehind = [42]
+        let raised = await waitUntil(4) { mac.raisedWindows == [42, 42] }
+        XCTAssertTrue(raised, "退到后面之后应重新提到最前：\(mac.raisedWindows)")
+        // 不看了：之后它退到后面也不再管。
+        session.stop()
+        _ = await waitUntil { server.desktopViewer == nil }
+        mac.windowsBehind = [42]
+        try await Task.sleep(for: .milliseconds(1800))
+        XCTAssertEqual(mac.raisedWindows, [42, 42], "停流后不该再去提窗口")
+    }
+
+    func test_window_is_left_alone_unless_keep_front_was_asked() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 0, y: 0, width: 900, height: 600))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, independentInput: false)
+        XCTAssertEqual(session.state, .streaming)
+        mac.windowsBehind = [42]
+        try await Task.sleep(for: .milliseconds(1800))
+        XCTAssertEqual(mac.raisedWindows, [42], "没要保持在最前：只在开流时提一次，不和坐在 Mac 前的人抢窗口")
+        // 中途打开：按同一个窗口重开流，从此开始保持。
+        await session.switchWindow(to: 42, keepFront: true, independentInput: false)
+        let raised = await waitUntil(4) { mac.raisedWindows.count >= 2 && mac.windowsBehind.isEmpty }
+        XCTAssertTrue(raised, "打开开关后应把窗口提回最前：\(mac.raisedWindows)")
+    }
+
+    func test_independent_input_leaves_the_app_in_the_background() async throws {
+        // 「独立键鼠」：输入直接投给窗口所在的进程，开流前不把 App 变成当前 App；关掉就回到老办法，先提到最前。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 0, y: 0, width: 900, height: 600))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        XCTAssertTrue(session.supportsWindowInput)
+        await session.switchWindow(to: 42)
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(mac.independentInputs, [true])
+        XCTAssertEqual(mac.surfacedWindows, [42])
+        XCTAssertTrue(mac.raisedWindows.isEmpty, "不抢 Mac 上的前台 App")
+
+        await session.switchWindow(to: 42, independentInput: false)
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(mac.independentInputs, [true, false])
+        XCTAssertEqual(mac.raisedWindows, [42], "走全局通道：点击只落到最上面的窗口，开流前提到最前")
+        XCTAssertEqual(mac.surfacedWindows, [42])
+    }
+
+    func test_independent_input_is_not_asked_of_an_old_mac() async throws {
+        let old = RemoteConstants.localFeatures.filter { $0 != RemoteFeature.desktopWindowInput }
+        let (server, mac, client) = try await makeRig(features: old)
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 0, y: 0, width: 900, height: 600))]
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        XCTAssertFalse(session.supportsWindowInput, "主控端据此不显示开关")
+        await session.switchWindow(to: 42)
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertEqual(mac.independentInputs, [false])
+        XCTAssertEqual(mac.raisedWindows, [42])
+    }
+
+    func test_view_only_never_uses_independent_input() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.windows = [(id: 42, app: "Xcode", title: "A", bounds: CGRect(x: 0, y: 0, width: 900, height: 600))]
+        mac.canControl = false
+        let session = RemoteDesktopSession(client: client, maxWidth: 2007, maxHeight: 2853)
+        defer { session.stop() }
+        await session.switchWindow(to: 42)
+        XCTAssertEqual(session.state, .streaming)
+        XCTAssertTrue(mac.independentInputs.isEmpty, "没有「辅助功能」授权：不建输入落点")
+        XCTAssertTrue(mac.surfacedWindows.isEmpty)
     }
 
     func test_connection_drop_restores_fitted_window() async throws {
@@ -287,6 +592,51 @@ final class RemoteDesktopWindowTests: XCTestCase {
         XCTAssertNil(RemoteDesktopWindowFit.size(canvas: .zero, textScale: 1))
         XCTAssertNil(RemoteDesktopWindowFit.size(canvas: canvas, textScale: .nan))
         XCTAssertTrue(RemoteDesktopWindowFit.textScales.contains(1))
+    }
+
+    /// 「最清晰」（默认）：Mac 每点 2 个像素，窗口调成画布像素数的一半那么多点，画面不经放大。
+    func test_sharpest_text_scale_maps_mac_pixels_onto_device_pixels() {
+        let canvas = CGSize(width: 951, height: 669)
+        XCTAssertEqual(RemoteDesktopWindowFit.defaultTextScale, RemoteDesktopWindowFit.sharpest, "默认是最清晰")
+        let phone = RemoteDesktopWindowFit.size(canvas: canvas, textScale: RemoteDesktopWindowFit.sharpest, displayScale: 3)
+        XCTAssertEqual(phone, CGSize(width: 1426, height: 1003),
+                       "3 倍屏：画布 2853×2007 像素，窗口 2852×2006 像素（往下取整，不能比画布多出一个像素）")
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: CGSize(width: 950, height: 668), textScale: RemoteDesktopWindowFit.sharpest,
+                                                   displayScale: 3), CGSize(width: 1425, height: 1002), "像素数是偶数时正好对上")
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: canvas, textScale: RemoteDesktopWindowFit.sharpest, displayScale: 2),
+                       CGSize(width: 951, height: 669), "2 倍屏：和标准一样")
+        XCTAssertEqual(RemoteDesktopWindowFit.size(canvas: canvas, textScale: 1, displayScale: 3),
+                       CGSize(width: 951, height: 669), "别的档不看屏幕的倍数")
+        XCTAssertEqual(RemoteDesktopWindowFit.scale(for: RemoteDesktopWindowFit.sharpest, displayScale: 0), 2, "倍数没报上来时不除以零")
+    }
+
+    /// 画面和画布只差一两个像素时按原生像素一比一排、落在整像素上，不拉去铺满。
+    func test_viewport_shows_a_nearly_fitting_picture_at_native_pixels() {
+        // 「最清晰」的真实情形：画布 951×669 点（3 倍屏），窗口 1426×1003 点，视频 2852×2006 像素。
+        var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 1426, height: 1003),
+                                             viewSize: CGSize(width: 951, height: 669), bleedsIntoCorners: true)
+        let stretched = viewport.contentFrame
+        XCTAssertEqual(stretched.width, 951, accuracy: 0.01, "前提：不给原生大小时拉去铺满")
+        viewport.nativeSize = CGSize(width: 2852.0 / 3, height: 2006.0 / 3)
+        viewport.pixelsPerPoint = 3
+        let frame = viewport.contentFrame
+        XCTAssertEqual(frame.width * 3, 2852, accuracy: 0.001, "一个视频像素对一个屏幕像素")
+        XCTAssertEqual(frame.height * 3, 2006, accuracy: 0.001)
+        XCTAssertEqual((frame.minX * 3).rounded(), frame.minX * 3, accuracy: 0.001, "位置在整像素上")
+        XCTAssertEqual((frame.minY * 3).rounded(), frame.minY * 3, accuracy: 0.001)
+        XCTAssertEqual(viewport.scale, 2852.0 / 3 / 1426, accuracy: 0.0001, "滚动量、指针照这个比例换算")
+    }
+
+    func test_viewport_does_not_snap_when_the_picture_is_far_from_native_or_too_big() {
+        var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 951, height: 669),
+                                             viewSize: CGSize(width: 951, height: 669), bleedsIntoCorners: true)
+        viewport.pixelsPerPoint = 3
+        viewport.nativeSize = CGSize(width: 1902.0 / 3, height: 1338.0 / 3)
+        XCTAssertNil(viewport.snappedSize, "标准字号：视频只有画布三分之二的像素，照旧放大铺满")
+        XCTAssertEqual(viewport.contentFrame.width, 951, accuracy: 0.01)
+        viewport.contentSize = CGSize(width: 1427, height: 1004)
+        viewport.nativeSize = CGSize(width: 2854.0 / 3, height: 2008.0 / 3)
+        XCTAssertNil(viewport.snappedSize, "比画布还大一个像素：放不下，照旧缩进去")
     }
 
     func test_listable_windows_skip_overlays_and_tiny_ones() {

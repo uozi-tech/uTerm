@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// 远程桌面「粘贴到 Mac」与终端「贴图片」的内容来源：手机剪贴板里的图片 / 文字，或相册里选的一张图。
+/// 远程桌面「粘贴到 Mac」与终端「贴图片」的内容来源：手机剪贴板里的图片 / 文字 / 视频，或相册里选的一张图、一段视频。
 /// 怎么打包（太大的图怎么压、HEIC 转 JPEG）与 Mac 主控端共用 `RemoteDesktopPasteEncoding`。
 ///
 /// 主线程上只看剪贴板里有哪些类型（`hasImages` / `itemProviders`，不读内容）。内容一律经系统的异步加载
@@ -25,6 +25,66 @@ nonisolated enum RemoteDesktopPasteSource {
             if !text.isEmpty { return try RemoteDesktopPasteEncoding.text(text) }
         }
         throw RemoteDesktopPasteEncoding.Failure.empty
+    }
+
+    /// 读手机剪贴板，给远程桌面用：有视频（在「照片」里拷贝的一段）且 Mac 收得了文件时按文件贴，否则同 `clipboard`。
+    @MainActor
+    static func clipboardItem(_ board: UIPasteboard = .general, allowsFiles: Bool) async throws -> RemoteDesktopPasteItem {
+        guard allowsFiles,
+              let provider = board.itemProviders.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.movie.identifier) })
+        else { return .content(try await clipboard(board)) }
+        PasteProgressReporter.report(PasteProgress(.reading))
+        let type = provider.registeredTypeIdentifiers.first { UTType($0)?.conforms(to: .movie) == true } ?? UTType.movie.identifier
+        let suggested = provider.suggestedName
+        let url = try await load { done in
+            // 系统给的文件只在这个回调里有效：当场拷走。
+            provider.loadFileRepresentation(forTypeIdentifier: type) { file, error in
+                done(Result {
+                    guard let file else { throw error ?? RemoteDesktopPasteFileError.unreadable }
+                    return try adopt(file, suggestedName: suggested)
+                })
+            }
+        }
+        return .file(url: url, name: url.lastPathComponent)
+    }
+
+    /// 相册里选的一项，给远程桌面用：视频按文件贴，其余按图片贴。
+    static func picked(_ item: PhotosPickerItem) async throws -> RemoteDesktopPasteItem {
+        guard item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) else {
+            return .content(try await photo(item))
+        }
+        PasteProgressReporter.report(PasteProgress(.reading))
+        let movie = try await load { done in
+            item.loadTransferable(type: RemotePastedMovie.self) { loaded in
+                switch loaded {
+                case .success(let movie): done(result(movie, nil))
+                case .failure(let error): done(.failure(error))
+                }
+            }
+        }
+        return .file(url: movie.url, name: movie.url.lastPathComponent)
+    }
+
+    /// 把系统给的临时文件拷进自己的临时目录（每个文件单独一个文件夹，名字留着原来的），返回新位置。
+    static func adopt(_ file: URL, suggestedName: String? = nil) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PasteOut/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var name = file.lastPathComponent
+        if let suggestedName, !suggestedName.isEmpty {
+            // 剪贴板里的文件名常常是一串临时编号：有建议的名字就用它，扩展名跟着文件走。
+            let base = (suggestedName as NSString).deletingPathExtension
+            name = file.pathExtension.isEmpty ? base : "\(base).\(file.pathExtension)"
+        }
+        let target = folder.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: file, to: target)
+        return target
+    }
+
+    /// 发完（或没发成）之后把 `adopt` 拷出来的那份删掉。
+    static func discard(_ item: RemoteDesktopPasteItem) {
+        guard case .file(let url, _) = item else { return }
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 
     /// 相册里选的一张。
@@ -109,6 +169,17 @@ nonisolated enum RemoteDesktopPasteSource {
         format.scale = image.scale
         return UIGraphicsImageRenderer(size: image.size, format: format).pngData { _ in
             image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
+    }
+}
+
+/// 相册里的一段视频：系统导出成一个临时文件交过来，只在导入的回调里有效，当场拷到自己的临时目录。
+nonisolated struct RemotePastedMovie: Transferable, Sendable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            RemotePastedMovie(url: try RemoteDesktopPasteSource.adopt(received.file))
         }
     }
 }

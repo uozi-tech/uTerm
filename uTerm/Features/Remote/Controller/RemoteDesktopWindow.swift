@@ -240,8 +240,8 @@ struct RemoteDesktopContent: View {
                 }
                 if session.supportsWindows {
                     barButton("macwindow", active: session.windowID != nil,
-                              help: session.windowID != nil ? String(localized: "正在只看一个窗口（点按换一个，或回到整个屏幕）")
-                                                            : String(localized: "只看一个窗口")) {
+                              help: session.windowID != nil ? String(localized: "窗口模式（点按换一个窗口，或回到整个屏幕）")
+                                                            : String(localized: "窗口模式")) {
                         pickingWindow = true
                     }
                     .popover(isPresented: $pickingWindow, arrowEdge: .bottom) { windowPicker }

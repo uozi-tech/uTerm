@@ -55,6 +55,12 @@ nonisolated enum RemoteDesktopWindows {
         return raw.compactMap(entry(from:)).first { $0.id == id }
     }
 
+    /// 一个进程此刻在屏幕上的全部窗口，含菜单、浮层这些不是普通层级的，最上面的在前。
+    static func windows(ofPID pid: pid_t) -> [Entry] {
+        guard let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        return raw.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }.compactMap(entry(from:))
+    }
+
     private static func entry(from info: [String: Any]) -> Entry? {
         guard let number = info[kCGWindowNumber as String] as? NSNumber,
               let pid = info[kCGWindowOwnerPID as String] as? NSNumber,
@@ -108,15 +114,22 @@ nonisolated enum RemoteDesktopWindows {
     /// 把窗口提到最前、它的 App 变成当前 App。点击只会落到最上面的窗口上；开流那一刻被同一个 App 的另一个窗口
     /// 整个盖住时按窗口的流还一帧都不出（2026-11-17 探针），所以开流前先提一次。同步等辅助功能接口，别在主线程上调。
     /// 沙盒里实测能提别的 App 的窗口（同一天，带 `com.apple.axserver` 例外的探针）。
+    ///
+    /// `activates` 为 false 时只把窗口提到它那个 App 的窗口堆最上面，不把 App 变成当前 App（2026-11-18 探针：
+    /// 窗口会排到当前 App 的窗口后面、别的后台窗口前面，前台 App 不变）。
     @discardableResult
-    static func raise(id: UInt32) -> Bool {
+    static func raise(id: UInt32, activates: Bool = true) -> Bool {
         guard let entry = entry(id: id) else { return false }
         if entry.pid == ProcessInfo.processInfo.processIdentifier {
             // 本进程自己的窗口（服务跑在 uTerm 主程序里、看的正是 uTerm 的窗口）：对自己发辅助功能请求会在
             // 调用线程上直接操作窗口，不在主线程就被 AppKit 中断（2026-11-17 探针崩在这里）。改在主线程上直接提。
             DispatchQueue.main.async {
-                NSApp.window(withWindowNumber: Int(id))?.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                if activates {
+                    NSApp.window(withWindowNumber: Int(id))?.makeKeyAndOrderFront(nil)
+                    NSApp.activate(ignoringOtherApps: true)
+                } else {
+                    NSApp.window(withWindowNumber: Int(id))?.orderFront(nil)
+                }
             }
             return true
         }
@@ -135,8 +148,56 @@ nonisolated enum RemoteDesktopWindows {
             return false
         }
         let raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
-        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        if activates { AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue) }
         return raised
+    }
+
+    /// 输入按进程投递（不占 Mac 的键鼠）时开流前用：同一个 App 有别的窗口叠在它上面才提，而且不激活 App。
+    /// 被别的 App 盖住不用管——流照出、点击照到；只有被自家窗口整个盖住时流一帧都不出（见 `raise`）。
+    static func surface(id: UInt32) {
+        guard hasSiblingAbove(id: id, in: onScreenEntries()) else { return }
+        raise(id: id, activates: false)
+    }
+
+    /// 纯规则：`entries` 是屏幕上的窗口（最上面的在前）。同一个进程有没有别的普通窗口叠在这个窗口上面。
+    static func hasSiblingAbove(id: UInt32, in entries: [Entry]) -> Bool {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return false }
+        let target = entries[index]
+        return entries[..<index].contains { other in
+            other.pid == target.pid && other.layer == 0 && other.alpha > 0.01 && other.bounds.intersects(target.bounds)
+        }
+    }
+
+    /// 走全局输入通道、只看一个窗口时，每次按下之前调：这个点上盖着别的 App 的窗口就先把要看的窗口提到最前，
+    /// 等它真的排到上面（最多约 0.3 秒）。全局通道的点击只落到最上面的窗口上，不提就点到别人头上
+    /// （2026-11-18 user 反馈）。同步等辅助功能接口，别在主线程上调。
+    static func uncover(id: UInt32, at point: CGPoint) {
+        guard let entry = entry(id: id), obstruction(to: entry.pid, at: point, in: onScreenEntries()) != nil else { return }
+        AppLogger.info("远程桌面：要点的位置被别的 App 的窗口盖着，先把看的窗口提到最前", category: RemoteLog.category)
+        guard raise(id: id) else { return }
+        for _ in 0..<30 {
+            usleep(10_000)
+            if obstruction(to: entry.pid, at: point, in: onScreenEntries()) == nil { return }
+        }
+    }
+
+    /// 纯规则：`entries` 是屏幕上的窗口（最上面的在前）。这个点上最上面的普通窗口是别的进程的就返回它。
+    /// 别的进程不是普通层级的窗口不算（程序坞、菜单栏、各种工具铺满屏幕的透明浮层：提窗口也盖不过它们）。
+    static func obstruction(to pid: pid_t, at point: CGPoint, in entries: [Entry]) -> Entry? {
+        let top = entries.first { entry in
+            entry.alpha > 0.01 && entry.bounds.contains(point) && (entry.layer == 0 || entry.pid == pid)
+        }
+        guard let top, top.pid != pid else { return nil }
+        return top
+    }
+
+    /// 这个窗口的 App 此刻是不是当前 App（见 `RemoteDesktopStartRequest.windowKeepFront`）。窗口没了也算是。
+    ///
+    /// 只看 App 在不在最前，不看它在同一个 App 里是不是最上面的那个窗口：同一个 App 里盖在上面的常常是它自己
+    /// 弹出来的面板、浮层，再去提主窗口会把这些东西顶掉。
+    static func appIsFront(id: UInt32) -> Bool {
+        guard let entry = entry(id: id) else { return true }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == entry.pid
     }
 
     // MARK: - 改大小
@@ -151,9 +212,18 @@ nonisolated enum RemoteDesktopWindows {
         let target = CGRect(origin: entry.bounds.origin, size: CGSize(width: size.width.rounded(), height: size.height.rounded()))
         guard !matches(entry.bounds, target) else { return nil }
         guard setFrame(target, of: entry, moves: false) else { return nil }
-        settle(id: id)
+        settle(id: id, target: target)
         guard let after = self.entry(id: id), !matches(after.bounds, entry.bounds) else { return nil }
         return entry.bounds
+    }
+
+    /// 把窗口挪到 `frame`（换一块屏幕放，位置和大小一起改），等它停下来。挪不动返回 false。
+    /// 同步等辅助功能接口，别在主线程上调。
+    static func place(id: UInt32, frame: CGRect) -> Bool {
+        guard let entry = entry(id: id) else { return false }
+        guard setFrame(frame, of: entry, moves: true) else { return false }
+        settle(id: id, target: frame)
+        return true
     }
 
     /// 把窗口放回 `frame`（流结束时还原）。窗口没了就算了。
@@ -191,7 +261,13 @@ nonisolated enum RemoteDesktopWindows {
     }
 
     /// 等窗口的大小停下来（有的 App 改大小带动画）：连着两次读到一样的就算停了，最多约 0.5 秒。
-    private static func settle(id: UInt32) {
+    /// 已经是要的大小就不等：多数 App 在辅助功能调用返回时已经改完，系统窗口表最多晚几毫秒，先快看几眼
+    /// （原先每次至少睡 50 ms，转屏、弹键盘时都白等这一下）。
+    private static func settle(id: UInt32, target: CGRect) {
+        for _ in 0..<4 {
+            if let now = entry(id: id)?.bounds, matches(now, target) { return }
+            usleep(6_000)
+        }
         var last = entry(id: id)?.bounds
         for _ in 0..<10 {
             usleep(50_000)

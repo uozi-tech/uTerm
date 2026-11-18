@@ -147,11 +147,16 @@ struct RemoteMacSheet: View {
     @State private var shellError: String?
     @State private var workspaceChoices: RemoteLocalWorkspaces?
     @State private var pendingClose: RemoteSessionInfo?
+    /// 进了「窗口模式」那一页（列 Mac 上的窗口，点一个直接只看它）。
+    @State private var choosingWindow = false
 
     var body: some View {
         NavigationStack {
             content
             .background(M.canvas)
+            .navigationDestination(isPresented: $choosingWindow) {
+                MacWindowListPage(client: client) { openDesktop(window: $0) }
+            }
             .navigationTitle(client.macName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -279,17 +284,19 @@ struct RemoteMacSheet: View {
             }
             section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本过旧，不支持远程桌面。将其更新到最新版本后即可使用。") {
                 if client.supportsDesktop {
+                    // 分隔线交给 List（`last: true` 关掉行自带的）。
                     MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
                               chevron: true, last: true) {
                         openDesktop()
                     }
+                    if client.supportsDesktopWindows {
+                        MInsetRow(icon: "window", label: "窗口模式", sub: "只看一个窗口，并调成适合这里的大小",
+                                  chevron: true, last: true) {
+                            choosingWindow = true
+                        }
+                    }
                 } else {
                     MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "需要更新 Mac 上的 uTerm", last: true)
-                }
-            }
-            if client.supportsDesktop, client.supportsDesktopWindows {
-                section("只看一个窗口", footer: "只把 Mac 上的一个窗口投到这里，并调成适合这里的大小；看完后窗口恢复原样。列的是 Mac 上此刻开着的窗口。") {
-                    MacWindowRows(client: client) { openDesktop(window: $0) }
                 }
             }
             section("文件", footer: client.supportsFiles
@@ -387,7 +394,8 @@ struct RemoteMacSheet: View {
                 .first(where: { $0.activationState == .foregroundActive })?.keyWindow else { return nil }
         let scale = window.screen.scale
         guard let size = RemoteDesktopRequestSizeMemory.load(screen: window.bounds.size, scale: scale) else { return nil }
-        let session = RemoteDesktopSession(client: client, maxWidth: size.width, maxHeight: size.height, pointScale: scale)
+        let session = RemoteDesktopSession(client: client, maxWidth: size.width, maxHeight: size.height,
+                                           pointScale: RemoteDesktopRequestSize.pointScale(displayScale: scale))
         session.openRequestedAt = tappedAt
         Task { await session.start() }
         return session
@@ -467,31 +475,80 @@ extension RemoteMacClient {
 }
 
 /// 新建终端抽屉里的「这台 Mac 的本机终端」：每台配对过的 Mac 一行，点一下在 Mac 上开一个新的登录 shell。
-/// Mac 面板里「只看一个窗口」那一组：面板出现时向 Mac 要一次窗口列表，点一行直接只看那个窗口。
-struct MacWindowRows: View {
+/// Mac 面板里的「窗口模式」页：进来时向 Mac 要一次窗口列表（下拉再要一次），点一行直接只看那个窗口。
+struct MacWindowListPage: View {
     let client: RemoteMacClient
     let onOpen: (UInt32) -> Void
 
+    @AppStorage(DefaultsKey.remoteDesktopFitWindow) private var fitsWindow = true
+    @AppStorage(DefaultsKey.remoteDesktopWindowTextScale) private var textScale = RemoteDesktopWindowFit.defaultTextScale
+    @AppStorage(DefaultsKey.remoteDesktopWindowTouchMode) private var touchMode = false
+    @AppStorage(DefaultsKey.remoteDesktopWindowKeepFront) private var keepsFront = false
+    @AppStorage(DefaultsKey.remoteDesktopWindowIndependentInput) private var independentInput = true
     @State private var windows: [RemoteDesktopWindowSummary] = []
     @State private var note: String?
     @State private var loading = true
 
     var body: some View {
-        Group {
-            if loading, windows.isEmpty {
-                MInsetRow(icon: "window", iconColor: M.text3, label: String(localized: "正在读取窗口…"), last: true)
-            } else if windows.isEmpty {
-                MInsetRow(icon: "window", iconColor: M.text3,
-                          label: note ?? String(localized: "那台 Mac 上此刻没有可以单独看的窗口。"), wraps: true, last: true)
-            } else {
-                ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
-                    MInsetRow(icon: "window", label: window.menuTitle, sub: window.menuDetail, subMono: false,
-                              chevron: true, last: index == windows.count - 1) {
-                        onOpen(window.id)
+        List {
+            Section {
+                if loading, windows.isEmpty {
+                    MInsetRow(icon: "window", iconColor: M.text3, label: String(localized: "正在读取窗口…"), last: true)
+                } else if windows.isEmpty {
+                    MInsetRow(icon: "window", iconColor: M.text3,
+                              label: note ?? String(localized: "那台 Mac 上此刻没有可以单独看的窗口。"), wraps: true, last: true)
+                } else {
+                    ForEach(windows, id: \.id) { window in
+                        MInsetRow(icon: "window", label: window.menuTitle, sub: window.menuDetail, subMono: false,
+                                  chevron: true, last: true) {
+                            onOpen(window.id)
+                        }
                     }
                 }
+            } header: {
+                Text("Mac 上的窗口")
+            } footer: {
+                if let note, !windows.isEmpty { Text(verbatim: note) }
             }
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(M.card)
+            Section {
+                Toggle("把窗口调成这里的大小", isOn: $fitsWindow)
+                if fitsWindow {
+                    RemoteWindowTextScalePicker(selection: $textScale)
+                }
+            } footer: {
+                Text("Mac 上的窗口会改成适合这里的大小，里面的内容重新排版。「最清晰」时 Mac 的像素和这里的像素一一对应，画面最利、字最小；「标准」时字和在 Mac 上一样大；字越大，窗口里排得下的内容越少。看完后窗口恢复原来的大小。")
+            }
+            .listRowBackground(M.card)
+            if client.supportsDesktopWindowFront {
+                Section {
+                    Toggle("看着时保持在最前", isOn: $keepsFront)
+                } footer: {
+                    Text("被别的窗口盖住、或者它的 App 退到后面时，Mac 不再让这个窗口重绘，动画会停在最后一帧。打开后，看着的这段时间 Mac 会一直把它提到最前；坐在 Mac 前用别的 App 的人会被打断。")
+                }
+                .listRowBackground(M.card)
+            }
+            if client.supportsDesktopWindowInput {
+                Section {
+                    Toggle("独立键鼠", isOn: $independentInput)
+                } footer: {
+                    Text("鼠标和键盘直接发给这个窗口：Mac 上的指针不动，窗口被别的窗口盖住也能操作，坐在 Mac 前的人可以同时用自己的键鼠。个别 App 不响应这样发来的操作，遇到时关掉。")
+                }
+                .listRowBackground(M.card)
+            }
+            Section {
+                Toggle("触摸屏模式", isOn: $touchMode)
+            } footer: {
+                Text("点哪里就是哪里，不显示鼠标指针：单指拖动滚动内容，按住再拖是拖拽，双指轻点是右键。关着时像触控板一样移动指针。")
+            }
+            .listRowBackground(M.card)
         }
+        .scrollContentBackground(.hidden)
+        .background(M.canvas)
+        .navigationTitle("窗口模式")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await load() }
         .task { await load() }
     }
 

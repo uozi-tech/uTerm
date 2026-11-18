@@ -28,9 +28,10 @@ import ScreenCaptureKit
 /// - 只在有人看的时候存在：桌面流结束即 `stopCapture`，不在后台空转。
 nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSource, SCStreamOutput, SCStreamDelegate,
     @unchecked Sendable {
-    private let display: RemoteDesktopDisplay
-    private let width: Int
-    private let height: Int
+    /// 采集目标与要出的画面尺寸。只看一个窗口时原地换尺寸会改（`retarget`，在 `queue` 上改）。
+    private var display: RemoteDesktopDisplay
+    private var width: Int
+    private var height: Int
     private let frameRate: Int
     private let tenBit: Bool
     private let queue = DispatchQueue(label: "com.uozi.uTerm.remote.capture", qos: .userInteractive)
@@ -40,6 +41,8 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
     /// 快的建不起来时运动帧也用 Lanczos。
     private var scaler: RemoteFrameScaler?
     private var fastScaler: RemoteFastFrameScaler?
+    /// `scaler` 的一份，给精修用（`refinedImage` 在别的队列上调）。受 `lock` 保护。
+    private var refineScaler: RemoteFrameScaler?
     /// 最后交出去的那帧（缩过的）与它的原始采集：精修时据此重缩。受 `lock` 保护。
     private var lastScaled: CVPixelBuffer?
     private var lastRaw: CVPixelBuffer?
@@ -47,6 +50,10 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
     private var governor: RemoteCaptureRateGovernor
     private var configuration: SCStreamConfiguration?
     private var captureFrameSize = CGSize.zero
+    /// 原地换尺寸之后在等的采集尺寸（像素）和开始等的时刻：到这个尺寸的帧出来之前，旧尺寸的帧不交出去。
+    private var awaitedCaptureSize: (width: Int, height: Int, since: UInt64)?
+    /// 最多等这么久，系统一直不出新尺寸的帧就不等了。
+    static let retargetWaitNanos: UInt64 = 1_000_000_000
     private var onFrame: (@Sendable (CVPixelBuffer, UInt64) -> Void)?
     private var onStop: (@Sendable (Error?) -> Void)?
     /// 以下只在按窗口采集时用。`onGeometry` 在 `start` 之前设好、之后不变；另两个只在 `queue` 上用。
@@ -125,6 +132,7 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         configuration.capturesAudio = false
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         let frameSize = CGSize(width: configuration.width, height: configuration.height)
+        lock.withLock { refineScaler = scaler }
         queue.sync {
             self.scaler = scaler
             self.fastScaler = fastScaler
@@ -212,6 +220,12 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
               SCFrameStatus(rawValue: rawStatus) == .complete,
               let captured = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let nanos = DispatchTime.now().uptimeNanoseconds
+        if let awaited = awaitedCaptureSize {
+            // 刚原地换过尺寸：系统换好之前出来的还是旧尺寸的帧，交出去会被按新尺寸硬缩，比例是错的。丢掉。
+            let arrived = CVPixelBufferGetWidth(captured) == awaited.width && CVPixelBufferGetHeight(captured) == awaited.height
+            guard arrived || nanos &- awaited.since > Self.retargetWaitNanos else { return }
+            awaitedCaptureSize = nil
+        }
         if display.windowID != nil {
             reportGeometry(attachments.first, captured: captured)
             // 画面没变（系统照样出帧）：不交出去，采集帧率按「没在变」算。
@@ -259,10 +273,61 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         lock.lock()
         let raw = lastScaled === frame ? lastRaw : nil
         let region = lastRegion, crop = lastCrop
+        let scaler = refineScaler
         lock.unlock()
         guard let raw, let scaler, let refined = scaler.scale(raw, crop: crop) else { return nil }
         RemoteFrameRegionTag.set(region, on: refined)
         return refined
+    }
+
+    /// 窗口改了大小：同一条采集流接着用，只把目标和输出尺寸换掉（`SCStream.updateConfiguration`），不重开。
+    /// 重开一条流到出第一帧要一百多毫秒；改配置是异步的，改完前到的帧还是旧尺寸，推流器先缩着用。
+    func retarget(display: RemoteDesktopDisplay, width: Int, height: Int) {
+        queue.async { [self] in
+            self.display = display
+            self.width = width
+            self.height = height
+            guard let configuration else { return }
+            let outputFormat = tenBit ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+                : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            let capture = RemoteDesktopGeometry.captureSize(
+                displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight), stream: (width, height))
+            let scaler = capture != (width, height)
+                ? RemoteFrameScaler(width: width, height: height, outputFormat: outputFormat) : nil
+            let fastScaler = scaler != nil
+                ? RemoteFastFrameScaler(width: width, height: height, outputFormat: outputFormat) : nil
+            configuration.width = scaler != nil ? capture.width : width
+            configuration.height = scaler != nil ? capture.height : height
+            configuration.pixelFormat = scaler != nil ? kCVPixelFormatType_32BGRA : outputFormat
+            self.scaler = scaler
+            self.fastScaler = fastScaler
+            if CGSize(width: configuration.width, height: configuration.height) != captureFrameSize {
+                awaitedCaptureSize = (configuration.width, configuration.height, DispatchTime.now().uptimeNanoseconds)
+            }
+            captureFrameSize = CGSize(width: configuration.width, height: configuration.height)
+            baseCaptureSize = (configuration.width, configuration.height)
+            // 按旧尺寸留着的东西都作废：比对用的上一张、按区域重出用的那张、几何（下一帧重新报）。
+            region = nil
+            lastCapture = nil
+            previousCapture = nil
+            lastGeometry = nil
+            lock.lock()
+            refineScaler = scaler
+            lastScaled = nil
+            lastRaw = nil
+            lastRegion = nil
+            lastCrop = nil
+            let stream = self.stream
+            lock.unlock()
+            guard let stream else { return }
+            let size = (configuration.width, configuration.height)
+            stream.updateConfiguration(configuration) { error in
+                if let error {
+                    AppLogger.info("远程桌面：采集尺寸没改成 \(size.0)×\(size.1)：\(error.localizedDescription)",
+                                   category: RemoteLog.category)
+                }
+            }
+        }
     }
 
     func setRegion(_ visible: RemoteDesktopRegion?) {

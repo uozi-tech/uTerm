@@ -89,6 +89,13 @@ nonisolated enum RemoteDesktopPasteEncoding {
     }
 
     /// 粘过去之后给用户看的一句提示。
+    static func sentNote(_ item: RemoteDesktopPasteItem) -> String {
+        switch item {
+        case .content(let content): return sentNote(content)
+        case .file: return String(localized: "已把视频粘贴到 Mac")
+        }
+    }
+
     static func sentNote(_ content: RemoteDesktopPaste) -> String {
         switch content {
         case .text: return String(localized: "已把文字粘贴到 Mac")

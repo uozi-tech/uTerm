@@ -153,24 +153,69 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
         XCTAssertGreaterThan(oldFrame.minX, 30)
     }
 
-    func test_request_keeps_the_canvas_aspect_and_covers_the_screen_pixels() {
+    func test_request_is_exactly_the_canvas_pixels() {
         let request = duoRequest()
-        XCTAssertEqual(CGFloat(request.width) / CGFloat(request.height), Self.duoCanvas.width / Self.duoCanvas.height,
+        XCTAssertEqual(request, RemoteDesktopRequestSize(width: 2000, height: 1292), "画布 1000×646.5 点、2 倍：像素数取偶数")
+        // 不支持放大后取区域的老 Mac：照旧，比例按画布、大小不小于整块屏幕的像素。
+        let legacy = RemoteDesktopRequestSize.fitting(screen: Self.duoScreen, scale: 2, barHeight: Self.duoBar, topInset: 16,
+                                                      pixelExact: false)
+        XCTAssertEqual(CGFloat(legacy.width) / CGFloat(legacy.height), Self.duoCanvas.width / Self.duoCanvas.height,
                        accuracy: 0.001)
-        XCTAssertEqual(request.height, 1407, "短边还是屏幕的像素")
-        XCTAssertGreaterThanOrEqual(request.width, 2000)
+        XCTAssertEqual(legacy.height, 1407, "短边还是屏幕的像素")
+        XCTAssertGreaterThanOrEqual(legacy.width, 2000)
     }
 
-    /// 接着显示器的 Mac 只拿这个框定视频尺寸：不比按整块屏幕要的时候小。
-    func test_stream_on_a_real_display_is_not_smaller_than_before() {
-        let request = duoRequest()
-        let old = RemoteDesktopSession.requestedSize(longPixels: 2000, shortPixels: 1407)
-        for display in [CGSize(width: 3840, height: 2160), CGSize(width: 3024, height: 1964), CGSize(width: 5120, height: 2160)] {
-            let now = RemoteDesktopGeometry.streamSize(displayPixels: display, maxWidth: request.width, maxHeight: request.height)
-            let before = RemoteDesktopGeometry.streamSize(displayPixels: display, maxWidth: old.width, maxHeight: old.height)
-            XCTAssertGreaterThanOrEqual(now.width, before.width, "\(display)")
-            XCTAssertGreaterThanOrEqual(now.height, before.height, "\(display)")
+    /// 接着显示器的 Mac 拿这个框定视频尺寸：出来的正好是手机画布里要显示的那么多像素，手机一比一排，不再缩第二次。
+    /// 回归：原先多要约 8%，手机再用双线性缩进画布，每个像素都被重新采样。
+    func test_stream_on_a_real_display_is_shown_pixel_for_pixel() {
+        // 2026-11-18 的 Duo：屏幕 951×669 点、3 倍，顶栏约 52 点。
+        let screen = CGSize(width: 951, height: 669), canvas = CGSize(width: 951, height: 617)
+        let request = RemoteDesktopRequestSize.fitting(screen: screen, scale: 3, barHeight: 52, topInset: 16)
+        XCTAssertEqual(request, RemoteDesktopRequestSize(width: 2852, height: 1850))
+        // 显示器的像素与点（Studio Display、14 寸内建屏、带鱼屏）。
+        let displays: [(pixels: CGSize, points: CGSize)] = [
+            (CGSize(width: 5120, height: 2880), CGSize(width: 2560, height: 1440)),
+            (CGSize(width: 3024, height: 1964), CGSize(width: 1512, height: 982)),
+            (CGSize(width: 5120, height: 2160), CGSize(width: 2560, height: 1080)),
+        ]
+        for display in displays {
+            let stream = RemoteDesktopGeometry.streamSize(displayPixels: display.pixels, maxWidth: request.width,
+                                                          maxHeight: request.height)
+            var viewport = RemoteDesktopViewport(contentSize: display.points, viewSize: canvas, bleedsIntoCorners: true)
+            viewport.pixelsPerPoint = 3
+            viewport.nativeSize = CGSize(width: CGFloat(stream.width) / 3, height: CGFloat(stream.height) / 3)
+            XCTAssertNotNil(viewport.snappedSize, "\(display.pixels)：视频 \(stream) 应能一比一放进画布")
+            let frame = viewport.contentFrame
+            XCTAssertEqual(frame.width * 3, CGFloat(stream.width), accuracy: 0.01, "\(display.pixels)")
+            XCTAssertEqual(frame.height * 3, CGFloat(stream.height), accuracy: 0.01, "\(display.pixels)")
         }
+        // 对照：老规则多要的那一截，手机上得再缩一次（放不进画布，不会一比一）。
+        let legacy = RemoteDesktopRequestSize.fitting(screen: screen, scale: 3, barHeight: 52, topInset: 16, pixelExact: false)
+        let old = RemoteDesktopGeometry.streamSize(displayPixels: displays[0].pixels, maxWidth: legacy.width, maxHeight: legacy.height)
+        XCTAssertGreaterThan(old.width, 2853, "前提：老规则出来的视频比画布的像素多")
+    }
+
+    /// 无显示器的 Mac：3 倍屏的手机报「每点 2 像素」，虚拟屏的像素数正好是画布的像素数。
+    func test_headless_display_matches_a_three_x_canvas_pixel_for_pixel() {
+        XCTAssertEqual(RemoteDesktopRequestSize.pointScale(displayScale: 3), 2)
+        XCTAssertEqual(RemoteDesktopRequestSize.pointScale(displayScale: 2), 2)
+        XCTAssertEqual(RemoteDesktopRequestSize.pointScale(displayScale: 1), 1)
+        let canvas = CGSize(width: 951, height: 617)
+        let request = RemoteDesktopRequestSize.fitting(screen: CGSize(width: 951, height: 669), scale: 3, barHeight: 52,
+                                                       topInset: 16)
+        let display = RemoteHeadlessDisplay.virtualSize(viewerPixels: (request.width, request.height), pointScale: 2)
+        XCTAssertEqual(display.width, 1426)
+        XCTAssertEqual(display.height, 925)
+        let stream = RemoteDesktopGeometry.streamSize(displayPixels: CGSize(width: display.width * 2, height: display.height * 2),
+                                                      maxWidth: request.width, maxHeight: request.height)
+        XCTAssertEqual(stream.width, 2852, "虚拟屏按 2 倍渲染出来就是要的像素数，Mac 不用再缩")
+        XCTAssertEqual(stream.height, 1850)
+        var viewport = RemoteDesktopViewport(contentSize: CGSize(width: display.width, height: display.height),
+                                             viewSize: canvas, bleedsIntoCorners: true)
+        viewport.pixelsPerPoint = 3
+        viewport.nativeSize = CGSize(width: CGFloat(stream.width) / 3, height: CGFloat(stream.height) / 3)
+        XCTAssertNotNil(viewport.snappedSize)
+        XCTAssertEqual(viewport.contentFrame.width * 3, 2852, accuracy: 0.01)
     }
 
     // MARK: - 方向
@@ -201,8 +246,12 @@ final class RemoteDesktopRequestSizeTests: XCTestCase {
 
     func test_small_square_screen_still_asks_for_1080p() {
         // 直角屏的小手机（667×375pt、2 倍）：画布 667×321。
+        let exact = RemoteDesktopRequestSize.fitting(screen: CGSize(width: 667, height: 375), scale: 2, barHeight: 54,
+                                                     topInset: 14)
+        XCTAssertEqual(exact, RemoteDesktopRequestSize(width: 1334, height: 642), "能按区域取原生像素的 Mac：就按画布的像素数")
+        // 老 Mac（放大后不能另取原生像素）：至少 1080p，放大看细节时还有余量。
         let request = RemoteDesktopRequestSize.fitting(screen: CGSize(width: 667, height: 375), scale: 2, barHeight: 54,
-                                                       topInset: 14)
+                                                       topInset: 14, pixelExact: false)
         XCTAssertEqual(request.height, 1080)
         XCTAssertEqual(CGFloat(request.width) / CGFloat(request.height), 667.0 / 321.0, accuracy: 0.001)
         let canvas = CGSize(width: 667, height: 321)

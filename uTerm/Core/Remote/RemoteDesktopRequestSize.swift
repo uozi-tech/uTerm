@@ -7,8 +7,14 @@ import Foundation
 /// （`RemoteHeadlessDisplay`）。画面不是放在整块屏幕上，是放在顶栏下面的画布里，画布比屏幕扁：按整块屏幕的
 /// 比例要，建出来的虚拟屏放进画布就左右留黑边（2026-11-15 Duo 内屏看无显示器的 mini：屏幕 1000×703.5pt，
 /// 画布约 1000×646pt，截图里画面只有 860×630pt，左右各空 70pt）。所以比例按画布来：手机上「适配屏幕」是贴边
-/// 铺满整块画布（`RemoteDesktopViewport.bleedsIntoCorners`），建出的虚拟屏正好不留黑边。大小仍不小于整块屏幕的
-/// 像素：接着显示器的 Mac 上视频尺寸不比原来小。
+/// 铺满整块画布（`RemoteDesktopViewport.bleedsIntoCorners`），建出的虚拟屏正好不留黑边。
+///
+/// **大小就是画布的像素数**（2026-11-18 起，`pixelExact`）。原先要的是「比例按画布、大小不小于整块屏幕的像素」，
+/// 比画布实际显示的多出约 8%：接着显示器的 Mac 先把屏幕缩到这个尺寸，手机再缩一次才放进画布，后一次是显示层的
+/// 双线性缩放，每个像素都被重新采样，字发软。按画布的像素数要，Mac 一次缩到位，手机一比一显示
+/// （`RemoteDesktopViewport.nativeSize`）。放大后的清晰度不靠多要的这点余量：放大时 Mac 另按原生像素取看得见的
+/// 那一块（`desktop-region`）。不支持取区域的老 Mac 照旧按原来的规则要。宽高取偶数：视频的宽高本来就是偶数；
+/// 无显示器的 Mac 按「像素 ÷ 每点像素数」建虚拟屏，奇数会多出一个像素、整帧被缩一丝。
 ///
 /// Mac 的屏总是横的，一律按横过来看时的画布算：竖着开的，转过来之后也正好铺满。
 nonisolated struct RemoteDesktopRequestSize: Equatable, Sendable, Codable {
@@ -29,14 +35,28 @@ nonisolated struct RemoteDesktopRequestSize: Equatable, Sendable, Codable {
         return CGSize(width: long, height: max(0, short - max(0, bar)))
     }
 
-    /// - Parameter scale: 屏幕的像素倍数。
-    static func fitting(screen: CGSize, scale: CGFloat, barHeight: CGFloat, topInset: CGFloat) -> RemoteDesktopRequestSize {
+    /// 报给 Mac 的「每个点几个像素」（`RemoteDesktopStartRequest.pointScale`）：无显示器的 Mac 拿画面的像素数除以它
+    /// 定虚拟屏的点数。Mac 的虚拟屏每点最多渲染 2 个像素，3 倍屏的手机照实报 3 的话，虚拟屏只有画布三分之二的
+    /// 像素，要放大 1.5 倍才铺满；报 2，虚拟屏的像素数正好是画布的像素数（屏上的东西是原来的三分之二大）。
+    static func pointScale(displayScale: CGFloat) -> Double {
+        min(Double(displayScale), RemoteDesktopWindowFit.macPixelsPerPoint)
+    }
+
+    /// - Parameters:
+    ///   - scale: 屏幕的像素倍数。
+    ///   - pixelExact: 按画布的像素数要（见类型注释）。false：老规则，比例按画布、大小不小于整块屏幕的像素和 1080p。
+    static func fitting(screen: CGSize, scale: CGFloat, barHeight: CGFloat, topInset: CGFloat,
+                        pixelExact: Bool = true) -> RemoteDesktopRequestSize {
         let long = max(screen.width, screen.height), short = min(screen.width, screen.height)
         let box = RemoteDesktopSession.requestedSize(longPixels: Int(long * scale), shortPixels: Int(short * scale))
         let canvas = landscapeCanvas(screen: screen, barHeight: barHeight, topInset: topInset)
         // 画布量不出来（还没排版）：退回整块屏幕的像素。
         guard canvas.width > 0, canvas.height > 0, canvas.width >= canvas.height else {
             return RemoteDesktopRequestSize(width: box.width, height: box.height)
+        }
+        if pixelExact {
+            let width = Int((canvas.width * scale).rounded()) & ~1, height = Int((canvas.height * scale).rounded()) & ~1
+            if width >= 2, height >= 2 { return RemoteDesktopRequestSize(width: width, height: height) }
         }
         // 比例取画布的，大小取能盖住 `box` 的最小一块。画布比屏幕扁，通常是短边不动、长边加长。
         let aspect = canvas.width / canvas.height
@@ -53,8 +73,9 @@ nonisolated struct RemoteDesktopRequestSize: Equatable, Sendable, Codable {
 nonisolated enum RemoteDesktopRequestSizeMemory {
     private static let limit = 8
 
+    /// 末尾的 `#2`：2026-11-18 改成按画布的像素数要之后，以前记下的尺寸（大约多 8%）不能再用。
     static func key(screen: CGSize, scale: CGFloat) -> String {
-        "\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))@\(Int((scale * 100).rounded()))"
+        "\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))@\(Int((scale * 100).rounded()))#2"
     }
 
     static func load(screen: CGSize, scale: CGFloat,

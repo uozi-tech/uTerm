@@ -31,13 +31,18 @@ struct RemoteDesktopEnvironment {
     var window: @MainActor (_ id: UInt32) -> (display: RemoteDesktopDisplay, title: String)? = { _ in nil }
     /// 把窗口提到最前（要「辅助功能」授权）。点击只会落到最上面的窗口上，被盖住的窗口点不到。
     var raiseWindow: @MainActor (_ id: UInt32) async -> Void = { _ in }
+    /// 输入按进程投递时开流前用：同一个 App 有别的窗口叠在它上面才提，而且不激活 App（见 `RemoteDesktopWindows.surface`）。
+    var surfaceWindow: @MainActor (_ id: UInt32) async -> Void = { _ in }
+    /// 这个窗口的 App 此刻是不是当前 App。窗口已经没了也算是（没有可提的东西）。
+    var windowAppIsFront: @MainActor (_ id: UInt32) -> Bool = { _ in true }
     /// 把窗口调成这么大（点，要「辅助功能」授权）。返回改之前的位置，没改返回 nil。
     var fitWindow: @MainActor (_ id: UInt32, _ size: CGSize) async -> CGRect? = { _, _ in nil }
     /// 把调过大小的窗口放回原来的位置和大小。
     var restoreWindow: @MainActor (_ id: UInt32, _ frame: CGRect) async -> Void = { _, _ in }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
         -> any RemoteDesktopFrameSource
-    var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
+    /// `independent`：只看一个窗口时主控端要了「独立键鼠」——输入直接投给窗口所在的进程，不动 Mac 上的指针。
+    var makeInjector: @MainActor (_ display: RemoteDesktopDisplay, _ independent: Bool) -> any RemoteDesktopInputSink
     /// Mac 光标的全局坐标（在连接队列上轮询）。
     var cursorLocation: (@Sendable () -> CGPoint?)?
     /// 光标形状的指纹（便宜，每 100 ms 调一次）与图（贵，指纹变了才调）。nil = 不发形状。
@@ -59,7 +64,7 @@ struct RemoteDesktopEnvironment {
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
         isEnabled: { false }, screenCaptureAuthorized: { false }, canPostEvents: { false }, display: { _ in nil },
-        makeSource: { _, _, _, _ in fatalError("远程桌面未启用") }, makeInjector: { _ in fatalError("远程桌面未启用") },
+        makeSource: { _, _, _, _ in fatalError("远程桌面未启用") }, makeInjector: { _, _ in fatalError("远程桌面未启用") },
         cursorLocation: nil)
 
     static func live(settings: RemoteControlSettings) -> RemoteDesktopEnvironment {
@@ -86,12 +91,20 @@ struct RemoteDesktopEnvironment {
                 // 同步等辅助功能接口（对方卡住时最多 1 秒），不占主线程。
                 _ = await Task.detached { RemoteDesktopWindows.raise(id: id) }.value
             },
-            fitWindow: { id, size in await Task.detached { RemoteDesktopWindows.resize(id: id, to: size) }.value },
-            restoreWindow: { id, frame in await Task.detached { RemoteDesktopWindows.restore(id: id, frame: frame) }.value },
+            surfaceWindow: { id in
+                await Task.detached { RemoteDesktopWindows.surface(id: id) }.value
+            },
+            windowAppIsFront: { id in RemoteDesktopWindows.appIsFront(id: id) },
+            // 屏幕放得下就原地调；放不下先挪到虚拟屏上（`RemoteWindowStage`）。还原时放回原处，虚拟屏随后拆掉。
+            fitWindow: { id, size in await RemoteWindowStage.fit(id: id, size: size) },
+            restoreWindow: { id, frame in
+                await Task.detached { RemoteDesktopWindows.restore(id: id, frame: frame) }.value
+                RemoteWindowStage.restored(id: id)
+            },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
             },
-            makeInjector: { display in RemoteEventInjector(display: display) },
+            makeInjector: { display, independent in RemoteEventInjector.live(display: display, independent: independent) },
             cursorLocation: { CGEvent(source: nil)?.location },
             cursorSignature: { RemoteSystemCursor.signature() },
             cursorImage: { RemoteSystemCursor.image() },

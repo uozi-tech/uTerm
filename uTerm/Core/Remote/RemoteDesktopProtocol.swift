@@ -64,6 +64,14 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     /// 字和在 Mac 上一样大。要「辅助功能」授权，没有就不调；App 有最小窗口尺寸时得到的可能更大。流结束后 Mac 把
     /// 窗口还原。nil = 不动窗口。
     var windowFit: RemoteDesktopFit? = nil
+    /// 只看一个窗口时，看着的这段时间把它保持在最前：它的 App 不是当前 App 了就重新提上来。被别的窗口盖住、
+    /// 或者 App 退到后台时 macOS 不让它重绘，动画就停在最后一帧。要「辅助功能」授权。会和坐在 Mac 前的人抢窗口，
+    /// 所以由看的人决定开不开。只发给声明了 `desktop-window-front` 的 Mac；老 Mac 不认这个键，什么都不做。
+    var windowKeepFront: Bool? = nil
+    /// 只看一个窗口时，鼠标键盘直接投给那个窗口所在的进程：Mac 上的指针不动、前台 App 不变，窗口被盖住也点得到，
+    /// 坐在 Mac 前的人可以同时用自己的键鼠。个别 App 不吃这样投来的事件，所以由看的人决定开不开。
+    /// 只发给声明了 `desktop-window-input` 的 Mac；老 Mac 不认这个键，照旧走全局输入通道。
+    var windowIndependentInput: Bool? = nil
 }
 
 /// 一个点尺寸。
@@ -175,6 +183,10 @@ nonisolated struct RemoteDesktopGeometryUpdate: Codable, Equatable, Sendable {
     /// 内容占视频帧的比例（0…1，从左上角算）。
     var contentWidth: Double
     var contentHeight: Double
+    /// 视频帧现在的像素尺寸（替换 `RemoteDesktopInfo.streamWidth` / `streamHeight`）。原地换尺寸之后和开流时不一样了；
+    /// 老 Mac 不发，主控端照旧用开流时的。
+    var streamWidth: Int? = nil
+    var streamHeight: Int? = nil
 }
 
 /// 一块显示器的简介：给主控端的「切换显示器」菜单用。
@@ -778,22 +790,104 @@ nonisolated struct RemoteDesktopPasteAssembler {
     }
 }
 
+/// 主控端 → Mac：把主控端上的一个文件（视频）传过去，贴进 Mac 当前的前台 app（`desktopPasteFile`）。
+/// `[u32 编号][u64 偏移][u64 总长][u16 文件名长度][文件名][内容]`。
+///
+/// 文件比图片大得多，不能像 `RemoteDesktopPaste` 那样整份放在内存里拼：一块一块发，Mac 边收边写进文件
+///（`RemotePastedFileReceiver`），收齐后把文件放进剪贴板、按 ⌘V。文件名每块都带（就几十个字节），接收端只认第一块的。
+nonisolated struct RemoteDesktopPasteFileChunk: Equatable, Sendable {
+    /// 一个文件最多这么大。
+    static let maxTotalBytes: UInt64 = 4 << 30
+    static let maxNameBytes = 255
+
+    var pasteID: UInt32
+    var offset: UInt64
+    var total: UInt64
+    var name: String
+    var bytes: Data
+
+    func encoded() -> Data {
+        let name = Data(self.name.utf8.prefix(Self.maxNameBytes))
+        var writer = RemoteByteWriter(capacity: 22 + name.count + bytes.count)
+        writer.u32(pasteID)
+        writer.u64(offset)
+        writer.u64(total)
+        writer.u16(UInt16(name.count))
+        writer.bytes(name)
+        writer.bytes(bytes)
+        return writer.data
+    }
+
+    init(pasteID: UInt32, offset: UInt64, total: UInt64, name: String, bytes: Data) {
+        self.pasteID = pasteID
+        self.offset = offset
+        self.total = total
+        self.name = name
+        self.bytes = bytes
+    }
+
+    init(decoding payload: Data) throws {
+        var reader = RemoteByteReader(payload)
+        pasteID = try reader.u32()
+        offset = try reader.u64()
+        total = try reader.u64()
+        let length = Int(try reader.u16())
+        guard length <= Self.maxNameBytes else { throw RemoteProtocolError.malformedMessage }
+        // 文件名在 UTF-8 的字节上截过，末尾可能是半个字：按容错解。
+        name = String(decoding: try reader.bytes(length), as: UTF8.self)
+        bytes = reader.rest()
+    }
+}
+
+/// 要粘贴到 Mac 的一样东西：图片 / 文字（整份在内存里），或一个文件（视频，按路径边读边传）。
+nonisolated enum RemoteDesktopPasteItem: Equatable, Sendable {
+    case content(RemoteDesktopPaste)
+    case file(url: URL, name: String)
+}
+
+nonisolated enum RemoteDesktopPasteFileError: LocalizedError, Equatable {
+    case macTooOld
+    case unreadable
+    case tooLarge
+
+    var errorDescription: String? {
+        switch self {
+        case .macTooOld: return String(localized: "这台 Mac 上的 uTerm 版本太旧，不能粘贴视频。把 Mac 上的 uTerm 更新到最新版")
+        case .unreadable: return String(localized: "无法读取这个视频")
+        case .tooLarge: return String(localized: "视频太大，一次最多粘贴 4 GB")
+        }
+    }
+}
+
 /// 手机这边把粘贴内容排着队发出去。大内容切块，发完一块再发下一块，中间按键和确认能插进来。
 nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
     static let chunkBytes = 32 * 1024
     /// 同时在途几块。太少的话直连上每个往返只传一块（确认才算完成），太多又把链路占满。
     static let window = 4
 
+    /// 文件一块多大。比图片的块大：视频几十上百 MB，块太小光往返就要很久。
+    static let fileChunkBytes = 256 * 1024
+
     /// 排着队的一条内容和它的回调。只在 `link.queue` 上碰（所以 `@unchecked`）。
     private final class Item: @unchecked Sendable {
-        let payload: Data
+        enum Source {
+            /// 打好包的图片 / 文字（`RemoteDesktopPaste.encoded()`）。
+            case data(Data)
+            /// 一个文件，从头顺着读。
+            case file(FileHandle, name: String)
+        }
+
+        let source: Source
+        let total: Int
         let progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)?
         let completion: (@Sendable (Error?) -> Void)?
         private var sent = 0
         private var finished = false
 
-        init(payload: Data, progress: (@Sendable (Int, Int) -> Void)?, completion: (@Sendable (Error?) -> Void)?) {
-            self.payload = payload
+        init(source: Source, total: Int, progress: (@Sendable (Int, Int) -> Void)?,
+             completion: (@Sendable (Error?) -> Void)?) {
+            self.source = source
+            self.total = total
             self.progress = progress
             self.completion = completion
         }
@@ -803,8 +897,8 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
             guard !finished else { return }
             if let error { return finish(error) }
             sent += bytes
-            progress?(sent, payload.count)
-            if sent >= payload.count { finish(nil) }
+            progress?(sent, total)
+            if sent >= total { finish(nil) }
         }
 
         func finish(_ error: Error?) {
@@ -853,7 +947,32 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
                 completion?(RemoteProtocolError.closed)
                 return
             }
-            waiting.append(Item(payload: content.encoded(), progress: progress, completion: completion))
+            let payload = content.encoded()
+            waiting.append(Item(source: .data(payload), total: payload.count, progress: progress, completion: completion))
+            pump()
+        }
+    }
+
+    /// 排一个文件（视频）：边读边发，不整份读进内存。调用前应已确认 Mac 认得 `desktopPasteFile`。
+    /// `name`：Mac 上存成的文件名。回调同 `enqueue(_:progress:completion:)`。
+    func enqueueFile(at url: URL, name: String,
+                     progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)? = nil,
+                     completion: (@Sendable (Error?) -> Void)? = nil) {
+        link.queue.async { [self] in
+            guard !failed else {
+                completion?(RemoteProtocolError.closed)
+                return
+            }
+            guard let handle = try? FileHandle(forReadingFrom: url), let size = try? handle.seekToEnd(), size > 0,
+                  (try? handle.seek(toOffset: 0)) != nil else {
+                completion?(RemoteDesktopPasteFileError.unreadable)
+                return
+            }
+            guard size <= RemoteDesktopPasteFileChunk.maxTotalBytes else {
+                completion?(RemoteDesktopPasteFileError.tooLarge)
+                return
+            }
+            waiting.append(Item(source: .file(handle, name: name), total: Int(size), progress: progress, completion: completion))
             pump()
         }
     }
@@ -864,10 +983,10 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
             if current == nil {
                 guard !waiting.isEmpty else { return }
                 let next = waiting.removeFirst()
-                guard supportsChunks, next.payload.count > Self.chunkBytes else {
+                if case .data(let payload) = next.source, !(supportsChunks && payload.count > Self.chunkBytes) {
                     // 排在队里的就按序发：小内容不能抢到前面的大内容之前。
-                    let count = next.payload.count
-                    link.sendOnQueue(RemoteMessage(.desktopPaste, channel: channel, payload: next.payload),
+                    let count = payload.count
+                    link.sendOnQueue(RemoteMessage(.desktopPaste, channel: channel, payload: payload),
                                      completion: { error in next.handedOff(count, error: error) })
                     continue
                 }
@@ -875,23 +994,47 @@ nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
                 offset = 0
             }
             guard let item = current else { return }
-            let payload = item.payload
-            while inFlight < Self.window, offset < payload.count {
-                let end = min(payload.count, offset + Self.chunkBytes)
-                let chunk = RemoteDesktopPasteChunk(pasteID: nextID, offset: UInt32(offset), total: UInt32(payload.count),
-                                                    bytes: Data(payload[(payload.startIndex + offset)..<(payload.startIndex + end)]))
-                let length = end - offset
-                offset = end
+            var unreadable = false
+            while inFlight < Self.window, offset < item.total {
+                guard let (message, length) = nextChunk(of: item) else {
+                    unreadable = true
+                    break
+                }
+                offset += length
                 inFlight += 1
-                link.sendOnQueue(RemoteMessage(.desktopPasteChunk, channel: channel, payload: chunk.encoded()),
-                                 completion: { [weak self] error in
-                                     item.handedOff(length, error: error)
-                                     self?.chunkFinished(error)
-                                 })
+                link.sendOnQueue(message, completion: { [weak self] error in
+                    item.handedOff(length, error: error)
+                    self?.chunkFinished(error)
+                })
             }
-            guard offset >= payload.count else { return }
+            if unreadable {
+                // 文件读不下去了（被删了、比开始时短了）：这一条算失败，后面排着的照发。Mac 那边没收齐的半个文件
+                // 等下一次粘贴来时扔掉。
+                current = nil
+                nextID &+= 1
+                item.finish(RemoteDesktopPasteFileError.unreadable)
+                continue
+            }
+            guard offset >= item.total else { return }
             current = nil
             nextID &+= 1
+        }
+    }
+
+    /// `current` 从 `offset` 起的下一块。文件读不出来时返回 nil。
+    private func nextChunk(of item: Item) -> (RemoteMessage, Int)? {
+        switch item.source {
+        case .data(let payload):
+            let end = min(payload.count, offset + Self.chunkBytes)
+            let chunk = RemoteDesktopPasteChunk(pasteID: nextID, offset: UInt32(offset), total: UInt32(payload.count),
+                                                bytes: Data(payload[(payload.startIndex + offset)..<(payload.startIndex + end)]))
+            return (RemoteMessage(.desktopPasteChunk, channel: channel, payload: chunk.encoded()), end - offset)
+        case .file(let handle, let name):
+            let want = min(Self.fileChunkBytes, item.total - offset)
+            guard let bytes = try? handle.read(upToCount: want), !bytes.isEmpty else { return nil }
+            let chunk = RemoteDesktopPasteFileChunk(pasteID: nextID, offset: UInt64(offset), total: UInt64(item.total),
+                                                    name: name, bytes: bytes)
+            return (RemoteMessage(.desktopPasteFile, channel: channel, payload: chunk.encoded()), bytes.count)
         }
     }
 

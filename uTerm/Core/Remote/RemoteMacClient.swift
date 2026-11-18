@@ -145,6 +145,14 @@ final class RemoteMacClient: Identifiable {
     /// 远程桌面里能不能粘贴手机的图片 / 文字（老 Mac 收到 `desktopPaste` 会断开整条连接）。
     var supportsDesktopPaste: Bool { macFeatures.contains(RemoteFeature.desktopPaste) }
     var supportsDesktopPasteChunks: Bool { macFeatures.contains(RemoteFeature.desktopPasteChunks) }
+    /// 远程桌面里能不能把文件（视频）贴过去（老 Mac 收到 `desktopPasteFile` 会断开整条连接）。
+    var supportsDesktopPasteFiles: Bool { macFeatures.contains(RemoteFeature.desktopPasteFiles) }
+    /// 只看一个窗口时那台 Mac 能不能把它保持在最前。
+    var supportsDesktopWindowFront: Bool { macFeatures.contains(RemoteFeature.desktopWindowFront) }
+    /// 只看一个窗口时那台 Mac 能不能不停流原地换尺寸。
+    var supportsDesktopWindowRefit: Bool { macFeatures.contains(RemoteFeature.desktopWindowRefit) }
+    /// 那台 Mac 在只看一个窗口时能把输入直接投给窗口所在的进程（不动 Mac 上的指针）。
+    var supportsDesktopWindowInput: Bool { macFeatures.contains(RemoteFeature.desktopWindowInput) }
     /// Mac 支持远程解锁 / 帘幕（会发 `desktopScreenState`、认得 `desktopUnlock`）。
     var supportsUnlock: Bool { macFeatures.contains(RemoteFeature.desktopUnlock) }
     /// Mac 认得 `desktopPause`：手机退到后台时能让它停止推流（老 Mac 收到会断开整条连接）。
@@ -881,7 +889,7 @@ final class RemoteMacClient: Identifiable {
             throw connectionFailure
         }
         guard supportsDesktopWindows else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能只看一个窗口。把 Mac 上的 uTerm 更新到最新版")
+            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不支持窗口模式。把 Mac 上的 uTerm 更新到最新版")
         }
         let request = RemoteDesktopWindowListRequest(requestID: UUID())
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteDesktopWindowList, Error>) in

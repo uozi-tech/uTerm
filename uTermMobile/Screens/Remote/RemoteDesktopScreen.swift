@@ -48,7 +48,12 @@ struct RemoteDesktopScreen: View {
     /// 画布（顶栏下面那块）此刻的点尺寸：只看一个窗口时请 Mac 把窗口调成这么大。
     @State private var canvasSize = CGSize.zero
     @State private var refitTask: Task<Void, Never>?
-    @AppStorage(DefaultsKey.remoteDesktopWindowTextScale) private var windowTextScale = 1.0
+    @AppStorage(DefaultsKey.remoteDesktopWindowTextScale) private var windowTextScale = RemoteDesktopWindowFit.defaultTextScale
+    /// 窗口模式下用触摸屏的方式操作（点哪里就是哪里），不用触控板式的指针。
+    @AppStorage(DefaultsKey.remoteDesktopWindowTouchMode) private var windowTouchMode = false
+    /// 窗口模式下看着的时候请 Mac 把那个窗口保持在最前。
+    @AppStorage(DefaultsKey.remoteDesktopWindowKeepFront) private var keepsWindowFront = false
+    @AppStorage(DefaultsKey.remoteDesktopWindowIndependentInput) private var independentWindowInput = true
     @State private var pickedPhoto: PhotosPickerItem?
     /// 粘贴的进度（读取 / 压缩 / 发送，带进度条）与结果（「已粘贴到 Mac」/「已复制到手机」/ 失败原因）；
     /// 结果几秒后自己消失。
@@ -87,6 +92,9 @@ struct RemoteDesktopScreen: View {
     @State private var screenSize: CGSize?
     /// 顶栏除去顶边距（`barInsets.top`）的高度：画布上沿离屏幕顶边的距离减顶边距。
     @State private var barRowHeight: CGFloat = 0
+    /// 画布的位置量出来过没有。窗口模式下顶上那一行可以是 0 高（横握、状态栏藏着时安全区上沿就是屏幕顶边），
+    /// 不能再拿「顶栏高度大于 0」当成「排过版了」。
+    @State private var canvasMeasured = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
     @Environment(\.mAccent) private var accent
@@ -108,9 +116,11 @@ struct RemoteDesktopScreen: View {
                 }
                 ZStack {
                     if let session {
-                        RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
+                        RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible,
+                                            onSystemPaste: { Task { await pasteClipboard() } }, fitToken: fitToken,
                                             displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) },
-                                            contentFraction: session.contentFraction)
+                                            contentFraction: session.contentFraction, touchMode: touchMode,
+                                            streamPixels: session.info.map { CGSize(width: $0.streamWidth, height: $0.streamHeight) })
                         overlay(session)
                         lockOverlay(session)
                     }
@@ -121,6 +131,7 @@ struct RemoteDesktopScreen: View {
                 // 整列从屏幕顶边排起：画布上沿离屏幕顶边多远，顶栏就多高。
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
                     barRowHeight = max(0, top - barInsets.top)
+                    canvasMeasured = true
                 }
                 if keyBarShown, let session, session.canControl {
                     RemoteDesktopKeyBar(keys: keys, keyboardShown: $keyboardVisible) { session.send($0) }
@@ -137,12 +148,18 @@ struct RemoteDesktopScreen: View {
             .ignoresSafeArea(.container, edges: keyBarShown ? [.top, .horizontal] : .all)
             .background(Color.black.ignoresSafeArea())
             .background(ScreenCornerInsetsReader(insets: $barInsets, screen: $screenSize).ignoresSafeArea())
-            .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
+            // Mac 收得了文件时相册里也能选视频。
+            .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto,
+                          matching: session?.canPasteFiles == true ? .any(of: [.images, .videos]) : .images)
             .sheet(isPresented: $enteringPassword) {
                 if let session { passwordSheet(session) }
             }
             .sheet(isPresented: $pickingWindow) {
-                if let session { RemoteDesktopWindowPicker(session: session, canvasSize: canvasSize) }
+                // 画布按窗口模式的排版算（顶栏不占行）：从整个屏幕换过去时，窗口一次就调成排版换完之后的大小，
+                // 不用等排版变了再调第二次。
+                if let session {
+                    RemoteDesktopWindowPicker(session: session, canvasSize: windowCanvasSize(safeTop: geometry.safeAreaInsets.top))
+                }
             }
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
@@ -153,21 +170,14 @@ struct RemoteDesktopScreen: View {
             .task(id: requestedSize != nil) {
                 guard session == nil, let requestedSize else { return }
                 let created = RemoteDesktopSession(client: client, maxWidth: requestedSize.width,
-                                                   maxHeight: requestedSize.height, pointScale: displayScale)
+                                                   maxHeight: requestedSize.height,
+                                                   pointScale: RemoteDesktopRequestSize.pointScale(displayScale: displayScale))
                 created.onClipboard = { content in copyFromMac(content) }
                 created.openRequestedAt = tappedAt
                 session = created
                 refreshVault()
-                guard let initialWindow else {
-                    await created.start()
-                    return
-                }
-                // 直接开某个窗口：要把窗口调成画布那么大，等画布量出来再开（第一次排版之后就有，最多等半秒）。
-                for _ in 0..<25 where canvasSize.width <= 0 || canvasSize.height <= 0 {
-                    try? await Task.sleep(for: .milliseconds(20))
-                }
-                let fit = fitsWindow ? RemoteDesktopWindowFit.size(canvas: canvasSize, textScale: windowTextScale) : nil
-                await created.switchWindow(to: initialWindow, fit: fit)
+                // 开流不放在这个 task 里跑：它跟着「要多大量出来没有」重启，排版途中那个值一变，开到一半的流就被取消。
+                Task { await openFirst(created) }
             }
         }
         .onChange(of: canvasSize) { _, size in refitWindowWhenSettled(size) }
@@ -246,15 +256,62 @@ struct RemoteDesktopScreen: View {
         return !state.isTerminal
     }
 
+    /// 新建的会话第一次开流：整个屏幕直接开；窗口模式先等画布停稳，按它的大小请 Mac 调窗口。
+    private func openFirst(_ created: RemoteDesktopSession) async {
+        guard let initialWindow else {
+            await created.start()
+            return
+        }
+        let canvas = await settledCanvasSize()
+        // 等的时候页面已经关了：别再开流。
+        guard onScreen, session === created else { return }
+        let fit = fitsWindow
+            ? RemoteDesktopWindowFit.size(canvas: canvas, textScale: windowTextScale, displayScale: displayScale) : nil
+        await created.switchWindow(to: initialWindow, fit: fit, keepFront: keepsWindowFront,
+                                   independentInput: independentWindowInput)
+    }
+
+    /// 等画布量出来并停稳（状态栏藏起来之后安全区会再变一次）：连续 160 ms 没变就算稳，最多等 1 秒。
+    /// 不等的话窗口先按中间值调一次，几百毫秒后又按最终值调一次，流跟着重开。
+    private func settledCanvasSize() async -> CGSize {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        var last = canvasSize
+        var since = clock.now
+        while clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(40))
+            if canvasSize != last {
+                last = canvasSize
+                since = clock.now
+            } else if last.width > 0, last.height > 0, clock.now - since >= .milliseconds(160) {
+                break
+            }
+        }
+        return canvasSize
+    }
+
+    /// 窗口模式下画布有多大：现在就是窗口模式时即 `canvasSize`；还在看整个屏幕时，把顶栏那一行换成窗口模式的
+    /// 那一行（只让出安全区）算出来。
+    private func windowCanvasSize(safeTop: CGFloat) -> CGSize {
+        guard !windowMode, canvasSize.width > 0, canvasSize.height > 0 else { return canvasSize }
+        let barRow = barInsets.top + barRowHeight
+        return CGSize(width: canvasSize.width, height: canvasSize.height + max(0, barRow - safeTop))
+    }
+
     /// 画布大小变了（转屏、折叠屏开合）：正在看一个调过大小的窗口时，等它稳住再请 Mac 按新的画布调一次。
-    /// 键盘条开着时不调：它只是暂时占掉一截，收起来画布就回去了。
+    /// 键盘条、软键盘弹起收起也照调：窗口跟着缩到键盘上面那块画布里，整扇窗都看得见（2026-11-18 user 定；
+    /// 原先键盘条开着时不调，开着键盘转到竖屏、或者弹出软键盘之后，窗口还是原来那么大，只露出一截）。
     private func refitWindowWhenSettled(_ size: CGSize) {
         refitTask?.cancel()
-        guard let session, session.windowID != nil, session.windowFit != nil, !keyBarShown else { return }
+        guard let session, session.windowID != nil, session.windowFit != nil else { return }
         refitTask = Task {
-            try? await Task.sleep(for: .milliseconds(800))
-            guard !Task.isCancelled, canvasSize == size, !keyBarShown,
-                  let fit = RemoteDesktopWindowFit.size(canvas: size, textScale: windowTextScale) else { return }
+            // 画布停稳这么久就发（每变一次重新计）。原先固定等 600 ms，占了调一次大小的一半时间；键盘弹出、转屏时
+            // 画布的大小只变一两次，停稳 250 ms 足够认出是最终的大小。Mac 那头还原窗口有 600 ms 的宽限，
+            // 在它之内到的重调不会和还原撞上。
+            try? await Task.sleep(for: Self.refitSettle)
+            guard !Task.isCancelled, canvasSize == size,
+                  let fit = RemoteDesktopWindowFit.size(canvas: size, textScale: windowTextScale,
+                                                        displayScale: displayScale) else { return }
             await session.refitWindow(to: fit)
         }
     }
@@ -275,13 +332,14 @@ struct RemoteDesktopScreen: View {
     }
 
     private static let sizeMemorySettle: Duration = .seconds(1)
+    static let refitSettle: Duration = .milliseconds(250)
 
-    /// 向 Mac 要多大的画面：比例按顶栏下面的画布，大小不小于屏幕像素（见 `RemoteDesktopRequestSize`）。
-    /// 屏幕或顶栏还没量出来时为 nil。
+    /// 向 Mac 要多大的画面：顶栏下面那块画布的像素数（见 `RemoteDesktopRequestSize`）。
+    /// 屏幕或顶栏还没量出来时为 nil。窗口模式下顶栏不占行，量出过画布的位置就算数。
     private var requestedSize: RemoteDesktopRequestSize? {
-        guard let screenSize, barRowHeight > 0 else { return nil }
+        guard let screenSize, windowMode ? canvasMeasured : barRowHeight > 0 else { return nil }
         return .fitting(screen: screenSize, scale: displayScale, barHeight: barInsets.top + barRowHeight,
-                        topInset: barInsets.top)
+                        topInset: barInsets.top, pixelExact: client.supportsDesktopRegion)
     }
 
     // MARK: - 顶栏
@@ -293,12 +351,18 @@ struct RemoteDesktopScreen: View {
         return initialWindow != nil && session?.state != .streaming && session?.info == nil
     }
 
+    /// 此刻是不是触摸屏模式：只在窗口模式下有（整个屏幕太大，手指点不准，放大后单指还要用来挪指针）。
+    private var touchMode: Bool { windowMode && windowTouchMode }
+
     /// 只看一个窗口时的工具栏：收着时是右上角一个小按钮；点开后整条浮在画面上沿（不占排版的地方，画布大小不变，
     /// Mac 上的窗口也就不用跟着重调）。
     @ViewBuilder private func windowBar(width barWidth: CGFloat) -> some View {
         if windowBarShown {
+            // 底色不透明：半透明时下面亮的 Mac 画面透上来，整条发灰，按钮的浅色底和它混在一起分不出来
+            // （2026-11-18 user：「按钮的配色很灾难」）。和看整个屏幕时的顶栏同一个黑底。
             topBar(width: barWidth)
-                .background(Color.black.opacity(0.82))
+                .background(Color.black.ignoresSafeArea(edges: .top))
+                .overlay(alignment: .bottom) { Color.white.opacity(0.12).frame(height: 0.5) }
                 .transition(.opacity)
         } else {
             HStack {
@@ -415,11 +479,13 @@ struct RemoteDesktopScreen: View {
 
     private var hasMoreActions: Bool { !displays.isEmpty || canPickWindow || canPaste || canCurtain || canManagePassword }
 
+    /// 「更多」菜单。**要矮**：横握时屏幕只有六百多点高，以前十行（两块显示器各占两行、操作方式两行、密码两行）
+    /// 比屏幕还高，系统把菜单顶出屏幕外，上下都点不全（2026-11-18 Duo 录屏）。所以成组的选项收进子菜单，
+    /// 两选一的做成一个带勾的开关，最多七行。
     @ViewBuilder private var moreActions: some View {
-        if let session, !displays.isEmpty {
-            // 用系统的选择器：勾单独占一列，几块屏的名字左边对齐（自己画勾图标时没勾的那行会往左缩）。
-            // iOS 菜单的勾只能在左边，放不到右侧。
-            Section {
+        Section {
+            if let session, !displays.isEmpty {
+                // 子菜单里用系统的选择器：勾单独占一列，几块屏的名字左边对齐。
                 Picker(selection: Binding(
                     get: { session.info?.displayID ?? 0 },
                     set: { id in Task { await session.switchDisplay(to: id) } }
@@ -432,15 +498,19 @@ struct RemoteDesktopScreen: View {
                         .tag(display.id)
                     }
                 } label: {
-                    Text("切换显示器")
+                    Label("切换显示器", systemImage: "display.2")
                 }
-                .pickerStyle(.inline)
+                .pickerStyle(.menu)
             }
-        }
-        if canPickWindow {
-            Section {
+            if canPickWindow {
                 Button { pickingWindow = true } label: {
-                    Label("只看一个窗口…", systemImage: "macwindow")
+                    Label("窗口模式…", systemImage: "macwindow")
+                }
+            }
+            if windowMode, session?.canControl == true {
+                // 开着是触摸屏模式（点哪里就是哪里），关着是触控板模式。
+                Toggle(isOn: $windowTouchMode) {
+                    Label("触摸屏模式", systemImage: "hand.tap")
                 }
             }
         }
@@ -450,37 +520,49 @@ struct RemoteDesktopScreen: View {
                     Label("粘贴到 Mac", systemImage: "doc.on.clipboard")
                 }
                 Button { pickingPhoto = true } label: {
-                    Label("从相册选择图片…", systemImage: "photo")
-                }
-            }
-        }
-        if canCurtain, let session {
-            let curtained = session.screen.curtained
-            Section {
-                Button { session.setCurtain(!curtained) } label: {
-                    Label(curtained ? "关闭帘幕" : "开启帘幕", systemImage: curtained ? "eye" : "eye.slash")
-                }
-            }
-        }
-        if canManagePassword {
-            Section {
-                Button {
-                    passwordDraft = ""
-                    passwordSheetSavesOnly = true
-                    enteringPassword = true
-                } label: {
-                    Label(vaultHasPassword ? "修改解锁密码…" : "设置解锁密码…", systemImage: "key")
-                }
-                if vaultHasPassword {
-                    Button(role: .destructive) {
-                        if let macID = client.macDeviceID { vault.remove(forMac: macID) }
-                        refreshVault()
-                    } label: {
-                        Label("删除已保存的密码", systemImage: "trash")
+                    if session?.canPasteFiles == true {
+                        Label("从相册选择照片或视频…", systemImage: "photo")
+                    } else {
+                        Label("从相册选择图片…", systemImage: "photo")
                     }
                 }
             }
         }
+        Section {
+            if canCurtain, let session {
+                let curtained = session.screen.curtained
+                Button { session.setCurtain(!curtained) } label: {
+                    Label(curtained ? "关闭帘幕" : "开启帘幕", systemImage: curtained ? "eye" : "eye.slash")
+                }
+            }
+            if canManagePassword {
+                if vaultHasPassword {
+                    MMenu {
+                        Button { editUnlockPassword() } label: {
+                            Label("修改解锁密码…", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            if let macID = client.macDeviceID { vault.remove(forMac: macID) }
+                            refreshVault()
+                        } label: {
+                            Label("删除已保存的密码", systemImage: "trash")
+                        }
+                    } label: {
+                        Label("解锁密码", systemImage: "key")
+                    }
+                } else {
+                    Button { editUnlockPassword() } label: {
+                        Label("设置解锁密码…", systemImage: "key")
+                    }
+                }
+            }
+        }
+    }
+
+    private func editUnlockPassword() {
+        passwordDraft = ""
+        passwordSheetSavesOnly = true
+        enteringPassword = true
     }
 
     // MARK: - 声音
@@ -489,7 +571,7 @@ struct RemoteDesktopScreen: View {
 
     private var statusLine: String {
         guard let session else { return String(localized: "正在连接…") }
-        return session.statusText(controlling: String(localized: "触控板模式")) ?? ""
+        return session.statusText(controlling: touchMode ? String(localized: "触摸屏模式") : String(localized: "触控板模式")) ?? ""
     }
 
     private func barButton(_ symbol: String, active: Bool = false, action: @escaping () -> Void) -> some View {
@@ -498,26 +580,30 @@ struct RemoteDesktopScreen: View {
     }
 
     private func barIcon(_ symbol: String, active: Bool = false) -> some View {
+        // 开着的（键盘、声音）：强调色实底配白图标，一眼看得出是开着。原先是灰底上放强调色图标，
+        // 蓝字压在灰上对比度不够，和没开的也分不大出来。
         Image(systemName: symbol)
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(active ? accent : .white)
+            .foregroundStyle(.white)
             .frame(width: 36, height: 32)
-            .background(Color.white.opacity(active ? 0.18 : 0.1))
+            .background(active ? AnyShapeStyle(accent) : AnyShapeStyle(Color.white.opacity(0.14)))
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - 粘贴到 Mac
 
     private func pasteClipboard() async {
-        await paste { try await RemoteDesktopPasteSource.clipboard() }
+        let files = session?.canPasteFiles == true
+        await paste { try await RemoteDesktopPasteSource.clipboardItem(allowsFiles: files) }
     }
 
     private func pastePhoto(_ item: PhotosPickerItem) async {
-        await paste { try await RemoteDesktopPasteSource.photo(item) }
+        await paste { try await RemoteDesktopPasteSource.picked(item) }
     }
 
     /// 读出内容、发给 Mac，等全部交给链路后报结果。读取、压缩、打包都不在主线程上做，进度画在顶上的提示里。
-    private func paste(_ load: @MainActor () async throws -> RemoteDesktopPaste) async {
+    /// 视频是先拷到临时目录再边读边传的，发完（或没发成）把那份删掉。
+    private func paste(_ load: @MainActor () async throws -> RemoteDesktopPasteItem) async {
         guard let session, session.canPaste, !pasting else { return }
         pasting = true
         defer { pasting = false }
@@ -529,6 +615,7 @@ struct RemoteDesktopScreen: View {
         do {
             let content = try await PasteProgressReporter.$sink.withValue(relay.sink) {
                 let content = try await load()
+                defer { RemoteDesktopPasteSource.discard(content) }
                 try await session.pasteAndWait(content)
                 return content
             }
@@ -677,7 +764,11 @@ struct RemoteDesktopScreen: View {
                 } footer: {
                     Text("密码只保存在这台手机的钥匙串里，不会同步到 iCloud，取用时需要\(Self.biometryLead)验证。")
                 }
+                .listRowBackground(M.card)
             }
+            // 盖在 Mac 的画面上：用不透明的底色，不让下面的画面透上来（同 `RemoteDesktopWindowPicker`）。
+            .scrollContentBackground(.hidden)
+            .background(M.canvas)
             .navigationTitle(passwordSheetSavesOnly ? "\(client.macName) 的解锁密码" : "解锁 \(client.macName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -705,6 +796,7 @@ struct RemoteDesktopScreen: View {
             }
         }
         .presentationDetents([.medium])
+        .presentationBackground(M.canvas)
     }
 
     private func beginUnlock(_ session: RemoteDesktopSession) {

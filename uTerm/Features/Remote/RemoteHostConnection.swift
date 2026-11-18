@@ -54,6 +54,18 @@ final class RemoteHostConnection {
     private var peerTakesClipboard = false
     /// 为当前这条桌面流调过大小的窗口和它原来的位置：流结束时放回去。
     var desktopWindowRestore: (id: UInt32, frame: CGRect)?
+    /// 停流后等一小会儿再把窗口放回去的那个任务。主控端转屏、折叠时是「停流 → 按新尺寸再开」，两条消息前后脚到：
+    /// 立刻还原的话，还原和新的调大小是两个互不相干的异步动作，谁后落地不一定——还原落在后面，窗口就回到原来的
+    /// 大尺寸，画面等于没适配（2026-11-17 真机）。所以先等着，新的开流来了就取消，接着用同一份原位置。
+    private var windowRestoreTask: Task<Void, Never>?
+    /// 看着一个窗口、主控端要它保持在最前时：隔一会儿看一眼，它的 App 不在最前了就重新提上来。
+    private var windowFrontTask: Task<Void, Never>?
+    /// 正在看的那个窗口（能控制时才记）和主控端要的像素框：原地换尺寸时用。
+    private var desktopWindowStream: (windowID: UInt32, maxWidth: Int, maxHeight: Int)?
+    /// 原地换尺寸一次只做一个，后来的排在后面。
+    private var windowRefitTask: Task<Void, Never>?
+    static let windowFrontInterval: Duration = .seconds(1)
+    static let windowRestoreGrace: Duration = .milliseconds(600)
     /// 手机认得远程解锁 / 帘幕相关消息（`desktopScreenState` 等）。
     private var peerSupportsUnlock = false
     /// 对端认得解锁结果里的 `inputBlocked`。
@@ -393,6 +405,9 @@ final class RemoteHostConnection {
         case .desktopWindows:
             guard let request = try? RemoteJSON.decode(RemoteDesktopWindowListRequest.self, from: message.payload) else { return }
             Task { await listDesktopWindows(request) }
+        case .desktopWindowRefit:
+            guard let fit = try? RemoteJSON.decode(RemoteDesktopFit.self, from: message.payload) else { return }
+            refitDesktopWindow(fit, channel: message.channel)
         case .desktopUnlock:
             guard var request = try? RemoteJSON.decode(RemoteDesktopUnlockRequest.self, from: message.payload) else { return }
             let password = request.password
@@ -411,7 +426,7 @@ final class RemoteHostConnection {
                 stopAudio(notify: nil)
             }
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
-             .desktopPause, .desktopRegion:
+             .desktopPause, .desktopRegion, .desktopPasteFile:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
@@ -588,8 +603,12 @@ final class RemoteHostConnection {
         if let desktop {
             stopDesktop(channel: desktop.channel, notify: false)
         }
+        windowRestoreTask?.cancel()
+        windowRestoreTask = nil
+        windowFrontTask?.cancel()
+        windowFrontTask = nil
         if let pending = desktopWindowRestore {
-            // 调过大小、流却没开起来（或已经停了）的窗口：连接断了也要放回去。
+            // 调过大小的窗口：连接断了马上放回去，不等了。
             desktopWindowRestore = nil
             let environment = server.desktopEnvironment
             Task { await environment.restoreWindow(pending.id, pending.frame) }
@@ -694,14 +713,25 @@ extension RemoteHostConnection {
         // 只看一个窗口：先把它提到最前（盖住的窗口点不到，有时也采不到），再按它此刻的位置和大小当采集目标。
         var windowTitle: String?
         // 上一条流调过大小的窗口：这次还是它、还要调，就留着它最初的位置（结束时还原到那儿）；否则现在就还原。
+        // 停流时排着的那次还原先取消：要不要还原、什么时候还原，从这里起由这次开流定，和下面的调大小排着队来。
+        windowRestoreTask?.cancel()
+        windowRestoreTask = nil
+        windowFrontTask?.cancel()
+        windowFrontTask = nil
         if let pending = desktopWindowRestore, pending.id != request.windowID || request.windowFit == nil {
             desktopWindowRestore = nil
             await environment.restoreWindow(pending.id, pending.frame)
             guard generation == desktopStartGeneration, !isClosed else { return }
         }
+        // 独立键鼠：输入直接投给窗口所在的进程，不动 Mac 上的指针，也就不用把窗口提到最前、把 App 变成当前 App。
+        let independentInput = request.windowID != nil && request.windowIndependentInput == true && canControl
         if let windowID = request.windowID {
             if canControl {
-                await environment.raiseWindow(windowID)
+                if independentInput {
+                    await environment.surfaceWindow(windowID)
+                } else {
+                    await environment.raiseWindow(windowID)
+                }
                 if let fit = request.windowFit,
                    let original = await environment.fitWindow(windowID, CGSize(width: fit.width, height: fit.height)),
                    desktopWindowRestore == nil {
@@ -726,12 +756,21 @@ extension RemoteHostConnection {
         // 新手机（能解旁路精修帧）+ HEVC：10-bit 主流 + 旁路精修。老手机照旧，免得它把旁路帧当主流解。
         let sidecar = request.codec == .hevc && request.sidecarRefine == true
         let video = request.videoDatagrams == true ? link.videoChannel : nil
+        let injector = canControl ? environment.makeInjector(display, independentInput) : nil
+        // 按进程投递时 Mac 上的指针不动：主控端的指针跟着注入器自己记的位置走，形状也不取 Mac 上那个指针的。
+        let ownsPointer = injector?.virtualPointer != nil
+        if display.windowID != nil, canControl {
+            AppLogger.info("远程桌面：窗口模式的输入\(ownsPointer ? "直接投给窗口所在的进程（不动 Mac 上的指针）" : "走全局通道（会动 Mac 上的指针）")",
+                           category: RemoteLog.category)
+        }
+        let pointerLocation: (@Sendable () -> CGPoint?)? = ownsPointer
+            ? { @Sendable [weak injector] in injector?.virtualPointer } : environment.cursorLocation
         let streamer = RemoteDesktopStreamer(
             link: link, channel: channel, codec: request.codec, width: size.width, height: size.height, display: display,
             sidecarRefine: sidecar, sendsLatency: request.latencyStats == true, path: origin.path, video: video,
             source: environment.makeSource(display, size.width, size.height, sidecar),
-            injector: canControl ? environment.makeInjector(display) : nil,
-            cursorLocation: environment.cursorLocation,
+            injector: injector,
+            cursorLocation: pointerLocation,
             clipboard: canControl && peerTakesClipboard ? environment.clipboard : nil,
             onFirstInput: { [weak self] in
                 DispatchQueue.main.async {
@@ -751,6 +790,10 @@ extension RemoteHostConnection {
             })
         desktop = (channel, streamer)
         desktopRoute.set(streamer)
+        if let windowID = display.windowID, request.windowKeepFront == true, canControl {
+            keepWindowFront(windowID, channel: channel)
+        }
+        desktopWindowStream = display.windowID.flatMap { canControl ? ($0, request.maxWidth, request.maxHeight) : nil }
         server.claimDesktop(connection: self, channel: channel, canControl: canControl)
         setupScreenControl(channel: channel)
         let info = RemoteDesktopInfo(
@@ -779,7 +822,7 @@ extension RemoteHostConnection {
             streamer.activate(started: RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(info)))
             // 初始锁屏状态、光标形状排在 `desktopStarted` 之后发：对端要先靠它绑定通道，才接得到后续消息。
             sendScreenState()
-            if request.cursorImages == true { startCursorShapes(channel: channel) }
+            if request.cursorImages == true, !ownsPointer { startCursorShapes(channel: channel) }
         }
     }
 
@@ -800,14 +843,77 @@ extension RemoteHostConnection {
         reply(environment.listWindows())
     }
 
+    /// 主控端的画布变了（转屏、键盘弹出收起）：不停流，把正在看的窗口改成新的大小，流原地换尺寸
+    /// （`RemoteDesktopStreamer.retarget`）。排着队做，前一次没改完时不抢。
+    private func refitDesktopWindow(_ fit: RemoteDesktopFit, channel: UInt32) {
+        let previous = windowRefitTask
+        windowRefitTask = Task { [weak self] in
+            await previous?.value
+            await self?.performWindowRefit(fit, channel: channel)
+        }
+    }
+
+    private func performWindowRefit(_ fit: RemoteDesktopFit, channel: UInt32) async {
+        guard !isClosed, let current = desktop, current.channel == channel, let target = desktopWindowStream else { return }
+        let environment = server.desktopEnvironment
+        let clock = ContinuousClock()
+        let started = clock.now
+        // 改窗口大小到新尺寸的第一帧之间的过渡画面一张都不送，主控端停在上一张上，等新的到了一次换完。
+        current.streamer.holdForRetarget()
+        // 第一次改它的大小时记下原来的位置，结束时还原到那儿。
+        if let original = await environment.fitWindow(target.windowID, CGSize(width: fit.width, height: fit.height)),
+           desktopWindowRestore == nil {
+            desktopWindowRestore = (target.windowID, original)
+        }
+        guard !isClosed, desktop?.channel == channel, let window = environment.window(target.windowID) else {
+            current.streamer.cancelRetargetHold()
+            return
+        }
+        let size = RemoteDesktopGeometry.streamSize(
+            displayPixels: CGSize(width: window.display.pixelWidth, height: window.display.pixelHeight),
+            maxWidth: target.maxWidth, maxHeight: target.maxHeight)
+        AppLogger.info("远程桌面：改窗口大小 \(RemoteConnectTrace.millis(clock.now - started)) ms，流原地换成 \(size.width)×\(size.height)",
+                       category: RemoteLog.category)
+        current.streamer.retarget(display: window.display, width: size.width, height: size.height)
+    }
+
+    /// 这条流还在的时候把窗口保持在最前：每隔 `windowFrontInterval` 看一眼，它的 App 不是当前 App 了就再提一次。
+    /// 被别的 App 盖住的窗口 macOS 不让它重绘，画面就停在最后一帧（2026-11-18 user 反馈）。
+    private func keepWindowFront(_ windowID: UInt32, channel: UInt32) {
+        windowFrontTask?.cancel()
+        windowFrontTask = Task { [weak self] in
+            var raises = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.windowFrontInterval)
+                guard !Task.isCancelled, let self, !self.isClosed, self.desktop?.channel == channel else { return }
+                let environment = self.server.desktopEnvironment
+                guard !environment.windowAppIsFront(windowID) else { continue }
+                raises += 1
+                // 头几次每次都记，之后每 30 次记一行。
+                if raises <= 3 || raises % 30 == 0 {
+                    AppLogger.info("远程桌面：正在看的窗口退到了后面，重新提到最前（第 \(raises) 次）", category: RemoteLog.category)
+                }
+                await environment.raiseWindow(windowID)
+            }
+        }
+    }
+
     /// 结束桌面流。`notify` = 告诉手机（Mac 上断开、被别的设备接管、采集停了）。
     func stopDesktop(channel: UInt32, notify: Bool, reason: String = "", restoresWindow: Bool = true) {
         guard let current = desktop, current.channel == channel else { return }
-        if restoresWindow, let pending = desktopWindowRestore {
-            // 为这条流调过大小的窗口放回去。
-            desktopWindowRestore = nil
-            let environment = server.desktopEnvironment
-            Task { await environment.restoreWindow(pending.id, pending.frame) }
+        windowFrontTask?.cancel()
+        windowFrontTask = nil
+        desktopWindowStream = nil
+        if restoresWindow, desktopWindowRestore != nil {
+            // 为这条流调过大小的窗口放回去——等一小会儿，主控端马上按新尺寸再开同一个窗口时就不用折腾了。
+            windowRestoreTask?.cancel()
+            windowRestoreTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.windowRestoreGrace)
+                guard !Task.isCancelled, let self, let pending = self.desktopWindowRestore else { return }
+                self.desktopWindowRestore = nil
+                self.windowRestoreTask = nil
+                await self.server.desktopEnvironment.restoreWindow(pending.id, pending.frame)
+            }
         }
         stopAudio(notify: nil)
         desktop = nil

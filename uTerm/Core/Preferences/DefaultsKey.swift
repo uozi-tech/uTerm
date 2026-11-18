@@ -109,8 +109,17 @@ nonisolated enum DefaultsKey {
     static let remoteDesktopSendSystemShortcuts = "remote.desktop.sendSystemShortcuts"
     /// iOS：远程桌面只看一个窗口时，请 Mac 把那个窗口调成手机画布的大小（默认开）。
     static let remoteDesktopFitWindow = "remote.desktop.fitWindow"
-    /// iOS：调窗口大小时字要多大（`RemoteDesktopWindowFit.textScales` 里的一个，1 = 和在 Mac 上一样大）。
+    /// iOS：调窗口大小时字要多大（`RemoteDesktopWindowFit.textScales` 里的一个，1 = 和在 Mac 上一样大；
+    /// 0 = 「最清晰」，像素一一对应，也是默认值）。
     static let remoteDesktopWindowTextScale = "remote.desktop.windowTextScale"
+    /// 窗口模式下用触摸屏的方式操作（点哪里就是哪里、不显示指针），不用触控板式的指针。默认关。只存本机。
+    static let remoteDesktopWindowTouchMode = "remote.desktop.windowTouchMode"
+    /// 窗口模式下看着的时候请 Mac 把那个窗口保持在最前（被盖住的窗口不重绘、动画会停）。默认关：会和坐在
+    /// Mac 前的人抢窗口。只存本机。
+    static let remoteDesktopWindowKeepFront = "remote.desktop.windowKeepFront"
+    /// 窗口模式下鼠标键盘直接投给那个窗口所在的进程，不动 Mac 上的指针、不占 Mac 的键鼠。默认开；个别 App
+    /// 不吃这样投来的事件时关掉。只存本机。
+    static let remoteDesktopWindowIndependentInput = "remote.desktop.windowIndependentInput"
     /// macOS：中继 relayID → 装着它的已保存主机（ServerProfile.id），本机自己管，不同步。
     static let remoteRelayManagedHosts = "remote.relay.managedHosts"
     /// macOS：最近一次从 OSS 取到的中继最新版本与取的时间。

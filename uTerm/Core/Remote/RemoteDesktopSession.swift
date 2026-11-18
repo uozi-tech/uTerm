@@ -97,6 +97,10 @@ final class RemoteDesktopSession {
     private(set) var windowID: UInt32?
     /// 只看一个窗口时，请 Mac 先把窗口调成这么大（点）。nil = 不动窗口。
     private(set) var windowFit: CGSize?
+    /// 看着一个窗口时请 Mac 把它保持在最前。
+    private(set) var windowKeepFront = false
+    /// 看着一个窗口时请 Mac 把输入直接投给窗口所在的进程（不动 Mac 上的指针）。
+    private(set) var windowIndependentInput = true
     /// 只看一个窗口时，内容占视频帧的比例（从左上角算）：窗口改了大小、菜单伸出窗口后，视频帧的右边或下边会空出来，
     /// 画布把空的那截裁掉。整块显示器时恒为 1。
     private(set) var contentFraction = CGSize(width: 1, height: 1)
@@ -216,19 +220,69 @@ final class RemoteDesktopSession {
     ///
     /// `fit`：请 Mac 先把窗口调成这么大（点，一般是本机画布的点尺寸），窗口里的内容按它重排；流结束后 Mac 把窗口
     /// 还原。nil = 不动窗口。
-    func switchWindow(to id: UInt32?, fit: CGSize? = nil) async {
+    ///
+    /// `keepFront`：看着的时候请 Mac 把这个窗口保持在最前（见 `RemoteDesktopStartRequest.windowKeepFront`）。
+    /// nil = 照现在的不变。
+    ///
+    /// `independentInput`：请 Mac 把输入直接投给窗口所在的进程（见 `RemoteDesktopStartRequest.windowIndependentInput`）。
+    /// nil = 照现在的不变。
+    func switchWindow(to id: UInt32?, fit: CGSize? = nil, keepFront: Bool? = nil, independentInput: Bool? = nil) async {
         let fit = id == nil ? nil : fit
-        guard id != windowID || fit != windowFit else { return }
+        let keepFront = keepFront ?? windowKeepFront
+        let independentInput = independentInput ?? windowIndependentInput
+        guard id != windowID || fit != windowFit || keepFront != windowKeepFront
+                || independentInput != windowIndependentInput else { return }
+        // 还是这个窗口、画面正放着，只是换个大小（转屏、键盘弹出收起）：留着上一张画面，不盖「正在连接」。
+        if id != nil, id == windowID, state == .streaming, !awaitingFirstFrame { beginRetarget() }
         windowID = id
         windowFit = fit
+        windowKeepFront = keepFront
+        windowIndependentInput = independentInput
         stop()
         await start()
     }
+
+    /// 正在给同一个窗口换大小（按新尺寸重开流）。这期间 `notice` 不盖「正在连接」，画布上留着上一张画面：
+    /// 整个过程只有几百毫秒，盖一层黑再揭开比留着旧画面更显得慢、更晃眼。超过 `retargetGrace` 还没出画面
+    /// （Mac 卡住了、连接断了）就照常盖。
+    private(set) var isRetargeting = false
+    @ObservationIgnored private var retargetTask: Task<Void, Never>?
+    static let retargetGrace: Duration = .milliseconds(1500)
+
+    private func beginRetarget() {
+        isRetargeting = true
+        retargetTask?.cancel()
+        retargetTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.retargetGrace)
+            guard !Task.isCancelled else { return }
+            self?.isRetargeting = false
+        }
+    }
+
+    private func endRetarget() {
+        retargetTask?.cancel()
+        retargetTask = nil
+        if isRetargeting { isRetargeting = false }
+    }
+
+    /// 那台 Mac 能不能把正在看的窗口保持在最前。
+    var supportsWindowFront: Bool { client.supportsDesktopWindowFront }
+
+    /// 那台 Mac 能不能把输入直接投给正在看的窗口（不动 Mac 上的指针）。
+    var supportsWindowInput: Bool { client.supportsDesktopWindowInput }
 
     /// 画布大小变了（转屏、折叠屏开合）：正在看一个调过大小的窗口时，按新的画布再调一次。差不到 8 点不动。
     func refitWindow(to size: CGSize) async {
         guard windowID != nil, let current = windowFit, size.width > 0, size.height > 0,
               abs(current.width - size.width) >= 8 || abs(current.height - size.height) >= 8 else { return }
+        // 新的 Mac：不停流，请它原地换（改窗口大小、改采集参数、重建编码器），画面接着来，新的点尺寸和像素数随
+        // `desktopGeometry` 到。省掉停流再开的来回和重开采集的一百多毫秒。老 Mac 照旧停流再开。
+        if client.supportsDesktopWindowRefit, state == .streaming, !awaitingFirstFrame, let attachment {
+            windowFit = size
+            attachment.link.send(RemoteMessage(.desktopWindowRefit, channel: attachment.channel, payload: RemoteJSON.encode(
+                RemoteDesktopFit(width: size.width, height: size.height))))
+            return
+        }
         await switchWindow(to: windowID, fit: size)
     }
 
@@ -268,6 +322,9 @@ final class RemoteDesktopSession {
         awaitingFirstFrame = false
         contentFraction = CGSize(width: 1, height: 1)
         pendingGeometry = nil
+        deferredGeometry = nil
+        deferredGeometryTask?.cancel()
+        deferredGeometryTask = nil
         sentRegion = nil
         receiver.expectFirstImage(trace: trace) { [weak self] in
             DispatchQueue.main.async {
@@ -328,7 +385,11 @@ final class RemoteDesktopSession {
                                                 cursorImages: wantsCursorImages ? true : nil, pointScale: pointScale,
                                                 windowID: client.supportsDesktopWindows ? windowID : nil,
                                                 windowFit: client.supportsDesktopWindows && windowID != nil
-                                                    ? windowFit.map { RemoteDesktopFit(width: $0.width, height: $0.height) } : nil)
+                                                    ? windowFit.map { RemoteDesktopFit(width: $0.width, height: $0.height) } : nil,
+                                                windowKeepFront: client.supportsDesktopWindowFront && windowID != nil && windowKeepFront
+                                                    ? true : nil,
+                                                windowIndependentInput: client.supportsDesktopWindowInput && windowID != nil
+                                                    && windowIndependentInput ? true : nil)
         let wasConnected = client.state == .connected
         let startStep = trace.begin(.desktopStart, detail: wasConnected ? nil : String(localized: "含建连"))
         let attached: RemoteAttachment
@@ -389,11 +450,58 @@ final class RemoteDesktopSession {
     private func applyPendingGeometry() {
         guard let update = pendingGeometry, info != nil else { return }
         pendingGeometry = nil
+        // 视频帧的形状要变了（原地换尺寸）而新形状的画面还没到：先不换排版，等那一帧（`frameShown`）。
+        // 现在就换的话，画布拿新的比例去摆旧的画面，画面被拉变形一下才换成新的（2026-11-18 user：换尺寸时闪）。
+        if let shown = shownFrameSize, let width = update.streamWidth, let height = update.streamHeight,
+           width > 0, height > 0, !Self.sameShape(shown, (width, height)) {
+            deferredGeometry = update
+            deferredGeometryTask?.cancel()
+            deferredGeometryTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.geometryFrameWait)
+                guard !Task.isCancelled, let self, let late = self.deferredGeometry else { return }
+                self.commitGeometry(late)
+            }
+            return
+        }
+        commitGeometry(update)
+    }
+
+    private func commitGeometry(_ update: RemoteDesktopGeometryUpdate) {
+        deferredGeometry = nil
+        deferredGeometryTask?.cancel()
+        deferredGeometryTask = nil
         info?.displayWidth = update.width
         info?.displayHeight = update.height
+        if let width = update.streamWidth, let height = update.streamHeight, width > 0, height > 0 {
+            info?.streamWidth = width
+            info?.streamHeight = height
+        }
         contentFraction = CGSize(width: min(1, update.contentWidth), height: min(1, update.contentHeight))
     }
 
+    /// 送显示的那一层报来：马上要显示的整块画面换了像素数（第一帧、原地换尺寸后的第一帧、Mac 换了编码分辨率）。
+    /// 在它把这一帧送进显示层之前、主线程上调。等着这个形状的几何这时套上，排版和画面一起换。
+    func frameShown(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+        shownFrameSize = (width, height)
+        if let deferred = deferredGeometry, let wanted = deferred.streamWidth, let tall = deferred.streamHeight,
+           Self.sameShape((width, height), (wanted, tall)) {
+            commitGeometry(deferred)
+        }
+    }
+
+    /// 两个像素尺寸是不是同一个长宽比（差不到 1%）。Mac 降编码分辨率时是等比缩的，形状不变。
+    nonisolated static func sameShape(_ first: (width: Int, height: Int), _ second: (width: Int, height: Int)) -> Bool {
+        let cross = Double(first.width) * Double(second.height), other = Double(second.width) * Double(first.height)
+        return abs(cross - other) <= 0.01 * max(cross, other)
+    }
+
+    /// 新形状的画面最多等这么久；一直不来（丢了、Mac 那头没换成）就照几何换，免得排版一直停在旧的上。
+    static let geometryFrameWait: Duration = .milliseconds(1200)
+    @ObservationIgnored private var deferredGeometry: RemoteDesktopGeometryUpdate?
+    @ObservationIgnored private var deferredGeometryTask: Task<Void, Never>?
+    /// 画布上此刻那张整块画面的像素数。没接画布、还没出过画面时是 nil（这时几何来了就套）。
+    @ObservationIgnored private var shownFrameSize: (width: Int, height: Int)?
     @ObservationIgnored private var pendingGeometry: RemoteDesktopGeometryUpdate?
     /// 画布此刻想要的那一块，和已经告诉这条流的那一块（新开的流从整块起步）。
     @ObservationIgnored private var wantedRegion: RemoteDesktopRegion?
@@ -405,6 +513,7 @@ final class RemoteDesktopSession {
         guard arrived == generation, !isStopped else { return }
         firstImageGeneration = arrived
         awaitingFirstFrame = false
+        endRetarget()
         guard firstFrameStep != nil else { return }
         if let trace = openTrace, let step = firstFrameStep {
             trace.end(step, ok: true)
@@ -491,6 +600,29 @@ final class RemoteDesktopSession {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             uploader.enqueue(content, progress: progress) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    /// 能不能把文件（视频）贴过去：要有控制权，Mac 还得认得 `desktopPasteFile`。
+    var canPasteFiles: Bool { canPaste && client.supportsDesktopPasteFiles }
+
+    /// 粘贴一样东西并等它全部交给链路：图片 / 文字同 `pasteAndWait(_:)`；文件边读边传，Mac 收齐后放进剪贴板、按 ⌘V。
+    func pasteAndWait(_ item: RemoteDesktopPasteItem) async throws {
+        switch item {
+        case .content(let content):
+            try await pasteAndWait(content)
+        case .file(let url, let name):
+            guard let uploader = uploader() else { throw RemoteProtocolError.closed }
+            guard client.supportsDesktopPasteFiles else { throw RemoteDesktopPasteFileError.macTooOld }
+            let sink = PasteProgressReporter.sink
+            let progress: (@Sendable (Int, Int) -> Void)? = sink.map { sink in
+                { @Sendable sent, total in sink(PasteProgress.sending(sent, of: total)) }
+            }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                uploader.enqueueFile(at: url, name: name, progress: progress) { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                }
             }
         }
     }

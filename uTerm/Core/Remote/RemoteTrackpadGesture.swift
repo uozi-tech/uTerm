@@ -21,6 +21,8 @@ nonisolated enum RemoteTrackpadAction: Equatable {
     case panned(CGSize)
     /// 三指扫了一下（手指走的方向），一次接触只发一次。
     case swiped(RemoteSwipeDirection)
+    /// 触摸屏模式：把指针放到手指所在的位置（视图坐标）。紧跟在后面的点击 / 拖拽 / 滚动就落在这里。
+    case pointerJumped(to: CGPoint)
 }
 
 /// 三指扫动的方向（手指走的方向）。
@@ -50,8 +52,25 @@ nonisolated enum RemoteSwipeDirection: Equatable {
 /// - 三指：一起走过 `swipeThreshold` 判成扫动，按主方向发一次 `swiped`，之后到全部抬起都不再有动作。
 ///   手指不会同时落下，单指 / 双指还没判定时来了第三根照样算三指。
 /// - 四指及以上、三指中途抬起或加指：不产生动作，全部抬起后才接受新手势。
+///
+/// 触摸屏模式（`mode = .touch`，只看一个窗口时可选）：没有指针，点哪里就是哪里，像用手机上的 App。
+/// - 单指轻点：在手指的位置单击。
+/// - 单指拖动：滚动手指下面的内容（先把指针放到落指处，Mac 把滚动交给指针下面的视图）。
+/// - 按住不动 `holdDuration`：在手指的位置按下左键，之后指针跟着手指走（选文字、拖滑块、拖窗口），抬手松开。
+/// - 双指轻点：在两指中间右键。双指拖动、捏合、三指扫动与触控板模式相同。
+/// 每个动作前先发 `pointerJumped`，后面跟的还是 `click` / `dragBegan` / `scrollBegan` 这些，画布照旧执行。
 nonisolated struct RemoteTrackpadGesture {
+    enum Mode {
+        case trackpad
+        case touch
+    }
+
+    /// 只在没有手势进行时改（调用方先 `cancel()`）。
+    var mode = Mode.trackpad
+
     static let moveThreshold: CGFloat = 3
+    /// 触摸屏模式下手指走出这么远才算拖动：直接点目标时手指落下、抬起之间会滑几个点，按触控板那 3 点算就全成了滚动。
+    static let touchSlop: CGFloat = 10
     static let holdDuration: TimeInterval = 0.45
     static let twoFingerTapDuration: TimeInterval = 0.35
     static let intentThreshold: CGFloat = 6
@@ -76,8 +95,10 @@ nonisolated struct RemoteTrackpadGesture {
         case pointer(id: Int)
         case drag(id: Int)
         case pendingTwo(first: RemoteTrackpadTouch, second: RemoteTrackpadTouch, startTime: TimeInterval, moved: Bool)
-        case releasingTwo(id: Int, start: CGPoint, startTime: TimeInterval)
+        case releasingTwo(id: Int, start: CGPoint, startTime: TimeInterval, anchor: CGPoint)
         case scrolling(ids: Set<Int>)
+        /// 触摸屏模式的单指滚动。
+        case touchScrolling(id: Int)
         case pinching(ids: Set<Int>, distance: CGFloat)
         case pendingThree(ids: Set<Int>, start: CGPoint)
         case ignored
@@ -123,7 +144,7 @@ nonisolated struct RemoteTrackpadGesture {
         guard time - startTime >= Self.holdDuration else { return [] }
         phase = .drag(id: id)
         tracked = start
-        return [.dragBegan]
+        return jump(to: start) + [.dragBegan]
     }
 
     /// 系统收走了触摸：结束进行中的手势，不产生点击。
@@ -147,10 +168,12 @@ nonisolated struct RemoteTrackpadGesture {
             return advanceDrag(touches, id: id, at: time)
         case .pendingTwo(let first, let second, let startTime, let moved):
             return advancePendingTwo(touches, first: first, second: second, startTime: startTime, moved: moved, at: time)
-        case .releasingTwo(let id, let start, let startTime):
-            return advanceReleasingTwo(touches, id: id, start: start, startTime: startTime, at: time)
+        case .releasingTwo(let id, let start, let startTime, let anchor):
+            return advanceReleasingTwo(touches, id: id, start: start, startTime: startTime, anchor: anchor, at: time)
         case .scrolling(let ids):
             return advanceScrolling(touches, ids: ids, at: time)
+        case .touchScrolling(let id):
+            return advanceTouchScrolling(touches, id: id, at: time)
         case .pinching(let ids, let distance):
             return advancePinching(touches, ids: ids, distance: distance, at: time)
         case .pendingThree(let ids, let start):
@@ -193,7 +216,7 @@ nonisolated struct RemoteTrackpadGesture {
                                             startTime: TimeInterval, at time: TimeInterval) -> [RemoteTrackpadAction] {
         if touches.isEmpty {
             phase = .idle
-            return suppressesTap ? [] : [.click(.left)]
+            return suppressesTap ? [] : jump(to: start) + [.click(.left)]
         }
         guard touches.count == 1, touches[0].id == id else {
             if touches.count == 2 { beginTwo(touches, at: time) } else { beginThreeOrIgnore(touches) }
@@ -201,11 +224,34 @@ nonisolated struct RemoteTrackpadGesture {
         }
         let location = touches[0].location
         record(location, at: time)
-        guard hypot(location.x - start.x, location.y - start.y) > Self.moveThreshold else { return [] }
+        let slop = mode == .touch ? Self.touchSlop : Self.moveThreshold
+        guard hypot(location.x - start.x, location.y - start.y) > slop else { return [] }
         let delta = CGSize(width: location.x - start.x, height: location.y - start.y)
         tracked = location
+        if mode == .touch {
+            // 判定用掉的位移一起发：内容从第一下就和手指对齐。
+            phase = .touchScrolling(id: id)
+            return [.pointerJumped(to: start), .scrollBegan, .scrollMoved(delta)]
+        }
         phase = .pointer(id: id)
         return [.movePointer(delta, speed: speed(at: time))]
+    }
+
+    /// 触摸屏模式的单指滚动：只跟落下的那根手指，它抬起或又来了别的手指就结束。
+    private mutating func advanceTouchScrolling(_ touches: [RemoteTrackpadTouch], id: Int,
+                                                at time: TimeInterval) -> [RemoteTrackpadAction] {
+        guard touches.count == 1, touches[0].id == id else {
+            phase = touches.isEmpty ? .idle : .ignored
+            return [.scrollEnded(velocity: velocity(at: time))]
+        }
+        record(touches[0].location, at: time)
+        let delta = stepTracked(to: touches[0].location)
+        return delta == .zero ? [] : [.scrollMoved(delta)]
+    }
+
+    /// 触摸屏模式下把指针放到这里；触控板模式什么也不发。
+    private func jump(to point: CGPoint) -> [RemoteTrackpadAction] {
+        mode == .touch ? [.pointerJumped(to: point)] : []
     }
 
     private mutating func advancePointer(_ touches: [RemoteTrackpadTouch], id: Int,
@@ -240,18 +286,22 @@ nonisolated struct RemoteTrackpadGesture {
         record(touch.location, at: time)
         let delta = stepTracked(to: touch.location)
         guard delta != .zero else { return [] }
+        // 触摸屏模式：拖着的东西就在手指下面，不经指针加速。
+        if mode == .touch { return [.pointerJumped(to: touch.location)] }
         return [.dragMoved(delta, speed: speed(at: time), location: touch.location)]
     }
 
     private mutating func advancePendingTwo(_ touches: [RemoteTrackpadTouch], first: RemoteTrackpadTouch,
                                             second: RemoteTrackpadTouch, startTime: TimeInterval, moved: Bool,
                                             at time: TimeInterval) -> [RemoteTrackpadAction] {
+        let anchor = Self.centroid([first, second])
         switch touches.count {
         case 0:
             phase = .idle
-            return moved ? [] : twoFingerTap(startTime: startTime, at: time)
+            return moved ? [] : twoFingerTap(startTime: startTime, anchor: anchor, at: time)
         case 1:
-            phase = moved ? .ignored : .releasingTwo(id: touches[0].id, start: touches[0].location, startTime: startTime)
+            phase = moved ? .ignored : .releasingTwo(id: touches[0].id, start: touches[0].location,
+                                                     startTime: startTime, anchor: anchor)
             return []
         default:
             break
@@ -283,8 +333,8 @@ nonisolated struct RemoteTrackpadGesture {
             tracked = center
             resetSamples(center, at: time)
             // 判定用掉的位移一起发：内容从第一下就和手指对齐。
-            let start = Self.centroid([first, second])
-            return [.scrollBegan, .scrollMoved(CGSize(width: center.x - start.x, height: center.y - start.y))]
+            return jump(to: anchor)
+                + [.scrollBegan, .scrollMoved(CGSize(width: center.x - anchor.x, height: center.y - anchor.y))]
         }
     }
 
@@ -320,10 +370,11 @@ nonisolated struct RemoteTrackpadGesture {
     }
 
     private mutating func advanceReleasingTwo(_ touches: [RemoteTrackpadTouch], id: Int, start: CGPoint,
-                                              startTime: TimeInterval, at time: TimeInterval) -> [RemoteTrackpadAction] {
+                                              startTime: TimeInterval, anchor: CGPoint,
+                                              at time: TimeInterval) -> [RemoteTrackpadAction] {
         if touches.isEmpty {
             phase = .idle
-            return twoFingerTap(startTime: startTime, at: time)
+            return twoFingerTap(startTime: startTime, anchor: anchor, at: time)
         }
         guard touches.count == 1, touches[0].id == id else {
             phase = .ignored
@@ -354,9 +405,10 @@ nonisolated struct RemoteTrackpadGesture {
         return nil
     }
 
-    private func twoFingerTap(startTime: TimeInterval, at time: TimeInterval) -> [RemoteTrackpadAction] {
+    /// `anchor`：两指落下时的中点，触摸屏模式下右键点在这里。
+    private func twoFingerTap(startTime: TimeInterval, anchor: CGPoint, at time: TimeInterval) -> [RemoteTrackpadAction] {
         guard !suppressesTap, time - startTime <= Self.twoFingerTapDuration else { return [] }
-        return [.click(.right)]
+        return jump(to: anchor) + [.click(.right)]
     }
 
     private mutating func advanceScrolling(_ touches: [RemoteTrackpadTouch], ids: Set<Int>,
@@ -391,7 +443,7 @@ nonisolated struct RemoteTrackpadGesture {
         switch phase {
         case .drag:
             return [.dragEnded]
-        case .scrolling:
+        case .scrolling, .touchScrolling:
             return [.scrollEnded(velocity: .zero)]
         default:
             return []

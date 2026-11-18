@@ -70,6 +70,18 @@ final class RemoteKeyInputView: UIView, UITextInput {
     var send: ((RemoteDesktopInput) -> Void)?
     /// 用户或系统收起了键盘。外面自己调 `dismissKeyboard()` 时不回调。
     var onResign: (() -> Void)?
+    /// 系统键盘自带的「粘贴」（候选栏上的粘贴、编辑菜单）。系统只是对第一响应者发一个 `paste:`，不往里塞字；
+    /// 以前没接，点了没有任何反应（2026-11-18 user）。交给外面按「粘贴到 Mac」处理（文字、图片、视频都行）。
+    var onPaste: (() -> Void)?
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(UIResponderStandardEditActions.paste(_:)) { return onPaste != nil }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        onPaste?()
+    }
     /// 只给测试用：模拟器里切不了真实键盘。
     var languageOverride: String?
 

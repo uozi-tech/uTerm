@@ -578,6 +578,33 @@ nonisolated enum RemoteDesktopWindowFit {
     /// 可选的字的大小：窗口的点数 = 画布的点数 ÷ 它。
     static let textScales: [Double] = [0.8, 1, 1.25, 1.5]
 
+    /// 「最清晰」：Mac 的像素和主控端屏幕的像素一一对应，不经放大。存的是这个记号，用的时候按主控端的屏幕换算
+    /// （`scale(for:displayScale:)`）。默认就是它（user 定，2026-11-18）：标准字号下窗口只有每点 2 个像素，
+    /// 手机每点 3 个，放大 1.5 倍后达不到手机原生的清晰度。
+    static let sharpest = 0.0
+    static let defaultTextScale = sharpest
+    /// Mac 的视网膜屏每个点 2 个像素。窗口在非视网膜的外接屏上时对不上（那时每点 1 个像素），主控端无从知道。
+    static let macPixelsPerPoint = 2.0
+
+    /// 存下来的字号 → 实际的比例。「最清晰」= Mac 每点的像素数 ÷ 主控端每点的像素数：手机（3 倍屏）上是 2/3，
+    /// 窗口是画布的 1.5 倍大、字是标准的三分之二；2 倍屏的 iPad 上就是 1，和「标准」一样。
+    static func scale(for stored: Double, displayScale: Double) -> Double {
+        stored == sharpest ? macPixelsPerPoint / max(1, displayScale) : stored
+    }
+
+    /// 按存下来的字号（可能是「最清晰」）算窗口该多大。
+    ///
+    /// 「最清晰」按像素算、往下取整：窗口的像素数不超过画布的像素数（画布 2853×2007 像素 → 窗口 1426×1003 点 =
+    /// 2852×2006 像素）。多出一个像素，Mac 就得把整帧缩一丝、手机再拉回去，一比一就没了。
+    static func size(canvas: CGSize, textScale: Double, displayScale: Double) -> CGSize? {
+        guard textScale == sharpest, displayScale >= 1, canvas.width > 0, canvas.height > 0 else {
+            return size(canvas: canvas, textScale: scale(for: textScale, displayScale: displayScale))
+        }
+        // 先把画布的像素数取整再除：951 × 3 在浮点里可能差一丝，直接往下取整会白丢一个点。
+        return CGSize(width: ((canvas.width * displayScale).rounded() / macPixelsPerPoint).rounded(.down),
+                      height: ((canvas.height * displayScale).rounded() / macPixelsPerPoint).rounded(.down))
+    }
+
     static func size(canvas: CGSize, textScale: Double) -> CGSize? {
         guard canvas.width > 0, canvas.height > 0, textScale.isFinite else { return nil }
         let scale = min(2, max(0.5, textScale))
@@ -678,6 +705,24 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     private(set) var zoom: CGFloat = 1
     private(set) var center = CGPoint(x: 0.5, y: 0.5)
 
+    /// 画面按原生像素一比一显示时该占多少点（视频里内容的像素数 ÷ 屏幕每点的像素数）。给了它、它放得进视图、
+    /// 适配出来的大小又和它只差一丝（`snapTolerance`）时，就照它排、位置落在整像素上，不拉去铺满：
+    /// 差一两个像素的拉伸会让画面中间的字偏半个像素，整片发糊（窗口模式「最清晰」要的就是一比一）。
+    var nativeSize: CGSize?
+    /// 屏幕每点几个像素（位置取整用）。
+    var pixelsPerPoint: CGFloat = 1
+    static let snapTolerance: CGFloat = 0.015
+
+    /// 这时按原生像素排（见 `nativeSize`）；否则 nil。
+    var snappedSize: CGSize? {
+        guard let native = nativeSize, native.width > 0, native.height > 0, contentSize.width > 0, contentSize.height > 0,
+              native.width <= viewSize.width + 0.01, native.height <= viewSize.height + 0.01 else { return nil }
+        let fit = min(viewSize.width / contentSize.width, viewSize.height / contentSize.height)
+        guard abs(native.width / contentSize.width / fit - 1) <= Self.snapTolerance,
+              abs(native.height / contentSize.height / fit - 1) <= Self.snapTolerance else { return nil }
+        return native
+    }
+
     /// 贴边铺满时，显示器和视图的宽高比差在这个比例以内就把画面拉成视图的比例，整块铺满。
     /// 显示器的宽高比是对方按我们要的框定的，点数取整、顶栏高度在开流后又变了一点（出读数条），总会差一丝：
     /// 不拉的话这一丝就成了一条黑边，下角又进了屏幕圆角（2026-11-15 Duo 实测差 0.9%，底下 6pt 黑条）。
@@ -695,6 +740,10 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     /// 画面按这个点尺寸排：通常就是 `contentSize`；贴边铺满、宽高比和视图只差一丝时（`stretchTolerance`）
     /// 保留宽度、把高度拉到视图的比例。只用于排版，归一化坐标照旧对应整块显示器。
     var pictureSize: CGSize {
+        if let native = snappedSize {
+            // 乘上 `fitScale`（= 原生宽 ÷ 显示器宽）正好是原生大小。
+            return CGSize(width: contentSize.width, height: native.height * contentSize.width / native.width)
+        }
         guard bleedsIntoCorners, contentSize.width > 0, contentSize.height > 0,
               viewSize.width > 0, viewSize.height > 0 else { return contentSize }
         let viewAspect = viewSize.width / viewSize.height
@@ -712,6 +761,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     ///（见 `RemoteDesktopCornerFit`；`bleedsIntoCorners` 时不留）。
     var fitScale: CGFloat {
         guard contentSize.width > 0, contentSize.height > 0 else { return 1 }
+        if let native = snappedSize { return native.width / contentSize.width }
         return RemoteDesktopCornerFit.scale(content: pictureSize, view: viewSize,
                                             corners: bleedsIntoCorners ? .square : corners)
     }
@@ -730,8 +780,13 @@ nonisolated struct RemoteDesktopViewport: Equatable {
         let size = CGSize(width: pictureSize.width * scale, height: pictureSize.height * scale)
         let shifts = fitMargin == 0
         let rest = RemoteDesktopCornerFit.origin(size: size, view: viewSize, corners: corners, shifts: shifts)
-        let origin = CGPoint(x: size.width > viewSize.width ? viewSize.width / 2 - center.x * size.width : rest.x,
+        var origin = CGPoint(x: size.width > viewSize.width ? viewSize.width / 2 - center.x * size.width : rest.x,
                              y: size.height > viewSize.height ? viewSize.height / 2 - center.y * size.height : rest.y)
+        if snappedSize != nil, pixelsPerPoint > 0 {
+            // 一比一时位置也要在整像素上，偏半个像素同样会糊。
+            origin = CGPoint(x: (origin.x * pixelsPerPoint).rounded() / pixelsPerPoint,
+                             y: (origin.y * pixelsPerPoint).rounded() / pixelsPerPoint)
+        }
         return CGRect(origin: origin, size: size)
     }
 

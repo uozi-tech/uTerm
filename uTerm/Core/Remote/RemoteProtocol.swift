@@ -46,7 +46,9 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus,
                                           RemoteFeature.files, RemoteFeature.deviceVouch,
                                           RemoteFeature.siblingRevoke, RemoteFeature.desktopWindows,
-                                          RemoteFeature.desktopRegion]
+                                          RemoteFeature.desktopRegion, RemoteFeature.desktopPasteFiles,
+                                          RemoteFeature.desktopWindowFront, RemoteFeature.desktopWindowRefit,
+                                          RemoteFeature.desktopWindowInput]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -143,6 +145,19 @@ nonisolated enum RemoteFeature {
     ///（`RemoteDesktopFrame.Flags.hasRegion`）。老 Mac 收到 `desktopRegion` 会断开整条连接，所以主控端只对声明了的
     /// Mac 发；Mac 只在收到过 `desktopRegion` 的流上发带区域的帧（老主控端不发，也就收不到）。
     static let desktopRegion = "desktop-region"
+    /// 远程桌面里把主控端的一个文件（视频）贴过来：Mac 认得 `desktopPasteFile`，边收边写进文件，收齐后把文件放进
+    /// 剪贴板、按 ⌘V。老 Mac 收到会断开整条连接，所以主控端只对声明了的 Mac 发。
+    static let desktopPasteFiles = "desktop-paste-files"
+    /// 远程桌面只看一个窗口时能把它保持在最前：开流请求里的 `windowKeepFront` 生效。老 Mac 不认这个键
+    /// （什么都不做），主控端据此决定显不显示那个开关。
+    static let desktopWindowFront = "desktop-window-front"
+    /// 只看一个窗口时能不停流原地换尺寸：Mac 认得 `desktopWindowRefit`（改窗口大小、改采集参数、按新尺寸重建编码器，
+    /// 同一条流接着出画面），并在 `desktopGeometry` 里带上新的视频像素数。老 Mac 收到这条消息会断开整条连接，
+    /// 主控端只对声明了它的 Mac 发，否则照旧停流再按新尺寸开。
+    static let desktopWindowRefit = "desktop-window-refit"
+    /// 只看一个窗口时输入能直接投给窗口所在的进程（不动 Mac 上的指针）：开流请求里的 `windowIndependentInput` 生效。
+    /// 老 Mac 不认这个键（照旧走全局输入通道），主控端据此决定显不显示那个开关。
+    static let desktopWindowInput = "desktop-window-input"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -304,6 +319,11 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 主控端 → Mac：画面放大了，此刻只看得见这一块（桌面通道）。负载 = `RemoteDesktopRegionRequest`（JSON）。
         /// Mac 改成只取这一块（加一圈余量）、按原生像素出，帧头里带上取的是哪一块。只发给带 `desktop-region` 的 Mac。
         case desktopRegion = 57
+        /// 粘贴文件的一块（桌面通道）。负载 = `RemoteDesktopPasteFileChunk`。只发给 `features` 带
+        /// `desktop-paste-files` 的 Mac。
+        case desktopPasteFile = 58
+        /// 主控端 → Mac：正在看的这个窗口按新尺寸重调（负载是 `RemoteDesktopFit`，点），不停流。
+        case desktopWindowRefit = 59
     }
 
     var kind: Kind

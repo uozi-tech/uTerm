@@ -172,6 +172,36 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertGreaterThan(sent.count, 1, "分块发送应逐块报进度")
         let pastedBig = await waitUntil { mac.injector.allPastes.last == big }
         XCTAssertTrue(pastedBig)
+        // 视频按文件传：边读边发，Mac 边收边写，收齐后落点拿到的是本机上的文件，内容一字不差、名字是手机给的。
+        XCTAssertTrue(session.canPasteFiles)
+        let movie = Data((0..<700_000).map { UInt8(truncatingIfNeeded: $0 &* 13) })
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("PasteOutTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let movieFile = folder.appendingPathComponent("IMG_0042.MOV")
+        try movie.write(to: movieFile)
+        let fileReports = PasteReports()
+        try await PasteProgressReporter.$sink.withValue({ fileReports.add($0) }) {
+            try await session.pasteAndWait(.file(url: movieFile, name: "IMG_0042.MOV"))
+        }
+        XCTAssertEqual(fileReports.all.last?.fraction, 1)
+        XCTAssertGreaterThan(fileReports.all.count, 1, "视频分块发送应逐块报进度")
+        let filePasted = await waitUntil { mac.injector.pastedFiles.count == 1 }
+        XCTAssertTrue(filePasted)
+        let landed = try XCTUnwrap(mac.injector.pastedFiles.first)
+        addTeardownBlock { try? FileManager.default.removeItem(at: landed.deletingLastPathComponent()) }
+        XCTAssertEqual(landed.lastPathComponent, "IMG_0042.MOV")
+        XCTAssertEqual(try Data(contentsOf: landed), movie)
+        // 读不了的文件：报错，不拖累后面的粘贴。
+        do {
+            try await session.pasteAndWait(.file(url: folder.appendingPathComponent("没有这个文件.mov"), name: "x.mov"))
+            XCTFail("不存在的文件应报错")
+        } catch {
+            XCTAssertEqual(error as? RemoteDesktopPasteFileError, .unreadable)
+        }
+        try await session.pasteAndWait(.content(.text("视频之后的字")))
+        let afterFile = await waitUntil { mac.injector.allPastes.last == .text("视频之后的字") }
+        XCTAssertTrue(afterFile)
         let controlling = await waitUntil { server.desktopViewer?.isControlling == true }
         XCTAssertTrue(controlling, "收到输入后 Mac 上的指示改成「正在控制」")
 

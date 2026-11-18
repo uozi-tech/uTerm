@@ -57,6 +57,13 @@ extension RemoteDesktopSession {
     /// 按这一路画面的状态该盖什么；正常在放时为 nil。`showsClose`：失败 / 结束时给不给「关闭」。
     func notice(macName: String, showsClose: Bool) -> RemoteDesktopNotice? {
         let close: [RemoteDesktopNotice.Action] = showsClose ? [.close] : []
+        // 同一个窗口换大小的那几百毫秒：留着上一张画面，什么都不盖（见 `isRetargeting`）。失败、结束、重试照常提示。
+        if isRetargeting, retryReason == nil {
+            switch state {
+            case .idle, .connecting, .streaming: return nil
+            case .reconnecting, .failed, .ended, .unsupported: break
+            }
+        }
         switch state {
         case .idle, .connecting:
             if let retryReason {

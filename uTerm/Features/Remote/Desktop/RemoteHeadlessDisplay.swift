@@ -172,6 +172,8 @@ enum RemoteHeadlessDisplay {
 
     /// 建出来的虚拟屏。持有它，屏幕就在；放掉它，屏幕就撤。
     private static var virtualDisplay: NSObject?
+    /// 本进程此刻管着一块顶替占位屏的虚拟屏（这台 Mac 没接显示器）。
+    static var ownsVirtualDisplay: Bool { virtualDisplay != nil }
     private static var virtualDisplayID: CGDirectDisplayID = 0
     private static var virtualState: VirtualState?
     private static var watchesReconfiguration = false
@@ -188,6 +190,8 @@ enum RemoteHeadlessDisplay {
                 && !(display.vendor == placeholderVendor && display.model == placeholderModel)
                 // 上一个远控进程留下的那块（见 `Plan.adoptOrphan`）不是真显示器。
                 && !(display.vendor == virtualVendor && display.model == virtualModel)
+                // 窗口模式自己建的那块（`RemoteWindowStage`）也不是真显示器。
+                && !(display.vendor == virtualVendor && display.model == RemoteWindowStage.model)
                 && !(display.vendor == screenSharingVendor && display.model == screenSharingModel)
         }
     }
@@ -416,7 +420,7 @@ enum RemoteHeadlessDisplay {
     }
 
     /// 把虚拟屏切到 `size` 的 2 倍模式（见 `hiDPIMode`）。已经是了就不动。
-    private static func selectHiDPIMode(_ id: CGDirectDisplayID, size: VirtualSize) {
+    fileprivate static func selectHiDPIMode(_ id: CGDirectDisplayID, size: VirtualSize) {
         guard let current = CGDisplayCopyDisplayMode(id) else { return }
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = (CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode]) ?? []
@@ -463,11 +467,13 @@ enum RemoteHeadlessDisplay {
     }
 
     /// 经 ObjC 运行时建 `CGVirtualDisplay`：描述符 → 显示器 → 设置（hiDPI + 一个模式）。任何一步对不上返回 nil。
-    private static func makeVirtualDisplay(size: VirtualSize, maxPixels: (width: Int, height: Int)) -> NSObject? {
+    fileprivate static func makeVirtualDisplay(size: VirtualSize, maxPixels: (width: Int, height: Int),
+                                               name: String = String(localized: "uTerm 远程显示器"),
+                                               model: UInt32 = virtualModel) -> NSObject? {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
               let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type else { return nil }
         let descriptor = descriptorClass.init()
-        descriptor.setValue(String(localized: "uTerm 远程显示器"), forKey: "name")
+        descriptor.setValue(name, forKey: "name")
         descriptor.setValue(maxPixels.width, forKey: "maxPixelsWide")
         descriptor.setValue(maxPixels.height, forKey: "maxPixelsHigh")
         // 27 英寸 16:9 的物理尺寸：系统按它算像素密度，配合 2 倍模式显示为视网膜。不随尺寸变：
@@ -475,7 +481,7 @@ enum RemoteHeadlessDisplay {
         descriptor.setValue(NSValue(size: NSSize(width: 597, height: 336)), forKey: "sizeInMillimeters")
         // 厂商、型号、序列号固定：系统按它们认出「还是那块屏」，记得上面的窗口摆法。
         descriptor.setValue(virtualVendor, forKey: "vendorID")
-        descriptor.setValue(virtualModel, forKey: "productID")
+        descriptor.setValue(model, forKey: "productID")
         descriptor.setValue(1, forKey: "serialNum")
         descriptor.setValue(DispatchQueue.main, forKey: "queue")
 
@@ -520,5 +526,221 @@ enum RemoteHeadlessDisplay {
     private static func mode(_ mode: CGDisplayMode) -> Mode {
         Mode(width: mode.width, height: mode.height, pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight,
              usable: mode.isUsableForDesktopGUI())
+    }
+}
+
+// MARK: - 窗口模式：屏幕放不下时的虚拟屏
+
+/// 窗口模式下，主控端要的窗口大小这台 Mac 的屏幕放不下时（14 寸内建屏 1512×982 点放不下 1426×1003 点的窗口，
+/// 竖握时要的 1003×1426 点更放不下），建一块够大的 2 倍虚拟屏，把窗口挪上去再调大小；不看了把窗口放回原处、
+/// 拆掉虚拟屏（2026-11-18 user 要的）。
+///
+/// 和 `RemoteHeadlessDisplay` 的那块不是一回事：那块是没接显示器时顶替占位屏当主屏；这块是接着真显示器时多出来的
+/// 一块扩展屏，只放正在被看的窗口，摆在所有显示器的右边。型号不同（`model`），两边互不相认。没接显示器的 Mac
+/// 已经有一块按主控端大小建的虚拟屏，不再另建。
+///
+/// 2026-11-17 探针（macOS 27.2.1）：沙盒里能建；接着真屏时新屏会把别的屏的坐标挤开，建好后要用
+/// `CGConfigureDisplayOrigin` 摆到右边；2 倍模式两边都要约 512 点以上。
+/// 2026-11-18 探针（同一台，只接内建屏）：
+/// - 刚建好落在 **1 倍**模式（要 1426×1486 点，得到的是 2852×2972 点、每点 1 像素），而且这时显示模式还读不到
+///   （`CGDisplayCopyDisplayMode` 是空的，空转 3 秒也一样）。**先提交一次显示器配置**（摆位置那次），约 0.4 秒后
+///   模式才读得到，这时再切 2 倍才切得上。顺序反了就一直是 1 倍，窗口放上去比不挪还糊。
+/// - 切成 2 倍后：`NSScreen` 马上就有，倍数 2，菜单栏高 30 点，可用范围 1426×1456。内建屏的位置没被挤动。
+/// - 拆屏 = 对象真正释放。释放后别的进程 2 秒内就看不到它了，但**本进程里 `CGDisplayIsOnline` 还一直报在线**，
+///   不能拿它判断拆没拆掉。建屏那几步里有 autorelease 的引用，不包在自动释放池里对象就放不掉。
+///
+/// 坐在 Mac 前的人会看到这个窗口从屏幕上消失（它在那块看不见的屏上），不看了才回来；这期间鼠标也可能跑进去。
+@MainActor
+enum RemoteWindowStage {
+    nonisolated static let model: UInt32 = 0x0002
+    /// 给菜单栏留的高度（点）：窗口不能和菜单栏重叠。
+    nonisolated static let menuBarReserve = 60
+    /// 虚拟屏每边至少这么多点（2 倍模式的下限之上留些余量）。
+    nonisolated static let minimumSide = 640
+    /// 最后一个窗口放回去之后多久拆。
+    nonisolated static let releaseGrace: Duration = .seconds(3)
+
+    /// 这块屏幕的可用范围放不放得下要的窗口大小。
+    nonisolated static func needsStage(fit: CGSize, visible: CGSize) -> Bool {
+        fit.width > visible.width + 1 || fit.height > visible.height + 1
+    }
+
+    /// 放得下 `fit` 的虚拟屏该多大：正方形加菜单栏的高度，横着竖着的窗口都放得下，转屏时不用重建。
+    nonisolated static func stageSize(for fit: CGSize) -> RemoteHeadlessDisplay.VirtualSize {
+        let limit = RemoteHeadlessDisplay.maximumPoints
+        let side = (max(minimumSide, Int(max(fit.width, fit.height).rounded(.up))) + 1) & ~1
+        return RemoteHeadlessDisplay.VirtualSize(width: min(limit.width, side),
+                                                 height: min(limit.height, side + menuBarReserve))
+    }
+
+    /// 已建的这块放不放得下。
+    nonisolated static func holds(_ fit: CGSize, in size: RemoteHeadlessDisplay.VirtualSize) -> Bool {
+        Int(fit.width.rounded(.up)) <= size.width && Int(fit.height.rounded(.up)) <= size.height - menuBarReserve
+    }
+
+    private static var display: NSObject?
+    private static var displayID: CGDirectDisplayID = 0
+    private static var size: RemoteHeadlessDisplay.VirtualSize?
+    /// 现在放在这块屏上的窗口。
+    private static var staged: Set<UInt32> = []
+    private static var releaseTask: Task<Void, Never>?
+
+    /// 把窗口调成 `fit`（点）：屏幕放得下就原地调；放不下就挪到虚拟屏上再调。返回动它之前的位置，没动返回 nil。
+    static func fit(id: UInt32, size fit: CGSize) async -> CGRect? {
+        guard let entry = RemoteDesktopWindows.entry(id: id) else { return nil }
+        if !(staged.contains(id) && display != nil) {
+            guard !RemoteHeadlessDisplay.ownsVirtualDisplay, let visible = visibleSize(around: entry.bounds),
+                  needsStage(fit: fit, visible: visible) else {
+                return await Task.detached { RemoteDesktopWindows.resize(id: id, to: fit) }.value
+            }
+        }
+        guard await ensure(for: fit), let area = usableArea() else {
+            AppLogger.notice("远程桌面：屏幕放不下 \(Int(fit.width))×\(Int(fit.height)) 点的窗口，虚拟屏又没建成，只能在原来的屏幕上尽量调",
+                             category: RemoteLog.category)
+            return await Task.detached { RemoteDesktopWindows.resize(id: id, to: fit) }.value
+        }
+        releaseTask?.cancel()
+        releaseTask = nil
+        staged.insert(id)
+        let target = CGRect(x: area.minX, y: area.minY, width: min(fit.width, area.width).rounded(),
+                            height: min(fit.height, area.height).rounded())
+        let placed = await Task.detached { RemoteDesktopWindows.place(id: id, frame: target) }.value
+        return placed ? entry.bounds : nil
+    }
+
+    /// 窗口放回原处了：这块屏上没有别的窗口就过一会儿拆掉。
+    static func restored(id: UInt32) {
+        guard staged.remove(id) != nil, staged.isEmpty, display != nil else { return }
+        releaseTask?.cancel()
+        releaseTask = Task {
+            try? await Task.sleep(for: releaseGrace)
+            guard !Task.isCancelled, staged.isEmpty else { return }
+            drop()
+        }
+    }
+
+    private static func drop() {
+        guard display != nil else { return }
+        // 包在池里：对象上挂着 autorelease 的引用时，光置空放不掉，屏就撤不了。
+        autoreleasepool { display = nil }
+        displayID = 0
+        size = nil
+        AppLogger.notice("远程桌面：窗口模式用的虚拟屏拆掉了", category: RemoteLog.category)
+    }
+
+    /// 窗口所在那块屏幕的可用范围（去掉菜单栏和程序坞）有多大。
+    private static func visibleSize(around bounds: CGRect) -> CGSize? {
+        var best: (area: CGFloat, size: CGSize)?
+        for screen in NSScreen.screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+            let overlap = CGDisplayBounds(number.uint32Value).intersection(bounds)
+            let area = overlap.isNull ? 0 : overlap.width * overlap.height
+            if best == nil || area > best!.area { best = (area, screen.visibleFrame.size) }
+        }
+        return best?.size
+    }
+
+    /// 虚拟屏上能放窗口的范围（全局坐标，左上角原点）。系统还没把它报成 `NSScreen` 时按预留的菜单栏高度估。
+    private static func usableArea() -> CGRect? {
+        guard display != nil, displayID != 0 else { return nil }
+        let bounds = CGDisplayBounds(displayID)
+        let screen = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
+        }
+        guard let screen else {
+            return CGRect(x: bounds.minX, y: bounds.minY + CGFloat(menuBarReserve), width: bounds.width,
+                          height: bounds.height - CGFloat(menuBarReserve))
+        }
+        // AppKit 的坐标左下角原点：可用范围上沿离屏幕上沿多远就是菜单栏多高。
+        let top = screen.frame.maxY - screen.visibleFrame.maxY
+        let left = screen.visibleFrame.minX - screen.frame.minX
+        return CGRect(x: bounds.minX + left, y: bounds.minY + top, width: screen.visibleFrame.width,
+                      height: screen.visibleFrame.height)
+    }
+
+    /// 备好一块放得下 `fit` 的虚拟屏。已有的不够大就拆了重建。
+    private static func ensure(for fit: CGSize) async -> Bool {
+        // 不问 `CGDisplayIsOnline`：本进程里它报的是旧值（见类型注释）。对象还在手里就是还在。
+        if display != nil, let size, holds(fit, in: size) { return true }
+        if display != nil { drop() }
+        let wanted = stageSize(for: fit)
+        guard holds(fit, in: wanted) else { return false }
+        // 新屏一出现，系统会把别的屏的位置挤开：先记下，建好再摆回去。
+        let others = onlineDisplays().map { ($0, CGDisplayBounds($0).origin) }
+        let limit = RemoteHeadlessDisplay.maxPixels(for: wanted)
+        let name = String(localized: "uTerm 窗口模式")
+        var created: NSObject?
+        var id: CGDirectDisplayID = 0
+        autoreleasepool {
+            created = RemoteHeadlessDisplay.makeVirtualDisplay(size: wanted, maxPixels: limit, name: name, model: model)
+            id = (created?.value(forKey: "displayID") as? NSNumber)?.uint32Value ?? 0
+        }
+        guard let created, id != 0 else { return false }
+        display = created
+        displayID = id
+        size = wanted
+        var waited = 0
+        while CGDisplayIsOnline(id) == 0, waited < 40 {
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        guard CGDisplayIsOnline(id) != 0 else {
+            drop()
+            return false
+        }
+        // 先摆位置（提交一次显示器配置），模式才读得到；读到了再切 2 倍，等它生效（探针：前后约 0.5 秒）。
+        arrange(stage: id, others: others)
+        var isHiDPI = false
+        waited = 0
+        while waited < 60 {
+            if let mode = CGDisplayCopyDisplayMode(id), mode.width > 0 {
+                if mode.width == wanted.width, mode.pixelWidth == 2 * mode.width {
+                    isHiDPI = true
+                    break
+                }
+                if waited % 4 == 0 { RemoteHeadlessDisplay.selectHiDPIMode(id, size: wanted) }
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        guard isHiDPI else {
+            // 每点只有 1 个像素的屏，窗口放上去比留在原来的屏上还糊：不用它。
+            AppLogger.notice("远程桌面：窗口模式的虚拟屏没切上 2 倍模式，拆掉，窗口留在原来的屏幕上", category: RemoteLog.category)
+            drop()
+            return false
+        }
+        // 等系统把它报成 NSScreen（菜单栏多高要问它），最多约 1.5 秒。
+        waited = 0
+        while waited < 30, !NSScreen.screens.contains(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
+        }) {
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        let bounds = CGDisplayBounds(id)
+        AppLogger.notice("远程桌面：屏幕放不下要的窗口，建了 \(wanted.width)×\(wanted.height) 点的虚拟屏，摆在 x=\(Int(bounds.minX))",
+                         category: RemoteLog.category)
+        return true
+    }
+
+    /// 别的屏放回原来的位置，虚拟屏摆到它们的右边。
+    private static func arrange(stage: CGDirectDisplayID, others: [(CGDirectDisplayID, CGPoint)]) {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        var right: CGFloat = 0
+        for (id, origin) in others where CGDisplayIsOnline(id) != 0 {
+            CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y))
+            right = max(right, origin.x + CGDisplayBounds(id).width)
+        }
+        CGConfigureDisplayOrigin(config, stage, Int32(right), 0)
+        if CGCompleteDisplayConfiguration(config, .forSession) != .success { CGCancelDisplayConfiguration(config) }
+    }
+
+    private static func onlineDisplays() -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        return Array(ids.prefix(Int(count)))
     }
 }

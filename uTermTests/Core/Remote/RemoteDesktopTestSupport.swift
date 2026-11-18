@@ -321,8 +321,10 @@ final class LocalChangeRenderer: @unchecked Sendable {
 
 /// 合成采集源：按需（`emit`）或按定时器出帧，模拟 ScreenCaptureKit「有变化才出帧」的行为。
 final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable {
-    let width: Int
-    let height: Int
+    /// 出的画面的像素数。`retarget` 会换（原地换尺寸）。
+    var width: Int { lock.lock(); defer { lock.unlock() }; return size.width }
+    var height: Int { lock.lock(); defer { lock.unlock() }; return size.height }
+    private var size: (width: Int, height: Int)
     let detail: Bool
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "test.synthetic.capture", qos: .userInteractive)
@@ -347,9 +349,22 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
     private var local: LocalChangeRenderer?
 
     init(width: Int, height: Int, detail: Bool = false) {
-        self.width = width
-        self.height = height
+        size = (width, height)
         self.detail = detail
+    }
+
+    /// 被原地换过几次尺寸，换成了多大。
+    private var retargets: [(width: Int, height: Int)] = []
+    var retargetedSizes: [(width: Int, height: Int)] { lock.lock(); defer { lock.unlock() }; return retargets }
+
+    /// 和 ScreenCaptureKit 一样：换好之后的帧是新尺寸的，并且马上出一张。按旧尺寸备好的那组画面作废。
+    func retarget(display: RemoteDesktopDisplay, width: Int, height: Int) {
+        lock.lock()
+        size = (width, height)
+        retargets.append((width, height))
+        cycle = []
+        lock.unlock()
+        queue.async { self.emit() }
     }
 
     func start(onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
@@ -548,8 +563,33 @@ final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
         lock.lock(); pastes.append(content); lock.unlock()
     }
 
+    private var files: [URL] = []
+
+    func pasteFile(at url: URL) {
+        clipboard?.copy(nil)
+        lock.lock(); files.append(url); lock.unlock()
+    }
+
+    /// 贴过来的文件（已经落在本机的位置）。
+    var pastedFiles: [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return files
+    }
+
     func releaseButtons() {
         lock.lock(); releases += 1; lock.unlock()
+    }
+
+    private var pointer: CGPoint?
+
+    /// 不为 nil = 这个落点自己管指针（按进程投递），主控端的指针跟着它走。
+    var virtualPointer: CGPoint? {
+        lock.lock(); defer { lock.unlock() }
+        return pointer
+    }
+
+    func setVirtualPointer(_ point: CGPoint?) {
+        lock.lock(); pointer = point; lock.unlock()
     }
 
     private var boundsUpdates: [CGRect] = []
@@ -683,11 +723,23 @@ final class FakeDesktopMac {
     private(set) var openedWindows: [UInt32?] = []
     /// 被提到最前的窗口（按顺序）。
     private(set) var raisedWindows: [UInt32] = []
+    /// 没激活 App、只在自家窗口堆里提上来的（输入按进程投递时开流前做的）。
+    private(set) var surfacedWindows: [UInt32] = []
+    /// 每次建输入落点时主控端要没要「独立键鼠」。
+    private(set) var independentInputs: [Bool] = []
+    /// 这台 Mac 建不建得了按进程投递的落点（系统里找不到私有接口时建不了）。
+    var canDeliverToWindow = true
+    /// 这些窗口的 App 此刻不在最前（别的 App 到前面来了）。提一次就回到最前。
+    var windowsBehind: Set<UInt32> = []
     /// 被调过大小的窗口和要的尺寸、被还原的窗口和位置（按顺序）。
     private(set) var fittedWindows: [(id: UInt32, size: CGSize)] = []
     private(set) var restoredWindows: [(id: UInt32, frame: CGRect)] = []
     /// App 的最小窗口尺寸：要的比它小时只能调到它。
     var minimumWindowSize = CGSize(width: 400, height: 350)
+    /// 还原窗口要多久（真实环境里是异步的辅助功能调用，几十到几百毫秒）。
+    var restoreDelay: Duration = .zero
+    /// 改窗口大小要多久（真的 App 改大小带动画，辅助功能接口要等它停下来）。
+    var fitDelay: Duration = .zero
     /// 开流前整理过几次显示器（无显示器换 2 倍模式那一步）。
     private(set) var preparedDisplays = 0
     /// 每次整理显示器时看的设备要的像素。
@@ -746,8 +798,14 @@ final class FakeDesktopMac {
                                                    pixelHeight: Int(window.bounds.height * 2), windowID: id)
                 return (display, window.title.isEmpty ? window.app : window.title)
             },
-            raiseWindow: { [weak self] id in self?.raisedWindows.append(id) },
+            raiseWindow: { [weak self] id in
+                self?.raisedWindows.append(id)
+                self?.windowsBehind.remove(id)
+            },
+            surfaceWindow: { [weak self] id in self?.surfacedWindows.append(id) },
+            windowAppIsFront: { [weak self] id in self?.windowsBehind.contains(id) != true },
             fitWindow: { [weak self] id, size in
+                if let delay = self?.fitDelay, delay > .zero { try? await Task.sleep(for: delay) }
                 guard let self, let index = self.windows.firstIndex(where: { $0.id == id }) else { return nil }
                 self.fittedWindows.append((id, size))
                 let original = self.windows[index].bounds
@@ -758,6 +816,7 @@ final class FakeDesktopMac {
                 return original
             },
             restoreWindow: { [weak self] id, frame in
+                if let delay = self?.restoreDelay, delay > .zero { try? await Task.sleep(for: delay) }
                 guard let self else { return }
                 self.restoredWindows.append((id, frame))
                 if let index = self.windows.firstIndex(where: { $0.id == id }) { self.windows[index].bounds = frame }
@@ -769,7 +828,14 @@ final class FakeDesktopMac {
                 self?.sources.append(source)
                 return source
             },
-            makeInjector: { [weak self] _ in self?.injector ?? RecordingInputSink() },
+            makeInjector: { [weak self] display, independent in
+                guard let self else { return RecordingInputSink() }
+                self.independentInputs.append(independent)
+                // 按进程投递时落点自己管指针，起点在窗口正中。
+                self.injector.setVirtualPointer(independent && self.canDeliverToWindow
+                                                ? CGPoint(x: display.bounds.midX, y: display.bounds.midY) : nil)
+                return self.injector
+            },
             cursorLocation: { cursorBox.value },
             cursorSignature: { [weak self] in self?.cursorShape.map { $0.png.hashValue ^ Int($0.hotX * 100) } },
             cursorImage: { [weak self] in

@@ -30,9 +30,13 @@ nonisolated protocol RemoteDesktopFrameSource: AnyObject, Sendable {
     /// 主控端放大了，此刻只看得见这一块（nil = 没放大）。来源可以改成只取这一块、按原生像素出，出的帧上带着取的
     /// 是哪一块（`RemoteFrameRegionTag`）。取不取、取多大由来源定；默认实现不理会，照旧出整块。任何线程。
     func setRegion(_ visible: RemoteDesktopRegion?)
+    /// 只看一个窗口时：窗口改了大小，采集目标和要出的画面尺寸跟着换，**不重开**。换好之前到的帧还是旧尺寸，
+    /// 推流器会先缩到新的编码尺寸顶着。默认实现不理会（之后的帧尺寸不变，推流器一直缩着）。
+    func retarget(display: RemoteDesktopDisplay, width: Int, height: Int)
 }
 
 nonisolated extension RemoteDesktopFrameSource {
+    func retarget(display: RemoteDesktopDisplay, width: Int, height: Int) {}
     func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer? { nil }
     func observeGeometry(_ handler: @escaping @Sendable (RemoteDesktopFrameGeometry) -> Void) {}
     func setRegion(_ visible: RemoteDesktopRegion?) {}
@@ -43,14 +47,20 @@ nonisolated protocol RemoteDesktopInputSink: AnyObject, Sendable {
     func inject(_ input: RemoteDesktopInput)
     /// 把手机发来的图片 / 文字放进 Mac 的剪贴板，再替用户按一下 ⌘V。
     func paste(_ content: RemoteDesktopPaste)
+    /// 把手机传来、已经落在本机的文件（视频）放进剪贴板，再替用户按一下 ⌘V。
+    func pasteFile(at url: URL)
     /// 松开还按着的鼠标键。停流时调用：手机断开后发不来抬起事件。
     func releaseButtons()
     /// 只看一个窗口时：归一化坐标对应的范围变了（窗口挪动、改大小、菜单伸出窗口）。
     func updateBounds(_ bounds: CGRect)
+    /// 输入不动 Mac 上的真实指针时（按进程投递，见 `RemoteWindowInputTarget`），主控端的指针该画在哪儿（全局坐标）。
+    /// nil = 跟着 Mac 的真实指针走。在连接队列上读。
+    var virtualPointer: CGPoint? { get }
 }
 
 nonisolated extension RemoteDesktopInputSink {
     func updateBounds(_ bounds: CGRect) {}
+    var virtualPointer: CGPoint? { nil }
 }
 
 /// Mac 的系统剪贴板（只读）：生产是 `NSPasteboard.general`，测试是内存里的假剪贴板。在连接队列上调用。
@@ -127,9 +137,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     let link: RemoteLink
     let channel: UInt32
     let codec: RemoteVideoCodec
-    let width: Int
-    let height: Int
-    let display: RemoteDesktopDisplay
+    /// 视频的像素尺寸与采集目标。只看一个窗口时原地换尺寸会改（`retarget`），只在 `link.queue` 上改。
+    private(set) var width: Int
+    private(set) var height: Int
+    private(set) var display: RemoteDesktopDisplay
+    private let path: RemoteLinkPath
     /// 10-bit 主流 + 旁路精修（手机声明能解旁路帧、且是 HEVC 时）。否则 8-bit 主流、主流里精修。
     let sidecarRefine: Bool
     let stats = RemoteDesktopStreamerStats()
@@ -195,6 +207,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 视频延迟分段（见 `RemoteLatencyBreakdown`）。
     private var latency = RemoteLatencyBreakdown()
     private var pasteAssembler = RemoteDesktopPasteAssembler()
+    /// 手机传来的文件（视频）边收边写到这里；流结束时没收完的那个随它一起扔掉。
+    private let pastedFiles: RemotePastedFileReceiving = RemotePastedFileReceiver()
     private var linkState: RemoteLinkState?
     /// 码控上一次定的码率（不扣纠错、不看节奏），用来判断这次是不是在往下调。
     private var appliedRate = 0
@@ -207,6 +221,18 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 只看一个窗口时最近告诉主控端的那份几何。
     private var sentGeometry: RemoteDesktopFrameGeometry?
     private var pendingGeometry: RemoteDesktopFrameGeometry?
+    /// 原地换尺寸进行到哪儿了（见 `holdForRetarget`）。
+    private enum RetargetHold {
+        /// 正在改窗口大小：采集还是旧的那套，出来的是把新窗口缩在旧画面里的过渡帧。
+        case resizing
+        /// 采集和编码器已经换成新尺寸：等第一张新尺寸的画面。
+        case awaitingFrame
+    }
+    private var retargetHold: RetargetHold?
+    private var retargetHoldGeneration = 0
+    /// 冻结最多这么久。窗口改不动、采集迟迟不出新尺寸的帧时到点放开，画面接着走。取得宽：屏幕放不下、
+    /// 要先建虚拟屏再把窗口挪过去时（`RemoteWindowStage`），光建屏就要一秒左右。
+    static let retargetHoldLimitMillis = 2500
     private var clipboardTimer: DispatchSourceTimer?
     /// 已经处理过（发过、或不该发）的剪贴板版本。
     /// 读系统剪贴板可能卡很久（接力来的内容要等系统去别的设备取），所以不在连接队列上读：定时器和读取都在这条
@@ -245,6 +271,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.width = width
         self.height = height
         self.display = display
+        self.path = path
         targetBounds = display.bounds
         self.sidecarRefine = sidecarRefine
         self.sendsLatency = sendsLatency
@@ -354,12 +381,17 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             injector.inject(input)
         case .desktopPaste:
             guard let content = try? RemoteDesktopPaste(decoding: message.payload), let injector else { return }
-            pasteWithoutEcho(content, injector)
+            pasteWithoutEcho(injector) { $0.paste(content) }
         case .desktopPasteChunk:
             // 只能看时不攒：这些内容不会被用到，不能白占内存。
             guard let injector, let chunk = try? RemoteDesktopPasteChunk(decoding: message.payload),
                   let content = pasteAssembler.receive(chunk) else { return }
-            pasteWithoutEcho(content, injector)
+            pasteWithoutEcho(injector) { $0.paste(content) }
+        case .desktopPasteFile:
+            // 同上：只能看时不收，不白占磁盘。
+            guard let injector, let chunk = try? RemoteDesktopPasteFileChunk(decoding: message.payload),
+                  let url = pastedFiles.receive(chunk) else { return }
+            pasteWithoutEcho(injector) { $0.pasteFile(at: url) }
         case .desktopKeyframe:
             forceKeyframe = true
             awaitingRecovery = true
@@ -383,6 +415,12 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     private func captured(_ frame: RemoteCapturedFrame) {
         guard !isStopped else { return }
+        if let hold = retargetHold {
+            // 换尺寸途中的画面一张都不送（见 `holdForRetarget`）：过渡帧丢掉，等到第一张新尺寸的再接着走。
+            guard hold == .awaitingFrame, CVPixelBufferGetWidth(frame.image) == width,
+                  CVPixelBufferGetHeight(frame.image) == height else { return }
+            releaseRetargetHold()
+        }
         diagnostics.recordCapture(change: frame.change)
         logDiagnosticsIfDue(now: DispatchTime.now().uptimeNanoseconds)
         lastFrame = frame
@@ -399,7 +437,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     private func offer(_ frame: RemoteCapturedFrame) {
         // 暂停期间所有「补一帧」的入口（关键帧请求、丢帧恢复、码控重送）都落到这里：一律不编，恢复时统一补关键帧。
-        guard !isPaused else { return }
+        // 换尺寸途中也不编：手里留着的是旧尺寸的画面，放开时第一张就是新尺寸的关键帧。
+        guard !isPaused, retargetHold == nil else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let (submit, congested) = pacer.offer(frame, now: now)
         // 在途满了被替掉只记数，不降码率：往返比帧间隔长也会这样，带宽真不够时延迟会涨，由 `rate` 看延迟判。
@@ -749,7 +788,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
         let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
-        guard isLive, !isPaused, !refined, !awaitingRecovery, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
+        guard isLive, !isPaused, retargetHold == nil, !refined, !awaitingRecovery, rate.bitrate >= floor, let lastFrame,
+              pacer.pending == nil,
               pacer.inflight.isEmpty, let quality = refineQuality,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
@@ -1040,12 +1080,104 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     }
 
     private func sendGeometryIfNeeded() {
-        guard let geometry = pendingGeometry else { return }
+        // 换尺寸途中报来的是过渡状态的范围：不发，放开时发最终的。
+        guard retargetHold == nil, let geometry = pendingGeometry else { return }
         pendingGeometry = nil
         let previous = sentGeometry ?? .whole(display.bounds)
         guard geometry.differsVisibly(from: previous) else { return }
+        sendGeometry(geometry)
+    }
+
+    /// 发一份几何，带上视频帧此刻的像素尺寸（原地换过尺寸之后主控端要靠它知道）。
+    private func sendGeometry(_ geometry: RemoteDesktopFrameGeometry) {
         sentGeometry = geometry
-        link.sendOnQueue(RemoteMessage(.desktopGeometry, channel: channel, payload: RemoteJSON.encode(geometry.update)))
+        var update = geometry.update
+        update.streamWidth = width
+        update.streamHeight = height
+        link.sendOnQueue(RemoteMessage(.desktopGeometry, channel: channel, payload: RemoteJSON.encode(update)))
+    }
+
+    // MARK: - 原地换尺寸
+
+    /// 要原地换尺寸了（马上去改窗口大小）：从现在起到第一张新尺寸的画面出来，一张都不送、几何也不发，
+    /// 主控端停在上一张画面上。可在任意线程调；之后要么调 `retarget`，要么调 `cancelRetargetHold`。
+    ///
+    /// 为什么要冻结（2026-11-18 user：换尺寸时画面闪）：改窗口大小到采集换成新尺寸之间有两段过渡——
+    /// 1. 窗口已经变了、采集还是旧的那套：系统把新窗口等比缩进旧尺寸的画面、靠左上角放，并报来新的范围。
+    ///    照发的话主控端先按「内容只占画面一角」重排一次。
+    /// 2. 采集参数已经改了、新尺寸的第一帧还没出来：这时发了新的像素数，主控端拿新的排版去摆旧的画面，又跳一次。
+    /// 冻结之后主控端只换一次：新的几何紧挨着新尺寸的第一帧（关键帧）发，它等那一帧到了再一起换。
+    func holdForRetarget() {
+        link.queue.async { [self] in
+            guard !isStopped, isLive else { return }
+            retargetHold = .resizing
+            retargetHoldGeneration &+= 1
+            let generation = retargetHoldGeneration
+            link.queue.asyncAfter(deadline: .now() + .milliseconds(Self.retargetHoldLimitMillis)) { [weak self] in
+                guard let self, self.retargetHoldGeneration == generation, self.retargetHold != nil else { return }
+                AppLogger.info("远程桌面：原地换尺寸等了 \(Self.retargetHoldLimitMillis) ms 还没出新画面，先放开",
+                               category: RemoteLog.category)
+                self.releaseRetargetHold()
+            }
+        }
+    }
+
+    /// 尺寸没换成（窗口没了、流换了）：放开冻结，画面照旧走。可在任意线程调。
+    func cancelRetargetHold() {
+        link.queue.async { [self] in
+            guard retargetHold != nil else { return }
+            releaseRetargetHold()
+        }
+    }
+
+    /// 放开冻结：先把最终的几何（点尺寸、视频像素数）发出去，画面随后跟上。在连接队列上。
+    private func releaseRetargetHold() {
+        retargetHold = nil
+        retargetHoldGeneration &+= 1
+        pendingGeometry = nil
+        guard !isStopped else { return }
+        if isLive { sendGeometry(.whole(display.bounds)) } else { sentGeometry = nil }
+    }
+
+    /// 只看一个窗口时窗口改了大小：同一条流接着用，采集目标、视频尺寸、编码器换成新的，下一帧是关键帧。
+    /// 比停流再开少掉重开采集（一百多毫秒）和主控端停流、开流的来回。可在任意线程调。
+    func retarget(display: RemoteDesktopDisplay, width: Int, height: Int) {
+        link.queue.async { [self] in
+            guard !isStopped, width > 0, height > 0 else { return }
+            let resized = width != self.width || height != self.height
+            self.display = display
+            targetBounds = display.bounds
+            injector?.updateBounds(display.bounds)
+            if resized {
+                self.width = width
+                self.height = height
+                // 码率上下限按像素数定：按新尺寸重来。旁路精修的编码器按旧尺寸建的，放掉，下次精修时再建。
+                rate = RemoteRateController(width: width, height: height, path: path, paced: video != nil,
+                                            now: DispatchTime.now().uptimeNanoseconds)
+                appliedRate = rate.bitrate
+                stats.setBitrate(rate.bitrate)
+                stillEncoderRelease?.cancel()
+                stillEncoderRelease = nil
+                stillEncoder = nil
+                refineBytes = [:]
+                inStreamRefineBytes = nil
+                refined = false
+                quality = RemoteQualityCap(now: DispatchTime.now().uptimeNanoseconds)
+                pendingScale = nil
+                rebuildEncoder(scale: scaleSelector.current, from: scaleSelector.current, pacingRate: linkState?.pacingRate ?? 0)
+                source.retarget(display: display, width: width, height: height)
+            }
+            pendingGeometry = nil
+            if resized, retargetHold != nil {
+                // 新的几何等第一张新尺寸的画面出来时紧挨着它发（`captured`），主控端一次换完。
+                retargetHold = .awaitingFrame
+            } else {
+                // 像素数没变（只挪了位置、或窗口改不动），或者没经过冻结：马上告诉主控端。
+                releaseRetargetHold()
+            }
+            AppLogger.info("远程桌面：原地换尺寸，画面 \(width)×\(height)（窗口 \(Int(display.bounds.width))×\(Int(display.bounds.height)) 点）",
+                           category: RemoteLog.category)
+        }
     }
 
     // MARK: - 光标
@@ -1103,11 +1235,11 @@ nonisolated extension RemoteDesktopStreamer {
 
     /// 粘贴手机送来的内容，并且不把它当成 Mac 上的新拷贝回传：写剪贴板期间监视先停一下，写完把新的版本号记成
     /// 已经看过。在连接队列上；版本号在 `clipboardQueue` 上读。
-    private func pasteWithoutEcho(_ content: RemoteDesktopPaste, _ injector: any RemoteDesktopInputSink) {
-        guard let clipboard else { return injector.paste(content) }
+    private func pasteWithoutEcho(_ injector: any RemoteDesktopInputSink, _ paste: (any RemoteDesktopInputSink) -> Void) {
+        guard let clipboard else { return paste(injector) }
         let state = clipboardState
         state.beginPaste()
-        injector.paste(content)
+        paste(injector)
         clipboardQueue.async { state.endPaste(seen: clipboard.changeCount) }
     }
 }
@@ -1228,7 +1360,7 @@ nonisolated final class RemoteDesktopRoute: @unchecked Sendable {
     func handle(_ message: RemoteMessage) -> Bool {
         switch message.kind {
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
-             .desktopPause, .desktopRegion:
+             .desktopPause, .desktopRegion, .desktopPasteFile:
             if let streamer, streamer.channel == message.channel { streamer.handle(message) }
             return true
         default:

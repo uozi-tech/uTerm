@@ -65,8 +65,7 @@ final class RemoteDesktopCanvasNSView: NSView {
     /// 由它裁掉。
     private let pictureLayer = CALayer()
     private var contentFraction = CGSize(width: 1, height: 1)
-    /// 放大后那台 Mac 只送来看得见的那一块（按原生像素）：画在这层上，盖住下面那张整块的（同手机画布）。
-    private let regionLayer = AVSampleBufferDisplayLayer()
+    /// 放大后那台 Mac 只送来看得见的那一块（按原生像素）：画在这层里面，盖住下面那张整块的（同手机画布）。
     private let regionSpace = CALayer()
     private var regionReport: DispatchWorkItem?
     private var lastRegionReport = Date.distantPast
@@ -111,9 +110,6 @@ final class RemoteDesktopCanvasNSView: NSView {
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = NSColor.black.cgColor
         pictureLayer.addSublayer(displayLayer)
-        regionLayer.videoGravity = .resize
-        regionLayer.isHidden = true
-        regionSpace.addSublayer(regionLayer)
         pictureLayer.addSublayer(regionSpace)
         layer?.addSublayer(pictureLayer)
         cursorLayer.path = RemoteDesktopArrowCursor.path()
@@ -127,7 +123,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         layer?.addSublayer(cursorLayer)
         cornerProbe.onChange = { [weak self] in self?.cornersChanged() }
         addSubview(cornerProbe)
-        session.attachCanvas(displayLayer, regionLayer: regionLayer) { [weak self] cursor in self?.macCursorArrived(cursor) }
+        session.attachCanvas(displayLayer, regionSpace: regionSpace) { [weak self] cursor in self?.macCursorArrived(cursor) }
         AppLogger.info("远程桌面画布：建立", category: RemoteLog.category)
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(windowResignedKey),

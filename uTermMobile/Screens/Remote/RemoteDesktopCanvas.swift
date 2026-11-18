@@ -25,17 +25,24 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
     let keys: RemoteDesktopKeyState
     /// 软键盘是否弹出（由外面的键盘按钮控制）。
     @Binding var keyboardVisible: Bool
+    /// 用户点了系统键盘自带的「粘贴」：按「粘贴到 Mac」处理。
+    var onSystemPaste: () -> Void = {}
     /// 递增一次 = 回到「适配屏幕」。
     let fitToken: Int
     /// Mac 显示器的点尺寸（开流后才有）。作为参数传进来，SwiftUI 才会在它变化时调 `updateUIView`。
     let displaySize: CGSize?
     /// 内容占视频帧的比例（只看一个窗口时可能小于 1，见 `RemoteDesktopSession.contentFraction`）。
     var contentFraction = CGSize(width: 1, height: 1)
+    /// 触摸屏模式：点哪里就是哪里、不画指针（见 `RemoteTrackpadGesture.Mode.touch`）。
+    var touchMode = false
+    /// 视频帧的像素尺寸（开流后才有）。画面接近一比一时按它排（`RemoteDesktopViewport.nativeSize`）。
+    var streamPixels: CGSize?
 
     func makeUIView(context: Context) -> RemoteDesktopCanvasView {
         let view = RemoteDesktopCanvasView(session: session, keys: keys)
         // 键盘可能在 SwiftUI 更新期间被收走（拆视图时 UIKit 卸第一响应者），不能当场写状态。
         view.onKeyboardDismissed = { DispatchQueue.main.async { keyboardVisible = false } }
+        view.onSystemPaste = onSystemPaste
         return view
     }
 
@@ -47,6 +54,8 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
         }
         view.updateContentSize(displaySize)
         view.updateContentFraction(contentFraction)
+        view.updateStreamPixels(streamPixels)
+        view.setTouchMode(touchMode)
     }
 
     static func dismantleUIView(_ view: RemoteDesktopCanvasView, coordinator: ()) {
@@ -62,6 +71,7 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
 ///   手指一动光标就动，不等 Mac 回画面；手指离开一会儿后才采用 Mac 报回的位置（Mac 上有人动了鼠标）。
 /// - 指针移动按屏幕刷新合并：一帧只发最新位置。
 /// - 手势：触摸直接交给 `RemoteTrackpadGesture` 判定，这里只执行结果（判定规则见那边的注释）。
+/// - 触摸屏模式（`setTouchMode`）：不画光标，手势先把指针放到手指的位置（`pointerJumped`）再点、拖、滚。
 @MainActor
 final class RemoteDesktopCanvasView: UIView {
     private let session: RemoteDesktopSession
@@ -70,10 +80,11 @@ final class RemoteDesktopCanvasView: UIView {
     /// 画面挂在这个视图上（位置大小 = `displayedFrame`）。iOS 26 起它是 `extensionView` 的内容视图。
     private let pictureView = UIView()
     private var contentFraction = CGSize(width: 1, height: 1)
-    /// 放大后 Mac 只送来看得见的那一块（按原生像素）：画在这层上，盖住下面那张整块的。它放在单位坐标的父图层里，
-    /// 位置由每帧自己带的区域定（`RemoteDesktopRegionPlacement`）。
-    private let regionLayer = AVSampleBufferDisplayLayer()
+    /// 放大后 Mac 只送来看得见的那一块（按原生像素）：画在这层里面，盖住下面那张整块的。它是单位坐标的图层，
+    /// 里面的画面摆在哪儿由每帧自己带的区域定（`RemoteDesktopRegionStage`）。
     private let regionSpace = CALayer()
+    /// 画面的像素比屏幕上要显示的少时（窗口模式：Mac 每点 2 像素，手机 3 像素）先放大到位再显示。
+    private let upscaler = RemoteDesktopUpscaler()
     /// 向 Mac 报「此刻看得见哪一块」：停稳一小会儿才报，拖着不放时隔一段也报一次。
     private var regionReport: DispatchWorkItem?
     private var lastRegionReport = Date.distantPast
@@ -90,6 +101,7 @@ final class RemoteDesktopCanvasView: UIView {
     private let cornerProbe = UIView()
     var fitToken = 0
     var onKeyboardDismissed: (() -> Void)?
+    var onSystemPaste: (() -> Void)?
 
     /// 放大后光标离画面边缘至少留这么多（视图点）。
     private static let pointerMargin: CGFloat = 48
@@ -130,9 +142,6 @@ final class RemoteDesktopCanvasView: UIView {
         displayLayer.backgroundColor = UIColor.black.cgColor
         pictureView.isUserInteractionEnabled = false
         pictureView.layer.addSublayer(displayLayer)
-        regionLayer.videoGravity = .resize
-        regionLayer.isHidden = true
-        regionSpace.addSublayer(regionLayer)
         pictureView.layer.addSublayer(regionSpace)
         if #available(iOS 26.0, *) {
             let extensionView = UIBackgroundExtensionView()
@@ -161,7 +170,10 @@ final class RemoteDesktopCanvasView: UIView {
         keyInput.keys = keys
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
-        session.attachCanvas(displayLayer, regionLayer: regionLayer) { [weak self] cursor in self?.macCursor(cursor) }
+        keyInput.onPaste = { [weak self] in self?.onSystemPaste?() }
+        session.attachCanvas(displayLayer, regionSpace: regionSpace, upscaler: upscaler) { [weak self] cursor in
+            self?.macCursor(cursor)
+        }
     }
 
     @available(*, unavailable)
@@ -182,8 +194,10 @@ final class RemoteDesktopCanvasView: UIView {
         super.didMoveToWindow()
         if window != nil {
             startDisplayLink()
-            // 外接键盘（iPad）：画布自己当第一响应者，不弹软键盘也能收到按键。
-            if !keyInput.isFirstResponder { becomeFirstResponder() }
+            // 外接键盘（iPad）：画布自己当第一响应者，不弹软键盘也能收到按键。视图是在 SwiftUI 更新途中挂上来的，
+            // 同样不当场换（见 `setKeyboardVisible`）。
+            claimsResponder = true
+            queueResponderChange()
         } else {
             displayLink?.invalidate()
             displayLink = nil
@@ -241,6 +255,7 @@ final class RemoteDesktopCanvasView: UIView {
         guard fraction.width > 0, fraction.height > 0, fraction != contentFraction else { return }
         contentFraction = fraction
         pictureView.clipsToBounds = fraction.width < 1 || fraction.height < 1
+        updateNativeSize()
         layoutContent()
     }
 
@@ -248,6 +263,37 @@ final class RemoteDesktopCanvasView: UIView {
         viewport.reset()
         layoutContent()
     }
+
+    private var streamPixels: CGSize?
+
+    /// 视频帧有多少像素。画面里内容的像素数和屏幕上要占的像素数只差一丝时，按原生像素一比一排（不拉伸）。
+    func updateStreamPixels(_ pixels: CGSize?) {
+        guard pixels != streamPixels else { return }
+        streamPixels = pixels
+        updateNativeSize()
+        layoutContent()
+    }
+
+    private func updateNativeSize() {
+        let scale = traitCollection.displayScale
+        viewport.pixelsPerPoint = scale
+        guard let streamPixels, streamPixels.width > 0, streamPixels.height > 0, scale > 0 else {
+            viewport.nativeSize = nil
+            return
+        }
+        viewport.nativeSize = CGSize(width: streamPixels.width * contentFraction.width / scale,
+                                     height: streamPixels.height * contentFraction.height / scale)
+    }
+
+    /// 换操作方式：进行到一半的手势先收尾（松开按着的左键、结束滚动），再换判定规则。
+    func setTouchMode(_ enabled: Bool) {
+        guard enabled != touchMode else { return }
+        apply(gesture.cancel())
+        gesture.mode = enabled ? .touch : .trackpad
+        layoutContent()
+    }
+
+    private var touchMode: Bool { gesture.mode == .touch }
 
     // MARK: - 放大后要区域
 
@@ -270,6 +316,16 @@ final class RemoteDesktopCanvasView: UIView {
                                                                       zoom: viewport.zoom))
     }
 
+    /// 整帧画面没放大（捏合之前）时在屏幕上占多少像素，报给放大器：不够密的画面它先放大到这么大。
+    /// 按没有捏合、没有让角时的大小算，这两样在动的时候不让它跟着换尺寸。
+    private func reportDisplayPixels() {
+        let fitted = viewport.contentFrame.size
+        let zoom = max(1, viewport.zoom)
+        let scale = traitCollection.displayScale
+        upscaler.setDisplayPixels(width: Int((fitted.width / zoom / contentFraction.width * scale).rounded()),
+                                  height: Int((fitted.height / zoom / contentFraction.height * scale).rounded()))
+    }
+
     private func layoutContent() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -284,10 +340,11 @@ final class RemoteDesktopCanvasView: UIView {
         displayLayer.frame = CGRect(x: 0, y: 0, width: pictureView.bounds.width / contentFraction.width,
                                     height: pictureView.bounds.height / contentFraction.height)
         displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
+        reportDisplayPixels()
         RemoteDesktopRegionPlacement.layout(regionSpace, in: pictureView.bounds)
         reportVisibleRegionSoon()
         cursorLayer.position = CGPoint(x: frame.minX + pointer.x * frame.width, y: frame.minY + pointer.y * frame.height)
-        cursorLayer.isHidden = session.info == nil || !macCursorVisible
+        cursorLayer.isHidden = session.info == nil || !macCursorVisible || touchMode
         CATransaction.commit()
         if peekTarget != viewport.peekInsets { wake() }
     }
@@ -295,7 +352,8 @@ final class RemoteDesktopCanvasView: UIView {
     /// 指针在被屏幕圆角切掉的角上时画面四边该收多少（见 `RemoteDesktopViewport.cornerPeek`）。
     /// 光标藏着（在别的显示器上 / 还没开流）时不收。
     private var peekTarget: RemoteDesktopEdgeInsets {
-        guard session.info != nil, macCursorVisible else { return .zero }
+        // 触摸屏模式没有光标可让。
+        guard session.info != nil, macCursorVisible, !touchMode else { return .zero }
         return viewport.cornerPeek(for: pointer)
     }
 
@@ -431,7 +489,26 @@ final class RemoteDesktopCanvasView: UIView {
             layoutContent()
         case .swiped(let direction):
             swipe(direction)
+        case .pointerJumped(let point):
+            jumpPointer(to: point)
         }
+    }
+
+    /// 触摸屏模式：指针直接到手指的位置（落在画面外的收到画面边上）。只能看时不动。
+    private func jumpPointer(to point: CGPoint) {
+        guard session.canControl else { return }
+        let target = Self.pointer(at: point, picture: viewport.displayedFrame)
+        guard target != pointer else { return }
+        pointer = target
+        macCursorVisible = true
+        wake()
+    }
+
+    /// 视图上的一点对应画面里的哪儿（归一化坐标，收在 0…1 里）。
+    static func pointer(at point: CGPoint, picture: CGRect) -> CGPoint {
+        guard picture.width > 0, picture.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
+        return CGPoint(x: min(1, max(0, (point.x - picture.minX) / picture.width)),
+                       y: min(1, max(0, (point.y - picture.minY) / picture.height)))
     }
 
     private func noteLocalInput() {
@@ -451,6 +528,8 @@ final class RemoteDesktopCanvasView: UIView {
     /// 捏合把光标留在了画面外时，让它跟着留在画面边上：否则下一次移动或点击都发生在看不见的地方，
     /// 画面还会被拽回光标那边，刚放大的位置就没了。
     private func keepPointerInView() {
+        // 触摸屏模式没有光标，指针下一次用之前总会先放到手指的位置。
+        guard !touchMode else { return }
         pointer = Self.pointerKeptInView(pointer, viewport: viewport, canControl: session.canControl,
                                          cursorVisible: macCursorVisible)
         if session.canControl, macCursorVisible, lastSentPointer != pointer { wake() }
@@ -479,9 +558,11 @@ final class RemoteDesktopCanvasView: UIView {
         flushPointer()
         let now = CACurrentMediaTime()
         var count: UInt8 = 1
-        if button == .left, let last = lastClick, now - last.time < 0.35,
-           hypot(last.point.x - pointer.x, last.point.y - pointer.y) < 0.01 {
+        if button == .left, let last = lastClick, now - last.time < 0.35, isRepeat(of: last.point) {
             count = min(3, last.count + 1)
+            // 触摸屏模式下连点的几下手指落点差着几个点：都点在第一下的位置，双击才落在同一个目标上。
+            if touchMode { pointer = last.point }
+            flushPointer()
         }
         lastClick = button == .left ? (now, pointer, count) : nil
         let modifiers = keys.consume()
@@ -490,6 +571,17 @@ final class RemoteDesktopCanvasView: UIView {
         session.send(.button(button, down: false, clickCount: count, x: x, y: y, modifiers: modifiers))
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.5)
     }
+
+    /// 这一下和上一下点的是不是同一个地方。触控板模式下指针没动才算（差不到画面的 1%）；
+    /// 触摸屏模式下每一下都是手指重新落的，落点差在 `touchRepeatRadius` 以内都算。
+    private func isRepeat(of last: CGPoint) -> Bool {
+        guard touchMode else { return hypot(last.x - pointer.x, last.y - pointer.y) < 0.01 }
+        let frame = viewport.displayedFrame
+        return hypot((last.x - pointer.x) * frame.width, (last.y - pointer.y) * frame.height) < Self.touchRepeatRadius
+    }
+
+    /// 触摸屏模式下连点的落点差在这么多视图点以内算同一处（系统双击手势的容差也在这个量级）。
+    static let touchRepeatRadius: CGFloat = 28
 
     /// 按住左键，之后手指移动就是拖拽（选文字、拖窗口），抬手松开。
     private func beginDrag() {
@@ -536,7 +628,14 @@ final class RemoteDesktopCanvasView: UIView {
     }
 
     private func moveScroll(by delta: CGSize) {
-        guard scrolling else { return }
+        guard scrolling else {
+            // 只能看时触摸屏模式的单指拖动没有别的用处：拿来平移放大后的画面（触控板模式下是单指移动在平移）。
+            if touchMode, !session.canControl {
+                viewport.pan(by: delta)
+                layoutContent()
+            }
+            return
+        }
         let scale = max(0.01, viewport.scale)
         session.send(.scroll(dx: Float(delta.width / scale), dy: Float(delta.height / scale), phase: .changed))
     }
@@ -603,12 +702,41 @@ final class RemoteDesktopCanvasView: UIView {
 
     // MARK: - 键盘
 
+    /// 外面要软键盘弹着还是收着。
+    private var wantsKeyboard = false
+    private var responderChangeQueued = false
+    /// 刚挂上窗口：画布要当一次第一响应者。
+    private var claimsResponder = false
+
+    /// 软键盘弹不弹。只记下要的状态，这一轮主线程任务跑完再换第一响应者，**不能当场换**：
+    /// 调用方是 `updateUIView`，那时 SwiftUI 正在更新；换第一响应者时 UIKit 顺着视图树通知到 SwiftUI 的宿主视图，
+    /// 它当场去读图上的值，AttributeGraph 判成环，主线程就在 `AG::Graph::print_cycle` 里空转，触摸全无反应、
+    /// 画面照常在放（解码不经主线程）。2026-11-18 Duo 窗口模式下点键盘按钮撞到，系统的 CPU 报告里 90 秒都停在
+    /// `updateUIView` → `setKeyboardVisible` → `becomeFirstResponder` → `print_cycle`。
     func setKeyboardVisible(_ visible: Bool) {
-        if visible, !keyInput.isFirstResponder {
-            _ = keyInput.becomeFirstResponder()
-        } else if !visible, keyInput.isFirstResponder {
-            keyInput.dismissKeyboard()
-            becomeFirstResponder()
+        wantsKeyboard = visible
+        guard visible != keyInput.isFirstResponder else { return }
+        queueResponderChange()
+    }
+
+    private func queueResponderChange() {
+        guard !responderChangeQueued else { return }
+        responderChangeQueued = true
+        DispatchQueue.main.async { [weak self] in self?.applyResponder() }
+    }
+
+    /// 按 `wantsKeyboard` 摆第一响应者：要软键盘就是输入视图；不要就是画布自己（外接键盘不弹软键盘也能收到按键）。
+    private func applyResponder() {
+        responderChangeQueued = false
+        defer { claimsResponder = false }
+        guard window != nil else { return }
+        if wantsKeyboard {
+            if !keyInput.isFirstResponder { _ = keyInput.becomeFirstResponder() }
+        } else {
+            // 只在刚挂上窗口、或刚从输入视图手里收回时才拿：别的时候第一响应者可能是弹层里的输入框，不能抢。
+            let wasTyping = keyInput.isFirstResponder
+            if wasTyping { keyInput.dismissKeyboard() }
+            if wasTyping || claimsResponder, !isFirstResponder { becomeFirstResponder() }
         }
     }
 
