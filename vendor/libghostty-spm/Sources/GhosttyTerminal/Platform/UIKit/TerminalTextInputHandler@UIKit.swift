@@ -55,6 +55,7 @@
 
         init(view: UITerminalView) {
             self.view = view
+            TerminalDictationInput.startObserving()
         }
 
         // MARK: - Text Input
@@ -64,11 +65,13 @@
             applyingStickyModifiers: Bool = false,
         ) {
             guard let view else { return }
-            let shouldNotifySelectionChange = shouldNotifySelectionChange
+            let isHypothesis = TerminalDictationInput.claimHypothesis()
+            let startsCommittedText = !hasMarkedText && committedTail.isEmpty && isHypothesis
+            let shouldNotifySelectionChange = shouldNotifySelectionChange || startsCommittedText
 
             TerminalDebugLog.log(
                 .input,
-                "insertText text=\(TerminalDebugLog.describe(text)) marked=\(hasMarkedText)",
+                "insertText text=\(TerminalDebugLog.describe(text)) marked=\(hasMarkedText) dictation=\(startsCommittedText)",
             )
 
             view.inputDelegate?.textWillChange(view)
@@ -82,10 +85,10 @@
                 if applyingStickyModifiers {
                     _ = view.handleStickyCommittedText(text)
                 } else {
-                    sendCommittedText(text)
+                    sendCommittedText(text, startingTail: startsCommittedText)
                 }
             #else
-                sendCommittedText(text)
+                sendCommittedText(text, startingTail: startsCommittedText)
             #endif
             view.refreshInputAccessoryContent()
 
@@ -147,8 +150,9 @@
         }
 
         /// 上屏一段字。留着听写那一段时接在它后面（UIKit 下一版结果要连同它一起找）；没留着就和以前一样直接发。
-        private func sendCommittedText(_ text: String) {
-            guard !committedTail.isEmpty else {
+        /// `startingTail`：这是听写的第一版（UIKit 在光标处插入时走 `insertText`，见 `TerminalDictationInput`），从它开始记。
+        private func sendCommittedText(_ text: String, startingTail: Bool = false) {
+            guard !committedTail.isEmpty || startingTail else {
                 sendTypedText(text)
                 return
             }
@@ -172,6 +176,7 @@
         ///（退格 + 补字），落在那一段之后就是在光标处插入、并从这里开始记。
         func replaceCommittedText(in range: TerminalTextRange, with text: String) {
             guard let view else { return }
+            _ = TerminalDictationInput.claimHypothesis()
             let tailRange = document.committedRange(of: NSRange(location: range.location, length: range.length))
 
             TerminalDebugLog.log(

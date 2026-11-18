@@ -1,9 +1,19 @@
+import GhosttyTerminal
 import XCTest
 @testable import uTermMobile
 
 /// 远程桌面的键盘里用听写：同终端（`GhosttyDictationTests`），文档要留着上一版识别结果，改写时退格再补字。
 @MainActor
 final class RemoteKeyDictationTests: XCTestCase {
+    /// 「接下来是听写」的标记是全进程的：每个用例都从没有标记开始，免得前一个用例的听写漏到普通打字里。
+    override func setUp() async throws {
+        DictationSimulator.reset()
+    }
+
+    override func tearDown() async throws {
+        DictationSimulator.reset()
+    }
+
     private func input(language: String) -> (view: RemoteKeyInputView, sent: () -> [RemoteDesktopInput], clear: () -> Void) {
         let view = RemoteKeyInputView()
         view.languageOverride = language
@@ -56,6 +66,24 @@ final class RemoteKeyDictationTests: XCTestCase {
         view.deleteBackward()
         XCTAssertEqual(sent(), delete)
         XCTAssertEqual(documentText(view), "你")
+    }
+
+    /// 同终端（`GhosttyDictationTests.testFirstHypothesisThroughInsertTextIsKept`）：第一版走 `insertText` 也要记下。
+    func testFirstHypothesisThroughInsertTextIsKept() {
+        let (view, sent, clear) = input(language: "zh-Hans")
+        DictationSimulator.announceHypothesis()
+        view.insertText("我")
+        XCTAssertEqual(sent(), [.text("我")])
+        XCTAssertEqual(documentText(view), "我")
+        clear()
+        guard let selection = view.selectedTextRange,
+              let start = view.position(from: selection.end, offset: -1),
+              let previous = view.textRange(from: start, to: selection.end)
+        else { return XCTFail("第二版从光标往前找第一版") }
+        XCTAssertEqual(view.text(in: previous), "我")
+        view.replace(previous, withText: "我们")
+        XCTAssertEqual(sent(), [.text("们")])
+        XCTAssertEqual(documentText(view), "我们")
     }
 
     func testTypingWithoutDictationKeepsTheDocumentEmpty() {

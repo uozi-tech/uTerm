@@ -8,6 +8,15 @@ import XCTest
 /// 用 `DictationSimulator` 照 UIKit 的做法驱动，核文档和发给终端的字节。
 @MainActor
 final class GhosttyDictationTests: XCTestCase {
+    /// 「接下来是听写」的标记是全进程的：每个用例都从没有标记开始，免得前一个用例的听写漏到普通打字里。
+    override func setUp() async throws {
+        DictationSimulator.reset()
+    }
+
+    override func tearDown() async throws {
+        DictationSimulator.reset()
+    }
+
     private func ready() async throws -> GhosttyProbeHost {
         let host = try GhosttyProbeHost()
         host.window.makeKey()
@@ -49,6 +58,24 @@ final class GhosttyDictationTests: XCTestCase {
         let third = try await sent(host)
         XCTAssertEqual(third, String(repeating: backspace, count: 11) + "Hello world.", "开头变了：退到开头重打")
         XCTAssertEqual(documentText(host.view), "Hello world.")
+    }
+
+    /// 真机上只剩第一个字的那一步：UIKit 把第一版插在光标处时调的是 `insertText`，不是 `replace`。
+    /// 来源是听写时这一版也要记下，下一版才找得到它。
+    func testFirstHypothesisThroughInsertTextIsKept() async throws {
+        let host = try await ready()
+        defer { host.close() }
+        DictationSimulator.announceHypothesis()
+        host.view.insertText("我")
+        XCTAssertEqual(documentText(host.view), "我")
+        let selection = try XCTUnwrap(host.view.selectedTextRange)
+        let start = try XCTUnwrap(host.view.position(from: selection.end, offset: -1))
+        let previous = try XCTUnwrap(host.view.textRange(from: start, to: selection.end))
+        XCTAssertEqual(host.view.text(in: previous), "我", "第二版从光标往前找第一版")
+        host.view.replace(previous, withText: "我们")
+        let bytes = try await sent(host)
+        XCTAssertEqual(bytes, "我们")
+        XCTAssertEqual(documentText(host.view), "我们")
     }
 
     func testTypingWithoutDictationKeepsTheKeyboardContextEmpty() async throws {

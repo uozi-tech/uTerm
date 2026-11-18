@@ -88,6 +88,7 @@ final class RemoteKeyInputView: UIView, UITextInput {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        TerminalDictationInput.startObserving()
         compositionLabel.isHidden = true
         compositionLabel.textAlignment = .center
         compositionLabel.backgroundColor = UIColor.black.withAlphaComponent(0.8)
@@ -177,8 +178,10 @@ final class RemoteKeyInputView: UIView, UITextInput {
     }
 
     /// 上屏一段字。留着听写那一段时接在它后面；带上膛修饰的是快捷键，那一段作废。
+    /// 听写的第一版也从这里进来（UIKit 在光标处插入时调 `insertText`，见 `TerminalDictationInput`），从它开始记。
     private func commit(_ text: String, armed: RemoteKeyModifiers, asKeys: Bool) {
-        guard !tail.isEmpty, armed.isEmpty else {
+        let isHypothesis = TerminalDictationInput.claimHypothesis()
+        guard !tail.isEmpty || isHypothesis, armed.isEmpty else {
             resetTail()
             deliver(text, armed: armed, asKeys: asKeys)
             return
