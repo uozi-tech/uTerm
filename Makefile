@@ -722,6 +722,23 @@ verify-mobile-signing:
 		exit 1; \
 	fi; \
 	printf '%s\n' 'iCloud container OK: iCloud.com.uozi.uTerm'; \
+	appex="$$app/PlugIns/uTermLiveActivity.appex"; \
+	if [ ! -d "$$appex" ]; then \
+		printf '%s\n' 'ERROR: the Live Activity extension (PlugIns/uTermLiveActivity.appex) is missing.'; \
+		exit 1; \
+	fi; \
+	if ! codesign -dv --verbose=4 "$$appex" 2>&1 | grep -q 'Authority=Apple Distribution'; then \
+		printf '%s\n' 'ERROR: uTermLiveActivity.appex is not signed with an Apple Distribution certificate.'; \
+		printf '%s\n' '  The App ID com.uozi.uTerm.LiveActivity needs an App Store profile (automatic signing creates it).'; \
+		exit 1; \
+	fi; \
+	app_build=$$(plutil -extract CFBundleVersion raw -o - "$$app/Info.plist"); \
+	appex_build=$$(plutil -extract CFBundleVersion raw -o - "$$appex/Info.plist"); \
+	if [ "$$app_build" != "$$appex_build" ]; then \
+		printf '%s\n' "ERROR: extension build $$appex_build != app build $$app_build (App Store rejects the mismatch)."; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "Live Activity extension OK: build $$appex_build"; \
 	printf '%s\n' "Distribution signing OK: $(MOBILE_IPA)"
 
 # 上传 archive 到 App Store Connect（TestFlight）。认证同 archive / export，走共用的

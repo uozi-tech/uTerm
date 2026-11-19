@@ -82,9 +82,10 @@ final class ParallelRunSessionTests: XCTestCase {
     func testContinuedProcessingIdentifierIsPermitted() async throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("BGContinuedProcessingTask 需要 iOS 26") }
         let identifier = ParallelBackgroundKeeper.identifierPrefix + "test." + UUID().uuidString
-        let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
-            task.setTaskCompleted(success: true)
-        }
+        // 系统在自己的队列上调启动回调（真机上提交后会马上启动）：闭包不能带主线程隔离，否则一进来就崩。
+        let registered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: identifier, using: nil,
+            launchHandler: ContinuedProcessingHandlers.launchHandler { (task: BGTask) in task.setTaskCompleted(success: true) })
         XCTAssertTrue(registered, "Info.plist 的 BGTaskSchedulerPermittedIdentifiers 没登记这个前缀")
 
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "测试", subtitle: "测试")
@@ -101,7 +102,7 @@ final class ParallelRunSessionTests: XCTestCase {
     /// 系统在后台队列上调启动回调：回调不能带主线程隔离（否则一进来就崩），交给 `adopt` 时要回到主线程。
     func testLaunchHandlerRunsOffTheMainThreadAndHandsBackToMain() async throws {
         let adopted = expectation(description: "回到主线程交给 adopt")
-        let handler = ParallelBackgroundKeeper.launchHandler { (value: NSString) in
+        let handler = ContinuedProcessingHandlers.launchHandler { (value: NSString) in
             XCTAssertTrue(Thread.isMainThread)
             XCTAssertEqual(value, "任务")
             adopted.fulfill()

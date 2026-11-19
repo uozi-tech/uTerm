@@ -296,6 +296,8 @@ struct WorkspaceTabChip: View {
     @Environment(\.mAccent) private var accent
     /// Duo 状态行里胶囊加高到 36pt（行高 82，30pt 的胶囊显得太扁，实机反馈）。
     @Environment(\.mInStatusRow) private var inStatusRow
+    /// 可选：探针里单独挂标签时没有注入。
+    @Environment(TerminalActivityCenter.self) private var activityCenter: TerminalActivityCenter?
     @State private var hovering = false
 
     private var isFront: Bool { activity != .inactive }
@@ -378,6 +380,9 @@ struct WorkspaceTabChip: View {
                 Button(action: onMove) {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")
                 }
+            }
+            if case .terminal = tab, let keepAlive = activityCenter?.keepAlive, keepAlive.isSupported {
+                TerminalKeepAliveMenu(keepAlive: keepAlive)
             }
             Button(role: .destructive, action: onClose) { Label("关闭", systemImage: "xmark") }
         }

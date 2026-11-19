@@ -90,6 +90,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.localNetworkUsed, "localNetwork.used"),
         (DefaultsKey.mobileRestorableTerminalTabs, "mobile.restorableTerminalTabs"),
         (DefaultsKey.mobileTerminalKeyboardLanguage, "mobile.terminal.keyboardLanguage"),
+        (DefaultsKey.mobileLiveActivity, "mobile.liveActivity"),
         (DefaultsKey.fileBrowserSortKey, "fileBrowser.sortKey"),
         (DefaultsKey.fileBrowserSortAscending, "fileBrowser.sortAscending"),
         (DefaultsKey.fileBrowserFoldersFirst, "fileBrowser.foldersFirst"),
@@ -97,6 +98,7 @@ final class DefaultsKeyTests: XCTestCase {
         // 调试开关
         (DefaultsKey.sshTimingProbe, "sshTimingProbe"),
         (DefaultsKey.remoteDebugOpenDesktop, "RemoteDebugOpenDesktop"),
+        (DefaultsKey.liveActivityDebugDemo, "LiveActivityDebugDemo"),
         (DefaultsKey.remoteDebugEndpoint, "RemoteDebugEndpoint"),
         (DefaultsKey.remoteDebugPathMatrix, "RemoteDebugPathMatrix"),
         (DefaultsKey.debugLayoutDiagnostics, "debug.layoutDiagnostics"),

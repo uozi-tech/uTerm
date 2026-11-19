@@ -48,10 +48,8 @@ final class ParallelBackgroundKeeper {
     nonisolated static let identifierPrefix = "com.uozi.uTerm.parallel."
 
     private let sessions: () -> [ParallelRunSession]
-    /// iOS 26 的 `BGContinuedProcessingTask`（类型擦除，免得整个类挂可用性标注）。
-    private var continued: AnyObject?
-    /// 已提交、系统还没开始跑的标识（提交与启动之间不要重复提交）。
-    private var pendingIdentifier: String?
+    /// iOS 26 的 `ContinuedProcessingLease`（类型擦除，免得整个类挂可用性标注）。
+    private var leaseStorage: AnyObject?
     private var legacyTask: UIBackgroundTaskIdentifier = .invalid
     private var ticker: Task<Void, Never>?
     private var reported: Int64 = 0
@@ -101,15 +99,13 @@ final class ParallelBackgroundKeeper {
             finish()
             return false
         }
-        if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
+        if #available(iOS 26.0, *), lease.isRunning {
             let (total, done) = Self.units(running)
-            task.progress.totalUnitCount = total
             // 单调不减：重新运行 / 新开一批会让「完成量」回落，回落不报（系统按「没进展」算会收回任务）。
             reported = min(total, max(reported, done))
-            task.progress.completedUnitCount = reported
             let first = running[0]
             let title = running.count == 1 ? first.title : "\(first.title) 等 \(running.count) 个"
-            task.updateTitle(title, subtitle: first.progressText)
+            lease.report(total: total, completed: reported, title: title, subtitle: first.progressText)
         }
         return true
     }
@@ -137,75 +133,41 @@ final class ParallelBackgroundKeeper {
         ticker?.cancel()
         ticker = nil
         reported = 0
-        pendingIdentifier = nil
-        if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
-            task.progress.completedUnitCount = task.progress.totalUnitCount
-            task.setTaskCompleted(success: true)
-        }
-        continued = nil
+        if #available(iOS 26.0, *) { lease.finish() }
         endLegacyTask()
     }
 
     // MARK: iOS 26：系统后台继续处理
 
-    /// 系统的启动回调：`using: nil` 时系统在自己的后台队列上调它。必须在 nonisolated 的地方建——在本类（`@MainActor`）
-    /// 的方法里直接写闭包，Swift 会把它推断成主线程隔离、进入时检查执行者，系统一启动任务就崩（同远程桌面声音的
-    /// 播放回调，ebd13a48）。任务对象只在主线程上用：包一层带回主线程再交给 `adopt`。
-    nonisolated static func launchHandler<Handle>(_ adopt: @escaping @MainActor @Sendable (Handle) -> Void)
-        -> (Handle) -> Void {
-        { task in
-            let handed = UncheckedSendable(task)
-            Task { @MainActor in adopt(handed.value) }
+    @available(iOS 26.0, *)
+    private var lease: ContinuedProcessingLease {
+        if let lease = leaseStorage as? ContinuedProcessingLease { return lease }
+        let lease = ContinuedProcessingLease(identifierPrefix: Self.identifierPrefix)
+        lease.onStart = { [weak self] in
+            guard let self else { return }
+            if !self.tick() { self.finish() }
         }
+        // 系统收回（用户在灵动岛上点了停止、或资源紧张）：运行本身跟着 App 挂起。
+        lease.onExpire = {}
+        leaseStorage = lease
+        return lease
     }
 
     @available(iOS 26.0, *)
     private func submitContinuedTask(title: String) {
-        // 已经有一个在跑 / 在排队：沿用，标题由 tick 更新。
-        guard continued == nil, pendingIdentifier == nil else { return }
-        let identifier = Self.identifierPrefix + UUID().uuidString
-        let registered = BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: identifier, using: nil,
-            launchHandler: Self.launchHandler { [weak self] (task: BGTask) in
-                guard let task = task as? BGContinuedProcessingTask else { return }
-                self?.adopt(task, identifier: identifier)
-            })
-        guard registered else { return }   // Info.plist 没登记：退回 beginBackgroundTask
-        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: "准备中…")
-        request.strategy = .fail   // 现在跑不了就别排队：排到后面时运行早已结束
-        do {
-            try BGTaskScheduler.shared.submit(request)
-            pendingIdentifier = identifier
-        } catch {
-            // 系统现在不让跑（负载高等）：退到后台时走 beginBackgroundTask。
-        }
-    }
-
-    @available(iOS 26.0, *)
-    private func adopt(_ task: BGContinuedProcessingTask, identifier: String) {
-        guard identifier == pendingIdentifier else {
-            task.setTaskCompleted(success: true)   // 过期的提交（运行早结束了）
-            return
-        }
-        pendingIdentifier = nil
-        continued = task
-        task.expirationHandler = { [weak self] in
-            // 系统收回（用户在灵动岛上点了停止、或资源紧张）：交还任务，运行本身跟着 App 挂起。
-            Task { @MainActor in
-                guard let self else { return }
-                if let t = self.continued as? BGContinuedProcessingTask {
-                    t.setTaskCompleted(success: false)
-                }
-                self.continued = nil
-            }
-        }
-        if !tick() { finish() }
+        // 已经有一个在跑 / 在排队：沿用，标题由 tick 更新。现在跑不了：退到后台时走 beginBackgroundTask。
+        lease.submit(title: title, subtitle: "准备中…")
     }
 
     // MARK: 兜底：beginBackgroundTask
 
+    private var continuedRunning: Bool {
+        if #available(iOS 26.0, *) { return lease.isRunning }
+        return false
+    }
+
     private func didEnterBackground() {
-        guard continued == nil, legacyTask == .invalid, sessions().contains(where: \.isRunning) else { return }
+        guard !continuedRunning, legacyTask == .invalid, sessions().contains(where: \.isRunning) else { return }
         legacyTask = UIApplication.shared.beginBackgroundTask(withName: "Parallel run") { [weak self] in
             MainActor.assumeIsolated { self?.endLegacyTask() }
         }
@@ -243,10 +205,4 @@ final class ParallelBackgroundKeeper {
                 .requestAuthorization(options: [.alert, .sound, .provisional])
         }
     }
-}
-
-/// 把系统交来的非 Sendable 对象带过线程边界（之后只在主线程上用）。
-nonisolated struct UncheckedSendable<Value>: @unchecked Sendable {
-    let value: Value
-    init(_ value: Value) { self.value = value }
 }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4C495645414354000000000E /* uTermLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4C4956454143540000000001 /* uTermLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
@@ -56,6 +57,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		4C495645414354000000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4C4956454143540000000004;
+			remoteInfo = uTermLiveActivity;
+		};
 		25FE8A04CCE470F978BD4E34 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
@@ -115,6 +123,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		4C495645414354000000000F /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4C495645414354000000000E /* uTermLiveActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		55535348535441434B000020 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -129,6 +148,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4C4956454143540000000001 /* uTermLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = uTermLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermBackgroundLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		484F4C444552000000000003 /* uterm-holder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "uterm-holder.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -635,6 +655,16 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		4C4956454143540000000002 /* uTermLiveActivity */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = uTermLiveActivity;
+			sourceTree = "<group>";
+		};
+		4C4956454143540000000003 /* uTermActivityShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = uTermActivityShared;
+			sourceTree = "<group>";
+		};
 		10C0DE0000000000000000B0 /* uTermMobile */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = uTermMobile;
@@ -707,6 +737,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		4C4956454143540000000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		10C0DE0000000000000000A4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -841,6 +878,8 @@
 				555445524D53534800000001 /* uTermSSH */,
 				46494C455300000000000001 /* uTermFiles */,
 				52484F535400000000000002 /* uTermRemoteHost */,
+				4C4956454143540000000002 /* uTermLiveActivity */,
+				4C4956454143540000000003 /* uTermActivityShared */,
 			);
 			sourceTree = "<group>";
 		};
@@ -856,6 +895,7 @@
 				484F4C444552000000000003 /* uterm-holder.app */,
 				555445524D53534800000005 /* uterm-ssh */,
 				52484F535400000000000001 /* uTermRemoteHost.app */,
+				4C4956454143540000000001 /* uTermLiveActivity.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -888,6 +928,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		4C4956454143540000000004 /* uTermLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4C4956454143540000000005 /* Build configuration list for PBXNativeTarget "uTermLiveActivity" */;
+			buildPhases = (
+				4C4956454143540000000008 /* Sources */,
+				4C4956454143540000000009 /* Frameworks */,
+				4C495645414354000000000A /* Resources */,
+				4C495645414354000000000B /* Set Build Number */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4C4956454143540000000002 /* uTermLiveActivity */,
+				4C4956454143540000000003 /* uTermActivityShared */,
+			);
+			name = uTermLiveActivity;
+			productName = uTermLiveActivity;
+			productReference = 4C4956454143540000000001 /* uTermLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		10C0DE0000000000000000A1 /* uTermMobile */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 10C0DE0000000000000000A2 /* Build configuration list for PBXNativeTarget "uTermMobile" */;
@@ -895,14 +957,17 @@
 				10C0DE0000000000000000A3 /* Sources */,
 				10C0DE0000000000000000A4 /* Frameworks */,
 				10C0DE0000000000000000A5 /* Resources */,
+				4C495645414354000000000F /* Embed Foundation Extensions */,
 				CFCFCFCF000000000000F0F3 /* Set Build Number */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				4C495645414354000000000D /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				10C0DE0000000000000000B0 /* uTermMobile */,
+				4C4956454143540000000003 /* uTermActivityShared */,
 				46494C455300000000000001 /* uTermFiles */,
 				484F4C444552000000000001 /* uTermHolder */,
 				555445524D53534800000001 /* uTermSSH */,
@@ -1154,6 +1219,9 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					4C4956454143540000000004 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					10C0DE0000000000000000A1 = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -1215,11 +1283,19 @@
 				484F4C444552000000000004 /* uterm-holder */,
 				555445524D53534800000006 /* uterm-ssh */,
 				52484F53540000000000000E /* uTermRemoteHost */,
+				4C4956454143540000000004 /* uTermLiveActivity */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		4C495645414354000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		10C0DE0000000000000000A5 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1265,6 +1341,26 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		4C495645414354000000000B /* Set Build Number */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Set Build Number";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# build = git commit count + Config/BuildNumberOffset (offset exists because a 2026-09-11 history rewrite dropped merge commits below an already-published build; only ever raise it).\ncount=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\noffset=$(cat \"$SRCROOT/Config/BuildNumberOffset\" 2>/dev/null || echo 0)\nbuildNumber=$((count + offset))\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
+		};
 		484F4C44455200000000000E /* Copy Icon and Names */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -1428,6 +1524,13 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		4C4956454143540000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		10C0DE0000000000000000A3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1495,6 +1598,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		4C495645414354000000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4C4956454143540000000004 /* uTermLiveActivity */;
+			targetProxy = 4C495645414354000000000C /* PBXContainerItemProxy */;
+		};
 		484F4C44455200000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = "uterm-holder";
@@ -1544,6 +1652,70 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		4C4956454143540000000006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "uTermLiveActivity-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4C4956454143540000000007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "uTermLiveActivity-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		10C0DE0000000000000000F1 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
@@ -2169,6 +2341,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		4C4956454143540000000005 /* Build configuration list for PBXNativeTarget "uTermLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4C4956454143540000000006 /* Debug */,
+				4C4956454143540000000007 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		10C0DE0000000000000000A2 /* Build configuration list for PBXNativeTarget "uTermMobile" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

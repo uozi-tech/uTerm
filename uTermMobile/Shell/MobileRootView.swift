@@ -17,6 +17,9 @@ struct MobileRootView: View {
     /// 会话工作区（终端 + 文件浏览标签、分屏）在根视图持有（高于标签栏 ⇄ 侧栏外壳），
     /// 横屏切 size class 时不丢会话 / 不退回根目录。
     @State private var workspace = MobileWorkspace()
+    /// 终端状态上灵动岛 / 锁屏、后台提醒、「离开后继续运行」。
+    @State private var activityCenter = TerminalActivityCenter()
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         @Bindable var store = store
@@ -31,6 +34,16 @@ struct MobileRootView: View {
             MLayoutDiagnosticsOverlay()
             #endif
         }
+        // 灵动岛 / 锁屏 / 通知点进来：切到那个终端标签页。
+        .modifier(TerminalActivityLinkHandler())
+        .task {
+            activityCenter.start(workspace: workspace)
+            #if DEBUG
+            TerminalActivityDemo.open(in: workspace, store: store, container: modelContext.container,
+                                      center: activityCenter)
+            #endif
+        }
+        .environment(activityCenter)
         .environment(store)
         .environment(hostKeyRelay)
         .environment(workspace)

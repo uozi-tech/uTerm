@@ -8,6 +8,9 @@ struct SettingsTerminalSection: View {
     private var cursorShapeRaw: String = TerminalCursorPreference.defaultShape.rawValue
     @AppStorage(DefaultsKey.terminalCursorBlink)
     private var cursorBlink: Bool = TerminalCursorPreference.defaultBlink
+    /// 只存本机（`TerminalActivityCenter` 读它）。
+    @AppStorage(DefaultsKey.mobileLiveActivity)
+    private var liveActivity = true
 
     private var cursorShape: TerminalCursorShape { TerminalCursorPreference.shape(rawValue: cursorShapeRaw) }
 
@@ -30,6 +33,8 @@ struct SettingsTerminalSection: View {
                       }))
             MInsetRow(label: "闪烁",
                       trailing: AnyView(MSwitch(on: $cursorBlink)))
+            MInsetRow(label: "灵动岛与锁屏", sub: "Claude Code 等程序在运行或等你处理时显示",
+                      trailing: AnyView(MSwitch(on: $liveActivity)))
             // 键盘条 AI 面板里的启动命令 / 提示词 / 斜杠命令。只在本机，不跨设备同步。
             NavigationLink { TerminalPhrasesScreen() } label: {
                 MInsetRow(label: "键盘条短语", sub: "启动命令、提示词、斜杠命令", chevron: true, last: true)

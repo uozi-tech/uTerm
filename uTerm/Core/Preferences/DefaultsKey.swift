@@ -144,6 +144,8 @@ nonisolated enum DefaultsKey {
     static let mobileRestorableTerminalTabs = "mobile.restorableTerminalTabs"
     /// iOS：终端里手机键盘上次用的输入语言（`KeyboardLanguageMemory`）。只存本机。
     static let mobileTerminalKeyboardLanguage = "mobile.terminal.keyboardLanguage"
+    /// iOS：终端状态上灵动岛和锁屏（`TerminalActivityCenter`，Bool，缺省开）。只存本机。
+    static let mobileLiveActivity = "mobile.liveActivity"
 
     /// macOS SFTP 浏览器的排序 / 过滤偏好。
     /// 待接线：`FileBrowserModel.PrefKey` 仍写着同值的字面量（该文件本轮不动）。
@@ -156,6 +158,9 @@ nonisolated enum DefaultsKey {
 
     static let sshTimingProbe = "sshTimingProbe"
     static let remoteDebugOpenDesktop = "RemoteDebugOpenDesktop"
+    /// 调试（iOS，只在 Debug 构建里认）：启动参数 `-LiveActivityDebugDemo YES` 开一个按时间表报程序状态的演示终端，
+    /// 真机上不连主机也能看灵动岛（`TerminalActivityDemo`）。
+    static let liveActivityDebugDemo = "LiveActivityDebugDemo"
     static let remoteDebugEndpoint = "RemoteDebugEndpoint"
     /// iOS 调试：启动即对第一台在中继上的 Mac 跑 N 轮链路矩阵，结果打到标准输出。
     static let remoteDebugPathMatrix = "RemoteDebugPathMatrix"
