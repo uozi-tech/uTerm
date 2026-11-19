@@ -64,7 +64,10 @@ final class RemotePairingPrompt {
         panel.isReleasedWhenClosed = false
         panel.contentView = hosting
         panel.center()
+        // 弹出即成为 key 窗口，输码格子（第一响应者）直接收键、第一位高亮，不用先点一下面板。
+        // 面板是 `.nonactivatingPanel`，`makeKey` 不会把 App 拉到前台。
         panel.orderFrontRegardless()
+        panel.makeKey()
         self.panel = panel
     }
 

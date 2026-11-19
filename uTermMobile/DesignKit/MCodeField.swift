@@ -48,7 +48,13 @@ struct MCodeField: View {
             if normalized != value { code = normalized; return }
             if normalized.count == length { onComplete(normalized) }
         }
-        .onAppear { focused = true }
+        // 一出现就弹键盘、高亮第一位。在单子里出现时，`onAppear` 那一拍单子还在弹出动画里，立刻设焦点常常落空：
+        // 再隔一拍补一次。
+        .task {
+            focused = true
+            try? await Task.sleep(for: .milliseconds(350))
+            if !focused { focused = true }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(length) 位数字码"))
         .accessibilityValue(Text(code.isEmpty ? "未输入" : CodeFieldInput.spoken(code)))

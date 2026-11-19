@@ -150,7 +150,8 @@ final class UCodeKeyView: NSView {
         guard let window else { return }
         center.addObserver(self, selector: #selector(windowKeyChanged), name: NSWindow.didBecomeKeyNotification, object: window)
         center.addObserver(self, selector: #selector(windowKeyChanged), name: NSWindow.didResignKeyNotification, object: window)
-        // 一出现就把焦点放在这里：窗口成为 key（点一下面板）之后直接打字。不抢 key 窗口。
+        // 一出现就把焦点放在这里。自己不抢 key 窗口：弹面板的一方负责 `makeKey`（配对审批、设备组加入都是），
+        // 窗口一成为 key 就能直接打字。
         DispatchQueue.main.async { [weak self] in
             guard let self, let window = self.window, window.firstResponder !== self else { return }
             window.makeFirstResponder(self)

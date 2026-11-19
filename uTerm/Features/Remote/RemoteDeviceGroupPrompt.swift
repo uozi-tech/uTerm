@@ -60,7 +60,9 @@ final class RemoteDeviceGroupPrompt {
         panel.isReleasedWhenClosed = false
         panel.contentView = hosting
         panel.center()
+        // 弹出即成为 key 窗口，输码格子直接收键、第一位高亮（同配对审批面板）。`makeKey` 不激活 App。
         panel.orderFrontRegardless()
+        panel.makeKey()
         self.panel = panel
     }
 
