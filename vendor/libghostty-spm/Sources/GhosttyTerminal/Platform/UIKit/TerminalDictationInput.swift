@@ -21,7 +21,7 @@
     public enum TerminalDictationInput {
         public static let willInsertHypothesis = Notification.Name("UIDictationWillInsertHypothesisNotification")
 
-        @MainActor private static var observer: NSObjectProtocol?
+        @MainActor private static var observer: (any NSObjectProtocol)?
         @MainActor private static var pendingHypothesis = false
 
         /// 开始收通知。可以反复调，只装一次。要在听写开始之前调（输入视图建好时）。

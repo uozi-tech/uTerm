@@ -156,7 +156,7 @@ public enum UTermScrollTrace {
             /// uTerm 测试用：系统滚动那条路径借的 UIScrollView。
             var uTermSystemScrollView: UIScrollView? { systemScroll.driver }
             /// uTerm 测试用：系统滚动的 delegate（上游把它放在单独的对象上，测试要伪造拖动 / 减速时经它调）。
-            var uTermSystemScrollDelegate: UIScrollViewDelegate? { systemScroll.delegate }
+            var uTermSystemScrollDelegate: (any UIScrollViewDelegate)? { systemScroll.delegate }
             /// uTerm 测试用：现在一下单指拖动会不会归系统滚动。
             var uTermSystemPanWouldBegin: Bool { systemPanWouldBegin }
         #endif

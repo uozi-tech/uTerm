@@ -293,7 +293,7 @@ nonisolated final class RemoteDesktopRegionStage: @unchecked Sendable {
         slots[index].layer.isHidden = true
         CATransaction.commit()
         // 里面那张清掉：下次再露出来时不该先闪一下上一回的画面。
-        slots[index].layer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+        slots[index].renderer.renderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 }
 

@@ -185,12 +185,19 @@ struct RemoteMacSheet: View {
         }
     }
 
+    /// 正在连（含失败后自动重试中）。
+    private var connectingRow: some View {
+        scrolling {
+            statusRow(icon: "refresh", text: client.connectProgress?.title ?? "", detail: client.connectProgress?.detail)
+        }
+    }
+
     @ViewBuilder private var content: some View {
         switch client.state {
-        case .idle, .connecting, .failed where client.isAutoRetrying:
-            scrolling {
-                statusRow(icon: "refresh", text: client.connectProgress?.title ?? "", detail: client.connectProgress?.detail)
-            }
+        case .idle, .connecting:
+            connectingRow
+        case .failed where client.isAutoRetrying:
+            connectingRow
         case .awaitingApproval(let code):
             scrolling { pairing(code) }
         case .failed(let message):

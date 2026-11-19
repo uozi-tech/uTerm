@@ -77,7 +77,7 @@ struct WorkspaceTabStrip: View {
     /// 标签条高度（不含顶边净空）。
     static let height: CGFloat = 48
     /// 工作区分屏区的坐标空间：拖动判定、分隔条、标签条与标签的位置都在这里量。
-    static let coordinateSpace = "workspace-split"
+    nonisolated static let coordinateSpace = "workspace-split"
     let tabs: [MWorkTab]
     let activeID: UUID?
     /// 本格是否为聚焦格。
