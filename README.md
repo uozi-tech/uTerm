@@ -1,9 +1,11 @@
 # uTerm
 
 macOS 与 iOS / iPadOS 上的服务器工作台：SSH 终端、SFTP 文件浏览与编辑、端口转发、密钥管理、快捷命令与多机并行执行、
-AI 助手；手机或另一台 Mac 还能经局域网或自建中继远程控制这台 Mac 的终端与屏幕。终端引擎是 [Ghostty](https://ghostty.org)。
+AI 助手；手机或另一台 Mac 还能经局域网或自建中继远程控制这台 Mac 的终端与屏幕。终端引擎是 [Ghostty](https://ghostty.org)，
+经 [libghostty-spm](https://github.com/Lakr233/libghostty-spm) 以 Swift 包接入（带补丁的 fork 在 `vendor/libghostty-spm`）。
 
-A native server workspace for macOS and iOS / iPadOS: SSH terminals (Ghostty engine), SFTP, port forwarding, keys,
+A native server workspace for macOS and iOS / iPadOS: SSH terminals (the Ghostty engine, integrated
+through [libghostty-spm](https://github.com/Lakr233/libghostty-spm)), SFTP, port forwarding, keys,
 quick commands across many hosts, an AI assistant, and remote control of a Mac from a phone or another Mac over the LAN or
 a self-hosted relay.
 
