@@ -36,7 +36,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_TEAM_ID = "ABCDE12345"
 DEFAULT_CONTAINER_ID = "iCloud.com.uozi.uTerm"
 
 # 扫描根（相对仓库根）。vendor/ 下的第三方副本不参与。
@@ -323,6 +322,8 @@ def parse_ddl(text: str) -> dict[str, dict[str, str]]:
 
 
 def export_schema(team_id: str, container_id: str, environment: str) -> str:
+    if not team_id:
+        raise ModelError("要导出线上 schema 得知道容器所属团队：传 --team-id <TEAM> 或设 TEAM_ID")
     cmd = ["xcrun", "cktool", "export-schema", "--team-id", team_id,
            "--container-id", container_id, "--environment", environment]
     try:
@@ -425,7 +426,8 @@ def swift_files(repo_root: Path, roots: list[str]) -> list[Path]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="比对 SwiftData @Model 与已部署的 CloudKit schema")
-    parser.add_argument("--team-id", default=os.environ.get("TEAM_ID", DEFAULT_TEAM_ID))
+    # 容器所属团队；维护者的值来自 internal/config.mk（make check-cloudkit-schema 传进来），别处用 --team-id / TEAM_ID。
+    parser.add_argument("--team-id", default=os.environ.get("TEAM_ID", ""))
     parser.add_argument("--container-id", default=os.environ.get("CLOUDKIT_CONTAINER_ID", DEFAULT_CONTAINER_ID))
     parser.add_argument("--environment", default="production", choices=["production", "development"])
     parser.add_argument("--schema-file", help="离线：直接读一份已导出的 DDL，不调用 cktool")

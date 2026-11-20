@@ -40,3 +40,6 @@ xcuserdata/
 uTerm/Services/SSH/HostHolder/Binaries/
 # 贡献者本地构建覆盖（见 Config/Local.xcconfig.example）
 Config/Local.xcconfig
+# internal/setup.sh 建的符号链接：发版 skill、内部 CLAUDE 说明
+.claude/skills/release
+CLAUDE.local.md
