@@ -35,11 +35,12 @@ final class UDColorTests: XCTestCase {
     // MARK: - 语义状态：暗夜鲜艳（原样）/ 日间低饱和
 
     func test_semantic_dark_stays_vivid_iOS() {
-        assertHex(UD.success, .darkAqua, 0x49AA19, "success dark = #49AA19")
+        // uAppKit 1.22.3 起深色语义色提亮（深色层级与对比度调整）。
+        assertHex(UD.success, .darkAqua, 0x6ABE39, "success dark = #6ABE39")
         assertHex(UD.warning, .darkAqua, 0xD89614, "warning dark = #D89614")
-        assertHex(UD.caution, .darkAqua, 0xD87A16, "caution dark = #D87A16（与 warning 区分）")
-        assertHex(UD.danger,  .darkAqua, 0xDC4446, "danger dark = #DC4446")
-        assertHex(UD.info,    .darkAqua, 0x1668DC, "info dark = primary #1668DC")
+        assertHex(UD.caution, .darkAqua, 0xE88B2A, "caution dark = #E88B2A（与 warning 区分）")
+        assertHex(UD.danger,  .darkAqua, 0xF07070, "danger dark = #F07070")
+        assertHex(UD.info,    .darkAqua, 0x4C9BF5, "info dark = #4C9BF5")
     }
 
     func test_semantic_light_is_low_saturation_youthful() {
@@ -111,7 +112,7 @@ final class UDColorTests: XCTestCase {
     @MainActor
     func test_row_selected_is_blue_accent_tint() {
         assertHex(UD.rowSelected, .aqua,     0x1677FF, alpha: 0.12, "rowSelected light = 蓝 accent@12%")
-        assertHex(UD.rowSelected, .darkAqua, 0x1668DC, alpha: 0.14, "rowSelected dark = 蓝 accent@14%")
+        assertHex(UD.rowSelected, .darkAqua, 0x1668DC, alpha: 0.20, "rowSelected dark = 蓝 accent@20%（uAppKit 1.22.3 起）")
     }
 
     // MARK: - 输入底：v2 淡灰无描边（深=白 6% / 浅=黑 5%）

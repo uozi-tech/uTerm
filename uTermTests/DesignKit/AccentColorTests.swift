@@ -29,8 +29,8 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(AccentColor.blue.hoverSpec(dark: false),   UD.ColorSpec.hex(0x4096FF))
         XCTAssertEqual(AccentColor.blue.pressedSpec(dark: true),  UD.ColorSpec.hex(0x65A9F3))
         XCTAssertEqual(AccentColor.blue.pressedSpec(dark: false), UD.ColorSpec.hex(0x69B1FF))
-        // 日间文字即主色；暗夜深底上取 hover 档提亮。
-        XCTAssertEqual(AccentColor.blue.inkSpec(dark: true),      UD.ColorSpec.hex(0x3C89E8))
+        // 日间文字即主色；暗夜深底上用提亮的 #4C9BF5（uAppKit 1.22.3 起，深色对比度调整）。
+        XCTAssertEqual(AccentColor.blue.inkSpec(dark: true),      UD.ColorSpec.hex(0x4C9BF5))
         XCTAssertEqual(AccentColor.blue.inkSpec(dark: false),     UD.ColorSpec.hex(0x1677FF))
         // softSpec（深 10% / 浅 12%）。14% 那一档叫 `UD.accentTint`（选中 / 主操作底），是另一个 token。
         XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x1668DC, 0.10))
