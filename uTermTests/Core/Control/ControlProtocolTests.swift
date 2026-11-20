@@ -249,8 +249,10 @@ final class ControlProtocolTests: XCTestCase {
     func testSocketCandidatesMatchClient() throws {
         let client = try String(
             contentsOf: DefaultsKeyLintTests.repoRoot.appending(path: "scripts/utermctl"), encoding: .utf8)
-        XCTAssertTrue(client.contains("\"~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/control.sock\""))
-        XCTAssertTrue(client.contains("\"~/Library/Containers/com.uozi.uTerm/Data/tmp/control.sock\""))
+        // 容器路径随 bundle id 走（用自己团队签名的构建换了前缀），客户端从所在 .app 读 bundle id，读不到用正式版的。
+        XCTAssertTrue(client.contains("OFFICIAL_BUNDLE_ID = \"com.uozi.uTerm\""))
+        XCTAssertTrue(client.contains("f\"~/Library/Containers/{BUNDLE_ID}/Data/Library/Application Support/uTerm/control.sock\""))
+        XCTAssertTrue(client.contains("f\"~/Library/Containers/{BUNDLE_ID}/Data/tmp/control.sock\""))
     }
 
     func testSocketFilenameSeparatesDebugFromRelease() {
