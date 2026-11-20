@@ -34,6 +34,8 @@ make build      # 或者 open uTerm.xcodeproj
   `make engine` 按 `ENGINE.lock` 取或现编。
 - **应用内更新与中继一键部署**：源码构建默认没有（入口自动隐藏）。要的话在 `Config/Local.xcconfig` 里配自己的更新源与中继
   发布地址，见 `Config/Local.xcconfig.example`。
+- **分发改过的版本**：换掉应用名称（`INFOPLIST_KEY_CFBundleDisplayName`）与图标（`AppIcon`），不能以 uTerm 的名义发布，
+  见 [`TRADEMARK.md`](TRADEMARK.md)。自己编、自己用不用改。
 - **iCloud 同步**：容器是 `iCloud.<bundle id 前缀>`，和正式版不通。`Local.xcconfig.example` 里把环境设成 Development：
   新容器的 Production 里还没有 schema，同步会静默失败。
 
@@ -70,3 +72,5 @@ cd relay && GOWORK=off go test -race ./...   # 自建中继
 ## 许可证
 
 [AGPL-3.0](LICENSE)。第三方组件各自的许可证见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+许可证只覆盖代码，不包括「uTerm」名称与图标：分发改过的版本要换名称和图标，见 [`TRADEMARK.md`](TRADEMARK.md)。
