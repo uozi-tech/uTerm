@@ -1,10 +1,10 @@
 {
-  "originHash" : "aec6dd4041cfbeb3a6c14ea627a12b9614985981a8818d1375cac75af79fe6a2",
+  "originHash" : "63eabe5cc48089c46fc1655449ee85594ac3b415a50735ad601199c6dbcc363b",
   "pins" : [
     {
       "identity" : "bigint",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:attaswift/BigInt.git",
+      "location" : "https://github.com/attaswift/BigInt.git",
       "state" : {
         "revision" : "63feef7820abb1a8fb08587d7da56bb0b7db8751",
         "version" : "6.0.1"
@@ -31,7 +31,7 @@
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:sparkle-project/Sparkle.git",
+      "location" : "https://github.com/sparkle-project/Sparkle.git",
       "state" : {
         "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
         "version" : "2.10.0"
@@ -40,7 +40,7 @@
     {
       "identity" : "swift-asn1",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:apple/swift-asn1.git",
+      "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
         "revision" : "3b6410f7dee09eb33cdd26260c5fd47fda19b0e2",
         "version" : "1.7.3"
@@ -76,7 +76,7 @@
     {
       "identity" : "swift-crypto",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:apple/swift-crypto.git",
+      "location" : "https://github.com/apple/swift-crypto.git",
       "state" : {
         "revision" : "da9d28d69ebe3894b18376c8f2395c2f37b8448f",
         "version" : "4.5.2"
@@ -85,7 +85,7 @@
     {
       "identity" : "swift-log",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:apple/swift-log.git",
+      "location" : "https://github.com/apple/swift-log.git",
       "state" : {
         "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
         "version" : "1.15.1"
@@ -94,7 +94,7 @@
     {
       "identity" : "swift-markdown",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:swiftlang/swift-markdown.git",
+      "location" : "https://github.com/swiftlang/swift-markdown.git",
       "state" : {
         "revision" : "25cb61d3482054b09ae76ca4f281b1bfe7fe5a43",
         "version" : "0.9.0"
@@ -103,7 +103,7 @@
     {
       "identity" : "swift-nio",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:apple/swift-nio.git",
+      "location" : "https://github.com/apple/swift-nio.git",
       "state" : {
         "revision" : "2f58d8ef84438d6517fc78bcea2f8527e3c72936",
         "version" : "2.105.0"
@@ -121,7 +121,7 @@
     {
       "identity" : "swift-tree-sitter",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:tree-sitter/swift-tree-sitter.git",
+      "location" : "https://github.com/tree-sitter/swift-tree-sitter.git",
       "state" : {
         "revision" : "f97df585296977d8fcaf644cbde567151d1367b8",
         "version" : "0.10.0"
@@ -148,7 +148,7 @@
     {
       "identity" : "tree-sitter-bash",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:tree-sitter/tree-sitter-bash.git",
+      "location" : "https://github.com/tree-sitter/tree-sitter-bash.git",
       "state" : {
         "revision" : "a06c2e4415e9bc0346c6b86d401879ffb44058f7"
       }
@@ -156,7 +156,7 @@
     {
       "identity" : "tree-sitter-go",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:tree-sitter/tree-sitter-go.git",
+      "location" : "https://github.com/tree-sitter/tree-sitter-go.git",
       "state" : {
         "revision" : "2346a3ab1bb3857b48b29d779a1ef9799a248cd7"
       }
@@ -164,7 +164,7 @@
     {
       "identity" : "tree-sitter-json",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:tree-sitter/tree-sitter-json.git",
+      "location" : "https://github.com/tree-sitter/tree-sitter-json.git",
       "state" : {
         "revision" : "254c42a6476413b776221e03982ac8ae159eeb72"
       }
@@ -172,7 +172,7 @@
     {
       "identity" : "tree-sitter-markdown",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:tree-sitter-grammars/tree-sitter-markdown.git",
+      "location" : "https://github.com/tree-sitter-grammars/tree-sitter-markdown.git",
       "state" : {
         "revision" : "a0a00f817d02412bd92c54d316f164d827b57b5c"
       }
@@ -180,7 +180,7 @@
     {
       "identity" : "tree-sitter-swift",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:alex-pinkus/tree-sitter-swift.git",
+      "location" : "https://github.com/alex-pinkus/tree-sitter-swift.git",
       "state" : {
         "revision" : "31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5"
       }
@@ -188,7 +188,7 @@
     {
       "identity" : "tree-sitter-typescript",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:tree-sitter/tree-sitter-typescript.git",
+      "location" : "https://github.com/tree-sitter/tree-sitter-typescript.git",
       "state" : {
         "revision" : "75b3874edb2dc714fb1fd77a32013d0f8699989f"
       }
@@ -198,8 +198,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/uozi-tech/uAppKit.git",
       "state" : {
-        "revision" : "69e10cf031a0aedcb959bee6e8bbab69dcf15812",
-        "version" : "1.23.0"
+        "revision" : "0369f6fc2830444b6acfea195441671f6c905f3d",
+        "version" : "1.23.1"
       }
     }
   ],
