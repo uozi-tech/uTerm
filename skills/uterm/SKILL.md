@@ -99,7 +99,7 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 | 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发的增删与启停 / `terminal send` / `terminal open` / `relay import` / `mac run` 与 `mac` 的写操作 | `mutations_disabled` |
 
 只读的 `hosts` / `host-key` / `sftp ls|stat|cat|get` / `forward list` / `terminals` /
-`terminal read|wait` / `relay check` / `macs` / `mac` 的读与搜索只要第一个开关。
+`terminal read|wait` / `relay check` / `relay install-command` / `macs` / `mac` 的读与搜索只要第一个开关。
 
 `run` **有意**归在第二个开关下：shell 命令无法可靠地分成读和写（`cat` 能读密钥、
 `awk` 能写文件），假的「只读模式」比没有更糟。所以哪怕只是想看看磁盘水位，也需要

@@ -33,16 +33,15 @@ uTerm，再测通。
 ```
 
 让用户指定装在哪台（或用他在提示里给的那台）。要求：Linux、systemd、amd64 或 arm64、
-能访问外网下载（`downloads.example.com`）。手机和 Mac 都要能访问到它，
+能访问外网下载安装脚本与二进制。手机和 Mac 都要能访问到它，
 所以通常是一台有公网 IP 的云服务器。
 
 ```sh
 "$UTERMCTL" run -H <主机> -c 'uname -m; id -u; command -v systemctl; sudo -n true 2>&1 && echo sudo-ok; command -v curl || command -v wget'
 ```
 
-- `id -u` 是 `0`（root）就直接跑安装脚本。
-- 不是 root 但打印了 `sudo-ok`：命令前加 `sudo`。
-- 不是 root 且 `sudo -n` 要密码：安装那一步改用 `terminal open`（见第 3 步）。
+- `id -u` 是 `0`（root），或打印了 `sudo-ok`：第 3 步的命令直接 `run`（它自己判断要不要 `sudo -n`）。
+- 不是 root 且 `sudo -n` 要密码：安装那一步改用 `--interactive` 版在 `terminal open` 里跑（见第 3 步）。
 
 ### 2. 问用户三件事（不要自己定）
 
@@ -63,19 +62,27 @@ uTerm，再测通。
 
 ### 3. 安装
 
+安装脚本放在哪由这个 uTerm 构建决定，**不要自己找下载地址**，用 `relay install-command` 拼出那一行命令
+（`--` 之后原样是安装脚本的参数，会逐个加引号）：
+
 ```sh
-"$UTERMCTL" run -H <主机> --timeout 180 -c \
-  'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sh -s -- install --public-host <地址> --name "<名字>"'
+CMD=$("$UTERMCTL" relay install-command -- install --public-host <地址> --name "<名字>")
+"$UTERMCTL" run -H <主机> --timeout 180 -c "$CMD"
 ```
 
 （用户指定了端口才加 `--port <端口>`。）
 
-非 root 时在 `sh` 前加 `sudo`：`… | sudo sh -s -- install …`。需要 sudo 密码时：
+命令自己判断：root 直接跑，其他用户用 `sudo -n`。输出里有 `a password is required`（sudo 要密码）时，
+改用 `--interactive` 版在终端窗口里跑：
 
 ```sh
-"$UTERMCTL" terminal open -H <主机> -- sh -c 'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --public-host <地址>'
+CMD=$("$UTERMCTL" relay install-command --interactive -- install --public-host <地址>)
+"$UTERMCTL" terminal open -H <主机> -- sh -c "$CMD"
 "$UTERMCTL" terminal wait -t <返回的会话 id>
 ```
+
+`relay install-command` 报 `relay_release_unavailable`：这个 uTerm 构建没有配置中继的发布地址（自己从源码
+编的 uTerm 默认如此）。告诉用户按 uTerm 仓库的 `relay/README.md` 从源码编译部署，停在这里。
 
 告诉用户去那个窗口里输密码。
 
@@ -148,11 +155,11 @@ uTerm 从这台 Mac 连一遍中继，逐项报告：
 中继有新版本时 uTerm 会提醒用户，设置页里也能一键更新。用户让你更新时：
 
 ```sh
-"$UTERMCTL" run -H <主机> --timeout 180 -c \
-  'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sh -s -- update'
+CMD=$("$UTERMCTL" relay install-command -- update)
+"$UTERMCTL" run -H <主机> --timeout 180 -c "$CMD"
 ```
 
-（非 root 同样加 `sudo`，要密码就走 `terminal open`。）输出 `previous=` / `version=` /
+（sudo 要密码就换 `--interactive` 版走 `terminal open`，同第 3 步。）输出 `previous=` / `version=` /
 `updated=yes|no`。新版本起不来时脚本会**自动换回旧版本**并报错。更新会重启中继，
 正在经中继的连接会断几秒。完了跑一次 `relay check`，确认 `serverVersion` 是新版本。
 

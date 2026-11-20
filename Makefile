@@ -216,9 +216,8 @@ test-weak-network: engine holder
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
 
-# 中继发布：交叉编译两个架构 + SHA256SUMS + latest.json，传到 OSS 的 $(OSS_PREFIX)/relay/。
-# 版本取 relay/cmd/uterm-relay/main.go 的 version。先传二进制、最后传 latest.json，
-# 免得 uTerm 和安装脚本看到新版本号时文件还没上去。
+# 中继打包：交叉编译两个架构 + SHA256SUMS + latest.json + install.sh，放进 build/relay/，整个目录传到任意静态
+# 下载地址即可（UTERM_RELAY_BASE_URL 指向它）。版本取 relay/cmd/uterm-relay/main.go 的 version。
 RELAY_VERSION := $(shell sed -n 's/^const version = "\(.*\)"/\1/p' relay/cmd/uterm-relay/main.go)
 RELAY_DIST := build/relay
 
@@ -232,7 +231,9 @@ relay-dist:
 	done
 	cd "$(RELAY_DIST)/$(RELAY_VERSION)" && shasum -a 256 uterm-relay-linux-* > SHA256SUMS
 	printf '{ "version": "%s" }\n' "$(RELAY_VERSION)" > "$(RELAY_DIST)/latest.json"
-	cp relay/scripts/install.sh "$(RELAY_DIST)/install.sh"
+	@# 发布地址写进安装脚本（UTERM_RELAY_BASE_URL：放 latest.json 与各版本二进制的目录）；不给就留占位，脚本运行时要求设环境变量。
+	sed 's#@RELAY_BASE_URL@#$(UTERM_RELAY_BASE_URL)#' relay/scripts/install.sh > "$(RELAY_DIST)/install.sh"
+	@[ -n "$(UTERM_RELAY_BASE_URL)" ] || printf '%s\n' "note: UTERM_RELAY_BASE_URL is empty; install.sh will ask for it at run time."
 	@printf '%s\n' "Built uterm-relay $(RELAY_VERSION) in $(RELAY_DIST)"
 
 test-mobile-fast: engine holder

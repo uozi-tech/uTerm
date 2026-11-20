@@ -187,6 +187,26 @@ final class ControlRelayHandlerTests: XCTestCase {
         XCTAssertEqual(response.code, ControlErrorCode.operation_failed.rawValue)
     }
 
+    // MARK: - relay-install-command
+
+    func testInstallCommandQuotesEveryArgument() async throws {
+        try XCTSkipUnless(RemoteRelayRelease.isAvailable, "这个构建没有配置中继发布地址")
+        let script = try XCTUnwrap(RemoteRelayRelease.installScriptURL).absoluteString
+        var request = ControlRequest(action: .relayInstallCommand)
+        request.args = ["install", "--public-host", "relay.example.com", "--name", "家里 it's"]
+        let response = await handler.handle(request)
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertTrue(response.message.contains("curl -fsSL \(script) | $S sh -s -- "), response.message)
+        XCTAssertTrue(response.message.hasSuffix("'install' '--public-host' 'relay.example.com' '--name' '家里 it'\\''s'"),
+                      response.message)
+
+        request.args = ["update"]
+        request.mode = "interactive"
+        let interactive = await handler.handle(request)
+        XCTAssertEqual(interactive.message, "curl -fsSL \(script) | sudo sh -s -- 'update'")
+        XCTAssertFalse(ControlAction.relayInstallCommand.requiresMutation, "只拼命令，不动任何东西")
+    }
+
     // MARK: - relay-check
 
     func testCheckWithoutAConfigSaysSo() async {

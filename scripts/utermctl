@@ -374,7 +374,7 @@ def build_parser():
     p.add_argument("--wait", type=float, help="最多等几秒，默认 90，封顶 1800；没跑完回 state=running")
 
     # --- relay ---
-    relay = sub.add_parser("relay", parents=[shared], help="自建中继：导入配置、测试连通")
+    relay = sub.add_parser("relay", parents=[shared], help="自建中继：安装命令、导入配置、测试连通")
     relay_sub = relay.add_subparsers(dest="relay_action", required=True)
     p = relay_sub.add_parser("import", parents=[shared],
                              help="让 uTerm 经 SFTP 读主机上安装脚本写的设备配置并存进钥匙串（密钥不经过本客户端）")
@@ -383,6 +383,11 @@ def build_parser():
     p.add_argument("--replace", action="store_true", help="已经导入了另一台中继时换成这一台")
     relay_sub.add_parser("check", parents=[shared],
                          help="从这台 Mac 测已导入的中继：TCP、成员认证、UDP，附带版本")
+    p = relay_sub.add_parser("install-command", parents=[shared],
+                             help="打印在服务器上安装 / 更新中继的那一行命令（安装脚本放在哪由这个 uTerm 构建决定）")
+    p.add_argument("--interactive", action="store_true",
+                   help="给要输 sudo 密码的终端用（curl … | sudo sh）；缺省是 root 直接跑、其他用户 sudo -n 的版本")
+    p.add_argument("argv", nargs="*", help="-- 之后是安装脚本的参数，缺省 install；例：-- update")
 
     p = add("disconnect", "松开命令行连接池对主机的持有")
     p.add_argument("--host", "-H", help="不给就释放全部")
@@ -700,6 +705,14 @@ def make_request(args):
         request["enter"] = True
     if action == "relay-import" and getattr(args, "replace", False):
         request["force"] = True
+    if action == "relay-install-command":
+        argv = list(getattr(args, "argv", []) or [])
+        if argv[:1] == ["--"]:
+            argv = argv[1:]
+        if argv:
+            request["args"] = argv
+        if getattr(args, "interactive", False):
+            request["mode"] = "interactive"
 
     return request
 
@@ -2220,6 +2233,10 @@ def render(response, fmt, args):
             return run_output(response) + "\n-- " + (response.get("message") or "")
         return as_json(response)
     action = resolved_action(args)
+
+    # 结果就是一行 shell 命令：原样打印，好直接交给 `run -H <主机> -- …` / `terminal open`。
+    if action == "relay-install-command":
+        return response.get("message") or ""
 
     if fmt == "json":
         return as_json(response)

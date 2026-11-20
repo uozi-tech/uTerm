@@ -39,27 +39,40 @@ final class RemoteRelayReleaseTests: XCTestCase {
                        ["previous": "1.0.0", "version": "1.1.0", "updated": "yes"])
     }
 
-    func testUpdateCommandUsesSudoOnlyForNonRoot() {
-        let command = RemoteRelayRelease.updateCommand
+    func testUpdateCommandUsesSudoOnlyForNonRoot() throws {
+        try XCTSkipUnless(RemoteRelayRelease.isAvailable, "这个构建没有配置中继发布地址")
+        let command = try XCTUnwrap(RemoteRelayRelease.updateCommand)
         XCTAssertTrue(command.contains("sudo -n"))
-        XCTAssertTrue(command.contains(RemoteRelayRelease.installScriptURL.absoluteString))
+        XCTAssertTrue(command.contains(try XCTUnwrap(RemoteRelayRelease.installScriptURL).absoluteString))
         XCTAssertTrue(command.hasSuffix("sh -s -- update"))
         XCTAssertTrue(RemoteRelayRelease.needsPassword("sudo: a password is required"))
         XCTAssertFalse(RemoteRelayRelease.needsPassword("version=1.1.0"))
     }
 
+    /// 发布地址是构建配置：空、没展开的 `$(…)`、不是 http(s) 都当没配。
+    func testReleaseURLComesFromBuildConfiguration() {
+        let key = RemoteRelayRelease.infoKey
+        XCTAssertNil(RemoteRelayRelease.configuredBaseURL(nil))
+        XCTAssertNil(RemoteRelayRelease.configuredBaseURL([key: ""]))
+        XCTAssertNil(RemoteRelayRelease.configuredBaseURL([key: "  "]))
+        XCTAssertNil(RemoteRelayRelease.configuredBaseURL([key: "$(UTERM_RELAY_RELEASE_URL)"]))
+        XCTAssertNil(RemoteRelayRelease.configuredBaseURL([key: "file:///tmp/relay"]))
+        XCTAssertEqual(RemoteRelayRelease.configuredBaseURL([key: "https://dl.example.com/relay"])?.absoluteString,
+                       "https://dl.example.com/relay")
+    }
+
     // MARK: - 提示词
 
     func testDeployPromptNamesTheHostAndTheRules() {
-        let prompt = RemoteRelayAgentPrompt.deploy(hostName: "relay-host")
-        XCTAssertTrue(prompt.contains("「relay-host」"))
+        let prompt = RemoteRelayAgentPrompt.deploy(hostName: "relay-sz")
+        XCTAssertTrue(prompt.contains("「relay-sz」"))
         XCTAssertTrue(prompt.contains("references/relay.md"))
         XCTAssertTrue(prompt.contains("relay import"))
         XCTAssertTrue(prompt.contains("relay check"))
         XCTAssertTrue(prompt.contains("随机"))
         XCTAssertTrue(prompt.contains("不要运行 uterm-relay config"))
         XCTAssertTrue(RemoteRelayAgentPrompt.deploy(hostName: nil).contains("问我装在哪台"))
-        XCTAssertTrue(RemoteRelayAgentPrompt.update(hostName: "relay-host").contains("「relay-host」"))
+        XCTAssertTrue(RemoteRelayAgentPrompt.update(hostName: "relay-sz").contains("「relay-sz」"))
     }
 
     // MARK: - 管理主机

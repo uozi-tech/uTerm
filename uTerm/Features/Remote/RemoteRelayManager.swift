@@ -36,6 +36,10 @@ final class RemoteRelayManager {
     func update(_ config: RemoteRelayConfig, on profile: ServerProfile, container: ModelContainer,
                 registry: TerminalSessionRegistry?, updates: RemoteRelayUpdateMonitor) async {
         guard updatePhase != .running else { return }
+        guard let command = RemoteRelayRelease.updateCommand else {
+            updatePhase = .failed(String(localized: "这个构建没有配置中继的发布地址，不能一键更新"))
+            return
+        }
         updatePhase = .running
         let executor: SSHCommandExecutor
         do {
@@ -45,7 +49,7 @@ final class RemoteRelayManager {
             return
         }
         let limits = SupervisedExec.interactiveLimits(for: executor)
-        switch await SupervisedExec.run(RemoteRelayRelease.updateCommand, on: executor, limits: limits) {
+        switch await SupervisedExec.run(command, on: executor, limits: limits) {
         case .completed(let result):
             if result.exitCode == 0 {
                 let summary = RemoteRelayRelease.summary(result.output)
@@ -69,15 +73,16 @@ final class RemoteRelayManager {
     }
 
     private func openTerminal(profile: ServerProfile, registry: TerminalSessionRegistry?) {
+        guard let interactive = RemoteRelayRelease.interactiveUpdateCommand else { return }
         guard let registry, let open = registry.openTerminalWindow, let windowID = open(profile.id) else {
-            updatePhase = .failed(String(localized: "这台主机的 sudo 需要密码，在终端里运行：\n\(RemoteRelayRelease.interactiveUpdateCommand)"))
+            updatePhase = .failed(String(localized: "这台主机的 sudo 需要密码，在终端里运行：\n\(interactive)"))
             return
         }
         updatePhase = .openedTerminal
         Task {
             guard let entry = await registry.waitForSession(inWindow: windowID, timeout: .seconds(20)),
                   let session = registry.session(for: entry.id) else { return }
-            session.startTrackedRun(RemoteRelayRelease.interactiveUpdateCommand)
+            session.startTrackedRun(interactive)
         }
     }
 

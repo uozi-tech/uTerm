@@ -137,6 +137,7 @@ DEFAULT_PAYLOADS = {
                                         "serverVersion": "1.1.0", "onlineHosts": 1,
                                         "problems": ["UDP 47310 没有回应"]}},
                     "message": "TCP 通 · 认证 通 · UDP 不通"},
+    "relay-install-command": {"message": "curl -fsSL https://dl.example.com/relay/install.sh | sudo sh -s -- 'update'"},
 }
 
 
@@ -830,6 +831,14 @@ def exercise(server, root, rejecting):
     equal(last(server)["path"], "/root/c.json", "relay import --path")
     run_cli(server, ["relay", "check"])
     equal(last(server)["action"], "relay-check", "relay check")
+    proc = run_cli(server, ["relay", "install-command", "--interactive", "--", "update"])
+    equal(last(server)["action"], "relay-install-command", "relay install-command")
+    equal(last(server)["args"], ["update"], "relay install-command 的参数")
+    equal(last(server)["mode"], "interactive", "relay install-command --interactive")
+    equal(proc.stdout.strip(), "curl -fsSL https://dl.example.com/relay/install.sh | sudo sh -s -- 'update'",
+          "relay install-command 原样打印命令（不是 JSON）")
+    run_cli(server, ["relay", "install-command"])
+    check("args" not in last(server) and "mode" not in last(server), "relay install-command 缺省不带参数（服务端按 install）")
 
     print("格式化")
     proc = run_cli(server, ["hosts", "--format", "table"])

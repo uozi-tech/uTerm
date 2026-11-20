@@ -29,6 +29,7 @@ extension RemoteHostServer: ControlRelayManaging {
 extension ControlHandler {
 
     func handleRelay(_ request: ControlRequest, _ deps: Dependencies) async throws -> ControlResponse {
+        if request.action == .relayInstallCommand { return try Self.relayInstallCommand(request) }
         guard let relay = deps.relay else {
             throw ControlFailure(code: .app_not_ready, message: "远程控制服务还没有启动")
         }
@@ -111,6 +112,22 @@ extension ControlHandler {
         default:
             return "读取 \(host):\(path) 失败：\(detail)"
         }
+    }
+
+    // MARK: - relay-install-command
+
+    /// 不碰远控服务，只把参数逐个加引号拼到安装脚本那一行后面。
+    static func relayInstallCommand(_ request: ControlRequest) throws -> ControlResponse {
+        let arguments = (request.args ?? ["install"]).map(RemotePath.shellQuote).joined(separator: " ")
+        let command = request.mode == "interactive"
+            ? RemoteRelayRelease.interactiveCommand(arguments)
+            : RemoteRelayRelease.remoteCommand(arguments)
+        guard let command else {
+            throw ControlFailure(code: .relay_release_unavailable,
+                                 message: "这个 uTerm 构建没有配置中继的发布地址，不能一键安装。"
+                                     + "按 uTerm 仓库的 relay/README.md 从源码编译部署 uterm-relay。")
+        }
+        return .success(id: request.id, message: command)
     }
 
     // MARK: - relay-check

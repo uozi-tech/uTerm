@@ -1,7 +1,10 @@
 #!/bin/sh
 # Install, update and inspect uterm-relay on a Linux server with systemd.
 #
-#   curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --public-host relay.example.com
+#   curl -fsSL <发布地址>/install.sh | sudo sh -s -- install --public-host relay.example.com
+#
+# <发布地址> 是 `make relay-dist UTERM_RELAY_BASE_URL=<地址>` 打包时写进来的（放 latest.json、各版本二进制的目录），
+# 也可以运行时用环境变量 UTERM_RELAY_BASE_URL 覆盖。
 #
 # Subcommands:
 #   install --public-host H [--port P] [--name N] [--open-firewall] [--version V]
@@ -16,7 +19,7 @@
 # Every result is a `key=value` line on stdout; problems go to stderr.
 set -eu
 
-BASE_URL=${UTERM_RELAY_BASE_URL:-https://downloads.example.com/uTerm/relay}
+BASE_URL=${UTERM_RELAY_BASE_URL:-@RELAY_BASE_URL@}
 # Tests install into a scratch tree and run without root.
 ROOT=${UTERM_RELAY_ROOT:-}
 SERVICE=uterm-relay
@@ -31,6 +34,10 @@ die() {
 	echo "uterm-relay install: $*" >&2
 	exit 1
 }
+
+case $BASE_URL in
+	@*) die "这份安装脚本没有发布地址：设 UTERM_RELAY_BASE_URL=<放 latest.json 与二进制的地址> 再跑，或从源码编译（见 uTerm 仓库 relay/README.md）" ;;
+esac
 
 say() { echo "$1=$2"; }
 

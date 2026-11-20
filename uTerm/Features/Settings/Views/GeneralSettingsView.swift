@@ -14,7 +14,8 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsPageHeader(title: "通用", subtitle: String(localized: "启动与更新"))
+            SettingsPageHeader(title: "通用",
+                               subtitle: appUpdater.isAvailable ? String(localized: "启动与更新") : String(localized: "启动"))
 
             SettingsGroup(title: "启动") {
                 SettingsRow(label: "启动时",
@@ -29,21 +30,28 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            SettingsGroup(title: "更新") {
-                SettingsRow(label: "自动检查更新") {
-                    UDToggle(Binding(
-                        get: { appUpdater.automaticallyChecksForUpdates },
-                        set: { appUpdater.automaticallyChecksForUpdates = $0 }
-                    ))
+            if appUpdater.isAvailable {
+                updateGroup
+            }
+        }
+    }
+
+    /// 没配更新源的构建（公开仓库默认如此）没有这一组。
+    private var updateGroup: some View {
+        SettingsGroup(title: "更新") {
+            SettingsRow(label: "自动检查更新") {
+                UDToggle(Binding(
+                    get: { appUpdater.automaticallyChecksForUpdates },
+                    set: { appUpdater.automaticallyChecksForUpdates = $0 }
+                ))
+            }
+            SettingsListRow(icon: "arrow.down.circle", tint: UD.accent,
+                            title: "uTerm \(AppUpdater.currentVersionString)",
+                            subtitle: lastCheckLine) {
+                UDButton(title: "检查更新", style: .secondary) {
+                    appUpdater.checkForUpdates()
                 }
-                SettingsListRow(icon: "arrow.down.circle", tint: UD.accent,
-                                title: "uTerm \(AppUpdater.currentVersionString)",
-                                subtitle: lastCheckLine) {
-                    UDButton(title: "检查更新", style: .secondary) {
-                        appUpdater.checkForUpdates()
-                    }
-                    .disabled(!appUpdater.canCheckForUpdates)
-                }
+                .disabled(!appUpdater.canCheckForUpdates)
             }
         }
     }

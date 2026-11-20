@@ -16,10 +16,15 @@ import Sparkle
 @MainActor
 @Observable
 final class AppUpdater {
-    private let controller: SPUStandardUpdaterController
+    /// 没配更新源的构建（公开仓库默认如此）没有它：不启动 Sparkle，设置页与菜单里的「检查更新」隐藏。
+    private let controller: SPUStandardUpdaterController?
     private let updaterDelegate = AppUpdaterDelegate()
 
     init() {
+        guard Self.isConfigured(Bundle.main.infoDictionary) else {
+            controller = nil
+            return
+        }
         // startingUpdater: true → Sparkle init 后立即启动 auto-check timer
         // delegate 只用来知道「要重启装更新了」：这时退出不用问用户本机终端怎么办。
         self.controller = SPUStandardUpdaterController(
@@ -29,26 +34,41 @@ final class AppUpdater {
         )
     }
 
+    /// 这个构建有没有应用内更新。
+    var isAvailable: Bool { controller != nil }
+
+    /// 更新源与公钥都配了才算（Info.plist 的 `SUFeedURL` / `SUPublicEDKey`，由构建设置
+    /// `UTERM_SU_FEED_URL` / `UTERM_SU_PUBLIC_ED_KEY` 注入）。少一个 Sparkle 就会报错或拒绝装更新。
+    nonisolated static func isConfigured(_ info: [String: Any]?) -> Bool {
+        func value(_ key: String) -> String? {
+            guard let text = (info?[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty, !text.contains("$(") else { return nil }
+            return text
+        }
+        guard let feed = value("SUFeedURL"), URL(string: feed)?.scheme == "https" else { return false }
+        return value("SUPublicEDKey") != nil
+    }
+
     /// Bind 到 SettingsView 的 Toggle。Sparkle 持久化此值到 UserDefaults
     /// (key: `SUEnableAutomaticChecks`)。
     var automaticallyChecksForUpdates: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
-        set { controller.updater.automaticallyChecksForUpdates = newValue }
+        get { controller?.updater.automaticallyChecksForUpdates ?? false }
+        set { controller?.updater.automaticallyChecksForUpdates = newValue }
     }
 
     /// 上次成功 check 的时间；nil = 从未 check 过（首次启动）。
     var lastUpdateCheckDate: Date? {
-        controller.updater.lastUpdateCheckDate
+        controller?.updater.lastUpdateCheckDate
     }
 
     /// `false` 当 Sparkle 当前正在进行 check（防 double-click）。
     var canCheckForUpdates: Bool {
-        controller.updater.canCheckForUpdates
+        controller?.updater.canCheckForUpdates ?? false
     }
 
     /// 触发用户手动 check。Sparkle 默认 UI driver 弹窗向用户报结果。
     func checkForUpdates() {
-        controller.checkForUpdates(nil)
+        controller?.checkForUpdates(nil)
     }
 
     /// 当前 app 版本字符串，与 AboutSettingsView 同模式（spec 01）。

@@ -1,11 +1,25 @@
 import Foundation
 
-/// 中继的发布物：OSS 上的安装脚本、各版本二进制和 `latest.json`（`make relay-publish` 上传，
-/// 脚本源码在 `relay/scripts/install.sh`）。部署和更新都只跑这一个脚本。
+/// 中继的发布物：安装脚本、各版本二进制和 `latest.json`（脚本源码在 `relay/scripts/install.sh`）。
+/// 部署和更新都只跑这一个脚本。
+///
+/// 放在哪里是构建配置：Info.plist 的 `UTermRelayReleaseURL`（构建设置 `UTERM_RELAY_RELEASE_URL`）。
+/// 没配的构建（公开仓库默认如此）没有一键部署 / 更新与更新提醒，中继按 `relay/README.md` 从源码部署。
 nonisolated enum RemoteRelayRelease {
-    static let baseURL = URL(string: "https://downloads.example.com/uTerm/relay")!
-    static var installScriptURL: URL { baseURL.appending(path: "install.sh") }
-    static var latestURL: URL { baseURL.appending(path: "latest.json") }
+    static let infoKey = "UTermRelayReleaseURL"
+    static let baseURL: URL? = configuredBaseURL(Bundle.main.infoDictionary)
+    static var isAvailable: Bool { baseURL != nil }
+    static var installScriptURL: URL? { baseURL?.appending(path: "install.sh") }
+    static var latestURL: URL? { baseURL?.appending(path: "latest.json") }
+
+    /// 没配（空串，或构建设置没展开留下的 `$(…)`）就是 nil。
+    static func configuredBaseURL(_ info: [String: Any]?) -> URL? {
+        guard let text = (info?[infoKey] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty, !text.contains("$("),
+              let url = URL(string: text), let scheme = url.scheme, scheme == "https" || scheme == "http"
+        else { return nil }
+        return url
+    }
 
     /// 安装脚本把设备配置写在 SSH 登录用户主目录下的这里（0600）。相对路径：SFTP 从主目录起算。
     static let clientConfigPath = ".config/uterm-relay/client.json"
@@ -14,17 +28,20 @@ nonisolated enum RemoteRelayRelease {
 
     /// 在服务器上跑安装脚本的一行命令。root 直接跑，其他用户走 `sudo -n`：要密码时立刻失败，
     /// 由调用方改开终端让用户自己输（见 `needsPassword`）。
-    static func remoteCommand(_ arguments: String) -> String {
-        "if [ \"$(id -u)\" = 0 ]; then S=; else S='sudo -n'; fi; "
-            + "curl -fsSL \(installScriptURL.absoluteString) | $S sh -s -- \(arguments)"
+    static func remoteCommand(_ arguments: String) -> String? {
+        guard let script = installScriptURL else { return nil }
+        return "if [ \"$(id -u)\" = 0 ]; then S=; else S='sudo -n'; fi; "
+            + "curl -fsSL \(script.absoluteString) | $S sh -s -- \(arguments)"
     }
 
-    static var updateCommand: String { remoteCommand("update") }
+    static var updateCommand: String? { remoteCommand("update") }
 
     /// 开在终端里、让用户输 sudo 密码的版本。
-    static var interactiveUpdateCommand: String {
-        "curl -fsSL \(installScriptURL.absoluteString) | sudo sh -s -- update"
+    static func interactiveCommand(_ arguments: String) -> String? {
+        installScriptURL.map { "curl -fsSL \($0.absoluteString) | sudo sh -s -- \(arguments)" }
     }
+
+    static var interactiveUpdateCommand: String? { interactiveCommand("update") }
 
     /// `sudo -n` 因为要密码而拒绝。
     static func needsPassword(_ output: String) -> Bool {
@@ -53,8 +70,9 @@ nonisolated enum RemoteRelayRelease {
         return version
     }
 
-    /// 取 OSS 上的最新版本号。
+    /// 取发布处的最新版本号。没配发布地址时直接失败（更新提醒因此不出现）。
     static func fetchLatestVersion(session: URLSession = .shared) async throws -> String {
+        guard let latestURL else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: latestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         request.httpMethod = "GET"
         let (data, response) = try await session.data(for: request)

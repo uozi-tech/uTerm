@@ -35,7 +35,9 @@ struct AppInfoCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             AboutMenuButton()
-            CheckForUpdatesMenuButton(appUpdater: appUpdater)
+            if appUpdater.isAvailable {
+                CheckForUpdatesMenuButton(appUpdater: appUpdater)
+            }
             PermissionGuideMenuButton()
         }
     }

@@ -15,15 +15,19 @@
 Linux + systemd，amd64 或 arm64。
 
 ```sh
-curl -fsSL https://downloads.example.com/uTerm/relay/install.sh \
+curl -fsSL <发布地址>/install.sh \
   | sudo sh -s -- install --public-host relay.example.com [--port P] [--name 家里] [--open-firewall]
 ```
+
+`<发布地址>` 是放安装脚本、`latest.json` 与各版本二进制的地方（见下面「发布」）。uTerm 的正式版带着自己的
+发布地址，`utermctl relay install-command -- install --public-host …` 会打印出完整的这一行；自己从源码编的
+uTerm 没有发布地址，按下面「发布」自建一个，或者跳过脚本直接手动运行。
 
 不给 `--port` 时脚本在 1000–65535 里随机挑一个空闲端口（输出的 `port=`）：每台中继各用各的端口，扫固定端口找不到它。云服务器的安全组要手动放行这个端口的 **TCP 和 UDP**。
 
 中继对认证之前的连接一律不回话：魔数之后只回 32 字节随机数，任何不对（版本、签名、格式）都直接断开，不带名字、版本号或失败原因，扫端口认不出它。
 
-脚本从 OSS 下载对应架构的二进制、按 `SHA256SUMS` 校验，装到 `/usr/local/bin/uterm-relay`，写 `/etc/uterm-relay/relay.env` 和 `uterm-relay.service`（DynamicUser，数据在 `/var/lib/uterm-relay`）。设备配置写到运行 sudo 的那个用户的 `~/.config/uterm-relay/client.json`（0600），然后在 uTerm 里导入：
+脚本从发布地址下载对应架构的二进制、按 `SHA256SUMS` 校验，装到 `/usr/local/bin/uterm-relay`，写 `/etc/uterm-relay/relay.env` 和 `uterm-relay.service`（DynamicUser，数据在 `/var/lib/uterm-relay`）。设备配置写到运行 sudo 的那个用户的 `~/.config/uterm-relay/client.json`（0600），然后在 uTerm 里导入：
 
 ```sh
 utermctl relay import -H <这台主机>   # 或 设置 › 远程控制 › 导入配置，选这个文件
@@ -58,9 +62,14 @@ RELAY_DATA=/var/lib/uterm-relay RELAY_PUBLIC_HOST=relay.example.com ./uterm-rela
 
 `uterm-relay.json` 含成员私钥，等同口令：不要提交到仓库，也不要发到公开渠道。
 
-### 发布（维护者）
+### 发布
 
-`make relay-publish`：交叉编译两个架构、生成 `SHA256SUMS` 与 `latest.json`，连同 `install.sh` 传到 OSS 的 `uTerm/relay/`。版本取 `cmd/uterm-relay/main.go` 的 `version`；hello 里会带上它，uTerm 据此提醒更新。
+`make relay-dist UTERM_RELAY_BASE_URL=https://dl.example.com/uterm-relay`：交叉编译两个架构，生成 `SHA256SUMS`
+与 `latest.json`，连同写好发布地址的 `install.sh` 放进 `build/relay/`。把这个目录原样传到那个地址（任意静态
+下载服务都行）即可。版本取 `cmd/uterm-relay/main.go` 的 `version`；hello 里会带上它，uTerm 据此提醒更新。
+
+要让自己编的 uTerm 也能一键部署 / 更新、提醒新版本，在 `Config/Local.xcconfig` 里设同一个地址：
+`UTERM_RELAY_RELEASE_URL = https:/$()/dl.example.com/uterm-relay`（见 `Config/Local.xcconfig.example`）。
 
 ## 导入
 

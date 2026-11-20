@@ -73,6 +73,9 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     case relayImport = "relay-import"
     /// 从这台 Mac 测一遍已导入的中继：TCP、成员认证、UDP（STUN），附带版本。
     case relayCheck = "relay-check"
+    /// 拼出在服务器上安装 / 更新中继的那一行命令（`args` 是安装脚本的参数，`mode=interactive` 给要输 sudo
+    /// 密码的终端版）。安装脚本放在哪是构建配置，技能文档里不写死地址；没配时报 `relay_release_unavailable`。
+    case relayInstallCommand = "relay-install-command"
 
     // MARK: 收尾
 
@@ -144,7 +147,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
              .sftpLs, .sftpStat, .sftpCat, .sftpGet,
              .forwardList,
              .terminals, .terminalRead, .terminalWait,
-             .relayCheck,
+             .relayCheck, .relayInstallCommand,
              .disconnect,
              .macs, .macLs, .macStat, .macCat, .macGet, .macRead, .macGrep, .macFind, .macTree,
              .macHash, .macDu, .macDf, .macReadlink, .macXattr, .macWaitChange, .macShares:
@@ -177,7 +180,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
             return .forward
         case .terminals, .terminalRead, .terminalSend, .terminalOpen, .terminalWait:
             return .terminal
-        case .relayImport, .relayCheck:
+        case .relayImport, .relayCheck, .relayInstallCommand:
             return .relay
         case .ping, .disconnect:
             return .misc
@@ -1003,6 +1006,8 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     case relay_config_invalid
     /// `relay-check`：这台 Mac 连不上中继或认证没过。逐项结果在 `relay.check` 里。
     case relay_unreachable
+    /// `relay-install-command`：这个 uTerm 构建没有配置中继的发布地址（公开构建默认如此）。
+    case relay_release_unavailable
 
     // 服务端兜底
     case handler_timeout
