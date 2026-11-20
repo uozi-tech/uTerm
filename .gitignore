@@ -1,4 +1,5 @@
-.superpowers/
+# 内部资料（真实地址、发版配置；将来是单独的私有仓库），永不进公开仓库
+/internal/
 .claude/worktrees/
 # typo guard for .claude/worktrees/ — earlier runs leaked into .claire/
 .claire/
