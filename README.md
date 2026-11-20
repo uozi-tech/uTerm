@@ -68,6 +68,7 @@ cd relay && GOWORK=off go test -race ./...   # 自建中继
 
 见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。合并 PR 之前每位贡献者要签一次 [CLA](CLA.md)（PR 里自动检查）。
 安全问题请按 [`SECURITY.md`](SECURITY.md) 私下报告。
+隐私政策见 [`PRIVACY.md`](PRIVACY.md)：没有账号、不收集统计数据，数据在你自己的设备与 iCloud 里。
 
 ## 许可证
 
