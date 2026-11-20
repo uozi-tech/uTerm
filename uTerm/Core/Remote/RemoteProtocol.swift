@@ -48,7 +48,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.siblingRevoke, RemoteFeature.desktopWindows,
                                           RemoteFeature.desktopRegion, RemoteFeature.desktopPasteFiles,
                                           RemoteFeature.desktopWindowFront, RemoteFeature.desktopWindowRefit,
-                                          RemoteFeature.desktopWindowInput]
+                                          RemoteFeature.desktopWindowInput, RemoteFeature.desktopAuthPrompt]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -158,6 +158,10 @@ nonisolated enum RemoteFeature {
     /// 只看一个窗口时输入能直接投给窗口所在的进程（不动 Mac 上的指针）：开流请求里的 `windowIndependentInput` 生效。
     /// 老 Mac 不认这个键（照旧走全局输入通道），主控端据此决定显不显示那个开关。
     static let desktopWindowInput = "desktop-window-input"
+    /// 远程桌面里过 Mac 上的系统验证框（Touch ID / 密码）：Mac 在 `desktopScreenState` 里带 `authPrompt`、
+    /// 认得 `desktopAuthPrompt`；主控端认得 `authPrompt` 与 `desktopAuthPromptResult`。老 Mac 收到
+    /// `desktopAuthPrompt` 会断开整条连接，所以主控端只对声明了的 Mac 发；Mac 只给声明了的主控端报框。
+    static let desktopAuthPrompt = "desktop-auth-prompt"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -324,6 +328,11 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopPasteFile = 58
         /// 主控端 → Mac：正在看的这个窗口按新尺寸重调（负载是 `RemoteDesktopFit`，点），不停流。
         case desktopWindowRefit = 59
+        /// 主控端 → Mac：回应屏上的系统验证框（桌面通道）。负载 = `RemoteDesktopAuthPromptRequest`（JSON）。
+        /// 只发给 `features` 带 `desktop-auth-prompt` 的 Mac。
+        case desktopAuthPrompt = 60
+        /// Mac → 主控端：回应验证框的结果（桌面通道）。负载 = `RemoteDesktopAuthPromptResult`（JSON）。
+        case desktopAuthPromptResult = 61
     }
 
     var kind: Kind

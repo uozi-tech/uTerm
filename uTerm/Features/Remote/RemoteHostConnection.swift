@@ -78,6 +78,13 @@ final class RemoteHostConnection {
     private var remotelyUnlocked = false
     /// 正在执行解锁（按键序列 + 轮询）：同时来的第二个请求直接拒掉，免得两串按键交错。
     private var unlockInFlight = false
+    /// 对端认得屏上验证框的报告与回应（`desktop-auth-prompt`）。
+    private var peerSupportsAuthPrompt = false
+    /// 定时看屏上有没有验证框（开着桌面流、对端认得时才挂）与上次报出去的框。
+    private var authPromptWatch: Task<Void, Never>?
+    private var lastAuthPrompt: RemoteDesktopAuthPrompt?
+    /// 正在回应验证框（切前台、打字、等结果）：同时来的第二个请求直接拒掉。
+    private var authPromptInFlight = false
     /// 光标形状的轮询（开流请求要了 `cursorImages` 才挂）与上次发出的形状。
     private var cursorShapeTimer: Timer?
     private var lastCursorSignature: Int?
@@ -151,7 +158,7 @@ final class RemoteHostConnection {
     private func advertisedFeatures() -> [String] {
         var features = server.localFeatures
         if server.desktopEnvironment.makeScreenController == nil {
-            features.removeAll { $0 == RemoteFeature.desktopUnlock }
+            features.removeAll { $0 == RemoteFeature.desktopUnlock || $0 == RemoteFeature.desktopAuthPrompt }
         }
         return features
     }
@@ -180,6 +187,7 @@ final class RemoteHostConnection {
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
             peerSupportsUnlockOutcomes = peer.supports(RemoteFeature.desktopUnlockOutcomes)
+            peerSupportsAuthPrompt = peer.supports(RemoteFeature.desktopAuthPrompt)
             peerSupportsAudio = peer.supports(RemoteFeature.desktopAudio)
             peerSupportsAudioLossless = peer.supports(RemoteFeature.desktopAudioLossless)
             peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
@@ -426,6 +434,11 @@ final class RemoteHostConnection {
         case .desktopCurtain:
             guard let request = try? RemoteJSON.decode(RemoteDesktopCurtainRequest.self, from: message.payload) else { return }
             setCurtain(request.on, channel: message.channel)
+        case .desktopAuthPrompt:
+            guard var request = try? RemoteJSON.decode(RemoteDesktopAuthPromptRequest.self, from: message.payload) else { return }
+            let password = request.password
+            request.password = nil
+            handleAuthPrompt(request, password: password, channel: message.channel)
         case .desktopAudio:
             guard let request = try? RemoteJSON.decode(RemoteDesktopAudioRequest.self, from: message.payload) else { return }
             audioRequestGeneration += 1
@@ -443,7 +456,7 @@ final class RemoteHostConnection {
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
              .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult, .revokeSiblingResult,
-             .desktopWindowList, .desktopGeometry:
+             .desktopWindowList, .desktopGeometry, .desktopAuthPromptResult:
             break
         }
     }
@@ -1073,9 +1086,33 @@ extension RemoteHostConnection {
             }
             lockObservers.append(observer)
         }
+        if peerSupportsAuthPrompt { watchAuthPrompts(controller) }
     }
 
+    /// 验证框没有系统通知可听，每半秒看一次屏上的窗口表（几毫秒），框出现 / 消失 / 换了一个就推新状态。
+    private func watchAuthPrompts(_ controller: any RemoteScreenController) {
+        authPromptWatch?.cancel()
+        lastAuthPrompt = controller.currentAuthPrompt()
+        authPromptWatch = Task { [weak self, weak controller] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.authPromptPollInterval)
+                guard let self, let controller, !Task.isCancelled else { return }
+                let prompt = controller.isLocked ? nil : controller.currentAuthPrompt()
+                guard prompt != self.lastAuthPrompt else { continue }
+                if let prompt {
+                    AppLogger.info("远程桌面：Mac 上出现验证框（\(prompt.kind.rawValue)）", category: RemoteLog.category)
+                }
+                self.sendScreenState()
+            }
+        }
+    }
+
+    static let authPromptPollInterval: Duration = .milliseconds(500)
+
     private func teardownScreenControl() {
+        authPromptWatch?.cancel()
+        authPromptWatch = nil
+        lastAuthPrompt = nil
         for observer in lockObservers { DistributedNotificationCenter.default().removeObserver(observer) }
         lockObservers.removeAll()
         if let controller = server.screenController {
@@ -1093,9 +1130,14 @@ extension RemoteHostConnection {
     /// 把当前锁屏 / 帘幕状态推给手机。
     func sendScreenState() {
         guard peerSupportsUnlock, let channel = desktop?.channel, let controller = server.screenController else { return }
-        let state = RemoteDesktopScreenState(
+        var state = RemoteDesktopScreenState(
             locked: controller.isLocked, curtained: controller.isCurtained,
             unlockAvailable: server.desktopEnvironment.isUnlockEnabled() && (server.desktopViewer?.canControl ?? false))
+        if peerSupportsAuthPrompt {
+            // 锁屏上不会有这类框；即使有也先解锁。
+            state.authPrompt = state.locked ? nil : controller.currentAuthPrompt()
+            lastAuthPrompt = state.authPrompt
+        }
         link.send(RemoteMessage(.desktopScreenState, channel: channel, payload: RemoteJSON.encode(state)))
     }
 
@@ -1147,6 +1189,40 @@ extension RemoteHostConnection {
             }
             reply(Self.unlockOutcome(attempt, peerKnowsBlocked: peerSupportsUnlockOutcomes))
             sendScreenState()
+        }
+    }
+
+    /// 回应屏上的验证框。和远程解锁同一道门：开了「允许远程解锁」、是正在看屏幕且能控制的那一路。
+    fileprivate func handleAuthPrompt(_ request: RemoteDesktopAuthPromptRequest, password: String?, channel: UInt32) {
+        func reply(_ outcome: RemoteDesktopAuthPromptResult.Outcome) {
+            link.send(RemoteMessage(.desktopAuthPromptResult, channel: channel, payload: RemoteJSON.encode(
+                RemoteDesktopAuthPromptResult(requestID: request.requestID, outcome: outcome))))
+        }
+        guard peerSupportsAuthPrompt, canUnlockRemotely(channel: channel), !authPromptInFlight, !unlockInFlight,
+              let controller = server.screenController else { return reply(.notAllowed) }
+        guard !controller.isLocked else { return reply(.gone) }
+        if request.action == .fill, password?.isEmpty ?? true { return reply(.notFocused) }
+        AppLogger.info("远程桌面：\(self.peerName) 回应 Mac 上的验证框（\(request.action.rawValue)）",
+                       category: RemoteLog.category)
+        authPromptInFlight = true
+        Task {
+            let attempt = await controller.answerAuthPrompt(id: request.promptID, action: request.action,
+                                                            password: password)
+            authPromptInFlight = false
+            AppLogger.info("远程桌面：验证框回应结果 \(String(describing: attempt))", category: RemoteLog.category)
+            guard !isClosed, desktop?.channel == channel else { return }
+            reply(Self.authPromptOutcome(attempt))
+            sendScreenState()
+        }
+    }
+
+    nonisolated static func authPromptOutcome(_ attempt: RemoteAuthPromptAttempt) -> RemoteDesktopAuthPromptResult.Outcome {
+        switch attempt {
+        case .accepted: .accepted
+        case .rejected: .rejected
+        case .cancelled: .cancelled
+        case .gone: .gone
+        case .notFocused: .notFocused
         }
     }
 

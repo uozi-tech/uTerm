@@ -66,7 +66,7 @@ struct RemoteCapabilitiesGroup: View {
                 }
                 .settingsNested()
                 SettingsRow(label: "允许远程解锁",
-                            hint: "Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠和扬声器）") {
+                            hint: "Mac 锁屏时，配对过的设备能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠和扬声器）；屏上弹出要触控 ID 或密码的验证框时，也能替它填入登录密码") {
                     UDToggle(Binding(get: { settings.isDesktopUnlockEnabled },
                                      set: { settings.isDesktopUnlockEnabled = $0 }))
                 }

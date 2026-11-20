@@ -63,6 +63,8 @@ final class RemoteDesktopSession {
     private(set) var screen = RemoteDesktopScreenState(locked: false, curtained: false, unlockAvailable: false)
     /// 这台 Mac 支持远程解锁（能收到锁屏状态、能发解锁请求）。
     var supportsUnlock: Bool { client.supportsUnlock }
+    /// 这台 Mac 会报屏上的系统验证框、能代填密码或取消（`desktop-auth-prompt`）。
+    var supportsAuthPrompt: Bool { client.supportsAuthPrompt }
 
     /// 声音（调研 §17）。
     enum AudioState: Equatable {
@@ -83,6 +85,8 @@ final class RemoteDesktopSession {
     @ObservationIgnored private var audioPlaying = false
     nonisolated let audioReceiver: RemoteAudioReceiver
     @ObservationIgnored private var unlockWaiters: [UUID: CheckedContinuation<RemoteDesktopUnlockResult.Outcome, Never>] = [:]
+    @ObservationIgnored private var authPromptWaiters:
+        [UUID: CheckedContinuation<RemoteDesktopAuthPromptResult.Outcome, Never>] = [:]
 
     nonisolated let receiver: RemoteDesktopReceiver
     let client: RemoteMacClient
@@ -362,6 +366,14 @@ final class RemoteDesktopSession {
                 case .desktopUnlockResult:
                     guard let result = try? RemoteJSON.decode(RemoteDesktopUnlockResult.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.unlockResultArrived(result) } }
+                case .desktopAuthPromptResult:
+                    guard let result = try? RemoteJSON.decode(RemoteDesktopAuthPromptResult.self, from: message.payload)
+                    else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            self?.authPromptWaiters.removeValue(forKey: result.requestID)?.resume(returning: result.outcome)
+                        }
+                    }
                 case .desktopGeometry:
                     guard let update = try? RemoteJSON.decode(RemoteDesktopGeometryUpdate.self, from: message.payload) else { return }
                     DispatchQueue.main.async {
@@ -768,6 +780,26 @@ final class RemoteDesktopSession {
         guard let attachment, supportsUnlock else { return }
         let request = RemoteDesktopCurtainRequest(on: on)
         attachment.link.send(RemoteMessage(.desktopCurtain, channel: attachment.channel, payload: RemoteJSON.encode(request)))
+    }
+
+    /// 回应 Mac 屏上的系统验证框：`fill` 让 Mac 改用密码、填入登录密码并确认；`cancel` 取消那个框。
+    /// 密码来自本机（钥匙串或刚输入的），只经加密信道发一次。
+    func answerAuthPrompt(_ prompt: RemoteDesktopAuthPrompt, action: RemoteDesktopAuthPromptRequest.Action,
+                          password: String? = nil) async -> RemoteDesktopAuthPromptResult.Outcome {
+        guard let attachment, supportsAuthPrompt else { return .notAllowed }
+        let requestID = UUID()
+        let request = RemoteDesktopAuthPromptRequest(requestID: requestID, promptID: prompt.id, action: action,
+                                                     password: action == .fill ? password : nil)
+        attachment.link.send(RemoteMessage(.desktopAuthPrompt, channel: attachment.channel,
+                                           payload: RemoteJSON.encode(request)))
+        return await withCheckedContinuation { continuation in
+            authPromptWaiters[requestID] = continuation
+            // Mac 要切前台、改用密码、打字，再等框关掉（约 4 秒），留出链路余量；超时当失败处理。
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                self?.authPromptWaiters.removeValue(forKey: requestID)?.resume(returning: .timedOut)
+            }
+        }
     }
 
     private func unlockResultArrived(_ result: RemoteDesktopUnlockResult) {

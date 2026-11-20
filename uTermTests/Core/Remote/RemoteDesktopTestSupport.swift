@@ -923,4 +923,20 @@ final class FakeScreenController: RemoteScreenController {
 
     /// 触发「本机解除帘幕」出口（模拟坐在 Mac 前的人连按 Esc）。
     func fireLocalRelease() { onLocalCurtainRelease?() }
+
+    /// 屏上的验证框（nil = 没有）。
+    var authPrompt: RemoteDesktopAuthPrompt?
+    /// 下一次回应验证框的结果。
+    var authPromptAttempt: RemoteAuthPromptAttempt = .accepted
+    /// 收到的回应（动作、密码）。
+    private(set) var authPromptAnswers: [(id: UInt32, action: RemoteDesktopAuthPromptRequest.Action, password: String?)] = []
+
+    func currentAuthPrompt() -> RemoteDesktopAuthPrompt? { authPrompt }
+
+    func answerAuthPrompt(id: UInt32, action: RemoteDesktopAuthPromptRequest.Action,
+                          password: String?) async -> RemoteAuthPromptAttempt {
+        authPromptAnswers.append((id, action, password))
+        if authPromptAttempt == .accepted || authPromptAttempt == .cancelled { authPrompt = nil }
+        return authPromptAttempt
+    }
 }

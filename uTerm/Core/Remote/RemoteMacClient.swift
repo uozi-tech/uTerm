@@ -155,6 +155,8 @@ final class RemoteMacClient: Identifiable {
     var supportsDesktopWindowInput: Bool { macFeatures.contains(RemoteFeature.desktopWindowInput) }
     /// Mac 支持远程解锁 / 帘幕（会发 `desktopScreenState`、认得 `desktopUnlock`）。
     var supportsUnlock: Bool { macFeatures.contains(RemoteFeature.desktopUnlock) }
+    /// Mac 会报屏上的系统验证框、认得 `desktopAuthPrompt`（老 Mac 收到会断开整条连接）。
+    var supportsAuthPrompt: Bool { macFeatures.contains(RemoteFeature.desktopAuthPrompt) }
     /// Mac 认得 `desktopPause`：手机退到后台时能让它停止推流（老 Mac 收到会断开整条连接）。
     var supportsDesktopPause: Bool { macFeatures.contains(RemoteFeature.desktopPause) }
     /// Mac 能把声音传过来（认得 `desktopAudio`）。
@@ -699,7 +701,7 @@ final class RemoteMacClient: Identifiable {
                 table.sink(message.channel)?.onSnapshot?(piece.data, piece.isFirst, piece.isLast)
             }
         case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult,
-             .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame, .desktopGeometry:
+             .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame, .desktopGeometry, .desktopAuthPromptResult:
             table.sink(message.channel)?.onMessage?(message, link)
         case .desktopStarted:
             // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。

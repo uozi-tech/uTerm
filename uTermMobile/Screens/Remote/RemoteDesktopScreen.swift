@@ -70,6 +70,10 @@ struct RemoteDesktopScreen: View {
     @State private var lockOverlayDismissed = false
     /// 密码框只保存（顶栏「设置解锁密码」）还是保存后立即解锁（锁屏遮罩）。
     @State private var passwordSheetSavesOnly = false
+    /// 密码框是替 Mac 屏上的验证框填的（填完不解锁，只回应那个框）。关掉密码框时清掉。
+    @State private var passwordSheetAuthPrompt: RemoteDesktopAuthPrompt?
+    /// 回应 Mac 验证框的进行态（与锁屏解锁分开：两件事不会同时发生，但提示各管各的）。
+    @State private var authPromptPhase: UnlockPhase = .idle
     /// 这台 Mac 存没存过解锁密码。查钥匙串有开销，不能每次重绘都查（顶栏每秒刷新统计）：
     /// 只在进页面、存、删之后刷新一次。
     @State private var hasSavedPassword = false
@@ -123,6 +127,7 @@ struct RemoteDesktopScreen: View {
                                             streamPixels: session.info.map { CGSize(width: $0.streamWidth, height: $0.streamHeight) })
                         overlay(session)
                         lockOverlay(session)
+                        authPromptOverlay(session)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -151,7 +156,7 @@ struct RemoteDesktopScreen: View {
             // Mac 收得了文件时相册里也能选视频。
             .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto,
                           matching: session?.canPasteFiles == true ? .any(of: [.images, .videos]) : .images)
-            .sheet(isPresented: $enteringPassword) {
+            .sheet(isPresented: $enteringPassword, onDismiss: { passwordSheetAuthPrompt = nil }) {
                 if let session { passwordSheet(session) }
             }
             .sheet(isPresented: $pickingWindow) {
@@ -229,6 +234,10 @@ struct RemoteDesktopScreen: View {
                 lockOverlayDismissed = false
                 unlockPhase = .idle
             }
+        }
+        .onChange(of: session?.screen.authPrompt?.id) { _, _ in
+            // 框换了 / 关了：上一个框的失败提示不再适用。
+            if authPromptPhase != .working { authPromptPhase = .idle }
         }
         .onChange(of: session?.audioState) { _, state in
             // Mac 上没开、采集停了、拔了耳机：按钮已经复位，这里说一声为什么。
@@ -769,15 +778,17 @@ struct RemoteDesktopScreen: View {
             // 盖在 Mac 的画面上：用不透明的底色，不让下面的画面透上来（同 `RemoteDesktopWindowPicker`）。
             .scrollContentBackground(.hidden)
             .background(M.canvas)
-            .navigationTitle(passwordSheetSavesOnly ? "\(client.macName) 的解锁密码" : "解锁 \(client.macName)")
+            .navigationTitle(passwordSheetAuthPrompt != nil ? "替 \(client.macName) 填写密码"
+                             : passwordSheetSavesOnly ? "\(client.macName) 的解锁密码" : "解锁 \(client.macName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { enteringPassword = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(passwordSheetSavesOnly ? "保存" : "解锁") {
+                    Button(passwordSheetAuthPrompt != nil ? "填入" : passwordSheetSavesOnly ? "保存" : "解锁") {
                         let password = passwordDraft
+                        let authPrompt = passwordSheetAuthPrompt
                         passwordDraft = ""
                         enteringPassword = false
                         if let macID = client.macDeviceID {
@@ -789,8 +800,12 @@ struct RemoteDesktopScreen: View {
                             }
                         }
                         refreshVault()
-                        // 只保存时不发解锁：Mac 可能根本没锁，用户只是先把密码存好。
-                        if !passwordSheetSavesOnly { Task { await submitUnlock(session, password: password) } }
+                        if let authPrompt {
+                            Task { await submitAuthPrompt(session, prompt: authPrompt, action: .fill, password: password) }
+                        } else if !passwordSheetSavesOnly {
+                            // 只保存时不发解锁：Mac 可能根本没锁，用户只是先把密码存好。
+                            Task { await submitUnlock(session, password: password) }
+                        }
                     }.disabled(passwordDraft.isEmpty)
                 }
             }
@@ -826,6 +841,86 @@ struct RemoteDesktopScreen: View {
         unlockPhase = .working
         let outcome = await session.unlock(password: password)
         unlockPhase = outcome.failureMessage.map { .failed($0) } ?? .idle
+    }
+
+    // MARK: - Mac 屏上的验证框
+
+    /// Mac 屏上有要 Touch ID / 密码的系统框：底部一张卡片，用已存的解锁密码（面容 ID / 触控 ID 取出）或现输的密码替它填，
+    /// 或取消那个请求。不盖住画面：框本身还要看得见。什么时候显示见 `authPromptBanner`。
+    @ViewBuilder private func authPromptOverlay(_ session: RemoteDesktopSession) -> some View {
+        switch session.authPromptBanner(macName: client.macName) {
+        case .none:
+            EmptyView()
+        case .caption(let text):
+            bottomCaption(text)
+        case .actionable(let prompt, let title, let message):
+            let working = authPromptPhase == .working
+            VStack {
+                Spacer()
+                VStack(spacing: 10) {
+                    Text(title)
+                        .font(M.sans(15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text(authPromptMessage(default: message))
+                        .font(M.sans(12.5))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                    if working {
+                        ProgressView().tint(.white)
+                    } else {
+                        HStack(spacing: 8) {
+                            MBtn(title: vaultHasPassword ? "用\(Self.biometryLead)填入密码" : "输入密码", kind: .primary,
+                                 height: 40) {
+                                beginAuthPromptFill(session, prompt: prompt)
+                            }.fixedSize()
+                            MBtn(title: "取消请求", kind: .secondary, height: 40) {
+                                Task { await submitAuthPrompt(session, prompt: prompt, action: .cancel, password: nil) }
+                            }.fixedSize()
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: 420)
+                .background(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(0.8)))
+                .padding(.bottom, 24).padding(.horizontal, 16)
+            }
+        }
+    }
+
+    private func authPromptMessage(default message: String) -> String {
+        if case .failed(let reason) = authPromptPhase { return reason }
+        return message
+    }
+
+    /// 有存过的解锁密码就用面容 ID / 触控 ID 取出来填；没有（或取不出）就弹密码框现输，现输的顺手存下来。
+    private func beginAuthPromptFill(_ session: RemoteDesktopSession, prompt: RemoteDesktopAuthPrompt) {
+        func askForPassword() {
+            passwordDraft = ""
+            passwordSheetSavesOnly = false
+            passwordSheetAuthPrompt = prompt
+            enteringPassword = true
+        }
+        guard let macID = client.macDeviceID, vault.hasPassword(forMac: macID) else { return askForPassword() }
+        authPromptPhase = .working
+        Task {
+            do {
+                guard let password = try await vault.password(forMac: macID, reason: "替 \(client.macName) 填写密码") else {
+                    authPromptPhase = .idle
+                    return askForPassword()
+                }
+                await submitAuthPrompt(session, prompt: prompt, action: .fill, password: password)
+            } catch {
+                authPromptPhase = .failed("\(Self.biometryLead)验证未通过。")
+            }
+        }
+    }
+
+    private func submitAuthPrompt(_ session: RemoteDesktopSession, prompt: RemoteDesktopAuthPrompt,
+                                  action: RemoteDesktopAuthPromptRequest.Action, password: String?) async {
+        authPromptPhase = .working
+        let outcome = await session.answerAuthPrompt(prompt, action: action, password: password)
+        authPromptPhase = outcome.failureMessage.map { .failed($0) } ?? .idle
     }
 
     private func notice(spinner: Bool, title: String, message: String?, dim: Bool = false) -> some View {

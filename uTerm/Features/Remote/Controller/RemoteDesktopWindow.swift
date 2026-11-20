@@ -168,6 +168,10 @@ struct RemoteDesktopContent: View {
     @State private var password = ""
     @State private var unlocking = false
     @State private var unlockError: String?
+    /// 替那台 Mac 的验证框填的密码（不保存）、在途、失败原因。
+    @State private var authPassword = ""
+    @State private var authWorking = false
+    @State private var authError: String?
     /// 「只看一个窗口」的弹层和它的内容。
     @State private var pickingWindow = false
     @State private var windowChoices: [RemoteDesktopWindowSummary] = []
@@ -198,6 +202,7 @@ struct RemoteDesktopContent: View {
                     onZoomChanged: { zoomLevel = $0 })
                 stateOverlay
                 lockOverlay
+                authPromptOverlay
             }
             .overlay(alignment: .top) { toast }
             .overlay(alignment: .topLeading) { statsBadge }
@@ -539,6 +544,60 @@ struct RemoteDesktopContent: View {
                     }
                 }
             }
+        }
+    }
+
+    /// 那台 Mac 屏上有要 Touch ID / 密码的系统框：在这里填它的登录密码（不保存），或取消那个请求。
+    /// 不盖住画面，只在底部放一张卡片：框本身还要看得见。什么时候显示见 `authPromptBanner`。
+    @ViewBuilder private var authPromptOverlay: some View {
+        switch session.authPromptBanner(macName: client.macName) {
+        case .none:
+            EmptyView()
+        case .caption(let text):
+            bottomCaption(text)
+        case .actionable(let prompt, let title, let message):
+            VStack {
+                Spacer()
+                VStack(spacing: 10) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(authError ?? message)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 380)
+                    if authWorking {
+                        UDIndeterminateBar().frame(width: 140)
+                    } else {
+                        HStack(spacing: 8) {
+                            UDTextField(placeholder: String(localized: "登录密码"), text: $authPassword, isSecure: true)
+                                .frame(width: 200)
+                                .onSubmit { answerAuthPrompt(prompt, action: .fill) }
+                            UDButton(title: "填入密码") { answerAuthPrompt(prompt, action: .fill) }
+                                .disabled(authPassword.isEmpty)
+                            UDButton(title: "取消请求", style: .secondary) { answerAuthPrompt(prompt, action: .cancel) }
+                        }
+                    }
+                }
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(0.8)))
+                .padding(.bottom, 24).padding(.horizontal, 20)
+            }
+            .onChange(of: prompt.id) { _, _ in authError = nil }
+        }
+    }
+
+    private func answerAuthPrompt(_ prompt: RemoteDesktopAuthPrompt, action: RemoteDesktopAuthPromptRequest.Action) {
+        guard !authWorking, action == .cancel || !authPassword.isEmpty else { return }
+        let secret = action == .fill ? authPassword : nil
+        authPassword = ""
+        authWorking = true
+        authError = nil
+        Task {
+            let outcome = await session.answerAuthPrompt(prompt, action: action, password: secret)
+            authWorking = false
+            authError = outcome.failureMessage
         }
     }
 

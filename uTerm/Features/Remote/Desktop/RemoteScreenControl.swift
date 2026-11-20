@@ -139,7 +139,7 @@ nonisolated enum RemoteKeyboardBlocker {
         return blocker(windows: list, screenArea: Double(main.width * main.height), processName: Self.processName)
     }
 
-    private static func processName(_ pid: pid_t) -> String? {
+    static func processName(_ pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: 256)
         guard proc_name(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
         return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
@@ -272,6 +272,11 @@ protocol RemoteScreenController: AnyObject {
     func setCurtain(_ on: Bool)
     /// 本机要求解除帘幕时回调（如坐在 Mac 前的人连按 Esc）。
     var onLocalCurtainRelease: (() -> Void)? { get set }
+    /// 屏上正等着验证的系统框（Touch ID / 密码），没有为 nil。远程桌面开着时定时读。
+    func currentAuthPrompt() -> RemoteDesktopAuthPrompt?
+    /// 回应那个框：改用密码填入并确认，或取消。
+    func answerAuthPrompt(id: UInt32, action: RemoteDesktopAuthPromptRequest.Action,
+                          password: String?) async -> RemoteAuthPromptAttempt
 }
 
 /// 生产实现：接到前面几个系统能力上。
@@ -292,6 +297,13 @@ final class LiveRemoteScreenController: RemoteScreenController {
     }
 
     func lockScreen() { RemoteScreenLock.lock() }
+
+    func currentAuthPrompt() -> RemoteDesktopAuthPrompt? { RemoteAuthPromptDetector.current()?.prompt }
+
+    func answerAuthPrompt(id: UInt32, action: RemoteDesktopAuthPromptRequest.Action,
+                          password: String?) async -> RemoteAuthPromptAttempt {
+        await RemoteAuthPromptTypist.answer(promptID: id, action: action, password: password, environment: .live)
+    }
 
     func setCurtain(_ on: Bool) {
         if on { RemoteCurtain.shared.enable() } else { RemoteCurtain.shared.disable() }

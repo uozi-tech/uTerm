@@ -222,6 +222,75 @@ nonisolated struct RemoteDesktopScreenState: Codable, Equatable, Sendable {
     var curtained: Bool
     /// 这台 Mac 允许手机远程解锁、挂帘幕（开了设置里的开关，并且有「辅助功能」授权）。
     var unlockAvailable: Bool
+    /// 屏上正等着验证的系统框（要 Touch ID 或登录密码的那种）。只发给声明了 `desktop-auth-prompt` 的对端；
+    /// 老对端解码时忽略这个键。
+    var authPrompt: RemoteDesktopAuthPrompt? = nil
+}
+
+/// Mac 上一个等着验证身份的系统框：管理员授权（SecurityAgent）或 App 调 LocalAuthentication（coreautha）。
+/// 指纹没法远程给，主控端能做的是让 Mac 点「使用密码」、填登录密码，或取消这个框。
+nonisolated struct RemoteDesktopAuthPrompt: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        /// 系统授权（装软件、改系统设置、`sudo`、脚本要管理员权限）：只有密码框。
+        case authorization
+        /// App 要验证身份（LocalAuthentication）：先是 Touch ID，可以改用密码。
+        case localAuthentication
+        /// 以后的 Mac 认出的新种类，老主控端按通用文案显示。
+        case other
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Kind(rawValue: raw) ?? .other
+        }
+    }
+
+    /// 那个框的窗口号。主控端回应时带上，Mac 据此确认要填的还是同一个框（中途换了框就不填）。
+    var id: UInt32
+    var kind: Kind
+}
+
+/// 主控端 → Mac：回应屏上的验证框（`desktopAuthPrompt`，桌面通道）。密码只在 Mac 内存里用一次。
+nonisolated struct RemoteDesktopAuthPromptRequest: Codable, Equatable, Sendable, CustomStringConvertible,
+    CustomDebugStringConvertible {
+    enum Action: String, Codable, Sendable {
+        /// 改用密码并填入登录密码、确认。
+        case fill
+        /// 取消这个框（等同在 Mac 上点「取消」）。
+        case cancel
+    }
+
+    var requestID: UUID
+    var promptID: UInt32
+    var action: Action
+    /// `fill` 时的登录密码。
+    var password: String?
+
+    /// 不让密码经 `print` / 字符串插值意外进日志。
+    var description: String { "RemoteDesktopAuthPromptRequest(\(requestID), \(action.rawValue))" }
+    var debugDescription: String { description }
+}
+
+/// Mac → 主控端：回应验证框的结果（`desktopAuthPromptResult`，桌面通道）。
+nonisolated struct RemoteDesktopAuthPromptResult: Codable, Equatable, Sendable {
+    enum Outcome: String, Codable, Sendable {
+        /// 填完密码后框关了（通过了）。
+        case accepted
+        /// 填完密码后框还在：密码不对。
+        case rejected
+        /// 已取消。
+        case cancelled
+        /// 那个框已经不在了（Mac 前有人处理掉了，或换成了另一个框）。
+        case gone
+        /// 没能把框切到前台、或没找到密码输入框：密码没有输，免得打进别的 App。
+        case notFocused
+        /// Mac 没开远程解锁，或没有「辅助功能」授权，或这台设备不是正在看屏幕的那台。
+        case notAllowed
+        /// 等不到结果。
+        case timedOut
+    }
+
+    var requestID: UUID
+    var outcome: Outcome
 }
 
 /// 手机 → Mac：用登录密码解锁锁屏（`desktopUnlock`，桌面通道）。密码只在 Mac 内存里用一次。

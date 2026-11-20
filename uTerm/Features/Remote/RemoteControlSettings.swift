@@ -42,7 +42,8 @@ final class RemoteControlSettings {
     }
 
     /// 「允许远程解锁」：Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕模式（默认关）。在远程桌面之上
-    /// 再单独开一次——解锁等于交出这台 Mac 的登录，比看屏幕更重。
+    /// 再单独开一次——解锁等于交出这台 Mac 的登录，比看屏幕更重。同一个开关也管替屏上的系统验证框（Touch ID /
+    /// 密码）填登录密码（`desktop-auth-prompt`）：给出去的同样是登录密码。
     var isDesktopUnlockEnabled: Bool {
         didSet {
             guard isDesktopUnlockEnabled != oldValue else { return }

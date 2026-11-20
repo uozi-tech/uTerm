@@ -1000,3 +1000,34 @@ user 定：局域网里不是自己 iCloud 账户里的 Mac 不要自动发现�
 - 真机 iPhone：Opus 解码（模拟器通过）、AVAudioSession 打断 / 拔耳机、蓝牙耳机延迟、静音键下出声。
 - 蜂窝与公网中继上的声音延迟与断音。本机经真实 `uterm-relay` 已过：`make test-relay-e2e` 15 个用例全过（含新的 `test_desktop_audio_plays_through_the_relay_while_video_runs`：视频 30 fps 52 Mbps 同时，8 s 放出 363 包，补静音 0，欠载 0，确认启用 `link-flow`）。
 - 采集到出声的端到端延迟（方案 A3：Mac 放带时间码的声音，手机录音对照）。
+
+## 18. 被控 Mac 上的系统验证框（Touch ID / 密码）：探针结果（2026-11-20）
+
+问题：远程控制时被控 Mac 弹出要 Touch ID 或密码的系统框，手机这边怎么过。指纹在 Mac 的传感器和安全隔区里本地比对，没有任何接口能把手机上的生物识别转过去；能走的只有框自带的「使用密码…」退路，再把登录密码打进去（密码可以复用手机上存的远程解锁密码，`RemoteUnlockVault`）。
+
+探针：独立 App `com.uozi.uTerm.authprobe`（沙盒 + hardened runtime + Developer ID，授权辅助功能与录屏，和远控进程同一种注入：`hidSystemState` 事件源带 `userDataTag`、post 到 `.cghidEventTap`、鼠标带 `mouseEventNumber`，文字用 `keyboardSetUnicodeString`），macOS 27.2.1，本机有 Touch ID、`sudo_local` 开了 `pam_tid`。按钮位置靠 ScreenCaptureKit 截窗口 + Vision 认字。校验结果看 authd / coreauthd 日志，探针只打错误密码。
+
+| 框 | 进程（`CGWindowList` 的 owner） | 外观 | 结果 |
+|---|---|---|---|
+| `do shell script … with administrator privileges`、第三方 App 调 `AuthorizationCopyRights`（例：`system.preferences.security`）、`sudo` | `SecurityAgent`（前台 bundle `com.apple.SecurityAgent`），layer 1000 | 用户名 + 密码框，**没有 Touch ID** | 模拟点击密码框 → SecurityAgent 变前台、安全输入打开 → Unicode 打字 + 回车 → authd `Evaluate denied`（确实校验了）。模拟点「不允许」/「取消」有效（osascript 收到 -128） |
+| `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` | `coreautha`（前台 bundle `com.apple.LocalAuthentication.UIAgent`），layer 1000 | 「使用触控 ID 或输入密码以继续」+「使用密码…」+「取消」 | 模拟点「使用密码…」→ coreauthd `Fallback authentication mechanism selected`，窗口变高、出现密码框且已聚焦（安全输入打开）→ 打字 + 回车 → coreauthd `PasscodeRejected`。框在前台时，回车 = 「使用密码…」（默认按钮）；Esc = 取消（`Canceled by user`） |
+| 终端里的 `sudo`（`pam_tid`） | 同 SecurityAgent 那一行 | 本次弹的是 SecurityAgent 密码框 | 点「取消」后 sudo 退到终端里的 `Password:`，手机在终端里输就行 |
+
+结论与实现要点：
+
+- **可行**，不需要额外权限：远控进程已有的辅助功能 + 录屏就够。苹果没有拒收模拟输入（SecurityAgent 和 coreautha 都收）。
+- **沙盒里 AX 读不到这两个进程**（`AXUIElementCopyAttributeValue` 回 -25204），按钮只能靠截图认字或按固定布局算。窗口宽 260pt，按钮文字稳定（「使用密码…」「取消」「允许」「解锁」「好」，英文系统另配）。
+- **框出现时不一定在前台**：多次实测框弹出后前台还是原来的 App。直接发键盘事件会打进那个 App。有一次探针的错误密码和回车就打进了前台的别的窗口。所以**必须先点框（点密码框或「使用密码…」）把它变成前台，再核对**：前台 bundle 是 `com.apple.SecurityAgent` / `com.apple.LocalAuthentication.UIAgent` / `loginwindow`，并且 `IsSecureEventInputEnabled()` 为真，才打密码；每组按键前都复核一次（和锁屏解锁的规矩相同）。
+- 带 Touch ID 的 **SecurityAgent** 框（苹果自家 App 发起的，如系统设置里的改动、安装器）这次没弹出来：第三方进程请求的授权只给密码框。预计也是「使用密码…」按钮，同一套流程，留到实现时在系统设置里手动触发核一次。
+- 只认生物识别的框（`.deviceOwnerAuthenticationWithBiometrics`、Apple Pay）没有密码退路，远程过不了，界面上要明说。
+
+复现：探针源码思路见本节；触发用 `osascript -e 'do shell script "true" with administrator privileges'`、一个调 `LAContext.evaluatePolicy` 的小命令行程序、`sudo -K; script -q /dev/null sudo -v`。日志：`/usr/bin/log show --last 1m --info --predicate 'process == "authd" OR process == "coreauthd"'`（zsh 里 `log` 是内建命令，要写全路径）。
+
+### 落地（2026-11-20）
+
+- 协议：能力 `desktop-auth-prompt`；`desktopScreenState` 多一个可选键 `authPrompt`（`RemoteDesktopAuthPrompt`：窗口号 + 种类，未知种类解成 `other`）；消息 60 `desktopAuthPrompt`（主控端 → Mac，`fill` 带密码 / `cancel`）、61 `desktopAuthPromptResult`（`accepted` / `rejected` / `cancelled` / `gone` / `notFocused` / `notAllowed` / `timedOut`）。老 Mac 不认 60，主控端只对声明了能力的发；Mac 只给声明了的主控端报框。
+- 门禁与远程解锁相同：「允许远程解锁」开着、是正在看屏幕且能控制的那一路（`canUnlockRemotely`），和解锁请求互斥。锁屏时不报框。
+- 被控端：`Features/Remote/Desktop/RemoteAuthPrompt.swift`（远控进程编、iOS 不编）。`RemoteAuthPromptDetector` 按进程名（`proc_name`，不按会被本地化的窗口属主名）认 `SecurityAgent` / `coreautha`、layer > 0、边长 ≥ 100；连接在开着桌面流时每 0.5 秒看一次，变了就推状态。`RemoteAuthPromptTypist` 不认按钮文字：点框标题区（顶边往下 30pt）把它叫到前台 → 安全输入没开时 LocalAuthentication 按回车（默认按钮「使用密码…」）、SecurityAgent 按 Tab → ⌘A + Delete → 逐字打（每字前核对：同一个框、它的进程在前台、安全输入开着）→ 回车 → 4 秒内框关了算通过，还在算密码不对。取消 = 叫到前台后按 Esc。
+- 主控端：共用判定 `authPromptBanner` / `failureMessage`（`RemoteDesktopPresentation`）；Mac 窗口底部卡片（现输密码，不保存），iOS 底部卡片（有存过的解锁密码就用面容 ID / 触控 ID 取出，否则弹密码框，现输的顺手存进钥匙串）。都不盖住画面。
+- 验证：`RemoteAuthPromptTests`（13 个：找框、步骤与守卫、回环端到端）；把 `RemoteAuthPrompt.swift` 原样编进探针 App 在真实的框上跑：管理员授权框（不在前台时）输错 → `rejected`（authd `Evaluate denied`）、取消 → `cancelled`（osascript -128）；LocalAuthentication 框（前台是 Finder）输错 → `rejected`（coreauthd `PasscodeRejected`）、取消 → `cancelled`。
+- 没验的：输对密码的 `accepted`（要真密码）；帘幕开着时；经远控进程 + 真机的整条链路；苹果自家 App 发起的带 Touch ID 的 SecurityAgent 框。

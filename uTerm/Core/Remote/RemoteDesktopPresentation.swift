@@ -105,6 +105,18 @@ extension RemoteDesktopSession {
         return .caption(String(localized: "\(macName) 已锁定。在它的「设置 › 远程控制」里打开「允许远程解锁」（并授予「辅助功能」权限）后，可以在这里解锁。"))
     }
 
+    /// 屏上有系统验证框时显示什么。和锁屏提示一样只在画面正在传时显示；锁着时先解锁。
+    func authPromptBanner(macName: String) -> RemoteDesktopAuthPromptBanner {
+        guard case .streaming = state, supportsAuthPrompt, !screen.locked, let prompt = screen.authPrompt else {
+            return .none
+        }
+        guard screen.unlockAvailable else {
+            return .caption(String(localized: "\(macName) 在等验证身份。在它的「设置 › 远程控制」里打开「允许远程解锁」（并授予「辅助功能」权限）后，可以在这里替它填入登录密码。"))
+        }
+        return .actionable(prompt: prompt, title: prompt.kind.bannerTitle(macName: macName),
+                           message: String(localized: "指纹没法远程按。可以让它改用登录密码，或取消这个请求。"))
+    }
+
     /// 顶栏名字后面的一行状态。`controlling`：正常可控时写什么（手机写「触控板模式」，Mac 窗口不写字）。
     func statusText(controlling: String?) -> String? {
         switch state {
@@ -198,6 +210,41 @@ nonisolated struct RemoteDesktopStat: Equatable, Identifiable, Sendable {
         items.map { item in
             [item.label, item.value, item.unit, item.detail].compactMap(\.self).joined(separator: " ")
         }.joined(separator: "，")
+    }
+}
+
+// MARK: - 验证框
+
+/// Mac 屏上有验证框（Touch ID / 密码）时显示什么。
+nonisolated enum RemoteDesktopAuthPromptBanner: Equatable {
+    case none
+    /// 能替它填密码或取消：标题、说明，按钮各端自己画。
+    case actionable(prompt: RemoteDesktopAuthPrompt, title: String, message: String)
+    /// 那台 Mac 没开远程解锁：不挡画面，只在底部提示一句。
+    case caption(String)
+}
+
+extension RemoteDesktopAuthPrompt.Kind {
+    nonisolated func bannerTitle(macName: String) -> String {
+        switch self {
+        case .authorization: return String(localized: "\(macName) 在请求管理员授权")
+        case .localAuthentication: return String(localized: "\(macName) 上的 App 在请求验证身份")
+        case .other: return String(localized: "\(macName) 在请求验证身份")
+        }
+    }
+}
+
+extension RemoteDesktopAuthPromptResult.Outcome {
+    /// 没成时给用户看的原因；通过了 / 取消了为 nil。
+    nonisolated var failureMessage: String? {
+        switch self {
+        case .accepted, .cancelled: return nil
+        case .rejected: return String(localized: "密码不对，那个验证框还在，请重试。")
+        case .gone: return String(localized: "那个验证框已经关了。")
+        case .notFocused: return String(localized: "没能把验证框切到前台，密码没有输入（免得打进别的 App）。可以在画面上点一下那个框再试。")
+        case .notAllowed: return String(localized: "Mac 当前不允许远程填写密码。")
+        case .timedOut: return String(localized: "等不到结果，请看一下画面再试。")
+        }
     }
 }
 
