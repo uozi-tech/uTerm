@@ -10,15 +10,16 @@ import Foundation
 /// JSON 负载只加可选字段，枚举只加 case，解不开的一律忽略。
 nonisolated enum RemoteHostAgent {
     /// launchd 任务名，也是 `MachServices` 里的服务名（App 的 entitlement 里有对应的 mach-lookup 例外）。
-    static let machServiceName = "com.uozi.uTerm.RemoteHost"
+    /// 都随 bundle id 前缀走（`AppIdentity`）：plist 在构建时按 `UTERM_BUNDLE_ID` 生成，正式版仍是 `com.uozi.uTerm.RemoteHost`。
+    static let machServiceName = AppIdentity.remoteHost
     /// `Contents/Library/LaunchAgents/` 下的 plist 文件名（`SMAppService.agent(plistName:)`）。
-    static let plistName = "com.uozi.uTerm.RemoteHost.plist"
-    static let bundleIdentifier = "com.uozi.uTerm.RemoteHost"
+    static let plistName = AppIdentity.remoteHost + ".plist"
+    static let bundleIdentifier = AppIdentity.remoteHost
     /// 这一版说的协议版本。只在不兼容时加一（加方法、加字段不算）。
     static let protocolVersion = 1
 
     /// 远控进程只接受同团队签名的 uTerm 主程序来连（团队号取自己的签名，见 `CodeSigningTeam`）。
-    static let appRequirement = CodeSigningTeam.requirement(identifiers: ["com.uozi.uTerm"])
+    static let appRequirement = CodeSigningTeam.requirement(identifiers: [AppIdentity.app])
     /// App 只认同团队签名的远控进程。
     static let agentRequirement = CodeSigningTeam.requirement(identifiers: [bundleIdentifier])
 

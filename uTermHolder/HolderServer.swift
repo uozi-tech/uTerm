@@ -13,7 +13,7 @@ final class HolderServer: @unchecked Sendable {
     /// 两个身份都要放行：连接是 XPC 服务建的，但 `LOCAL_PEERTOKEN` 查到的是**最后动过对端 socket 的进程**。
     /// fd 交给主程序后，主程序抢在这边 `accept` 之前发了数据，查到的就是主程序。
     private static let peerRequirement =
-        CodeSigningTeam.requirement(identifiers: ["com.uozi.uTerm.ShellAgent", "com.uozi.uTerm"])
+        CodeSigningTeam.requirement(identifiers: [AppIdentity.shellAgent, AppIdentity.app])
     private static let killGraceSeconds = 3
     /// shell 在 App 不在时退出：留着最后一屏等 App 回来，但不能永远等。
     private static let exitedLingerSeconds = 24 * 60 * 60

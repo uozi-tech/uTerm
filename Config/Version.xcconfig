@@ -3,6 +3,14 @@
 // project 级 baseConfigurationReference 引用本文件，所有 target 继承。
 MARKETING_VERSION = 2.4.1
 
+// bundle id 前缀：9 个 target 的 bundle id、iCloud 容器、钥匙串访问组、远控进程的 launchd 任务名都由它派生。
+// 用自己的团队签名时在 Local.xcconfig 里改成自己的（App ID 全苹果唯一，com.uozi.uTerm 只有我们的团队能用）。
+UTERM_BUNDLE_ID = com.uozi.uTerm
+UTERM_ICLOUD_CONTAINER = iCloud.$(UTERM_BUNDLE_ID)
+// 正式版钉在 Production（理由见 uTerm/uTerm.entitlements 的注释）。自己的新容器 Production 里还没有 schema，
+// 同步会静默失败：fork 改成 Development，CloudKit 会按模型自动建 schema。
+UTERM_ICLOUD_ENVIRONMENT = Production
+
 // 维护者配置（团队号、Sparkle 更新源、中继发布地址）：internal/ 是维护者私有的，没有时跳过。
 #include? "../internal/Config/Internal.xcconfig"
 // 贡献者本地覆盖（团队号、bundle id 前缀等），已 gitignore；从 Local.xcconfig.example 复制。

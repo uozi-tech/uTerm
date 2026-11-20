@@ -31,12 +31,36 @@ import uuid
 ENV_SOCKET = "UTERM_CONTROL_SOCKET"
 # uTerm 开本机终端时写进 shell 环境的终端编号（见 `mac_target`）。
 ENV_SESSION = "UTERM_SESSION_ID"
-BUNDLE_ID = "com.uozi.uTerm"
+OFFICIAL_BUNDLE_ID = "com.uozi.uTerm"
+
+
+def _bundle_id():
+    """uTerm 的 bundle id：UTERM_BUNDLE_ID 优先，其次读自己所在 .app 的 Info.plist（用自己团队签的构建会换
+    bundle id 前缀，沙盒容器路径跟着变），都没有就是正式版。"""
+    explicit = os.environ.get("UTERM_BUNDLE_ID", "").strip()
+    if explicit:
+        return explicit
+    path = os.path.realpath(__file__)
+    while path and path != os.path.dirname(path):
+        if path.endswith(".app"):
+            try:
+                with open(os.path.join(path, "Contents", "Info.plist"), "rb") as handle:
+                    value = plistlib.load(handle).get("CFBundleIdentifier")
+                if isinstance(value, str) and value:
+                    return value
+            except (OSError, plistlib.InvalidFileException, ValueError):
+                pass
+            break
+        path = os.path.dirname(path)
+    return OFFICIAL_BUNDLE_ID
+
+
+BUNDLE_ID = _bundle_id()
 ON_DEMAND_KEY = "background.allowOnDemandLaunch"
 CONTROL_ENABLED_KEY = "control.enabled"
 PREFERENCE_CANDIDATES = [
-    "~/Library/Containers/com.uozi.uTerm/Data/Library/Preferences/com.uozi.uTerm.plist",
-    "~/Library/Preferences/com.uozi.uTerm.plist",
+    f"~/Library/Containers/{BUNDLE_ID}/Data/Library/Preferences/{BUNDLE_ID}.plist",
+    f"~/Library/Preferences/{BUNDLE_ID}.plist",
 ]
 
 # macOS 端 Debug 与 Release 都开沙盒，socket 只落在容器里。顺序与 uTerm 的
@@ -44,8 +68,8 @@ PREFERENCE_CANDIDATES = [
 # Application Support 下；那条路径超过 sun_path 上限（用户名超过 10 个字符）时 uTerm
 # 改到容器的 Data/tmp/。最后一条是给「万一有人跑不带沙盒的构建」留的，成本为零。
 SOCKET_CANDIDATES = [
-    "~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/control.sock",
-    "~/Library/Containers/com.uozi.uTerm/Data/tmp/control.sock",
+    f"~/Library/Containers/{BUNDLE_ID}/Data/Library/Application Support/uTerm/control.sock",
+    f"~/Library/Containers/{BUNDLE_ID}/Data/tmp/control.sock",
     "~/Library/Application Support/uTerm/control.sock",
 ]
 # sockaddr_un.sun_path 104 字节，要给结尾 NUL 留 1 字节。

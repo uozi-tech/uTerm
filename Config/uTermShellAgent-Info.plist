@@ -18,5 +18,7 @@
 		<key>JoinExistingSession</key>
 		<true/>
 	</dict>
+	<key>UTermBundleIDBase</key>
+	<string>$(UTERM_BUNDLE_ID)</string>
 </dict>
 </plist>

@@ -44,4 +44,26 @@ final class CodeSigningTeamTests: XCTestCase {
             XCTAssertTrue(text.hasSuffix("certificate leaf[subject.OU] = \"\(team)\""), text)
         }
     }
+
+    /// 正式构建（测试宿主就是）读出来的前缀与以前写死的一字不差：launchd 任务名、XPC 服务名、互认身份都不变，
+    /// 已经装着的远控进程与登录项不会因为这次改动被当成别的程序。
+    @MainActor
+    func testOfficialBuildKeepsTheSameIdentities() {
+        XCTAssertEqual(AppIdentity.base, Bundle.main.bundleIdentifier)
+        XCTAssertEqual(AppIdentity.base, "com.uozi.uTerm")
+        XCTAssertEqual(RemoteHostAgent.machServiceName, "com.uozi.uTerm.RemoteHost")
+        XCTAssertEqual(RemoteHostAgent.plistName, "com.uozi.uTerm.RemoteHost.plist")
+        XCTAssertEqual(LocalShellAgent.serviceName, "com.uozi.uTerm.ShellAgent")
+        XCTAssertEqual(BackgroundServiceSettings.loginItemIdentifier, "com.uozi.uTerm.BackgroundLauncher")
+        XCTAssertTrue(RemoteHostAgent.appRequirement.contains("identifier \"com.uozi.uTerm\""))
+    }
+
+    /// 前缀从 Info.plist 的 `UTermBundleIDBase` 读；没有这个键、或构建设置没展开时退回正式前缀。
+    func testBundleIDBaseFallsBackToOfficial() {
+        XCTAssertEqual(AppIdentity.resolve("com.example.uterm"), "com.example.uterm")
+        XCTAssertEqual(AppIdentity.resolve(" com.example.uterm\n"), "com.example.uterm")
+        for value: Any? in [nil, "", "   ", "$(UTERM_BUNDLE_ID)", 42] {
+            XCTAssertEqual(AppIdentity.resolve(value), "com.uozi.uTerm")
+        }
+    }
 }

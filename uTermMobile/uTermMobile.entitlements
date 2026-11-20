@@ -4,20 +4,20 @@
 <dict>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.uozi.uTerm</string>
+		<string>$(UTERM_ICLOUD_CONTAINER)</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
 		<string>CloudKit</string>
 	</array>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
-	<string>$(TeamIdentifierPrefix)com.uozi.uTerm</string>
+	<string>$(TeamIdentifierPrefix)$(UTERM_BUNDLE_ID)</string>
 	<!-- 与已发布的 macOS 版同处 Production 数据库（否则 Xcode 调试构建默认走 Development，看不到正式数据）。
 	     若你的 macOS 数据来自 Xcode 调试运行（Development），把此值改成 Development。
 	     ⚠️ 与 macOS 端同样的连带后果：没有任何构建连 Development ⇒ 新 `@Model` 字段不会被自动推上
 	     CloudKit。发版前用 `make check-cloudkit-schema` 兜底，理由见 uTerm/uTerm.entitlements 的长注释。 -->
 	<key>com.apple.developer.icloud-container-environment</key>
-	<string>Production</string>
+	<string>$(UTERM_ICLOUD_ENVIRONMENT)</string>
 	<!-- Push Notifications 能力：SwiftData 的 CloudKit 镜像（NSPersistentCloudKitContainer）
 	     靠 CloudKit 静默推送实现「对端一改、本端即拉」。缺此项时同步退化为「仅冷启动 / 进前台时拉一次」，
 	     iOS 退后台又会被系统挂起 → 体感就是同步「不积极」。
@@ -32,7 +32,7 @@
 	     访问同步项还会以 errSecMissingEntitlement(-34018) 失败。 -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.uozi.uTerm</string>
+		<string>$(AppIdentifierPrefix)$(UTERM_BUNDLE_ID)</string>
 	</array>
 </dict>
 </plist>

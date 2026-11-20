@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 derived="${1:-build/DerivedData}"
 app="$PWD/$derived/Build/Products/Debug/uTerm.app"
 agent="$app/Contents/Helpers/uTermRemoteHost.app/Contents/MacOS/uTermRemoteHost"
-label=com.uozi.uTerm.RemoteHost
+label=${UTERM_BUNDLE_ID:-com.uozi.uTerm}.RemoteHost
 domain="gui/$(id -u)"
 test -x "$agent" || { echo "找不到 $agent，先 build-for-testing" >&2; exit 1; }
 if launchctl print "$domain/$label" >/dev/null 2>&1; then

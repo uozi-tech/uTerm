@@ -18,18 +18,22 @@ a self-hosted relay.
 
 ```sh
 git clone https://github.com/uozi-tech/uTerm.git && cd uTerm
-cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填自己的 Apple Developer Team ID
+cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填自己的 Team ID 与 bundle id 前缀
 make engine     # 终端引擎：第一次从上游源码编（约 15 分钟，会下载 Zig 与 Ghostty 源码）
 make build      # 或者 open uTerm.xcodeproj
 ```
 
-- **签名**：远控进程、本机终端的辅助进程与 holder 之间按「同一团队签名」互认，团队号从签名里读，所以用你自己的团队签就行，
-  不用改源码。
+- **签名**：用你自己的团队签名时，在 `Config/Local.xcconfig` 里填 Team ID，并把 `UTERM_BUNDLE_ID` 换成你自己的前缀
+  （App ID 全苹果唯一，`com.uozi.uTerm` 只有我们的团队能用）。各 target 的 bundle id、iCloud 容器、钥匙串访问组、
+  远控进程的 launchd 任务名都由这个前缀派生；远控进程、本机终端的辅助进程与 holder 之间按「同一团队签名」互认，
+  团队号与身份都在运行时读，不用改源码。第一次构建用 Xcode 打开工程、在 Signing & Capabilities 里让它注册 App ID
+  与 iCloud 容器，或者命令行加 `-allowProvisioningUpdates`。
 - **引擎**：`vendor/libghostty-spm` 是带补丁的 libghostty-spm（补丁见它的 `UTERM-PATCHES.md`），两个 xcframework 不进版本库，
   `make engine` 按 `ENGINE.lock` 取或现编。
 - **应用内更新与中继一键部署**：源码构建默认没有（入口自动隐藏）。要的话在 `Config/Local.xcconfig` 里配自己的更新源与中继
   发布地址，见 `Config/Local.xcconfig.example`。
-- **iCloud 同步**：用的是 `iCloud.com.uozi.uTerm` 容器，你自己的团队用不了它；换 bundle id 与容器才能同步。
+- **iCloud 同步**：容器是 `iCloud.<bundle id 前缀>`，和正式版不通。`Local.xcconfig.example` 里把环境设成 Development：
+  新容器的 Production 里还没有 schema，同步会静默失败。
 
 ## 测试
 

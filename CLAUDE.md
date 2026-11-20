@@ -171,6 +171,11 @@ App 更新、崩溃、被强制结束时已建立的远控连接不断。方案�
   **回来的 App 换了 build（更新）时远控进程立即退出**：换过包的旧进程过不了 App 的签名核对（`-67065`），tccd 也不认它的
   屏幕录制授权（手机开屏幕报「用户拒绝」）。App 连续几次等不到握手回话就注销再注册它（救 2.1.5 及以前不会自己退的旧进程）；握手 10 秒没回也算一次（`RemoteHostAgent.helloTimeout`：launchd 拉不起进程时连接不断、只是一直排队，没有超时 App 会永远停在「正在连接」）。开发机上的典型起因：开机时系统按 bundle id 重新登记任务，挑中了 build 号更大的工作树 Debug 构建，之后那份被重编或删掉；或后台项目记录里缓存着当年开发签名的启动约束（launchd 报 `Launch Constraint Violation`）。先 `lsregister -u` 掉非 `/Applications` 的副本，再让 App 注销再注册（重启 App 即可触发）。
   所以更新会让远控连接断一次，见方案文档 §4.5。
+- **进程身份不写死**：bundle id 前缀是构建设置 `UTERM_BUNDLE_ID`（`Config/Version.xcconfig`，正式版 `com.uozi.uTerm`，
+  外部贡献者在 `Config/Local.xcconfig` 换成自己的），9 个 target 的 bundle id、entitlements、iOS 后台任务 id、远控进程的
+  launchd plist（构建时按前缀替换，正式前缀下逐字节不变）都由它派生。代码里的 mach 服务名、XPC 服务名、互认身份、登录项 id
+  一律走 `AppIdentity`（`uTermHolder/CodeSigningTeam.swift`，读本进程 Info.plist 的 `UTermBundleIDBase`）；iOS 用
+  `Bundle.main.bundleIdentifier`。钥匙串服务名、日志 subsystem、队列名、UTType **不**跟着变（改了丢已有用户的数据）。
 - **加文件**：远控进程只编列出来的共享源码（pbxproj 里 `Exceptions for "uTerm" folder in "uTermRemoteHost" target`）。
   被控端代码引用了新的类型就要把它的文件加进去；那个文件又拖进主控端或终端引擎的代码时，把用得到的部分拆成单独文件。
 - **launchd plist**（`Config/com.uozi.uTerm.RemoteHost.plist`）在注册时被缓存，改了它 App 会先注销再注册（按内容摘要判断）；

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>UTermBundleIDBase</key>
+	<string>$(UTERM_BUNDLE_ID)</string>
 	<key>UTermRelayReleaseURL</key>
 	<string>$(UTERM_RELAY_RELEASE_URL)</string>
 	<!-- 系统设置（辅助功能等列表）、本地网络授权框里显示的名字在 zh-Hans.lproj / en.lproj 的 InfoPlist.strings 里给。

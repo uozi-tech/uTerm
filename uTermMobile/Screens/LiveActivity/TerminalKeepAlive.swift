@@ -12,8 +12,8 @@ import UserNotifications
 @MainActor
 @Observable
 final class TerminalKeepAlive {
-    /// Info.plist 的 `BGTaskSchedulerPermittedIdentifiers` 里登记的是 `com.uozi.uTerm.terminal.*`。
-    nonisolated static let identifierPrefix = "com.uozi.uTerm.terminal."
+    /// Info.plist 的 `BGTaskSchedulerPermittedIdentifiers` 里登记的是 `$(UTERM_BUNDLE_ID).terminal.*`（必须以 bundle id 开头）。
+    nonisolated static let identifierPrefix = (Bundle.main.bundleIdentifier ?? "com.uozi.uTerm") + ".terminal."
     /// 菜单里给的几档（分钟）。
     nonisolated static let durations = [15, 30, 60]
     /// 程序都停下之后再等多久结束。

@@ -12,7 +12,7 @@ import Foundation
 @available(iOS 26.0, *)
 @MainActor
 final class ContinuedProcessingLease {
-    /// Info.plist 的 `BGTaskSchedulerPermittedIdentifiers` 里登记的通配前缀（如 `com.uozi.uTerm.parallel.`）。
+    /// Info.plist 的 `BGTaskSchedulerPermittedIdentifiers` 里登记的通配前缀（如 `<bundle id>.parallel.`）。
     /// 每次提交用一个新后缀：同一个标识只能注册一次，重复注册系统会杀掉 App。
     private let identifierPrefix: String
     private var task: BGContinuedProcessingTask?

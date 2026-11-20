@@ -30,7 +30,7 @@ final class BackgroundServiceSettings {
         func unregister() throws { try service.unregister() }
     }
 
-    static let loginItemIdentifier = "com.uozi.uTerm.BackgroundLauncher"
+    static let loginItemIdentifier = AppIdentity.backgroundLauncher
     enum Keys {
         static let launchAtLogin = DefaultsKey.backgroundLaunchAtLogin
         static let allowOnDemandLaunch = DefaultsKey.backgroundAllowOnDemandLaunch

@@ -4,6 +4,12 @@
 // 进程间互认（远控进程、本机终端的辅助进程、holder）按「同一团队签名」判断，团队号从签名里读，不用另外配。
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
 
+// bundle id 前缀：App ID 全苹果唯一，com.uozi.uTerm 只有 uTerm 的团队能注册，用你自己的团队签名就要换成自己的。
+// 9 个 target 的 bundle id、iCloud 容器（iCloud.<前缀>）、钥匙串访问组、远控进程的 launchd 任务名都跟着它走。
+UTERM_BUNDLE_ID = com.example.uterm
+// iCloud 同步：新容器的 Production 里还没有 schema，同步会静默失败；用 Development，CloudKit 会按模型自动建。
+UTERM_ICLOUD_ENVIRONMENT = Development
+
 // 可选：应用内更新与中继一键部署。不填就没有这两个功能（各自的入口自动隐藏）。
 // URL 里的 `//` 要写成 `/$()/`，否则会被当成注释。
 // UTERM_SU_FEED_URL = https:/$()/example.com/uTerm/appcast.xml

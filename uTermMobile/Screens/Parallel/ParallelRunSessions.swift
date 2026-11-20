@@ -43,9 +43,9 @@ final class ParallelRunSession: Identifiable {
 /// - 跑完时 App 不在前台：发一条本地通知（静默授权，不弹授权框）。
 @MainActor
 final class ParallelBackgroundKeeper {
-    /// Info.plist 的 `BGTaskSchedulerPermittedIdentifiers` 里登记的是 `com.uozi.uTerm.parallel.*`；
+    /// Info.plist 的 `BGTaskSchedulerPermittedIdentifiers` 里登记的是 `$(UTERM_BUNDLE_ID).parallel.*`（必须以 bundle id 开头）；
     /// 每次提交用一个新后缀（同一标识只能注册一次，重复注册系统会杀掉 App）。
-    nonisolated static let identifierPrefix = "com.uozi.uTerm.parallel."
+    nonisolated static let identifierPrefix = (Bundle.main.bundleIdentifier ?? "com.uozi.uTerm") + ".parallel."
 
     private let sessions: () -> [ParallelRunSession]
     /// iOS 26 的 `ContinuedProcessingLease`（类型擦除，免得整个类挂可用性标注）。

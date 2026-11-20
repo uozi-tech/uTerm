@@ -11,7 +11,7 @@
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.uozi.uTerm.holder</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -42,5 +42,7 @@
 	<string>你在 uTerm 的本机终端里运行的程序要访问可移除宗卷上的文件。</string>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>你在 uTerm 的本机终端里运行的程序要访问网络宗卷上的文件。</string>
+	<key>UTermBundleIDBase</key>
+	<string>$(UTERM_BUNDLE_ID)</string>
 </dict>
 </plist>

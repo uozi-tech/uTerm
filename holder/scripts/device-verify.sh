@@ -18,7 +18,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-bundle_id=com.uozi.uTerm
+bundle_id=${UTERM_BUNDLE_ID:-com.uozi.uTerm}
 other_app=com.apple.Preferences
 suite=uTermMobileTests/MobileTerminalDeviceVerifyTests
 

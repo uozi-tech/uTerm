@@ -79,10 +79,10 @@
 	     这类任务不需要 UIBackgroundModes 里的 processing。 -->
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.uozi.uTerm.parallel.*</string>
+		<string>$(UTERM_BUNDLE_ID).parallel.*</string>
 		<!-- 终端「离开后继续运行」（TerminalKeepAlive），同为 BGContinuedProcessingTask。 -->
-		<string>com.uozi.uTerm.terminal.*</string>
-		<string>com.uozi.uTerm.relay.renewCertificates</string>
+		<string>$(UTERM_BUNDLE_ID).terminal.*</string>
+		<string>$(UTERM_BUNDLE_ID).relay.renewCertificates</string>
 	</array>
 	<!-- 终端状态上灵动岛和锁屏（TerminalActivityCenter，组件扩展 uTermLiveActivity 负责画）。
 	     只靠 App 自己更新，没有推送，所以不需要 NSSupportsLiveActivitiesFrequentUpdates。 -->

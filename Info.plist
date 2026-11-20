@@ -14,6 +14,8 @@
 	<string>$(UTERM_SU_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>$(UTERM_SU_PUBLIC_ED_KEY)</string>
+	<key>UTermBundleIDBase</key>
+	<string>$(UTERM_BUNDLE_ID)</string>
 	<key>UTermRelayReleaseURL</key>
 	<string>$(UTERM_RELAY_RELEASE_URL)</string>
 	<key>SUScheduledCheckInterval</key>

@@ -1457,7 +1457,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n# holder 是 App 包（uterm-holder.app）；旧版本的裸可执行文件 Helpers/uterm-holder 一并删掉。\n/bin/rm -rf \"$helpers/uterm-holder\" \"$helpers/uterm-holder.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder.app\" \"$helpers/uterm-holder.app\"\n/bin/rm -f \"$helpers/uterm-ssh\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-ssh\" \"$helpers/uterm-ssh\"\n# 远控进程（SMAppService.agent）：先删后拷，运行中的旧版本映射着旧文件。plist 由 launchd 在注册时读取。\n/bin/rm -rf \"$helpers/uTermRemoteHost.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermRemoteHost.app\" \"$helpers/uTermRemoteHost.app\"\nagents=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents\"\n/bin/mkdir -p \"$agents\"\n/bin/cp \"${SRCROOT}/Config/com.uozi.uTerm.RemoteHost.plist\" \"$agents/com.uozi.uTerm.RemoteHost.plist\"\n";
+			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n# holder 是 App 包（uterm-holder.app）；旧版本的裸可执行文件 Helpers/uterm-holder 一并删掉。\n/bin/rm -rf \"$helpers/uterm-holder\" \"$helpers/uterm-holder.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder.app\" \"$helpers/uterm-holder.app\"\n/bin/rm -f \"$helpers/uterm-ssh\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-ssh\" \"$helpers/uterm-ssh\"\n# 远控进程（SMAppService.agent）：先删后拷，运行中的旧版本映射着旧文件。plist 由 launchd 在注册时读取。\n/bin/rm -rf \"$helpers/uTermRemoteHost.app\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermRemoteHost.app\" \"$helpers/uTermRemoteHost.app\"\nagents=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents\"\n/bin/mkdir -p \"$agents\"\n# 任务名随 bundle id 前缀（UTERM_BUNDLE_ID）走；正式前缀下替换前后逐字节相同，App 按内容摘要判断不会重新注册。\n/usr/bin/sed \"s/com\\\\.uozi\\\\.uTerm/${UTERM_BUNDLE_ID}/g\" \"${SRCROOT}/Config/com.uozi.uTerm.RemoteHost.plist\" > \"$agents/${UTERM_BUNDLE_ID}.RemoteHost.plist\"\n";
 		};
 		CFCFCFCF000000000000F0F1 /* Set Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1686,7 +1686,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.LiveActivity;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).LiveActivity";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -1717,7 +1717,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.LiveActivity;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).LiveActivity";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -1755,7 +1755,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -1793,7 +1793,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -1815,7 +1815,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/uterm-holder-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.holder;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).holder";
 				PRODUCT_NAME = "uterm-holder";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1833,7 +1833,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/uterm-holder-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.holder;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).holder";
 				PRODUCT_NAME = "uterm-holder";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1861,7 +1861,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.RemoteHost;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).RemoteHost";
 				PRODUCT_NAME = uTermRemoteHost;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1892,7 +1892,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.RemoteHost;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).RemoteHost";
 				PRODUCT_NAME = uTermRemoteHost;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1912,7 +1912,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/uTermShellAgent-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.ShellAgent;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).ShellAgent";
 				PRODUCT_NAME = uTermShellAgent;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1929,7 +1929,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/uTermShellAgent-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.ShellAgent;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).ShellAgent";
 				PRODUCT_NAME = uTermShellAgent;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1945,7 +1945,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.SSH;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).SSH";
 				PRODUCT_NAME = "uterm-ssh";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1961,7 +1961,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.SSH;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).SSH";
 				PRODUCT_NAME = "uterm-ssh";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2126,7 +2126,7 @@
 				);
 				LM_SKIP_METADATA_EXTRACTION = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -2166,7 +2166,7 @@
 				);
 				LM_SKIP_METADATA_EXTRACTION = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -2198,7 +2198,7 @@
 				);
 				LM_SKIP_METADATA_EXTRACTION = YES;
 				MACOSX_DEPLOYMENT_TARGET = "$(RECOMMENDED_MACOSX_DEPLOYMENT_TARGET)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.BackgroundLauncher;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).BackgroundLauncher";
 				PRODUCT_NAME = uTermBackgroundLauncher;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2220,7 +2220,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)Tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_VERSION = 6.0;
@@ -2242,7 +2242,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)Tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_VERSION = 6.0;
@@ -2265,7 +2265,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobileTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)MobileTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -2290,7 +2290,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobileTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID)MobileTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -2320,7 +2320,7 @@
 				);
 				LM_SKIP_METADATA_EXTRACTION = YES;
 				MACOSX_DEPLOYMENT_TARGET = "$(RECOMMENDED_MACOSX_DEPLOYMENT_TARGET)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.BackgroundLauncher;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UTERM_BUNDLE_ID).BackgroundLauncher";
 				PRODUCT_NAME = uTermBackgroundLauncher;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;

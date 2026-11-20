@@ -21,11 +21,11 @@
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
 		<!-- 远控进程（uTermRemoteHost，SMAppService.agent）的 mach 服务，见 RemoteHostAgent.machServiceName。 -->
-		<string>com.uozi.uTerm.RemoteHost</string>
+		<string>$(UTERM_BUNDLE_ID).RemoteHost</string>
 	</array>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.uozi.uTerm</string>
+		<string>$(UTERM_ICLOUD_CONTAINER)</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
@@ -52,9 +52,9 @@
 	     漂了就用它 `--emit-schema` 生成 DDL → `cktool import-schema --environment development`
 	     → CloudKit Console 部署到 Production。详见该脚本头注释与 CLAUDE.md「CloudKit schema」。 -->
 	<key>com.apple.developer.icloud-container-environment</key>
-	<string>Production</string>
+	<string>$(UTERM_ICLOUD_ENVIRONMENT)</string>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
-	<string>$(TeamIdentifierPrefix)com.uozi.uTerm</string>
+	<string>$(TeamIdentifierPrefix)$(UTERM_BUNDLE_ID)</string>
 	<!-- 技能安装：在用户**真实**家目录（非沙盒容器）下的 AI CLI 配置目录里建符号链接。
 	     没有这些例外，`~/.claude/skills` 等位置写不进去（uTable 踩过）。
 	     `/.local/bin/` 供可选的「同时链接到 ~/.local/bin/utermctl」使用。 -->
@@ -70,7 +70,7 @@
 	     两端须落在同一组才能互相读到。 -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.uozi.uTerm</string>
+		<string>$(AppIdentifierPrefix)$(UTERM_BUNDLE_ID)</string>
 	</array>
 </dict>
 </plist>

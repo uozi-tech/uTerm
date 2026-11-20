@@ -42,7 +42,7 @@ final class RemoteMacDirectoryLifecycle {
 
     /// 平时 App 查 Mac 在线状态时就顺手续了（`RemoteMacDirectory.startCertificateRenewals`）；这是给长期不打开
     /// App 的人的补充：系统挑空闲时机拉起 App 跑一下，不保证执行。
-    static let renewalTaskID = "com.uozi.uTerm.relay.renewCertificates"
+    static let renewalTaskID = (Bundle.main.bundleIdentifier ?? "com.uozi.uTerm") + ".relay.renewCertificates"
     private static var renewalRegistered = false
     private static weak var renewalTarget: RemoteMacDirectory?
 

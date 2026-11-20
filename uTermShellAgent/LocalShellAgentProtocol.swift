@@ -15,11 +15,11 @@ import Foundation
 /// 这个文件同时编进主程序与辅助程序（`uTermShellAgent` 文件夹对 uTerm target 只放行它）。
 nonisolated enum LocalShellAgent {
     /// XPC 服务名 = 辅助程序的 bundle id（`NSXPCConnection(serviceName:)` 用）。
-    static let serviceName = "com.uozi.uTerm.ShellAgent"
+    static let serviceName = AppIdentity.shellAgent
     /// 只接受同一团队签名的 uTerm 主程序来连：起的是这个用户的登录 shell，不能谁都能要。远控进程（`uTermRemoteHost`）包里
     /// 也嵌了一份这个服务，替它执行远程文件请求，所以也放行它。
     static let clientRequirement =
-        CodeSigningTeam.requirement(identifiers: ["com.uozi.uTerm", "com.uozi.uTerm.RemoteHost"])
+        CodeSigningTeam.requirement(identifiers: [AppIdentity.app, AppIdentity.remoteHost])
 }
 
 @objc nonisolated protocol LocalShellAgentProtocol {

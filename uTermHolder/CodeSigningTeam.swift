@@ -1,4 +1,30 @@
 import Foundation
+
+/// 本构建的 bundle id 前缀（构建设置 `UTERM_BUNDLE_ID`，正式版是 `com.uozi.uTerm`）与由它派生的各进程身份。
+///
+/// 用自己团队签名的构建会换前缀（App ID 全苹果唯一），所以进程间互认、XPC 服务名、launchd 任务名都不能写死：
+/// 各进程的 Info.plist 带着 `UTermBundleIDBase = $(UTERM_BUNDLE_ID)`，这里从本进程读。读不到（单元测试的宿主以外、
+/// 没有这个键的进程）就退回正式版的前缀。
+///
+/// 只管跟签名身份绑在一起的名字。钥匙串的服务名、日志 subsystem、队列名、UTType 这些内部名字不跟着变：
+/// 改了会让已有用户的数据对不上，而它们和签名无关。
+nonisolated enum AppIdentity {
+    static let officialBase = "com.uozi.uTerm"
+    static let base: String = resolve(Bundle.main.object(forInfoDictionaryKey: "UTermBundleIDBase"))
+
+    /// 主程序（macOS / iOS）。
+    static var app: String { base }
+    static var remoteHost: String { base + ".RemoteHost" }
+    static var shellAgent: String { base + ".ShellAgent" }
+    static var backgroundLauncher: String { base + ".BackgroundLauncher" }
+
+    static func resolve(_ value: Any?) -> String {
+        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty, !text.contains("$(") else { return officialBase }
+        return text
+    }
+}
+
 #if os(macOS)
 import Security
 
