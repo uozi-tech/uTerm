@@ -1,5 +1,5 @@
 {
-  "originHash" : "d3348626797968e311499e578b69415468ea2bdbf57dac4b0ae8ae4685b0bbba",
+  "originHash" : "aec6dd4041cfbeb3a6c14ea627a12b9614985981a8818d1375cac75af79fe6a2",
   "pins" : [
     {
       "identity" : "bigint",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "63feef7820abb1a8fb08587d7da56bb0b7db8751",
         "version" : "6.0.1"
-      }
-    },
-    {
-      "identity" : "citadel",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/uozi-tech/Citadel.git",
-      "state" : {
-        "revision" : "38da75e88efca34232d67bb35ec267651a8c1e30",
-        "version" : "1.0.2"
       }
     },
     {
@@ -112,19 +103,10 @@
     {
       "identity" : "swift-nio",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-nio.git",
+      "location" : "git@github.com:apple/swift-nio.git",
       "state" : {
         "revision" : "2f58d8ef84438d6517fc78bcea2f8527e3c72936",
         "version" : "2.105.0"
-      }
-    },
-    {
-      "identity" : "swift-nio-ssh",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/uozi-tech/swift-nio-ssh.git",
-      "state" : {
-        "revision" : "2299e814478d308aa3ae530cb6678910be872e72",
-        "version" : "1.0.0"
       }
     },
     {
@@ -216,8 +198,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/uozi-tech/uAppKit.git",
       "state" : {
-        "revision" : "1877d79f4c37e8f2098ab1623b116db2d7bcc74f",
-        "version" : "1.22.0"
+        "revision" : "69e10cf031a0aedcb959bee6e8bbab69dcf15812",
+        "version" : "1.23.0"
       }
     }
   ],
