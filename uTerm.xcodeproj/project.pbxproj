@@ -489,9 +489,24 @@
 			);
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
 		};
+		484F4C4445520000000000E1 /* Exceptions for "uTermHolder" folder in "uTermShellAgent" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				CodeSigningTeam.swift,
+			);
+			target = 5348454C4C00000000000004 /* uTermShellAgent */;
+		};
+		484F4C4445520000000000E2 /* Exceptions for "uTermHolder" folder in "uTermRemoteHost" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				CodeSigningTeam.swift,
+			);
+			target = 52484F53540000000000000E /* uTermRemoteHost */;
+		};
 		484F4C4445520000000000D1 /* Exceptions for "uTermHolder" folder in "uTermMobile" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				CodeSigningTeam.swift,
 				HolderOutputLog.swift,
 				HolderServer.swift,
 				main.swift,
@@ -685,6 +700,8 @@
 				484F4C444552000000000002 /* Exceptions for "uTermHolder" folder in "uTerm" target */,
 				484F4C4445520000000000D1 /* Exceptions for "uTermHolder" folder in "uTermMobile" target */,
 				555445524D53534800000004 /* Exceptions for "uTermHolder" folder in "uterm-ssh" target */,
+				484F4C4445520000000000E1 /* Exceptions for "uTermHolder" folder in "uTermShellAgent" target */,
+				484F4C4445520000000000E2 /* Exceptions for "uTermHolder" folder in "uTermRemoteHost" target */,
 			);
 			path = uTermHolder;
 			sourceTree = "<group>";

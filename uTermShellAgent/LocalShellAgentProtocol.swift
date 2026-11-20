@@ -19,8 +19,7 @@ nonisolated enum LocalShellAgent {
     /// 只接受同一团队签名的 uTerm 主程序来连：起的是这个用户的登录 shell，不能谁都能要。远控进程（`uTermRemoteHost`）包里
     /// 也嵌了一份这个服务，替它执行远程文件请求，所以也放行它。
     static let clientRequirement =
-        "anchor apple generic and (identifier \"com.uozi.uTerm\" or identifier \"com.uozi.uTerm.RemoteHost\") "
-        + "and certificate leaf[subject.OU] = \"ABCDE12345\""
+        CodeSigningTeam.requirement(identifiers: ["com.uozi.uTerm", "com.uozi.uTerm.RemoteHost"])
 }
 
 @objc nonisolated protocol LocalShellAgentProtocol {

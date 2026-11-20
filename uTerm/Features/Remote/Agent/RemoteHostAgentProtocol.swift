@@ -17,12 +17,10 @@ nonisolated enum RemoteHostAgent {
     /// 这一版说的协议版本。只在不兼容时加一（加方法、加字段不算）。
     static let protocolVersion = 1
 
-    /// 远控进程只接受同团队签名的 uTerm 主程序来连。
-    static let appRequirement =
-        "anchor apple generic and identifier \"com.uozi.uTerm\" and certificate leaf[subject.OU] = \"ABCDE12345\""
+    /// 远控进程只接受同团队签名的 uTerm 主程序来连（团队号取自己的签名，见 `CodeSigningTeam`）。
+    static let appRequirement = CodeSigningTeam.requirement(identifiers: ["com.uozi.uTerm"])
     /// App 只认同团队签名的远控进程。
-    static let agentRequirement =
-        "anchor apple generic and identifier \"\(bundleIdentifier)\" and certificate leaf[subject.OU] = \"ABCDE12345\""
+    static let agentRequirement = CodeSigningTeam.requirement(identifiers: [bundleIdentifier])
 
     /// App 不在时还对外服务多久（崩溃、被强制结束）。
     static let defaultGrace: Duration = .seconds(120)
