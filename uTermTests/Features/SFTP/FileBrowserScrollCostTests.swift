@@ -5,7 +5,7 @@ import XCTest
 @testable import uTerm
 
 // 形状抄自 `uTermTests/Support/ProbeSmokeTests.swift`（链路自证），量法照
-// `<workspace>/uTable/docs/swiftui-scroll-perf-playbook.md` §一 四把尺。
+// uTable 仓库的 `docs/swiftui-scroll-perf-playbook.md` §一 四把尺。
 //
 // 被测对象是**两个共用 `FileBrowserModel` 数据的列表**：
 // - `SFTPFileTable`（独立 SFTP 窗口的文件表，经真 `SFTPBrowserView` 挂载）

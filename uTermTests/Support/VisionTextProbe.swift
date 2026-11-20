@@ -2,7 +2,7 @@ import AppKit
 import CoreML
 import Vision
 
-// 抄自 uTable commit aaea666（`git -C <workspace>/uTable log -1 --format=%h -- uTableTests/VisionTextProbe.swift`）。
+// 抄自 uTable commit aaea666（在 uTable 仓库里 `git log -1 --format=%h -- uTableTests/VisionTextProbe.swift`）。
 //
 // 移植到 uTerm 时的改动（只做编译所需的最小改动）：
 // `perform` 上的 `@concurrent` 去掉了 —— `uTermTests` target 没开

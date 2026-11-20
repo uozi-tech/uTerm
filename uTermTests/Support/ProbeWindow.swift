@@ -1,6 +1,6 @@
 import AppKit
 
-// 抄自 uTable commit bba891b（`git -C <workspace>/uTable log -1 --format=%h -- uTableTests/ProbeWindow.swift`）。
+// 抄自 uTable commit bba891b（在 uTable 仓库里 `git log -1 --format=%h -- uTableTests/ProbeWindow.swift`）。
 //
 // 移植到 uTerm 时的改动（只做编译所需的最小改动）：
 // 1. `uTermTests` target 的 `SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated`（uTable 的

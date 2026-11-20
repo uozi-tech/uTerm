@@ -11,7 +11,7 @@
 # To verify: grep -c "PBXFileSystemSynchronizedRootGroup" uTerm.xcodeproj/project.pbxproj
 #
 # Usage (if ever needed for a traditional PBXGroup project):
-#   export PATH="~/.gem/ruby/2.6.0/bin:$PATH"
+#   export PATH="$HOME/.gem/ruby/2.6.0/bin:$PATH"
 #   ruby scripts/add-editor-files-to-xcodeproj.rb
 
 require 'xcodeproj'

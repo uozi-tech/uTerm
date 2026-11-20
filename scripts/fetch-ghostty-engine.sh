@@ -8,7 +8,8 @@
 #   fetch-ghostty-engine.sh --check      只核对，不改任何东西；不是最新就非零退出
 #   fetch-ghostty-engine.sh --print KEY  打印清单里某一项的值（例如 engine_version）
 #
-# zip 从哪来：默认 <workspace>/uTerm-ghostty-artifacts/2026-11-17，环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from 可改。
+# zip 从哪来：环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from（维护者的目录由 internal/config.mk 设好）。都没有就退出 3，
+# make engine 据此退到从上游源码现编。
 # 清单里的 download_base 现在只是待办（还没上传），这里不联网。
 # 本机现编的（scripts/build-ghostty-engine.sh，stamp 是 `local-build <engine_version>`）也算就位：和清单的 engine_version
 # 一致就不动、不去找 zip。zip 找不到时退出码是 3（其余错误是 1），`make engine` 据此退到现编。
@@ -19,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCK="$REPO_ROOT/vendor/libghostty-spm/ENGINE.lock"
 DEST="$REPO_ROOT/vendor/libghostty-spm/BinaryTarget"
-FROM="${UTERM_GHOSTTY_ARTIFACTS:-<workspace>/uTerm-ghostty-artifacts/2026-11-17}"
+FROM="${UTERM_GHOSTTY_ARTIFACTS:-}"
 MODE=fetch
 PRINT_KEY=
 
@@ -99,6 +100,11 @@ fetch_one() {
 	fi
 
 	local src="$FROM/$zip"
+	if [ -z "$FROM" ]; then
+		echo "fetch-ghostty-engine: 没有指定放 zip 的目录（UTERM_GHOSTTY_ARTIFACTS / --from）。
+  清单要 ${zip}（sha256 ${sha}）；没有 zip 就从上游源码现编：make engine-build（scripts/build-ghostty-engine.sh）。" >&2
+		exit 3
+	fi
 	if [ ! -f "$src" ]; then
 		echo "fetch-ghostty-engine: 找不到 $src
   清单要 ${zip}（sha256 ${sha}）。

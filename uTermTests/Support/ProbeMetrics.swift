@@ -1,7 +1,7 @@
 import AppKit
 import Darwin
 
-// 抄自 uTable commit 65fb6eb（`git -C <workspace>/uTable log -1 --format=%h -- uTableTests/ProbeMetrics.swift`）。
+// 抄自 uTable commit 65fb6eb（在 uTable 仓库里 `git log -1 --format=%h -- uTableTests/ProbeMetrics.swift`）。
 //
 // 移植到 uTerm 时的改动（只做编译所需的最小改动）：
 // 1. 去掉 `@testable import uTable`。

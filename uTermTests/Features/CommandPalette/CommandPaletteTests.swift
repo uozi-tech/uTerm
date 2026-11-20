@@ -16,7 +16,7 @@ final class CommandPaletteTests: XCTestCase {
 
     private func sample() -> [CommandPaletteItem] {
         [
-            item("h1", .host, title: "demo-server", detail: "root@203.0.113.10"),
+            item("h1", .host, title: "demo-ci", detail: "root@203.0.113.10"),
             item("c1", .command, title: "新建主机…", detail: "创建一台新服务器"),
             item("f1", .file, title: "main.go", detail: "~/src/main.go"),
             item("s1", .setting, title: "设置 · 终端", detail: "字体、颜色、行距"),
@@ -36,7 +36,7 @@ final class CommandPaletteTests: XCTestCase {
     }
 
     func testFilterMatchesDetail() {
-        let r = filterCommandPalette(sample(), query: "47.113")
+        let r = filterCommandPalette(sample(), query: "203.0.113")
         XCTAssertEqual(r.map(\.id), ["h1"])
     }
 
@@ -78,7 +78,7 @@ final class CommandPaletteTests: XCTestCase {
 
     func testFilterThenGroupDropsEliminatedKind() {
         // 过滤掉所有非 host 项后，分组结果不应再出现 命令/文件/设置 组。
-        let filtered = filterCommandPalette(sample(), query: "uozi")
+        let filtered = filterCommandPalette(sample(), query: "demo")
         let sections = groupCommandPalette(filtered)
         XCTAssertEqual(sections.map(\.kind), [.host])
         XCTAssertEqual(sections.first?.items.map(\.id), ["h1"])

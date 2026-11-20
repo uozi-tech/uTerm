@@ -32,7 +32,7 @@ SIGNING_ARGS := CODE_SIGN_STYLE=$(CODE_SIGN_STYLE) ENABLE_HARDENED_RUNTIME=YES $
 # 发布 archive 钉住 Package.resolved：依赖版本可复现，且远端偶发不可达时不会整条失败。
 # 想让它照常联网解析依赖就传空值：make archive-mobile MOBILE_PACKAGE_ARGS=
 MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
-# macOS archive 同理：默认钉在 Package.resolved 上、不联网刷新依赖镜像。uAppKit ≥ 1.4.6 的清单用 git@github.com: 形式引用
+# macOS archive 同理：默认钉在 Package.resolved 上、不联网刷新依赖镜像。uAppKit ≥ 1.4.6 的清单曾用 SSH 形式引用
 # swift-nio / swift-log 等，与根工程的 https 形式同名异址，Xcode 的 SwiftPM 在「Updating from …」阶段会互锁挂死（0% CPU、无 git 子进程）。
 # 想照常联网解析依赖就传空值：make release PACKAGE_ARGS=
 PACKAGE_ARGS ?= -disableAutomaticPackageResolution -skipPackageUpdates
@@ -134,7 +134,7 @@ bump-major-mobile:
 
 # 终端引擎（GhosttyKit + libghostty-vt）的两个 xcframework 不进版本库：按 vendor/libghostty-spm/ENGINE.lock 取 zip、
 # 校验 sha256、解到 vendor/libghostty-spm/BinaryTarget/。已是清单要的那一份时什么都不做，所以挂在每个会编工程的目标前面。
-# zip 默认从 <workspace>/uTerm-ghostty-artifacts/2026-11-17 取，换地方传 UTERM_GHOSTTY_ARTIFACTS=<目录>。
+# zip 从 UTERM_GHOSTTY_ARTIFACTS=<目录> 取（维护者的目录在 internal/config.mk），没有就退到现编。
 # `make clean` 只清 build/，不动 vendor/ 下的这两份。
 # 取不到 zip（新克隆的仓库、换了机器；fetch 脚本退出码 3）时退到从上游源码现编（约 10–20 分钟，要联网），
 # 设 UTERM_GHOSTTY_NO_BUILD=1 就不退、直接失败。
