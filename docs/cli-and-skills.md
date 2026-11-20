@@ -545,7 +545,7 @@ utermctl ── socket ──▶ ControlHandler+Mac ──▶ RemoteMacFileProvi
 - 沙盒下 `NSHomeDirectory()` 是容器，必须走 `SkillTarget.realHomeDirectoryURL`
   （passwd 里的真实家目录）；并且 `uTerm.entitlements` 里要有
   `com.apple.security.temporary-exception.files.home-relative-path.read-write`
-  （`/.claude/`、`/.codex/`、`/.cursor/`、`/.codebuddy/`、`/.local/bin/`），否则链接建不了。
+  （`/.claude/`、`/.codex/`、`/.cursor/`、`/.codebuddy/`、`/.gemini/`、`/.local/bin/`），否则链接建不了。
   链接**目标**（app 包）不需要任何例外。
 - 新增一个工具（如 CodeBuddy）要改三处：`SkillTarget` 加 case（`rawValue` 即
   `~/.<rawValue>` 目录名）、entitlements 加 `/.<rawValue>/`、技能里定位
@@ -624,7 +624,7 @@ Translocation，挂在随机只读路径上）时，`transientBundleReason` 拒�
 ### 可选的 `~/.local/bin/utermctl`
 
 技能自带的 `~/.<tool>/skills/uterm/bin/utermctl` 是**主路径**：装了技能就一定能跑，
-不依赖用户的 shell 环境（Claude Code / Codex / Cursor / CodeBuddy 起的是非登录 shell，PATH 常与
+不依赖用户的 shell 环境（Claude Code / Codex / Cursor / CodeBuddy / Antigravity 起的是非登录 shell，PATH 常与
 用户终端里的不一样）。PATH 只是兜底，所以技能文档里的定位代码是「先 `command -v`，
 再逐个工具目录循环」，两条都找不到才报错。
 

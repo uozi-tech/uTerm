@@ -122,7 +122,7 @@ struct CLISettingsView: View {
                 SettingsEmptyRow(symbol: "magnifyingglass", text: String(localized: "正在检测本机的 AI 命令行工具…"))
             } else if skills.availableTargets.isEmpty {
                 SettingsEmptyRow(symbol: "sparkles",
-                                 text: String(localized: "没有检测到 Claude、Codex、Cursor 或 CodeBuddy 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy）。装好其中之一后回到这里即可安装技能。"))
+                                 text: String(localized: "没有检测到 Claude、Codex、Cursor、CodeBuddy 或 Antigravity 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy、~/.gemini/antigravity）。装好其中之一后回到这里即可安装技能。"))
             } else {
                 ForEach(skills.availableTargets, id: \.self) { target in
                     targetRow(target)

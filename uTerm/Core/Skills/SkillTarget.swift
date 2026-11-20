@@ -1,12 +1,14 @@
 import Darwin
 import Foundation
 
-/// 支持安装技能的 AI CLI 工具。每个工具在用户 home 下有一个 `~/.<tool>/skills` 目录。
+/// 支持安装技能的 AI CLI 工具。多数工具在用户 home 下有一个 `~/.<tool>/skills` 目录，
+/// Antigravity 通过 `~/.gemini/antigravity` 检测，安装到 `~/.gemini/config/skills`。
 nonisolated enum SkillTarget: String, CaseIterable, Sendable {
     case claude
     case codex
     case cursor
     case codebuddy
+    case antigravity
 
     var displayName: String {
         switch self {
@@ -14,6 +16,7 @@ nonisolated enum SkillTarget: String, CaseIterable, Sendable {
         case .codex: return "Codex"
         case .cursor: return "Cursor"
         case .codebuddy: return "CodeBuddy"
+        case .antigravity: return "Antigravity"
         }
     }
 
@@ -24,25 +27,49 @@ nonisolated enum SkillTarget: String, CaseIterable, Sendable {
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .cursor: return "cursorarrow.rays"
         case .codebuddy: return "curlybraces.square"
+        case .antigravity: return "atom"
         }
     }
 
-    /// 该工具的隐藏配置目录名，如 `.claude`。
-    private var dotDirectoryName: String { ".\(rawValue)" }
-
-    /// 该工具的配置根目录 `<home>/.<tool>`。它存不存在，就是用户用不用这个 CLI 的判据
-    /// —— 技能真正要装进去的地方，与有没有装桌面 app 无关。
-    func configDirectoryURL(homeDirectoryURL: URL) -> URL {
-        homeDirectoryURL
-            .appending(path: dotDirectoryName, directoryHint: .isDirectory)
-            .standardizedFileURL
+    /// 该工具在用户家目录下的顶层隐藏目录名，如 `.claude`、`.gemini`。
+    /// 沙盒 entitlements 的 `home-relative-path` 例外按这一层授予（`/<dotDirectoryName>/`）。
+    var dotDirectoryName: String {
+        switch self {
+        case .claude, .codex, .cursor, .codebuddy:
+            return ".\(rawValue)"
+        case .antigravity:
+            return ".gemini"
+        }
     }
 
-    /// `<home>/.<tool>/skills`。
+    /// 该工具的配置根目录（用于检测用户是否在用这个工具）：
+    /// 多数工具为 `<home>/.<tool>`，Antigravity 为 `<home>/.gemini/antigravity`。
+    /// 它存不存在，就是用户用不用这个工具的判据 —— 与有没有装桌面 app 无关。
+    func configDirectoryURL(homeDirectoryURL: URL) -> URL {
+        switch self {
+        case .claude, .codex, .cursor, .codebuddy:
+            homeDirectoryURL
+                .appending(path: dotDirectoryName, directoryHint: .isDirectory)
+                .standardizedFileURL
+        case .antigravity:
+            homeDirectoryURL
+                .appending(path: ".gemini/antigravity", directoryHint: .isDirectory)
+                .standardizedFileURL
+        }
+    }
+
+    /// 技能安装目录：多数工具为 `<home>/.<tool>/skills`，Antigravity 为 `<home>/.gemini/config/skills`。
     func skillsDirectoryURL(homeDirectoryURL: URL) -> URL {
-        configDirectoryURL(homeDirectoryURL: homeDirectoryURL)
-            .appending(path: "skills", directoryHint: .isDirectory)
-            .standardizedFileURL
+        switch self {
+        case .claude, .codex, .cursor, .codebuddy:
+            configDirectoryURL(homeDirectoryURL: homeDirectoryURL)
+                .appending(path: "skills", directoryHint: .isDirectory)
+                .standardizedFileURL
+        case .antigravity:
+            homeDirectoryURL
+                .appending(path: ".gemini/config/skills", directoryHint: .isDirectory)
+                .standardizedFileURL
+        }
     }
 
     /// **真实**的用户家目录。

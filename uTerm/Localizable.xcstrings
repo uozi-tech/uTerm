@@ -3041,7 +3041,7 @@
     "没有未分组的主机" : {
 
     },
-    "没有检测到 Claude、Codex、Cursor 或 CodeBuddy 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy）。装好其中之一后回到这里即可安装技能。" : {
+    "没有检测到 Claude、Codex、Cursor、CodeBuddy 或 Antigravity 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy、~/.gemini/antigravity）。装好其中之一后回到这里即可安装技能。" : {
 
     },
     "没能把验证框切到前台，密码没有输入（免得打进别的 App）。可以在画面上点一下那个框再试。" : {

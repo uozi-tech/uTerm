@@ -186,16 +186,19 @@ final class SkillDefinitionTests: XCTestCase {
         let lookup = Set(doc[start.upperBound..<end.lowerBound].split(separator: ",").map(String.init))
 
         for target in SkillTarget.allCases {
-            // 目录名从 `configDirectoryURL` 取，与安装器实际写入的位置同源。
-            let directory = target.configDirectoryURL(homeDirectoryURL: URL(fileURLWithPath: "/"))
-                .lastPathComponent
+            let entitlementPath = "/\(target.dotDirectoryName)/"
             XCTAssertTrue(
-                allowed.contains("/\(directory)/"),
-                "uTerm.entitlements 缺 /\(directory)/，沙盒版装不进 \(target.displayName)"
+                allowed.contains(entitlementPath),
+                "uTerm.entitlements 缺 \(entitlementPath)，沙盒版装不进 \(target.displayName)"
             )
+            // 从实际安装目录回推 `"$HOME"/.{…}/skills` 里的相对路径（如 claude、gemini/config）。
+            let skillsParent = target.skillsDirectoryURL(homeDirectoryURL: URL(fileURLWithPath: "/"))
+                .deletingLastPathComponent()
+                .path
+            let lookupEntry = skillsParent.hasPrefix("/.") ? String(skillsParent.dropFirst(2)) : skillsParent
             XCTAssertTrue(
-                lookup.contains(String(directory.dropFirst())),
-                "SKILL.md 的定位循环缺 \(directory)，\(target.displayName) 里找不到 utermctl"
+                lookup.contains(lookupEntry),
+                "SKILL.md 的定位循环缺 .\(lookupEntry)，\(target.displayName) 里找不到 utermctl"
             )
         }
     }

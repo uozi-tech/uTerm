@@ -27,7 +27,7 @@ UTERMCTL=""
 if command -v utermctl >/dev/null 2>&1; then
   UTERMCTL="$(command -v utermctl)"
 else
-  for p in "$HOME"/.{claude,codex,cursor,codebuddy}/skills/uterm/bin/utermctl; do
+  for p in "$HOME"/.{claude,codex,cursor,codebuddy,gemini/config}/skills/uterm/bin/utermctl; do
     if [ -x "$p" ]; then UTERMCTL="$p"; break; fi
     if [ -r "$p" ] && [ -z "$UTERMCTL" ]; then UTERMCTL="$p"; fi
   done
