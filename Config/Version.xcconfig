@@ -2,3 +2,8 @@
 // 由 scripts/bump-version.sh / make bump-* / make set-version 维护。
 // project 级 baseConfigurationReference 引用本文件，所有 target 继承。
 MARKETING_VERSION = 2.4.1
+
+// 维护者配置（团队号、Sparkle 更新源、中继发布地址）：internal/ 是维护者私有的，没有时跳过。
+#include? "../internal/Config/Internal.xcconfig"
+// 贡献者本地覆盖（团队号、bundle id 前缀等），已 gitignore；从 Local.xcconfig.example 复制。
+#include? "Local.xcconfig"

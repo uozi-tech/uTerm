@@ -11,9 +11,11 @@
 		<string>_uterm-group._tcp</string>
 	</array>
 	<key>SUFeedURL</key>
-	<string>https://downloads.example.com/uTerm/appcast.xml</string>
+	<string>$(UTERM_SU_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
-	<string>ZkS07iKmIlPCyTcEyY8jFluP/0HKIpy7vCpPZGeeIqI=</string>
+	<string>$(UTERM_SU_PUBLIC_ED_KEY)</string>
+	<key>UTermRelayReleaseURL</key>
+	<string>$(UTERM_RELAY_RELEASE_URL)</string>
 	<key>SUScheduledCheckInterval</key>
 	<integer>14400</integer>
 	<key>SUEnableInstallerLauncherService</key>

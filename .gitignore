@@ -1,5 +1,5 @@
 # 内部资料（真实地址、发版配置；将来是单独的私有仓库），永不进公开仓库
-/internal/
+/internal
 .claude/worktrees/
 # typo guard for .claude/worktrees/ — earlier runs leaked into .claire/
 .claire/
@@ -38,3 +38,5 @@ xcuserdata/
 
 # 主机上的会话保持进程的二进制不进版本库：make holder 从 holder/ 编出来放到这里
 uTerm/Services/SSH/HostHolder/Binaries/
+# 贡献者本地构建覆盖（见 Config/Local.xcconfig.example）
+Config/Local.xcconfig
