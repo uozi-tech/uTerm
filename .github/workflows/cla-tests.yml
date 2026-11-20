@@ -1,0 +1,19 @@
+# CLA 检查脚本自己的单测（只在改动 .github/cla/ 时跑）。普通 pull_request 触发，不带 secrets。
+name: CLA tests
+on:
+  pull_request:
+    paths: [".github/cla/**"]
+  push:
+    branches: [main]
+    paths: [".github/cla/**"]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: node --test .github/cla/

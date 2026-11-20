@@ -1,0 +1,19 @@
+# gitleaks 配置：默认规则，加上看过、确认无害的已知项。
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "测试夹具里现生成的测试私钥（uTermTests/Support/Fixtures/generate.sh，口令 testpass123）与截断的假私钥"
+targetRules = ["private-key"]
+paths = [
+  '''^uTermTests/Support/KeyImportFixtures\.swift$''',
+  '''^uTermTests/Services/SSH/SSHAuthResolverTests\.swift$''',
+  '''^uTermTests/Services/SSH/SSHKeyGeneratorTests\.swift$''',
+  '''^uTermTests/Services/SSH/PEMDocumentTests\.swift$''',
+  '''^uTermTests/Features/Keys/KeyPasteTextTests\.swift$''',
+]
+
+[[allowlists]]
+description = "类型名被当成 key 值：`let identityKey: Curve25519.KeyAgreement.PrivateKey` 之类"
+targetRules = ["generic-api-key"]
+regexes = ['''^(Curve25519|P256|P384|P521)\.(KeyAgreement|Signing)\.PrivateKey$''']

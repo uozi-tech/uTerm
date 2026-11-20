@@ -1,0 +1,43 @@
+# 贡献者许可协议（CLA）检查：PR 的每位提交作者都要签过一次 CLA.md。逻辑在 .github/cla/。
+#
+# 只 checkout 默认分支上的 .github/cla，绝不 checkout / 执行 PR 里的代码——pull_request_target 与
+# issue_comment 都在本仓库的上下文里跑、带着 secrets。合并门禁看 commit status「cla」。
+#
+# 需要：仓库（或组织）secret CLA_SIGNATURES_TOKEN = fine-grained PAT，只授权签名仓库的
+# Contents 读写。签名仓库是私有的，所有 uozi 项目共用一份签名。
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  # 同一个 PR 串行，签名写入不被取消
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    if: github.event_name == 'pull_request_target' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/cla
+          persist-credentials: false
+      - run: node .github/cla/run.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLA_SIGNATURES_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
+          CLA_SIGNATURES_REPO: uozi-tech/cla-signatures
+          CLA_SIGNATURES_PATH: signatures/cla-v1.json
+          CLA_DOCUMENT_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/CLA.md
