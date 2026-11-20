@@ -10,7 +10,7 @@
 #
 # zip 从哪来：环境变量 UTERM_GHOSTTY_ARTIFACTS 或 --from（维护者的目录由 internal/config.mk 设好）。都没有就退出 3，
 # make engine 据此退到从上游源码现编。
-# 清单里的 download_base 现在只是待办（还没上传），这里不联网。
+# 不发布二进制（已定），这里不联网下载。
 # 本机现编的（scripts/build-ghostty-engine.sh，stamp 是 `local-build <engine_version>`）也算就位：和清单的 engine_version
 # 一致就不动、不去找 zip。zip 找不到时退出码是 3（其余错误是 1），`make engine` 据此退到现编。
 # 测试用：--lock PATH 换清单，--dest PATH 换输出目录。

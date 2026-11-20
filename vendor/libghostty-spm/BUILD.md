@@ -116,8 +116,7 @@ nm -gU ghostty-vt.xcframework/ios-arm64/libghostty-vt.a | grep -v ' _ghostty_'  
 
 ## 4. 放进仓库
 
-1. 两个 zip 放到 artifacts 目录（`UTERM_GHOSTTY_ARTIFACTS` 指向的地方；公开下载地址还没有，占位在 `ENGINE.lock` 里。
-   对象传上去就不再覆盖）。
+1. 两个 zip 放到 artifacts 目录（`UTERM_GHOSTTY_ARTIFACTS` 指向的地方）。不发布二进制，别人的机器上 `make engine` 现编。
 2. 改 `ENGINE.lock`：两个 zip 的文件名与 sha256、`engine_version`、来源几行。
 3. 改 `uTerm/Features/Terminal/Shadow/TerminalEngineVersion.swift` 的 `TerminalEngineVersion.current`，和 `engine_version` 一字不差。
 4. `make engine`，两端重编，按 `UTERM-PATCHES.md`「升级步骤」第 8 条跑回归。

@@ -26,7 +26,7 @@ final class TerminalEngineLockTests: XCTestCase {
             let sha = try XCTUnwrap(lock["\(id)_sha256"], "\(id)_sha256")
             XCTAssertNotNil(sha.wholeMatch(of: /[0-9a-f]{64}/), "\(id)_sha256 不是 64 位小写十六进制：\(sha)")
         }
-        XCTAssertNil(lock["download_base"], "二进制还没上传：download_base 应当保持注释状态，脚本不联网")
+        XCTAssertNil(lock["download_base"], "不发布二进制：ENGINE.lock 里不该有 download_base，脚本不联网")
     }
 
     /// 版本串里写的 Ghostty 提交、补丁编号和清单里的来源、zip 文件名是同一回事。

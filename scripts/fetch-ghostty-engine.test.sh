@@ -153,7 +153,7 @@ if [ -f "$real" ]; then
 	else
 		bad "engine_version（$want）与 TerminalEngineVersion.swift 里的 TerminalEngineVersion.current 不一致"
 	fi
-	if grep -qE '^download_base=' "$real"; then bad "download_base 还没上传，应当保持注释状态"; else ok "download_base 仍是注释（没上传，不下载）"; fi
+	if grep -qE '^download_base=' "$real"; then bad "不发布二进制：ENGINE.lock 里不该有 download_base"; else ok "ENGINE.lock 里没有 download_base（不发布二进制、不下载）"; fi
 else
 	bad "找不到 vendor/libghostty-spm/ENGINE.lock"
 fi

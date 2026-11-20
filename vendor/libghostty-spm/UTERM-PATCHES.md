@@ -70,7 +70,7 @@ ghosttyvt_zip=ghostty-vt-5ebe501a-0023.xcframework.zip      sha256 4d418119…c5
 目标都先依赖它。`make clean` 只清 `build/`，不动这里。`make check-engine` 只核不取。
 
 - zip 所在目录由 `UTERM_GHOSTTY_ARTIFACTS=<目录> make engine` 指定（维护者的目录在 `internal/config.mk`）。
-- **zip 还没有公开下载地址**（计划放 GitHub Releases，`ENGINE.lock` 的 `download_base` 是注释），脚本现在不联网。
+- **不发布二进制**（已定）：zip 只在维护者本机，脚本不联网下载；别人的机器上走下面的现编。
 - **取不到 zip 时现编**：新克隆的仓库、换了机器，`make engine` 找不到 zip（fetch 脚本退出码 3）就自动改跑
   `scripts/build-ghostty-engine.sh`：按 `ENGINE.lock` 的「来源」几行克隆上游 tag、核对提交和 `Ghostty.ref`、接上我们的
   `Patches/ghostty/`、编 GhosttyKit（默认只编 macOS + iOS）和 vt、核版本串与导出表，装进 `BinaryTarget/`，stamp 写成

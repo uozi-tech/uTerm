@@ -29,7 +29,5 @@ ghosttyvt_zip=ghostty-vt-5ebe501a-0023.xcframework.zip
 ghosttyvt_sha256=4d418119fbdd525e3e72bcbd3dfd8eb6b74866c105816790ed06ef9d2ea6c5c8
 ghosttyvt_dir=ghostty-vt.xcframework
 
-# 待办：两个 zip 还没有公开下载地址（计划放 GitHub Releases）。上传之后的地址是 <download_base>/<zip 文件名>，
-# 对象传上去就不再覆盖（换二进制 = 换文件名）。现在脚本只从本地目录取（环境变量 UTERM_GHOSTTY_ARTIFACTS），
-# 不读这一项、也不联网；没有 zip 时 make engine 从上游源码现编。
-# download_base=
+# 不发布二进制（已定）：zip 只给维护者本机用（环境变量 UTERM_GHOSTTY_ARTIFACTS 指向的目录），脚本不联网下载。
+# 别人的机器上没有 zip，make engine 按上面「来源」几行从上游源码现编（约 15 分钟，会下载 Zig 与 Ghostty 源码）。
