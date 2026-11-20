@@ -11,9 +11,27 @@ paths = [
   '''^uTermTests/Services/SSH/SSHKeyGeneratorTests\.swift$''',
   '''^uTermTests/Services/SSH/PEMDocumentTests\.swift$''',
   '''^uTermTests/Features/Keys/KeyPasteTextTests\.swift$''',
+  # 同一批文件在历史里的旧位置
+  '''^uTermTests/KeyImportFixtures\.swift$''',
+  '''^uTermTests/PEMDocumentTests\.swift$''',
+  '''^uTermTests/SSHAuthResolverTests\.swift$''',
+]
+
+[[allowlists]]
+description = "私钥格式的常量（生成 / 识别 PEM 头），不是钥匙本身；含历史里的旧位置与 vendor 过的 Citadel"
+targetRules = ["private-key"]
+paths = [
+  '''^uTerm/SSH/KeyImport/OpenSSHRSAEncoder\.swift$''',
+  '''^vendor/Citadel/Sources/Citadel/(OpenSSHKey|SSHKeyTypeDetection)\.swift$''',
 ]
 
 [[allowlists]]
 description = "类型名被当成 key 值：`let identityKey: Curve25519.KeyAgreement.PrivateKey` 之类"
 targetRules = ["generic-api-key"]
-regexes = ['''^(Curve25519|P256|P384|P521)\.(KeyAgreement|Signing)\.PrivateKey$''']
+regexes = ['''^(Curve25519|P256|P384|P521)\.(KeyAgreement|Signing)\.PrivateKey$''', '''^RSASHA512PrivateKey$''']
+
+[[allowlists]]
+description = "Sparkle 的 EdDSA 公钥（历史里写在 pbxproj 的 INFOPLIST_KEY_SUPublicEDKey），本来就公开"
+targetRules = ["generic-api-key"]
+paths = ['''^uTerm\.xcodeproj/project\.pbxproj$''']
+regexes = ['''^[A-Za-z0-9+/]{43}=$''']
