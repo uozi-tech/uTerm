@@ -2,14 +2,14 @@
 
 Version 1.0
 
-> **中文摘要（不具法律效力，以下方英文条款为准）**：你保留自己贡献的版权；同时授予 uozi
+> **中文摘要（不具法律效力，以下方英文条款为准）**：你保留自己贡献的版权；同时授予 uozi（柚子星云科技（深圳）有限公司，Uozi Tech）
 > 一份永久、全球、免费、不可撤销的版权许可与专利许可，允许 uozi 以任何许可证（包括
 > 项目当前的 AGPL-3.0 以外的许可证，例如 App Store 分发所需的条款）使用、修改、再许可
 > 和分发你的贡献。你保证贡献是你本人的原创，或你有权提交；如果你的雇主对你的作品
 > 享有权利，需要先取得雇主许可。签一次，适用于 uozi 的所有项目。
 
 Thank you for your interest in contributing to software projects managed by
-**[公司法定名称 / Company legal name]** ("uozi", "we" or "us"). This Contributor License
+**柚子星云科技（深圳）有限公司 (Uozi Tech)** ("uozi", "we" or "us"). This Contributor License
 Agreement ("Agreement") documents the rights granted by contributors to us. To make this
 document effective, please sign it by posting the sign-off comment shown by the CLA check
 on your pull request. This is a legally binding document, so please read it carefully
