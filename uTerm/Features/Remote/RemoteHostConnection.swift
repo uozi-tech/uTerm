@@ -39,6 +39,8 @@ final class RemoteHostConnection {
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
     private(set) var peerID: UUID?
+    /// 对端握手时报的长期公钥（握手后才有）。等审批时据此判断它是不是刚由别的途径记进了信任表。
+    private(set) var peerKey: Data?
     /// 对端握手时报的平台（`RemoteDevicePlatform`）。老版本不报。
     private(set) var peerPlatform: String?
     /// 通过认证的时刻。同一台设备连着不止一条时，用最新的那条。
@@ -172,6 +174,7 @@ final class RemoteHostConnection {
             let peer = established.peer
             peerName = peer.deviceName
             peerID = peer.deviceID
+            peerKey = peer.staticKey
             peerPlatform = peer.platform
             peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
@@ -214,6 +217,13 @@ final class RemoteHostConnection {
             guard approved else {
                 link.send(RemoteMessage(.pairing, payload: Data([RemotePairingState.rejected.rawValue])),
                           thenClose: RemoteProtocolError.pairingRejected)
+                return
+            }
+            // 等审批期间它已经由设备组 / 担保记进了信任表（`RemoteHostServer.approvePendingPairings`）：按认识的设备放行，
+            // 不再当成在这台 Mac 上手动配对重记一遍——来路和配对时间（资历，§18）都不能被改掉。
+            if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey) {
+                try rememberRecognized(peer)
+                authorize(.trusted)
                 return
             }
             try server.trust(newPeer(from: peer))

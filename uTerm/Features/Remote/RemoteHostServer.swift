@@ -671,6 +671,18 @@ final class RemoteHostServer {
         resolvePairing(id, approved: false)
     }
 
+    /// 等审批的连接里，有的设备此刻已经被本机信任了（同一把钥匙；刚由设备组 / 担保记下的）：不用再等 Mac 上的人
+    /// 输码，直接放行，输码框随之收起。不然那条连接一直挂在「等待确认」，主控端那边也一直显示核对码，
+    /// 要断开重连才认出来（先点了一台没配对的 Mac、关掉核对码，再加入设备组，就是这样）。
+    func approvePendingPairings() {
+        for request in pairingRequests {
+            guard let connection = connections[request.id], let peerID = connection.peerID,
+                  let peerKey = connection.peerKey, identity.recognizes(id: peerID, publicKey: peerKey) else { continue }
+            AppLogger.notice("远控：「\(request.deviceName)」已经被本机信任，不用再输核对码", category: RemoteLog.category)
+            resolvePairing(request.id, approved: true)
+        }
+    }
+
     private func resolvePairing(_ id: UUID, approved: Bool) {
         pairingRequests.removeAll { $0.id == id }
         pairingWaiters.removeValue(forKey: id)?.resume(returning: approved)
@@ -740,6 +752,7 @@ final class RemoteHostServer {
             AppLogger.info("远控：拒绝 \(voucherName) 为「\(request.name)」开通：\(reason)", category: RemoteLog.category)
             return RemoteVouchResult(requestID: request.requestID, outcome: .rejected, reason: reason)
         case .alreadyTrusted:
+            approvePendingPairings()
             let internet = allowsInternetAccess(request.deviceID)
             return RemoteVouchResult(requestID: request.requestID, outcome: .alreadyTrusted, internetAccess: internet,
                                      relay: internet ? relayConfig(forPeer: request.deviceID) : nil)
@@ -766,6 +779,7 @@ final class RemoteHostServer {
         AppLogger.notice("远控：\(voucherName) 为「\(request.name)」开通了远程控制（公网接入：\(internet ? "是" : "否")）",
                          category: RemoteLog.category)
         refreshVouches(notify: true)
+        approvePendingPairings()
         let relay = internet ? relayConfig(forPeer: request.deviceID) : nil
         return RemoteVouchResult(requestID: request.requestID, outcome: .added, internetAccess: internet, relay: relay)
     }

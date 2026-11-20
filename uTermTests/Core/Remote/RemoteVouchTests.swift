@@ -443,6 +443,30 @@ final class RemoteVouchTests: XCTestCase {
         padClient.disconnect()
     }
 
+    /// 先点了一台没配对的 Mac（主控端显示核对码、Mac 上弹输码框），没输码就关掉；再加入设备组，那台 Mac 把它记成
+    /// 主控端。那条还在等审批的连接要马上放行、输码框收起，不用断开重连；来路仍是设备组，不被当成手动配对重记。
+    func test_pending_pairing_goes_through_once_the_group_adds_that_device() async throws {
+        let server = try await makeServer()
+        defer { server.stop() }
+        let pad = Device("iPad")
+        let padClient = try client(pad, to: server)
+        let connecting = Task { await padClient.connect() }
+        let asked = await waitUntil {
+            if case .awaitingApproval = padClient.state { return !server.pairingRequests.isEmpty }
+            return false
+        }
+        XCTAssertTrue(asked, "没配对的设备先等审批")
+
+        let added = await server.groupAddController(vouchRequest(pad))
+        XCTAssertEqual(added?.kind, .added)
+        let passed = await waitUntil { padClient.state == .connected }
+        XCTAssertTrue(passed, "设备组记下之后，等着的那条连接直接放行")
+        XCTAssertTrue(server.pairingRequests.isEmpty, "Mac 上的输码框随之收起")
+        await connecting.value
+        XCTAssertEqual(server.peerVouches[pad.id]?.isFromDeviceGroup(hostID: hostID), true, "来路仍是设备组")
+        padClient.disconnect()
+    }
+
     func test_mac_never_adds_an_owner_blocked_device_or_swaps_a_key_and_respects_the_switch() async throws {
         let server = try await makeServer()
         defer { server.stop() }
