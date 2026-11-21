@@ -62,6 +62,7 @@ enum MGlyph {
         case "wifi":       return "wifi"
         case "network":    return "network"
         case "diag":       return "stethoscope"
+        case "gift":       return "gift"
         default:           return "circle"
         }
     }

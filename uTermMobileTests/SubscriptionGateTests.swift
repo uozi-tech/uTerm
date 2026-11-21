@@ -132,6 +132,19 @@ final class SubscriptionStoreKitTests: XCTestCase {
         XCTAssertNotNil(expires)
     }
 
+    /// 永久版（兑换码发的买断商品）算作 uTerm Pro，没有到期日；和订阅同时在时以永久版为准。
+    func testLifetimeUnlocksWithoutExpiry() async throws {
+        let products = try await Product.products(for: [SubscriptionStore.lifetimeID])
+        XCTAssertEqual(products.first?.type, .nonConsumable)
+        let store = SubscriptionStore()
+        _ = try await session.buyProduct(identifier: SubscriptionStore.monthlyID)
+        _ = try await session.buyProduct(identifier: SubscriptionStore.lifetimeID)
+        await store.refresh()
+        XCTAssertEqual(store.status, .active(productID: SubscriptionStore.lifetimeID, expires: nil))
+        XCTAssertTrue(store.isLifetime)
+        XCTAssertTrue(store.isEntitled)
+    }
+
     func testRefundRevokes() async throws {
         let store = SubscriptionStore()
         let transaction = try await session.buyProduct(identifier: SubscriptionStore.yearlyID)

@@ -1,10 +1,22 @@
 {
   "identifier" : "5A1E7C0D",
-  "nonRenewingSubscriptions" : [
-
-  ],
+  "nonRenewingSubscriptions" : [],
   "products" : [
-
+    {
+      "displayPrice" : "59.99",
+      "familyShareable" : false,
+      "internalID" : "6772396804",
+      "localizations" : [
+        {
+          "description" : "全部功能，永久使用",
+          "displayName" : "uTerm Pro 永久版",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "productID" : "com.uozi.uTerm.pro.lifetime",
+      "referenceName" : "uTerm Pro Lifetime",
+      "type" : "NonConsumable"
+    }
   ],
   "settings" : {
     "_applicationInternalID" : "6772396745",
@@ -13,9 +25,7 @@
     "_lastSynchronizedDate" : 0,
     "_locale" : "zh_Hans",
     "_storefront" : "USA",
-    "_storeKitErrors" : [
-
-    ]
+    "_storeKitErrors" : []
   },
   "subscriptionGroups" : [
     {
@@ -30,12 +40,8 @@
       "name" : "uTerm Pro",
       "subscriptions" : [
         {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
+          "adHocOffers" : [],
+          "codeOffers" : [],
           "displayPrice" : "14.99",
           "familyShareable" : false,
           "groupNumber" : 1,
@@ -58,17 +64,11 @@
           "referenceName" : "uTerm Pro Yearly",
           "subscriptionGroupID" : "21800001",
           "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
+          "winbackOffers" : []
         },
         {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
+          "adHocOffers" : [],
+          "codeOffers" : [],
           "displayPrice" : "2.99",
           "familyShareable" : false,
           "groupNumber" : 1,
@@ -85,9 +85,7 @@
           "referenceName" : "uTerm Pro Monthly",
           "subscriptionGroupID" : "21800001",
           "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
+          "winbackOffers" : []
         }
       ]
     }

@@ -3,6 +3,7 @@ import Observation
 import StoreKit
 
 /// iOS 版的订阅（uTerm Pro，月付 / 年付，年付带免费试用）。StoreKit 2：本机读权益、监听交易更新。
+/// 另有一个只发兑换码、不在 App 里卖的买断商品（永久版，非消耗型），拿到它等于永久订阅。
 ///
 /// 规则：全部功能都在订阅里，门开在「开始用」的那一下（连主机、开文件、远控 Mac、跑快捷命令，见
 /// `MobileStore` 里的 `admits`）。没订阅也能看主机列表（iCloud 同步来的）、改设置、用体验主机。
@@ -23,7 +24,12 @@ final class SubscriptionStore {
     nonisolated static var productPrefix: String { (Bundle.main.bundleIdentifier ?? "com.uozi.uTerm") + ".pro" }
     nonisolated static var yearlyID: String { productPrefix + ".yearly" }
     nonisolated static var monthlyID: String { productPrefix + ".monthly" }
+    /// 订阅页里卖的两档。
     nonisolated static var productIDs: [String] { [yearlyID, monthlyID] }
+    /// 永久版：只经兑换码（App Store 的 offer code）发放，订阅页不卖。
+    nonisolated static var lifetimeID: String { productPrefix + ".lifetime" }
+    /// 算作 uTerm Pro 的全部商品。
+    nonisolated static var entitlementIDs: [String] { productIDs + [lifetimeID] }
 
     private(set) var status: Status = .unknown
     /// 订阅页是否在显示（根视图据此弹 sheet）。
@@ -63,6 +69,9 @@ final class SubscriptionStore {
 
     var isSubscribed: Bool { if case .active = status { return true } else { return false } }
 
+    /// 永久版（兑换码拿到的）：没有续期、不用管理订阅。
+    var isLifetime: Bool { if case .active(Self.lifetimeID, _) = status { return true } else { return false } }
+
     /// 启动时调一次：读当前权益，之后跟着交易更新（续订、退款、别的设备买的）走。
     func start() {
         guard fixed == nil, updatesTask == nil else { return }
@@ -81,10 +90,11 @@ final class SubscriptionStore {
         var best: (id: String, expires: Date?)?
         for await entitlement in Transaction.currentEntitlements {
             guard case .verified(let transaction) = entitlement,
-                  Self.productIDs.contains(transaction.productID),
+                  Self.entitlementIDs.contains(transaction.productID),
                   transaction.revocationDate == nil else { continue }
             if let expires = transaction.expirationDate, expires < Date() { continue }
-            if best == nil || (transaction.expirationDate ?? .distantFuture) > (best?.expires ?? .distantPast) {
+            // 没有到期日（永久版）算最晚，同时有订阅和永久版时取永久版。
+            if best.map({ (transaction.expirationDate ?? .distantFuture) > ($0.expires ?? .distantFuture) }) ?? true {
                 best = (transaction.productID, transaction.expirationDate)
             }
         }
