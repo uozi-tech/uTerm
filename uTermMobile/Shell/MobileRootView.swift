@@ -124,7 +124,7 @@ struct MobileRootView: View {
 
 // MARK: - 外壳：标签栏 ⇄ 侧栏自适应（系统原生 TabView）
 
-private struct MobileTabShell: View {
+struct MobileTabShell: View {
     @Environment(MobileStore.self) private var store
 
     var body: some View {
@@ -167,7 +167,7 @@ private struct MobileTabShell: View {
 // MARK: - 工作区层
 
 /// 收起时整层平移到屏幕右侧之外、不可点、读屏跳过；展开时从右侧推入（与下钻同向）。
-private struct WorkspaceLayer: View {
+struct WorkspaceLayer: View {
     @Environment(MobileStore.self) private var store
     @Environment(\.mChrome) private var chrome
 

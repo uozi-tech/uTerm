@@ -1224,3 +1224,40 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         link.send(RemoteMessage(.desktopKeyframe, channel: channel))
     }
 }
+
+// MARK: - 界面画廊
+
+extension RemoteDesktopSession {
+    /// 界面画廊（官网截图）用：不连 Mac，把 `image` 当成「只看一个窗口」时 Mac 送来的画面，经画布的显示管线上屏。
+    /// 先让 `RemoteDesktopScreen` 带着这个会话（`started:`）挂上画布，再调它。App 里不调。
+    func showGalleryWindow(_ image: CVPixelBuffer, windowID: UInt32, title: String, pointSize: CGSize) {
+        var shown = RemoteDesktopInfo(requestID: UUID())
+        shown.displayWidth = pointSize.width
+        shown.displayHeight = pointSize.height
+        shown.streamWidth = CVPixelBufferGetWidth(image)
+        shown.streamHeight = CVPixelBufferGetHeight(image)
+        shown.canControl = true
+        shown.windowID = windowID
+        shown.windowTitle = title
+        info = shown
+        self.windowID = windowID
+        contentFraction = CGSize(width: 1, height: 1)
+        awaitingFirstFrame = false
+        state = .streaming
+        receiver.showGalleryImage(image)
+    }
+}
+
+extension RemoteDesktopReceiver {
+    /// 画廊：把一张图当成解好的一帧整块画面，交给画布接上的显示回调。
+    func showGalleryImage(_ image: CVPixelBuffer) {
+        lock.lock()
+        let handler = onImage
+        lock.unlock()
+        let frame = RemoteDesktopFrame(flags: [.keyframe], codec: .hevc, sequence: 0, captureNanos: 0,
+                                       width: UInt16(CVPixelBufferGetWidth(image)),
+                                       height: UInt16(CVPixelBufferGetHeight(image)),
+                                       parameterSets: [], data: Data())
+        handler?(image, frame)
+    }
+}

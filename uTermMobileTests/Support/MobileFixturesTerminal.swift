@@ -53,6 +53,8 @@ struct MobileFakeTerminalScript: Sendable {
     var exitsWhenScriptEnds: Bool
     /// `connect()` 直接抛这个错（模拟建连失败，走控制器的 `.failed` 分支）。
     var connectFailure: String?
+    /// 连上后一次吐出的整段输出（官网截图用的写好的终端内容）；之后照常按节拍吐语料。
+    var transcript: String?
 
     init(linesPerSecond: Double,
          seconds: Double,
@@ -84,6 +86,13 @@ struct MobileFakeTerminalScript: Sendable {
     /// 与真实 SSH 在内网跑 `yes` 时被 PTY 流控压住的量级同阶。
     static func flood(seconds: Double = 10) -> MobileFakeTerminalScript {
         MobileFakeTerminalScript(linesPerSecond: 2000, seconds: seconds, corpus: .ansiColor)
+    }
+
+    /// 连上后吐一段写好的输出，然后安静（画廊里的「真实」终端画面）。
+    static func transcript(_ text: String) -> MobileFakeTerminalScript {
+        var s = MobileFakeTerminalScript(linesPerSecond: 0, seconds: 0, corpus: .plain, echoesInput: false)
+        s.transcript = text
+        return s
     }
 
     /// 一台已经连上、但不再吐任何东西的会话（量「常驻挂载」本身的代价用）。
@@ -285,9 +294,23 @@ actor MobileFakeTerminalTransport: TerminalBackend {
     // MARK: 输出泵
 
     private func startPump() {
+        if let text = script.transcript {
+            // 等视图把终端尺寸定下来再吐：按默认 80 列排好的内容换到窄屏上会折乱。
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(700))
+                await self?.emitTranscript(text)
+            }
+        }
         guard script.linesPerSecond > 0 else { scriptFinished = true; return }
         pumpTask?.cancel()
         pumpTask = Task { [weak self] in await self?.pump() }
+    }
+
+    private func emitTranscript(_ text: String) {
+        guard !closed else { return }
+        let bytes = Data(text.utf8)
+        outputContinuation.yield(.bytes(bytes))
+        bytesEmitted += bytes.count
     }
 
     /// 按 20ms 一批吐字节。批大小用**累加器**算，所以 60 行/秒（1.2 行/批）与

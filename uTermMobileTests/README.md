@@ -58,6 +58,7 @@ target 默认隔离取 `nonisolated`（跟 `uTermTests` 一致），而 `UIWindo
 | `ProbeSmokeTests.swift` | 链路自证：`@testable import` 通没通、整条量测链路、像素不是空壳 | |
 | `Probes/ProbeRigSelfTests.swift` | 尺本身准不准：三档 A/B、四条滚动驱动、**反向自证**、OCR、拆窗与宿主层级不漂移 | |
 | `Probes/StyleGalleryTests.swift` | **样式画廊（按需）**：每个页面 × 设备形态（iPhone Duo 外屏 466×678 / 展开 669×951 / 分屏 330 宽、iPhone、iPad）× 日夜各截一张 PNG，供人眼核对样式与折叠屏适配。不是闸门：没设 `UTERM_STYLE_SHOTS_DIR` 就整条 skip；跑法 `TEST_RUNNER_UTERM_STYLE_SHOTS_DIR=/tmp/shots xcodebuild test … -only-testing:uTermMobileTests/StyleGalleryTests`（窗口最大 820×1180，选 iPad 模拟器跑） | |
+| `Probes/PromoGalleryTests.swift` | **宣传截图（按需）**：干净夹具（常见名字的主机、真的 Claude Code 录制 `Support/Recordings/`）。`testPromoScreens` 用探针窗口出图；`testPromoScreensOnDevice` 在 iPhone Duo 模拟器（展开、横握）里整屏挂真的外壳，等宿主脚本截屏（带状态栏那一列与屏幕圆角）。同 `UTERM_STYLE_SHOTS_DIR` 开关 | |
 | `Probes/ParallelRunProbeTests.swift` | 并行执行屏：追加期心跳 / 单帧、跨格跳转、贴底跟随、AI 泳道展开、ticker 与脉冲的运行态门控 | 判定与读数见 `docs/scroll-perf-findings.md`「并行执行屏 · Shell（iOS）」 |
 
 ### `MobileProbeRig` —— 探针只写十几行
