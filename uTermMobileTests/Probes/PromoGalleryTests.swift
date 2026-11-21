@@ -343,15 +343,22 @@ final class PromoGalleryTests: XCTestCase {
     private func shootDevice<V: View>(_ name: String, dark: Bool, into dir: URL, settle: Duration = .milliseconds(900),
                                       before: () -> Void = {}, _ view: () -> V) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        window.frame = scene.coordinateSpace.bounds
-        window.windowLevel = .normal + 1
+        // 挂在宿主 App 自己的主窗口上（临时换掉它的根控制器，拍完换回）：Home 指示条藏不藏，系统只问主窗口。
+        let window = try XCTUnwrap(scene.windows.first { $0.isKeyWindow } ?? scene.windows.first)
+        let original = window.rootViewController
+        let originalStyle = window.overrideUserInterfaceStyle
+        defer {
+            window.rootViewController = original
+            window.overrideUserInterfaceStyle = originalStyle
+        }
         window.overrideUserInterfaceStyle = dark ? .dark : .light
-        window.rootViewController = UIHostingController(rootView: view()
+        let host = PromoHostingController(rootView: AnyView(view()
             .environment(\.mAccent, M.accent)
             .tint(M.accent)
-            .mMeasuresChrome())
-        window.makeKeyAndVisible()
+            .mMeasuresChrome()
+            .persistentSystemOverlays(.hidden)))
+        window.rootViewController = host
+        host.setNeedsUpdateOfHomeIndicatorAutoHidden()
         try await Task.sleep(for: .milliseconds(600))
         before()
         try await Task.sleep(for: settle)
@@ -369,7 +376,10 @@ final class PromoGalleryTests: XCTestCase {
         }
         try? FileManager.default.removeItem(at: marker)
         XCTAssertTrue(FileManager.default.fileExists(atPath: png.path), "截图脚本没截到 \(file)")
-        window.isHidden = true
-        window.rootViewController = nil
     }
+}
+
+/// 宣传截图用的托管控制器：请系统藏起 Home 指示条（SwiftUI 的 persistentSystemOverlays 在这个单独的窗口里不生效）。
+private final class PromoHostingController: UIHostingController<AnyView> {
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
 }
