@@ -67,6 +67,13 @@ struct HostsScreen: View {
 
                 RemoteMacSection()
 
+                // 体验主机：没有主机时始终显示；有主机后只在「全部」里留着，不挤占「最近」「分组」。
+                if hosts.isEmpty || filter == .all {
+                    DemoHostCard(onTerminal: { store.openDemo(.terminal) }, onFiles: { store.openDemo(.sftp) })
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 16)
+                }
+
                 if hosts.isEmpty {
                     MEmptyState(icon: "server", title: "还没有主机",
                                 message: "添加一台主机，即可连接终端、浏览文件或运行命令。",

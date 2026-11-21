@@ -47,8 +47,8 @@ struct WorkspaceScreen: View {
         .overlay(alignment: chrome.statusColumn?.edge == .leading ? .topLeading : .topTrailing) {
             if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
                 WorkspaceSideControls(
-                    // 远控标签没有 Agent（同标签条，见 WorkspaceTabStrip）。
-                    agentOn: focusedFrontTerminal.flatMap { $0.remote == nil ? $0.mode == .agent : nil },
+                    // 远控标签、体验主机没有 Agent（同标签条，见 WorkspaceTabStrip）。
+                    agentOn: focusedFrontTerminal.flatMap { $0.offersAgent ? $0.mode == .agent : nil },
                     isSplit: workspace.isSplit,
                     onAgent: { toggleAgent(in: workspace.focusedPane) },
                     onToggleSplit: toggleSplit)
@@ -58,6 +58,7 @@ struct WorkspaceScreen: View {
             }
         }
         .onChange(of: store.openTarget) { _, t in consume(t) }
+        .onChange(of: store.demoRequest) { _, r in consume(r) }
         .onChange(of: store.remoteTakeover) { _, t in consume(t) }
         .onChange(of: store.remoteFiles) { _, r in consume(r) }
         .onChange(of: followedSessionIDs) { _, _ in followRemoteSessions() }
@@ -90,9 +91,11 @@ struct WorkspaceScreen: View {
         // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
         // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
         .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
-            // 跳过远控标签：它挂的是不入库的临时主机，本来就不在列表里，不是被删了。
+            // 跳过远控标签与体验主机：它们挂的是不入库的临时主机，本来就不在列表里，不是被删了。
             // 不能按 modelContext 判：被同步删掉的主机 modelContext 也会变 nil，那正是要收掉的。
-            let orphaned = Set(workspace.tabs.filter { $0.terminal?.remote == nil }.map { $0.host.persistentModelID })
+            let orphaned = Set(workspace.tabs
+                .filter { $0.terminal?.remote == nil && !DemoHostProfile.isDemo($0.host) }
+                .map { $0.host.persistentModelID })
                 .subtracting(live)
             guard !orphaned.isEmpty else { return }
             for host in orphaned {
@@ -169,6 +172,28 @@ struct WorkspaceScreen: View {
                             controller: MobileSFTPController(remoteMac: request.client))
         files.controller.startRemote()
         workspace.open(.files(files))
+    }
+
+    /// 体验主机：已有同类标签就带到前台，没有就开一个。终端与文件共用进程里同一份模拟文件系统。
+    private func consume(_ request: MDemoRequest?) {
+        guard let request else { return }
+        store.demoRequest = nil
+        let host = DemoHostProfile.shared
+        if let existing = workspace.existing(host: host.persistentModelID, kind: request.kind) {
+            workspace.activate(existing.id)
+            return
+        }
+        switch request.kind {
+        case .terminal:
+            let term = TermTab(host: host, transportFactory: .demo)
+            term.controller.start(profile: host, container: context.container, relay: relay)
+            workspace.open(.terminal(term))
+        case .sftp:
+            let files = FileTab(host: host, controller: MobileSFTPController(demo: DemoSFTPProvider()))
+            files.controller.startDemo()
+            workspace.open(.files(files))
+        }
+        syncKeyboard()
     }
 
     /// 接管中的 Mac 的终端列表（按 Mac 上的标签顺序发来，重排了也会变）。nil = 这条连接上还没收到，
@@ -265,7 +290,7 @@ struct WorkspaceScreen: View {
 
     /// 切换当前终端标签的「终端 ⇄ Agent」模式（对齐 macOS 终端窗口的分段开关）。
     private func toggleAgent(in pane: MPane) {
-        guard let term = workspace.tab(pane.activeID)?.terminal else { return }
+        guard let term = workspace.tab(pane.activeID)?.terminal, term.offersAgent else { return }
         workspace.focus(pane: pane.id)
         withAnimation(.easeInOut(duration: 0.16)) {
             term.mode = term.mode == .agent ? .terminal : .agent

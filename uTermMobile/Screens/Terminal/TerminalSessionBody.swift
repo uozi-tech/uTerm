@@ -36,6 +36,11 @@ final class TermTab: Identifiable {
         self.controller = MobileTerminalController(transportFactory: transportFactory, hostSessionID: hostSessionID)
     }
 
+    /// 体验主机的标签（模拟 shell）。
+    var isDemo: Bool { DemoHostProfile.isDemo(host) }
+    /// 能切到 Agent：远控标签没有（Agent 跑在 Mac 那边），体验主机也没有（`run_command` 要真 SSH）。
+    var offersAgent: Bool { remote == nil && !isDemo }
+
     /// 远控标签：经 Mac 接入它上面的终端。
     init(host: ServerProfile, remote: MRemoteSource) {
         self.host = host

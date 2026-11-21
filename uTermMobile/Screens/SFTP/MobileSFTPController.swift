@@ -78,6 +78,19 @@ final class MobileSFTPController {
         started = true     // 误触的 `start(profile:…)` 不会去建 SSH 连接
     }
 
+    /// 体验主机：文件落在内存里的模拟文件系统上，不建任何连接。建好后调 `startDemo()` 列第一屏。
+    init(demo provider: DemoSFTPProvider) {
+        remoteMac = nil
+        browser = FileBrowserModel(provider: provider, startPath: DemoFileSystem.home,
+                                   sortOptions: Self.sortOptions, resolvesOwnerNames: false)
+        started = true     // 误触的 `start(profile:…)` 不会去建 SSH 连接
+    }
+
+    func startDemo() {
+        let browser = browser
+        connectTask = Task { await browser.load(DemoFileSystem.home) }
+    }
+
     /// 测试注入口（同 `FileBrowserModel.init(testProvider:startPath:)`）：
     /// 直接进入「已连上、当前目录 = `startPath`」的浏览态，不建任何真实连接。
     /// `started = true` 让误触的 `start(...)` 变成 no-op，绝不会回退到真实建连。
