@@ -2,6 +2,12 @@
 
 每个发布版本面向用户的改动。macOS 版是 `uTerm`，iOS / iPadOS 版是 `uTermMobile`，两者版本号前两段一致、各自递增 patch。
 
+## uTerm 2.4.2 (build 1296) - 2026-11-21
+
+新功能
+- AI 技能支持一键安装到 Antigravity（链接至 `~/.gemini/config/skills/uterm`）。
+- 远程桌面支持为被控 Mac 的系统验证弹窗直接输入密码或取消。
+
 ## uTermMobile 2.4.1 (build 1292) - 2026-11-20
 
 新功能
