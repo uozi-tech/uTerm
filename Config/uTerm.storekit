@@ -1,0 +1,99 @@
+{
+  "identifier" : "5A1E7C0D",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6772396745",
+    "_developerTeamID" : "B4MSBHVSCA",
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 0,
+    "_locale" : "zh_Hans",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21800001",
+      "localizations" : [
+        {
+          "description" : "uTerm Pro",
+          "displayName" : "uTerm Pro",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "name" : "uTerm Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "13.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6772396801",
+          "introductoryOffer" : {
+            "internalID" : "6772396803",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1W"
+          },
+          "localizations" : [
+            {
+              "description" : "全部功能，按年付费",
+              "displayName" : "uTerm Pro 年付",
+              "locale" : "zh_Hans"
+            }
+          ],
+          "productID" : "com.uozi.uTerm.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "uTerm Pro Yearly",
+          "subscriptionGroupID" : "21800001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "2.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6772396802",
+          "localizations" : [
+            {
+              "description" : "全部功能，按月付费",
+              "displayName" : "uTerm Pro 月付",
+              "locale" : "zh_Hans"
+            }
+          ],
+          "productID" : "com.uozi.uTerm.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "uTerm Pro Monthly",
+          "subscriptionGroupID" : "21800001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

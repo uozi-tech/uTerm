@@ -91,6 +91,19 @@ final class MobileStore {
     /// 远程桌面（Mac 面板「屏幕」发起）。根视图以全屏覆盖呈现。
     var remoteDesktop: MRemoteDesktopRequest?
 
+    /// 打开体验主机（主机页的体验卡发起）。工作区消费：已有同类标签就带到前台。
+    var demoRequest: MDemoRequest?
+
+    /// 订阅门禁（根视图接上 App 的那一份）。nil = 不设防（测试里单独建的 store）。
+    @ObservationIgnored weak var subscription: SubscriptionStore?
+
+    /// 「开始用」的门：订阅中就放行；否则弹订阅页，买成功后再跑一次 `retry`。
+    private func admits(_ retry: @escaping () -> Void) -> Bool {
+        guard let subscription, !subscription.isEntitled else { return true }
+        subscription.require(retry)
+        return false
+    }
+
     // MARK: - 连接中页（设计稿 m-connect `ConnectingCover`）
 
     /// 受保护连接请求：非空时根视图在所有标签之上呈现全屏「连接中」中转页。
@@ -101,6 +114,7 @@ final class MobileStore {
 
     /// 只把真正能下发的主机交给并行执行（剔除已删除 / 仅 SFTP、去重），一台都没有就不开。
     func runCommand(_ cmd: QuickCommand, hosts: [ServerProfile]) {
+        guard admits({ [weak self] in self?.runCommand(cmd, hosts: hosts) }) else { return }
         let targets = QuickCommandTargets.runnable(cmd.serverIDs, in: hosts)
         guard !targets.isEmpty else { return }
         let session = ParallelRunSession(request: ParallelRunRequest(
@@ -137,6 +151,7 @@ final class MobileStore {
     /// 连接本体随之跑在目标屏（终端 / 文件）里，连接中页观察其真实状态推进阶段。
     func requestConnect(_ host: ServerProfile, kind: MConnectKind, allowDuplicate: Bool = false) {
         guard connecting == nil else { return }   // 中转页已盖住下层，不应再有并发请求
+        guard admits({ [weak self] in self?.requestConnect(host, kind: kind, allowDuplicate: allowDuplicate) }) else { return }
         // 仅 SFTP 主机无法开终端：自动改走文件浏览（否则连接中页会卡在无法绑定的连接态）。
         let resolved: MConnectKind = (kind == .terminal && host.sftpOnly) ? .sftp : kind
         let req = MConnectRequest(host: host, kind: resolved, origin: tab)
@@ -153,6 +168,7 @@ final class MobileStore {
     /// 新终端（刚在 Mac 上开的本机 shell）。
     func takeOver(_ client: RemoteMacClient, focus: UUID) {
         guard connecting == nil else { return }
+        guard admits({ [weak self] in self?.takeOver(client, focus: focus) }) else { return }
         var sessionIDs = client.sessions.map(\.id)
         if !sessionIDs.contains(focus) { sessionIDs.append(focus) }
         let req = MConnectRequest(host: client.tabHost(for: focus), kind: .terminal, origin: tab)
@@ -168,8 +184,28 @@ final class MobileStore {
     /// 浏览一台 Mac 的文件：工作区里开（或带出已有的）它的文件标签。标签自己显示连接中 / 失败，不走连接中页。
     func openRemoteFiles(_ client: RemoteMacClient) {
         guard connecting == nil else { return }
+        guard admits({ [weak self] in self?.openRemoteFiles(client) }) else { return }
         remoteFiles = MRemoteFilesRequest(client: client)
         showWorkspace = true
+    }
+
+    /// 体验主机：模拟的 shell 与内存文件系统，没有要等的连接，不走连接中页，也不受订阅限制。
+    func openDemo(_ kind: MConnectKind) {
+        guard connecting == nil else { return }
+        demoRequest = MDemoRequest(kind: kind)
+        showWorkspace = true
+    }
+
+    /// 看 Mac 的屏幕（远程桌面，全屏覆盖呈现）。没订阅时先弹订阅页；早开的流随之关掉。
+    func openRemoteDesktop(_ request: MRemoteDesktopRequest) {
+        guard admits({ [weak self] in
+            self?.openRemoteDesktop(MRemoteDesktopRequest(client: request.client, tappedAt: request.tappedAt,
+                                                          windowID: request.windowID))
+        }) else {
+            request.session?.stop()
+            return
+        }
+        remoteDesktop = request
     }
 
     /// 连接中页跑完（已连接）：撤下中转页，露出目标会话。

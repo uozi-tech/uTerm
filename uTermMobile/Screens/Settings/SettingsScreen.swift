@@ -34,6 +34,7 @@ struct SettingsScreen: View {
                 VStack(spacing: 0) {
                     profileCard
                     actionsGroup
+                    SettingsSubscriptionSection()
                     ForEach(Self.sectionOrder) { section in
                         sectionView(section)
                     }

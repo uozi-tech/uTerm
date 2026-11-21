@@ -83,6 +83,7 @@ struct MobileTerminalTabRestorer: View {
     @Environment(MobileWorkspace.self) private var workspace
     @Environment(HostKeyChallengeRelay.self) private var relay
     @Environment(\.modelContext) private var context
+    @Environment(SubscriptionStore.self) private var subscriptions: SubscriptionStore?
     /// 订阅主机表（和 `WorkspaceScreen` 同一种取法）：首次出现时结果已经在了。
     @Query private var hosts: [ServerProfile]
     /// 测试宿主和正式版共用一份偏好：在里面记、恢复标签会把测试开的假标签变成对真实主机的连接，所以不碰。
@@ -94,7 +95,11 @@ struct MobileTerminalTabRestorer: View {
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .onAppear(perform: restoreOnce)
+            // 先等订阅状态读出来：没订阅就不把上次的会话连回去（连接也在订阅里）。
+            .task {
+                await subscriptions?.waitUntilResolved()
+                restoreOnce()
+            }
             .onChange(of: workspace.terminalTabArchive(showsWorkspace: store.showWorkspace)) { _, archive in
                 guard didRestore, let defaults else { return }
                 archive.save(to: defaults)
@@ -103,6 +108,7 @@ struct MobileTerminalTabRestorer: View {
 
     private func restoreOnce() {
         guard !didRestore, let defaults else { return }
+        guard subscriptions?.isEntitled ?? true else { return }
         didRestore = true
         let archive = MobileTerminalTabArchive.load(from: defaults)
         guard !archive.tabs.isEmpty else { return }

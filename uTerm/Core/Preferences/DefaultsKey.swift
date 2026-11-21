@@ -165,6 +165,9 @@ nonisolated enum DefaultsKey {
     /// iOS 调试：启动即对第一台在中继上的 Mac 跑 N 轮链路矩阵，结果打到标准输出。
     static let remoteDebugPathMatrix = "RemoteDebugPathMatrix"
     static let debugLayoutDiagnostics = "debug.layoutDiagnostics"
+    /// iOS 调试（只在 Debug 构建里认）：启动参数 `-UTermSubscriptionOverride active|inactive` 固定订阅状态，
+    /// 不碰 StoreKit（`SubscriptionStore.live()`）。
+    static let subscriptionOverride = "UTermSubscriptionOverride"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）
 

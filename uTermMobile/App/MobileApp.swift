@@ -26,6 +26,8 @@ struct MobileApp: App {
     @State private var remoteMacs = RemoteMacDirectory.mobile(relayStore: TestHostEnvironment.isActive ? nil : RemoteRelayConfigStore())
     /// 「我的设备」（设备组）：前台时一直读名册，别的设备想加入时弹输码单子（`RemoteGroupJoinHandler`）。全 App 一个。
     @State private var deviceGroupService = RemoteDeviceGroupService()
+    /// 订阅（uTerm Pro）。门禁在 `MobileStore` 的各个「开始用」入口上；测试宿主里视为已订阅。
+    @State private var subscriptions = SubscriptionStore.live()
     @Environment(\.scenePhase) private var scenePhase
 
     let modelContainer: ModelContainer
@@ -68,8 +70,11 @@ struct MobileApp: App {
                     if phase == .active { deviceGroupService.start(hosts: remoteMacs) } else if phase == .background { deviceGroupService.stop() }
                 }
                 .environment(cloudKitSync)
+                .environment(subscriptions)
+                .mobileSubscriptionPaywall(subscriptions)
                 .task {
                     sharedPreferences.startForAppLaunch()
+                    subscriptions.start()
                 }
         }
         .modelContainer(modelContainer)

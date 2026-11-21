@@ -20,6 +20,8 @@ struct MobileRootView: View {
     /// 终端状态上灵动岛 / 锁屏、后台提醒、「离开后继续运行」。
     @State private var activityCenter = TerminalActivityCenter()
     @Environment(\.modelContext) private var modelContext
+    /// 订阅门禁：交给 `MobileStore`，「开始用」的入口都经它（`MobileStore.admits`）。
+    @Environment(SubscriptionStore.self) private var subscriptions: SubscriptionStore?
 
     var body: some View {
         @Bindable var store = store
@@ -36,6 +38,7 @@ struct MobileRootView: View {
         }
         // 灵动岛 / 锁屏 / 通知点进来：切到那个终端标签页。
         .modifier(TerminalActivityLinkHandler())
+        .onAppear { store.subscription = subscriptions }
         .task {
             activityCenter.start(workspace: workspace)
             #if DEBUG

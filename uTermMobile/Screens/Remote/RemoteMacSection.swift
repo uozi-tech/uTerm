@@ -390,7 +390,7 @@ struct RemoteMacSheet: View {
         let client = self.client
         // 同终端：等面板收起再盖全屏，避免两个转场叠在一起。知道要多大时流已经在开了（`startDesktopEarly`）。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            store.remoteDesktop = MRemoteDesktopRequest(client: client, tappedAt: tapped, session: session, windowID: window)
+            store.openRemoteDesktop(MRemoteDesktopRequest(client: client, tappedAt: tapped, session: session, windowID: window))
         }
     }
 
