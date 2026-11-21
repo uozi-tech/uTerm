@@ -20,6 +20,14 @@ struct SFTPWindowView: View {
     /// `pages/sftp.jsx`）。同一窗口的标签共用一台服务器（由 `SFTPWindowID` 指定）。
     @State private var tabs: [SFTPBrowserTab] = [SFTPBrowserTab()]
     @State private var activeTabID: UUID?
+    /// 界面画廊注入的现成标签（假 SFTP 已接好）：不去连主机，关窗时也不释放。
+    private let isCatalog: Bool
+
+    init(windowID: SFTPWindowID?, catalogTabs: [SFTPBrowserTab]? = nil) {
+        self.windowID = windowID
+        self.isCatalog = catalogTabs != nil
+        if let catalogTabs { _tabs = State(initialValue: catalogTabs) }
+    }
 
     private var server: ServerProfile? {
         guard let id = windowID?.serverID else { return nil }
@@ -40,7 +48,7 @@ struct SFTPWindowView: View {
             // 不要开屏自动聚焦路径栏的搜索框：连接中窗口里只有这一个文本框，macOS 会在窗口
             // 成为 key 时把焦点自动交给它（实机反馈「连接中搜索框自动 focus」）。
             .disablesInitialAutoFocus()
-            .onDisappear { disposeAll() }
+            .onDisappear { if !isCatalog { disposeAll() } }
     }
 
     @ViewBuilder
@@ -80,7 +88,7 @@ struct SFTPWindowView: View {
             ZStack {
                 ForEach(tabs) { tab in
                     SFTPBrowserContainer(
-                        tab: tab, server: server,
+                        tab: tab, server: server, connects: !isCatalog,
                         openWorkspace: { openWorkspace(for: server) },
                         openTerminal: { openTerminal(for: server) })
                         .opacity(tab.id == effectiveActiveID ? 1 : 0)
@@ -178,8 +186,7 @@ struct SFTPBrowserTab: Identifiable {
     /// 本标签的「打开」（下载到本地交外部应用、保存自动回传；数据库交 uTable）。
     let externalOpen: ExternalOpenCoordinator
 
-    init() {
-        let model = FileBrowserModel()
+    init(model: FileBrowserModel = FileBrowserModel()) {
         self.model = model
         self.externalOpen = ExternalOpenCoordinator(
             provider: { [weak model] in model?.sftpProvider },
@@ -209,6 +216,8 @@ private struct OptionalExternalOpenBinding: ViewModifier {
 private struct SFTPBrowserContainer: View {
     let tab: SFTPBrowserTab
     let server: ServerProfile
+    /// 画廊里标签已经接好假 SFTP，不连。
+    var connects = true
     let openWorkspace: () -> Void
     let openTerminal: () -> Void
     @Environment(\.modelContext) private var modelContext
@@ -219,6 +228,7 @@ private struct SFTPBrowserContainer: View {
                         openTerminal: openTerminal)
             .hostKeySheet(tab.model.hostKeyRelay)
             .task(id: tab.id) {
+                guard connects else { return }
                 await tab.model.connect(profile: server, modelContainer: modelContext.container)
             }
     }

@@ -340,6 +340,31 @@ to-one 关系镜像成一个 `STRING` 引用字段，to-many 靠子表反向键�
   - 真机测量用维护者指定的那台（见 `internal/CLAUDE.md`），别的真机不要装包、不要跑测试。设备锁屏时 xcodebuild 会直接退出。
   - 测量用例默认跳过，开关是 `TEST_RUNNER_GHOSTTY_MEASURE=1`（Mac 的 `GhosttyMeasureTests`）/ `UTERM_MEASURE=1`（iOS）。量时间、帧率时别和别的编译同时跑。
 
+## 界面画廊（`make gallery`）
+
+`uTermTests/Support/UICatalog/` 是 macOS 每个窗口 / 状态的目录（移植自 uTable 的同名设施）：每条记录一个层级 ID + 构造闭包，
+`UICatalogSnapshotTests` 浅深各渲一张，`make gallery` 拼成 `build/ui-gallery/latest/index.html`（`GALLERY_FILTER=子串` 只渲一部分，
+`GALLERY_ARTIFACT=<目录>` 另出 Artifact 发布包，`make gallery-diff` 比改动前后）。
+
+- 夹具全是假的：内存 SwiftData、一次性设置存储、`MockSFTP`、终端接 `MockBackend` 喂写好的 ANSI 输出、并行执行用假执行器 + 脚本化的
+  `MockLLMClient`。**不连任何真主机**（转发规则别开 `autostart`，会真去连）。
+- 终端是真的 Ghostty surface：`cacheDisplay` 拍不到 Metal 画面，渲染器把 IOSurface 那一帧贴回去；有终端的记录标 `live: true`
+  （窗口透明地摆在屏上才有显示节拍）。
+- 测试宿主带沙盒、写不进仓库：图挂成 XCTest 附件，`scripts/ui-gallery.py collect` 从 xcresult 导出。
+- 要和用户看到的一样：整窗记录带系统红绿灯（单独拍了贴回去）；测试宿主不是前台 App，`UICatalogWindow` 覆盖了 AppKit
+  判断「活跃外观」的私有方法，否则红绿灯是灰的。工作区的状态栏遥测走真解析器（`TelemetryModel.tick()` 吃写好的输出），
+  预览区空着时的「最近打开」走真的打开 / 关闭流程填。离屏 `cacheDisplay` 画 CALayer 投影和屏幕合成器不一样（模糊大、
+  偏移方向反），拍的那一下按比例改回去再还原（`UI_GALLERY_SHADOW_RADIUS` / `_OFFSET` 可调，默认 0.6 / -1.6，对着主按钮量的）。
+  和装好的 App 对不上时，先拿 App 的真窗口截图比一遍。
+- 产品侧只加了画廊用的注入口：`WelcomeView(initialPane:initialSelection:)`、`WorkspaceWindowView(catalogModel:)`、
+  `TerminalWindowView(catalogModel:)`、`SFTPWindowView(catalogTabs:)`、`ParallelRunWindowView(catalogModel:)`，App 里都走默认值；
+  iOS 侧 `RemoteDesktopSession.showGalleryWindow`（不连 Mac，把一张图当窗口模式的画面送进画布，官网截图用）；`TelemetryModel.tick()` 由 private 放宽成 internal。
+- iOS 对应的是 `uTermMobileTests/Probes/StyleGalleryTests`（压力夹具，核排版，见 `uTermMobileTests/README.md`）；宣传用的干净几屏是
+  同目录的 `PromoGalleryTests`（文件名 `promo-*`，同一个开关 `UTERM_STYLE_SHOTS_DIR`）。其中 `testPromoScreensOnDevice` 在
+  iPhone Duo 模拟器里整屏挂真的外壳、由宿主脚本 `simctl io screenshot` 截（带状态栏那一列与屏幕圆角）；远程桌面的窗口模式用
+  Mac 画廊「终端窗口/手机窗口模式」那张图当画面。终端里的 Claude Code 是真的录制（`Recordings/README.md`）。
+- 官网在维护者私有仓库（`internal/website/`，公开仓库没有），产品画面只取这些截图，不手画界面。
+
 ## 文案目录（`uTerm/Localizable.xcstrings`）
 
 两端共用一份 String Catalog。里面的键是编译器抽出来的：`SWIFT_EMIT_LOC_STRINGS = YES` 让每个源文件编译时吐

@@ -28,11 +28,16 @@ struct WorkspaceWindowView: View {
     /// 全局端口转发协调器（由 App 根注入）。标题栏读活跃隧道数；打开管理窗用 openWindow。
     @Environment(ForwardingCoordinator.self) private var forwarding
 
-    init(windowID: WorkspaceWindowID?) {
+    /// 界面画廊（`UICatalog`）注入的、已经摆好标签与假连接的模型。非 nil 时不恢复布局、不建连、
+    /// 不起遥测与 Agent 执行器，关窗也不 dispose（会话由画廊收尾）。App 里恒为 nil。
+    private let isCatalog: Bool
+
+    init(windowID: WorkspaceWindowID?, catalogModel: WorkspaceModel? = nil) {
         self.windowID = windowID
+        self.isCatalog = catalogModel != nil
         // @State 初值在 init 时构造一次；用 windowID 让 FilePreviewModel
         // 拿到正确的 RecentFilesStore 命名（按服务器范围）。
-        self._workspace = State(initialValue: WorkspaceModel(windowID: windowID))
+        self._workspace = State(initialValue: catalogModel ?? WorkspaceModel(windowID: windowID))
     }
 
     private struct LargeFileConfirm: Identifiable {
@@ -166,7 +171,7 @@ struct WorkspaceWindowView: View {
             // restoreTerminalSession (spec 02): false 时跳过 snapshot.load()，
             // 直接开空白单 tab。但保存逻辑（onChange）不动——用户切回 ON 时
             // 能复现最近一次状态。
-            guard !didRestore else { return }
+            guard !didRestore, !isCatalog else { return }
             didRestore = true
             let heldSessions = await SSHSessionRestorer.shared.claim(windowID: windowID.id)
             if restoreTerminalSession, let snapshot = WorkspaceStore(windowID: windowID).load() {
@@ -193,10 +198,11 @@ struct WorkspaceWindowView: View {
         // 与所有终端 session。SwiftUI 在 view 离开层级时调 onDisappear，
         // 而正常 re-render 不会触发，故此处是安全的窗口生命周期挂点。
         // 遥测轮询：start() 幂等且独立于视图生命周期；窗口关闭 dispose→stop。
-        .task { workspace.telemetryModel.start() }
+        .task { if !isCatalog { workspace.telemetryModel.start() } }
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
         // 解析失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 不提供工具。
         .task(id: server.id) {
+            guard !isCatalog else { return }
             workspace.assistantModel.executor = (try? WorkspaceCommandExecutorFactory.make(
                 server: server, container: modelContext.container))?.executor
         }
@@ -204,7 +210,7 @@ struct WorkspaceWindowView: View {
         // 抽成独立 ViewModifier —— 内联 .task + .onChange 会把本就庞大的 body 推过类型检查上限。
         .modifier(QuickCommandInboxConsumer(workspace: workspace, server: server))
         .onDisappear {
-            workspace.dispose()
+            if !isCatalog { workspace.dispose() }
         }
         // 快照防抖保存 + SFTP 进入 browsing 后恢复预览缓冲。抽成独立 ViewModifier ——
         // 两个内联 .onChange 会把本就庞大的 body 推过类型检查上限。

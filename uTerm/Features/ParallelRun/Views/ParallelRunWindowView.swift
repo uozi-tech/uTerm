@@ -11,6 +11,12 @@ import SwiftData
 struct ParallelRunWindowView: View {
     let windowID: ParallelRunWindowID?
 
+    /// 界面画廊（`UICatalog`）注入的模型（带假执行器）。App 里恒为 nil。
+    init(windowID: ParallelRunWindowID?, catalogModel: ParallelRunModel? = nil) {
+        self.windowID = windowID
+        _model = State(initialValue: catalogModel)
+    }
+
     @Query private var commands: [QuickCommand]
     @Query private var profiles: [ServerProfile]
     @Query(sort: \AIProvider.sortOrder) private var providers: [AIProvider]

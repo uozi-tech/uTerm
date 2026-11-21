@@ -16,6 +16,14 @@ nonisolated enum WelcomePane: Hashable, Sendable {
 struct WelcomeView: View {
     let startupBehaviorGate: StartupBehaviorGate
 
+    /// `initialPane` / `initialSelection` 只给界面画廊（`UICatalog`）摆初始状态用；App 里走默认值。
+    init(startupBehaviorGate: StartupBehaviorGate, initialPane: WelcomePane = .hosts,
+         initialSelection: UUID? = nil) {
+        self.startupBehaviorGate = startupBehaviorGate
+        _pane = State(initialValue: initialPane)
+        _selectedProfileID = State(initialValue: initialSelection)
+    }
+
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext

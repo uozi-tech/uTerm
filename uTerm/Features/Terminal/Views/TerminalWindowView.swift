@@ -31,6 +31,17 @@ struct TerminalWindowView: View {
     @State private var palette = CommandPaletteModel()
     /// 最近一次活动终端标签连的主机。标签全关掉（或前台不是终端）时标题栏 / ⌘T 回落到它。
     @State private var lastServerID: UUID?
+    /// 界面画廊注入的现成模型（标签、假后端都已接好）：不恢复会话、不开新标签、不接真执行器、关时不释放。
+    private let isCatalog: Bool
+
+    init(windowID: TerminalWindowID?, catalogModel: WorkspaceModel? = nil) {
+        self.windowID = windowID
+        self.isCatalog = catalogModel != nil
+        if let catalogModel {
+            _workspace = State(initialValue: catalogModel)
+            _didOpen = State(initialValue: true)
+        }
+    }
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.controlActiveState) private var controlActiveState
@@ -142,10 +153,11 @@ struct TerminalWindowView: View {
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
         // 失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 退化为纯文本对话。
         .task(id: server.id) {
+            guard !isCatalog else { return }
             workspace.assistantModel.executor = (try? WorkspaceCommandExecutorFactory.make(
                 server: server, container: modelContext.container))?.executor
         }
-        .onDisappear { workspace.dispose() }
+        .onDisappear { if !isCatalog { workspace.dispose() } }
         // 全局 CommandGroup 通知广播到所有窗口；controlActiveState == .key 守卫，只让
         // 前台窗口响应。分屏命令仅终端模式生效。
         .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in

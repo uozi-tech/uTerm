@@ -55,7 +55,7 @@ MOBILE_VERSION ?= $(shell scripts/bump-version.sh --mobile print)
 BUILD_NUMBER ?= $(shell echo $$(( $$(git rev-list --count HEAD) + $$(cat Config/BuildNumberOffset 2>/dev/null || echo 0) )))
 .DEFAULT_GOAL := help
 
-.PHONY: help test-fast test-relay-e2e test-weak-network relay-dist test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
+.PHONY: help gallery gallery-diff test-fast test-relay-e2e test-weak-network relay-dist test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	engine engine-build check-engine holder test-holder test-holder-e2e build test test-mobile check-cli check-skills check-cloudkit-schema clean install \
 	sync-strings sync-strings-build check-strings tag
@@ -72,6 +72,8 @@ help::
 	@printf '%s\n' '  make test                              Run tests with xcodebuild'
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
 	@printf '%s\n' '  make test-fast                         Run tests in parallel, recheck failures serially'
+	@printf '%s\n' '  make gallery [GALLERY_FILTER=子串]       Render every macOS window (light+dark) → build/ui-gallery/latest/index.html'
+	@printf '%s\n' '  make gallery-diff GALLERY_BEFORE=dir     Compare a saved gallery run with latest (changed only)'
 	@printf '%s\n' '  make test-mobile-fast                  Same for uTermMobileTests'
 	@printf '%s\n' '  make holder                            Build the host session holder (holder/, Go) into the app resources'
 	@printf '%s\n' '  make test-holder                       Run the session holder tests (unit + real PTY)'
@@ -324,6 +326,44 @@ check-skills: check-cli engine holder
 		-enableCodeCoverage NO \
 		-only-testing:uTermTests/SkillDefinitionTests \
 		-only-testing:uTermTests/SkillInstallerTests
+
+# 界面画廊（uTermTests/Support/UICatalog）：每个窗口 / 状态浅深各一张 PNG + manifest.json，再拼成 index.html。
+# 只在这里跑，不进 make test / test-fast。测试宿主带沙盒、写不进仓库：图挂成 XCTest 附件，
+# 跑完由 ui-gallery.py collect 从 xcresult 里导出。发 Artifact：加 GALLERY_ARTIFACT=<目录>，见脚本头注释。
+# 改动前后对比：先 `cp -R build/ui-gallery/latest build/ui-gallery/before`，改完再
+# `make gallery && make gallery-diff GALLERY_BEFORE=build/ui-gallery/before`。
+GALLERY_DIR ?= $(BUILD_DIR)/ui-gallery/latest
+GALLERY_RESULT := $(BUILD_DIR)/ui-gallery/run.xcresult
+GALLERY_FILTER ?=
+GALLERY_ARTIFACT ?=
+gallery: engine holder
+	rm -rf "$(GALLERY_DIR)" "$(GALLERY_RESULT)" && mkdir -p "$(GALLERY_DIR)"
+	xcodebuild build-for-testing \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(DESTINATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO \
+		$(PACKAGE_ARGS) \
+		-quiet
+	TEST_RUNNER_UI_GALLERY_OUT="$(abspath $(GALLERY_DIR))" TEST_RUNNER_UI_GALLERY_FILTER="$(GALLERY_FILTER)" \
+	xcodebuild test-without-building \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(DESTINATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO \
+		-resultBundlePath "$(GALLERY_RESULT)" \
+		-only-testing:uTermTests/UICatalogSnapshotTests \
+		| grep -E '\[ui-gallery\]|error:|Test Case' || true
+	python3 scripts/ui-gallery.py collect "$(GALLERY_RESULT)" "$(GALLERY_DIR)"
+	python3 scripts/ui-gallery.py build "$(GALLERY_DIR)" $(if $(GALLERY_ARTIFACT),--artifact "$(GALLERY_ARTIFACT)")
+
+gallery-diff:
+	@[ -n "$(GALLERY_BEFORE)" ] || { echo 'Usage: make gallery-diff GALLERY_BEFORE=build/ui-gallery/before' >&2; exit 1; }
+	python3 scripts/ui-gallery.py diff "$(GALLERY_BEFORE)" "$(GALLERY_DIR)"
 
 clean:
 	rm -rf "$(BUILD_DIR)"

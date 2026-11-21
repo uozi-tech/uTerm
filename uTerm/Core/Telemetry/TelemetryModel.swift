@@ -65,7 +65,8 @@ final class TelemetryModel {
         }
     }
 
-    private func tick() async {
+    /// 取一拍。界面画廊的夹具直接调它（假 SFTP 回写好的输出），App 里只由 `loop()` 调。
+    func tick() async {
         guard let provider = providerProvider() else {
             if display.reachable { display.reachable = false }
             return
