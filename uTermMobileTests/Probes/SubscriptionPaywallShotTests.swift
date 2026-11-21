@@ -44,4 +44,34 @@ final class SubscriptionPaywallShotTests: XCTestCase {
         }
         session.clearTransactions()
     }
+
+    /// 永久版（只发兑换码的买断商品）的审核截图：设置 › 订阅里的「兑换码」入口。
+    func testShootRedeemEntry() async throws {
+        guard let dir = ProcessInfo.processInfo.environment["UTERM_STYLE_SHOTS_DIR"], !dir.isEmpty else {
+            throw XCTSkip("未设置 UTERM_STYLE_SHOTS_DIR")
+        }
+        let subscriptions = SubscriptionStore(fixed: .inactive)
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let root = NavigationStack {
+                MScreen(title: "设置", embedsNavigationStack: false, pinsHeader: true) {
+                    VStack(spacing: 0) { SettingsSubscriptionSection() }
+                }
+            }
+            .environment(subscriptions)
+            .environment(\.mAccent, M.accent)
+            let (window, host) = MobileProbeWindow.make(placement: .visibleOnScreen, rootView: root)
+            window.overrideUserInterfaceStyle = style
+            try await Task.sleep(for: .seconds(1))
+            host.view.layoutIfNeeded()
+            CATransaction.flush()
+            let png = UIGraphicsImageRenderer(bounds: host.view.bounds).pngData { _ in
+                host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            }
+            let out = URL(fileURLWithPath: dir).appendingPathComponent(
+                "subscription-redeem-\(style == .dark ? "dark" : "light").png")
+            try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: out)
+            MobileProbeWindow.close(window)
+        }
+    }
 }
