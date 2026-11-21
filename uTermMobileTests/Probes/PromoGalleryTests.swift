@@ -166,10 +166,10 @@ final class PromoGalleryTests: XCTestCase {
     }
 
     /// Mac 画廊（`make gallery`）渲的那个手机尺寸的终端窗口，当成窗口模式下 Mac 送来的画面。
-    private static func macWindowFrame(dark: Bool) throws -> CVPixelBuffer {
+    private static func macWindowFrame(dark: Bool, name: String = "终端窗口__手机窗口模式") throws -> CVPixelBuffer {
         let dir = try XCTUnwrap(ProcessInfo.processInfo.environment["UTERM_PROMO_MAC_SHOTS"],
                                 "设 TEST_RUNNER_UTERM_PROMO_MAC_SHOTS=<make gallery 的出图目录>")
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("终端窗口__手机窗口模式--\(dark ? "dark" : "light").png")
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("\(name)--\(dark ? "dark" : "light").png")
         let image = try XCTUnwrap(UIImage(contentsOfFile: url.path)?.cgImage, "缺图：\(url.path)")
         let width = image.width, height = image.height
         var buffer: CVPixelBuffer?
@@ -322,6 +322,20 @@ final class PromoGalleryTests: XCTestCase {
                 RemoteDesktopScreen(client: client, started: session, initialWindow: 1, onClose: {})
             }
             session.stop()
+
+            // 远程桌面看整块屏幕：画面是合成的 Mac 桌面（`internal/website/scripts/compose-mac-desktop.swift`：
+            // 渐变壁纸 + 菜单栏 + Mac 画廊渲的真 uTerm 窗口 + Dock）。
+            let desktopClient = RemoteMacClient(macName: "MacBook Pro", endpoint: .hostPort(host: "127.0.0.1", port: 9),
+                                                identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+            let desktopSession = RemoteDesktopSession(client: desktopClient, maxWidth: 3024, maxHeight: 1964)
+            let desktop = try Self.macWindowFrame(dark: dark, name: "桌面__远程桌面")
+            try await shootDevice("remote-desktop", dark: dark, into: out, settle: .milliseconds(1_200), before: {
+                desktopSession.showGalleryWindow(desktop, windowID: nil, title: nil,
+                                                 pointSize: CGSize(width: 1512, height: 982))
+            }) {
+                RemoteDesktopScreen(client: desktopClient, started: desktopSession, onClose: {})
+            }
+            desktopSession.stop()
         }
     }
 

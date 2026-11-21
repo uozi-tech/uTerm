@@ -1228,9 +1228,10 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
 // MARK: - 界面画廊
 
 extension RemoteDesktopSession {
-    /// 界面画廊（官网截图）用：不连 Mac，把 `image` 当成「只看一个窗口」时 Mac 送来的画面，经画布的显示管线上屏。
-    /// 先让 `RemoteDesktopScreen` 带着这个会话（`started:`）挂上画布，再调它。App 里不调。
-    func showGalleryWindow(_ image: CVPixelBuffer, windowID: UInt32, title: String, pointSize: CGSize) {
+    /// 界面画廊（宣传截图）用：不连 Mac，把 `image` 当成 Mac 送来的画面，经画布的显示管线上屏。
+    /// `windowID` 给了是「只看一个窗口」，nil 是整块屏幕。先让 `RemoteDesktopScreen` 带着这个会话（`started:`）
+    /// 挂上画布，再调它。App 里不调。
+    func showGalleryWindow(_ image: CVPixelBuffer, windowID: UInt32?, title: String?, pointSize: CGSize) {
         var shown = RemoteDesktopInfo(requestID: UUID())
         shown.displayWidth = pointSize.width
         shown.displayHeight = pointSize.height
