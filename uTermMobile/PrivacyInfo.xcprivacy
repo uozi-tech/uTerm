@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  iOS 版的隐私清单（App Store 提审必需，缺了会收到 ITMS-91053）。
+  依据是 Release 构建的 uTermMobile 二进制实际导入的符号（nm -u），不是猜的：
+  - NSUserDefaults：偏好设置，只本 App 自己读写（没有 App Group）→ CA92.1。
+  - stat / fstat / lstat / fstatat、NSFileModificationDate、NSURLContentModificationDateKey：
+    App 容器内的临时文件与下载（C617.1），以及用户在文件选择器里选中、要上传到 SFTP 的文件（3B52.1）。
+  - ProcessInfo.systemUptime：终端引擎（GhosttyTerminal）算滚动惯性、耗时，只取差值 → 35F9.1。
+  - UITextInputMode.activeInputModes：远程桌面与终端按当前键盘语言切输入（KeyboardLanguageMemory）→ 54BD.1。
+  不收集任何数据、不追踪（见 PRIVACY.md）。包里的 swift-nio / swift-crypto 各带自己的清单。
+  新用到 Apple 列出的「需要理由的 API」时在这里补，提审前用 nm -u 核一遍。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>3B52.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryActiveKeyboards</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>54BD.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
