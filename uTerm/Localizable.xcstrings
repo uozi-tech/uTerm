@@ -27563,6 +27563,34 @@
         }
       }
     },
+    "启动、文件与更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startup, files and updates"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "起動、ファイル、アップデート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시작, 파일 및 업데이트"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟動、檔案與更新"
+          }
+        }
+      }
+    },
     "启动、更新" : {
       "localizations" : {
         "en" : {
@@ -27591,7 +27619,36 @@
         }
       }
     },
+    "启动与文件" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startup and files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "起動とファイル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시작 및 파일"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟動與檔案"
+          }
+        }
+      }
+    },
     "启动与更新" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -44693,6 +44750,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收集位址"
+          }
+        }
+      }
+    },
+    "改了远程文件，停下一秒就写回主机。文件在你打开后被别处改过时不覆盖，等你决定；关掉后用 ⌘S 保存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edits to remote files are written back to the host a second after you stop typing. If the file was changed elsewhere after you opened it, nothing is overwritten until you decide. When off, save with ⌘S."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートファイルを編集すると、手を止めて 1 秒後にホストへ書き戻します。開いた後にほかの場所で変更されていた場合は上書きせず、判断を待ちます。オフのときは ⌘S で保存します"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 파일을 편집하면 입력을 멈추고 1초 뒤 호스트에 다시 씁니다. 연 뒤에 다른 곳에서 파일이 바뀌었으면 덮어쓰지 않고 결정을 기다립니다. 끄면 ⌘S로 저장합니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改了遠端檔案，停下一秒就寫回主機。檔案在你開啟後被別處改過時不覆寫，等你決定；關掉後用 ⌘S 儲存"
           }
         }
       }
@@ -64578,6 +64663,63 @@
         }
       }
     },
+    "自动保存" : {
+      "comment" : "设置项：编辑远程文件后自动写回主机",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto Save"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動保存"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자동 저장"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動儲存"
+          }
+        }
+      }
+    },
+    "自动保存失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto Save failed: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動保存に失敗しました：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자동 저장 실패: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動儲存失敗：%@"
+          }
+        }
+      }
+    },
     "自动建立已关闭，隧道需手动开启" : {
       "localizations" : {
         "en" : {
@@ -70255,6 +70397,34 @@
         }
       }
     },
+    "这个文件在你打开后被别处改过，没有自动覆盖。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This file was changed elsewhere after you opened it, so it wasn’t overwritten."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルは開いた後にほかの場所で変更されたため、自動では上書きしていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 파일은 연 뒤에 다른 곳에서 바뀌어 자동으로 덮어쓰지 않았습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個檔案在你開啟後被別處改過，沒有自動覆寫。"
+          }
+        }
+      }
+    },
     "这个文件在你打开后被别处改过。覆盖会丢掉那些改动。" : {
       "localizations" : {
         "en" : {
@@ -74414,6 +74584,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇保持，終端機裡的程式會繼續執行，下次打開 uTerm 時自動接回。"
+          }
+        }
+      }
+    },
+    "选择保留哪份…" : {
+      "comment" : "自动保存遇到远端改动时的按钮：弹出覆盖 / 放弃本地改动的选择",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Version…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残す方を選ぶ…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "남길 버전 선택…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇保留哪份…"
           }
         }
       }

@@ -577,12 +577,26 @@ final class WorkspaceModel {
     /// `closeTerminal(paneID:)`，那边已经由发起方确认过。
     func requestCloseTerminalTab(_ tabID: UUID) {
         guard let tab = terminalGroups.allTabs.first(where: { $0.id == tabID }) else { return }
+        if let buffer = tab.payload.fileBuffer {
+            // 文件标签：没有程序要问，要问的是改过没存的内容。别处（另一个标签、预览区）还开着同一个文档就直接关。
+            let elsewhere = terminalGroups.allTabs.contains { $0.id != tabID && $0.payload.fileBuffer === buffer }
+                || filePreviewModel.panes.allTabs.contains { $0.payload === buffer }
+            let close: @MainActor () -> Void = { [weak self] in
+                guard let self, let at = terminalGroups.locateTab(tabID) else { return }
+                terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+            }
+            if elsewhere { close() } else { filePreviewModel.closeAfterSaving(buffer, close: close) }
+            return
+        }
         TerminalCloseGuard.requestClose(tab.payload.session) { [weak self] in
             // 确认期间标签可能被拖到别的组、或已经被关掉，到这时再定位。
             guard let self, let at = terminalGroups.locateTab(tabID) else { return }
             terminalGroups.closeTab(groupID: at.groupID, index: at.index)
         }
     }
+
+    /// 终端区前台的文件标签的文档（终端窗口里 ⌘S 没带文档 id 时存它）。
+    var activeTerminalFileBufferID: UUID? { terminalGroups.activeTab?.payload.fileBuffer?.id }
 
     /// ⌘W / 命令面板。活动组是空的时没有会话要问，直接收掉空组。
     func requestCloseActiveTerminalTab() {

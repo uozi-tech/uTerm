@@ -21,6 +21,8 @@ nonisolated enum DefaultsKey {
     static let accentColor = "accentColor"
     static let startupBehavior = "startupBehavior"
     static let restoreTerminalSession = "restoreTerminalSession"
+    /// 编辑远程文件后自动写回主机（默认开）。
+    static let editorAutoSave = "editorAutoSave"
     static let sshConnectTimeout = "sshConnectTimeout"
     static let sshHostKeyPolicy = "sshHostKeyPolicy"
     static let logLevel = "logLevel"

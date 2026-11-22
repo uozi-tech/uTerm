@@ -140,6 +140,16 @@ final class FilePreviewModel {
     private var detached: [UUID: (buffer: FileBuffer, provider: any SFTPProviding)] = [:]
     private var remoteCommandRefreshGeneration = 0
 
+    /// 自动保存开着没有（设置 › 通用 › 文件，默认开）。测试里换掉，免得读写正式版的偏好。
+    var isAutosaveEnabled: () -> Bool = { FilePreviewModel.autosavePreference() }
+    /// 最后一次编辑之后停多久写回主机。
+    var autosaveDelay: Duration = .seconds(1)
+    private var autosaveTasks: [UUID: Task<Void, Never>] = [:]
+
+    nonisolated static func autosavePreference(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: DefaultsKey.editorAutoSave) as? Bool ?? true
+    }
+
     init(recentsStore: RecentFilesStore,
          sftpProvider: @escaping () -> (any SFTPProviding)?) {
         self.recentsStore = recentsStore
@@ -296,10 +306,16 @@ final class FilePreviewModel {
     /// 最后一个引用它的标签关掉了。
     func releaseDetached(_ id: UUID) {
         detached[id]?.buffer.onBecameDirty = nil
+        cancelAutosave(id)
         detached[id] = nil
     }
 
     func isDetached(_ id: UUID) -> Bool { detached[id] != nil }
+
+    /// 这个文档开在本窗口里（预览区或终端区）。⌘S 的通知会广播到所有窗口，只有它的主人处理。
+    func owns(_ id: UUID) -> Bool { knownBuffer(id) != nil }
+
+    fileprivate func knownBufferForSave(_ id: UUID) -> FileBuffer? { knownBuffer(id) }
 
     private func knownBuffer(_ id: UUID) -> FileBuffer? {
         buffers.first { $0.id == id } ?? detached[id]?.buffer
@@ -332,6 +348,9 @@ final class FilePreviewModel {
         buf.onBecameDirty = { [weak self] buffer in
             self?.promoteTransientTabs(for: buffer)
         }
+        buf.onEdited = { [weak self] buffer in
+            self?.scheduleAutosave(buffer)
+        }
         return buf
     }
 
@@ -341,6 +360,7 @@ final class FilePreviewModel {
                                              remaining: [UPaneTab<FileBuffer>]) {
         guard !remaining.contains(where: { $0.payload === buffer }) else { return }
         buffer.onBecameDirty = nil
+        cancelAutosave(buffer.id)
         buffers.removeAll { $0 === buffer }
     }
 
@@ -351,7 +371,7 @@ final class FilePreviewModel {
     /// 一个面板。所以迁到组模型是**恒等映射** —— 全部标签塞进唯一一个组，
     /// `activeFileIndex` 成为该组的 `activeIndex`，既不丢东西也不需要迁移代码。
     func restoreOpenFiles(_ snapshots: [OpenFileSnapshot]?, activeIndex: Int?) {
-        for buf in buffers { buf.onBecameDirty = nil }
+        for buf in buffers { buf.onBecameDirty = nil; cancelAutosave(buf.id) }
         buffers.removeAll()
         let snapshots = snapshots ?? []
         let restored = UPaneGroupsSnapshot<OpenFileSnapshot>(
@@ -531,6 +551,7 @@ final class FilePreviewModel {
                 buf.mtimeWhenLoaded = (try? await sftp.stat(buf.remotePath))?.mtime
             }
             buf.state = .loaded
+            buf.autosaveIssue = nil
             // 更新 recents（游离文档可能在另一台主机上，不进本窗口的「最近打开」）
             guard detached[buf.id] == nil else { return }
             recentsStore.touch(RecentFileEntry(
@@ -611,31 +632,73 @@ final class FilePreviewModel {
         guard case .loaded = buf.state else { return .noop }
         guard buf.isDirty else { return .noop }
         guard let sftp = provider(for: buf) else { return .failed(String(localized: "SFTP 尚未连接")) }
+        // 这一次写的就是最新内容，排着的自动保存不用再跑。
+        cancelAutosave(id)
+        // 先标成保存中：stat 期间再来一次保存（自动保存到点、⌘S）直接 noop，不会写两遍。
+        buf.state = .saving
 
         // mtime 冲突检测
         do {
             let stat = try await sftp.stat(buf.remotePath)
             if let local = buf.mtimeWhenLoaded, stat.mtime > local {
+                buf.state = .loaded
                 return .conflict(remoteMtime: stat.mtime)
             }
         } catch {
             // stat 失败不阻塞 —— 文件可能是新建（无 mtimeWhenLoaded）
         }
 
-        buf.state = .saving
+        // 写的是这一刻的内容；写的途中用户接着打字，那些字还没存，不能清掉「未保存」。
+        let version = buf.textVersion
+        let data = Data(buf.text.utf8)
         do {
-            let data = Data(buf.text.utf8)
             try await sftp.write(buf.remotePath, data: data)
             let newStat = try? await sftp.stat(buf.remotePath)
             buf.mtimeWhenLoaded = newStat?.mtime ?? Date()
-            buf.isDirty = false
             buf.state = .loaded
+            buf.autosaveIssue = nil
+            if buf.textVersion == version {
+                buf.isDirty = false
+            } else {
+                scheduleAutosave(buf)
+            }
             promoteTransientTabs(for: buf)   // 保存过的文件不该再被下一次单击顶掉
             return .saved
         } catch {
-            Self.applyPreviewLoadFailure(error, to: buf)
-            return .failed("\(error)")
+            // 写失败时内容还在、还能接着改：留在编辑器里，不换成失败页。
+            buf.state = .loaded
+            return .failed(error.localizedDescription)
         }
+    }
+
+    // MARK: 自动保存
+
+    /// 用户改了内容：停 `autosaveDelay` 没再改就写回。远端被别处改过（冲突）之后不再自动存，等用户 ⌘S 决定。
+    private func scheduleAutosave(_ buf: FileBuffer) {
+        guard isAutosaveEnabled(), buf.autosaveIssue != .conflict else { return }
+        autosaveTasks[buf.id]?.cancel()
+        let delay = autosaveDelay
+        autosaveTasks[buf.id] = Task { [weak self, weak buf] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, let buf else { return }
+            self.autosaveTasks[buf.id] = nil
+            await self.autosave(buf)
+        }
+    }
+
+    private func autosave(_ buf: FileBuffer) async {
+        guard knownBuffer(buf.id) === buf, buf.isDirty else { return }
+        // 上一次还没写完：等它写完再排（它写完时内容变了会自己再排一次）。
+        if case .saving = buf.state { return }
+        switch await save(buf.id) {
+        case .conflict: buf.autosaveIssue = .conflict
+        case .failed(let message): buf.autosaveIssue = .failed(message)
+        case .saved, .noop: break
+        }
+    }
+
+    private func cancelAutosave(_ id: UUID) {
+        autosaveTasks.removeValue(forKey: id)?.cancel()
     }
 
     /// 冲突 dialog 用户选「用远程的」时调。重读 + 清 dirty。
@@ -652,6 +715,7 @@ final class FilePreviewModel {
             buf.mtimeWhenLoaded = stat?.mtime
             buf.isDirty = false
             buf.state = .loaded
+            buf.autosaveIssue = nil
         } catch {
             buf.state = .failed("\(error)")
         }
@@ -671,6 +735,8 @@ final class FilePreviewModel {
     func dispose() {
         remoteCommandRefreshGeneration &+= 1
         for buf in buffers { buf.onBecameDirty = nil }
+        for task in autosaveTasks.values { task.cancel() }
+        autosaveTasks.removeAll()
         buffers.removeAll()
         editorFocusRequest = nil
         // reset 不走 onTabRemoved —— 释放整个工作区不是逐个关标签。
@@ -840,5 +906,67 @@ final class FilePreviewModel {
             return joined.isEmpty ? "/" : "/\(joined)"
         }
         return joined
+    }
+}
+
+// MARK: 带提示的保存（⌘S、关标签）
+
+extension FilePreviewModel {
+    /// ⌘S：远端在打开之后被改过就问「覆盖 / 放弃本地改动 / 取消」，写失败说原因。预览区与终端区的文件标签共用。
+    func saveInteractively(_ id: UUID) async {
+        switch await save(id) {
+        case .conflict(let remoteMtime):
+            let alert = NSAlert()
+            alert.messageText = String(localized: "远程文件已变化")
+            alert.informativeText = String(localized: "这个文件在你打开后被别处改过。覆盖会丢掉那些改动。")
+            alert.addButton(withTitle: String(localized: "覆盖远程文件"))
+            alert.addButton(withTitle: String(localized: "放弃本地改动"))
+            alert.addButton(withTitle: String(localized: "取消"))
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                // 强制覆盖：把基准推到远程值绕过冲突检查
+                knownBufferForSave(id)?.mtimeWhenLoaded = remoteMtime
+                _ = await save(id)
+            case .alertSecondButtonReturn:
+                await reloadFromRemote(id)
+            default: break
+            }
+        case .failed(let message):
+            let alert = NSAlert()
+            alert.messageText = String(localized: "保存失败")
+            alert.informativeText = message
+            alert.runModal()
+        case .saved, .noop: break
+        }
+    }
+
+    /// 关掉最后一个引用这个文档的标签。没改过直接关；自动保存开着就先存（冲突、失败照 ⌘S 那样问），存好了才关；
+    /// 关着就问「保存 / 不保存 / 取消」。
+    func closeAfterSaving(_ buf: FileBuffer, close: @escaping @MainActor () -> Void) {
+        guard buf.isDirty else { return close() }
+        if isAutosaveEnabled() {
+            Task { @MainActor in
+                await saveInteractively(buf.id)
+                if !buf.isDirty { close() }
+            }
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "是否保存对「\(buf.displayName)」的更改？")
+        alert.informativeText = String(localized: "如果不保存，你的更改将丢失。")
+        alert.addButton(withTitle: String(localized: "保存"))
+        alert.addButton(withTitle: String(localized: "不保存"))
+        alert.addButton(withTitle: String(localized: "取消"))
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            Task { @MainActor in
+                await saveInteractively(buf.id)
+                if !buf.isDirty { close() }   // 仅保存成功才关
+            }
+        case .alertSecondButtonReturn:
+            close()
+        default:
+            break
+        }
     }
 }

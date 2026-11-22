@@ -17,6 +17,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.accentColor, "accentColor"),
         (DefaultsKey.startupBehavior, "startupBehavior"),
         (DefaultsKey.restoreTerminalSession, "restoreTerminalSession"),
+        (DefaultsKey.editorAutoSave, "editorAutoSave"),
         (DefaultsKey.sshConnectTimeout, "sshConnectTimeout"),
         (DefaultsKey.sshHostKeyPolicy, "sshHostKeyPolicy"),
         (DefaultsKey.logLevel, "logLevel"),

@@ -163,6 +163,14 @@ struct TerminalWindowView: View {
         .onDisappear { if !isCatalog { workspace.dispose() } }
         // 全局 CommandGroup 通知广播到所有窗口；controlActiveState == .key 守卫，只让
         // 前台窗口响应。分屏命令仅终端模式生效。
+        // ⌘S：终端区里的文件标签（⌘ 点的路径、程序请求预览的文件）。编辑器聚焦时通知里带着正在编辑的文档。
+        .onReceive(NotificationCenter.default.publisher(for: .savePreviewBuffer)) { note in
+            guard controlActiveState == .key else { return }
+            let requested = note.userInfo?[SavePreviewBufferKey.bufferID] as? UUID
+            guard let id = requested ?? workspace.activeTerminalFileBufferID,
+                  workspace.filePreviewModel.owns(id) else { return }
+            Task { await workspace.filePreviewModel.saveInteractively(id) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
             guard controlActiveState == .key else { return }
             workspace.openServer(profileID: server.id, title: server.name)

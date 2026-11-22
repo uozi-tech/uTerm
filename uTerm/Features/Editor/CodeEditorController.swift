@@ -535,8 +535,7 @@ extension CodeEditorController: TextViewDelegate {
                   with string: String) {
         guard !_isUpdatingFromBinding else { return }
         let newText = textView.string
-        buffer?.text = newText
-        buffer?.isDirty = true
+        buffer?.applyEdit(newText)
         renderedTextVersion = buffer?.textVersion
         onTextChange?(range, string)
         highlighter.didEdit(range: range, replacement: string, fullText: newText) { [weak self] pairs in

@@ -44,6 +44,8 @@ nonisolated enum SettingsCatalog {
              kind: .choice, key: DefaultsKey.startupBehavior, syncScope: .synced, platforms: .macOS),
         Item(id: "general.restoreTerminalSession", section: .general, group: "启动", title: "恢复终端会话",
              kind: .toggle, key: DefaultsKey.restoreTerminalSession, syncScope: .synced, platforms: .macOS),
+        Item(id: "general.editorAutoSave", section: .general, group: "文件", title: "自动保存",
+             kind: .toggle, key: DefaultsKey.editorAutoSave, syncScope: .synced, platforms: .macOS),
         // Sparkle 自己存 `SUEnableAutomaticChecks`，不在 DefaultsKey 表里。
         Item(id: "general.autoUpdate", section: .general, group: "更新", title: "自动检查更新",
              kind: .toggle, key: nil, syncScope: .none, platforms: .macOS),
@@ -186,6 +188,7 @@ nonisolated enum SettingsCatalog {
         DefaultsKey.appLanguage: "mac 专属：iOS 跟随系统语言（系统设置里按 App 改）",
         DefaultsKey.startupBehavior: "mac 专属：启动时打开欢迎窗还是上次主机",
         DefaultsKey.restoreTerminalSession: "mac 专属：恢复工作区的标签与分屏",
+        DefaultsKey.editorAutoSave: "mac 专属：iOS 只预览远程文件，不编辑",
         DefaultsKey.globalForwardingLaunchAtAppStart: "mac 专属：端口转发只在 mac 上跑，开关在全局端口转发窗口里",
         DefaultsKey.activeProviderID: "在 Agent 输入区的模型菜单里选，不在设置页",
         DefaultsKey.agentSafety: "在 Agent 输入区的信任档位里选，不在设置页",

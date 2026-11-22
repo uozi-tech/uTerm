@@ -24,7 +24,12 @@ struct PreviewBufferBody: View {
                     title: String(localized: "无法预览此文件"),
                     message: message)
             case .loaded, .saving:
-                previewContent
+                VStack(spacing: 0) {
+                    if let issue = buffer.autosaveIssue {
+                        AutosaveIssueBanner(bufferID: buffer.id, issue: issue)
+                    }
+                    previewContent
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -48,6 +53,47 @@ struct PreviewBufferBody: View {
     private var markdownImageLoader: MarkdownImageLoader? {
         return { source in
             try await onLoadMarkdownImage(source, buffer)
+        }
+    }
+}
+
+/// 自动保存没成的那一条：远端被别处改过（没覆盖）或写失败。按钮走 ⌘S 同一条路（`saveInteractively`）。
+private struct AutosaveIssueBanner: View {
+    let bufferID: UUID
+    let issue: FileBuffer.AutosaveIssue
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(UD.warning)
+            Text(message)
+                .font(UD.caption)
+                .foregroundStyle(UD.text2)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            UDButton(title: buttonTitle, style: .secondary) {
+                NotificationCenter.default.post(name: .savePreviewBuffer, object: nil,
+                                                userInfo: [SavePreviewBufferKey.bufferID: bufferID])
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(UD.warning.opacity(0.12))
+    }
+
+    private var message: String {
+        switch issue {
+        case .conflict:
+            return String(localized: "这个文件在你打开后被别处改过，没有自动覆盖。")
+        case .failed(let reason):
+            return String(localized: "自动保存失败：\(reason)")
+        }
+    }
+
+    private var buttonTitle: String {
+        switch issue {
+        case .conflict: return String(localized: "选择保留哪份…", comment: "自动保存遇到远端改动时的按钮：弹出覆盖 / 放弃本地改动的选择")
+        case .failed: return String(localized: "重试", comment: "自动保存失败后再存一次")
         }
     }
 }

@@ -110,7 +110,29 @@ actor MockSFTP: SFTPProviding {
     // MARK: - SFTPProviding write / stat
 
     func write(_ path: String, data: Data) async throws {
+        wholeWriteCount += 1
+        if holdsWholeWrites {
+            await withCheckedContinuation { heldWholeWrites.append($0) }
+        }
+        if let wholeWriteError { throw wholeWriteError }
         blobStore[path] = (data, Date())
+    }
+
+    /// `write`（整文件写，编辑器保存走这条）被调了几次。
+    private(set) var wholeWriteCount = 0
+    /// `write` 抛这个错（断线、没权限）。
+    private var wholeWriteError: Error?
+    func setWholeWriteError(_ error: Error?) { wholeWriteError = error }
+    /// 置位时 `write` 挂起到 `releaseWholeWrites()`：模拟保存途中用户接着打字。
+    private var holdsWholeWrites = false
+    private var heldWholeWrites: [CheckedContinuation<Void, Never>] = []
+    var heldWholeWriteCount: Int { heldWholeWrites.count }
+    func setHoldsWholeWrites(_ value: Bool) { holdsWholeWrites = value }
+    func releaseWholeWrites() {
+        holdsWholeWrites = false
+        let held = heldWholeWrites
+        heldWholeWrites.removeAll()
+        for continuation in held { continuation.resume() }
     }
 
     // MARK: - 区间读写（分片传输的原语）

@@ -269,11 +269,11 @@ struct WorkspaceWindowView: View {
             // 编辑器聚焦时由本地 keyDown 监听器带入正在编辑的 buffer id（分屏下精确保存它，
             // 不被过期的 activeBufferID 误导）；菜单点击 / 非编辑器聚焦时回落到 activeBufferID。
             let requested = note.userInfo?[SavePreviewBufferKey.bufferID] as? UUID
-            guard let id = requested ?? workspace.filePreviewModel.activeBufferID else { return }
+            guard let id = requested ?? workspace.filePreviewModel.activeBufferID ?? workspace.activeTerminalFileBufferID else { return }
             // 多窗口下通知会广播到所有工作区窗口：带入的 bufferID 只存在于来源窗口的模型里，
             // 非来源窗口直接忽略（避免对不属于自己的 id 触发一次空保存路径）。
-            guard workspace.filePreviewModel.buffers.contains(where: { $0.id == id }) else { return }
-            Task { await handleSave(id: id) }
+            guard workspace.filePreviewModel.owns(id) else { return }
+            Task { await workspace.filePreviewModel.saveInteractively(id) }
         }
         .confirmationDialog(
             "文件较大，可能卡顿。继续打开？",
@@ -349,41 +349,19 @@ struct WorkspaceWindowView: View {
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）
 
-    /// 关闭一个文件标签；脏文件先弹「保存 / 不保存 / 取消」。⌘W 与 chip 的 × 共用此入口。
-    ///
-    /// 组件（`UPaneGroupArea`）只发「请求关闭」，真关由这里做 —— 关闭是模态 + 异步的：
-    /// 选「保存」时起一个 Task，`await handleSave` 之后再判断 `!isDirty` 才真的关，
-    /// 保存失败就不关。
+    /// 关闭一个文件标签。⌘W 与 chip 的 × 共用此入口；组件（`UPaneGroupArea`）只发「请求关闭」，真关由这里做。
     ///
     /// 参数是**标签** id。同一个文件可以在两个组里各有一个标签，只有关掉**最后一个**
-    /// 引用它的标签才会丢内容，所以确认框也只在那时才弹。
+    /// 引用它的标签才会丢内容，所以只有那时才先存（自动保存开着）或问（关着），见 `closeAfterSaving`。
     @MainActor
     private func requestCloseTab(_ tabID: UUID) {
         let model = workspace.filePreviewModel
         guard let (buf, isLastReference) = model.closeContext(forTab: tabID) else { return }
-        guard buf.isDirty, isLastReference else {
+        guard isLastReference else {
             model.closeTab(tabID)
             return
         }
-        let alert = NSAlert()
-        alert.messageText = String(localized: "是否保存对「\(buf.displayName)」的更改？")
-        alert.informativeText = String(localized: "如果不保存，你的更改将丢失。")
-        alert.addButton(withTitle: String(localized: "保存"))        // .alertFirstButtonReturn
-        alert.addButton(withTitle: String(localized: "不保存"))      // .alertSecondButtonReturn
-        alert.addButton(withTitle: String(localized: "取消"))        // .alertThirdButtonReturn
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:             // 保存
-            Task { @MainActor in
-                await handleSave(id: buf.id)      // 既有流程，含远程 mtime 冲突检测与失败提示
-                if !buf.isDirty {
-                    model.closeTab(tabID)         // 仅保存成功才关
-                }
-            }
-        case .alertSecondButtonReturn:            // 不保存
-            model.closeTab(tabID)
-        default:                                  // 取消：什么都不做
-            break
-        }
+        model.closeAfterSaving(buf) { model.closeTab(tabID) }
     }
 
     /// ⌘W：按键盘焦点先关当前文件标签 / 终端活动标签；都没有可关时才关窗口。
@@ -404,38 +382,6 @@ struct WorkspaceWindowView: View {
             window.performClose(nil)
         }
     }
-
-    @MainActor
-    private func handleSave(id: UUID) async {
-        let result = await workspace.filePreviewModel.save(id)
-        switch result {
-        case .conflict(let remoteMtime):
-            let alert = NSAlert()
-            alert.messageText = String(localized: "远程文件已变化")
-            alert.informativeText = String(localized: "这个文件在你打开后被别处改过。覆盖会丢掉那些改动。")
-            alert.addButton(withTitle: String(localized: "覆盖远程文件"))
-            alert.addButton(withTitle: String(localized: "放弃本地改动"))
-            alert.addButton(withTitle: String(localized: "取消"))
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:
-                // 强制覆盖：把 mtimeWhenLoaded 推到远程值绕过 conflict guard
-                if let buf = workspace.filePreviewModel.buffers.first(where: { $0.id == id }) {
-                    buf.mtimeWhenLoaded = remoteMtime
-                }
-                _ = await workspace.filePreviewModel.save(id)
-            case .alertSecondButtonReturn:
-                await workspace.filePreviewModel.reloadFromRemote(id)
-            default: break
-            }
-        case .failed(let msg):
-            let alert = NSAlert()
-            alert.messageText = String(localized: "保存失败")
-            alert.informativeText = msg
-            alert.runModal()
-        case .saved, .noop: break
-        }
-    }
-
 }
 
 /// 被挡在编辑器之外的文件：要么类型本就不该进编辑器，要么太大。

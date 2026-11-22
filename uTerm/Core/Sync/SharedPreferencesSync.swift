@@ -48,6 +48,7 @@ final class SharedPreferencesSync {
         Definition(key: DefaultsKey.accentColor, kind: .string, defaultValue: .string("blue"), legacyKeys: []),
         Definition(key: DefaultsKey.startupBehavior, kind: .string, defaultValue: .string("welcome"), legacyKeys: []),
         Definition(key: DefaultsKey.restoreTerminalSession, kind: .bool, defaultValue: .bool(true), legacyKeys: []),
+        Definition(key: DefaultsKey.editorAutoSave, kind: .bool, defaultValue: .bool(true), legacyKeys: []),
         Definition(key: DefaultsKey.sshConnectTimeout, kind: .integer, defaultValue: .integer(30), legacyKeys: []),
         Definition(key: DefaultsKey.sshHostKeyPolicy, kind: .string, defaultValue: .string("ask"), legacyKeys: []),
         Definition(key: DefaultsKey.logLevel, kind: .string, defaultValue: .string("info"), legacyKeys: []),

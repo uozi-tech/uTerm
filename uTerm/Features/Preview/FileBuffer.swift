@@ -49,6 +49,16 @@ final class FileBuffer: Identifiable {
     ///
     /// 参数是 buffer 自己：闭包由 buffer 持有，再捕获 buffer 就成环了。
     @ObservationIgnored var onBecameDirty: ((FileBuffer) -> Void)?
+    /// 用户在编辑器里改了内容（`applyEdit`）。`FilePreviewModel` 用它排自动保存；程序写入（加载、重读）不走这里。
+    @ObservationIgnored var onEdited: ((FileBuffer) -> Void)?
+    /// 自动保存没成：远端在打开之后被别处改过（不自动覆盖，等用户 ⌘S 决定），或写入失败（下次编辑 / ⌘S 再试）。
+    /// 保存成功、重读后清掉。
+    var autosaveIssue: AutosaveIssue?
+
+    enum AutosaveIssue: Equatable {
+        case conflict
+        case failed(String)
+    }
     var state: State = .loading
 
     enum State: Equatable {
@@ -61,6 +71,13 @@ final class FileBuffer: Identifiable {
     init(remotePath: String, kind: FileKind) {
         self.remotePath = remotePath
         self.kind = kind
+    }
+
+    /// 编辑器里的一次改动。
+    func applyEdit(_ newText: String) {
+        text = newText
+        isDirty = true
+        onEdited?(self)
     }
 
     /// 文件名 —— 标签条显示用。
