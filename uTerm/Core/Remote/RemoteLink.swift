@@ -78,6 +78,9 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     /// 传输报过数据报活动（直连）。字节流传输从不报。
     private var seesDatagrams = false
     private var lastSent = DispatchTime.now()
+    /// 同一时刻，但按设备睡眠时也照走的时钟记（只在 `queue` 上读写）。`DispatchTime` 在设备睡着时停表，
+    /// 量不出 App 挂起了多久；回前台判断 Mac 是不是早已断开要用这个（见 `checkAfterResume`）。
+    private var lastSentWall = ContinuousClock.now
     /// 上次发 ping 的时刻（只在 `queue` 上读写）；还没发过是 0，心跳第一拍就会问一声，连上就有往返读数。
     private var lastPingSent = DispatchTime(uptimeNanoseconds: 0)
     private var livenessTimer: DispatchSourceTimer?
@@ -299,6 +302,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         }
         let count = countsTowardBackpressure ? framed.count : 0
         lastSent = .now()
+        lastSentWall = .now
         inflightBytes += count
         transport.send(framed) { [weak self] error in
             defer { completion?(error) }
@@ -346,6 +350,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             }
             flow?.recordSent(bytes: framed.count, now: DispatchTime.now().uptimeNanoseconds)
             lastSent = .now()
+            lastSentWall = .now
             let token = record.token
             transport.send(framed) { [weak self] error in
                 guard let self else { return }
@@ -570,12 +575,32 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     /// Mac 这一端：只判死，不主动发。
     func startSilenceWatch(limit: TimeInterval) {
         startLivenessTimer(every: limit / 3) { link, quiet, _, _ in
-            if quiet > limit { link.fail(RemoteProtocolError.timeout) }
+            guard quiet > limit else { return }
+            AppLogger.notice("远控连接：对端 \(String(format: "%.1f", quiet)) 秒没发来任何东西，判断已断开",
+                             category: RemoteLog.category)
+            link.fail(RemoteProtocolError.timeout)
         }
     }
 
     /// 脚下传输走的网卡名（不知道时 nil，见 `RemoteTransport.interfaceName`）。
     var interfaceName: String? { transport.interfaceName }
+
+    /// 刚回到前台。本机安静（没发出过任何东西）超过 `droppedAfter`：对端早已按无声断开了这条连接，直接判死，
+    /// 马上重连。走公网直连（UDP）时对端断开不会通知过来，不这么做就要白等一次探测超时，画面卡着。
+    /// 没超过就照常探测（`probe`）。
+    func checkAfterResume(probeReplyLimit: TimeInterval, droppedAfter: TimeInterval) {
+        queue.async { [self] in
+            guard !self.isClosed else { return }
+            let silent = ContinuousClock.now - self.lastSentWall
+            guard silent > .seconds(droppedAfter) else {
+                self.probe(replyLimit: probeReplyLimit)
+                return
+            }
+            AppLogger.notice("远控连接：本机已经 \(RemoteConnectTrace.millis(silent) / 1000) 秒没发出任何东西，"
+                             + "对端早已断开，直接重连", category: RemoteLog.category)
+            self.fail(RemoteProtocolError.timeout)
+        }
+    }
 
     /// 网络刚变化或刚回到前台：发一个 ping，`replyLimit` 秒内收到任何字节都算活着，否则判死。
     func probe(replyLimit: TimeInterval) {
@@ -601,6 +626,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             guard !self.isClosed, self.livenessTimer == nil else { return }
             self.lastReceived = .now()
             self.lastSent = .now()
+            self.lastSentWall = .now
             var lastTick = DispatchTime.now()
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
             // 给定时器 10% 的余量：不带余量时系统只能按精确时刻单独唤醒 CPU，带了才能和别的定时器（网络栈、

@@ -31,7 +31,9 @@ final class RemoteReconnectTests: XCTestCase {
     private let fastHeartbeat = RemoteHeartbeat(pingInterval: 0.15, replyLimit: 0.6, probeReplyLimit: 0.3,
                                                 peerSilenceLimit: 0.6)
 
-    private func makeFixture(heartbeat: RemoteHeartbeat = .standard) async throws -> Fixture {
+    /// - Parameter sessions: Mac 端的会话来源；nil = 用 `registry`（同一进程里的终端）。
+    private func makeFixture(heartbeat: RemoteHeartbeat = .standard,
+                             sessions: (any RemoteHostSessions)? = nil) async throws -> Fixture {
         let registry = TerminalSessionRegistry()
         let session = TerminalSession()
         await session.connect(using: MockBackend())
@@ -39,7 +41,8 @@ final class RemoteReconnectTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "测试主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()), session: session)
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(sessions: sessions ?? RemoteRegistrySessions(registry: registry),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       peerSilenceLimit: heartbeat.peerSilenceLimit)
         server.start()
@@ -326,4 +329,60 @@ final class RemoteReconnectTests: XCTestCase {
         XCTAssertEqual(fixture.client.state, .connected)
     }
 
+
+    /// Mac 上的 uTerm 正在重启（远控进程替它撑着、App 还没回来）时的接入失败是暂时的：不能当成会话结束，
+    /// 否则标签直接显示「远程会话已结束」，App 回来也接不回。
+    func test_attach_failure_while_mac_app_restarts_is_retryable() async throws {
+        let fixture = try await makeFixture(sessions: RemoteForwardedSessions(requestTimeout: .milliseconds(100)))
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        let sink = RemoteChannelSink(onOutput: { _ in }, onClosed: { _, _ in })
+        do {
+            _ = try await fixture.client.attach(sessionID: fixture.sessionID,
+                                                size: RemoteGridSize(cols: 80, rows: 24), sink: sink)
+            XCTFail("App 不在时接入应失败")
+        } catch RemoteAttachError.unreachable {
+            // 暂时的失败：重连循环会接着退避重试。
+        } catch {
+            XCTFail("App 不在应是可重试的失败，实际 \(error)")
+        }
+        XCTAssertEqual(fixture.client.state, .connected, "接入失败不该影响连接本身")
+    }
+
+    /// 老版本手机不认 `retryable`、老版本 Mac 不发它：编码时缺省不写，解码时缺省为 nil。
+    func test_attach_result_retryable_field_is_optional_on_the_wire() throws {
+        let id = UUID()
+        let plain = RemoteJSON.encode(RemoteAttachResult(sessionID: id, error: "x"))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("retryable"))
+        let old = try RemoteJSON.decode(RemoteAttachResult.self, from: plain)
+        XCTAssertNil(old.retryable)
+        let marked = RemoteJSON.encode(RemoteAttachResult(sessionID: id, error: "x", retryable: true))
+        XCTAssertEqual(try RemoteJSON.decode(RemoteAttachResult.self, from: marked).retryable, true)
+    }
+
+    /// Mac 一直不回接入结果：手机不能永远等着（标签会一直停在「正在重连」），到时限断开这条连接重连。
+    func test_attach_without_reply_gives_up_and_drops_the_link() async throws {
+        // 心跳判死放得很长：这里只能靠接入的时限发现。
+        let heartbeat = RemoteHeartbeat(pingInterval: 60, replyLimit: 600, probeReplyLimit: 5, peerSilenceLimit: 600)
+        let fixture = try await makeFixture(heartbeat: heartbeat)
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        fixture.client.attachReplyTimeout = .milliseconds(500)
+        fixture.proxy.setMode(.stalled)
+        let sink = RemoteChannelSink(onOutput: { _ in }, onClosed: { _, _ in })
+        let start = Date()
+        do {
+            _ = try await fixture.client.attach(sessionID: fixture.sessionID,
+                                                size: RemoteGridSize(cols: 80, rows: 24), sink: sink)
+            XCTFail("收不到回执时接入应失败")
+        } catch {}
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3, "应按接入时限放弃，而不是一直等")
+        XCTAssertNotEqual(fixture.client.state, .connected, "放弃时应断开这条连接，重连时两头状态一起清空")
+    }
 }

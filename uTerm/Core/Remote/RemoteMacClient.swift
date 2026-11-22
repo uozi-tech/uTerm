@@ -137,6 +137,9 @@ final class RemoteMacClient: Identifiable {
     /// 还有公网可走时，局域网这一步最多等多久。局域网通的时候 0.1 秒内就握完手了；
     /// 等久了的多半是 Bonjour 结果过时（刚关了 Wi-Fi）。
     @ObservationIgnored var localNetworkLimit: Duration = .seconds(3)
+    /// 接入请求最多等 Mac 回多久。Mac 那头最坏要等终端接回（远控进程里 45 秒）、转给 App（15 秒）、钉尺寸（1 秒），
+    /// 每段都有时限；这里只是兜底，正常不会触发。测试里调短。
+    @ObservationIgnored var attachReplyTimeout: Duration = .seconds(75)
     /// 用户打开时（`connectInteractively`）失败后自动再试几次、隔多久。
     nonisolated static let interactiveRetryDelays: [Duration] = [.milliseconds(500), .seconds(2)]
 
@@ -224,7 +227,8 @@ final class RemoteMacClient: Identifiable {
     }
     @ObservationIgnored private var connectTask: Task<Void, Never>?
     @ObservationIgnored private var outcomeWaiter: CheckedContinuation<Void, Never>?
-    @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
+    /// 按会话 ID 等接入结果；`token` 认出是哪一次接入（超时只作废自己那一次）。
+    @ObservationIgnored private var attachWaiters: [UUID: (token: UUID, continuation: CheckedContinuation<UInt32, Error>)] = [:]
     @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
     @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
@@ -282,9 +286,10 @@ final class RemoteMacClient: Identifiable {
         networkChanged(isSatisfied: snapshot.isSatisfied)
     }
 
-    /// App 回到前台：挂起期间连接可能已经死了，问一声；正在退避等待重连的，马上再试一次。
+    /// App 回到前台：挂起期间连接可能已经死了，问一声（挂起久到 Mac 一定断开了就直接重连）；
+    /// 正在退避等待重连的，马上再试一次。
     func returnedToForeground() {
-        link?.probe(replyLimit: heartbeat.probeReplyLimit)
+        link?.checkAfterResume(probeReplyLimit: heartbeat.probeReplyLimit, droppedAfter: heartbeat.resumeDropLimit)
         retryGate.kick()
     }
 
@@ -681,7 +686,7 @@ final class RemoteMacClient: Identifiable {
             state = .failed(error?.localizedDescription ?? String(localized: "Mac 没有确认配对"))
         }
         resumeOutcome()
-        for (_, waiter) in attachWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        for (_, waiter) in attachWaiters { waiter.continuation.resume(throwing: RemoteProtocolError.closed) }
         attachWaiters.removeAll()
         for (_, waiter) in desktopWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         desktopWaiters.removeAll()
@@ -772,10 +777,12 @@ final class RemoteMacClient: Identifiable {
             }
         case .attached:
             guard let result = try? RemoteJSON.decode(RemoteAttachResult.self, from: message.payload),
-                  let waiter = attachWaiters.removeValue(forKey: result.sessionID) else { return }
+                  let waiter = attachWaiters.removeValue(forKey: result.sessionID)?.continuation else { return }
             if let error = result.error {
                 table.cancel(sessionID: result.sessionID)
-                waiter.resume(throwing: RemoteAttachError.rejected(error))
+                // 暂时的失败（Mac 上的 uTerm 正在重启）不能当成会话结束：标签照常退避重试，App 回来就接上。
+                waiter.resume(throwing: result.retryable == true ? RemoteAttachError.unreachable(error)
+                                                                 : RemoteAttachError.rejected(error))
             } else {
                 waiter.resume(returning: message.channel)
             }
@@ -834,13 +841,29 @@ final class RemoteMacClient: Identifiable {
             throw RemoteAttachError.rejected(RemoteTerminalEngine.mismatchMessage)
         }
         table.expect(sessionID: sessionID, sink: sink)
+        let token = UUID()
+        let timeout = attachReplyTimeout
+        let timer = Task { [weak self, weak link] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            self?.attachTimedOut(sessionID: sessionID, token: token, link: link)
+        }
+        defer { timer.cancel() }
         let channel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt32, Error>) in
-            attachWaiters.removeValue(forKey: sessionID)?.resume(throwing: RemoteProtocolError.closed)
-            attachWaiters[sessionID] = continuation
+            attachWaiters.removeValue(forKey: sessionID)?.continuation.resume(throwing: RemoteProtocolError.closed)
+            attachWaiters[sessionID] = (token, continuation)
             link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(
                 RemoteAttachRequest(sessionID: sessionID, cols: size.cols, rows: size.rows))))
         }
         return RemoteAttachment(link: link, channel: channel)
+    }
+
+    /// Mac 一直没回接入结果：断开这条连接重连，而不是在同一条连接上再要一次（迟到的回执会和下一次接入对错号）。
+    /// 断开时所有等待都以「连接已断开」结束，各个标签照常退避重连。
+    private func attachTimedOut(sessionID: UUID, token: UUID, link: RemoteLink?) {
+        guard let link, self.link === link, attachWaiters[sessionID]?.token == token else { return }
+        AppLogger.notice("远控：\(self.macName) \(RemoteConnectTrace.millis(self.attachReplyTimeout) / 1000) 秒没回接入结果，"
+                         + "断开重连", category: RemoteLog.category)
+        link.close(RemoteProtocolError.timeout)
     }
 
     func detach(_ attachment: RemoteAttachment) {

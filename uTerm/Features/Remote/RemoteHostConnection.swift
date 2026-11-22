@@ -136,8 +136,8 @@ final class RemoteHostConnection {
                 }
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.handle(message) } }
             },
-            onClose: { [weak self] _ in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.didClose() } }
+            onClose: { [weak self] error in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.didClose(error) } }
             },
             onWritable: { pump.drainOnQueue() }
         )
@@ -533,7 +533,7 @@ final class RemoteHostConnection {
         switch result {
         case .failure(let error):
             guard !isClosed else { return }
-            sendAttachResult(channel, request.sessionID, error: error.message)
+            sendAttachResult(channel, request.sessionID, error: error.message, retryable: error == .appUnavailable)
             return
         case .success(let handle):
             attachment = handle
@@ -594,9 +594,9 @@ final class RemoteHostConnection {
         }
     }
 
-    private func sendAttachResult(_ channel: UInt32, _ sessionID: UUID, error: String?) {
-        link.send(RemoteMessage(.attached, channel: channel,
-                                payload: RemoteJSON.encode(RemoteAttachResult(sessionID: sessionID, error: error))))
+    private func sendAttachResult(_ channel: UInt32, _ sessionID: UUID, error: String?, retryable: Bool = false) {
+        let result = RemoteAttachResult(sessionID: sessionID, error: error, retryable: retryable ? true : nil)
+        link.send(RemoteMessage(.attached, channel: channel, payload: RemoteJSON.encode(result)))
     }
 
     /// 结束一个通道的接入。`notify` = 告诉手机（Mac 侧主动断开、会话结束、被别的设备接管）。
@@ -618,9 +618,15 @@ final class RemoteHostConnection {
         sendSessions()
     }
 
-    private func didClose() {
+    private func didClose(_ error: Error?) {
         guard !isClosed else { return }
         isClosed = true
+        if isAuthorized {
+            // 为什么断（对端关的、无声超时、网络错误）：手机上「刚回前台就断」这类问题要两头对着看。
+            AppLogger.notice("远控：与 \(self.peerName) 的连接断开（\(self.origin.path.label)，接入后 "
+                             + "\(RemoteConnectTrace.millis(ContinuousClock.now - self.createdAt)) ms）："
+                             + (error?.localizedDescription ?? "正常关闭"), category: RemoteLog.category)
+        }
         finishKeyConfirmation(false)
         fileWaiters.failAll(RemoteFileError(.unreachable, String(localized: "「\(peerName)」的连接断开了")))
         for channel in Array(attachments.keys) {

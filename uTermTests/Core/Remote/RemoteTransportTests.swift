@@ -71,6 +71,30 @@ final class RemoteTransportTests: XCTestCase {
         XCTAssertTrue(failed, "挂起复位不能让回前台的探测失效")
     }
 
+    /// 回前台时本机已经安静得比 Mac 的无声上限还久：Mac 早断开了（公网直连上它断了也不会通知过来），
+    /// 不等探测超时，直接判死重连。
+    func test_resume_after_long_silence_drops_the_link_without_waiting_for_the_probe() async throws {
+        let pair = try await establishedPair()
+        try await Task.sleep(for: .milliseconds(400))
+        let start = Date()
+        pair.client.checkAfterResume(probeReplyLimit: 30, droppedAfter: 0.2)
+        let failed = await waitUntil(2) { pair.clientInbox.closed }
+        XCTAssertTrue(failed, "安静超过上限应直接判死")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1, "不该等探测的时限")
+    }
+
+    /// 刚刚还发过东西：照常探测，健康的链路留着。
+    func test_resume_after_short_silence_only_probes() async throws {
+        let pair = try await establishedPair()
+        pair.client.checkAfterResume(probeReplyLimit: 0.5, droppedAfter: 30)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(pair.clientInbox.closed, "没超过上限不该直接判死")
+        pair.server.send(RemoteMessage(.pong))
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertFalse(pair.clientInbox.closed, "对端回了探测，链路应留着")
+        pair.client.close()
+    }
+
     func test_handshake_and_large_frames_cross_a_non_network_transport() async throws {
         let pair = try await establishedPair()
         let big = Data((0..<1_500_000).map { UInt8($0 % 251) })

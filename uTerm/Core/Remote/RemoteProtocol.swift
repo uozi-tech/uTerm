@@ -69,6 +69,9 @@ nonisolated struct RemoteHeartbeat: Sendable {
     var probeReplyLimit: TimeInterval = 5
     /// Mac：声明支持心跳的手机这么久无声就断开。
     var peerSilenceLimit: TimeInterval = 30
+    /// 手机：回前台时本机已经这么久没发出任何东西，Mac 一定已经断开了（它每 `peerSilenceLimit / 3` 查一次，
+    /// 最晚 `peerSilenceLimit × 4/3` 动手，再留 2 秒余量），不用探测，直接重连。
+    var resumeDropLimit: TimeInterval = 42
     /// 手机：链路一直有数据在走（开着屏幕、终端在刷）时也隔这么久 ping 一次，好让往返读数不断档。
     /// 只按「安静了才 ping」的话，流不停就永远测不到往返。
     var roundTripRefresh: TimeInterval = 15
@@ -598,6 +601,9 @@ nonisolated struct RemoteAttachResult: Codable, Equatable, Sendable {
     var sessionID: UUID
     /// nil = 成功。
     var error: String?
+    /// 失败是暂时的（Mac 上的 uTerm 正在重启，远控进程替它撑着）：手机按退避再试，不要结束标签。
+    /// 老版本 Mac 不发（nil），老版本手机不认，各自照旧把失败当成会话结束。
+    var retryable: Bool? = nil
 }
 
 /// 明文握手消息（加密信道建立之前双方各发一条）。整段字节进入握手记录哈希，
