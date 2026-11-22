@@ -44,19 +44,12 @@ struct TerminalActivityWidget: Widget {
             } compactLeading: {
                 TerminalGlyph(tone: top?.tone, paused: state.paused)
             } compactTrailing: {
-                if let top {
-                    // 横屏时灵动岛竖着放、很窄：放不下字就画一个自明的状态图标（转圈 = 运行中、举手 = 等你、
-                    // 勾 = 完成、叉 = 出错），多个会话时带上个数。
-                    ViewThatFits(in: .horizontal) {
-                        Text(verbatim: top.shortStatus)
-                            .font(.system(size: 13, weight: .semibold))
-                            .lineLimit(1)
-                            .fixedSize()
-                        TerminalStatusSymbol(tone: top.tone, count: state.rows.count + state.overflow)
-                        TerminalStatusSymbol(tone: top.tone, count: 1)
-                    }
-                    .foregroundStyle(state.paused ? .secondary : top.tone.color)
-                }
+                // 只放终端个数：状态看左边图标的颜色，展开看详情。数字在灵动岛竖着放（Duo 横屏）时也放得下。
+                Text(verbatim: "\(state.rows.count + state.overflow)")
+                    .font(.system(size: 15, weight: .heavy).monospacedDigit())
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(state.paused ? .secondary : (top?.tone.color ?? .secondary))
             } minimal: {
                 TerminalGlyph(tone: top?.tone, paused: state.paused)
             }
@@ -212,36 +205,8 @@ private struct TerminalGlyph: View {
     }
 }
 
-/// 灵动岛窄处的状态：图标本身看得出意思，多个会话时右边带个数。
-private struct TerminalStatusSymbol: View {
-    let tone: TerminalActivityAttributes.Tone
-    let count: Int
-
-    var body: some View {
-        HStack(spacing: 2) {
-            Image(systemName: tone.symbol)
-            if count > 1 {
-                Text(verbatim: "\(count)").monospacedDigit()
-            }
-        }
-        .font(.system(size: 13, weight: .bold))
-        .lineLimit(1)
-        .fixedSize()
-    }
-}
-
 extension TerminalActivityAttributes.Tone {
     /// 与 App 里标签页圆点同义：等人处理 = 橙，运行中 = 蓝，完成 = 绿，出错 = 红。
-    /// 紧凑态放不下字时的图标：转圈 = 运行中，举手 = 等你处理。
-    var symbol: String {
-        switch self {
-        case .attention: "hand.raised.fill"
-        case .working: "progress.indicator"
-        case .done: "checkmark.circle.fill"
-        case .failed: "xmark.circle.fill"
-        }
-    }
-
     var color: Color {
         switch self {
         case .attention: .orange
