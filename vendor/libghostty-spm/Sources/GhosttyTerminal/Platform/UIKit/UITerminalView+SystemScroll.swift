@@ -53,6 +53,11 @@
             var alignFrom: CGFloat = 0
             var alignTo: CGFloat = 0
             var alignStart: CFTimeInterval = 0
+            /// uTerm 本地补丁：这一段对齐的曲线（时长、起步速度），见 `TerminalScrollAlignmentCurve`。
+            var alignCurve = TerminalScrollAlignmentCurve(distance: 0, velocity: 0, longest: 0.25)
+            /// uTerm 本地补丁：UIKit 当成停住的那次松手，手指其实还在动的速度（点 / 秒，正 = 内容偏移变大）：
+            /// 由 `willEndDragging` 记下，`didEndDragging(willDecelerate: false)` 的对齐带着它起步。
+            var releaseVelocity: CGFloat = 0
             /// Pixels the engine's position is ahead of the scroll view's:
             /// engine position = content offset (in pixels) + shift.
             ///

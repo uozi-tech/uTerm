@@ -199,10 +199,15 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
             let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
             var target = CGPoint(x: 0, y: min(max(0, scrollView.contentOffset.y - CGFloat(release) / 1000 * 0.998 / 0.002), maxOffset))
             view.uTermSystemScrollDelegate?.scrollViewWillEndDragging?(scrollView, withVelocity: CGPoint(x: 0, y: -release / 1000), targetContentOffset: &target)
-            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: true)
+            // 同 UIKit：落点就是原处（速度 0、没越界，GhosttyKit 不改它）时不减速，对齐归 GhosttyKit。
+            // 原来这里一律报 willDecelerate: true，假减速每帧把 contentOffset 写回原处，和对齐抢着写（真 UIKit 不会这样）。
+            let decelerates = abs(target.y - scrollView.contentOffset.y) > 0.001
+            view.uTermSystemScrollDelegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: decelerates)
             recorder.group += 1
             recorder.phase = "\(label)-release"
-            decel.run(scrollView, to: target.y) { view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
+            if decelerates {
+                decel.run(scrollView, to: target.y) { view.uTermSystemScrollDelegate?.scrollViewDidEndDecelerating?(scrollView) }
+            }
             try? await Task.sleep(for: .milliseconds(700))
             recorder.phase = "idle"
         }

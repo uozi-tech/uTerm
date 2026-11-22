@@ -44,7 +44,7 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 
 | 路径 | 内容 |
 |---|---|
-| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 17 个文件、加了 6 个文件，见「Swift 层补丁」 |
+| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 20 个文件、加了 7 个文件，见「Swift 层补丁」 |
 | `Package.swift` | 见「manifest 改动」 |
 | `ENGINE.lock` | 两个二进制的清单：引擎版本串、zip 文件名、sha256 |
 | `BinaryTarget/` | `GhosttyKit.xcframework`、`ghostty-vt.xcframework` 解在这里，**不进版本库**（`.gitignore`），由 `make engine` 放进来 |
@@ -426,6 +426,35 @@ Ghostty 的 surface 焦点（`ghostty_surface_set_focus`）同时管两件事：
 
 回归用例：`uTermMobileTests/GhosttyDictationTests.swift`（真 surface，`DictationSimulator` 照 UIKit 的做法驱动：先发通知，空范围走 `insertText`）、
 `uTermMobileTests/TerminalCommittedTailTests.swift`、`uTermMobileTests/RemoteKeyDictationTests.swift`。真听写只能在真机上试。
+
+### 18. iOS：系统滚动松手那一刻速度连续（慢松手不往回弹、对齐从静止起步）
+
+文件：`Metrics/TerminalScrollOffsetMapping.swift`（`landingOffset(proposed:current:)`、`restingRow(enginePixels:travel:)`）、
+`Metrics/TerminalScrollAlignmentCurve.swift`（新）、`Platform/UIKit/UITerminalView+SystemScroll.swift`（`alignCurve`、`releaseVelocity`）、
+`UITerminalView+SystemScrollAlign.swift`（`systemScrollAlign(animated:velocity:)`）、`UITerminalView+SystemScrollDelegate.swift`
+（`willEndDragging` 带上速度）。
+
+上游 2026-11-22 在手机上报「自然滚动有点回归，感觉速度向量不连续」。用合成的真触摸（`uTermMobileTests/Support/SyntheticFinger.swift`，
+UIKit 自己的拖动、松手速度、减速都在）量出来的原因和改法（读数与经过是维护者的内部测量记录 `ios-scroll-velocity-continuity.md`，不在公开仓库）：
+
+- **慢松手往回弹。** UIKit 把慢于约 250 pt/s 的松手当成停住（200 pt/s 恒为 0，250 pt/s 时有时无）：`willEndDragging` 的速度是 0、提议的落点就是原处，不改的话它当场停。
+  上游照样把落点改到最近的一行，UIKit 就自己从静止动过去（头一帧就是全程最快），而最近的那一行一半的时候在手指身后：
+  往前拖、一松手内容往回走半行。现在这种松手落点留在原处、记下拖动手势的速度，`didEndDragging(willDecelerate: false)`
+  的对齐顺着手指的方向走到前方的一行（`restingRow`，慢于 20 pt/s 才取最近的一行），起步速度就是手指的速度。
+  UIKit 调 `didEndDragging` 时 `isDragging` 还是 true，上游这一处的对齐因此在真触摸下从没跑过（被「手指按着不对齐」挡掉），
+  从这里调时传 `lifted: true` 不看它。
+- **对齐一上来就是最快。** `systemScrollAlign` 的动画原来是 0.25 s 的三次缓出 `1 - (1-p)^3`，头一帧是平均速度的 3 倍：
+  减速途中按一下停住、0.12 s 后对齐，画面从静止一下跳起来。现在是三次 Hermite（`TerminalScrollAlignmentCurve`）：
+  从静止起步时是 smoothstep，带着速度起步时按那个速度出发、到行时停住；起步速度要超过平均速度 3 倍（会冲过那一行）时缩短时长，最短 0.1 s。
+- **甩出去的落点不取到起点身后。** UIKit 会把松手速度带进改写过的落点（往前往后挪 25 pt，减速头一帧的速度和不改时一样），
+  可落点在起点身后时它一帧就把内容拽回去。上游按最近的一行取整，不看方向；现在只在甩的方向上取整。UIKit 给出速度的甩动
+  投影距离至少一百多点，实际碰不到，这条是兜底。
+
+和上游 [#122](https://github.com/Lakr233/libghostty-spm/pull/122)（`TerminalSurfaceOptions.scrollBehavior`，吸附可关）兼容：改的都在吸附整行那条路径里。
+
+回归用例：`uTermMobileTests/Probes/GhosttySystemScrollVelocityTests.swift`（真触摸：`testReleaseKeepsDirectionAndSpeed`、
+`testAlignmentStartsFromRest`，以及核 UIKit 前提的 `testUIKitReleasePremises`）、`uTermMobileTests/GhosttyScrollAlignmentMathTests.swift`
+（落点、停靠行、曲线的纯算术），以及第 4 条那几条系统滚动探针。真机手感只在 iPhone Duo 上验。
 
 ## manifest 改动（相对上游的 `Package.swift`）
 
