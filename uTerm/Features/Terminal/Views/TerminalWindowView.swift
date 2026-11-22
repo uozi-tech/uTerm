@@ -143,6 +143,8 @@ struct TerminalWindowView: View {
             // 窗格连接由 PaneView 自身的 .task 走共享 modelContainer 自动建立（与工作区窗口同路径）。
             guard !didOpen else { return }
             didOpen = true
+            // 终端里 ⌘ 点的路径 / 程序请求预览的文件开在终端区，按那个终端的主机读。
+            workspace.makeFileProvider = WorkspaceModel.liveFileProvider(container: modelContext.container)
             let heldSessions = await SSHSessionRestorer.shared.claim(windowID: windowID.id)
             if heldSessions.isEmpty {
                 openTab(serverID: windowID.serverID)

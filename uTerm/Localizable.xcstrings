@@ -29437,6 +29437,35 @@
         }
       }
     },
+    "在 uTerm 中打开「%@」" : {
+      "comment" : "终端选中路径后编辑菜单里的一项：在旁边的预览标签里打开；插值是文件名",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open “%@” in uTerm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を uTerm で開く"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm에서 ‘%@’ 열기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 uTerm 中開啟「%@」"
+          }
+        }
+      }
+    },
     "在 uTerm 内引用" : {
       "localizations" : {
         "en" : {
@@ -40595,6 +40624,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開啟…"
+          }
+        }
+      }
+    },
+    "打开「%@」" : {
+      "comment" : "终端选中网址后编辑菜单里的一项：交给浏览器打开；插值是网址的主机名",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open “%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を開く"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 열기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟「%@」"
           }
         }
       }

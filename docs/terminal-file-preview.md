@@ -24,12 +24,16 @@ ESC ] 6975 ; open ; <绝对路径> BEL
 | | Mac | iOS |
 |---|---|---|
 | 入口 | `TerminalSession.onFilePreviewRequest`（`TerminalSession+TrackedRun` 的 `handleUnknownOSC` 分出来，`TerminalSession+FilePreview`） | `MobileTerminalController.onFilePreviewRequest` |
-| 接的人 | `WorkspaceModel.terminalRequestedPreview`：只有工作区窗口（`acceptsTerminalFilePreviews`），只认侧栏 SFTP 连着的那台主机上的终端 | `MobileWorkspace.onFilePreviewRequest` → `WorkspaceScreen.showPreview` |
-| 显示 | 预览区的预览（临时）标签（`FilePreviewModel.reveal(path:)`）：没开过就开、顶替上一个预览标签；开着就切过去并重读，脏的不重读 | 只读预览标签（`FilePreviewTab`）：一台主机一个，换内容；放在终端旁边那一格（没分屏就拆出第二格） |
+| 接的人 | `WorkspaceModel.terminalRequestedPreview`：工作区窗口里、侧栏 SFTP 连着的那台主机上的终端进预览区；其余（纯终端窗口、工作区里别的主机的终端）在终端区开文件标签 | `MobileWorkspace.onFilePreviewRequest` → `WorkspaceScreen.showPreview` |
+| 显示 | 预览区的预览（临时）标签（`FilePreviewModel.reveal(path:)`）：没开过就开、顶替上一个预览标签；开着就切过去并重读，脏的不重读。终端区：临时文件标签放在发请求那个终端旁边一格（只有一格就拆到右边），同一主机同一路径已开着就切过去并重读 | 只读预览标签（`FilePreviewTab`）：一台主机一个，换内容；放在终端旁边那一格（没分屏就拆出第二格） |
 | 焦点 | 不抢编辑器焦点 | 键盘留在终端那一格 |
 | 内容 | 预览区原有的一套（编辑器 / Markdown 含图片 / 图片） | 图片（可缩放）、Markdown（`MStreamingMarkdown`，图片只显示替代文字）、等宽纯文本；上限 16 MiB |
 
-没做：Mac 本机终端（预览区只走 SFTP；沙盒也读不到用户文件）、纯终端窗口（没有预览区）、远控镜像。
+终端区的文件标签（`WorkspaceModel.openInTerminalArea`）：文件经这台主机单独的 SFTP 连接读（`makeFileProvider`，按主机缓存，
+窗口关时一起关；两种窗口都用 `WorkspaceModel.liveFileProvider`），文档不进侧栏的那份列表（`FilePreviewModel.openDetached`，
+标签全关了就 `releaseDetached`），也不进「最近打开」。先 stat：目录、不存在的不理。
+
+没做：Mac 本机终端（预览区只走 SFTP；沙盒也读不到用户文件）、远控镜像、终端区文件标签的 ⌘S 保存。
 
 ## ⌘ 点终端里的链接
 
@@ -46,6 +50,10 @@ OSC 8 超链接同样。⌘ 点之后以 `open_url` 交给宿主（文字里认�
 - Mac：`GhosttyTerminalBridge` 接 `TerminalSurfaceOpenURLHandlingDelegate` → `TerminalSession.openTerminalLink`。之前 Mac 没接，
   Ghostty 自己的处理会拒掉 `.unknown` 与 `.osc8`，所以 ⌘ 点网址也没反应；现在网址交给系统打开。
   `WorkspaceModel.terminalRequestedPreview` 先 stat：目录在侧栏打开，文件进预览区，不存在的不理（正文里像路径的词也会被认成链接）。
+- iOS 的快捷触发：手机上没有 ⌘ 点，双击路径（Ghostty 的触摸选词只在空白、引号、括号处断开，整条路径一次选中）或长按拖选，
+  编辑菜单最前面多一项「在 uTerm 中打开「文件名」」（网址是「打开「主机名」」）。选中的文字交给共享的 `TerminalLinkDetector`：
+  整段像链接、或单行里恰好一个像链接的词才出这一项，两头的中英文引号、括号、句末标点去掉。之后和 ⌘ 点同一条路
+  （`MGhosttyTerminalView.onOpenLink` → `openTerminalLink`）。远控镜像不出这一项（路径在被控的 Mac 上）。
 - iOS：`SurfaceDelegate` 交给 `MobileTerminalController.openTerminalLink`（接了键盘和指针才 ⌘ 点得到）。之前任何 scheme 都交给
   `UIApplication.open`，现在只放行上面三种。目录 / 不存在的文件会在预览标签里显示失败，还没像 Mac 那样先 stat。
 - 真 sshd 用例：`ForegroundActivityIntegrationTests.testForegroundDirectoriesFollowTheForegroundProcess`

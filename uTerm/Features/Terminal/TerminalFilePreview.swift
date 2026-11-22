@@ -255,3 +255,62 @@ enum TerminalLinkResolver {
         return TerminalLinkPath.resolve(raw, workingDirectory: dirs.workingDirectory, home: dirs.home)
     }
 }
+
+/// 手机上没有 ⌘ 点：双击 / 长按选中一段文字后，从选中的文字里认出路径或网址（Ghostty 的触摸选词只在空白、引号、
+/// 括号处断开，路径会被整段选中），编辑菜单里加一项「打开」。两端共用（iPad 接触控板时也走这里）。
+nonisolated enum TerminalLinkDetector {
+    /// 选中的文字里的那个链接：整段就是一个（允许带空格的绝对路径），或者一行里恰好只有一个像链接的词
+    /// （三击选中整行时）。认不出、或不止一个时返回 nil。
+    static func link(inSelection text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: \.isNewline), trimmed.count <= TerminalFilePreview.maxPathBytes
+        else { return nil }
+        let whole = trimmingDelimiters(trimmed)
+        if !whole.contains(where: \.isWhitespace) || whole.hasPrefix("/") || whole.hasPrefix("~/") {
+            if looksLikeLink(whole) { return whole }
+        }
+        let candidates = trimmed.split(whereSeparator: \.isWhitespace)
+            .map { trimmingDelimiters(String($0)) }
+            .filter(looksLikeLink)
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// 菜单上怎么称呼它：路径用文件名（去掉 `:行号`），网址用主机名。
+    static func displayName(of link: String) -> String {
+        switch TerminalLink.classify(link) {
+        case .web(let url): return url.host() ?? link
+        case .path(let raw):
+            let path = TerminalLinkPath.strippingLineSuffix(raw)
+            let name = (path as NSString).lastPathComponent
+            return name.isEmpty ? path : name
+        case .unsupported: return link
+        }
+    }
+
+    /// 网址，或像路径：带 `/`、以 `~` 开头，或者是带扩展名的文件名（`plan.md`；`1.2` 这种纯数字扩展名不算）。
+    static func looksLikeLink(_ text: String) -> Bool {
+        switch TerminalLink.classify(text) {
+        case .web: return true
+        case .unsupported: return false
+        case .path(let raw):
+            let path = TerminalLinkPath.strippingLineSuffix(raw)
+            guard !path.isEmpty, TerminalLinkPath.need(path) != .unresolvable else { return false }
+            if path.contains("/") || path.hasPrefix("~") { return path != "/" }
+            let ext = (path as NSString).pathExtension
+            let stem = (path as NSString).deletingPathExtension
+            return !stem.isEmpty && (1...8).contains(ext.count)
+                && ext.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) } && !ext.allSatisfy(\.isNumber)
+        }
+    }
+
+    /// 词两头的标点：引号、括号、句末标点（中英文）。末尾的冒号也去掉（`main.go:` 后面没跟行号）。
+    static func trimmingDelimiters(_ text: String) -> String {
+        let leading: Set<Character> = ["\"", "'", "`", "(", "[", "<", "{", "「", "『", "（", "“", "‘", "《"]
+        let trailing: Set<Character> = ["\"", "'", "`", ")", "]", ">", "}", "」", "』", "）", "”", "’", "》",
+                                        ".", ",", ";", ":", "!", "?", "。", "，", "；", "：", "！", "？", "、"]
+        var result = Substring(text)
+        while let first = result.first, leading.contains(first) { result = result.dropFirst() }
+        while let last = result.last, trailing.contains(last) { result = result.dropLast() }
+        return String(result)
+    }
+}

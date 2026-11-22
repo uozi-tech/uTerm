@@ -137,7 +137,14 @@ final class WorkspaceModel {
         // 标签被移出模型 = 那条会话该关（关 PTY + 解 host-key relay）。
         // 文件窗格的 `dispose()` 自带 no-op 守卫：buffer 归 FilePreviewModel 所有，
         // 关掉一个引用它的终端标签不该把它释放掉。
-        terminalGroups.onTabRemoved = { removed, _ in removed.payload.dispose() }
+        terminalGroups.onTabRemoved = { [weak self] removed, remaining in
+            removed.payload.dispose()
+            // 终端区里由终端打开的文件：最后一个引用它的标签关掉时放掉文档（克隆出来的标签共用同一个）。
+            if let buffer = removed.payload.fileBuffer,
+               !remaining.contains(where: { $0.payload.fileBuffer === buffer }) {
+                self?.filePreviewModel.releaseDetached(buffer.id)
+            }
+        }
         // 组内唯一标签拖到本组边缘 → 克隆。终端标签克隆 = 同服务器新开一条会话；
         // 文件标签克隆 = 同一个 buffer 再挂一份（对齐旧 `insertPane(copying:)`）。
         terminalGroups.cloneTab = { [weak self] tab in
@@ -271,6 +278,11 @@ final class WorkspaceModel {
         externalOpen.dispose()
         fileBrowserModel.dispose()
         filePreviewModel.dispose()
+        // 终端区开文件用的 SFTP 会话（共享连接池里的租约）一并归还。
+        let providers = Array(fileProviders.values)
+        fileProviders.removeAll()
+        makeFileProvider = nil
+        Task { for provider in providers { await provider.close() } }
         telemetryModel.stop()
     }
 
@@ -423,31 +435,112 @@ final class WorkspaceModel {
 
     private func stamp(_ pane: PaneModel) {
         pane.registrar = sessionRegistrar
-        let serverID = pane.serverProfileID
+        let serverID = pane.serverProfileID, paneID = pane.id
         pane.session.onFilePreviewRequest = { [weak self] path in
-            self?.terminalRequestedPreview(path, serverID: serverID)
+            self?.terminalRequestedPreview(path, serverID: serverID, fromPane: paneID)
         }
     }
 
-    /// 本窗口有预览区（工作区窗口）：终端里的程序请求预览的文件在这里打开。纯终端窗口没有预览区，不接。
+    /// 本窗口有预览区（工作区窗口）：侧栏连着的那台主机上的终端请求打开的文件开在预览区。
     @ObservationIgnored var acceptsTerminalFilePreviews = false
 
-    /// 终端里的程序请在旁边预览一个文件（`TerminalFilePreview`），或用户 ⌘ 点了终端里的路径。预览区经侧栏的 SFTP
-    /// 读文件，所以只认侧栏连着的那台主机上的终端：别的主机的路径在这边读到的是另一台机器上的同名文件。
+    /// 按主机建一条 SFTP 会话，给终端区里由终端打开的文件读写用（窗口视图注入：要 ModelContainer；走共享连接池，
+    /// 和那台主机的终端共用一条 SSH 连接）。没注入时终端区不开文件。
+    @ObservationIgnored var makeFileProvider: ((UUID) async throws -> any SFTPProviding)?
+    @ObservationIgnored private var fileProviders: [UUID: any SFTPProviding] = [:]
+
+    /// 终端里的程序请在旁边预览一个文件（`TerminalFilePreview`），或用户 ⌘ 点了终端里的路径。
     ///
-    /// 文件以预览（临时）标签打开、不抢键盘焦点（用户还在终端里和程序对话）；目录在侧栏里打开；不存在的不理
-    /// （链接正则会把正文里像路径的词也认成链接）。
-    func terminalRequestedPreview(_ path: String, serverID: UUID) {
-        guard acceptsTerminalFilePreviews, fileBrowserModel.connectedHost?.id == serverID,
-              let sftp = fileBrowserModel.sftpProvider else { return }
-        Task {
-            guard let stat = try? await sftp.stat(path) else { return }
-            if let mode = stat.permissions, mode & 0o170000 == 0o040000 {
-                await fileBrowserModel.load(path)
-            } else {
-                await filePreviewModel.reveal(path: path)
+    /// - 工作区窗口、终端连的正是侧栏那台主机：文件开在预览区的预览标签，目录在侧栏打开。
+    /// - 其余情况（纯终端窗口；工作区里连别的主机的终端）：文件以临时标签开在终端区，放在发起那个终端旁边的组里
+    ///   （只有一组就往右分出一组），按那个终端自己的主机读。目录不处理。
+    ///
+    /// 都不抢键盘焦点（用户还在终端里和程序对话）；不存在的不理（链接正则会把正文里像路径的词也认成链接）。
+    func terminalRequestedPreview(_ path: String, serverID: UUID, fromPane paneID: UUID? = nil) {
+        if acceptsTerminalFilePreviews, fileBrowserModel.connectedHost?.id == serverID,
+           let sftp = fileBrowserModel.sftpProvider {
+            Task {
+                guard let stat = try? await sftp.stat(path) else { return }
+                if Self.isDirectory(stat) {
+                    await fileBrowserModel.load(path)
+                } else {
+                    await filePreviewModel.reveal(path: path)
+                }
             }
+            return
         }
+        guard makeFileProvider != nil else { return }
+        Task { await openInTerminalArea(path, serverID: serverID, besidePane: paneID) }
+    }
+
+    /// `makeFileProvider` 的正式实现：按主机 id 取已保存的主机，经共享连接池建 SFTP 会话。主机密钥这时早已信任过
+    /// （终端连得上）；对不上就失败，不在这里弹信任框。
+    static func liveFileProvider(container: ModelContainer) -> (UUID) async throws -> any SFTPProviding {
+        { serverID in
+            let descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == serverID })
+            guard let profile = try container.mainContext.fetch(descriptor).first else {
+                throw CancellationError()
+            }
+            return try await SFTPSession.make(profile: profile, container: container, approver: { _ in false })
+        }
+    }
+
+    private static func isDirectory(_ stat: RemoteStat) -> Bool {
+        guard let mode = stat.permissions else { return false }
+        return mode & 0o170000 == 0o040000
+    }
+
+    private func fileProvider(for serverID: UUID) async -> (any SFTPProviding)? {
+        if let cached = fileProviders[serverID] { return cached }
+        guard let make = makeFileProvider, let provider = try? await make(serverID) else { return nil }
+        if let raced = fileProviders[serverID] {
+            await provider.close()
+            return raced
+        }
+        fileProviders[serverID] = provider
+        return provider
+    }
+
+    /// 终端区里开文件，见 `terminalRequestedPreview`。
+    func openInTerminalArea(_ path: String, serverID: UUID, besidePane paneID: UUID?) async {
+        guard let sftp = await fileProvider(for: serverID) else { return }
+        guard let stat = try? await sftp.stat(path), !Self.isDirectory(stat) else { return }
+        let sourceTabID = paneID.flatMap { id in terminalGroups.allTabs.first { $0.payload.id == id }?.id }
+        let source = sourceTabID.flatMap { terminalGroups.locateTab($0) }
+
+        // 已经开着：带到它那一组的前台并重读（程序刚改过它）。
+        if let existing = terminalGroups.allTabs.first(where: {
+            $0.payload.serverProfileID == serverID && $0.payload.fileBuffer?.remotePath == path
+        }), let at = terminalGroups.locateTab(existing.id), let buffer = existing.payload.fileBuffer {
+            terminalGroups.activateTab(groupID: at.groupID, index: at.index)
+            restoreFocus(to: sourceTabID)
+            await filePreviewModel.reloadDetached(buffer)
+            return
+        }
+
+        let buffer = await filePreviewModel.openDetached(path: path, provider: sftp)
+        // 放进发起那个终端以外的组；只有一组时先开在本组，再挪到本组右边缘分出一组（不会顺带开一个新终端）。
+        let otherGroup = terminalGroups.groupIDs.first { $0 != source?.groupID }
+        let targetGroup = otherGroup ?? source?.groupID ?? terminalGroups.activeGroupID
+        let displaced = targetGroup.flatMap { terminalGroups.groups[$0]?.tabs.first(where: \.isTransient)?.payload }
+        let tabID = terminalGroups.openTab({ TerminalTab(payload: self.makePane(serverProfileID: serverID,
+                                                                                  fileBuffer: buffer)) },
+                                           asTransient: true, in: targetGroup)
+        // 被顶替的临时标签是就地覆盖的，组件不发 `onTabRemoved`：它的文档在这里放掉。
+        if let displaced, let old = displaced.fileBuffer,
+           !terminalGroups.allTabs.contains(where: { $0.payload.fileBuffer === old }) {
+            filePreviewModel.releaseDetached(old.id)
+        }
+        if otherGroup == nil, let group = targetGroup, (terminalGroups.groups[group]?.tabs.count ?? 0) > 1 {
+            terminalGroups.moveTab(tabID, toGroup: group, zone: .trailing)
+        }
+        restoreFocus(to: sourceTabID)
+    }
+
+    /// 发起的那个终端回到它那一组的前台、那一组回到活动组（键盘焦点、标题栏跟着它）。
+    private func restoreFocus(to tabID: UUID?) {
+        guard let tabID, let at = terminalGroups.locateTab(tabID) else { return }
+        terminalGroups.activateTab(groupID: at.groupID, index: at.index)
     }
 
     func connectSharedSFTP(profile: ServerProfile, modelContainer: ModelContainer) async {

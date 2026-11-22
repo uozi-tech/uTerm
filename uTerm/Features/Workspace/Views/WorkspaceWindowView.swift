@@ -192,6 +192,8 @@ struct WorkspaceWindowView: View {
             if workspace.terminalGroups.isEmpty {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
+            // 连别的主机的终端里 ⌘ 点的路径开在终端区，按那个终端的主机读（侧栏那台的进预览区）。
+            workspace.makeFileProvider = WorkspaceModel.liveFileProvider(container: modelContext.container)
             await workspace.connectSharedSFTP(profile: server, modelContainer: modelContext.container)
             if workspace.fileBrowserModel.state == .browsing {
                 await workspace.filePreviewModel.loadRestoredBuffersIfNeeded()

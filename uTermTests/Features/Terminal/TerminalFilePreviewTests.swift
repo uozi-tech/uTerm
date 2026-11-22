@@ -166,6 +166,105 @@ final class TerminalFilePreviewTests: XCTestCase {
         await session.close()
     }
 
+    // MARK: 手机上选中文字后的「打开」
+
+    func testDetectsLinksInSelections() {
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "/tmp/uterm-link-demo/docs/plan.md"), "/tmp/uterm-link-demo/docs/plan.md")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: " docs/plan.md,\n"), "docs/plan.md", "两头的空白、句末逗号去掉")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "「src/main.go:42」"), "src/main.go:42")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "README.md"), "README.md", "带扩展名的文件名")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "~/notes.md"), "~/notes.md")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "/tmp/my docs/a b.md"), "/tmp/my docs/a b.md", "带空格的绝对路径")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "https://example.com/x."), "https://example.com/x")
+        XCTAssertEqual(TerminalLinkDetector.link(inSelection: "1  绝对路径          /tmp/a/plan.md"), "/tmp/a/plan.md",
+                       "三击选中整行：行里只有一个像链接的词")
+        XCTAssertNil(TerminalLinkDetector.link(inSelection: "cp a/b.md c/d.md"), "不止一个就不猜")
+        XCTAssertNil(TerminalLinkDetector.link(inSelection: "hello"))
+        XCTAssertNil(TerminalLinkDetector.link(inSelection: "v1.2"), "纯数字扩展名不算文件")
+        XCTAssertNil(TerminalLinkDetector.link(inSelection: "/a.md\n/b.md"), "多行")
+        XCTAssertNil(TerminalLinkDetector.link(inSelection: "ssh://host"))
+        XCTAssertNil(TerminalLinkDetector.link(inSelection: "$PWD/a.md"))
+
+        XCTAssertEqual(TerminalLinkDetector.displayName(of: "/srv/app/plan.md:12"), "plan.md")
+        XCTAssertEqual(TerminalLinkDetector.displayName(of: "https://github.com/ghostty-org/ghostty"), "github.com")
+    }
+
+    // MARK: 终端区里开文件（终端窗口，或连别的主机的终端）
+
+    private func terminalWindow() async throws -> (WorkspaceModel, MockSFTP, UUID, UUID) {
+        let workspace = WorkspaceModel()
+        let mock = MockSFTP()
+        workspace.makeFileProvider = { _ in mock }
+        let serverID = UUID()
+        let tabID = workspace.openServer(profileID: serverID, title: "uozi-sz")
+        let paneID = try XCTUnwrap(workspace.terminalGroups.tab(tabID)?.payload.id)
+        try await mock.write("/srv/plan.md", data: Data("# Plan".utf8))
+        try await mock.write("/srv/next.md", data: Data("# Next".utf8))
+        return (workspace, mock, serverID, paneID)
+    }
+
+    private func fileTabs(_ workspace: WorkspaceModel) -> [TerminalTab] {
+        workspace.terminalGroups.allTabs.filter { $0.payload.fileBuffer != nil }
+    }
+
+    func testTerminalWindowOpensFilesBesideTheTerminal() async throws {
+        let (workspace, _, serverID, paneID) = try await terminalWindow()
+        let terminalTab = try XCTUnwrap(workspace.terminalGroups.activeTab?.id)
+
+        await workspace.openInTerminalArea("/srv/plan.md", serverID: serverID, besidePane: paneID)
+
+        XCTAssertEqual(workspace.terminalGroups.groupCount, 2, "只有一组时往右分出一组")
+        let file = try XCTUnwrap(fileTabs(workspace).first)
+        XCTAssertTrue(file.isTransient, "临时标签，下一个会顶替它")
+        XCTAssertEqual(file.payload.fileBuffer?.text, "# Plan")
+        XCTAssertEqual(file.payload.serverProfileID, serverID)
+        XCTAssertEqual(workspace.terminalGroups.activeTab?.id, terminalTab, "焦点留在发起的终端上")
+        XCTAssertNotEqual(workspace.terminalGroups.locateTab(file.id)?.groupID,
+                          workspace.terminalGroups.locateTab(terminalTab)?.groupID)
+
+        await workspace.openInTerminalArea("/srv/next.md", serverID: serverID, besidePane: paneID)
+        XCTAssertEqual(workspace.terminalGroups.groupCount, 2, "已经有别的组就放进去，不再分")
+        XCTAssertEqual(fileTabs(workspace).map { $0.payload.fileBuffer?.remotePath }, ["/srv/next.md"], "顶替上一个")
+        let replaced = try XCTUnwrap(file.payload.fileBuffer)
+        XCTAssertFalse(workspace.filePreviewModel.isDetached(replaced.id), "被顶替的文档放掉了")
+        XCTAssertEqual(workspace.terminalGroups.activeTab?.id, terminalTab)
+    }
+
+    func testTerminalWindowReloadsOpenFilesAndSkipsDirectoriesAndMissingPaths() async throws {
+        let (workspace, mock, serverID, paneID) = try await terminalWindow()
+        await workspace.openInTerminalArea("/srv/plan.md", serverID: serverID, besidePane: paneID)
+        try await mock.write("/srv/plan.md", data: Data("# Plan v2".utf8))
+        await workspace.openInTerminalArea("/srv/plan.md", serverID: serverID, besidePane: paneID)
+        XCTAssertEqual(fileTabs(workspace).count, 1)
+        XCTAssertEqual(fileTabs(workspace).first?.payload.fileBuffer?.text, "# Plan v2", "程序刚改过：重读")
+
+        try await mock.write("/srv/docs", data: Data())
+        await mock.setStatPermissions("/srv/docs", 0o040755)
+        await workspace.openInTerminalArea("/srv/docs", serverID: serverID, besidePane: paneID)
+        await workspace.openInTerminalArea("/srv/nope.md", serverID: serverID, besidePane: paneID)
+        XCTAssertEqual(fileTabs(workspace).map { $0.payload.fileBuffer?.remotePath }, ["/srv/plan.md"], "目录、不存在的都不开")
+    }
+
+    func testClosingTheFileTabReleasesItsDocument() async throws {
+        let (workspace, _, serverID, paneID) = try await terminalWindow()
+        await workspace.openInTerminalArea("/srv/plan.md", serverID: serverID, besidePane: paneID)
+        let file = try XCTUnwrap(fileTabs(workspace).first)
+        let buffer = try XCTUnwrap(file.payload.fileBuffer)
+        XCTAssertTrue(workspace.filePreviewModel.isDetached(buffer.id))
+        let at = try XCTUnwrap(workspace.terminalGroups.locateTab(file.id))
+        workspace.terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+        XCTAssertFalse(workspace.filePreviewModel.isDetached(buffer.id))
+    }
+
+    func testWorkspaceRoutesOtherHostsToTheTerminalArea() async throws {
+        let (workspace, _, serverID, paneID) = try await terminalWindow()
+        workspace.acceptsTerminalFilePreviews = true   // 工作区窗口，但侧栏没连这台主机
+        workspace.terminalRequestedPreview("/srv/plan.md", serverID: serverID, fromPane: paneID)
+        for _ in 0..<100 where fileTabs(workspace).isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(fileTabs(workspace).count, 1)
+        XCTAssertTrue(workspace.filePreviewModel.buffers.isEmpty, "不进预览区")
+    }
+
     // MARK: 会话里的接线
 
     func testSessionReportsRequestAndHidesTheSequence() async {
@@ -255,15 +354,15 @@ final class TerminalFilePreviewTests: XCTestCase {
         XCTAssertEqual(plan.text, "my edit", "用户改了没存：不盖掉")
     }
 
-    func testWorkspaceOnlyAcceptsPreviewsWhenItHasAPreviewArea() async throws {
+    func testNothingOpensWithoutAPreviewAreaOrAFileProvider() async throws {
         let workspace = WorkspaceModel()
         let serverID = UUID()
         workspace.terminalRequestedPreview("/srv/plan.md", serverID: serverID)
-        XCTAssertTrue(workspace.filePreviewModel.buffers.isEmpty, "纯终端窗口（默认）不接")
+        XCTAssertTrue(workspace.filePreviewModel.buffers.isEmpty, "没有预览区、也没注入 SFTP（测试里的空窗口）")
 
         workspace.acceptsTerminalFilePreviews = true
         workspace.terminalRequestedPreview("/srv/plan.md", serverID: serverID)
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(workspace.filePreviewModel.buffers.isEmpty, "侧栏没连着这台主机：路径对不上，不接")
+        XCTAssertTrue(workspace.filePreviewModel.buffers.isEmpty, "侧栏没连着这台主机：不进预览区")
     }
 }

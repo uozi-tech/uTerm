@@ -16,6 +16,10 @@ final class MGhosttyTerminalView: UITerminalView {
     var onFocusReport: ((Bool) -> Void)?
     /// 剪贴板里只有图片 / 视频时的粘贴交给宿主（传到远端再把路径粘进来）。
     var onPasteMedia: (() -> Void)?
+    /// 选中的文字是路径或网址时，编辑菜单第一项「打开」交给宿主（`TerminalLinkDetector`）。nil = 不加这一项。
+    var onOpenLink: ((String) -> Void)?
+    /// 这个链接点了会不会有反应（远控镜像里的路径不会）；没有反应就不加「打开」。
+    var canOpenLink: ((String) -> Bool)?
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，见 `MTerminalContainerView`。
     var hasHostedLayout = false
     /// 这片终端的回滚区查找（`TerminalSurfaceLink.search`）：硬件键盘的 ⌘F / ⌘G / ⇧⌘G 落到它上面。
@@ -153,6 +157,29 @@ final class MGhosttyTerminalView: UITerminalView {
     @objc private func showTerminalFind() { search?.present() }
     @objc private func terminalFindNext() { search?.next() }
     @objc private func terminalFindPrevious() { search?.previous() }
+
+    // MARK: 选中路径 / 网址时的「打开」
+
+    /// 手机上没有 ⌘ 点：双击（或长按、三击）选中路径或网址，菜单第一项是「打开」。
+    override func touchSelectionMenuItems(for context: TerminalTouchSelectionMenuContext) -> [UIMenuElement] {
+        let items = super.touchSelectionMenuItems(for: context)
+        guard let onOpenLink, let link = TerminalLinkDetector.link(inSelection: context.selectedText),
+              canOpenLink?(link) ?? true else { return items }
+        let title: String
+        if case .web = TerminalLink.classify(link) {
+            title = String(localized: "打开「\(TerminalLinkDetector.displayName(of: link))」",
+                           comment: "终端选中网址后编辑菜单里的一项：交给浏览器打开；插值是网址的主机名")
+        } else {
+            title = String(localized: "在 uTerm 中打开「\(TerminalLinkDetector.displayName(of: link))」",
+                           comment: "终端选中路径后编辑菜单里的一项：在旁边的预览标签里打开；插值是文件名")
+        }
+        let open = UIAction(title: title, image: UIImage(systemName: "arrow.up.forward.square"),
+                            identifier: UIAction.Identifier("uterm.openLink")) { [weak self] _ in
+            _ = self?.uTermClearSelection(onlyIfBlank: false)
+            onOpenLink(link)
+        }
+        return [open] + items
+    }
 
     // MARK: 粘贴：剪贴板里只有图片 / 视频时当贴图片 / 视频
 

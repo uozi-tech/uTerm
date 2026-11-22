@@ -219,6 +219,18 @@ final class MobileTerminalController {
             }
         }
         terminal.onOpenLink = { [weak self] link, kind in self?.openTerminalLink(link, kind: kind) }
+        // 手机上没有 ⌘ 点：选中路径 / 网址后编辑菜单里的「打开」。
+        view.onOpenLink = { [weak self] link in self?.openTerminalLink(link, kind: .unknown) }
+        view.canOpenLink = { [weak self] link in self?.canOpenTerminalLink(link) ?? false }
+    }
+
+    /// 选中的链接点了会不会有反应：网址总会；路径要这个标签接了预览，且不是远控镜像（路径在那台 Mac 上）。
+    func canOpenTerminalLink(_ link: String) -> Bool {
+        switch TerminalLink.classify(link) {
+        case .web: return true
+        case .unsupported: return false
+        case .path: return onFilePreviewRequest != nil && !(connection?.mirrorsRemoteGrid ?? true)
+        }
     }
 
     /// 用户 ⌘ 点了终端里的链接（规则两端共用，见 `TerminalLink`）：网址交给系统，路径解析成主机上的绝对路径后在旁边

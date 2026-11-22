@@ -135,6 +135,9 @@ final class FilePreviewModel {
     /// 共享 FileBrowserModel 的 SFTP 会话）。
     private let sftpProvider: () -> (any SFTPProviding)?
     private var markdownImageCache = MarkdownImageCache()
+    /// 不在预览区里的文档：终端区里由终端打开的文件标签（`openDetached`）。各自带着发起那个终端所连主机的 SFTP
+    /// （终端窗口的标签可连不同主机，工作区里也可能不是侧栏那台），按文档 id 记；标签关掉时 `releaseDetached`。
+    private var detached: [UUID: (buffer: FileBuffer, provider: any SFTPProviding)] = [:]
     private var remoteCommandRefreshGeneration = 0
 
     init(recentsStore: RecentFilesStore,
@@ -269,6 +272,41 @@ final class FilePreviewModel {
         markdownImageCache.removeAll()
         buf.mtimeWhenLoaded = nil
         await load(buf, failIfProviderMissing: true)
+    }
+
+    // MARK: 游离文档（终端区里由终端打开的文件）
+
+    /// 新建一个不在预览区里的文档并加载：读写都走 `provider`（发起那个终端所连的主机）。由工作区把它放进终端区。
+    func openDetached(path: String, provider: any SFTPProviding) async -> FileBuffer {
+        let buf = makeBuffer(remotePath: path, byteSize: nil, mtime: nil)
+        detached[buf.id] = (buf, provider)
+        await load(buf, failIfProviderMissing: true)
+        return buf
+    }
+
+    /// 程序刚改过它：重读。用户改了没存（脏）或正在存的不重读。
+    func reloadDetached(_ buf: FileBuffer) async {
+        guard detached[buf.id] != nil, !buf.isDirty else { return }
+        if case .saving = buf.state { return }
+        markdownImageCache.removeAll()
+        buf.mtimeWhenLoaded = nil
+        await load(buf, failIfProviderMissing: true)
+    }
+
+    /// 最后一个引用它的标签关掉了。
+    func releaseDetached(_ id: UUID) {
+        detached[id]?.buffer.onBecameDirty = nil
+        detached[id] = nil
+    }
+
+    func isDetached(_ id: UUID) -> Bool { detached[id] != nil }
+
+    private func knownBuffer(_ id: UUID) -> FileBuffer? {
+        buffers.first { $0.id == id } ?? detached[id]?.buffer
+    }
+
+    private func provider(for buf: FileBuffer) -> (any SFTPProviding)? {
+        detached[buf.id]?.provider ?? sftpProvider()
     }
 
     /// 该标签是否处于「预览（临时）」状态（斜体、会被下一次单击顶替）。
@@ -475,7 +513,7 @@ final class FilePreviewModel {
             return
         }
 
-        guard let sftp = sftpProvider() else {
+        guard let sftp = provider(for: buf) else {
             if failIfProviderMissing {
                 buf.state = .failed(String(localized: "SFTP 尚未连接"))
             }
@@ -493,7 +531,8 @@ final class FilePreviewModel {
                 buf.mtimeWhenLoaded = (try? await sftp.stat(buf.remotePath))?.mtime
             }
             buf.state = .loaded
-            // 更新 recents
+            // 更新 recents（游离文档可能在另一台主机上，不进本窗口的「最近打开」）
+            guard detached[buf.id] == nil else { return }
             recentsStore.touch(RecentFileEntry(
                 remotePath: buf.remotePath,
                 kindTag: kindTag(for: buf.kind),
@@ -505,10 +544,10 @@ final class FilePreviewModel {
     }
 
     func download(_ buffer: FileBuffer, to localURL: URL) async throws {
-        guard buffers.contains(where: { $0.id == buffer.id }) else {
+        guard knownBuffer(buffer.id) != nil else {
             throw PreviewDownloadError.missingBuffer
         }
-        guard let sftp = sftpProvider() else {
+        guard let sftp = provider(for: buffer) else {
             throw PreviewDownloadError.providerUnavailable
         }
         try await sftp.download(
@@ -518,7 +557,7 @@ final class FilePreviewModel {
     }
 
     func loadMarkdownImage(source: String, referencedBy buffer: FileBuffer) async throws -> Data {
-        guard buffers.contains(where: { $0.id == buffer.id }) else {
+        guard knownBuffer(buffer.id) != nil else {
             throw PreviewDownloadError.missingBuffer
         }
 
@@ -530,7 +569,7 @@ final class FilePreviewModel {
         let data: Data
         switch resource {
         case .remotePath(let path):
-            guard let sftp = sftpProvider() else {
+            guard let sftp = provider(for: buffer) else {
                 throw PreviewDownloadError.providerUnavailable
             }
             do {
@@ -563,7 +602,7 @@ final class FilePreviewModel {
     }
 
     func save(_ id: UUID) async -> SaveOutcome {
-        guard let buf = buffers.first(where: { $0.id == id }) else { return .noop }
+        guard let buf = knownBuffer(id) else { return .noop }
         // image 不写回；其它种类（code/markdown/plainText）都允许保存
         switch buf.kind {
         case .image: return .noop
@@ -571,7 +610,7 @@ final class FilePreviewModel {
         }
         guard case .loaded = buf.state else { return .noop }
         guard buf.isDirty else { return .noop }
-        guard let sftp = sftpProvider() else { return .failed(String(localized: "SFTP 尚未连接")) }
+        guard let sftp = provider(for: buf) else { return .failed(String(localized: "SFTP 尚未连接")) }
 
         // mtime 冲突检测
         do {
@@ -601,8 +640,8 @@ final class FilePreviewModel {
 
     /// 冲突 dialog 用户选「用远程的」时调。重读 + 清 dirty。
     func reloadFromRemote(_ id: UUID) async {
-        guard let buf = buffers.first(where: { $0.id == id }) else { return }
-        guard let sftp = sftpProvider() else { return }
+        guard let buf = knownBuffer(id) else { return }
+        guard let sftp = provider(for: buf) else { return }
         do {
             let data = try await sftp.download(
                 remotePath: buf.remotePath,
