@@ -223,8 +223,8 @@ final class TerminalSurfaceCoordinator {
     private var hasDeferredWakeupTick = false
     /// 这一串推迟从什么时候开始的（`flushDeferredWakeupTick` 的上限从这里算）。
     private var deferredWakeupSince: CFTimeInterval = 0
-    /// 推迟最多这么久：到点不管还在不在滚，都补一次正常的 tick（再来的 wakeup 重新开始算）。宿主判断「在滚」出了错，
-    /// 也只是多 1 s 没同步重画，不会一直推迟下去。
+    /// 推迟最多这么久：到点不管还在不在滚，轮询都结束、补一次 tick（还在滚就就地 tick、不开 link；停了就走平常那条路）；
+    /// 再来的 wakeup 重新开始算。宿主判断「在滚」出了错，也只是多 1 s 没同步重画，不会一直推迟下去。
     static let deferredWakeupLimit: CFTimeInterval = 1.0
 
     private func deferWakeupTick() {
@@ -245,12 +245,19 @@ final class TerminalSurfaceCoordinator {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self, hasDeferredWakeupTick else { return }
             UTermScrollTrace.record("wakeup-poll", 1)
-            if wakeupDefersDisplayLink(), CACurrentMediaTime() - deferredWakeupSince < Self.deferredWakeupLimit {
+            let stillMoving = wakeupDefersDisplayLink()
+            if stillMoving, CACurrentMediaTime() - deferredWakeupSince < Self.deferredWakeupLimit {
                 flushDeferredWakeupTick()
                 return
             }
             hasDeferredWakeupTick = false
             pendingImmediateTick = true
+            if stillMoving {
+                // 到上限还在滚：就地 tick 一次收尾（不同步重画，滚动的画面渲染线程在画），不开 display link——开了就把
+                // 屏幕从 60 Hz 拽回 120 Hz。再来的 wakeup 重新开始推迟、重新算上限。
+                tick()
+                return
+            }
             if Self.wakeupDrawsSynchronously, !wakeupDefersSyncDraw() { pendingSyncDraw = true }
             ensureDisplayLink()
         }

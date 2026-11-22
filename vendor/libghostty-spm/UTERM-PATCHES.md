@@ -546,7 +546,7 @@ xctrace 录换屏表按上玻璃对（上玻璃模式：减速期间测试自己
 不认 `systemScrollIsBusy`：后者把越界停着、卡住没清的标志（`isUIKitMoving`、`panIsActive`）也算忙。第一版按它判，
 contentOffset 越界停着时（改标题这类不改回滚长度的 wakeup 不会让 UIKit 把它拉回范围），每个 wakeup 都不同步重画、
 50 ms 一次的轮询一直跑（`testStuckBusyStateDoesNotDeferWakeupsAtRest` 改前 5 个 wakeup 全推迟、0 次同步重画）。另外：
-推迟的轮询最多 1 s（`deferredWakeupLimit`），到点不管在不在滚都补一次正常的 tick；画不了（surface 放掉、在后台）的时候不推迟，
+推迟的轮询最多 1 s（`deferredWakeupLimit`），到点补一次 tick（还在滚就就地 tick、不开 display link，停了走平常那条路）；画不了（surface 放掉、在后台）的时候不推迟，
 照原路记下要 tick。轮询只捕获 weak self，视图没了就停；钩子挂在协调器上，surface 放掉 / 重建之后照旧。
 
 A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `moving`（默认，上面两步）、`moving-link`（只有第一步）、
