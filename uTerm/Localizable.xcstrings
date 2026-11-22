@@ -12740,6 +12740,41 @@
         }
       }
     },
+    "tab.hosts" : {
+      "comment" : "底部标签与主机页标题（复数：Hosts）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hosts"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ホスト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호스트"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主機"
+          }
+        }
+      }
+    },
     "TCP %@" : {
       "comment" : "中继检查摘要的一段，值是「通 / 不通 / 未测」",
       "localizations" : {
@@ -57022,19 +57057,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dynamic Island & Lock Screen"
+            "value" : "Live Activities"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dynamic Island とロック画面"
+            "value" : "ライブアクティビティ"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dynamic Island 및 잠금 화면"
+            "value" : "실시간 현황"
           }
         },
         "zh-Hant" : {
@@ -67814,19 +67849,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Match System"
+            "value" : "System"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "システムに合わせる"
+            "value" : "システム"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "시스템 설정 따르기"
+            "value" : "시스템"
           }
         },
         "zh-Hant" : {

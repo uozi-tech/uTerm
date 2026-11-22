@@ -9,7 +9,7 @@ enum MTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .hosts: return String(localized: "主机", comment: "底部标签")
+        case .hosts: return String(localized: "tab.hosts", defaultValue: "主机", comment: "底部标签与主机页标题（复数：Hosts）")
         case .commands: return String(localized: "命令", comment: "底部标签")
         case .settings: return String(localized: "设置", comment: "底部标签")
         }

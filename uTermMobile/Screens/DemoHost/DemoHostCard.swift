@@ -25,11 +25,10 @@ struct DemoHostCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            HStack(spacing: 8) {
-                MBtn(title: String(localized: "打开终端"), icon: "term", kind: .tinted, full: true, height: 40,
-                     action: onTerminal)
-                MBtn(title: String(localized: "浏览文件"), icon: "folder", kind: .secondary, full: true, height: 40,
-                     action: onFiles)
+            // 两个按钮的字都放得下一行就并排；放不下（窄屏、分屏，或译文比中文长）就上下叠，不折行、不截断。
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { actionButtons }
+                VStack(spacing: 8) { actionButtons }
             }
         }
         .padding(14)
@@ -37,5 +36,12 @@ struct DemoHostCard: View {
         .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("demo-host-card")
+    }
+
+    @ViewBuilder private var actionButtons: some View {
+        MBtn(title: String(localized: "打开终端"), icon: "term", kind: .tinted, full: true, height: 40,
+             action: onTerminal)
+        MBtn(title: String(localized: "浏览文件"), icon: "folder", kind: .secondary, full: true, height: 40,
+             action: onFiles)
     }
 }

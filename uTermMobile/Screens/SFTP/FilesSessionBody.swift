@@ -119,7 +119,11 @@ struct FilesSessionBody: View {
         HStack(spacing: 10) {
             Text("\(UFormat.count(controller.entries.count)) 项").font(M.mono(12.5)).foregroundStyle(M.text3)
             Spacer()
-            Text("长按文件查看操作").font(M.sans(11.5)).foregroundStyle(M.text4)
+            // 提示只是锦上添花：一行放不下（窄屏、译文长）就不显示，别把底栏挤成好几行。
+            ViewThatFits(in: .horizontal) {
+                Text("长按文件查看操作").font(M.sans(11.5)).foregroundStyle(M.text4).lineLimit(1)
+                Color.clear.frame(width: 0, height: 0)
+            }
             MBtn(title: String(localized: "上传", comment: "上传文件"), icon: "upload", kind: .tinted, height: 36) { showImporter = true }
                 .fixedSize()
         }

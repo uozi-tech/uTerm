@@ -42,7 +42,7 @@ struct HostsScreen: View {
         let recent = ServerGrouping.recent(hosts)
         let lazy = hosts.count > Self.eagerHostLimit
 
-        return MScreen(title: String(localized: "主机", comment: "主机标签页标题"),
+        return MScreen(title: String(localized: "tab.hosts", defaultValue: "主机", comment: "底部标签与主机页标题（复数：Hosts）"),
                        sub: String(localized: "\(hosts.count) 台主机"),
                        maxContentWidth: M.gridContentWidth, pinsHeader: true, actions: {
             // 有会话开着（工作区收起了）时给一个回去的入口。系统工具栏按钮，底由系统画。
