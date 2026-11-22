@@ -157,6 +157,12 @@ final class TerminalSurfaceCoordinator {
         static let wakeupDrawsSynchronously = true
     #endif
 
+    /// uTerm 本地补丁：这次 wakeup 先不在主线程同步重画（iOS 的视图在系统滚动动着时返回 true：手指拖着、减速、回弹、对齐）。
+    /// 滚动的每一步由渲染线程自己画；慢慢拖时每跨一行来一次 wakeup，下一拍的同步重画要等渲染线程手上那一帧
+    /// （Duo 内屏实测 8.4 ms ≈ 一拍），主线程被占满一拍，那一帧画面不动、下一帧补两步（`GhosttySlowDragFrameTests`）。
+    /// 停下之后的 wakeup 照旧同步重画。
+    var wakeupDefersSyncDraw: () -> Bool = { false }
+
     /// Running only while frames are owed. The engine's wakeups arrive at
     /// PTY speed, not display speed; rendering straight from them draws far
     /// more often than the screen can show and starves input handling under
@@ -198,7 +204,7 @@ final class TerminalSurfaceCoordinator {
 
     func requestImmediateTick(syncDraw: Bool = true) {
         pendingImmediateTick = true
-        if syncDraw || Self.wakeupDrawsSynchronously { pendingSyncDraw = true }
+        if syncDraw || (Self.wakeupDrawsSynchronously && !wakeupDefersSyncDraw()) { pendingSyncDraw = true }
         ensureDisplayLink()
     }
 

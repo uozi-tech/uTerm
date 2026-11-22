@@ -21,10 +21,11 @@ import XCTest
 /// 的一次回调。原来这里是伪造 pan 硬调 `handleTouchScrollGesture:`、按本地包自写惯性的回调（`glide-target`）分拍；
 /// 那套自写物理已经整套删掉，账本改记在系统路径上，两条门槛（赶上 vsync、link 不跳拍）原样。
 ///
-/// 这组读数量的是 iOS 现在唯一的行为：引擎 wakeup 也在主线程同步重画（`TerminalSurfaceCoordinator.wakeupDrawsSynchronously`，
-/// 第五轮 / 第七轮起的默认）。第六轮「wakeup 不同步重画」的 A/B 开关已经从本地包里拿掉，原来按第六轮定的两条门槛
-///（甩动期间 tick-draw 0 次、跨行拍主线程忙时 p95 < 2 ms）在同步重画下不成立，改成只打印，见 `summarize` 和
-/// `testRoundSixThresholdsWithoutSyncDraw`。
+/// iOS 上引擎 wakeup 默认在主线程同步重画（`TerminalSurfaceCoordinator.wakeupDrawsSynchronously`，第五轮 / 第七轮起），
+/// 但系统滚动动着时（这里的甩动全程都是）先不画（`wakeupDefersSyncDraw`，libghostty-spm 本地补丁 #20），所以甩动期间
+/// `BUDGET-SYNC-DRAW` 的 tick-draw 现在是 0 次。第六轮那两条门槛（tick-draw 0 次、跨行拍主线程忙时 p95 < 2 ms）仍只打印不设门槛，
+/// 见 `summarize` 和 `testRoundSixThresholdsWithoutSyncDraw`；拖着跨行不同步重画的门槛在
+/// `GhosttySlowDragFrameTests.testDragAcrossRowsDoesNotSyncDraw`。
 @MainActor
 final class GhosttyFrameBudgetTests: XCTestCase {
     typealias OnScreen = GhosttyOnScreenScrollTests
@@ -232,8 +233,8 @@ final class GhosttyFrameBudgetTests: XCTestCase {
     /// 打印分桶，并核回归门槛：赶不上 vsync 的拍、减速 link 跳拍（主线程卡过了一拍）各不超过 2 拍（每组约 1,000 拍）。
     ///
     /// 只打印、不再设门槛的两项（`BUDGET-SYNC-DRAW` 行）：甩动期间主线程同步整帧重画的次数、跨行拍的主线程忙时 p95。
-    /// 它们原来的门槛（0 次、< 2 ms）是第六轮「wakeup 不同步重画」下的读数；iOS 现在定死同步重画，
-    /// 每个跨行的拍都会画一次（18 Pro Max 上 2.1 ms 上下，跨行拍主线程忙时 p95 约 3.1 ms），那两条不成立。
+    /// 它们原来的门槛（0 次、< 2 ms）是第六轮「wakeup 不同步重画」下的读数。补丁 #20 之前 iOS 每个跨行的拍都会画一次
+    ///（18 Pro Max 上 2.1 ms 上下，跨行拍主线程忙时 p95 约 3.1 ms）；之后系统滚动动着时不画，2026-11-22 Duo 上甩动期间 0 次。
     private func summarize(_ all: [String: [Frame]]) {
         for (key, frames) in all.sorted(by: { $0.key < $1.key }) {
             for rows in 0...4 {

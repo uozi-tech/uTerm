@@ -239,6 +239,10 @@
                 core.bridge.onScrollbarChange = { [weak self] in
                     self?.systemScrollBarChanged()
                 }
+                // uTerm 本地补丁：系统滚动动着时引擎的 wakeup 不在主线程同步重画（见 `wakeupDefersSyncDraw`）。
+                core.wakeupDefersSyncDraw = { [weak self] in
+                    self?.systemScrollIsBusy ?? false
+                }
             #endif
             core.onMouseShape = { [weak self] shape in
                 self?.applyMouseShape(shape)

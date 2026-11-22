@@ -177,6 +177,7 @@ C 接口不动。源码里每一处都标着「uTerm 本地补丁」，升级时
 - 引擎 wakeup 触发的 tick 要不要在主线程同步整帧重画，由 `TerminalSurfaceCoordinator.wakeupDrawsSynchronously` 按平台定死：iOS true（user 在真机上
   说不同步时滚动发糊），Mac false（渲染线程自己会画，主线程每跨一行白画一帧 1.4–2.2 ms，还挡着渲染线程）。尺寸、度量、可见性、选区、
   首帧这些宿主侧的变化两端都照旧同步重画。实现是 `pendingSyncDraw` 和 `requestImmediateTick(syncDraw:)`。
+  例外是第 20 条：iOS 上系统滚动动着时，wakeup 先不同步重画（`wakeupDefersSyncDraw`）。
 - 几处 trace 打点（`tick-app` / `tick-refresh` / `tick-draw` / `wakeup-tick`），trace 关着时零开销。
 
 回归用例：`uTermMobileTests/TerminalHiddenRenderingTests.swift`（surface 放掉 / 重建）、`uTermMobileTests/Probes/GhosttyFrameBudgetTests.swift`、
@@ -506,6 +507,31 @@ iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swif
 因为中间读画面那几十毫秒本身就是一次停顿。`GhosttyMagicMouseScrollTests` 照过（36 拨 0 拨往回）。
 测量：`TEST_RUNNER_UTERM_SCROLLBENCH_DIR=<目录> xcodebuild test-without-building … -only-testing:uTermTests/GhosttyMacScrollBenchTests`
 （默认跳过；CSV 写进测试宿主的临时目录，日志里有路径）。真触控板手感未验。
+
+### 20. iOS：系统滚动动着时，引擎的 wakeup 不在主线程同步重画（慢滚每跨一行掉一帧）
+
+文件：`Surface/TerminalSurfaceCoordinator.swift`（`wakeupDefersSyncDraw`）、`Platform/UIKit/UITerminalView.swift`（接到 `systemScrollIsBusy`）。
+
+user 2026-11-22 在 Duo 上说慢慢拖着滚「有点卡」。真触摸（`SyntheticFinger`，每个显示帧一个 moved，发在引擎的 display link 之前）
+匀速拖、逐帧解 IOSurface 条码量出来（`uTermMobileTests/Probes/GhosttySlowDragFrameTests.swift`，读数是维护者的内部测量记录）：
+
+- **每跨一行掉一帧，次次对得上。** 视口一跨行，渲染器往 app 邮箱推一条滚动条消息 → wakeup → 下一拍主线程 `ghostty_surface_draw`
+  同步整帧重画（第 2 条，iOS 定死要）。这次重画要等渲染线程手上那一帧，Duo 内屏（2670×1878 px）上 p50 8.4 ms、最长 10.4 ms ≈ 一拍：
+  主线程整拍占满，那一拍画面不动、手指事件也晚到，下一拍补两到三步，参考 display link 跳一拍。慢的时候跨一行要 100–330 ms，
+  所以是一下一下有节奏的顿。40 / 80 / 150 / 300 pt/s 下每秒 1.5 / 3.7 / 4.8 / 5.5 次，「画面落后」的帧 100% 紧跟在跨行与同步重画之后。
+- 和第 18、19 条无关：没有它们的基线（`33fde4f2`）一样，每秒 1.9 / 5.4 / 6.7 / 7.2 次。
+- 改法：系统滚动动着（手指按着 / 拖着、减速、回弹、对齐，`systemScrollIsBusy`）时 wakeup 只 app tick + refresh，不同步重画；
+  滚动的每一步本来就是渲染线程画、主线程只设 contents（第六轮查过）。停下之后的 wakeup、宿主侧的变化照旧同步重画。
+  第八轮在 Duo 上按上玻璃量过，「wakeup 不同步重画」甩动的换帧率 97%（同步重画 81%）；user 后来说两种都和 SwiftTerm 无异，
+  默认留着同步重画。这条只把滚动途中那几次去掉。
+- 改后同一组（4 个速度 × 两个方向 × 两次）：跨行的 wakeup 同步重画 0 次，画面落后 / 跳拍 / 顿住的帧 0，主线程每拍忙时 p95
+  从 2.1–8.3 ms 降到 1.7–2.1 ms。
+
+另一种发法（120 Hz 定时器、不对齐显示帧）下改前改后都是每秒二三十次「一帧 0 步、下一帧两步」：UIKit 的拖动跟手指 1:1，
+一帧里来 0 个或 2 个触摸就是 0 / 2 步。真手指的触摸在 iOS 上是不是按显示帧对齐派发的，测试量不到；对齐时（上面那组）为 0。
+
+回归用例：`GhosttySlowDragFrameTests.testDragAcrossRowsDoesNotSyncDraw`（拖着跨 5 行以上 `tick-draw` 必须 0 次，停下后的 wakeup 仍同步重画；
+改前每跨一行一次），测量用 `testSlowDragFrames`（`TEST_RUNNER_UTERM_MEASURE=1`，真机）。真手指的手感要 user 在 Duo 上验。
 
 ## manifest 改动（相对上游的 `Package.swift`）
 
