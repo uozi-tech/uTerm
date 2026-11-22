@@ -128,7 +128,7 @@ final class GhosttyMacScrollTests: XCTestCase {
     }
 
     // CGScrollPhase / CGMomentumScrollPhase 的取值。
-    private let began: Int64 = 1, changed: Int64 = 2, ended: Int64 = 4
+    private let began: Int64 = 1, changed: Int64 = 2, ended: Int64 = 4, cancelled: Int64 = 8, mayBegin: Int64 = 128
     private let momentumBegin: Int64 = 1, momentumContinue: Int64 = 2, momentumEnd: Int64 = 3
 
     private func sleep(_ seconds: Double) async {
@@ -425,6 +425,37 @@ final class GhosttyMacScrollTests: XCTestCase {
         await settle(rig, "抬手后")
         XCTAssertEqual(rig.firstLine, start - 3, "应当顺着方向停在往回 3 行处")
         assertAligned(rig, firstLine: start - 3, "抬手吸附之后")
+    }
+
+    /// 惯性途中手指放上触控板把它按停（系统发惯性 ended，接着 mayBegin），不动、0.1 s 后抬起（cancelled）：
+    /// 顺着惯性的方向补到前方的一行，不往回。原来取近的那一行，一半的时候逆着惯性退回去。
+    func testCatchThenLiftCarriesOnInTheDirectionOfTravel() async throws {
+        let rig = try await makeRig()
+        defer { rig.close() }
+        let start = try XCTUnwrap(rig.firstLine)
+        let row = rig.rowPoints
+        // 两行再多四分之一行停住：近的那一行在身后。
+        let total = 2 * row + max(1, row / 4)
+        try rig.scroll(0, phase: began)
+        try rig.scroll(row, phase: changed)
+        await sleep(0.012)
+        try rig.scroll(0, phase: ended)
+        try rig.scroll(row / 2, momentum: momentumBegin)
+        await sleep(0.012)
+        var sent = row + row / 2
+        while sent < total {
+            let d = min(2, total - sent)
+            try rig.scroll(d, momentum: momentumContinue)
+            sent += d
+            await sleep(0.012)
+        }
+        try rig.scroll(0, momentum: momentumEnd)
+        try rig.scroll(0, phase: mayBegin)
+        await sleep(0.1)
+        try rig.scroll(0, phase: cancelled)
+        await settle(rig, "按停后抬手")
+        XCTAssertEqual(rig.firstLine, start - 3, "按停了惯性：应当顺着方向停在往回 3 行处（拨了 \(rig.sentPoints) pt，行高 \(row) pt）")
+        assertAligned(rig, firstLine: start - 3, "按停后抬手吸附之后")
     }
 
     /// 拨动后手指停住 150 ms（停住时系统不发事件）再抬起：当成停住了，走到近的那一行。原来按最后一个事件的位移（≥ 3 px）

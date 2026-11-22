@@ -66,7 +66,9 @@
                 settler.release(after: moving ? 0 : Self.smoothScrollLiftDelay, followingTravel: moving)
             } else if event.phase.contains(.cancelled) {
                 // Fingers rested on a moving scroll and lifted.
-                settler.release(followingTravel: false)
+                // uTerm 本地补丁（#19）：顺着刚才的方向补到前方的一行（从静止起步），不往回。原来取近的那一行，滚动基准里
+                // 一半逆着惯性的方向退回去（最多 5 pt）；iOS 的系统滚动按停后也是这条规则（补丁 #18）。
+                settler.release(followingTravel: true)
             }
         }
     }

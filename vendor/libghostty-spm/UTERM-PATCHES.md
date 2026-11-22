@@ -488,8 +488,11 @@ UIKit 自己的拖动、松手速度、减速都在）量出来的原因和改�
   有一半时候当成停住、往回吸到近的那一行（最多往回 5 pt）；手指停住不动 150 ms 再抬起（停住时系统不发事件），最后一个事件还是拨动时的，
   当成还在走、往前吸最多一整行（13 pt）。现在按速度判：最近 50 ms 的精确滚动 ≥ 30 pt/s 算还在走，最后一个事件过了 50 ms 速度开始衰减，
   0.1 s 归零。Magic Mouse 上手指搭着漂一个点（一个 1 pt 的事件 = 20 pt/s）仍算停住。
+- **按停惯性再抬起，往回退。** 惯性途中手指放上触控板（惯性 ended、接着 mayBegin）、不动、抬起（cancelled），原来取近的那一行：
+  基准 8 次里一半逆着惯性的方向退回去，最多 5 pt。现在顺着惯性的方向补到前方的一行（速度已经衰减到 0，从静止起步的 smoothstep），
+  和 iOS 系统滚动按停后的规则（第 18 条）一致。改后往回 0；代价是按停后往前补最多一行（中位 8 pt）。
 
-保证不变：落在整行上；顺着走的吸附不往回（往回只发生在停住之后取近的一行，和原来、和 iOS 第 18 条一样）；下一次触碰 `hold` 掐断吸附。
+保证不变：落在整行上；顺着走的吸附不往回（往回只发生在拖着停住之后取近的一行，和原来、和 iOS 第 18 条一样）；下一次触碰 `hold` 掐断吸附。
 代价：顺着走的吸附更长（惯性收尾后 141 → 150–230 ms 停稳），抬手时的吸附会在惯性来之前先走几个像素。
 老式滚轮不经过 settler，和 `NSScrollView` 一样一格 3 行直接跳，没动。
 
@@ -498,8 +501,8 @@ iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swif
 （`scrollBehavior`，吸附可关）兼容：改的都在吸附整行那条路径里。
 
 回归用例：`GhosttyMacScrollTests` 新加的 `testSnapAfterMomentumCarriesOnAtItsSpeed`（惯性 ~55 pt/s 收尾、补 12 pt：改前吸附 150 pt/s，
-改后 64）、`testSlowLiftAtHighEventRateCarriesOnAtOnce`（改前往回 3 pt、停 80 ms）、`testHoldThenLiftSettlesOnTheNearerRow`（改前往前多走一行），
-三条在改前都红；`checkLift` 的两种抬手改成在抬手那一刻把手指的状态摆清楚（停住 = 停 0.12 s，还在走 = 抬手前再拨 3 步），
+改后 64）、`testSlowLiftAtHighEventRateCarriesOnAtOnce`（改前往回 3 pt、停 80 ms）、`testHoldThenLiftSettlesOnTheNearerRow`（改前往前多走一行）、
+`testCatchThenLiftCarriesOnInTheDirectionOfTravel`（改前退回近的那一行），四条在改前都红；`checkLift` 的两种抬手改成在抬手那一刻把手指的状态摆清楚（停住 = 停 0.12 s，还在走 = 抬手前再拨 3 步），
 因为中间读画面那几十毫秒本身就是一次停顿。`GhosttyMagicMouseScrollTests` 照过（36 拨 0 拨往回）。
 测量：`TEST_RUNNER_UTERM_SCROLLBENCH_DIR=<目录> xcodebuild test-without-building … -only-testing:uTermTests/GhosttyMacScrollBenchTests`
 （默认跳过；CSV 写进测试宿主的临时目录，日志里有路径）。真触控板手感未验。
