@@ -461,10 +461,10 @@ final class WorkspaceModel {
            let sftp = fileBrowserModel.sftpProvider {
             Task {
                 guard let stat = try? await sftp.stat(path) else { return }
-                if !TerminalLinkTarget.isOpenableFile(stat) {
-                    await fileBrowserModel.load(path)
-                } else {
-                    await filePreviewModel.reveal(path: path)
+                switch TerminalLinkTarget.kind(stat) {
+                case .directory: await fileBrowserModel.load(path)
+                case .file: await filePreviewModel.reveal(path: path)
+                case .other: return   // FIFO、设备：读了会卡住侧栏共用的 SFTP 会话
                 }
             }
             return

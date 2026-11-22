@@ -15455,6 +15455,34 @@
         }
       }
     },
+    "不是普通文件，不预览" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not a regular file, so it isn’t previewed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通常のファイルではないため、プレビューしません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일반 파일이 아니어서 미리 보지 않습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是一般檔案，不預覽"
+          }
+        }
+      }
+    },
     "不清理" : {
       "comment" : "AI 对话保留时长：永不清理",
       "localizations" : {
@@ -29182,6 +29210,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "回答已完成"
+          }
+        }
+      }
+    },
+    "图片像素太多，不支持预览。可以用本机应用打开。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This image has too many pixels to preview. You can open it in a local app."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像のピクセル数が多すぎるためプレビューできません。このMacのアプリで開けます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지 픽셀이 너무 많아 미리 볼 수 없습니다. 로컬 앱으로 열 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圖片像素太多，不支援預覽。可以用本機 App 開啟。"
+          }
+        }
+      }
+    },
+    "图片像素太多，手机上预览不了。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This image has too many pixels to preview on this device."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像のピクセル数が多すぎるため、このデバイスではプレビューできません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지 픽셀이 너무 많아 이 기기에서 미리 볼 수 없습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圖片像素太多，手機上無法預覽。"
           }
         }
       }
@@ -70981,6 +71065,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這個檔案在你打開後被別處修改過。覆寫會丟掉那些變更。"
+          }
+        }
+      }
+    },
+    "这个文档引用的图片太多，只预览前 %lld 张" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This document references too many images; only the first %lld is previewed"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This document references too many images; only the first %lld are previewed"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このドキュメントが参照する画像が多すぎるため、最初の %lld 枚だけをプレビューします"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 문서가 참조하는 이미지가 너무 많아 처음 %lld개만 미리 봅니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這份文件引用的圖片太多，只預覽前 %lld 張"
           }
         }
       }

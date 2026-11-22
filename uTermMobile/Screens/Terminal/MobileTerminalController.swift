@@ -238,7 +238,8 @@ final class MobileTerminalController {
     func openTerminalLink(_ link: String, kind: TerminalOpenURLKind) {
         switch kind {
         case .text, .html:
-            if let url = URL(string: link) { UIApplication.shared.open(url) }
+            // Ghostty 自己写出的临时文件：只认本机文件 URL。
+            if let url = URL(string: link), url.isFileURL { UIApplication.shared.open(url) }
             return
         case .osc8, .unknown:
             break

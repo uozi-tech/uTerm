@@ -54,6 +54,10 @@ final class MobileFilePreviewController {
     @ObservationIgnored private var closed = false
     /// Markdown 里引用的图片（按主机上的路径）。重读时清掉：图多半是和文档一起刚生成的。
     @ObservationIgnored private var markdownImages: [String: UIImage] = [:]
+    /// 这篇文档读过哪些图：最多 `maxMarkdownImages` 张，免得一篇引用上千张图的文档一下子开出上千次 SFTP 读。
+    @ObservationIgnored private var markdownImageRequests: Set<String> = []
+    static let maxMarkdownImages = 64
+    static let maxMarkdownImageBytes = 8 * 1024 * 1024
 
     /// `connect` 第一次加载时才调，之后复用那条会话。
     init(path: String, connect: @escaping () async throws -> any SFTPProviding) {
@@ -81,6 +85,7 @@ final class MobileFilePreviewController {
         let attempt = generation
         phase = .loading
         markdownImages.removeAll()
+        markdownImageRequests.removeAll()
         let path = path
         Task { [weak self] in
             guard let self else { return }
@@ -112,6 +117,9 @@ final class MobileFilePreviewController {
         case notOnThisHost
         case undecodable
         case unavailable
+        case notAFile
+        case tooLarge
+        case tooManyImages
     }
 
     /// Markdown 预览里 `![](…)` 的图：按文档所在目录解析、只读同一台主机上的文件，单张上限同 Mac（8 MiB）。
@@ -120,9 +128,19 @@ final class MobileFilePreviewController {
             throw MarkdownImageError.notOnThisHost
         }
         if let cached = markdownImages[path] { return cached }
+        if !markdownImageRequests.contains(path) {
+            guard markdownImageRequests.count < Self.maxMarkdownImages else { throw MarkdownImageError.tooManyImages }
+            markdownImageRequests.insert(path)
+        }
         guard !closed, let provider = await session() else { throw MarkdownImageError.unavailable }
-        let data = try await provider.download(remotePath: path, maximumBytes: 8 * 1024 * 1024)
-        guard let image = UIImage(data: data) else { throw MarkdownImageError.undecodable }
+        // 先 stat：只读普通文件（FIFO、设备读了会一直挂着，见 `TerminalLinkTarget`），太大的不下。
+        let stat = try await provider.stat(path)
+        guard TerminalLinkTarget.isOpenableFile(stat) else { throw MarkdownImageError.notAFile }
+        guard stat.size <= Self.maxMarkdownImageBytes else { throw MarkdownImageError.tooLarge }
+        let data = try await provider.download(remotePath: path, maximumBytes: Self.maxMarkdownImageBytes)
+        // 声明的像素尺寸超上限不解，解出来也缩到够看就行（`RemoteImageGuard`）。
+        guard let cgImage = RemoteImageGuard.decode(data, maxPixelSize: 2048) else { throw MarkdownImageError.undecodable }
+        let image = UIImage(cgImage: cgImage)
         markdownImages[path] = image
         return image
     }
@@ -166,10 +184,14 @@ final class MobileFilePreviewController {
     static func phase(for data: Data, path: String) -> Phase {
         switch TerminalFilePreviewKind.of(path: path) {
         case .image:
-            guard let image = UIImage(data: data) else {
-                return .failed(String(localized: "图片无法解码，不支持预览。"))
+            // 先看声明的像素尺寸（`RemoteImageGuard`）：几 MB 的图可以声明几十亿像素，整张解码会让系统把 App 杀掉。
+            // 解出来缩到长边 4096：手机上放大看也够。
+            guard let cgImage = RemoteImageGuard.decode(data, maxPixelSize: 4096) else {
+                return .failed(RemoteImageGuard.pixelSize(of: data) != nil
+                    ? String(localized: "图片像素太多，手机上预览不了。")
+                    : String(localized: "图片无法解码，不支持预览。"))
             }
-            return .loaded(.image(image))
+            return .loaded(.image(UIImage(cgImage: cgImage)))
         case .markdown, .text:
             guard !data.contains(0), let text = String(data: data, encoding: .utf8) else {
                 return .failed(String(localized: "检测到二进制内容，不支持预览。"))

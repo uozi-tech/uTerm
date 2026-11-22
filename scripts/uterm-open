@@ -56,8 +56,11 @@ absolute() {
 }
 
 # 一条预览请求。tmux 里包一层 passthrough（需要 tmux 打开 allow-passthrough），否则 tmux 会吞掉它。
+# 路径里带控制字符的不发：文件名可以含 BEL / ESC，它们会提前结束这条 OSC，后面的字节就成了终端自己的控制序列
+# （比如写剪贴板的 OSC 52）。uTerm 那边也不认带控制字符的路径。
 emit() {
     path=$1
+    case $path in *[[:cntrl:]]*) return 0 ;; esac
     tty=$(find_tty) || return 0
     if [ -n "$TMUX" ]; then
         printf '\033Ptmux;\033\033]6975;open;%s\007\033\\' "$path" >>"$tty" 2>/dev/null

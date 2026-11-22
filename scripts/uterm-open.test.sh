@@ -24,6 +24,8 @@ check "绝对路径" "${esc}]6975;open;/tmp/a b.md${bel}" "$(run "$tool" "/tmp/a
 check "相对路径按当前目录" "${esc}]6975;open;$work/docs/plan.md${bel}" "$(cd "$work" && run "$tool" docs/plan.md)"
 check "多个文件" "${esc}]6975;open;/a${bel}${esc}]6975;open;/b${bel}" "$(run "$tool" /a /b)"
 check "没有参数什么也不写" "" "$(run "$tool")"
+check "带控制字符的路径不发（防注入别的终端序列）" "" "$(run "$tool" "/tmp/x${bel}${esc}]52;c;aGk=${bel}.md")"
+check "带换行的路径不发" "" "$(run "$tool" $'/tmp/a\nb.md')"
 : >"$out"; UTERM_OPEN_TTY="$out" TMUX=/tmp/tmux-1/default,1,0 "$tool" /a
 check "tmux 里包 passthrough" "${esc}Ptmux;${esc}${esc}]6975;open;/a${bel}${esc}\\" "$(cat "$out")"
 

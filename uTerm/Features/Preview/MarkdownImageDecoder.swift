@@ -5,6 +5,8 @@ enum MarkdownImageDecoder {
     @MainActor
     static func decode(_ data: Data) async -> NSImage? {
         guard isSVG(data) else {
+            // 图来自主机：先看声明的像素尺寸，超过上限不解（`RemoteImageGuard`）。
+            guard RemoteImageGuard.admits(data) else { return nil }
             return NSImage(data: data)
         }
 
@@ -82,12 +84,14 @@ private final class SVGSnapshotRenderer: NSObject, WKNavigationDelegate {
     }
 
     func render() async -> NSImage? {
-        guard let size = SVGMetadata.intrinsicSize(from: data),
-              size.width > 0,
-              size.height > 0
+        guard let declared = SVGMetadata.intrinsicSize(from: data),
+              declared.width > 0,
+              declared.height > 0
         else {
             return nil
         }
+        // SVG 来自主机：`width="100000"` 会让 WebView 和快照大到把 App 撑死，按像素上限缩（保持宽高比）。
+        let size = RemoteImageGuard.fittedSize(declared, maxLongEdge: 4096)
 
         let configuration = WKWebViewConfiguration()
         configuration.suppressesIncrementalRendering = true

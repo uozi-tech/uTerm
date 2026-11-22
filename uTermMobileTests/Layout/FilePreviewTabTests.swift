@@ -169,6 +169,32 @@ final class FilePreviewTabTests: XCTestCase {
         controller.close()
     }
 
+    func testMarkdownImagesAreCheckedBeforeReading() async throws {
+        let provider = MobileFakeSFTPProvider(entries: 0)
+        for dir in ["/proj", "/proj/img.png"] { try await provider.createDirectory(dir) }
+        try await provider.seedFile("/proj/plan.md", data: Data("# Plan".utf8))
+        try await provider.seedFile("/proj/notes.png", data: Data("not an image".utf8))
+        let controller = MobileFilePreviewController(path: "/proj/plan.md") { provider }
+
+        do {
+            _ = try await controller.markdownImage("img.png")
+            XCTFail("目录不读")
+        } catch MobileFilePreviewController.MarkdownImageError.notAFile {}
+        do {
+            _ = try await controller.markdownImage("notes.png")
+            XCTFail("解不开的不当图")
+        } catch MobileFilePreviewController.MarkdownImageError.undecodable {}
+
+        for i in 0..<(MobileFilePreviewController.maxMarkdownImages - 2) {
+            _ = try? await controller.markdownImage("missing-\(i).png")
+        }
+        do {
+            _ = try await controller.markdownImage("one-more.png")
+            XCTFail("一篇文档最多读这么多张")
+        } catch MobileFilePreviewController.MarkdownImageError.tooManyImages {}
+        controller.close()
+    }
+
     private func waitUntilLoaded(_ controller: MobileFilePreviewController) async throws {
         for _ in 0..<200 {
             if case .loading = controller.phase {

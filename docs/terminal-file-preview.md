@@ -19,6 +19,31 @@ ESC ] 6975 ; open ; <绝对路径> BEL
   不合规矩的路径。同一个路径 0.5 秒内只认一次（`TerminalFilePreviewThrottle`：Claude 连改几处，每次 Edit 都触发）。
 - 只读、只在 uTerm 里显示，不交给别的 App、不执行。SSH 上的程序能做到的，也就是让用户看到一个本来就能 `cat` 的文件。
 
+## 安全
+
+这条 OSC **谁都能发**：终端里打印出来的任何东西都可能带着它（`cat` 一个下载来的文件、远端日志、MOTD、别人仓库的
+README）。Markdown 文档同样来自主机，不可信。所以：
+
+- **程序发起的预览只认文档和图片**（`TerminalFilePreviewPolicy`）：Markdown、图片、txt / csv / json / yaml / toml /
+  log / html / svg。源代码、没有扩展名的文件（私钥、`.env`、`~/.aws/credentials`）请求不了。敏感位置一律不认：
+  凭据目录（`.ssh`、`.gnupg`、`.aws`、`.azure`、`.kube`、`.docker`、`.password-store`…）、系统目录（`/etc`、`/proc`、
+  `/sys`、`/dev`、`/boot`；`/root`、`/var/www` 里常有项目，不算）、名字里带 secret / credential / password / token /
+  private / id_rsa 之类的文件。打印出来的一行字不该能把私钥摆到屏幕上：用户可能在共享屏幕、被远程控制、开着 Agent。
+  用户自己 ⌘ 点、在手机上点「打开」的不受这些限制。
+- **频率上限**（`TerminalFilePreviewThrottle`）：同一路径 0.5 秒一次，总的令牌桶一口气 5 个、之后每秒 1 个。
+- **只读普通文件**（`TerminalLinkTarget`）：先 stat，FIFO、设备、套接字不读（`/dev/zero` 读不完、FIFO 一直挂着，Mac 上
+  会把侧栏共用的 SFTP 会话一起卡住）。⌘ 点、程序请求、Markdown 里的图都走这一条。
+- **图片先看声明的像素尺寸再解码**（`RemoteImageGuard`，上限 5000 万像素）：一张 1.5 MB 的全零 PNG 就能声明 2 万 × 2 万
+  像素，整张解码 1.6 GB。读不出尺寸的不解。iOS 解出来再缩（预览长边 4096、Markdown 里的图 2048）；Mac 的 SVG 快照按同一
+  个像素上限缩（长边 4096）。
+- **Markdown 里的图**：只读同一台主机上的文件（`RemoteMarkdownImagePath`，网址、`data:` 不读），先 stat，单张 8 MiB，
+  一篇文档最多读 64 张。
+- **Markdown 里的链接只放行网址**（http / https / mailto，`TerminalLink`）：之前任何 scheme 都可点，Mac 上
+  `[x](file:///Applications/…)` 会在本机打开 App，`shortcuts:` 之类会跑捷径。Agent 聊天同样。包着链接的图点了也只开网址。
+- iOS 终端视图没接宿主时的退路也只开网址；Ghostty 自己的临时文件只认本机文件 URL。
+- **`uterm-open` 不发带控制字符的路径**：文件名里的 BEL / ESC 会提前结束这条 OSC，后面的字节就成了终端自己的控制序列
+  （比如写剪贴板的 OSC 52）。
+
 ## 两端怎么显示
 
 | | Mac | iOS |

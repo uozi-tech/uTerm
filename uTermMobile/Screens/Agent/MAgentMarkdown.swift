@@ -327,7 +327,9 @@ private struct MMDInlineView: View {
                 result.append(a)
             case let link as MarkdownLink:
                 var a = attributed(link)
-                if let dest = link.destination, let url = URL(string: dest) {
+                // 只放行网址（`TerminalLink`）：文档来自主机、回复来自模型，`file:`、`tel:`、`shortcuts:` 之类
+                // 点一下就会拉起别的 App 或跑捷径。别的链接照常显示文字，不可点。
+                if let dest = link.destination, case .web(let url) = TerminalLink.classify(dest) {
                     a.link = url; a.foregroundColor = M.accent
                 }
                 result.append(a)

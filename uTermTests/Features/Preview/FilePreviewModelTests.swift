@@ -563,4 +563,36 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertFalse(m.buffers.contains { $0.remotePath == "/c.swift" },
                        "被顶替的文档要一起收掉，不能漏")
     }
+
+    // MARK: Markdown 里的图（安全）
+
+    func test_markdownImage_onlyReadsRegularFiles() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/docs/plan.md", data: Data("![x](pipe.png)".utf8))
+        await m.open(path: "/docs/plan.md", fileSize: nil, mtime: nil)
+        let buf = try XCTUnwrap(m.activeBuffer)
+        try await mock.write("/docs/pipe.png", data: Data())
+        await mock.setStatPermissions("/docs/pipe.png", 0o010644)   // FIFO
+        do {
+            _ = try await m.loadMarkdownImage(source: "pipe.png", referencedBy: buf)
+            XCTFail("FIFO 不读")
+        } catch FilePreviewModel.PreviewDownloadError.markdownImageNotAFile {}
+        let downloads = await mock.boundedDownloads.filter { $0.path == "/docs/pipe.png" }
+        XCTAssertTrue(downloads.isEmpty, "stat 之后就停下，不去读")
+    }
+
+    func test_markdownImage_capsImagesPerDocument() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/docs/plan.md", data: Data("# many".utf8))
+        await m.open(path: "/docs/plan.md", fileSize: nil, mtime: nil)
+        let buf = try XCTUnwrap(m.activeBuffer)
+        for i in 0..<MarkdownImageCache.maxEntryCount {
+            _ = try? await m.loadMarkdownImage(source: "missing-\(i).png", referencedBy: buf)
+        }
+        do {
+            _ = try await m.loadMarkdownImage(source: "one-more.png", referencedBy: buf)
+            XCTFail("超过上限")
+        } catch FilePreviewModel.PreviewDownloadError.tooManyMarkdownImages {}
+    }
+
 }

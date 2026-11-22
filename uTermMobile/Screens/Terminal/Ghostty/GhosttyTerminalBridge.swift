@@ -165,7 +165,7 @@ final class GhosttyTerminalBridge {
         delegateProxy.onOpenURL = { [weak self] url, kind in
             guard let self else { return }
             if let onOpenLink = self.onOpenLink { onOpenLink(url, kind) }
-            else if let url = URL(string: url) { UIApplication.shared.open(url) }
+            else { Self.openWebLinkOnly(url) }
         }
         view.delegate = delegateProxy
         view.search = link.search
@@ -489,7 +489,7 @@ private final class SurfaceDelegate: TerminalSurfaceOpenURLDelegate, TerminalSur
 
     func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
         if let onOpenURL { return onOpenURL(url, kind) }
-        if let url = URL(string: url) { UIApplication.shared.open(url) }
+        GhosttyTerminalBridge.openWebLinkOnly(url)
     }
 
     // 引擎报来的查找事件一律交给两端共用的 `TerminalSearch`。
@@ -497,4 +497,12 @@ private final class SurfaceDelegate: TerminalSurfaceOpenURLDelegate, TerminalSur
     func terminalDidEndSearch() { search?.handle(.ended) }
     func terminalDidUpdateSearchTotal(_ total: Int?) { search?.handle(.total(total)) }
     func terminalDidUpdateSearchSelected(_ selected: Int?) { search?.handle(.selected(selected)) }
+}
+
+extension GhosttyTerminalBridge {
+    /// 没接宿主的链接处理时的退路：只开网址（`TerminalLink`）。终端里的文字谁都能写，`tel:`、`shortcuts:`、
+    /// 自定义 scheme 点一下就会拉起别的 App 或跑捷径。
+    static func openWebLinkOnly(_ link: String) {
+        if case .web(let url) = TerminalLink.classify(link) { UIApplication.shared.open(url) }
+    }
 }

@@ -10,10 +10,14 @@ import Foundation
 /// 预览标签。只读、只在 uTerm 里显示，不交给别的 App、不执行：SSH 上的程序能做到的，也就是让用户看到一个本来就能
 /// `cat` 的文件。
 ///
+/// **这条序列谁都能发**：终端里打印出来的任何东西都可能带着它（`cat` 一个下载来的文件、远端日志、MOTD、别人仓库里的
+/// README），不只是 Claude 的 hook。所以它只能请 uTerm 显示文档和图片（`TerminalFilePreviewPolicy`），敏感位置一律
+/// 不认，频率也有上限；用户自己 ⌘ 点的路径不受这些限制。
+///
 /// 不认的情况一律静默丢掉（程序没法知道终端认不认，回显错误只会搅乱画面）：
 /// - 历史字节里的（接回时补上的那段）——影子终端喂历史时就不报未知 OSC。
 /// - 远控镜像：路径在被控的那台 Mac 上，这边读不到。
-/// - 不是绝对路径、带控制字符、太长。
+/// - 不是绝对路径、带控制字符、太长；不是文档 / 图片，或在敏感位置（`TerminalFilePreviewPolicy`）。
 ///
 /// 编号紧跟命令跟踪（`TerminalTrackedRun.oscCode` 6973）与 pty 认领（`TTYMarkerScanner.oscCode` 6974）。
 nonisolated enum TerminalFilePreview {
@@ -29,8 +33,10 @@ nonisolated enum TerminalFilePreview {
         guard payload.starts(with: prefix) else { return nil }
         let raw = payload.dropFirst(prefix.count)
         guard !raw.isEmpty, raw.count <= maxPathBytes,
-              let path = String(data: raw, encoding: .utf8) else { return nil }
-        return validated(path)
+              let path = String(data: raw, encoding: .utf8),
+              let valid = validated(path),
+              TerminalFilePreviewPolicy.admitsProgramRequest(valid) else { return nil }
+        return valid
     }
 
     /// 合规矩的绝对路径（去掉末尾的 `/`，`.` / `..` 段原样留着——SFTP 那边会解析）；不合规矩返回 nil。
@@ -49,16 +55,63 @@ nonisolated enum TerminalFilePreview {
     }
 }
 
-/// 同一个文件短时间里被要求打开好几次（Claude 一次改好几处，每次 Edit 都触发 hook）：只认第一次和间隔够长的，
-/// 免得预览区来回重读、手机那一格反复转圈。
+/// 程序（经 OSC 6975）能请 uTerm 显示什么。只管程序发起的请求；用户自己 ⌘ 点、在手机上点「打开」的不受限。
+///
+/// - 只认文档和图片：Markdown、图片、纯文本 / 数据格式。这正是 Claude 写完东西要看的；源代码、没有扩展名的文件
+///   （`~/.aws/credentials`、`.env`、私钥）程序请求不了。
+/// - 敏感位置一律不认：凭据目录（`.ssh`、`.aws`、`.kube`…）、系统目录（`/etc`、`/proc`…）、名字里带 secret /
+///   credential / token / password 之类的文件。被打印出来的一行字不该能把私钥摆到屏幕上——用户可能正在共享屏幕、被
+///   远程控制，或者开着 Agent。
+nonisolated enum TerminalFilePreviewPolicy {
+    static let documentExtensions: Set<String> = TerminalFilePreviewKind.markdownExtensions
+        .union(TerminalFilePreviewKind.imageExtensions)
+        .union(["txt", "text", "csv", "tsv", "json", "jsonl", "yaml", "yml", "toml", "log", "html", "htm", "svg"])
+
+    /// 路径里出现这些目录就不认（凭据、密钥、浏览器与系统的私有数据）。
+    static let sensitiveDirectories: Set<String> = [
+        ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store", ".pki",
+        ".gcloud", "gcloud", ".terraform.d", ".vault-token", "keyrings", ".mozilla", ".thunderbird",
+    ]
+    /// 这些顶层目录下的不认（系统配置、内核与设备接口）。`/root`（root 登录时的家目录）、`/var/www` 里常有项目，不算。
+    static let systemRoots: Set<String> = ["etc", "proc", "sys", "dev", "boot"]
+    /// 文件名（小写）里带这些就不认。
+    static let sensitiveNameFragments = ["secret", "credential", "password", "passwd", "token", "private",
+                                         "apikey", "api_key", "api-key", "id_rsa", "id_ed25519", "id_ecdsa",
+                                         "id_dsa", "shadow", ".env", "keychain", "wallet"]
+
+    static func admitsProgramRequest(_ path: String) -> Bool {
+        let components = path.split(separator: "/").map { $0.lowercased() }
+        guard let name = components.last else { return false }
+        if let first = components.first, systemRoots.contains(first) { return false }
+        if components.dropLast().contains(where: sensitiveDirectories.contains) { return false }
+        if sensitiveNameFragments.contains(where: name.contains) { return false }
+        return documentExtensions.contains((name as NSString).pathExtension)
+    }
+}
+
+/// 程序发起的预览请求的节流：
+/// - 同一个文件短时间里被要求打开好几次（Claude 一次改好几处，每次 Edit 都触发 hook）：只认第一次和间隔够长的，
+///   免得预览区来回重读、手机那一格反复转圈。
+/// - 总的频率有上限（令牌桶：一口气最多 `burst` 个，之后每秒回一个）：终端里刷屏的输出可能夹着一大串请求，
+///   每个都会开一条 SFTP 读。
 nonisolated struct TerminalFilePreviewThrottle {
     static let interval: TimeInterval = 0.5
+    static let burst: Double = 5
+    static let refillPerSecond: Double = 1
 
     private var last: (path: String, at: Date)?
+    private var tokens = TerminalFilePreviewThrottle.burst
+    private var refilledAt: Date?
 
     /// 这一次要不要处理。
     mutating func admits(_ path: String, now: Date = Date()) -> Bool {
         if let last, last.path == path, now.timeIntervalSince(last.at) < Self.interval { return false }
+        if let refilledAt {
+            tokens = min(Self.burst, tokens + max(0, now.timeIntervalSince(refilledAt)) * Self.refillPerSecond)
+        }
+        refilledAt = now
+        guard tokens >= 1 else { return false }
+        tokens -= 1
         last = (path, now)
         return true
     }
@@ -315,13 +368,23 @@ nonisolated enum TerminalLinkDetector {
     }
 }
 
-/// ⌘ 点的路径、程序请求预览的文件，开之前先 stat 看一眼：只开普通文件。目录、不存在的不理（正文里像路径的词也会被认成链接）。
-/// 两端共用。服务端没给权限位时当文件。
+/// ⌘ 点的路径、程序请求预览的文件、Markdown 里的图，读之前先 stat 看一眼。两端共用。
+///
+/// 只读普通文件：目录交给文件浏览（Mac 的侧栏）或不理；FIFO、设备、套接字不读——`/dev/zero` 读不完、FIFO 没人写就
+/// 一直挂着，Mac 上那条 SFTP 会话还和侧栏共用，会把文件浏览一起卡住。服务端没给权限位时当普通文件（读有大小上限）。
 nonisolated enum TerminalLinkTarget {
-    static func isOpenableFile(_ stat: RemoteStat) -> Bool {
-        guard let mode = stat.permissions else { return true }
-        return mode & 0o170000 != 0o040000
+    enum Kind: Equatable { case file, directory, other }
+
+    static func kind(_ stat: RemoteStat) -> Kind {
+        guard let mode = stat.permissions else { return .file }
+        switch mode & 0o170000 {
+        case 0o100000: return .file
+        case 0o040000: return .directory
+        default: return .other
+        }
     }
+
+    static func isOpenableFile(_ stat: RemoteStat) -> Bool { kind(stat) == .file }
 }
 
 /// 远程 Markdown 里 `![](…)` 引用的图片在主机上的哪个路径（两端的预览共用，规则原本在 Mac 的 `FilePreviewModel` 里）。

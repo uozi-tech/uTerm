@@ -112,6 +112,8 @@ final class FilePreviewModel {
         case invalidMarkdownImageSource
         case unsupportedMarkdownImageSource(String)
         case markdownImageTooLarge(bytes: Int)
+        case markdownImageNotAFile
+        case tooManyMarkdownImages
 
         var errorDescription: String? {
             switch self {
@@ -126,6 +128,10 @@ final class FilePreviewModel {
             case .markdownImageTooLarge(let bytes):
                 let cap = UFormat.bytes(MarkdownImageCache.perImageByteCap)
                 return String(localized: "图片超过 \(cap)（实际约 \(UFormat.bytes(bytes))），已跳过预览")
+            case .markdownImageNotAFile:
+                return String(localized: "不是普通文件，不预览")
+            case .tooManyMarkdownImages:
+                return String(localized: "这个文档引用的图片太多，只预览前 \(MarkdownImageCache.maxEntryCount) 张")
             }
         }
     }
@@ -135,6 +141,9 @@ final class FilePreviewModel {
     /// 共享 FileBrowserModel 的 SFTP 会话）。
     private let sftpProvider: () -> (any SFTPProviding)?
     private var markdownImageCache = MarkdownImageCache()
+    /// 每个文档读过哪些图（路径）：一篇文档最多读 `MarkdownImageCache.maxEntryCount` 张，免得一篇引用上千张图的文档
+    /// 一下子开出上千次 SFTP 读。重读文档时清掉。
+    private var markdownImageRequests: [UUID: Set<String>] = [:]
     /// 不在预览区里的文档：终端区里由终端打开的文件标签（`openDetached`）。各自带着发起那个终端所连主机的 SFTP
     /// （终端窗口的标签可连不同主机，工作区里也可能不是侧栏那台），按文档 id 记；标签关掉时 `releaseDetached`。
     private var detached: [UUID: (buffer: FileBuffer, provider: any SFTPProviding)] = [:]
@@ -313,6 +322,7 @@ final class FilePreviewModel {
         detached[id]?.buffer.onBecameDirty = nil
         cancelAutosave(id)
         detached[id] = nil
+        markdownImageRequests[id] = nil
     }
 
     func isDetached(_ id: UUID) -> Bool { detached[id] != nil }
@@ -367,6 +377,7 @@ final class FilePreviewModel {
         buffer.onBecameDirty = nil
         cancelAutosave(buffer.id)
         buffers.removeAll { $0 === buffer }
+        markdownImageRequests[buffer.id] = nil
     }
 
     /// 恢复上次打开的文件。
@@ -527,6 +538,7 @@ final class FilePreviewModel {
     }
 
     private func load(_ buf: FileBuffer, failIfProviderMissing: Bool) async {
+        markdownImageRequests[buf.id] = nil
         // 与 open() 同序：类型先于大小。
         if let reason = Self.unsupportedPreviewReason(forPath: buf.remotePath) {
             buf.state = .failed(reason)
@@ -597,6 +609,20 @@ final class FilePreviewModel {
         case .remotePath(let path):
             guard let sftp = provider(for: buffer) else {
                 throw PreviewDownloadError.providerUnavailable
+            }
+            var requested = markdownImageRequests[buffer.id] ?? []
+            if !requested.contains(path) {
+                guard requested.count < MarkdownImageCache.maxEntryCount else {
+                    throw PreviewDownloadError.tooManyMarkdownImages
+                }
+                requested.insert(path)
+                markdownImageRequests[buffer.id] = requested
+            }
+            // 先 stat：只读普通文件（FIFO、设备读了会卡住侧栏共用的会话，见 `TerminalLinkTarget`），太大的不下。
+            let stat = try await sftp.stat(path)
+            guard TerminalLinkTarget.isOpenableFile(stat) else { throw PreviewDownloadError.markdownImageNotAFile }
+            guard stat.size <= MarkdownImageCache.perImageByteCap else {
+                throw PreviewDownloadError.markdownImageTooLarge(bytes: Int(clamping: stat.size))
             }
             do {
                 data = try await sftp.download(
@@ -791,10 +817,13 @@ final class FilePreviewModel {
     private static func applyDownloadedData(_ data: Data, to buf: FileBuffer) -> Bool {
         switch buf.kind {
         case .image:
-            guard let img = NSImage(data: data) else {
+            // 先看声明的像素尺寸（`RemoteImageGuard`）：几 MB 的图可以声明几十亿像素，整张解码会把 App 撑死。
+            guard RemoteImageGuard.admits(data), let img = NSImage(data: data) else {
                 buf.imageData = nil
                 buf.imageSize = .zero
-                buf.state = .failed(String(localized: "图片无法解码，不支持预览。可以用本机应用打开，保存后自动上传回主机。"))
+                buf.state = .failed(RemoteImageGuard.pixelSize(of: data) != nil
+                    ? String(localized: "图片像素太多，不支持预览。可以用本机应用打开。")
+                    : String(localized: "图片无法解码，不支持预览。可以用本机应用打开，保存后自动上传回主机。"))
                 return false
             }
             buf.imageData = data

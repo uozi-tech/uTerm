@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import uTerm
 
@@ -15,7 +16,7 @@ final class TerminalFilePreviewTests: XCTestCase {
         XCTAssertEqual(parse("6975;open;/srv/app/docs/plan.md"), "/srv/app/docs/plan.md")
         XCTAssertEqual(parse("6975;open;/tmp/a b;c.png"), "/tmp/a b;c.png", "路径里的空格、分号原样保留")
         XCTAssertEqual(parse("6975;open;/home/用户/图.png"), "/home/用户/图.png")
-        XCTAssertEqual(parse("6975;open;/srv/docs/"), "/srv/docs", "末尾的 / 去掉")
+        XCTAssertEqual(TerminalFilePreview.validated("/srv/docs/"), "/srv/docs", "末尾的 / 去掉")
     }
 
     func testRejectsMalformedRequests() {
@@ -380,6 +381,100 @@ final class TerminalFilePreviewTests: XCTestCase {
         XCTAssertEqual(RemoteMarkdownImagePath.resolve("https://example.com/x.png", documentPath: doc), .external)
         XCTAssertEqual(RemoteMarkdownImagePath.resolve("data:image/png;base64,AAAA", documentPath: doc), .external)
         XCTAssertEqual(RemoteMarkdownImagePath.resolve("  ", documentPath: doc), .invalid)
+    }
+
+
+    // MARK: 安全
+
+    func testProgramRequestsOnlyOpenDocumentsOutsideSensitivePlaces() {
+        func admits(_ path: String) -> Bool { TerminalFilePreview.path(fromOSC: oscPayload(path)) != nil }
+        XCTAssertTrue(admits("/srv/proj/docs/plan.md"))
+        XCTAssertTrue(admits("/root/proj/out/chart.png"), "root 登录时的家目录不算系统目录")
+        XCTAssertTrue(admits("/var/www/site/README.md"))
+        XCTAssertTrue(admits("/home/me/report.json"))
+        XCTAssertFalse(admits("/home/me/.ssh/id_rsa"), "没有扩展名")
+        XCTAssertFalse(admits("/home/me/.ssh/notes.md"), "凭据目录")
+        XCTAssertFalse(admits("/home/me/.aws/credentials"))
+        XCTAssertFalse(admits("/home/me/.kube/config.yaml"))
+        XCTAssertFalse(admits("/home/me/.docker/config.json"))
+        XCTAssertFalse(admits("/etc/passwd.txt"), "系统目录")
+        XCTAssertFalse(admits("/proc/self/environ.txt"))
+        XCTAssertFalse(admits("/srv/app/secrets.yaml"), "名字像凭据")
+        XCTAssertFalse(admits("/srv/app/service-account-credentials.json"))
+        XCTAssertFalse(admits("/srv/app/.env.json"))
+        XCTAssertFalse(admits("/srv/app/token.json"))
+        XCTAssertFalse(admits("/srv/app/main.go"), "源代码不由程序请求")
+        XCTAssertFalse(admits("/srv/app/server.pem"))
+    }
+
+    private func oscPayload(_ path: String) -> Data {
+        Data("\(TerminalFilePreview.oscPrefix)open;\(path)".utf8)
+    }
+
+    func testProgramRequestsAreRateLimited() {
+        var throttle = TerminalFilePreviewThrottle()
+        let start = Date(timeIntervalSince1970: 1_000)
+        let burst = (0..<10).filter { throttle.admits("/srv/\($0).md", now: start) }.count
+        XCTAssertEqual(burst, Int(TerminalFilePreviewThrottle.burst), "一口气最多这么多")
+        XCTAssertFalse(throttle.admits("/srv/more.md", now: start.addingTimeInterval(0.5)))
+        XCTAssertTrue(throttle.admits("/srv/more.md", now: start.addingTimeInterval(1.2)), "每秒回一个")
+        XCTAssertFalse(throttle.admits("/srv/more.md", now: start.addingTimeInterval(1.3)), "同一个文件 0.5 秒内只认一次")
+    }
+
+    func testOnlyRegularFilesAreRead() {
+        XCTAssertEqual(TerminalLinkTarget.kind(RemoteStat(size: 0, mtime: .now, permissions: 0o010644)), .other, "FIFO")
+        XCTAssertEqual(TerminalLinkTarget.kind(RemoteStat(size: 0, mtime: .now, permissions: 0o020666)), .other, "字符设备")
+        XCTAssertEqual(TerminalLinkTarget.kind(RemoteStat(size: 0, mtime: .now, permissions: 0o140777)), .other, "套接字")
+        XCTAssertEqual(TerminalLinkTarget.kind(RemoteStat(size: 0, mtime: .now, permissions: 0o040755)), .directory)
+        XCTAssertEqual(TerminalLinkTarget.kind(RemoteStat(size: 0, mtime: .now, permissions: 0o100644)), .file)
+    }
+
+    /// 真的「解压炸弹」（1.5 MB、2 万 × 2 万像素的全零 PNG）造起来太重，这里用小图 + 调低的上限验证规则；
+    /// ImageIO 会照实报出炸弹的尺寸，是手工验过的（见 `RemoteImageGuard` 的注释）。
+    func testImagesOverThePixelBudgetAreNotDecoded() throws {
+        let small = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 300, pixelsHigh: 100,
+                                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                                   bytesPerRow: 0, bitsPerPixel: 0)?
+            .representation(using: .png, properties: [:]))
+        XCTAssertEqual(RemoteImageGuard.pixelSize(of: small), CGSize(width: 300, height: 100))
+        XCTAssertTrue(RemoteImageGuard.admits(small))
+        XCTAssertFalse(RemoteImageGuard.admits(small, maxPixels: 29_999), "超过像素上限：不解码")
+        XCTAssertTrue(RemoteImageGuard.admits(small, maxPixels: 30_000))
+        let decoded = try XCTUnwrap(RemoteImageGuard.decode(small, maxPixelSize: 150))
+        XCTAssertEqual(decoded.width, 150, "缩到长边 150")
+
+        XCTAssertNil(RemoteImageGuard.pixelSize(of: Self.headerOnlyPNG(width: 60_000, height: 60_000)))
+        XCTAssertFalse(RemoteImageGuard.admits(Self.headerOnlyPNG(width: 60_000, height: 60_000)),
+                       "读不出尺寸的（只有文件头）不解")
+        XCTAssertFalse(RemoteImageGuard.admits(Data("not an image".utf8)))
+    }
+
+    func testDeclaredVectorSizeIsClamped() {
+        let huge = RemoteImageGuard.fittedSize(CGSize(width: 100_000, height: 50_000), maxLongEdge: 4096)
+        XCTAssertEqual(huge, CGSize(width: 4096, height: 2048))
+        let square = RemoteImageGuard.fittedSize(CGSize(width: 20_000, height: 20_000), maxLongEdge: 100_000)
+        XCTAssertLessThanOrEqual(square.width * square.height, CGFloat(RemoteImageGuard.maxPixels) + 2 * square.width)
+        XCTAssertEqual(RemoteImageGuard.fittedSize(CGSize(width: 300, height: 200), maxLongEdge: 4096),
+                       CGSize(width: 300, height: 200), "不放大")
+    }
+
+    /// 只有文件头的 PNG：IHDR 里写多大就声称多大，数据只有几十字节。
+    static func headerOnlyPNG(width: UInt32, height: UInt32) -> Data {
+        func chunk(_ type: String, _ body: [UInt8]) -> [UInt8] {
+            let typed = Array(type.utf8) + body
+            var crc: UInt32 = 0xFFFF_FFFF
+            for byte in typed {
+                crc ^= UInt32(byte)
+                for _ in 0..<8 { crc = (crc >> 1) ^ (crc & 1 == 1 ? 0xEDB8_8320 : 0) }
+            }
+            crc ^= 0xFFFF_FFFF
+            return be(UInt32(body.count)) + typed + be(crc)
+        }
+        func be(_ value: UInt32) -> [UInt8] { [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: value >> $0) } }
+        let header: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        let ihdr = be(width) + be(height) + [8, 6, 0, 0, 0]
+        return Data(header + chunk("IHDR", ihdr) + chunk("IEND", []))
     }
 
 }
