@@ -27,7 +27,7 @@ ESC ] 6975 ; open ; <绝对路径> BEL
 | 接的人 | `WorkspaceModel.terminalRequestedPreview`：工作区窗口里、侧栏 SFTP 连着的那台主机上的终端进预览区；其余（纯终端窗口、工作区里别的主机的终端）在终端区开文件标签 | `MobileWorkspace.onFilePreviewRequest` → `WorkspaceScreen.showPreview` |
 | 显示 | 预览区的预览（临时）标签（`FilePreviewModel.reveal(path:)`）：没开过就开、顶替上一个预览标签；开着就切过去并重读，脏的不重读。终端区：临时文件标签放在发请求那个终端旁边一格（只有一格就拆到右边），同一主机同一路径已开着就切过去并重读 | 只读预览标签（`FilePreviewTab`）：一台主机一个，换内容；放在终端旁边那一格（没分屏就拆出第二格） |
 | 焦点 | 不抢编辑器焦点 | 键盘留在终端那一格 |
-| 内容 | 预览区原有的一套（编辑器 / Markdown 含图片 / 图片） | 图片（可缩放）、Markdown（`MStreamingMarkdown`；单独成段的图片经 `MMarkdownImageLoader` 读出来画，规则同 Mac：`RemoteMarkdownImagePath`，只读同一台主机上的文件，单张 8 MiB；行内的图仍是替代文字）、等宽纯文本；上限 16 MiB |
+| 内容 | 预览区原有的一套（编辑器 / Markdown 含图片 / 图片） | 图片（可缩放）、Markdown（`MStreamingMarkdown`；图片经 `MMarkdownImageLoader` 读出来画，规则同 Mac：`RemoteMarkdownImagePath`，只读同一台主机上的文件，单张 8 MiB。段落在图片处切开（`MMDParagraphLayout`）：前后的文字照原顺序留着，挨着的几张图排一行、每张最宽 240pt；读不到的图回退成替代文字）、等宽纯文本；上限 16 MiB |
 
 终端区的文件标签（`WorkspaceModel.openInTerminalArea`）：文件经这台主机单独的 SFTP 连接读（`makeFileProvider`，按主机缓存，
 窗口关时一起关；两种窗口都用 `WorkspaceModel.liveFileProvider`），文档不进侧栏的那份列表（`FilePreviewModel.openDetached`，

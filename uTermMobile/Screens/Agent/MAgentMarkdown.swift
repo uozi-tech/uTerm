@@ -54,24 +54,64 @@ extension EnvironmentValues {
     @Entry var mMarkdownImageLoader: MMarkdownImageLoader? = nil
 }
 
-/// 段落里除了空白只有图片：可以画成图片块（文档里 `![图](chart.png)` 单独一段是最常见的写法）。
-private func standaloneImages(in paragraph: Paragraph) -> [MarkdownImage]? {
-    var images: [MarkdownImage] = []
-    for child in paragraph.children {
-        switch child {
-        case let image as MarkdownImage: images.append(image)
-        case is SoftBreak, is LineBreak: continue
-        case let text as MarkdownText where text.string.allSatisfy(\.isWhitespace): continue
-        default: return nil
+/// 有读图的人时，段落按图片切开：图片之间、图片前后的文字照原顺序留成文字，图片画成图。挨着的几张图（中间只有空白，
+/// 比如一排徽章、两张并排的截图）放一行，排不下换行。没有图的段落不切，照旧一整段文字。
+nonisolated enum MMDParagraphLayout {
+    enum Segment {
+        case text([Markup])
+        case images([Markdown.Image])
+    }
+
+    static func segments(_ paragraph: Paragraph) -> [Segment] {
+        var segments: [Segment] = []
+        var text: [Markup] = []
+        var images: [Markdown.Image] = []
+        /// 两张图之间的空白：后面接着是图就丢掉，接着是文字就还给文字。
+        var gap: [Markup] = []
+
+        func flushText() {
+            if text.contains(where: { !isBlank($0) }) { segments.append(.text(text)) }
+            text = []
+        }
+        func flushImages() {
+            if !images.isEmpty { segments.append(.images(images)) }
+            images = []
+        }
+
+        for child in paragraph.children {
+            if let image = child as? Markdown.Image {
+                if images.isEmpty { flushText() }
+                gap = []
+                images.append(image)
+            } else if !images.isEmpty, isBlank(child) {
+                gap.append(child)
+            } else {
+                flushImages()
+                text += gap
+                gap = []
+                text.append(child)
+            }
+        }
+        flushImages()
+        flushText()
+        return segments
+    }
+
+    private static func isBlank(_ node: Markup) -> Bool {
+        switch node {
+        case is SoftBreak, is LineBreak: return true
+        case let text as Markdown.Text: return text.string.allSatisfy(\.isWhitespace)
+        default: return false
         }
     }
-    return images.isEmpty ? nil : images
 }
 
 private struct MMDImageView: View {
     let source: String
     let alt: String
     let loader: MMarkdownImageLoader
+    /// 和别的图排在一行时限一个宽度（行布局按理想尺寸排，不限的话大图会撑出屏幕）；单独一张时铺满可用宽度为止。
+    var maxWidthInRow: CGFloat? = nil
 
     private enum Phase { case loading, loaded(UIImage), failed }
     @State private var phase = Phase.loading
@@ -81,13 +121,13 @@ private struct MMDImageView: View {
             switch phase {
             case .loading:
                 ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 60)
+                    .frame(minWidth: 44, maxWidth: maxWidthInRow == nil ? .infinity : 44, minHeight: 44)
             case .loaded(let image):
                 Image(uiImage: image)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(maxWidth: image.size.width, alignment: .leading)
+                    .modifier(MMDImageSizing(natural: image.size, maxWidthInRow: maxWidthInRow))
                     .clipShape(RoundedRectangle(cornerRadius: MRadius.xs))
                     .accessibilityLabel(Text(verbatim: alt.isEmpty ? source : alt))
             case .failed:
@@ -100,7 +140,7 @@ private struct MMDImageView: View {
                 .foregroundStyle(M.text3)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: maxWidthInRow == nil ? .infinity : nil, alignment: .leading)
         .task(id: source) {
             phase = .loading
             do {
@@ -108,6 +148,22 @@ private struct MMDImageView: View {
             } catch {
                 phase = .failed
             }
+        }
+    }
+}
+
+/// 单独一张：不放大，宽不超过可用宽度（宽度由外面给）。排在一行里：外面不给宽度，按比例算出确切的宽高，
+/// 否则缩窄后的图还占着原来的高度、上下留白。
+private struct MMDImageSizing: ViewModifier {
+    let natural: CGSize
+    let maxWidthInRow: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let cap = maxWidthInRow, natural.width > 0 {
+            let width = min(natural.width, cap)
+            content.frame(width: width, height: natural.height * width / natural.width)
+        } else {
+            content.frame(maxWidth: natural.width, alignment: .leading)
         }
     }
 }
@@ -139,12 +195,8 @@ private struct MMDBlockView: View {
         switch block {
         case let h as Heading:         AnyView(headingView(h))
         case let p as Paragraph:
-            if let imageLoader, let images = standaloneImages(in: p) {
-                AnyView(VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(images.enumerated()), id: \.offset) { _, image in
-                        MMDImageView(source: image.source ?? "", alt: image.plainText, loader: imageLoader)
-                    }
-                })
+            if let imageLoader, p.children.contains(where: { $0 is Markdown.Image }) {
+                AnyView(paragraphWithImages(p, loader: imageLoader))
             } else {
                 AnyView(MMDInlineView(node: p))
             }
@@ -158,14 +210,33 @@ private struct MMDBlockView: View {
         }
     }
 
+    private func paragraphWithImages(_ p: Paragraph, loader: MMarkdownImageLoader) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(MMDParagraphLayout.segments(p).enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .text(let nodes):
+                    MMDInlineView(nodes: nodes)
+                case .images(let images) where images.count == 1:
+                    MMDImageView(source: images[0].source ?? "", alt: images[0].plainText, loader: loader)
+                case .images(let images):
+                    FlowLayout(spacing: 8) {
+                        ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                            MMDImageView(source: image.source ?? "", alt: image.plainText, loader: loader,
+                                         maxWidthInRow: 240)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func headingView(_ h: Heading) -> some View {
         // iOS 继承的默认 body ≈17pt，而正文已显式钉到 15pt（见 MMDInlineView）——标题级别
         // 必须全部 ≥ 正文，否则 H3-H6 比正文还小、层级倒挂。故按 15pt 正文重新标定。
         let sizes: [CGFloat] = [24, 20, 18, 16, 15, 15]
-        MMDInlineView(node: h)
-            .font(.system(size: sizes[min(h.level - 1, 5)], weight: .semibold))
-            .foregroundStyle(M.text)
+        // 字号交给 MMDInlineView 自己设：它里面钉着正文字号，外面再套 `.font` 会被里面的盖掉（之前标题和正文一样大）。
+        MMDInlineView(node: h, font: .system(size: sizes[min(h.level - 1, 5)], weight: .semibold))
             .padding(.top, h.level <= 2 ? 6 : 2)
             .accessibilityAddTraits(.isHeader)
     }
@@ -229,21 +300,52 @@ private struct MMDBlockView: View {
 
 /// inline 子节点 → AttributedString → Text。镜像 macOS `MDInlineView`。
 private struct MMDInlineView: View {
-    let node: Markup
+    /// 要画的 inline 节点：一整个块的子节点，或段落按图片切开后的一段（`MMDParagraphLayout`）。
+    let nodes: [Markup]
+    /// 切开的那段两头的空白（图片前后的空格、换行）去掉。
+    private let trimsEnds: Bool
+    private let font: Font
+
+    init(node: Markup, font: Font = M.sans(15)) {
+        nodes = Array(node.children)
+        trimsEnds = false
+        self.font = font
+    }
+
+    init(nodes: [Markup]) {
+        self.nodes = nodes
+        trimsEnds = true
+        font = M.sans(15)
+    }
 
     var body: some View {
-        Text(attributed(node))
+        Text(trimsEnds ? Self.trimmed(attributed(nodes)) : attributed(nodes))
             // 显式钉正文字号：不能依赖继承的默认 body（iOS ≈17pt / macOS ≈13pt 跨平台不一致，
             // 会撑大正文并打乱标题层级）。15pt 与用户气泡一致。
-            .font(M.sans(15))
+            .font(font)
             .foregroundStyle(M.text)
             .lineSpacing(3)
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    private static func trimmed(_ text: AttributedString) -> AttributedString {
+        var text = text
+        while let first = text.characters.first, first.isWhitespace {
+            text.removeSubrange(text.startIndex..<text.index(afterCharacter: text.startIndex))
+        }
+        while let last = text.characters.last, last.isWhitespace {
+            text.removeSubrange(text.index(beforeCharacter: text.endIndex)..<text.endIndex)
+        }
+        return text
+    }
+
     private func attributed(_ node: Markup) -> AttributedString {
+        attributed(Array(node.children))
+    }
+
+    private func attributed(_ children: [Markup]) -> AttributedString {
         var result = AttributedString()
-        for child in node.children {
+        for child in children {
             switch child {
             case let t as MarkdownText:
                 result.append(AttributedString(t.string))
