@@ -42281,6 +42281,34 @@
         }
       }
     },
+    "拷贝当前目录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Current Directory"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のディレクトリをコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 디렉터리 복사"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷貝目前目錄"
+          }
+        }
+      }
+    },
     "拷贝提示词" : {
       "localizations" : {
         "en" : {
@@ -42308,9 +42336,6 @@
           }
         }
       }
-    },
-    "拷贝当前目录" : {
-
     },
     "拷贝文件名" : {
       "localizations" : {
@@ -42369,7 +42394,32 @@
       }
     },
     "拷贝标题" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Title"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトルをコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제목 복사"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷貝標題"
+          }
+        }
+      }
     },
     "拷贝路径" : {
       "localizations" : {

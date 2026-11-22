@@ -125,7 +125,7 @@ struct TerminalArea: View {
     static func copyableTitle(for tab: TerminalTab, profiles: [UUID: ServerProfile]) -> String {
         let pane = tab.payload
         if let buffer = pane.fileBuffer { return buffer.displayName }
-        return pane.session.shellTitle ?? pane.tabTitle ?? profiles[pane.serverProfileID]?.name ?? "终端"
+        return pane.session.shellTitle ?? pane.tabTitle ?? profiles[pane.serverProfileID]?.name ?? String(localized: "终端")
     }
 
     /// 见 `TerminalTitle.clippedForTab`（两端共用）。

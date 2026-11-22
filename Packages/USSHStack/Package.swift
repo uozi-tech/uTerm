@@ -23,7 +23,7 @@ let package = Package(
         .library(name: "USSHStack", type: .dynamic, targets: ["USSHStack"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/uozi-tech/uAppKit.git", from: "1.23.1"),
+        .package(url: "https://github.com/uozi-tech/uAppKit.git", from: "1.24.1"),
     ],
     targets: [
         .target(
