@@ -147,6 +147,7 @@ struct SFTPPathBar: View {
         UDDropdown(anchor: .trailing) { open in
             HStack(spacing: 7) {
                 Text("操作").font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
+                    .lineLimit(1).fixedSize()
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(UD.text3)
                     .rotationEffect(.degrees(open ? 180 : 0))

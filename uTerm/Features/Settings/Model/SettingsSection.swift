@@ -51,6 +51,16 @@ nonisolated enum SettingsSection: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// 侧栏里的名字（侧栏只有 200pt 宽）：「命令行与技能」在有的语言里放不下，侧栏用短一点的写法，
+    /// 页面标题仍用 `title`。
+    var sidebarTitle: String {
+        switch self {
+        case .cli: return String(localized: "settings.sidebar.cli", defaultValue: "命令行与技能",
+                                 comment: "设置侧栏里「命令行与技能」的短名字（侧栏窄，放不下时用缩写，如 CLI）")
+        default: return title
+        }
+    }
+
     /// SF Symbol，两两不同（`SettingsCatalogTests` 钉住）。
     var symbol: String {
         switch self {

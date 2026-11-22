@@ -253,6 +253,7 @@ struct TunnelStatusBadge: View {
         HStack(spacing: 5) {
             Circle().fill(dot).frame(width: 6, height: 6)
             Text(text).font(.system(size: 11)).foregroundStyle(textColor)
+                .lineLimit(1).fixedSize()
         }
     }
 }

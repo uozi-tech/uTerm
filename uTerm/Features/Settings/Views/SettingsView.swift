@@ -149,7 +149,7 @@ private struct SettingsSidebarRow: View {
         Button(action: action) {
             HStack(spacing: 9) {
                 SettingsSidebarIcon(section: item, isOn: isOn)
-                Text(item.title)
+                Text(item.sidebarTitle)
                     .font(.system(size: 13, weight: isOn ? .medium : .regular))
                     .foregroundStyle(isOn ? UD.accentInk : UD.text)
                     .lineLimit(1)

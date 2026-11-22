@@ -197,6 +197,7 @@ private struct PermissionGuideRow: View {
             // 横排，不叠两层：叠起来会把这一行撑得比别的行高一截。
             HStack(spacing: 10) {
                 UDButton(title: String(localized: "打开系统设置"), style: .link, height: height, action: openSettings)
+                    .fixedSize()
                 UDButton(title: String(localized: "授权", comment: "授权引导：请求系统权限"), style: .primary, height: height, action: request)
             }
         case .notGranted, .needsRelaunch:
