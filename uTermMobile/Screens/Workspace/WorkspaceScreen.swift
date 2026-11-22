@@ -64,6 +64,7 @@ struct WorkspaceScreen: View {
         .onChange(of: followedSessionIDs) { _, _ in followRemoteSessions() }
         .task(id: workspace.followedClients.map(ObjectIdentifier.init)) { await keepFollowedMacsConnected() }
         .onAppear {
+            workspace.onFilePreviewRequest = { term, path in showPreview(path, beside: term) }
             consume(store.openTarget)
             consume(store.remoteTakeover)
             consume(store.remoteFiles)
@@ -237,7 +238,25 @@ struct WorkspaceScreen: View {
         switch tab {
         case .terminal(let t): req.terminal = t.controller
         case .files(let f): req.sftp = f.controller
+        case .preview: break
         }
+    }
+
+    /// 终端里的程序请在旁边预览一个文件（`TerminalFilePreview`）：这台主机已有预览标签就换内容，没有就开一个，
+    /// 放在终端旁边那一格，键盘留在终端上。体验主机没有真文件系统可读。
+    private func showPreview(_ path: String, beside term: TermTab) {
+        let host = term.host
+        guard !DemoHostProfile.isDemo(host) else { return }
+        if let existing = workspace.existingPreview(host: host.persistentModelID) {
+            existing.controller.show(path)
+            workspace.placePreview(existing, beside: term)
+            return
+        }
+        let controller = MobileFilePreviewController(path: path, profile: host,
+                                                     container: context.container, relay: relay)
+        let preview = FilePreviewTab(host: host, controller: controller)
+        controller.reload()
+        workspace.placePreview(preview, beside: term)
     }
 
     /// 用户要关一个标签：要不要先问由 `MTabCloseFlow` 裁决。
@@ -521,6 +540,8 @@ struct WorkspaceScreen: View {
                                 onClose: { requestClose(term.id) })
         case .files(let files):
             FilesSessionBody(tab: files, onClose: { closeTab(files.id) })
+        case .preview(let preview):
+            FilePreviewSessionBody(tab: preview, onClose: { closeTab(preview.id) })
         }
     }
 

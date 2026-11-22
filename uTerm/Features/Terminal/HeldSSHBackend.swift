@@ -194,6 +194,16 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         return table.activity(of: table.shells[0])
     }
 
+    func foregroundDirectories() async -> RemoteForegroundDirectories? {
+        guard let output = try? await core.execOnChild(RemoteProcessTable.command, timeout: Self.foregroundTimeout),
+              let table = RemoteProcessTable(output: output),
+              table.shells.count == 1,
+              let dirs = try? await core.execOnChild(
+                  RemoteForegroundDirectories.command(pid: table.foregroundPID(of: table.shells[0])),
+                  timeout: Self.foregroundTimeout) else { return nil }
+        return RemoteForegroundDirectories(output: dirs)
+    }
+
     nonisolated var trueColorHostKey: String { "\(target.profile.host):\(target.profile.port)" }
 
     func trueColorStatus() async throws -> RemoteTrueColor.Status {

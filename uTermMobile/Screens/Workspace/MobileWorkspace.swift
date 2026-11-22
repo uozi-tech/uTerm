@@ -25,11 +25,14 @@ final class FileTab: Identifiable {
 enum MWorkTab: Identifiable {
     case terminal(TermTab)
     case files(FileTab)
+    /// 终端里的程序请求预览的文件（只读，见 `FilePreviewTab`）。
+    case preview(FilePreviewTab)
 
     var id: UUID {
         switch self {
         case .terminal(let t): return t.id
         case .files(let f): return f.id
+        case .preview(let p): return p.id
         }
     }
 
@@ -37,18 +40,25 @@ enum MWorkTab: Identifiable {
         switch self {
         case .terminal(let t): return t.host
         case .files(let f): return f.host
+        case .preview(let p): return p.host
         }
     }
 
+    /// 预览标签也算文件一类（标签条上画文件夹图标）；「打开主机」复用已有标签时不认它（`existing(host:kind:)`）。
     var kind: MConnectKind {
         switch self {
         case .terminal: return .terminal
-        case .files: return .sftp
+        case .files, .preview: return .sftp
         }
     }
 
     var terminal: TermTab? {
         if case .terminal(let t) = self { return t }
+        return nil
+    }
+
+    var preview: FilePreviewTab? {
+        if case .preview(let p) = self { return p }
         return nil
     }
 
@@ -63,6 +73,7 @@ enum MWorkTab: Identifiable {
             }
             return t.controller.shellTitle ?? hostName
         case .files: return hostName
+        case .preview(let p): return p.title
         }
     }
 
@@ -73,6 +84,7 @@ enum MWorkTab: Identifiable {
         switch self {
         case .terminal(let t): snapshot = t.hostName
         case .files(let f): snapshot = f.hostName
+        case .preview(let p): snapshot = p.hostName
         }
         return host.isDeleted || host.modelContext == nil ? snapshot : host.name
     }
@@ -91,6 +103,7 @@ enum MWorkTab: Identifiable {
         switch self {
         case .terminal(let t): t.controller.close()
         case .files(let f): f.controller.close()
+        case .preview(let p): p.controller.close()
         }
     }
 }
@@ -140,6 +153,8 @@ final class MobileWorkspace {
     private(set) var splitAxis: Axis?
     /// 每一格的键盘意愿，按格 id 记（见 `keyboardIntent(forPane:)`）。
     @ObservationIgnored private var keyboardIntents: [UUID: MTerminalKeyboardIntent] = [:]
+    /// 终端里的程序请求预览一个文件（`TerminalFilePreview`）：工作区屏建预览标签（它有建 SFTP 会话要的容器）。
+    @ObservationIgnored var onFilePreviewRequest: ((TermTab, String) -> Void)?
 
     /// 左右并排至少要这么宽（每格约 280pt，放得下一屏可用的终端）。
     nonisolated static let sideBySideMinWidth: CGFloat = 560
@@ -184,7 +199,9 @@ final class MobileWorkspace {
     /// 同主机、同类型的已有标签（外部「连接」请求默认复用它而不是再开一个）。
     /// 同主机同类型的已有标签（只看直连的；远控标签接的是 Mac 上的终端，另算）。
     func existing(host: PersistentIdentifier, kind: MConnectKind) -> MWorkTab? {
-        tabs.first { $0.kind == kind && $0.host.persistentModelID == host && $0.terminal?.remote == nil }
+        tabs.first {
+            $0.kind == kind && $0.host.persistentModelID == host && $0.terminal?.remote == nil && $0.preview == nil
+        }
     }
 
     /// 已经接入了 Mac 上这个终端的远控标签。
@@ -373,6 +390,12 @@ final class MobileWorkspace {
     /// 把新标签放进 `paneID`（缺省聚焦格）末尾，设为前台并聚焦该格。`activate` 为 false 时留在后台，
     /// 除非那一格还没有前台标签。
     func open(_ tab: MWorkTab, in paneID: UUID? = nil, activate: Bool = true) {
+        if let term = tab.terminal, term.remote == nil {
+            term.controller.onFilePreviewRequest = { [weak self, weak term] path in
+                guard let self, let term else { return }
+                self.onFilePreviewRequest?(term, path)
+            }
+        }
         tabs.append(tab)
         let i = panes.firstIndex { $0.id == (paneID ?? focusedPaneID) } ?? 0
         panes[i].tabIDs.append(tab.id)
@@ -425,6 +448,42 @@ final class MobileWorkspace {
             tab.disposeSession()
         }
         return doomed.map(\.id)
+    }
+
+    /// 同主机的预览标签（一台主机至多一个）。
+    func existingPreview(host: PersistentIdentifier) -> FilePreviewTab? {
+        tabs.lazy.compactMap(\.preview).first { $0.host.persistentModelID == host }
+    }
+
+    /// 把预览标签放到 `term` 旁边，键盘焦点留在终端那一格（用户还在和终端里的程序对话）。
+    ///
+    /// 已分屏：放进终端不在的那一格；没分屏：拆出第二格放它。已经开着（换了内容的那个）：带到它那一格的前台，
+    /// 它要是和终端挤在同一格，挪到另一格。
+    func placePreview(_ preview: FilePreviewTab, beside term: TermTab) {
+        let focused = focusedPaneID
+        let termPane = paneIndex(containing: term.id)
+        if let at = paneIndex(containing: preview.id) {
+            if at == termPane, let other = otherPane(than: at) ?? splitOff() {
+                move(preview.id, from: at, to: other)
+            }
+        } else {
+            let target = termPane.flatMap { otherPane(than: $0) ?? splitOff() } ?? 0
+            tabs.append(.preview(preview))
+            panes[target].tabIDs.append(preview.id)
+        }
+        if let at = paneIndex(containing: preview.id) { panes[at].activeID = preview.id }
+        if panes.contains(where: { $0.id == focused }) { focusedPaneID = focused }
+    }
+
+    private func otherPane(than index: Int) -> Int? {
+        panes.indices.first { $0 != index }
+    }
+
+    /// 拆出一个空的第二格（不改聚焦）；已经两格了返回 nil。
+    private func splitOff() -> Int? {
+        guard panes.count < Self.maxPanes else { return nil }
+        panes.append(MPane())
+        return panes.count - 1
     }
 
     /// 拆出第二格并聚焦它。当前格有两个以上标签时把前台标签移过去（常见的「拖到右边」）；

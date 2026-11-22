@@ -428,13 +428,34 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
     }
 
     private func probeForeground(on connected: ConnectedClient) async -> TerminalActivity {
-        guard let output = try? await connected.collectOutput(of: RemoteProcessTable.command),
-              let table = RemoteProcessTable(output: output) else { return .unknown }
-        let shells = table.shells
-        if shells.count == 1 { return table.activity(of: shells[0]) }
-        guard let tty = await resolveTTY(among: shells.compactMap(\.tty), on: connected),
-              let shell = shells.first(where: { $0.tty == tty }) else { return .unknown }
+        guard let (table, shell) = await ownShell(on: connected) else { return .unknown }
         return table.activity(of: shell)
+    }
+
+    /// 读进程表，认出这个终端的 shell（连接上不止一个时靠 `resolveTTY`）。
+    private func ownShell(on connected: ConnectedClient) async -> (RemoteProcessTable, RemoteProcessTable.Process)? {
+        guard let output = try? await connected.collectOutput(of: RemoteProcessTable.command),
+              let table = RemoteProcessTable(output: output) else { return nil }
+        let shells = table.shells
+        if shells.count == 1 { return (table, shells[0]) }
+        guard let tty = await resolveTTY(among: shells.compactMap(\.tty), on: connected),
+              let shell = shells.first(where: { $0.tty == tty }) else { return nil }
+        return (table, shell)
+    }
+
+    /// 前台进程的当前目录与家目录：两次 exec（进程表、读 cwd），用户在等着点开的文件，所以限时。
+    func foregroundDirectories() async -> RemoteForegroundDirectories? {
+        guard !isClosed, let connected = connectedClient else { return nil }
+        return await RemoteForegroundDirectories.probed(timeout: .seconds(3)) {
+            await self.probeDirectories(on: connected)
+        }
+    }
+
+    private func probeDirectories(on connected: ConnectedClient) async -> RemoteForegroundDirectories? {
+        guard let (table, shell) = await ownShell(on: connected),
+              let output = try? await connected.collectOutput(
+                  of: RemoteForegroundDirectories.command(pid: table.foregroundPID(of: shell))) else { return nil }
+        return RemoteForegroundDirectories(output: output)
     }
 
     /// 连接上不止一个 shell 时认出自己的 pty，做法见 `TTYMarkerScanner`。

@@ -83,6 +83,11 @@ final class TerminalSession: NSObject {
     /// 一条会话同一时刻只跟踪一条；新的覆盖旧的。
     @ObservationIgnored var trackedRun: TerminalTrackedRun?
 
+    /// 程序请 uTerm 在旁边预览一个文件（`TerminalFilePreview`，路径在这条会话连的主机上）。工作区窗口装上；没装的
+    /// （终端窗口、本机终端）不理。
+    @ObservationIgnored var onFilePreviewRequest: (@MainActor (String) -> Void)?
+    @ObservationIgnored var filePreviewThrottle = TerminalFilePreviewThrottle()
+
     /// 远控镜像：把这条会话的字节流转给接入的设备（见 `TerminalMirrorTap`）。
     @ObservationIgnored let mirrorTap: TerminalMirrorTap
 
@@ -116,8 +121,8 @@ final class TerminalSession: NSObject {
         _ = ghostty
         installShadowEventHandler()
         installShadowClipboardHandler()
-        // 未知 OSC 只要命令跟踪的起止标记（`TerminalTrackedRun`）。
-        shadow.reportUnknownOSC(withPrefixes: ["\(TerminalTrackedRun.oscCode);"])
+        // 未知 OSC 只要命令跟踪的起止标记（`TerminalTrackedRun`）和「在旁边预览文件」（`TerminalFilePreview`）。
+        shadow.reportUnknownOSC(withPrefixes: ["\(TerminalTrackedRun.oscCode);", TerminalFilePreview.oscPrefix])
         // surface 没在吃字节的时候（还没建、被丢弃），查询由影子终端答；应答和键盘输入走同一条通道。
         link.onShadowReply = { [weak self] in self?.sendHostBytes($0) }
         updateShadowColors(dark: NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)

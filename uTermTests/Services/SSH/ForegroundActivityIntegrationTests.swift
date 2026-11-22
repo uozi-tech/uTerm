@@ -63,6 +63,30 @@ final class ForegroundActivityIntegrationTests: XCTestCase {
         await busy.close()
     }
 
+    /// ⌘ 点相对路径时的解析依据：前台进程（不是 shell）的当前目录，以及家目录。同一条连接上有几个 shell 时各答各的。
+    func testForegroundDirectoriesFollowTheForegroundProcess() async throws {
+        let port = try self.port(named: "UTERM_TEST_FOREGROUND_SSH_PORT")
+        let idle = try await connect(port: port)
+        let busy = try await connect(port: port)
+        try await Task.sleep(for: .seconds(1))
+        await idle.write(Data("cd /var\n".utf8))
+        // 子 shell 里换目录再跑：前台进程的目录是 /tmp，shell 自己还在家目录。
+        await busy.write(Data("(cd /tmp && exec sleep 30)\n".utf8))
+        try await Task.sleep(for: .milliseconds(700))
+
+        let running = await busy.foregroundDirectories()
+        XCTAssertEqual(running?.workingDirectory, "/tmp")
+        XCTAssertNotNil(running?.home)
+        XCTAssertEqual(running.flatMap { TerminalLinkPath.resolve("~/a.md", workingDirectory: nil, home: $0.home) },
+                       running?.home.map { $0 + "/a.md" })
+        let atPrompt = await idle.foregroundDirectories()
+        XCTAssertEqual(atPrompt?.workingDirectory, "/var", "停在提示符上就是 shell 的目录")
+
+        await busy.write(Data([0x03]))
+        await idle.close()
+        await busy.close()
+    }
+
     /// 探测不能往用户的屏幕上写东西。
     func testProbeLeavesNoVisibleOutput() async throws {
         let port = try self.port(named: "UTERM_TEST_FOREGROUND_SSH_PORT")

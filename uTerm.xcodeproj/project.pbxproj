@@ -397,6 +397,7 @@
 				Features/Terminal/TerminalQuitPolicy.swift,
 				Features/Terminal/TerminalScreenReader.swift,
 				Features/Terminal/TerminalSession.swift,
+				"Features/Terminal/TerminalSession+FilePreview.swift",
 				"Features/Terminal/TerminalSession+HeldSession.swift",
 				"Features/Terminal/TerminalSession+ImagePaste.swift",
 				"Features/Terminal/TerminalSession+ProgramStatus.swift",

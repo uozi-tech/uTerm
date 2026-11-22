@@ -1,0 +1,103 @@
+#!/bin/sh
+# uterm-open：请 uTerm 在终端旁边预览文件（Mac 开在工作区的预览区，iOS 开在另一格的预览标签）。
+#
+#   uterm-open <文件>...      预览这些文件（相对路径按当前目录）
+#   uterm-open --claude-hook  给 Claude Code 的 PostToolUse hook 用：从标准输入读 hook 的 JSON，
+#                             改动的是文档 / 图片才预览（扩展名见 UTERM_OPEN_EXTENSIONS）
+#
+# 原理：往终端写一条不显示的私有 OSC（ESC ] 6975 ; open ; <绝对路径> BEL）。uTerm 认得它，别的终端
+# 会忽略。路径是这台主机上的路径，uTerm 经 SFTP 读。只读、只在 uTerm 里显示。
+#
+# 装到主机上：放进 PATH 里的任意目录并加执行权限，例如
+#   mkdir -p ~/.local/bin && cp uterm-open ~/.local/bin/ && chmod +x ~/.local/bin/uterm-open
+#
+# Claude Code（项目的 .claude/settings.json 或 ~/.claude/settings.json）：
+#   {"hooks": {"PostToolUse": [{"matcher": "Write|Edit|MultiEdit",
+#     "hooks": [{"type": "command", "command": "uterm-open --claude-hook"}]}]}}
+#
+# 只用 POSIX sh、printf、ps；有 jq 或 python3 时用它们解析 JSON，都没有就退回 sed。
+# 什么都不输出（没有参数就什么也不做）、总是以 0 退出：hook 失败不该打断 Claude。
+
+UTERM_OPEN_EXTENSIONS=${UTERM_OPEN_EXTENSIONS:-"md markdown mdx png jpg jpeg gif webp heic bmp tif tiff"}
+
+# 能写的终端：先试 /dev/tty（打不开说明没有控制终端，比如被 hook 拉起时），再顺着父进程找第一个有终端的。
+# UTERM_OPEN_TTY 指定写到哪里（自测用）。
+find_tty() {
+    if [ -n "$UTERM_OPEN_TTY" ]; then
+        echo "$UTERM_OPEN_TTY"
+        return 0
+    fi
+    if (: >/dev/tty) 2>/dev/null; then
+        echo /dev/tty
+        return 0
+    fi
+    pid=$$
+    while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
+        t=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+        case $t in
+            '' | '?' | '??') ;;
+            *)
+                if (: >"/dev/$t") 2>/dev/null; then
+                    echo "/dev/$t"
+                    return 0
+                fi
+                ;;
+        esac
+        pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    done
+    return 1
+}
+
+absolute() {
+    case $1 in
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s/%s\n' "${PWD%/}" "$1" ;;
+    esac
+}
+
+# 一条预览请求。tmux 里包一层 passthrough（需要 tmux 打开 allow-passthrough），否则 tmux 会吞掉它。
+emit() {
+    path=$1
+    tty=$(find_tty) || return 0
+    if [ -n "$TMUX" ]; then
+        printf '\033Ptmux;\033\033]6975;open;%s\007\033\\' "$path" >>"$tty" 2>/dev/null
+    else
+        printf '\033]6975;open;%s\007' "$path" >>"$tty" 2>/dev/null
+    fi
+}
+
+wanted_extension() {
+    name=${1##*/}
+    case $name in *.*) ext=${name##*.} ;; *) return 1 ;; esac
+    ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
+    for e in $UTERM_OPEN_EXTENSIONS; do
+        [ "$e" = "$ext" ] && return 0
+    done
+    return 1
+}
+
+hook_file_path() {
+    json=$(cat)
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$json" | jq -r '.tool_input.file_path // empty' 2>/dev/null
+    elif command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$json" | python3 -c \
+            'import json,sys; print((json.load(sys.stdin).get("tool_input") or {}).get("file_path") or "")' 2>/dev/null
+    else
+        printf '%s' "$json" | tr -d '\n' |
+            sed -n 's/.*"tool_input"[^{]*{[^}]*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    fi
+}
+
+if [ "$1" = "--claude-hook" ]; then
+    file=$(hook_file_path)
+    [ -n "$file" ] || exit 0
+    file=$(absolute "$file")
+    [ -f "$file" ] && wanted_extension "$file" && emit "$file"
+    exit 0
+fi
+
+for file in "$@"; do
+    emit "$(absolute "$file")"
+done
+exit 0

@@ -37,7 +37,10 @@ struct WorkspaceWindowView: View {
         self.isCatalog = catalogModel != nil
         // @State 初值在 init 时构造一次；用 windowID 让 FilePreviewModel
         // 拿到正确的 RecentFilesStore 命名（按服务器范围）。
-        self._workspace = State(initialValue: catalogModel ?? WorkspaceModel(windowID: windowID))
+        let model = catalogModel ?? WorkspaceModel(windowID: windowID)
+        // 工作区窗口有预览区：终端里的程序（Claude Code 的 hook、`uterm-open`）请求预览的文件开在这里。
+        if catalogModel == nil { model.acceptsTerminalFilePreviews = true }
+        self._workspace = State(initialValue: model)
     }
 
     private struct LargeFileConfirm: Identifiable {

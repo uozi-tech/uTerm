@@ -35,6 +35,8 @@ final class GhosttyTerminalBridge {
     var events: TerminalEventRouter { link.events }
     /// 程序状态以外的影子事件（标题、通知、响铃、未知 OSC），主线程上、按字节流的先后到。
     var onEvent: ((ShadowTerminal.Event) -> Void)?
+    /// 用户 ⌘ 点了终端里的链接（接了硬件键盘与指针时）。没接时网址照旧交给系统。
+    var onOpenLink: ((String, TerminalOpenURLKind) -> Void)?
     /// 最近一次 resize 回调报来的网格（探针读它）。
     private(set) var grid: (cols: Int, rows: Int)?
     /// 最近一次 resize 回调报来的格子像素尺寸（探针读它，核字体）。
@@ -160,6 +162,11 @@ final class GhosttyTerminalBridge {
             backend: .inMemory(link.io),
             fontSize: Self.ghosttyFontSize(points: MGhosttyTerminalView.defaultFontSize))
         delegateProxy.search = link.search
+        delegateProxy.onOpenURL = { [weak self] url, kind in
+            guard let self else { return }
+            if let onOpenLink = self.onOpenLink { onOpenLink(url, kind) }
+            else if let url = URL(string: url) { UIApplication.shared.open(url) }
+        }
         view.delegate = delegateProxy
         view.search = link.search
         link.attach(view)
@@ -184,6 +191,8 @@ final class GhosttyTerminalBridge {
         view.uTermSendsCommandChords = { [weak self] in (self?.shadow.kittyKeyboardFlags ?? 0) != 0 }
         // 在 `feed` 里同步回调。主线程上喂的（测试、探针）当场交出去；入站任务喂的跳回主线程，先后不变。
         link.events.onEvent = { [weak self] in self?.onEvent?($0) }
+        // 未知 OSC 只要「在旁边预览文件」（`TerminalFilePreview`）；命令跟踪（6973）是 Mac 的 CLI 用的。
+        shadow.reportUnknownOSC(withPrefixes: [TerminalFilePreview.oscPrefix])
         // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后开闸，回放接上。
         if UIApplication.shared.applicationState == .background { setAppInBackground(true) }
     }
@@ -476,8 +485,10 @@ final class GhosttyTerminalBridge {
 @MainActor
 private final class SurfaceDelegate: TerminalSurfaceOpenURLDelegate, TerminalSurfaceSearchDelegate {
     weak var search: TerminalSearch?
+    var onOpenURL: ((String, TerminalOpenURLKind) -> Void)?
 
     func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
+        if let onOpenURL { return onOpenURL(url, kind) }
         if let url = URL(string: url) { UIApplication.shared.open(url) }
     }
 

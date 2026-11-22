@@ -194,11 +194,11 @@ final class FilePreviewModel {
     }
 
     /// 切到某个标签（点 chip 之外的入口用；chip 自己由组件处理）。
-    func selectTab(_ tabID: UUID) {
+    func selectTab(_ tabID: UUID, focusEditor: Bool = true) {
         guard let at = panes.locateTab(tabID),
               let buffer = panes.groups[at.groupID]?.tabs[at.index].payload else { return }
         panes.activateTab(groupID: at.groupID, index: at.index)
-        requestEditorFocus(buffer.id)
+        if focusEditor { requestEditorFocus(buffer.id) }
     }
 
     /// 用户主动打开 / 切换文件 → 请求把键盘焦点交给对应编辑器。
@@ -209,10 +209,12 @@ final class FilePreviewModel {
 
     /// SFTPSidebar 文件 tap → 通知 → 调用。`asPreview` = 以预览（临时）tab 打开：
     /// 顶替现有预览 tab 而不是新增；永久打开（双击）同一路径会把预览 tab 转正。
-    func open(path: String, fileSize: Int64?, mtime: Date?, asPreview: Bool = false) async {
+    /// `focusEditor` 为 false 时不把键盘焦点交给编辑器（终端里的程序请求预览：用户还在终端里打字）。
+    func open(path: String, fileSize: Int64?, mtime: Date?, asPreview: Bool = false,
+              focusEditor: Bool = true) async {
         // 已打开（在任何一个组里）则只切过去；永久打开命中预览标签时转正。
         if let existing = panes.allTabs.first(where: { $0.payload.remotePath == path }) {
-            selectTab(existing.id)
+            selectTab(existing.id, focusEditor: focusEditor)
             if !asPreview { panes.promoteTransient(existing.id) }
             return
         }
@@ -233,7 +235,7 @@ final class FilePreviewModel {
         if let displaced {
             releaseBufferIfUnreferenced(displaced, remaining: panes.allTabs)
         }
-        requestEditorFocus(buf.id)
+        if focusEditor { requestEditorFocus(buf.id) }
 
         // 类型检查在大小之前：归档/二进制不该因为「碰巧小于 50 MB」就去下载。
         if let reason = Self.unsupportedPreviewReason(forPath: path) {
@@ -247,6 +249,25 @@ final class FilePreviewModel {
             return
         }
 
+        await load(buf, failIfProviderMissing: true)
+    }
+
+    /// 终端里的程序请在预览区显示一个文件（`TerminalFilePreview`，Claude Code 写完文档 / 图片之后）。
+    ///
+    /// 没打开过：以预览（临时）标签打开，顶替上一个预览标签。已经打开：切过去并重读——程序刚改过它；用户改了没存
+    /// （脏）或正在存的不重读，免得盖掉用户的编辑。两种都不抢键盘焦点。
+    func reveal(path: String) async {
+        guard let existing = panes.allTabs.first(where: { $0.payload.remotePath == path }) else {
+            await open(path: path, fileSize: nil, mtime: nil, asPreview: true, focusEditor: false)
+            return
+        }
+        selectTab(existing.id, focusEditor: false)
+        let buf = existing.payload
+        guard !buf.isDirty else { return }
+        if case .saving = buf.state { return }
+        // Markdown 里引用的同目录图片多半也是刚生成的。
+        markdownImageCache.removeAll()
+        buf.mtimeWhenLoaded = nil
         await load(buf, failIfProviderMissing: true)
     }
 

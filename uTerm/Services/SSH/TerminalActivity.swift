@@ -181,6 +181,13 @@ nonisolated struct RemoteProcessTable {
         return .running(leader?.name)
     }
 
+    /// 终端前台那个进程：前台进程组的组长；前台就是 shell 自己（或认不出组长）时是 shell。
+    func foregroundPID(of shell: Process) -> Int32 {
+        guard shell.tpgid > 0, shell.tpgid != shell.pgid else { return shell.pid }
+        if let leader = processes[shell.tpgid] { return leader.pid }
+        return processes.values.filter { $0.pgid == shell.tpgid }.map(\.pid).min() ?? shell.pid
+    }
+
     private static func isSSHServer(_ name: String) -> Bool {
         name.hasPrefix("sshd") || name == "dropbear"
     }

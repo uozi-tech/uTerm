@@ -156,6 +156,10 @@ extension TerminalSession {
 
     /// 影子终端报来一条引擎不认识的 OSC（`payload` 含开头的编号）。标记在输出解析到那里时发出，`cursor` 是那一刻的光标。
     func handleUnknownOSC(_ payload: Data, cursor: ShadowTerminal.Marker?) {
+        if let path = TerminalFilePreview.path(fromOSC: payload) {
+            requestFilePreview(path)
+            return
+        }
         let prefix = Data("\(TerminalTrackedRun.oscCode);".utf8)
         guard payload.starts(with: prefix) else { return }
         handleTrackedRunMarker(payload.dropFirst(prefix.count), cursor: cursor)

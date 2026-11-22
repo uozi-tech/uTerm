@@ -26,6 +26,8 @@ protocol TerminalBackend: Actor {
     func verifyConnectionAlive() async -> Bool
     /// 终端前台此刻有没有 shell 以外的程序在跑。关标签前问它，决定要不要二次确认。
     func foregroundActivity() async -> TerminalActivity
+    /// 终端前台那个进程的当前目录与家目录（⌘ 点相对路径 / `~/` 时解析用）。拿不到返回 nil。
+    func foregroundDirectories() async -> RemoteForegroundDirectories?
 }
 
 extension TerminalBackend {
@@ -35,6 +37,8 @@ extension TerminalBackend {
     func verifyConnectionAlive() async -> Bool { true }
     /// 默认判断不了：关闭前宁可多问一句。
     func foregroundActivity() async -> TerminalActivity { .unknown }
+    /// 默认拿不到（本机 shell、远控镜像、测试 mock）。
+    func foregroundDirectories() async -> RemoteForegroundDirectories? { nil }
 }
 
 /// 只出字节的后端（SSH、本机 shell、holder，以及测试里的假后端）的输出流：收到的字节直接以 `.bytes` 进 `items`，

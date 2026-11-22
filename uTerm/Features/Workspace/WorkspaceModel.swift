@@ -423,6 +423,31 @@ final class WorkspaceModel {
 
     private func stamp(_ pane: PaneModel) {
         pane.registrar = sessionRegistrar
+        let serverID = pane.serverProfileID
+        pane.session.onFilePreviewRequest = { [weak self] path in
+            self?.terminalRequestedPreview(path, serverID: serverID)
+        }
+    }
+
+    /// 本窗口有预览区（工作区窗口）：终端里的程序请求预览的文件在这里打开。纯终端窗口没有预览区，不接。
+    @ObservationIgnored var acceptsTerminalFilePreviews = false
+
+    /// 终端里的程序请在旁边预览一个文件（`TerminalFilePreview`），或用户 ⌘ 点了终端里的路径。预览区经侧栏的 SFTP
+    /// 读文件，所以只认侧栏连着的那台主机上的终端：别的主机的路径在这边读到的是另一台机器上的同名文件。
+    ///
+    /// 文件以预览（临时）标签打开、不抢键盘焦点（用户还在终端里和程序对话）；目录在侧栏里打开；不存在的不理
+    /// （链接正则会把正文里像路径的词也认成链接）。
+    func terminalRequestedPreview(_ path: String, serverID: UUID) {
+        guard acceptsTerminalFilePreviews, fileBrowserModel.connectedHost?.id == serverID,
+              let sftp = fileBrowserModel.sftpProvider else { return }
+        Task {
+            guard let stat = try? await sftp.stat(path) else { return }
+            if let mode = stat.permissions, mode & 0o170000 == 0o040000 {
+                await fileBrowserModel.load(path)
+            } else {
+                await filePreviewModel.reveal(path: path)
+            }
+        }
     }
 
     func connectSharedSFTP(profile: ServerProfile, modelContainer: ModelContainer) async {

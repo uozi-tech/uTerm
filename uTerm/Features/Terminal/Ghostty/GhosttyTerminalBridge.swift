@@ -341,8 +341,14 @@ final class GhosttyTerminalBridge {
     /// Ghostty 的各个回调协议。单独一个对象：`TerminalSession` 不必知道这些协议。标题、铃、OSC 7 都以影子终端为准
     /// （标签藏着、surface 没在吃字节时它照样更新），surface 的那几个回调不接；surface 的生灭由 `TerminalSurfaceLink` 接。
     private final class DelegateProxy: TerminalSurfaceFocusDelegate,
-        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceScrollbarDelegate, TerminalSurfaceSearchDelegate {
+        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceScrollbarDelegate, TerminalSurfaceSearchDelegate,
+        TerminalSurfaceOpenURLHandlingDelegate {
         weak var bridge: GhosttyTerminalBridge?
+
+        /// ⌘ 点链接：网址交给系统，路径在预览区打开（`TerminalSession.openTerminalLink`）。
+        func terminalShouldHandleOpenURL(_ url: String, kind: TerminalOpenURLKind) -> Bool {
+            bridge?.owner?.openTerminalLink(url, kind: kind) ?? false
+        }
 
         // 回滚区查找：引擎报来的一律交给会话的查找状态（两端共用的 `TerminalSearch`）。
         func terminalDidStartSearch(needle: String?) { bridge?.link.search.handle(.started(needle: needle)) }

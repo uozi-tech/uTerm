@@ -541,6 +541,20 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         }
     }
 
+    func foregroundDirectories() async -> RemoteForegroundDirectories? {
+        if let fallback { return await fallback.foregroundDirectories() }
+        guard phase == .attached, let client, shellPID > 0 else { return nil }
+        let pid = shellPID
+        return await RemoteForegroundDirectories.probed(timeout: .seconds(3)) {
+            guard let output = try? await client.collectOutput(of: RemoteProcessTable.command),
+                  let table = RemoteProcessTable(output: output),
+                  let shell = table.processes[pid],
+                  let dirs = try? await client.collectOutput(
+                      of: RemoteForegroundDirectories.command(pid: table.foregroundPID(of: shell))) else { return nil }
+            return RemoteForegroundDirectories(output: dirs)
+        }
+    }
+
     nonisolated var programsCanReadMacClipboard: Bool { false }
 
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {

@@ -327,7 +327,7 @@ struct WorkspaceTabChip: View {
         HStack(spacing: 6) {
             MDot(color: stateDot.color, pulse: stateDot.pulse, size: 6)
             if tab.kind == .sftp {
-                MIcon(name: "folder", size: 12, color: iconColor,
+                MIcon(name: tab.preview == nil ? "folder" : "file", size: 12, color: iconColor,
                       weight: activity == .active ? .semibold : .regular)
             }
             Text(tab.title)
@@ -417,6 +417,12 @@ struct WorkspaceTabChip: View {
             switch f.controller.state {
             case .connected: return (M.success, false)
             case .connecting, .idle: return (M.warning, true)
+            case .failed: return (M.danger, false)
+            }
+        case .preview(let p):
+            switch p.controller.phase {
+            case .loaded: return (M.success, false)
+            case .loading: return (M.warning, true)
             case .failed: return (M.danger, false)
             }
         }

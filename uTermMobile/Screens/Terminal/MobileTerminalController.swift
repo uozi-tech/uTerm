@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import Observation
+import GhosttyTerminal
 import UIKit
 
 /// 用户要不要键盘：亲手收起过就是不要，直到点键盘按钮或点终端要回来。
@@ -46,6 +47,9 @@ final class MobileTerminalController {
     /// 用户亲手收起了键盘（`collapsed`）：切标签、关抽屉、转屏都不再自动弹回，直到用户点按钮或点终端。
     /// 同一格的标签共用一份，见 `MTerminalKeyboardIntent`。
     @ObservationIgnored var keyboardIntent = MTerminalKeyboardIntent()
+    /// 程序请 uTerm 在旁边预览一个文件（`TerminalFilePreview`，路径在这台主机上）。工作区开标签时装上。
+    @ObservationIgnored var onFilePreviewRequest: ((String) -> Void)?
+    @ObservationIgnored private var filePreviewThrottle = TerminalFilePreviewThrottle()
     /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil（标签退回主机名）。
     var shellTitle: String?
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
@@ -208,8 +212,48 @@ final class MobileTerminalController {
         events.sendToProgram = { [weak self] in self?.write($0) }
         events.onStatusChanged = { [weak self] in self?.publishProgramStatus() }
         terminal.onEvent = { [weak self] event in
-            if case .titleChanged(let title) = event { self?.receiveShellTitle(title) }
+            switch event {
+            case .titleChanged(let title): self?.receiveShellTitle(title)
+            case .unknownOSC(let payload, _): self?.receiveFilePreviewRequest(payload)
+            default: break
+            }
         }
+        terminal.onOpenLink = { [weak self] link, kind in self?.openTerminalLink(link, kind: kind) }
+    }
+
+    /// 用户 ⌘ 点了终端里的链接（规则两端共用，见 `TerminalLink`）：网址交给系统，路径解析成主机上的绝对路径后在旁边
+    /// 预览。Ghostty 自己写的临时文件（`.text` / `.html`）照旧交给系统。远控镜像的路径在那台 Mac 上，不理。
+    func openTerminalLink(_ link: String, kind: TerminalOpenURLKind) {
+        switch kind {
+        case .text, .html:
+            if let url = URL(string: link) { UIApplication.shared.open(url) }
+            return
+        case .osc8, .unknown:
+            break
+        }
+        switch TerminalLink.classify(link) {
+        case .web(let url):
+            UIApplication.shared.open(url)
+        case .path(let raw):
+            guard onFilePreviewRequest != nil, let connection, !connection.mirrorsRemoteGrid else { return }
+            let reported = terminal.shadow.workingDirectory
+            Task { [weak self] in
+                guard let path = await TerminalLinkResolver.absolutePath(raw, reportedDirectory: reported,
+                                                                         backend: connection) else { return }
+                self?.onFilePreviewRequest?(path)
+            }
+        case .unsupported:
+            break
+        }
+    }
+
+    /// 程序请在旁边预览一个文件（`TerminalFilePreview`）。远控镜像不理：路径在被控的那台 Mac 上，手机经 SSH 读不到。
+    private func receiveFilePreviewRequest(_ payload: Data) {
+        guard let path = TerminalFilePreview.path(fromOSC: payload),
+              let handler = onFilePreviewRequest,
+              !(connection?.mirrorsRemoteGrid ?? false),
+              filePreviewThrottle.admits(path) else { return }
+        handler(path)
     }
 
     // MARK: 程序状态（OSC 7501 / 133）
