@@ -50,6 +50,12 @@ final class GhosttySlowDragFrameTests: XCTestCase {
 
     enum Feed: String { case vsync, timer }
 
+    /// 补丁 #20 的几种做法（`UTermScrollTrace.ScrollWakeupSyncDraw`），`UTERM_SCROLL_POLICIES`，默认只跑包里的默认值。
+    static var policies: [UTermScrollTrace.ScrollWakeupSyncDraw] {
+        (env["UTERM_SCROLL_POLICIES"] ?? UTermScrollTrace.defaultScrollWakeupSyncDraw.rawValue).split(separator: ",")
+            .compactMap { UTermScrollTrace.ScrollWakeupSyncDraw(rawValue: String($0)) }
+    }
+
     /// 手指拖之前先走这么久（UIKit 的拖动要先过一段起拖距离），不算进统计。
     static let leadIn = 0.4
     static let historyLines = 3000
@@ -60,6 +66,7 @@ final class GhosttySlowDragFrameTests: XCTestCase {
 
     override func tearDown() async throws {
         UTermScrollTrace.isEnabled = false
+        UTermScrollTrace.scrollWakeupSyncDraw = UTermScrollTrace.defaultScrollWakeupSyncDraw
     }
 
     // MARK: 发手指事件的 link
@@ -72,6 +79,7 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         var step: (@MainActor (CADisplayLink) -> Void)?
 
         func start() {
+            link?.invalidate()
             let link = CADisplayLink(target: self, selector: #selector(frame(_:)))
             link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
             link.add(to: .main, forMode: .common)
@@ -415,7 +423,8 @@ final class GhosttySlowDragFrameTests: XCTestCase {
     // MARK: 用例
 
     /// 回归（不挂测量门，模拟器也跑）：手指拖着跨过好几行，引擎每跨一行的 wakeup 都不在主线程同步重画（`tick-draw` 0 次），
-    /// 画面照样跟着走。补丁 #20：Duo 内屏上那次同步重画要等渲染线程手上那一帧（8.4 ms ≈ 一拍），每跨一行掉一帧。
+    /// 慢于 `wakeupDisplayLinkMinimumSpeed` 时也不开 display link（`wakeup-deferred`），画面照样跟着走。
+    /// 补丁 #20：Duo 内屏上那次同步重画要等渲染线程手上那一帧（8.4 ms ≈ 一拍），每跨一行掉一帧。
     func testDragAcrossRowsDoesNotSyncDraw() async throws {
         let ticker = EarlyTicker()
         ticker.start()
@@ -440,9 +449,13 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         let rows = trace.filter { $0.kind == "row" }.map(\.value)
         let crossings = zip(rows, rows.dropFirst()).filter { $0 != $1 }.count
         let draws = trace.filter { $0.kind == "tick-draw" }.count
-        print("SLOWDRAG-REGRESSION crossings=\(crossings) tick-draws=\(draws) drags=\(trace.filter { $0.kind == "drag" }.count)")
+        let deferred = trace.filter { $0.kind == "wakeup-deferred" }.count
+        print("SLOWDRAG-REGRESSION crossings=\(crossings) tick-draws=\(draws) wakeup-deferred=\(deferred) "
+            + "tick-app=\(trace.filter { $0.kind == "tick-app" }.count) drags=\(trace.filter { $0.kind == "drag" }.count)")
         XCTAssertGreaterThanOrEqual(crossings, 5, "拖动没跨过几行，量的不是那条路径")
         XCTAssertEqual(draws, 0, "手指拖着时引擎的 wakeup 在主线程同步重画了")
+        // 150 pt/s 慢于 `wakeupDisplayLinkMinimumSpeed`：跨行的 wakeup 就地 refresh，不开 display link。
+        XCTAssertGreaterThanOrEqual(deferred, crossings / 2, "慢慢拖着时引擎的 wakeup 还在开 display link（会把屏幕拽回 120 Hz）")
         XCTAssertGreaterThan(host.view.uTermScrollState.row, rowBefore + 4, "视口没跟着手指走")
         // 停下之后 wakeup 照旧同步重画：喂一行输出（滚动条变了 → wakeup），等着看 tick-draw。
         try await Task.sleep(for: .milliseconds(800))
@@ -499,6 +512,10 @@ final class GhosttySlowDragFrameTests: XCTestCase {
                            x: size.width / 2, finger: finger, ticker: ticker)
         try await Task.sleep(for: .milliseconds(600))
 
+        for policy in Self.policies {
+        UTermScrollTrace.scrollWakeupSyncDraw = policy
+        let variant = Self.policies.count > 1 || policy != UTermScrollTrace.defaultScrollWakeupSyncDraw
+            ? "\(Self.variant)-\(policy.rawValue)" : Self.variant
         for feed in Self.feeds {
             for speed in Self.speeds {
                 for rep in 0..<Self.runs {
@@ -534,7 +551,7 @@ final class GhosttySlowDragFrameTests: XCTestCase {
                         let trace = UTermScrollTrace.drain()
                         UTermScrollTrace.isEnabled = false
                         let presents = GhosttyPresentLog.readThreads()
-                        let label = "\(Self.variant) feed=\(feed.rawValue) v=\(Int(speed)) dir=\(direction > 0 ? "up" : "down") rep=\(rep)"
+                        let label = "\(variant) feed=\(feed.rawValue) v=\(Int(speed)) dir=\(direction > 0 ? "up" : "down") rep=\(rep)"
                         guard let result = analyze(label: label, targets: sampler.targets, moves: moves, dragEnd: dragEnd,
                                                    direction: direction, trace: trace, samples: sampler.samples,
                                                    decodeSpans: decodeSpans, presents: presents, clock: clock) else {
@@ -544,10 +561,10 @@ final class GhosttySlowDragFrameTests: XCTestCase {
                         }
                         for line in result.lines { print(line) }
                         summary += result.lines
-                        aggregate["\(feed.rawValue) v=\(Int(speed))", default: []].append((result, rep))
+                        aggregate["\(variant) \(feed.rawValue) v=\(Int(speed))", default: []].append((result, rep))
                         let origin = result.rows[result.window.lowerBound].target
                         for r in result.rows where r.index >= result.window.lowerBound - 15 && r.index <= result.window.upperBound + 15 {
-                            csv += "\(Self.variant),\(feed.rawValue),\(Int(speed)),\(direction > 0 ? "up" : "down"),\(rep),\(r.index),"
+                            csv += "\(variant),\(feed.rawValue),\(Int(speed)),\(direction > 0 ? "up" : "down"),\(rep),\(r.index),"
                                 + "\(number((r.target - origin) * 1000)),\(number(r.interval * 1000)),\(r.moves),\(number(r.finger)),"
                                 + "\(r.drags),\(number(r.sent)),\(number(r.shown, "%.0f")),\(number(r.shownPos, "%.0f")),"
                                 + "\(number(r.expectedPos)),\(number(r.resid)),\(r.rowCross),\(r.tickDraws),\(number(r.tickDrawMS)),"
@@ -560,11 +577,13 @@ final class GhosttySlowDragFrameTests: XCTestCase {
                 }
             }
         }
+        }
+        UTermScrollTrace.scrollWakeupSyncDraw = UTermScrollTrace.defaultScrollWakeupSyncDraw
 
         // 每个速度合起来：每类事件的数量（每 100 帧）、旁边有跨行 / 同步重画的比例。
         for key in aggregate.keys.sorted(by: { a, b in
-            let pa = a.split(separator: "="), pb = b.split(separator: "=")
-            return (String(a.prefix(5)), Double(pa.last ?? "0") ?? 0) < (String(b.prefix(5)), Double(pb.last ?? "0") ?? 0)
+            let pa = a.components(separatedBy: " v="), pb = b.components(separatedBy: " v=")
+            return (pa[0], Double(pa.last ?? "0") ?? 0) < (pb[0], Double(pb.last ?? "0") ?? 0)
         }) {
             let runs = aggregate[key] ?? []
             var frames = 0, crossings = 0, draws = 0, presentsMain = 0, presentsOff = 0
@@ -602,9 +621,9 @@ final class GhosttySlowDragFrameTests: XCTestCase {
                 let e = byKind[kind] ?? (0, 0, 0)
                 return "\(kind)=\(e.n)(\(pct(e.n, frames)) cross=\(pct(e.cross, e.n)) draw=\(pct(e.draw, e.n)))"
             }
-            let line = String(format: "SLOWDRAG-SUM %@ %@ runs=%d frames=%d step=%.2fpx lags=%@ crossings=%d tick-draws=%d "
+            let line = String(format: "SLOWDRAG-SUM %@ runs=%d frames=%d step=%.2fpx lags=%@ crossings=%d tick-draws=%d "
                 + "presents main=%d off=%d base cross=%@ draw=%@ | %@",
-                Self.variant, key, runs.count, frames, steps.reduce(0, +) / Double(max(1, steps.count)),
+                key, runs.count, frames, steps.reduce(0, +) / Double(max(1, steps.count)),
                 lags.map(String.init).joined(separator: "/"), crossings, draws, presentsMain, presentsOff,
                 pct(baseCross, frames), pct(baseDraw, frames), kinds.joined(separator: " "))
             print(line)
