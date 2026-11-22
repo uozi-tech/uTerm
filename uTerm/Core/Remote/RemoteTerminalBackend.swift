@@ -27,6 +27,8 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     private var attachment: RemoteAttachment?
     private var isClosed = false
     private var reconnectTask: Task<Void, Never>?
+    /// 通道断开（`channelClosed`）的次数。接入要等 Mac 回话，等的这段时间里断开了就作废这次接入，见 `attach`。
+    private var channelCloses = 0
     /// 有没有人在看这个标签（前台标签且 App 在前台）。决定断线久了以后退避能不能放长，见 `RemoteReconnectPolicy`。
     /// 放在锁里而不是 actor 状态：界面切标签时同步写进来，几次快速切换不会因为异步任务乱序而留下旧值。
     /// 默认 true：不告诉它的调用方（Mac 端、测试）保持以前的退避。
@@ -42,7 +44,11 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     }
 
     func connect() async throws {
-        try await attach()
+        do {
+            try await attach()
+        } catch RemoteProtocolError.closed where reconnectTask != nil {
+            // 接上的那一刻连接就断了，`channelClosed` 已经排上了重连：不算连接失败，交给重连接回。
+        }
     }
 
     private func attach() async throws {
@@ -60,6 +66,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
             }
         )
         let requested = size
+        let closesBefore = channelCloses
         let attached = try await client.attach(sessionID: sessionID, size: requested, sink: sink)
         // 接入请求在路上时标签已经关了：close() 那会儿还没有 attachment 可 detach，这里补上，
         // 否则 Mac 上的会话一直按手机尺寸、标成被手机接管。
@@ -67,6 +74,10 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
             await client.detach(attached)
             return
         }
+        // Mac 回了「接入成功」，紧接着连接就断了（回前台时常见）：主线程先处理断开、通道的关闭通知先到了这里，
+        // 接入的结果排在后面才交回来，拿到的是那条已经关掉的连接。不能收下：重连循环会以为接上了而退出，
+        // 标签从此挂在死连接上，输出不来、按键发不出去。抛出去让重连循环再试。
+        guard channelCloses == closesBefore else { throw RemoteProtocolError.closed }
         attachment = attached
         reconnectingContinuation.yield(false)
         // 接入请求在路上时视图可能刚布局完、报来了真实尺寸（那时还没有通道，发不出去）：补发一次。
@@ -131,6 +142,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
 
     private func channelClosed(reason: String, sessionEnded: Bool) {
         attachment = nil
+        channelCloses += 1
         guard !isClosed else { return }
         if sessionEnded {
             end(reason)

@@ -95,6 +95,58 @@ final class RemoteReconnectTests: XCTestCase {
         XCTAssertFalse(ended)
     }
 
+    /// 重连时 Mac 刚回了「接入成功」连接就断了（回前台时常见）：手机主线程先处理断开、再交回接入结果，
+    /// 后端拿到的是已经关掉的那条连接。以前它把这当成接上了、退出重连，标签从此卡死；现在要接着重连。
+    ///
+    /// 时序靠主线程排队做出来：Mac 认下接入（`onStateChange`，在发出「接入成功」之前、同一轮主线程里）时
+    /// 排一个占住主线程的块；它占着的时候手机收到「接入成功」（排进主线程），块里再断开连接（断开也排进主线程，
+    /// 在它后面），和真机上的顺序一样。
+    func test_link_dropping_right_after_reattach_reply_does_not_strand_the_terminal() async throws {
+        let fixture = try await makeFixture()
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        let backend = RemoteTerminalBackend(client: fixture.client, sessionID: fixture.sessionID)
+        await backend.resize(cols: 64, rows: 20)
+        try await backend.connect()
+        let drain = Task.detached { for await _ in backend.outputItems {} }
+        defer { drain.cancel() }
+        let attachedFirst = await waitUntil { fixture.session.remoteController != nil }
+        XCTAssertTrue(attachedFirst)
+
+        // 断一次，让后端进重连循环；等 Mac 也认了断开、交还终端再布陷阱。
+        fixture.client.disconnect()
+        let released = await waitUntil { fixture.session.remoteController == nil }
+        XCTAssertTrue(released)
+
+        let client = fixture.client
+        let session = fixture.session
+        var trapped = false
+        fixture.server.onStateChange = {
+            guard !trapped, session.remoteController != nil else { return }
+            trapped = true
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    Thread.sleep(forTimeInterval: 0.3)   // 「接入成功」到手机、排进主线程
+                    client.disconnect()
+                    Thread.sleep(forTimeInterval: 0.3)   // 断开排进主线程，在「接入成功」后面
+                }
+            }
+        }
+        let sprung = await waitUntil(8) { trapped }
+        XCTAssertTrue(sprung, "重连应当走到 Mac 认下接入那一步")
+        fixture.server.onStateChange = nil
+        let droppedAgain = await waitUntil { session.remoteController == nil }
+        XCTAssertTrue(droppedAgain)
+
+        // 后端要自己再连回去，不能停在那条死连接上。
+        let reattached = await waitUntil(10) { session.remoteController != nil }
+        XCTAssertTrue(reattached, "接入结果晚于断开交回时，后端应当继续重连")
+        await backend.close()
+    }
+
     /// 真正的拒绝（配对被撤销等）不重试，也不被当成网络问题吞掉。
     func test_permanent_protocol_errors_are_not_treated_as_unreachable() {
         XCTAssertTrue(RemoteProtocolError.pairingRejected.isPermanent)
