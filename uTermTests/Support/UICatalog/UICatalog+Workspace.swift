@@ -30,6 +30,13 @@ extension UICatalog {
                 try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.claudeCode(cols: 120, rows: 41)],
                                                        inspector: false, terminalWindow: true))
             },
+            // App Store 截图用的 13 英寸 iPad 竖握画布（1032×1376 点）。竖屏放不下 Claude Code 的录制（按录制时的
+            // 行列数排版），用写好的 shell 输出。iPhone 竖握没有这一张：440 点比终端窗口的最小宽度还窄，Mac 调不过去。
+            UICatalogEntry("终端窗口/iPad 窗口模式", source: "uTerm/Features/Terminal/Views/TerminalWindowView.swift",
+                           symbol: "TerminalWindowView", size: CGSize(width: 1032, height: 1376), live: true) { stage in
+                try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.nginx, UICatalogTerminalScripts.memory],
+                                                       split: .vertical, inspector: false, terminalWindow: true))
+            },
             UICatalogEntry("工作区/文件预览与终端", source: src, symbol: "WorkspaceWindowView", live: true) { stage in
                 try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.nginx], inspector: false,
                                                        openFile: "/etc/nginx/nginx.conf", previewRatio: 0.62))

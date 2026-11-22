@@ -1,110 +1,239 @@
+import CoreVideo
+import Network
 import SwiftData
 import SwiftUI
+import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// App Store 截图：真页面 + 干净的示例数据（保留网段与 example 域名），整屏连状态栏由外面的 `simctl io screenshot` 拍。
+/// App Store 截图：真页面 + 干净的示例数据（保留网段与 example 域名），整屏连状态栏由外面的 `simctl io screenshot` 拍，
+/// 再由 `internal/appstore/compose/` 的模板加上标题、底色与机身。
 ///
-/// 测试把一屏摆到最上层后写 `<目录>/ready-<名字>`，等外面拍完写回 `<目录>/done-<名字>`（最多 60 秒）。
-/// 外面的脚本见 `scripts/appstore-screenshots.sh`：在 6.9 英寸 iPhone（1320×2868）与 13 英寸 iPad（2064×2752）
-/// 模拟器上各跑一遍。开关 `UTERM_APPSTORE_SHOTS_DIR`，不设就跳过。
+/// 每一屏整屏挂在宿主 App 的主窗口上（同 `PromoGalleryTests.shootDevice`：系统照真机排状态栏、安全区与工具栏），
+/// 摆好后写 `<目录>/ready-<名字>`，等外面拍完写回 `<目录>/done-<名字>`（最多 60 秒）。
+/// 外面的脚本是 `scripts/appstore-screenshots.sh`，三种设备各跑一遍：
+/// - `iphone`：6.9 英寸 iPhone 竖握（1320×2868）
+/// - `ipad`：13 英寸 iPad 竖握（2064×2752）
+/// - `duo`：iPhone Duo 展开、横握的内屏（2853×2007）
+///
+/// 开关 `UTERM_APPSTORE_SHOTS_DIR`（不设就跳过）；`UTERM_APPSTORE_DEVICE` 选设备；远程桌面的画面取 Mac 画廊
+/// （`make gallery GALLERY_FILTER=窗口模式` 与「桌面/远程桌面」）的出图目录 `UTERM_PROMO_MAC_SHOTS`。
+/// 一律深色：终端类 App 的商店图深色更好看，也和官网夜间版一致。
 @MainActor
 final class AppStoreScreenshotTests: XCTestCase {
+    private enum Device: String { case iphone, ipad, duo }
+
     private var dir: URL!
+    private var device: Device = .iphone
     private static let now = Date()
 
     override func setUp() async throws {
         try await super.setUp()
-        guard let path = ProcessInfo.processInfo.environment["UTERM_APPSTORE_SHOTS_DIR"], !path.isEmpty else {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = env["UTERM_APPSTORE_SHOTS_DIR"], !path.isEmpty else {
             throw XCTSkip("未设置 UTERM_APPSTORE_SHOTS_DIR：App Store 截图只按需跑")
         }
         dir = URL(fileURLWithPath: path, isDirectory: true)
+        device = Device(rawValue: env["UTERM_APPSTORE_DEVICE"] ?? "") ?? .iphone
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
     func testScreens() async throws {
-        defer { MobileProbeWindow.closeAll() }
         let (container, hosts) = try fixtures()
         let relay = HostKeyChallengeRelay()
-        let style: UIUserInterfaceStyle = ProcessInfo.processInfo.environment["UTERM_APPSTORE_DARK"] == "1" ? .dark : .light
-
-        // 1. 主机列表（顶上是体验主机）
-        try await present("1-hosts", style: style) {
-            HostsScreen().environment(store(tab: .hosts)).modelContainer(container)
-        }
-
-        // 2. 终端
+        let suite = "AppStoreScreenshotTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (directory, macsOnline) = try macDirectory(defaults)
+        let lan = LANSyncCoordinator(role: .receiver, preferences: SharedPreferencesSync(),
+                                     dataStore: LANSyncDataStore(container: container))
+        let subscriptions = SubscriptionStore.live()
         let web = try XCTUnwrap(hosts["prod-web-01"])
-        let term = TermTab(host: web, transportFactory: MobileTerminalTransportFactory { _ in
-            TranscriptBackend(text: Self.terminalTranscript)
-        })
-        term.controller.start(profile: web, container: container, relay: relay)
-        let terminalWorkspace = MobileWorkspace()
-        terminalWorkspace.open(.terminal(term))
-        try await present("2-terminal", style: style, settle: .seconds(2)) {
-            WorkspaceScreen().environment(workspaceStore()).environment(relay)
-                .environment(terminalWorkspace).modelContainer(container)
+
+        /// 真的外壳（同 `MobileRootView`）：主机页 / 命令页 + 盖在上面的工作区。
+        func shell(_ store: MobileStore, _ workspace: MobileWorkspace) -> some View {
+            ZStack {
+                MobileTabShell()
+                WorkspaceLayer()
+            }
+            .environment(store)
+            .environment(workspace)
+            .environment(relay)
+            .environment(TerminalActivityCenter())
+            .environment(lan)
+            .environment(directory)
+            .environment(subscriptions)
+            .environment(CloudKitSyncMonitor())
+            .modelContainer(container)
+        }
+        func terminal(_ host: ServerProfile, _ text: String) -> TermTab {
+            let tab = TermTab(host: host, transportFactory: MobileTerminalTransportFactory { _ in
+                TranscriptBackend(text: text)
+            })
+            tab.controller.start(profile: host, container: container, relay: relay)
+            return tab
+        }
+        func files(_ host: ServerProfile) async -> FileTab {
+            let tab = FileTab(host: host, controller: MobileSFTPController(
+                testProvider: DemoSFTPProvider(fileSystem: Self.siteFileSystem()), startPath: "/srv/www/shop"))
+            await tab.controller.load("/srv/www/shop")
+            return tab
+        }
+        var opened: [TermTab] = []
+        defer { for tab in opened { tab.controller.close() } }
+
+        // 终端：Duo 横握正好是 Claude Code 录制时的 106×35；竖屏放不下全屏界面，用写好的 shell 输出。
+        do {
+            let workspace = MobileWorkspace()
+            let front = terminal(web, device == .duo ? Self.claudeTranscript : Self.terminalTranscript)
+            let others = ["staging", "prod-db"].compactMap { hosts[$0] }.map { terminal($0, Self.terminalTranscript) }
+            opened += [front] + others
+            for tab in others { workspace.open(.terminal(tab)) }
+            workspace.open(.terminal(front))
+            workspace.activate(front.id)
+            let store = MobileStore()
+            store.showWorkspace = true
+            try await present("1-terminal", settle: .seconds(2)) { shell(store, workspace) }
         }
 
-        // 3. 文件
-        let files = FileTab(host: web, controller: MobileSFTPController(
-            testProvider: DemoSFTPProvider(fileSystem: Self.siteFileSystem()), startPath: "/srv/www/shop"))
-        await files.controller.load("/srv/www/shop")
-        let filesWorkspace = MobileWorkspace()
-        filesWorkspace.open(.files(files))
-        try await present("3-files", style: style) {
-            WorkspaceScreen().environment(workspaceStore()).environment(relay)
-                .environment(filesWorkspace).modelContainer(container)
+        // 接管 Mac 上的终端：远控标签（标签上带 Mac 的记号），内容是写好的输出。
+        do {
+            let client = RemoteMacClient(macName: "MacBook Pro", endpoint: .hostPort(host: "127.0.0.1", port: 9),
+                                         identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+            let workspace = MobileWorkspace()
+            var front: TermTab?
+            for (title, text) in [("MacBook Pro", Self.macDevTranscript), ("MacBook Pro", Self.macTestTranscript),
+                                  ("prod-web-01", Self.terminalTranscript)] {
+                let host = ServerProfile()
+                host.name = title
+                host.host = title == "MacBook Pro" ? "本机" : "10.0.1.11"
+                let tab = TermTab(host: host, remote: MRemoteSource(client: client, sessionID: UUID()),
+                                  transportFactory: MobileTerminalTransportFactory { _ in TranscriptBackend(text: text) })
+                tab.controller.start(profile: host, container: container, relay: relay)
+                opened.append(tab)
+                workspace.open(.terminal(tab))
+                front = front ?? tab
+            }
+            if let front { workspace.activate(front.id) }
+            let store = MobileStore()
+            store.showWorkspace = true
+            try await present("2-mac-terminal", settle: .seconds(2)) { shell(store, workspace) }
         }
 
-        // 4. 分屏：终端 + 文件
-        let split = MobileWorkspace()
-        let term2 = TermTab(host: web, transportFactory: MobileTerminalTransportFactory { _ in
-            TranscriptBackend(text: Self.terminalTranscript)
-        })
-        term2.controller.start(profile: web, container: container, relay: relay)
-        split.open(.terminal(term2))
-        let files2 = FileTab(host: web, controller: MobileSFTPController(
-            testProvider: DemoSFTPProvider(fileSystem: Self.siteFileSystem()), startPath: "/srv/www/shop"))
-        await files2.controller.load("/srv/www/shop")
-        split.open(.files(files2))
-        split.moveToOtherPane(files2.id)
-        try await present("4-split", style: style, settle: .seconds(2)) {
-            WorkspaceScreen().environment(workspaceStore()).environment(relay)
-                .environment(split).modelContainer(container)
+        // 远程桌面：整块屏幕只在 Duo 横握拍（竖屏里 Mac 的横屏画面只剩中间一条）；Duo 与 iPad 再拍窗口模式
+        // （iPhone 竖握比 Mac 终端窗口的最小宽度还窄）。
+        // Mac 把窗口调成手机画布的大小：Duo 横握 951×669 点、13 英寸 iPad 竖握 1032×1376 点（同 Mac 画廊里那两张图）。
+        let canvas = device == .duo ? CGSize(width: 951, height: 669) : CGSize(width: 1032, height: 1376)
+        if device == .duo {
+            let client = RemoteMacClient(macName: "MacBook Pro", endpoint: .hostPort(host: "127.0.0.1", port: 9),
+                                         identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+            let session = RemoteDesktopSession(client: client, maxWidth: 3024, maxHeight: 1964)
+            let desktop = try Self.macFrame("桌面__远程桌面")
+            try await present("3-remote-desktop", settle: .milliseconds(1_400), before: {
+                session.showGalleryWindow(desktop, windowID: nil, title: nil, pointSize: CGSize(width: 1512, height: 982))
+            }) {
+                RemoteDesktopScreen(client: client, started: session, onClose: {})
+                    .environment(subscriptions)
+            }
+            session.stop()
+        }
+        if device != .iphone {
+            let client = RemoteMacClient(macName: "MacBook Pro", endpoint: .hostPort(host: "127.0.0.1", port: 9),
+                                         identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+            let session = RemoteDesktopSession(client: client, maxWidth: Int(canvas.width * 3),
+                                               maxHeight: Int(canvas.height * 3))
+            let frame = try Self.macFrame(device == .duo ? "终端窗口__手机窗口模式" : "终端窗口__iPad_窗口模式")
+            try await present("4-remote-window", settle: .milliseconds(1_400), before: {
+                session.showGalleryWindow(frame, windowID: 1, title: "prod-web-01", pointSize: canvas)
+            }) {
+                RemoteDesktopScreen(client: client, started: session, initialWindow: 1, onClose: {})
+                    .environment(subscriptions)
+            }
+            session.stop()
         }
 
-        // 5. 并行执行（写好的输出，像真的 SSH 一样整段返回）
-        let targets = ["prod-web-01", "prod-web-02", "staging", "k3s-lab", "nas", "raspberry-pi"].compactMap { hosts[$0] }
-        let command = "systemctl restart app && systemctl is-active app && curl -s localhost:8080/healthz"
-        let commandID = UUID()
-        let controller = ParallelRunController(
-            commandID: commandID, commandName: "重启服务并检查", command: command, intent: "", aiAssisted: false,
-            targets: targets, doctor: nil, store: QuickCommandStore(context: container.mainContext),
-            container: container, executor: ScriptedParallelExecutor())
-        let request = ParallelRunRequest(commandID: commandID, name: "重启服务并检查", command: command,
-                                         intent: "", aiAssisted: false, serverIDs: targets.map(\.id))
-        controller.start()
-        try await present("5-parallel", style: style, settle: .seconds(2)) {
-            ParallelRunView(request: request, controller: controller, onClose: {})
-                .environment(store(tab: .commands)).modelContainer(container)
+        // 分屏：终端 + 文件。
+        do {
+            let workspace = MobileWorkspace()
+            let term = terminal(web, Self.terminalTranscript)
+            opened.append(term)
+            workspace.open(.terminal(term))
+            let browser = await files(web)
+            workspace.open(.files(browser))
+            workspace.moveToOtherPane(browser.id)
+            let store = MobileStore()
+            store.showWorkspace = true
+            try await present("5-split", settle: .seconds(2)) { shell(store, workspace) }
         }
-        controller.cancel()
-        for tab in [term, term2] { tab.controller.close() }
+
+        // 文件（iPhone、iPad 单独一张；Duo 的分屏已经够大）。
+        if device != .duo {
+            let workspace = MobileWorkspace()
+            workspace.open(.files(await files(web)))
+            let store = MobileStore()
+            store.showWorkspace = true
+            try await present("6-files") { shell(store, workspace) }
+        }
+
+        // 并行执行（写好的输出，像真的 SSH 一样整段返回）。
+        do {
+            let targets = ["prod-web-01", "prod-web-02", "staging", "k3s-lab", "nas", "raspberry-pi"].compactMap { hosts[$0] }
+            let command = "systemctl restart app && systemctl is-active app && curl -s localhost:8080/healthz"
+            let commandID = UUID()
+            let controller = ParallelRunController(
+                commandID: commandID, commandName: "重启服务并检查", command: command, intent: "", aiAssisted: false,
+                targets: targets, doctor: nil, store: QuickCommandStore(context: container.mainContext),
+                container: container, executor: ScriptedParallelExecutor())
+            let request = ParallelRunRequest(commandID: commandID, name: "重启服务并检查", command: command,
+                                             intent: "", aiAssisted: false, serverIDs: targets.map(\.id))
+            controller.start()
+            let store = MobileStore()
+            store.tab = .commands
+            try await present("7-parallel", settle: .seconds(2)) {
+                ParallelRunView(request: request, controller: controller, onClose: {})
+                    .environment(store).environment(subscriptions).modelContainer(container)
+            }
+            controller.cancel()
+        }
+
+        // 主机：顶上是体验主机，下面是「我的 Mac」与分组。
+        do {
+            let store = MobileStore()
+            store.tab = .hosts
+            try await present("8-hosts", before: { directory.setDiscovered(macsOnline) }) {
+                shell(store, MobileWorkspace())
+            }
+        }
     }
 
     // MARK: - 摆一屏，等外面拍
 
-    private func present<V: View>(_ name: String, style: UIUserInterfaceStyle,
-                                  settle: Duration = .milliseconds(800), _ view: () -> V) async throws {
-        let root = view().environment(\.mAccent, M.accent).tint(M.accent)
-        let (window, host) = MobileProbeWindow.make(placement: .visibleOnScreen, rootView: root)
-        host.safeAreaRegions = .all          // 真机一样让开状态栏与底部横条
-        window.overrideUserInterfaceStyle = style
-        host.view.backgroundColor = style == .dark ? .black : .white
-        host.view.setNeedsLayout()
-        host.view.layoutIfNeeded()
+    /// 整屏挂在宿主 App 的主窗口上（临时换掉它的根控制器，拍完换回），排好后请外面截屏。
+    private func present<V: View>(_ name: String, settle: Duration = .milliseconds(900),
+                                  before: () -> Void = {}, _ view: () -> V) async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = try XCTUnwrap(scene.windows.first { $0.isKeyWindow } ?? scene.windows.first)
+        let original = window.rootViewController
+        let originalStyle = window.overrideUserInterfaceStyle
+        defer {
+            window.rootViewController = original
+            window.overrideUserInterfaceStyle = originalStyle
+        }
+        window.overrideUserInterfaceStyle = .dark
+        let host = ScreenshotHostingController(rootView: AnyView(view()
+            .environment(\.mAccent, M.accent)
+            .tint(M.accent)
+            .mMeasuresChrome()
+            .persistentSystemOverlays(.hidden)))
+        host.view.backgroundColor = .black
+        window.rootViewController = host
+        host.setNeedsUpdateOfHomeIndicatorAutoHidden()
+        try await Task.sleep(for: .milliseconds(600))
+        before()
         try await Task.sleep(for: settle)
+        // 终端挂上会拿焦点、弹出软键盘，商店图里收起来（键盘条照常显示）。
+        window.endEditing(true)
+        try await Task.sleep(for: .milliseconds(700))
         let ready = dir.appendingPathComponent("ready-\(name)")
         let done = dir.appendingPathComponent("done-\(name)")
         try? FileManager.default.removeItem(at: done)
@@ -115,19 +244,51 @@ final class AppStoreScreenshotTests: XCTestCase {
         }
         try? FileManager.default.removeItem(at: ready)
         XCTAssertTrue(FileManager.default.fileExists(atPath: done.path), "外面没拍 \(name)")
-        MobileProbeWindow.close(window)
     }
 
-    private func store(tab: MTab) -> MobileStore {
-        let s = MobileStore()
-        s.tab = tab
-        return s
+    /// 「我的 Mac」：两台配对过的 Mac，名字中性，标成在局域网里找得到（同 `PromoGalleryTests`）。
+    private func macDirectory(_ defaults: UserDefaults) throws
+        -> (RemoteMacDirectory, [UUID: (name: String, endpoint: NWEndpoint)]) {
+        defaults.set(true, forKey: DefaultsKey.remoteBrowseActivated)
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let macs = [(UUID(), "MacBook Pro"), (UUID(), "Mac mini")]
+        for (i, (id, name)) in macs.enumerated() {
+            try identity.trust(RemotePeer(id: id, name: name, publicKey: Data(count: 32),
+                                          pairedAt: Self.now.addingTimeInterval(-86_400 * Double(30 - i))))
+        }
+        let directory = RemoteMacDirectory(identity: identity, defaults: defaults)
+        var found: [UUID: (name: String, endpoint: NWEndpoint)] = [:]
+        for (i, (id, name)) in macs.enumerated() {
+            found[id] = (name, .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: UInt16(9 + i))!))
+        }
+        directory.setDiscovered(found)
+        return (directory, found)
     }
 
-    private func workspaceStore() -> MobileStore {
-        let s = MobileStore()
-        s.showWorkspace = true
-        return s
+    /// Mac 画廊渲的一张图（深色），当成远程桌面里 Mac 送来的画面。
+    private static func macFrame(_ name: String) throws -> CVPixelBuffer {
+        let dir = try XCTUnwrap(ProcessInfo.processInfo.environment["UTERM_PROMO_MAC_SHOTS"],
+                                "设 TEST_RUNNER_UTERM_PROMO_MAC_SHOTS=<make gallery 的出图目录>")
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("\(name)--dark.png")
+        let image = try XCTUnwrap(UIImage(contentsOfFile: url.path)?.cgImage, "缺图：\(url.path)")
+        let width = image.width, height = image.height
+        var buffer: CVPixelBuffer?
+        let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+                                      kCVPixelBufferCGImageCompatibilityKey: true,
+                                      kCVPixelBufferCGBitmapContextCompatibilityKey: true]
+        XCTAssertEqual(CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &buffer),
+                       kCVReturnSuccess)
+        let pixels = try XCTUnwrap(buffer)
+        CVPixelBufferLockBaseAddress(pixels, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixels, []) }
+        let context = try XCTUnwrap(CGContext(
+            data: CVPixelBufferGetBaseAddress(pixels), width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
+        context.setFillColor(UIColor.black.cgColor)   // 窗口圆角外面是透明的，垫黑底
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixels
     }
 
     // MARK: - 示例数据
@@ -199,6 +360,62 @@ final class AppStoreScreenshotTests: XCTestCase {
         try? fs.chmod("/srv/www/shop/deploy.sh", mode: 0o755)
         return fs
     }
+
+    /// 真的 Claude Code（录制见 `Support/Recordings/`），106×35 正好是 Duo 横握时终端的行列数。
+    private static let claudeTranscript: String = {
+        let e = "\u{1B}["
+        let prompt = "\(e)1;32mdeploy@prod-web-01\(e)0m:\(e)1;34m~\(e)0m$ "
+        guard let url = Bundle(for: AppStoreScreenshotTests.self).url(forResource: "claude-code-106x35", withExtension: "raw"),
+              let data = try? Data(contentsOf: url) else { return prompt + "缺录制文件 claude-code-106x35.raw\r\n" }
+        return prompt + "claude\r\n" + String(decoding: data, as: UTF8.self)
+    }()
+
+    private static func macPrompt(_ dir: String) -> String {
+        "\u{1B}[1;36mdev@MacBook-Pro\u{1B}[0m \u{1B}[1;34m\(dir)\u{1B}[0m % "
+    }
+
+    /// Mac 上跑着的开发服务器。
+    private static let macDevTranscript: String = {
+        let e = "\u{1B}["
+        return [
+            macPrompt("~/code/shop") + "npm run dev",
+            "",
+            "> shop@2.14.0 dev",
+            "> vite",
+            "",
+            "  \(e)1;32mVITE\(e)0m v6.2.0  ready in \(e)1m412\(e)0m ms",
+            "",
+            "  \(e)32m➜\(e)0m  \(e)1mLocal\(e)0m:   \(e)36mhttp://localhost:5173/\(e)0m",
+            "  \(e)32m➜\(e)0m  \(e)1mNetwork\(e)0m: use --host to expose",
+            "",
+            "\(e)2m21:31:07\(e)0m \(e)36m[vite]\(e)0m \(e)32mhmr update\(e)0m \(e)2m/src/routes/cart.tsx\(e)0m",
+            "\(e)2m21:31:42\(e)0m \(e)36m[vite]\(e)0m \(e)32mhmr update\(e)0m \(e)2m/src/routes/orders.tsx\(e)0m",
+            "\(e)2m21:32:15\(e)0m \(e)36m[vite]\(e)0m \(e)32mhmr update\(e)0m \(e)2m/src/styles.css\(e)0m",
+            "\(e)2m21:33:02\(e)0m \(e)36m[vite]\(e)0m \(e)32mpage reload\(e)0m \(e)2msrc/main.tsx\(e)0m",
+        ].joined(separator: "\r\n")
+    }()
+
+    /// Mac 上另一个终端：跑测试。
+    private static let macTestTranscript: String = {
+        let e = "\u{1B}["
+        return [
+            macPrompt("~/code/shop") + "git status -sb",
+            "## main...origin/main [ahead 2]",
+            " \(e)31mM\(e)0m src/routes/orders.tsx",
+            " \(e)31mM\(e)0m src/styles.css",
+            macPrompt("~/code/shop") + "npm test",
+            "",
+            " \(e)32m✓\(e)0m src/cart.test.ts \(e)2m(12 tests)\(e)0m 38ms",
+            " \(e)32m✓\(e)0m src/orders.test.ts \(e)2m(9 tests)\(e)0m 51ms",
+            " \(e)32m✓\(e)0m src/invoice.test.ts \(e)2m(14 tests)\(e)0m 64ms",
+            " \(e)32m✓\(e)0m src/auth.test.ts \(e)2m(6 tests)\(e)0m 22ms",
+            "",
+            " \(e)2mTest Files\(e)0m  \(e)1;32m4 passed\(e)0m (4)",
+            " \(e)2m     Tests\(e)0m  \(e)1;32m41 passed\(e)0m (41)",
+            " \(e)2m  Duration\(e)0m  1.21s",
+            macPrompt("~/code/shop"),
+        ].joined(separator: "\r\n")
+    }()
 
     private static let terminalTranscript: String = {
         let e = "\u{1B}["
@@ -284,4 +501,9 @@ private actor TranscriptBackend: TerminalBackend {
     func resize(cols: UInt16, rows: UInt16) async {}
     func close() async { output.finish() }
     func foregroundActivity() async -> TerminalActivity { .idle }
+}
+
+/// 商店截图用的托管控制器：请系统藏起 Home 指示条。
+private final class ScreenshotHostingController: UIHostingController<AnyView> {
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
 }

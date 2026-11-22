@@ -41,13 +41,13 @@ final class TermTab: Identifiable {
     /// 能切到 Agent：远控标签没有（Agent 跑在 Mac 那边），体验主机也没有（`run_command` 要真 SSH）。
     var offersAgent: Bool { remote == nil && !isDemo }
 
-    /// 远控标签：经 Mac 接入它上面的终端。
-    init(host: ServerProfile, remote: MRemoteSource) {
+    /// 远控标签：经 Mac 接入它上面的终端。`transportFactory` 只给截图换成写好的输出，App 里一律走默认的远控通道。
+    init(host: ServerProfile, remote: MRemoteSource, transportFactory: MobileTerminalTransportFactory? = nil) {
         self.host = host
         self.hostName = host.name
         self.remote = remote
         self.controller = MobileTerminalController(
-            transportFactory: .remote(client: remote.client, sessionID: remote.sessionID))
+            transportFactory: transportFactory ?? .remote(client: remote.client, sessionID: remote.sessionID))
     }
 
     /// 标签上显示的程序状态。远控标签读 Mac 推来的（中途接入也拿得到当前状态），直连读本机解析的。
