@@ -24,6 +24,11 @@ nonisolated struct TerminalActivityAttributes: ActivityAttributes, Sendable {
         var footer: String?
         /// 内容过期（`staleDate` 到了、App 没来得及推「已暂停」）时扩展显示的底行。和 `paused` 时的 `footer` 同一句。
         var pausedText: String
+        /// 所有行（含没放下的）共有的程序名 / 状态 / 主机：提到标题行，行里不再重复。nil = 不全一样。
+        /// 可选是为了解得开升级前推出去的内容。
+        var sharedProgram: String? = nil
+        var sharedStatus: String? = nil
+        var sharedHost: String? = nil
     }
 
     nonisolated struct Row: Codable, Hashable, Sendable, Identifiable {

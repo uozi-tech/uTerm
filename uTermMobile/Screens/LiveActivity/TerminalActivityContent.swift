@@ -53,13 +53,30 @@ nonisolated enum TerminalActivityContent {
         guard !ranked.isEmpty else { return nil }
         let rows = ranked.prefix(maxRows).map(\.row)
         let overflow = ranked.count - rows.count
+        let all = ranked.map(\.row)
+        let hosts = entries.filter { tone(of: $0.status) != nil }
         return State(rows: Array(rows),
                      overflow: overflow,
                      overflowText: overflow > 0 ? String(localized: "还有 \(overflow) 个") : nil,
                      keepUntil: keepUntil(phase),
                      paused: phase == .paused,
                      footer: footer(phase),
-                     pausedText: pausedText)
+                     pausedText: pausedText,
+                     sharedProgram: shared(all.map(\.program)),
+                     sharedStatus: shared(all.map(\.status)),
+                     sharedHost: sharedHost(of: hosts))
+    }
+
+    /// 全都一样时取那个值。
+    private static func shared(_ values: [String]) -> String? {
+        guard let first = values.first, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    /// 都在同一台主机上时取主机名；有一行的标题就是主机名时不提（标题行和那一行会写两遍同一个名字）。
+    private static func sharedHost(of entries: [TerminalActivityEntry]) -> String? {
+        guard let host = shared(entries.map(\.host)), !entries.contains(where: { $0.title == host }) else { return nil }
+        return host
     }
 
     /// 把一份已经推出去的内容改成「已暂停」：App 要被挂起了，或者在后台时连接断了、算不出新内容。

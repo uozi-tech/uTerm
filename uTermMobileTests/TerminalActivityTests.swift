@@ -54,6 +54,42 @@ final class TerminalActivityTests: XCTestCase {
         XCTAssertNil(state.rows[0].host)
     }
 
+    func testSharedProgramStatusAndHostHoistedToHeadline() throws {
+        // 三个 Claude Code 都在运行、都在同一台 Mac 上：标题行写一次，行里只剩标签页标题。
+        let same = try XCTUnwrap(TerminalActivityContent.make(
+            entries: [entry(title: "a", host: "mac", state: .working),
+                      entry(title: "b", host: "mac", state: .working),
+                      entry(title: "c", host: "mac", state: .working)],
+            since: [:], phase: .live, now: t0))
+        XCTAssertEqual(same.sharedProgram, "Claude Code")
+        XCTAssertEqual(same.sharedStatus, same.rows[0].status)
+        XCTAssertEqual(same.sharedHost, "mac")
+
+        // 状态、主机不一样：只提程序。没放下的行也算在内。
+        let mixed = try XCTUnwrap(TerminalActivityContent.make(
+            entries: [entry(title: "a", host: "mac", state: .working),
+                      entry(title: "b", host: "mac", state: .working),
+                      entry(title: "c", host: "mac", state: .working),
+                      entry(title: "d", host: "prod", state: .done)],
+            since: [:], phase: .live, now: t0))
+        XCTAssertEqual(mixed.rows.map(\.title), ["a", "b", "c"])
+        XCTAssertEqual(mixed.sharedProgram, "Claude Code")
+        XCTAssertNil(mixed.sharedStatus, "第四个是完成，标题行不能写「运行中」")
+        XCTAssertNil(mixed.sharedHost)
+
+        // 标题就是主机名：不提主机（不然同一个名字写两遍）。
+        let titled = try XCTUnwrap(TerminalActivityContent.make(
+            entries: [entry(title: "prod", host: "prod", state: .working)], since: [:], phase: .live, now: t0))
+        XCTAssertNil(titled.sharedHost)
+    }
+
+    func testDecodesContentPushedBeforeSharedFields() throws {
+        let old = #"{"rows":[],"overflow":0,"paused":false,"pausedText":"x"}"#
+        let state = try JSONDecoder().decode(TerminalActivityAttributes.ContentState.self, from: Data(old.utf8))
+        XCTAssertNil(state.sharedProgram)
+        XCTAssertNil(state.sharedHost)
+    }
+
     func testPhasesSetFooterAndCountdown() throws {
         let entries = [entry(state: .working)]
         let live = try XCTUnwrap(TerminalActivityContent.make(entries: entries, since: [:], phase: .live, now: t0))

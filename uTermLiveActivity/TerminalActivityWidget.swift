@@ -28,29 +28,32 @@ struct TerminalActivityWidget: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.center) {
+                    TerminalHeadline(state: state, size: 15)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(state.rows) { row in
                             Link(destination: TerminalActivityAttributes.link(tab: row.id)) {
-                                TerminalRowView(row: row, paused: state.paused, compact: true)
+                                TerminalRowView(row: row, state: state, compact: true)
                             }
                         }
+                        TerminalFooterView(state: state)
                     }
-                }
-                DynamicIslandExpandedRegion(.bottom) {
-                    TerminalFooterView(state: state)
+                    .padding(.horizontal, 4)
                 }
             } compactLeading: {
                 TerminalGlyph(tone: top?.tone, paused: state.paused)
             } compactTrailing: {
                 if let top {
-                    // 横屏时灵动岛竖着放、很窄：放不下字就只画状态图标。
+                    // 横屏时灵动岛竖着放、很窄：放不下字就画一个自明的状态图标（转圈 = 运行中、举手 = 等你、
+                    // 勾 = 完成、叉 = 出错），多个会话时带上个数。
                     ViewThatFits(in: .horizontal) {
                         Text(verbatim: top.shortStatus)
                             .font(.system(size: 13, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize()
-                        Image(systemName: top.tone.symbol)
-                            .font(.system(size: 13, weight: .semibold))
+                        TerminalStatusSymbol(tone: top.tone, count: state.rows.count + state.overflow)
+                        TerminalStatusSymbol(tone: top.tone, count: 1)
                     }
                     .foregroundStyle(state.paused ? .secondary : top.tone.color)
                 }
@@ -69,16 +72,17 @@ private struct TerminalLockScreenView: View {
     let state: TerminalActivityAttributes.ContentState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
                 TerminalGlyph(tone: state.rows.first?.tone, paused: state.paused)
-                    .font(.system(size: 15, weight: .semibold))
-                Text(verbatim: "uTerm").font(.system(size: 15, weight: .semibold))
-                Spacer(minLength: 0)
+                    .font(.system(size: 17, weight: .semibold))
+                TerminalHeadline(state: state, size: 16)
             }
-            ForEach(state.rows) { row in
-                Link(destination: TerminalActivityAttributes.link(tab: row.id)) {
-                    TerminalRowView(row: row, paused: state.paused, compact: false)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(state.rows) { row in
+                    Link(destination: TerminalActivityAttributes.link(tab: row.id)) {
+                        TerminalRowView(row: row, state: state, compact: false)
+                    }
                 }
             }
             TerminalFooterView(state: state)
@@ -89,11 +93,37 @@ private struct TerminalLockScreenView: View {
 
 // MARK: - 部件
 
-/// 一行：状态点、「Claude Code · 等待确认」、标签页标题 / 主机、运行时长。
+/// 标题行：各行共有的「Claude Code · 运行中」，后面跟共有的主机（淡色）。什么都不共有时写 uTerm。
+private struct TerminalHeadline: View {
+    let state: TerminalActivityAttributes.ContentState
+    let size: CGFloat
+
+    var body: some View {
+        let parts = [state.sharedProgram, state.sharedStatus].compactMap(\.self)
+        let headline = parts.isEmpty ? "uTerm" : parts.joined(separator: " · ")
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(verbatim: headline)
+                .font(.system(size: size, weight: .semibold))
+                .layoutPriority(1)
+            Spacer(minLength: 0)
+            if let host = state.sharedHost {
+                Text(verbatim: host)
+                    .font(.system(size: size - 3))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(1)
+    }
+}
+
+/// 一行：状态点 + 标签页标题，右边是运行时长（运行中）或短状态（等人 / 完成 / 出错）；
+/// 第二行只写标题行里没提到的：程序、运行中的状态、主机。全提到标题行了就只有一行。
 private struct TerminalRowView: View {
     let row: TerminalActivityAttributes.Row
-    let paused: Bool
+    let state: TerminalActivityAttributes.ContentState
     let compact: Bool
+
+    private var paused: Bool { state.paused }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -102,29 +132,46 @@ private struct TerminalRowView: View {
                 .frame(width: 8, height: 8)
                 .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: "\(row.program) · \(row.status)")
+                Text(verbatim: row.title)
                     .font(.system(size: compact ? 14 : 15, weight: .semibold))
                     .lineLimit(1)
-                Text(verbatim: subtitle)
-                    .font(.system(size: compact ? 12 : 13))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let detail {
+                    Text(verbatim: detail)
+                        .font(.system(size: compact ? 12 : 13))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 4)
-            if !paused, row.tone == .working {
-                Text(timerInterval: row.since...Date.distantFuture, countsDown: false)
-                    .font(.system(size: compact ? 12 : 13).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 64, alignment: .trailing)
-            }
+            trailing
+                .font(.system(size: compact ? 12 : 13, weight: .medium).monospacedDigit())
         }
         .opacity(paused ? 0.6 : 1)
     }
 
-    private var subtitle: String {
-        guard let host = row.host else { return row.title }
-        return "\(row.title) — \(host)"
+    @ViewBuilder private var trailing: some View {
+        if row.tone == .working {
+            if !paused {
+                Text(timerInterval: row.since...Date.distantFuture, countsDown: false)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 64, alignment: .trailing)
+            }
+        } else if state.sharedStatus == nil {
+            Text(verbatim: row.shortStatus)
+                .foregroundStyle(paused ? Color.secondary : row.tone.color)
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
+    private var detail: String? {
+        var parts: [String] = []
+        if state.sharedProgram == nil { parts.append(row.program) }
+        // 不是运行中的状态写在右边了；运行中右边是计时，状态写在这里。
+        if state.sharedStatus == nil, row.tone == .working { parts.append(row.status) }
+        if state.sharedHost == nil, let host = row.host { parts.append(host) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
@@ -165,13 +212,31 @@ private struct TerminalGlyph: View {
     }
 }
 
+/// 灵动岛窄处的状态：图标本身看得出意思，多个会话时右边带个数。
+private struct TerminalStatusSymbol: View {
+    let tone: TerminalActivityAttributes.Tone
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: tone.symbol)
+            if count > 1 {
+                Text(verbatim: "\(count)").monospacedDigit()
+            }
+        }
+        .font(.system(size: 13, weight: .bold))
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
 extension TerminalActivityAttributes.Tone {
     /// 与 App 里标签页圆点同义：等人处理 = 橙，运行中 = 蓝，完成 = 绿，出错 = 红。
-    /// 紧凑态放不下字时的图标。
+    /// 紧凑态放不下字时的图标：转圈 = 运行中，举手 = 等你处理。
     var symbol: String {
         switch self {
-        case .attention: "exclamationmark.circle.fill"
-        case .working: "ellipsis.circle.fill"
+        case .attention: "hand.raised.fill"
+        case .working: "progress.indicator"
         case .done: "checkmark.circle.fill"
         case .failed: "xmark.circle.fill"
         }

@@ -65,4 +65,55 @@ final class TerminalActivityDeviceTests: XCTestCase {
         }
         center.keepAlive.stop()
     }
+
+    /// 看排版用：不接终端，直接按几组写好的内容建实时活动，外面截灵动岛 / 锁屏。模拟器上也能跑。
+    /// `TEST_RUNNER_UTERM_LIVE_ACTIVITY_SHOWCASE=1` 打开。
+    /// `simctl io screenshot` 截不到灵动岛，也锁不了屏（单元测试里按不了锁屏键）：在 DeviceHub 里看。每组停 `…_SHOWCASE_SECONDS`（默认 40）秒，切换时打印 `[la-scene] <名字>`。
+    func testLiveActivityLayoutShowcase() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["UTERM_LIVE_ACTIVITY_SHOWCASE"] != nil else { throw XCTSkip("手动看排版用，见注释") }
+        let hold = Double(env["UTERM_LIVE_ACTIVITY_SHOWCASE_SECONDS"] ?? "") ?? 40
+        for activity in Activity<TerminalActivityAttributes>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+
+        let now = Date()
+        func entry(_ title: String, _ host: String, _ state: ProgramState,
+                   kind: ProgramBlockKind? = nil) -> TerminalActivityEntry {
+            TerminalActivityEntry(tabID: UUID(), title: title, host: host,
+                                  status: ProgramStatusRecord(state: state, kind: kind, progress: nil,
+                                                              app: "claude-code", title: nil, message: nil))
+        }
+        let mac = "Jacky 的 MacBook Pro"
+        let same = [entry("ios-app-store-subscription", mac, .working),
+                    entry("Worktree 与已合并分支清理", mac, .working),
+                    entry("官网与 GitHub README 多语言", mac, .working)]
+        let mixed = [entry("ios-app-store-subscription", mac, .blocked, kind: .permission),
+                     entry("Worktree 与已合并分支清理", mac, .working),
+                     entry("deploy", "prod-1", .error),
+                     entry("官网与 GitHub README 多语言", mac, .done)]
+        let scenes: [(String, [TerminalActivityEntry], TerminalActivityPhase)] = [
+            ("same", same, .live),
+            ("mixed", mixed, .live),
+            ("single", [entry("ios-app-store-subscription", mac, .blocked, kind: .permission)], .live),
+            ("keeping", same, .keeping(until: now.addingTimeInterval(900))),
+        ]
+        let since = Dictionary(uniqueKeysWithValues: (same + mixed).enumerated().map {
+            ($0.element.tabID, now.addingTimeInterval(-Double(20 + 45 * $0.offset)))
+        })
+
+        var activity: Activity<TerminalActivityAttributes>?
+        for (name, entries, phase) in scenes {
+            let state = try XCTUnwrap(TerminalActivityContent.make(entries: entries, since: since, phase: phase))
+            let content = ActivityContent(state: state, staleDate: nil)
+            if let activity {
+                await activity.update(content)
+            } else {
+                activity = try Activity.request(attributes: TerminalActivityAttributes(), content: content)
+            }
+            print("[la-scene] \(name)")
+            try await Task.sleep(for: .seconds(hold))
+        }
+        await activity?.end(nil, dismissalPolicy: .immediate)
+    }
 }
