@@ -53,9 +53,19 @@ enum RemoteKeyCatalog {
 struct RemoteDesktopKeyBar: View {
     enum Panel: Hashable { case prompts, keys }
 
+    /// 粘贴到 Mac：剪贴板里的，或相册里选一项。执行（进度、结果提示、相册选择器）在 `RemoteDesktopScreen`。
+    struct PasteActions {
+        /// Mac 收得了文件（相册里也能选视频）。
+        let allowsFiles: Bool
+        let pasteClipboard: () -> Void
+        let pickPhoto: () -> Void
+    }
+
     let keys: RemoteDesktopKeyState
     /// 系统键盘弹着。由画布执行（`RemoteDesktopCanvas`），系统收走键盘时它会写回 false。
     @Binding var keyboardShown: Bool
+    /// nil = 那台 Mac 不收粘贴（老版本、只能看），不放粘贴键。
+    let paste: PasteActions?
     let send: (RemoteDesktopInput) -> Void
     @State private var panel: Panel?
     @State private var panels = MKeyBarPanelSwitch<Panel>(initial: .prompts)
@@ -64,10 +74,11 @@ struct RemoteDesktopKeyBar: View {
     @AppStorage(DefaultsKey.terminalKeyBarPhrases) private var phrasesRaw = ""
 
     init(keys: RemoteDesktopKeyState, keyboardShown: Binding<Bool>, panel: Panel? = nil,
-         send: @escaping (RemoteDesktopInput) -> Void) {
+         paste: PasteActions? = nil, send: @escaping (RemoteDesktopInput) -> Void) {
         self.keys = keys
         _keyboardShown = keyboardShown
         _panel = State(initialValue: panel)
+        self.paste = paste
         self.send = send
     }
 
@@ -90,6 +101,8 @@ struct RemoteDesktopKeyBar: View {
             }
             MKeyBarGap()
             ForEach(RemoteKeyCatalog.primary) { key in MKeyButton(label: key.label) { tap(key) } }
+            // 粘贴常用，同终端键盘条的贴图键一样紧跟 esc / tab / ↵，不用滚就点得到。
+            if let paste { pasteMenu(paste) }
             MKeyBarGap()
             ForEach(RemoteKeyCatalog.repeating) { key in MRepeatingKeyButton(label: key.label) { tap(key) } }
             MKeyBarGap()
@@ -114,6 +127,24 @@ struct RemoteDesktopKeyBar: View {
         .sheet(isPresented: $editingPhrases) {
             TerminalPhrasesScreen(showsDone: true)
         }
+    }
+
+    private func pasteMenu(_ paste: PasteActions) -> some View {
+        MMenu {
+            Button(action: paste.pasteClipboard) {
+                Label("粘贴到 Mac", systemImage: "doc.on.clipboard")
+            }
+            Button(action: paste.pickPhoto) {
+                if paste.allowsFiles {
+                    Label("从相册选择照片或视频…", systemImage: "photo")
+                } else {
+                    Label("从相册选择图片…", systemImage: "photo")
+                }
+            }
+        } label: {
+            MKeyIconCap(symbol: "doc.on.clipboard")
+        }
+        .accessibilityLabel("粘贴到 Mac")
     }
 
     private func section(_ title: LocalizedStringKey, _ keys: [RemoteBarKey]) -> some View {

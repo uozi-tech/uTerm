@@ -141,7 +141,9 @@ struct RemoteDesktopScreen: View {
                     canvasMeasured = true
                 }
                 if keyBarShown, let session, session.canControl {
-                    RemoteDesktopKeyBar(keys: keys, keyboardShown: $keyboardVisible) { session.send($0) }
+                    RemoteDesktopKeyBar(keys: keys, keyboardShown: $keyboardVisible, paste: pasteActions(session)) {
+                        session.send($0)
+                    }
                 }
             }
             .overlay(alignment: .top) {
@@ -439,7 +441,7 @@ struct RemoteDesktopScreen: View {
                     }
                     .accessibilityLabel(keyBarShown ? "收起键盘" : "弹出键盘")
                 }
-                // 不常用的（粘贴、帘幕、解锁密码）收进一个菜单，顶栏只留声音、适配屏幕和键盘。
+                // 不常用的（帘幕、解锁密码）收进一个菜单，顶栏只留声音、适配屏幕和键盘；粘贴在键盘条上。
                 if hasMoreActions {
                     MMenu { moreActions } label: { barIcon("ellipsis") }
                         .accessibilityLabel("更多")
@@ -470,7 +472,13 @@ struct RemoteDesktopScreen: View {
             .onTapGesture { showStats.toggle() }
     }
 
-    private var canPaste: Bool { session?.canPaste == true }
+    /// 键盘条上的粘贴键（粘贴要能控制，键盘条也只在能控制时出现）。
+    private func pasteActions(_ session: RemoteDesktopSession) -> RemoteDesktopKeyBar.PasteActions? {
+        guard session.canPaste else { return nil }
+        return .init(allowsFiles: session.canPasteFiles,
+                     pasteClipboard: { Task { await pasteClipboard() } },
+                     pickPhoto: { pickingPhoto = true })
+    }
 
     private var canCurtain: Bool {
         guard let session else { return false }
@@ -488,7 +496,7 @@ struct RemoteDesktopScreen: View {
     /// 那台 Mac 的 uTerm 能不能只看一个窗口（老版本不能）。
     private var canPickWindow: Bool { session?.supportsWindows == true }
 
-    private var hasMoreActions: Bool { !displays.isEmpty || canPickWindow || canPaste || canCurtain || canManagePassword }
+    private var hasMoreActions: Bool { !displays.isEmpty || canPickWindow || canCurtain || canManagePassword }
 
     /// 「更多」菜单。**要矮**：横握时屏幕只有六百多点高，以前十行（两块显示器各占两行、操作方式两行、密码两行）
     /// 比屏幕还高，系统把菜单顶出屏幕外，上下都点不全（2026-11-18 Duo 录屏）。所以成组的选项收进子菜单，
@@ -522,20 +530,6 @@ struct RemoteDesktopScreen: View {
                 // 开着是触摸屏模式（点哪里就是哪里），关着是触控板模式。
                 Toggle(isOn: $windowTouchMode) {
                     Label("触摸屏模式", systemImage: "hand.tap")
-                }
-            }
-        }
-        if canPaste {
-            Section {
-                Button { Task { await pasteClipboard() } } label: {
-                    Label("粘贴到 Mac", systemImage: "doc.on.clipboard")
-                }
-                Button { pickingPhoto = true } label: {
-                    if session?.canPasteFiles == true {
-                        Label("从相册选择照片或视频…", systemImage: "photo")
-                    } else {
-                        Label("从相册选择图片…", systemImage: "photo")
-                    }
                 }
             }
         }
