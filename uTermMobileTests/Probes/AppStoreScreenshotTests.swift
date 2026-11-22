@@ -18,13 +18,14 @@ import XCTest
 ///
 /// 开关 `UTERM_APPSTORE_SHOTS_DIR`（不设就跳过）；`UTERM_APPSTORE_DEVICE` 选设备；远程桌面的画面取 Mac 画廊
 /// （`make gallery GALLERY_FILTER=窗口模式` 与「桌面/远程桌面」）的出图目录 `UTERM_PROMO_MAC_SHOTS`。
-/// 一律深色：终端类 App 的商店图深色更好看，也和官网夜间版一致。
+/// 默认日间（`UTERM_APPSTORE_DARK=1` 改拍夜间），远程桌面的画面跟着取 Mac 画廊同一外观的图。
 @MainActor
 final class AppStoreScreenshotTests: XCTestCase {
     private enum Device: String { case iphone, ipad, duo }
 
     private var dir: URL!
     private var device: Device = .iphone
+    private var dark = false
     private static let now = Date()
 
     override func setUp() async throws {
@@ -35,6 +36,7 @@ final class AppStoreScreenshotTests: XCTestCase {
         }
         dir = URL(fileURLWithPath: path, isDirectory: true)
         device = Device(rawValue: env["UTERM_APPSTORE_DEVICE"] ?? "") ?? .iphone
+        dark = env["UTERM_APPSTORE_DARK"] == "1"
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
@@ -128,7 +130,7 @@ final class AppStoreScreenshotTests: XCTestCase {
             let client = RemoteMacClient(macName: "MacBook Pro", endpoint: .hostPort(host: "127.0.0.1", port: 9),
                                          identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
             let session = RemoteDesktopSession(client: client, maxWidth: 3024, maxHeight: 1964)
-            let desktop = try Self.macFrame("桌面__远程桌面")
+            let desktop = try Self.macFrame("桌面__远程桌面", dark: dark)
             try await present("3-remote-desktop", settle: .milliseconds(1_400), before: {
                 session.showGalleryWindow(desktop, windowID: nil, title: nil, pointSize: CGSize(width: 1512, height: 982))
             }) {
@@ -142,7 +144,7 @@ final class AppStoreScreenshotTests: XCTestCase {
                                          identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
             let session = RemoteDesktopSession(client: client, maxWidth: Int(canvas.width * 3),
                                                maxHeight: Int(canvas.height * 3))
-            let frame = try Self.macFrame(device == .duo ? "终端窗口__手机窗口模式" : "终端窗口__iPad_窗口模式")
+            let frame = try Self.macFrame(device == .duo ? "终端窗口__手机窗口模式" : "终端窗口__iPad_窗口模式", dark: dark)
             try await present("4-remote-window", settle: .milliseconds(1_400), before: {
                 session.showGalleryWindow(frame, windowID: 1, title: "prod-web-01", pointSize: canvas)
             }) {
@@ -219,13 +221,13 @@ final class AppStoreScreenshotTests: XCTestCase {
             window.rootViewController = original
             window.overrideUserInterfaceStyle = originalStyle
         }
-        window.overrideUserInterfaceStyle = .dark
+        window.overrideUserInterfaceStyle = dark ? .dark : .light
         let host = ScreenshotHostingController(rootView: AnyView(view()
             .environment(\.mAccent, M.accent)
             .tint(M.accent)
             .mMeasuresChrome()
             .persistentSystemOverlays(.hidden)))
-        host.view.backgroundColor = .black
+        host.view.backgroundColor = dark ? .black : .white
         window.rootViewController = host
         host.setNeedsUpdateOfHomeIndicatorAutoHidden()
         try await Task.sleep(for: .milliseconds(600))
@@ -265,11 +267,11 @@ final class AppStoreScreenshotTests: XCTestCase {
         return (directory, found)
     }
 
-    /// Mac 画廊渲的一张图（深色），当成远程桌面里 Mac 送来的画面。
-    private static func macFrame(_ name: String) throws -> CVPixelBuffer {
+    /// Mac 画廊渲的一张图，当成远程桌面里 Mac 送来的画面。
+    private static func macFrame(_ name: String, dark: Bool) throws -> CVPixelBuffer {
         let dir = try XCTUnwrap(ProcessInfo.processInfo.environment["UTERM_PROMO_MAC_SHOTS"],
                                 "设 TEST_RUNNER_UTERM_PROMO_MAC_SHOTS=<make gallery 的出图目录>")
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("\(name)--dark.png")
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("\(name)--\(dark ? "dark" : "light").png")
         let image = try XCTUnwrap(UIImage(contentsOfFile: url.path)?.cgImage, "缺图：\(url.path)")
         let width = image.width, height = image.height
         var buffer: CVPixelBuffer?
