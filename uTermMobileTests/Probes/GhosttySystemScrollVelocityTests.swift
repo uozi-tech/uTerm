@@ -295,7 +295,9 @@ final class GhosttySystemScrollVelocityTests: XCTestCase {
         let scrollView = try XCTUnwrap(host.view.uTermSystemScrollView)
         XCTAssertTrue(host.view.uTermSystemPanWouldBegin)
         let cell = try XCTUnwrap(host.view.uTermCellPixels)
-        let scale = host.window.screen.scale
+        // 终端按 `nativeScale` 把 contentOffset 换成引擎像素（`resolvedDisplayScale`）；Duo 内屏 `scale` = 3、`nativeScale` ≈ 2.807，
+        // 拿 `scale` 算的格高差 7%，「停没停在整行上」在真机上就判错（模拟器两者相同看不出来）。
+        let scale = host.window.screen.nativeScale
         return (host, scrollView, cell.height / scale)
     }
 
