@@ -69,6 +69,11 @@ struct TerminalArea: View {
                 workspace.requestCloseTerminalTab(tab.id)
             },
             stripAccessory: { groupID in newTabButton(groupID) },
+            tabMenu: { tab in
+                TerminalTabContextMenu(
+                    title: Self.copyableTitle(for: tab, profiles: profilesByID),
+                    onClose: { workspace.requestCloseTerminalTab(tab.id) })
+            },
             // 预览标签拖进终端组 —— 组件不认识的载荷转给 app。
             foreignDropTypes: [.utermFileBufferID],
             onForeignDrop: { providers, groupID, zone in
@@ -112,6 +117,14 @@ struct TerminalArea: View {
         return UPaneTabDescriptor(title: shellTitle.map(clippedTabTitle) ?? name,
                                   leadingDot: status?.tabDot ?? display.tint.color,
                                   help: status.map { "\($0.tabHelp)\n\(baseHelp)" } ?? baseHelp)
+    }
+
+    /// 右键「拷贝标题」拷的那一串：程序设的标题拷**完整的**（标签上显示的是截短的），
+    /// 没设就拷标签上那个名字。
+    static func copyableTitle(for tab: TerminalTab, profiles: [UUID: ServerProfile]) -> String {
+        let pane = tab.payload
+        if let buffer = pane.fileBuffer { return buffer.displayName }
+        return pane.session.shellTitle ?? pane.tabTitle ?? profiles[pane.serverProfileID]?.name ?? "终端"
     }
 
     /// 见 `TerminalTitle.clippedForTab`（两端共用）。
@@ -204,5 +217,35 @@ struct TerminalArea: View {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
         }
+    }
+}
+
+/// 终端标签的右键菜单，SSH 终端窗口与本机终端窗口共用。
+///
+/// 在 chip 自己的 body 里求值（组件保证），读到的标题跟着那一枚 chip 一起更新。
+struct TerminalTabContextMenu: View {
+    let title: String
+    /// shell 当前所在的目录；不知道（SSH 会话）时不出这一项。
+    var directory: String? = nil
+    let onClose: () -> Void
+
+    var body: some View {
+        Button { Self.copy(title) } label: {
+            Label("拷贝标题", systemImage: "doc.on.clipboard")
+        }
+        if let directory {
+            Button { Self.copy(directory) } label: {
+                Label("拷贝当前目录", systemImage: "folder")
+            }
+        }
+        Divider()
+        Button(action: onClose) {
+            Label("关闭标签页", systemImage: "xmark")
+        }
+    }
+
+    private static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }

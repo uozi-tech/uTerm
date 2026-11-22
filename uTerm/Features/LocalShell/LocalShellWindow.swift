@@ -523,7 +523,13 @@ struct LocalShellTerminalArea: View {
             },
             emptyGroup: { _ in background },
             onRequestClose: { tab in model.requestClose(tab.id) },
-            stripAccessory: { groupID in LocalShellNewTabButton(model: model, groupID: groupID) })
+            stripAccessory: { groupID in LocalShellNewTabButton(model: model, groupID: groupID) },
+            tabMenu: { tab in
+                TerminalTabContextMenu(
+                    title: tab.payload.session.shellTitle ?? tab.payload.defaultTitle,
+                    directory: tab.payload.workingDirectory,
+                    onClose: { model.requestClose(tab.id) })
+            })
             .uPaneGroupStyle(.card)
             .uPaneGroupWells()
     }
