@@ -12,6 +12,8 @@ struct HostsScreen: View {
     /// 可选：只为露出「会话 N」入口。单独挂主机页的探针 / 画廊不注入它。
     @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
     @Environment(\.mAccent) private var accent
+    /// 可选：决定有主机时还显不显示体验卡。单独挂主机页的探针 / 画廊不注入它。
+    @Environment(SubscriptionStore.self) private var subscriptions: SubscriptionStore?
 
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
     @Query(sort: [SortDescriptor(\ServerGroup.sortOrder)]) private var groups: [ServerGroup]
@@ -68,8 +70,9 @@ struct HostsScreen: View {
 
                 RemoteMacSection()
 
-                // 体验主机：没有主机时始终显示；有主机后只在「全部」里留着，不挤占「最近」「分组」。
-                if hosts.isEmpty || filter == .all {
+                // 体验主机：没有主机时始终显示。有主机后只给没订阅的人留在「全部」里（同步来的主机要订阅才能连，
+                // 体验主机是他们唯一能用的）；订阅了又有主机就不再显示。权益还没读出来时按已订阅算，免得卡片闪一下又消失。
+                if hosts.isEmpty || (filter == .all && !(subscriptions?.isEntitled ?? false)) {
                     DemoHostCard(onTerminal: { store.openDemo(.terminal) }, onFiles: { store.openDemo(.sftp) })
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 16)
