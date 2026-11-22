@@ -67,9 +67,30 @@ private struct MDBlockView: View {
             .accessibilityAddTraits(.isHeader)
     }
 
+    /// 文档预览（有读图的人）：段落在图片处切开，规则两端共用（`MarkdownParagraphLayout`）——前后的文字照原顺序留着，
+    /// 挨着的几张图排一行，包着链接的图点了打开链接。聊天（没有读图的人）照旧：只有整段一张图时画图片卡。
     @ViewBuilder
     private func paragraphView(_ p: Paragraph) -> some View {
-        if let image = imageOnly(in: p) {
+        if imageLoader != nil, MarkdownParagraphLayout.hasImages(p) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(MarkdownParagraphLayout.segments(p).enumerated()), id: \.offset) { _, segment in
+                    switch segment {
+                    case .text(let nodes):
+                        MDInlineView(nodes: nodes, style: style)
+                    case .images(let images) where images.count == 1:
+                        MDImageBlockView(image: images[0].image, style: style, imageLoader: imageLoader,
+                                         link: images[0].destination)
+                    case .images(let images):
+                        FlowLayout(spacing: 8) {
+                            ForEach(Array(images.enumerated()), id: \.offset) { _, item in
+                                MDImageBlockView(image: item.image, style: style, imageLoader: imageLoader,
+                                                 link: item.destination, maxWidthInRow: 320)
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let image = imageOnly(in: p) {
             MDImageBlockView(image: image, style: style, imageLoader: imageLoader)
         } else {
             MDInlineView(node: p, style: style)
@@ -170,6 +191,10 @@ private struct MDImageBlockView: View {
     let image: MarkdownImage
     let style: MarkdownStyle
     var imageLoader: MarkdownImageLoader?
+    /// 包着这张图的链接：点图打开（只认网址，见 `MDImageLink`）。
+    var link: String? = nil
+    /// 和别的图排在一行时限的宽度（行布局按理想尺寸排）；nil = 单独一张，铺满可用宽度为止。
+    var maxWidthInRow: CGFloat? = nil
 
     @State private var phase: Phase = .idle
 
@@ -178,7 +203,8 @@ private struct MDImageBlockView: View {
         // visible gray caption (see MarkdownImageCaptionTests).
         content
             .accessibilityLabel(accessibilityLabel)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: maxWidthInRow == nil ? .infinity : nil, alignment: .leading)
+            .modifier(MDImageLink(link: link))
             .task(id: source) {
                 await load()
             }
@@ -188,11 +214,23 @@ private struct MDImageBlockView: View {
     private var content: some View {
         switch phase {
         case .idle, .loading:
-            loadingView
+            if maxWidthInRow == nil {
+                loadingView
+            } else {
+                ProgressView().controlSize(.small).frame(width: 44, height: 44)
+            }
         case .loaded(let image):
-            MDLoadedImageView(image: image, style: style)
+            MDLoadedImageView(image: image, style: style, maxWidthInRow: maxWidthInRow)
         case .failed(let message):
-            failureView(message)
+            if maxWidthInRow == nil {
+                failureView(message)
+            } else {
+                // 一行里的小图（多半是徽章）读不到：只留图标和替代文字，原因在悬停提示里。
+                Label(accessibilityLabel, systemImage: "photo")
+                    .font(UD.caption)
+                    .foregroundStyle(style.textMuted)
+                    .help(message)
+            }
         }
     }
 
@@ -325,6 +363,7 @@ struct MarkdownImageLayout {
 private struct MDLoadedImageView: View {
     let image: NSImage
     let style: MarkdownStyle
+    var maxWidthInRow: CGFloat? = nil
 
     var body: some View {
         let frameLimit = MarkdownImageLayout.frameLimit(intrinsic: image.size)
@@ -333,9 +372,7 @@ private struct MDLoadedImageView: View {
             .resizable()
             .interpolation(.high)
             .scaledToFit()
-            .frame(maxWidth: frameLimit.width,
-                   maxHeight: frameLimit.height,
-                   alignment: .leading)
+            .modifier(MDImageSizing(intrinsic: image.size, frameLimit: frameLimit, maxWidthInRow: maxWidthInRow))
             .background(style.bgRaised)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(style.border, lineWidth: 0.5))
@@ -343,19 +380,79 @@ private struct MDLoadedImageView: View {
     }
 }
 
+/// 单独一张：不放大，宽高不超过 `frameLimit`，宽度由外面给。排在一行里：外面不给宽度，按比例算出确切的宽高，
+/// 否则缩窄后的图还占着原来的高度、上下留白。
+private struct MDImageSizing: ViewModifier {
+    let intrinsic: CGSize
+    let frameLimit: CGSize
+    let maxWidthInRow: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let cap = maxWidthInRow {
+            let size = MarkdownImageLayout.displaySize(intrinsic: intrinsic, availableWidth: cap)
+            content.frame(width: size.width, height: size.height)
+        } else {
+            content.frame(maxWidth: frameLimit.width, maxHeight: frameLimit.height, alignment: .leading)
+        }
+    }
+}
+
+/// 图外面包着网址链接：整张图可点，点了交给系统打开（同正文里的链接）。只认网址（`TerminalLink`）——
+/// 文档是主机上的，里面的链接谁都能写。
+private struct MDImageLink: ViewModifier {
+    let link: String?
+    @Environment(\.openURL) private var openURL
+
+    private var url: URL? {
+        guard let link, case .web = TerminalLink.classify(link) else { return nil }
+        return URL(string: link)
+    }
+
+    func body(content: Content) -> some View {
+        if let url {
+            Button { openURL(url) } label: { content }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .help(url.absoluteString)
+                .accessibilityAddTraits(.isLink)
+        } else {
+            content
+        }
+    }
+}
+
 /// inline 子节点 → AttributedString → Text。
 private struct MDInlineView: View {
-    let node: Markup
+    /// 一整个块的子节点，或段落按图片切开后的一段（`MarkdownParagraphLayout`，两头空白去掉）。
+    let nodes: [Markup]
     let style: MarkdownStyle
+    private let trimsEnds: Bool
+
+    init(node: Markup, style: MarkdownStyle) {
+        nodes = Array(node.children)
+        self.style = style
+        trimsEnds = false
+    }
+
+    init(nodes: [Markup], style: MarkdownStyle) {
+        self.nodes = nodes
+        self.style = style
+        trimsEnds = true
+    }
+
     var body: some View {
-        Text(attributed(node))
+        Text(trimsEnds ? MarkdownParagraphLayout.trimmed(attributed(nodes)) : attributed(nodes))
             .foregroundStyle(style.bodyColor)
             .lineSpacing(style.lineSpacing)
     }
 
     private func attributed(_ node: Markup) -> AttributedString {
+        attributed(Array(node.children))
+    }
+
+    private func attributed(_ children: [Markup]) -> AttributedString {
         var result = AttributedString()
-        for child in node.children {
+        for child in children {
             switch child {
             case let t as MarkdownText:
                 result.append(AttributedString(t.string))

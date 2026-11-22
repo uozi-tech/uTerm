@@ -2,14 +2,14 @@ import Markdown
 import XCTest
 @testable import uTermMobile
 
-/// 文档预览里段落按图片切开（`MMDParagraphLayout`）：文字照原顺序留着，图片单独画，挨着的图放一行。
+/// 文档预览里段落按图片切开（`MarkdownParagraphLayout`）：文字照原顺序留着，图片单独画，挨着的图放一行。
 final class MarkdownImageLayoutTests: XCTestCase {
 
     /// 每段写成一个字符串：文字段是去掉两头空白的纯文字，图片段是 `[img a.png, b.png]`。
     private func layout(_ markdown: String) throws -> [String] {
         let document = Document(parsing: markdown)
         let paragraph = try XCTUnwrap(document.child(at: 0) as? Paragraph)
-        return MMDParagraphLayout.segments(paragraph).map { segment in
+        return MarkdownParagraphLayout.segments(paragraph).map { segment in
             switch segment {
             case .text(let nodes):
                 return nodes.map { node -> String in
@@ -17,7 +17,9 @@ final class MarkdownImageLayoutTests: XCTestCase {
                     return (node as? InlineMarkup)?.plainText ?? ""
                 }.joined().trimmingCharacters(in: .whitespaces)
             case .images(let images):
-                return "[img " + images.map { $0.source ?? "" }.joined(separator: ", ") + "]"
+                return "[img " + images.map { item in
+                    (item.image.source ?? "") + (item.destination.map { " -> \($0)" } ?? "")
+                }.joined(separator: ", ") + "]"
             }
         }
     }
@@ -39,6 +41,16 @@ final class MarkdownImageLayoutTests: XCTestCase {
     func testTextBetweenImagesKeepsItsOrder() throws {
         XCTAssertEqual(try layout("![a](a.png) vs ![b](b.png)"),
                        ["[img a.png]", "vs", "[img b.png]"])
+    }
+
+    func testLinkedBadgesAreImagesThatKeepTheirLink() throws {
+        XCTAssertEqual(try layout("[![build](ci.svg)](https://ci.example/run) [![license](mit.svg)](LICENSE) MIT"),
+                       ["[img ci.svg -> https://ci.example/run, mit.svg -> LICENSE]", "MIT"])
+    }
+
+    func testLinkWithTextAroundTheImageStaysText() throws {
+        XCTAssertEqual(try layout("See [the ![x](x.png) docs](https://example.com)."),
+                       ["See the x docs."])
     }
 
     func testParagraphWithoutImagesIsOneTextSegment() throws {
@@ -68,7 +80,7 @@ final class MarkdownImagePreviewShotTests: XCTestCase {
         try await provider.seedFile("/proj/plan.md", data: Data("""
         # Plan
 
-        Badges: ![build](img/a.png) ![license](img/b.png) and some text after them.
+        Badges: [![build](img/a.png)](https://ci.example/run) [![license](img/b.png)](LICENSE) and some text after them.
 
         The chart below ![chart](img/chart.png) shows the trend, and this sentence continues after it.
 
