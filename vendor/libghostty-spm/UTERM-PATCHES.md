@@ -233,7 +233,7 @@ display link 跟屏幕刷新率走已经是上游的（#109）。留下的是：
 
 [#109](https://github.com/Lakr233/libghostty-spm/pull/109)（精确位移乘屏幕倍率）和 [#110](https://github.com/Lakr233/libghostty-spm/pull/110)
 （`TerminalSmoothScrollSettler`：抬手 0.08 s 等惯性、0.18 s 三次缓出吸附整行、惯性被下一次触碰掐断时顺着滚动方向补、绝不往回）
-合进去的就是这条，`AppTerminalView+SmoothScroll.swift` 现在是上游的。另外上游在点击（`mouseDown` / `rightMouseDown` /
+合进去的就是这条，`AppTerminalView+SmoothScroll.swift` 现在是上游的（吸附的曲线和「抬手时还在不在走」的判法后来由第 19 条改过）。另外上游在点击（`mouseDown` / `rightMouseDown` /
 `otherMouseDown`）前先当场对齐。uTerm 的 `GhosttySurfaceView.rightMouseDown` 在弹菜单时不调 super，所以弹菜单前不对齐
 （菜单里的动作不按格子命中，不影响）。
 
@@ -465,6 +465,44 @@ UIKit 自己的拖动、松手速度、减速都在）量出来的原因和改�
 回归用例：`uTermMobileTests/Probes/GhosttySystemScrollVelocityTests.swift`（真触摸：`testReleaseKeepsDirectionAndSpeed`、
 `testAlignmentStartsFromRest`、`testCatchAlignsAheadNotBack`，以及核 UIKit 前提的 `testUIKitReleasePremises`）、`uTermMobileTests/GhosttyScrollAlignmentMathTests.swift`
 （落点、停靠行、曲线的纯算术），以及第 4 条那几条系统滚动探针。真机手感只在 iPhone Duo 上验。
+
+### 19. Mac：吸附接着滚动的速度走（惯性收尾不加速、抬手不停顿、停住才取近的一行）
+
+文件：`Surface/TerminalSmoothScrollSettler.swift`（`velocity(at:)`、按 `TerminalScrollAlignmentCurve` 走的吸附）、
+`Metrics/TerminalScrollAlignmentCurve.swift`（`preferredSlope`，默认 3 = 第 18 条原样）、`Platform/AppKit/AppTerminalView+SmoothScroll.swift`（抬手）。
+
+接着第 18 条在 Mac 上量的（`uTermTests/Features/Terminal/GhosttyMacScrollBenchTests.swift`：真 surface 上回放 120 Hz 的合成触控板事件，
+惯性每毫秒衰减到 0.998、慢于 60 pt/s 结束，每个显示帧读引擎位置；对照是不吸附的 `NSScrollView`。60 Hz、2 倍屏、行高 14 pt，每种 8 次）。
+默认的 `.settlesOnRow` 有三处毛病，改法：
+
+- **惯性收尾时吸附反而加速。** 吸附原来不管来时多快都是 0.18 s 的三次缓出 `1 - (1-p)^3`，起步是平均速度的 3 倍：
+  惯性以 60 pt/s 收尾，补到前方那一行（平均 7 pt、最多 14 pt）时先冲到 91–102 pt/s（中位数，最高 178–198）再停，
+  看着是「快停了又被推了一下」。现在吸附按最近 50 ms 精确滚动的速度起步（`velocity(at:)`），三次 Hermite、起步斜率取 2——
+  速度从来时的速度直线降到 0（匀减速，和惯性尾巴的减速度同量级），时长 `2 × 距离 / 速度`，夹在 0.1–0.4 s。
+  改后吸附最快 58–74 pt/s（中位数，最高 75–78；以 60 Hz 的帧读、吸附 120 Hz 一步，有一步的混叠）。从静止起（停住后抬手、按住惯性再抬起）
+  是 0.18 s 的 smoothstep，原来头一帧就到 100 pt/s 上下。
+- **抬手时还在走，先停 0.08 s 再动。** 原来抬手一律等 `smoothScrollLiftDelay` 看有没有惯性，没有惯性时画面停 80 ms 再动（stop-then-go）。
+  现在还在走就当场按来时的速度吸附：惯性跟着来的话 `hold` 掐断吸附，从它走到的地方同方向接着走；停住了才照旧等 0.08 s（取近的一行可能往回，
+  不能抢在惯性前面）。
+- **「还在走」判错。** 原来看最后一个事件的位移 ≥ 3 px：120 Hz 的触控板以 150 pt/s 拨，每个事件只有 1–2 pt（2 倍屏上 2–4 px），
+  有一半时候当成停住、往回吸到近的那一行（最多往回 5 pt）；手指停住不动 150 ms 再抬起（停住时系统不发事件），最后一个事件还是拨动时的，
+  当成还在走、往前吸最多一整行（13 pt）。现在按速度判：最近 50 ms 的精确滚动 ≥ 30 pt/s 算还在走，最后一个事件过了 50 ms 速度开始衰减，
+  0.1 s 归零。Magic Mouse 上手指搭着漂一个点（一个 1 pt 的事件 = 20 pt/s）仍算停住。
+
+保证不变：落在整行上；顺着走的吸附不往回（往回只发生在停住之后取近的一行，和原来、和 iOS 第 18 条一样）；下一次触碰 `hold` 掐断吸附。
+代价：顺着走的吸附更长（惯性收尾后 141 → 150–230 ms 停稳），抬手时的吸附会在惯性来之前先走几个像素。
+老式滚轮不经过 settler，和 `NSScrollView` 一样一格 3 行直接跳，没动。
+
+iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swift`）和滚轮 / 触控板（`+ScrollSettle.swift`）的吸附也换成了这条曲线；
+系统滚动（第 4、18 条）不经过它。iOS 侧判「还在走」的地方没改。和上游 [#122](https://github.com/Lakr233/libghostty-spm/pull/122)
+（`scrollBehavior`，吸附可关）兼容：改的都在吸附整行那条路径里。
+
+回归用例：`GhosttyMacScrollTests` 新加的 `testSnapAfterMomentumCarriesOnAtItsSpeed`（惯性 ~55 pt/s 收尾、补 12 pt：改前吸附 150 pt/s，
+改后 64）、`testSlowLiftAtHighEventRateCarriesOnAtOnce`（改前往回 3 pt、停 80 ms）、`testHoldThenLiftSettlesOnTheNearerRow`（改前往前多走一行），
+三条在改前都红；`checkLift` 的两种抬手改成在抬手那一刻把手指的状态摆清楚（停住 = 停 0.12 s，还在走 = 抬手前再拨 3 步），
+因为中间读画面那几十毫秒本身就是一次停顿。`GhosttyMagicMouseScrollTests` 照过（36 拨 0 拨往回）。
+测量：`TEST_RUNNER_UTERM_SCROLLBENCH_DIR=<目录> xcodebuild test-without-building … -only-testing:uTermTests/GhosttyMacScrollBenchTests`
+（默认跳过；CSV 写进测试宿主的临时目录，日志里有路径）。真触控板手感未验。
 
 ## manifest 改动（相对上游的 `Package.swift`）
 

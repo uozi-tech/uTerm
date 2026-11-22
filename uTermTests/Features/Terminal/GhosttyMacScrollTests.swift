@@ -205,7 +205,9 @@ final class GhosttyMacScrollTests: XCTestCase {
     // MARK: 用例
 
     /// 手指拨 `tenths / 10` 行的距离后抬起、没有惯性：途中停在半行上，抬手后吸附到整行。
-    /// `slowStop`：最后两步只挪 1 pt（手指基本停住了才抬）——离哪边近往哪边走；否则抬手时还在走——顺着方向补。
+    /// `slowStop`：最后两步只挪 1 pt、再停住 0.12 s 才抬（手指停住了）——离哪边近往哪边走；否则抬手时还在走
+    /// （抬手前再拨 3 步、每步 2 pt）——顺着方向补。「还在走」按最近 50 ms 的速度判、停住 0.1 s 算停（补丁 #19），所以两种都要
+    /// 在抬手那一刻把手指的状态摆清楚：中间读画面那几十毫秒本身就是一次停顿。
     private func checkLift(tenths: Int, landsOn expectedRows: Int, slowStop: Bool) async throws {
         let rig = try await makeRig()
         defer { rig.close() }
@@ -229,6 +231,13 @@ final class GhosttyMacScrollTests: XCTestCase {
         let midBands = rig.bands().filter { $0.key >= 0 }
         XCTAssertNotEqual(rig.state.fractionPixels, 0, "拨了 \(rig.sentPoints) pt，镜像里应当带着小数")
         XCTAssertNotEqual(midBands.first?.height, rig.cell, "途中第一行应当被切掉一截（\(midBands.prefix(2))）")
+        if slowStop {
+            await sleep(0.12)
+        } else {
+            for _ in 0 ..< 3 { try rig.scroll(2, phase: changed); await sleep(0.008) }
+            let ahead = Int((Double(rig.sentPoints) * Double(rig.scale) / Double(rig.cell)).rounded(.up))
+            XCTAssertEqual(ahead, expectedRows, "用例凑的位移不对：\(rig.sentPoints) pt，行高 \(rig.rowPoints) pt")
+        }
 
         try rig.scroll(0, phase: ended)
         await settle(rig, "抬手后")
@@ -314,5 +323,131 @@ final class GhosttyMacScrollTests: XCTestCase {
         await settle(rig, "拨回底部之后")
         XCTAssertEqual(rig.firstLine, bottom, "应当回到活动区底部")
         assertAligned(rig, firstLine: bottom, "拨回底部之后")
+    }
+
+    // MARK: 吸附的速度（补丁 #19）
+
+    /// 视口顶边离回滚顶的距离（pt），按滚动的方向记：往回滚（`scroll` 的正位移）是正。
+    private func travelled(_ rig: Rig) -> Double {
+        let s = rig.state
+        return -(Double(s.row * rig.cell) + s.fraction) / Double(rig.scale)
+    }
+
+    /// 每 ~1 ms 记一次位置，记 `seconds` 秒。
+    private func track(_ rig: Rig, for seconds: Double) async -> [(t: Double, pt: Double)] {
+        var out: [(t: Double, pt: Double)] = []
+        let end = CACurrentMediaTime() + seconds
+        while CACurrentMediaTime() < end {
+            out.append((CACurrentMediaTime(), travelled(rig)))
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return out
+    }
+
+    /// 从 `from` 起，任意 50 ms 里走得最快的那一段的平均速度（pt/s）。吸附按 120 Hz 一步步走，50 ms 里有 6 步，
+    /// 窗口里多一步少一步差 1/6。
+    private func peakSpeed(_ samples: [(t: Double, pt: Double)], from: Double) -> Double {
+        var peak = 0.0
+        for (i, a) in samples.enumerated() where a.t >= from {
+            guard let b = samples[i...].first(where: { $0.t >= a.t + 0.05 }) else { break }
+            peak = max(peak, (b.pt - a.pt) / (b.t - a.t))
+        }
+        return peak
+    }
+
+    /// 往滚动方向的反方向一共走了多少 pt。
+    private func backwards(_ samples: [(t: Double, pt: Double)]) -> Double {
+        zip(samples, samples.dropFirst()).reduce(0) { $0 + max(0, $1.0.pt - $1.1.pt) }
+    }
+
+    /// 惯性慢慢收尾（约 55 pt/s）、停在离前方那一行还差大半行的地方：吸附接着惯性的速度匀减速过去，
+    /// 不先加速。原来是 0.18 s 的三次缓出，12 pt 的吸附头 50 ms 平均 150 pt/s（惯性收尾速度的近 3 倍）。
+    func testSnapAfterMomentumCarriesOnAtItsSpeed() async throws {
+        let rig = try await makeRig()
+        defer { rig.close() }
+        let start = try XCTUnwrap(rig.firstLine)
+        let row = rig.rowPoints
+        try rig.scroll(0, phase: began)
+        for _ in 0 ..< 4 { try rig.scroll(row / 2, phase: changed); await sleep(0.012) }
+        try rig.scroll(0, phase: ended)
+        for i in 0 ..< 5 { try rig.scroll(3, momentum: i == 0 ? momentumBegin : momentumContinue); await sleep(0.012) }
+        // 收尾每 18 ms 1 pt；凑到惯性结束时离前方那一行还差 row - 2 pt。
+        let tail = 6 + ((2 - (rig.sentPoints + 6)) % row + row) % row
+        var times: [Double] = []
+        for _ in 0 ..< tail {
+            try rig.scroll(1, momentum: momentumContinue)
+            times.append(CACurrentMediaTime())
+            await sleep(0.018)
+        }
+        let endSpeed = Double(tail - 1) / (times[times.count - 1] - times[0])
+        let before = travelled(rig)
+        try rig.scroll(0, momentum: momentumEnd)
+        let end = CACurrentMediaTime()
+        let samples = await track(rig, for: 0.7)
+        let moved = (samples.last?.pt ?? before) - before
+        XCTAssertEqual(moved, Double(row - 2), accuracy: 0.5, "惯性结束后应当顺着方向走到前方那一行（\(row - 2) pt）")
+        XCTAssertLessThan(backwards(samples), 0.01, "吸附往回走了")
+        let peak = peakSpeed(samples, from: end)
+        print("SNAP-SPEED 惯性收尾 \(Int(endSpeed)) pt/s，吸附最快 \(Int(peak)) pt/s（\(row - 2) pt）")
+        XCTAssertLessThan(peak, endSpeed * 1.5, "吸附比惯性收尾时快得多（收尾 \(Int(endSpeed)) pt/s，吸附 \(Int(peak)) pt/s）：速度跳了一下")
+        await settle(rig, "惯性结束后")
+        let rows = (rig.sentPoints + row - 1) / row
+        XCTAssertEqual(rig.firstLine, start - rows, "一共走了 \(rig.sentPoints) pt，应当停在往回 \(rows) 行处")
+        assertAligned(rig, firstLine: start - rows, "惯性结束吸附之后")
+    }
+
+    /// 120 Hz 的触控板慢慢拨（约 140 pt/s，每个事件 1–2 pt）、抬手时还在走、没有惯性：顺着方向马上走到前方那一行。
+    /// 原来按最后一个事件的位移判「还在走」（≥ 3 px），1 pt 的事件在 2 倍屏上只有 2 px，当成停住、往回吸到近的那一行；
+    /// 而且抬手先停 0.08 s 才动。
+    func testSlowLiftAtHighEventRateCarriesOnAtOnce() async throws {
+        let rig = try await makeRig()
+        defer { rig.close() }
+        let start = try XCTUnwrap(rig.firstLine)
+        let row = rig.rowPoints
+        // 两行多 3 pt：近的那一行在身后 3 pt，前方那一行还差 row - 3 pt。最后一个事件 1 pt。
+        let total = 2 * row + 3
+        var deltas: [Int] = []
+        while deltas.reduce(0, +) < total - 1 { deltas.append(deltas.count % 3 == 2 ? 2 : 1) }
+        if deltas.reduce(0, +) > total - 1 { deltas[deltas.count - 1] = 1 }
+        deltas.append(total - deltas.reduce(0, +))
+        XCTAssertEqual(deltas.last, 1)
+        try rig.scroll(0, phase: began)
+        for d in deltas { try rig.scroll(d, phase: changed); await sleep(0.008) }
+        XCTAssertEqual(rig.sentPoints, total)
+        let before = travelled(rig)
+        try rig.scroll(0, phase: ended)
+        let lift = CACurrentMediaTime()
+        let samples = await track(rig, for: 0.6)
+        XCTAssertLessThan(backwards(samples), 0.01, "抬手时还在走，吸附往回走了")
+        let firstMove = samples.first { $0.pt - before > 0.3 }.map { $0.t - lift }
+        XCTAssertNotNil(firstMove, "抬手后没往前走")
+        XCTAssertLessThan(firstMove ?? 1, 0.04, "抬手时还在走，吸附却先停了 \(Int((firstMove ?? 1) * 1000)) ms 才动")
+        await settle(rig, "抬手后")
+        XCTAssertEqual(rig.firstLine, start - 3, "应当顺着方向停在往回 3 行处")
+        assertAligned(rig, firstLine: start - 3, "抬手吸附之后")
+    }
+
+    /// 拨动后手指停住 150 ms（停住时系统不发事件）再抬起：当成停住了，走到近的那一行。原来按最后一个事件的位移（≥ 3 px）
+    /// 当成还在走，往前吸最多一整行。
+    func testHoldThenLiftSettlesOnTheNearerRow() async throws {
+        let rig = try await makeRig()
+        defer { rig.close() }
+        let start = try XCTUnwrap(rig.firstLine)
+        let row = rig.rowPoints
+        // 两行多 3 pt，每步 4 pt（最后一步 3 pt = 2 倍屏上 6 px）。
+        let total = 2 * row + 3
+        try rig.scroll(0, phase: began)
+        var sent = 0
+        while sent < total {
+            let d = min(4, total - sent)
+            try rig.scroll(d, phase: changed)
+            sent += d
+            await sleep(0.012)
+        }
+        await sleep(0.15)
+        try rig.scroll(0, phase: ended)
+        await settle(rig, "停住后抬手")
+        XCTAssertEqual(rig.firstLine, start - 2, "停住了才抬：应当停在近的那一行（往回 2 行处）")
+        assertAligned(rig, firstLine: start - 2, "停住后抬手吸附之后")
     }
 }

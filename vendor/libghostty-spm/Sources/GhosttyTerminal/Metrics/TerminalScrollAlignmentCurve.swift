@@ -4,6 +4,7 @@
 //
 //  uTerm 本地补丁（不在上游）：系统滚动对齐整行那一段动画的曲线。原来是 0.25 s 的三次缓出 `1 - (1-p)^3`，
 //  头一帧的速度是全程平均速度的 3 倍：手指停住松手、甩动途中按一下停住，画面都是从静止一下跳到最快再慢下来。
+//  Mac 的吸附（`TerminalSmoothScrollSettler`）也用它，`preferredSlope` 2：接着惯性的速度匀减速到那一行（补丁 #19）。
 //
 
 import CoreGraphics
@@ -27,7 +28,12 @@ struct TerminalScrollAlignmentCurve: Equatable {
     /// `distance` to the row and `velocity` the scroll moves at, in the
     /// same unit (per second); a velocity away from the row counts as rest.
     /// `longest` is the duration from rest.
-    init(distance: CGFloat, velocity: CGFloat, longest: TimeInterval) {
+    ///
+    /// `preferredSlope` is the start slope wanted when the duration allows
+    /// it: 3 is the cubic ease-out (the quickest that never overshoots), 2
+    /// slows down evenly — the curve's speed falls in a straight line from
+    /// the scroll's to zero, the way a glide's friction ends it.
+    init(distance: CGFloat, velocity: CGFloat, longest: TimeInterval, preferredSlope: CGFloat = 3) {
         let speed = distance == 0 ? 0 : max(0, velocity * (distance < 0 ? -1 : 1))
         guard speed > 0 else {
             duration = longest
@@ -35,8 +41,8 @@ struct TerminalScrollAlignmentCurve: Equatable {
             return
         }
         let span = abs(distance)
-        // The duration whose ease-out starts at exactly this speed.
-        duration = min(longest, max(Self.shortestDuration, Double(3 * span / speed)))
+        // The duration whose curve starts at exactly this speed.
+        duration = min(longest, max(Self.shortestDuration, Double(preferredSlope * span / speed)))
         startSlope = min(3, speed * CGFloat(duration) / span)
     }
 
