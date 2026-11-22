@@ -90,10 +90,10 @@ struct StatusBarView: View {
     static func cpuLoadSummary(load: String?, cpuPercent: Double, cores: Int?) -> String {
         var parts: [String] = []
         if let load {
-            parts.append("负载 \(load)")
+            parts.append(String(localized: "负载 \(load)", comment: "状态栏：主机平均负载"))
         }
         if let cores {
-            parts.append("\(cores) 核")
+            parts.append(String(localized: "\(cores) 核", comment: "状态栏：CPU 核数"))
         }
         parts.append("CPU \(Self.percent(cpuPercent))")
         return parts.joined(separator: " · ")
@@ -118,7 +118,7 @@ struct StatusBarView: View {
         .help("查看 CPU 与负载历史")
         .popover(isPresented: $cpuPopover, arrowEdge: .bottom) {
             SparklinePopover(
-                title: "CPU 与负载",
+                title: String(localized: "CPU 与负载"),
                 summary: Self.cpuLoadSummary(load: load, cpuPercent: cpu, cores: cores),
                 color: UD.mCPU,
                 history: workspace.telemetryModel.cpuHistory)
@@ -135,7 +135,7 @@ struct StatusBarView: View {
         .help("查看内存占用历史")
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {
             SparklinePopover(
-                title: "内存占用",
+                title: String(localized: "内存占用"),
                 summary: "\(text) · \(Self.percent(pct))",
                 color: UD.mMem,
                 history: workspace.telemetryModel.memHistory)

@@ -67,10 +67,12 @@ struct PaneView: View {
                 RemoteControlledTerminal(session: pane.session)
             case .failed(let message):
                 stateView(systemImage: "exclamationmark.triangle",
-                          title: "连接失败", detail: message, action: "重试")
+                          title: String(localized: "连接失败"), detail: message,
+                          action: String(localized: "重试"))
             case .disconnected:
                 stateView(systemImage: "bolt.horizontal.circle",
-                          title: "连接已断开", detail: "", action: "重新连接")
+                          title: String(localized: "连接已断开"), detail: "",
+                          action: String(localized: "重新连接"))
             }
         }
     }

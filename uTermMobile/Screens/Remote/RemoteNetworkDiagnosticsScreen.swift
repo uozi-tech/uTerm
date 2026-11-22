@@ -67,10 +67,10 @@ struct RemoteNetworkDiagnosticsScreen: View {
 
     @ViewBuilder private var targetGroup: some View {
         let macs = candidates
-        MInsetGroup(header: "检测哪台 Mac",
-                    footer: macs.isEmpty ? "还没有配对过的 Mac。同一 Apple ID 的 Mac 会自动出现，其他 Mac 可以扫码配对。" : nil) {
+        MInsetGroup(header: String(localized: "检测哪台 Mac"),
+                    footer: macs.isEmpty ? String(localized: "还没有配对过的 Mac。同一 Apple ID 的 Mac 会自动出现，其他 Mac 可以扫码配对。") : nil) {
             if macs.isEmpty {
-                MInsetRow(icon: "mac", label: "没有可检测的 Mac", last: true)
+                MInsetRow(icon: "mac", label: String(localized: "没有可检测的 Mac"), last: true)
             } else {
                 ForEach(macs) { mac in
                     MInsetRow(icon: "mac", label: mac.name, value: reachability(mac), last: mac.id == macs.last?.id,
@@ -92,11 +92,11 @@ struct RemoteNetworkDiagnosticsScreen: View {
     // MARK: - 环境
 
     private var environmentGroup: some View {
-        MInsetGroup(header: "这台手机") {
-            MInsetRow(icon: "globe", label: "网络", value: model.network)
-            MInsetRow(icon: "link", label: "中继", value: relayName ?? "未配置", last: !directory.internetOnly)
+        MInsetGroup(header: String(localized: "这台手机")) {
+            MInsetRow(icon: "globe", label: String(localized: "网络"), value: model.network)
+            MInsetRow(icon: "link", label: String(localized: "中继"), value: relayName ?? String(localized: "未配置"), last: !directory.internetOnly)
             if directory.internetOnly {
-                MInsetRow(icon: "forward", label: "只走公网", value: "已打开", last: true)
+                MInsetRow(icon: "forward", label: String(localized: "只走公网"), value: String(localized: "已打开"), last: true)
             }
         }
     }
@@ -115,9 +115,9 @@ struct RemoteNetworkDiagnosticsScreen: View {
                 ProgressView(value: Double(model.current.count), total: Double(max(1, model.currentTotal)))
                     .tint(accent)
                 Text(model.progressText).font(M.sans(13)).foregroundStyle(M.text3)
-                MBtn(title: "停止", kind: .secondary, full: true, height: 46) { model.stop() }
+                MBtn(title: String(localized: "停止"), kind: .secondary, full: true, height: 46) { model.stop() }
             } else {
-                MBtn(title: "开始检测", icon: "run", full: true, height: 46,
+                MBtn(title: String(localized: "开始检测"), icon: "run", full: true, height: 46,
                      disabled: selectedMac == nil || modes.isEmpty, action: run)
             }
         }
@@ -155,11 +155,10 @@ struct RemoteNetworkDiagnosticsScreen: View {
     }
 
     private var settingsGroup: some View {
-        MInsetGroup(header: "检测设置", footer: showsSettings
-                    ? "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继经你自建的中继转发。每条路径单独测试，"
-                        + "插着数据线、连着同一个 Wi-Fi 都不影响结果。"
+        MInsetGroup(header: String(localized: "检测设置"), footer: showsSettings
+                    ? String(localized: "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继经你自建的中继转发。每条路径单独测试，插着数据线、连着同一个 Wi-Fi 都不影响结果。")
                     : nil) {
-            MInsetRow(label: "测试项与轮数", value: settingsSummary, last: !showsSettings,
+            MInsetRow(label: String(localized: "测试项与轮数"), value: settingsSummary, last: !showsSettings,
                       trailing: AnyView(MIcon(name: showsSettings ? "chev-down" : "chev", size: 14, color: M.text4,
                                               weight: .semibold)),
                       onTap: { withAnimation(.easeOut(duration: 0.15)) { showsSettings.toggle() } })
@@ -167,7 +166,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
                 ForEach(RemotePathProbeMode.allCases, id: \.self) { mode in
                     MInsetRow(label: mode.label, trailing: AnyView(MSwitch(on: modeBinding(mode))))
                 }
-                MInsetRow(label: "每条路径的轮数", trailing: AnyView(
+                MInsetRow(label: String(localized: "每条路径的轮数"), trailing: AnyView(
                     Stepper("\(rounds) 轮", value: $rounds, in: 1...10).fixedSize()
                         .font(M.sans(14)).foregroundStyle(M.text2)))
                 HStack(spacing: 12) {
@@ -181,8 +180,10 @@ struct RemoteNetworkDiagnosticsScreen: View {
     }
 
     private var settingsSummary: String {
-        let count = modes.count == RemotePathProbeMode.allCases.count ? "全部" : "\(modes.count) 条路"
-        return "\(count) · \(rounds) 轮"
+        let count = modes.count == RemotePathProbeMode.allCases.count
+            ? String(localized: "全部", comment: "网络诊断：测试全部路径")
+            : String(localized: "\(modes.count) 条路")
+        return String(localized: "\(count) · \(rounds) 轮")
     }
 
     // MARK: - 历史
@@ -192,14 +193,14 @@ struct RemoteNetworkDiagnosticsScreen: View {
             NavigationLink {
                 RemoteConnectHistoryScreen()
             } label: {
-                MInsetRow(icon: "network", label: "最近的连接", sub: "每次连接 Mac 每一步的耗时与结果", chevron: true)
+                MInsetRow(icon: "network", label: String(localized: "最近的连接"), sub: String(localized: "每次连接 Mac 每一步的耗时与结果"), chevron: true)
             }
             .buttonStyle(MRowStyle())
             NavigationLink {
                 RemotePathHistoryScreen(log: model.log, onCleared: model.reloadHistory)
             } label: {
-                MInsetRow(icon: "clock", label: "历史记录",
-                          value: model.historyCount == 0 ? "无" : "\(model.historyCount) 条",
+                MInsetRow(icon: "clock", label: String(localized: "历史记录"),
+                          value: model.historyCount == 0 ? String(localized: "无", comment: "历史记录：没有记录") : String(localized: "\(model.historyCount) 条"),
                           chevron: true, last: true)
             }
             .buttonStyle(MRowStyle())
@@ -264,10 +265,10 @@ struct RemotePathSummaryRow: View {
             }
             if summary.successes > 0 {
                 HStack(spacing: 0) {
-                    metric("建立", summary.medianSetupMillis.map { "\($0) ms" })
-                    metric("往返", RemotePathProbeSummary.millis(summary.medianRoundTripMillis))
+                    metric(String(localized: "建立", comment: "网络诊断读数：建立连接耗时"), summary.medianSetupMillis.map { "\($0) ms" })
+                    metric(String(localized: "往返", comment: "网络诊断读数：往返时延"), RemotePathProbeSummary.millis(summary.medianRoundTripMillis))
                     metric("p95", RemotePathProbeSummary.millis(summary.medianP95Millis))
-                    metric("丢包", summary.meanLossPercent.map { "\($0)%" })
+                    metric(String(localized: "丢包", comment: "网络诊断读数：丢包率"), summary.meanLossPercent.map { "\($0)%" })
                 }
             }
             if !failures.isEmpty {

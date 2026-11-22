@@ -27,15 +27,15 @@ nonisolated struct ConnectionStatusDisplay: Equatable, Sendable {
     init(state: TerminalSession.ConnectionState) {
         switch state {
         case .idle:
-            tint = .neutral; label = "未连接"
+            tint = .neutral; label = String(localized: "未连接")
         case .connecting:
-            tint = .warning; label = "连接中"
+            tint = .warning; label = String(localized: "连接中")
         case .connected:
-            tint = .success; label = "已连接"
+            tint = .success; label = String(localized: "已连接")
         case .disconnected:
-            tint = .caution; label = "已断开"
+            tint = .caution; label = String(localized: "已断开")
         case .failed:
-            tint = .error; label = "连接失败"
+            tint = .error; label = String(localized: "连接失败")
         }
     }
 }

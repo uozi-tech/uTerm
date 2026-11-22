@@ -25,12 +25,12 @@ final class LANSyncCoordinator {
 
         var label: String {
             switch self {
-            case .stopped: return "未启动"
-            case .searching: return "搜索 iPhone 和 iPad"
-            case .hosting: return "等待同步请求"
-            case .ready: return "可发送"
-            case .waitingForConfirmation: return "等待 iPhone 或 iPad 确认"
-            case .syncing: return "同步中…"
+            case .stopped: return String(localized: "未启动", comment: "局域网同步状态")
+            case .searching: return String(localized: "搜索 iPhone 和 iPad")
+            case .hosting: return String(localized: "等待同步请求")
+            case .ready: return String(localized: "可发送", comment: "局域网同步状态：可以发送")
+            case .waitingForConfirmation: return String(localized: "等待 iPhone 或 iPad 确认")
+            case .syncing: return String(localized: "同步中…")
             case .error(let message): return message
             }
         }
@@ -171,9 +171,9 @@ final class LANSyncCoordinator {
     /// Mac-only entry point. The receiver never opens a connection or requests data.
     func sendSync(to peer: Peer? = nil) {
         guard role == .sender else { return }
-        guard !pairingCode.isEmpty else { status = .error("配对码未生成"); return }
+        guard !pairingCode.isEmpty else { status = .error(String(localized: "配对码未生成")); return }
         guard let peer = peer ?? peers.first else {
-            status = .error("未发现 iPhone 或 iPad，确认两台设备在同一局域网")
+            status = .error(String(localized: "未发现 iPhone 或 iPad，确认两台设备在同一局域网"))
             return
         }
         syncGeneration += 1
@@ -380,7 +380,7 @@ final class LANSyncCoordinator {
                 context.phase = "waiting for encrypted offer"
                 self.receiveOffer(on: context)
             } catch {
-                self.sendRejectionAndClose(context, message: "iPhone 或 iPad 上没有设置配对码，或配对码无效",
+                self.sendRejectionAndClose(context, message: String(localized: "iPhone 或 iPad 上没有设置配对码，或配对码无效"),
                                             error: error)
             }
         }
@@ -481,7 +481,7 @@ final class LANSyncCoordinator {
                       self.connections[ObjectIdentifier(context.connection)] != nil else { return }
                 guard let since = context.awaitingFrameSince,
                       Date().timeIntervalSince(since) > LANSyncConstants.syncTimeoutSeconds else { continue }
-                self.fail(context, error: LANSyncTransportError.connectionFailed("同步中断：Mac 长时间没有响应"))
+                self.fail(context, error: LANSyncTransportError.connectionFailed(String(localized: "同步中断：Mac 长时间没有响应")))
                 return
             }
         }
@@ -506,7 +506,7 @@ final class LANSyncCoordinator {
         for plaintext in transferPlaintexts {
             try sendEncryptedBytes(plaintext, type: "chunk", on: context, crypto: crypto)
         }
-        try sendEncrypted(LANSyncTransferResult(succeeded: true, message: "发送完成", digest: nil),
+        try sendEncrypted(LANSyncTransferResult(succeeded: true, message: String(localized: "发送完成"), digest: nil),
                           type: "finish", on: context, crypto: crypto)
         readSenderResult(on: context)
     }
@@ -577,7 +577,7 @@ final class LANSyncCoordinator {
                 self.lastSyncedAt = Date()
                 guard self.connections[ObjectIdentifier(context.connection)] != nil,
                       let crypto = context.crypto else { return }
-                try self.sendEncryptedThenClose(LANSyncTransferResult(succeeded: true, message: "同步完成",
+                try self.sendEncryptedThenClose(LANSyncTransferResult(succeeded: true, message: String(localized: "同步完成"),
                                                                       digest: offer.digest), type: "result",
                                                 on: context, crypto: crypto)
             } catch {
@@ -704,7 +704,7 @@ final class LANSyncCoordinator {
                     completion(value, bytes)
                 case .failure(let error):
                     if expectedType == "offer" {
-                        self.sendRejectionAndClose(context, message: "配对码不正确，或 iPhone 或 iPad 上没有设置配对码",
+                        self.sendRejectionAndClose(context, message: String(localized: "配对码不正确，或 iPhone 或 iPad 上没有设置配对码"),
                                                     error: error)
                         return
                     }
@@ -728,11 +728,11 @@ final class LANSyncCoordinator {
             AppLogger.info("LAN sync received \(result.messageType) frame seq=\(result.sequence) bytes=\(result.bytes.count)", category: "sync")
             guard result.messageType == expectedType else {
                 throw LANSyncTransportError.connectionFailed(
-                    "收到意外消息 \(result.messageType)，预期 \(expectedType)")
+                    String(localized: "收到意外消息 \(result.messageType)，预期 \(expectedType)"))
             }
             guard result.sequence == expectedSequence else {
                 throw LANSyncTransportError.connectionFailed(
-                    "消息序号错误：收到 \(result.sequence)，预期 \(expectedSequence)")
+                    String(localized: "消息序号错误：收到 \(String(result.sequence))，预期 \(String(expectedSequence))"))
             }
             return .success((try decoder.decode(T.self, from: result.bytes), result.bytes))
         } catch {
@@ -745,7 +745,7 @@ final class LANSyncCoordinator {
             try? await Task.sleep(for: .seconds(LANSyncConstants.syncTimeoutSeconds))
             guard let self, let context, self.syncGeneration == generation,
                   self.connections[ObjectIdentifier(context.connection)] != nil else { return }
-            self.fail(context, error: LANSyncTransportError.connectionFailed("等待 iPhone 或 iPad 响应超时"))
+            self.fail(context, error: LANSyncTransportError.connectionFailed(String(localized: "等待 iPhone 或 iPad 响应超时")))
         }
     }
 

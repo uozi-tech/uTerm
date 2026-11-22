@@ -99,14 +99,15 @@ struct ParallelAgentEngine {
         var interruption: String?
 
         agentLoop: for turnIndex in 0..<ParallelAgentPolicy.maxTurns {
-            onEvent(.activity((request.initial != nil || executedAny) ? "正在分析结果…" : "正在规划步骤…"))
+            onEvent(.activity((request.initial != nil || executedAny)
+                ? String(localized: "正在分析结果…") : String(localized: "正在规划步骤…")))
             let turn: ParallelAIDoctor.Turn
             switch await doctor.turn(messages: convo, system: system, withTools: true,
                                      onRetry: Self.retryNotice(onEvent)) {
             case .success(let t):
                 turn = t
             case .failure(let error):
-                interruption = "AI 服务请求失败（\(ParallelAgentPolicy.describe(error))），已重试仍未恢复"
+                interruption = String(localized: "AI 服务请求失败（\(ParallelAgentPolicy.describe(error))），已重试仍未恢复")
                 break agentLoop
             }
 
@@ -121,11 +122,11 @@ struct ParallelAgentEngine {
             if !approval.autoExecute {
                 for call in turn.calls {
                     let st = ToolCallState(from: call)
-                    if !st.command.isEmpty { onEvent(.suggested("建议执行：" + Self.stepLabel(st))) }
+                    if !st.command.isEmpty { onEvent(.suggested(String(localized: "建议执行：\(Self.stepLabel(st))"))) }
                 }
                 conclusion = (status: "failed",
                               summary: turn.text.isEmpty
-                                ? "已诊断并给出修复建议；审批档位「\(safetyLabel)」需要人工确认，未自动执行。"
+                                ? String(localized: "已诊断并给出修复建议；审批档位「\(safetyLabel)」需要人工确认，未自动执行。")
                                 : turn.text)
                 stoppedForSafety = true
                 break
@@ -140,7 +141,7 @@ struct ParallelAgentEngine {
                 if case .safety(let safety) = approval {
                     let verdict = await review(st, safety: safety, request: request)
                     guard verdict.approved, !Task.isCancelled else {
-                        onEvent(.suggested("需人工确认：" + Self.stepLabel(st) + "；" + verdict.reason))
+                        onEvent(.suggested(String(localized: "需人工确认：\(Self.stepLabel(st))；\(verdict.reason)")))
                         conclusion = (status: "failed", summary: verdict.reason)
                         stoppedForSafety = true
                         break
@@ -154,7 +155,7 @@ struct ParallelAgentEngine {
                 if let e = st.explanation, !e.isEmpty {
                     onEvent(.activity(e))
                 } else {
-                    onEvent(.activity("正在执行 \(st.command)"))
+                    onEvent(.activity(String(localized: "正在执行 \(st.command)")))
                 }
                 let outcome = await execute(st.command)
                 let exit: Int?
@@ -175,7 +176,7 @@ struct ParallelAgentEngine {
                 lastExit = exit
                 executedAny = true
                 onEvent(.stepFinished(index: index, outcome: outcome,
-                                      line: "执行 \(Self.stepLabel(st)) → 退出码 \(Self.exitText(exit))"))
+                                      line: String(localized: "执行 \(Self.stepLabel(st)) → 退出码 \(Self.exitText(exit))")))
                 resolvedCalls.append(st)
             }
             if stoppedForSafety { break }
@@ -184,7 +185,7 @@ struct ParallelAgentEngine {
             }
             convo.append(ChatMessage(role: .assistant, text: turn.text, toolCalls: resolvedCalls))
             if turnIndex == ParallelAgentPolicy.maxTurns - 1 {
-                interruption = "已用完 \(ParallelAgentPolicy.maxTurns) 轮仍未得出结论"
+                interruption = String(localized: "已用完 \(ParallelAgentPolicy.maxTurns) 轮仍未得出结论")
             }
         }
 
@@ -211,7 +212,7 @@ struct ParallelAgentEngine {
             return try await reviewToolApproval(client: doctor.client, config: config,
                                                 system: system, prompt: prompt)
         }
-        let reason = AgentToolApproval.isReadOnly(req) ? decision.reason : "AI 已批准：" + decision.reason
+        let reason = AgentToolApproval.isReadOnly(req) ? decision.reason : String(localized: "AI 已批准：\(decision.reason)")
         return (decision.approved, decision.approved ? reason : decision.reason)
     }
 
@@ -221,7 +222,7 @@ struct ParallelAgentEngine {
         -> @Sendable (Int, Error) -> Void {
         let sink = MainThreadSink(onEvent)
         return { attempt, error in
-            let text = "AI 服务暂时不可用（\(ParallelAgentPolicy.describe(error))），第 \(attempt) 次重试…"
+            let text = String(localized: "AI 服务暂时不可用（\(ParallelAgentPolicy.describe(error))），第 \(attempt) 次重试…")
             Task { @MainActor in sink.send(.activity(text)) }
         }
     }
@@ -264,12 +265,14 @@ struct ParallelAgentEngine {
             summary = text
         } else if let interruption {
             summary = succeeded
-                ? "命令执行完成，退出码 0；\(interruption)，未做进一步复核。"
-                : "\(interruption)\(stepCount > 0 ? "，已执行 \(stepCount) 步" : "")。可查看处理过程，确认后重新运行。"
+                ? String(localized: "命令执行完成，退出码 0；\(interruption)，未做进一步复核。")
+                : (stepCount > 0
+                    ? String(localized: "\(interruption)，已执行 \(stepCount) 步。可查看处理过程，确认后重新运行。")
+                    : String(localized: "\(interruption)。可查看处理过程，确认后重新运行。"))
         } else {
             summary = succeeded
                 ? ParallelRunCopy.succeeded
-                : "命令执行失败（退出码 \(exitText(initial != nil ? initial?.exitCode : lastExit))），需人工介入。"
+                : String(localized: "命令执行失败（退出码 \(exitText(initial != nil ? initial?.exitCode : lastExit))），需人工介入。")
         }
         return ParallelAgentOutcome(succeeded: succeeded, summary: summary,
                                     executedAny: executedAny, lastExit: lastExit)
@@ -326,7 +329,9 @@ struct ParallelAgentEngine {
         return st.command
     }
 
-    nonisolated static func exitText(_ code: Int?) -> String { code.map(String.init) ?? "未知" }
+    nonisolated static func exitText(_ code: Int?) -> String {
+        code.map(String.init) ?? String(localized: "未知", comment: "退出码未知")
+    }
 
     /// 静默超时 / 总时长上限的秒数（取自 `SupervisedExec.interactive*`），用于提示词。
     nonisolated static var idleSeconds: Int { Int(SupervisedExec.interactiveIdle.components.seconds) }
@@ -335,21 +340,23 @@ struct ParallelAgentEngine {
 
 /// 两端并行执行共用的结论文案（引擎之外的路径：非 AI、没配 AI、连不上、超时、跨台汇总兜底）。
 nonisolated enum ParallelRunCopy {
-    static let succeeded = "命令执行完成，退出码 0。"
+    static var succeeded: String { String(localized: "命令执行完成，退出码 0。") }
 
     static func shellFailed(exit: Int?) -> String {
-        "命令以退出码 \(ParallelAgentEngine.exitText(exit)) 结束，执行失败。"
+        String(localized: "命令以退出码 \(ParallelAgentEngine.exitText(exit)) 结束，执行失败。")
     }
 
     static func noProvider(ranInitial: Bool, exit: Int?, goal: String) -> String {
         ranInitial
-            ? "命令执行失败（退出码 \(ParallelAgentEngine.exitText(exit))）。未配置模型服务，无法自动诊断修复。"
-            : "未配置模型服务，无法按「\(goal)」自主下发命令。在「设置 › 模型服务」里添加后再试。"
+            ? String(localized: "命令执行失败（退出码 \(ParallelAgentEngine.exitText(exit))）。未配置模型服务，无法自动诊断修复。")
+            : String(localized: "未配置模型服务，无法按「\(goal)」自主下发命令。在「设置 › 模型服务」里添加后再试。")
     }
 
     /// 命令跑起来了但被看门狗终止。`signalled` = 已终止远端进程组（远端可能停在半截）。
     static func stalled(_ reason: String, signalled: Bool) -> String {
-        "执行超时：" + reason + (signalled ? "远端可能停在中间状态，需要人工复核。" : "")
+        signalled
+            ? String(localized: "执行超时：\(reason)远端可能停在中间状态，需要人工复核。")
+            : String(localized: "执行超时：\(reason)")
     }
 
     /// 交给 Agent 时附在初始结果后的说明。
@@ -359,21 +366,22 @@ nonisolated enum ParallelRunCopy {
 
     static func hostKeyUntrusted(mismatch: Bool) -> String {
         mismatch
-            ? "无法连接：该主机出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后点「信任并重试」。"
-            : "无法连接：尚未信任该主机的密钥。核对指纹无误后点「信任并重试」。"
+            ? String(localized: "无法连接：该主机出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后点「信任并重试」。")
+            : String(localized: "无法连接：尚未信任该主机的密钥。核对指纹无误后点「信任并重试」。")
     }
 
-    static func unreachable(_ reason: String) -> String { "无法连接到该主机：\(reason)。命令未执行。" }
+    static func unreachable(_ reason: String) -> String { String(localized: "无法连接到该主机：\(reason)。命令未执行。") }
 
     /// 把连接错误整理成一句原因（去空白；空则兜底）。
     static func connectionReason(_ text: String?) -> String {
         let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? "无法建立连接" : t
+        return t.isEmpty ? String(localized: "无法建立连接") : t
     }
 
     /// 模型汇总不可用时的跨台汇总（只讲成功 / 失败）。
     static func fallbackSynthesis(total: Int, failedNames: [String]) -> String {
-        if failedNames.isEmpty { return "\(total) 台全部执行成功，无异常。" }
-        return "\(total) 台中 \(total - failedNames.count) 台成功，\(failedNames.joined(separator: "、")) 失败，建议人工复核。"
+        if failedNames.isEmpty { return String(localized: "\(total) 台全部执行成功，无异常。") }
+        let names = failedNames.joined(separator: String(localized: "、", comment: "并列的主机名之间的分隔符"))
+        return String(localized: "\(total) 台中 \(total - failedNames.count) 台成功，\(names) 失败，建议人工复核。")
     }
 }

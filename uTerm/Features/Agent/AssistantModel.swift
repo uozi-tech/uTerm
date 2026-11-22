@@ -71,7 +71,7 @@ final class AssistantModel {
         for mi in messages.indices {
             for ci in messages[mi].toolCalls.indices where messages[mi].toolCalls[ci].status == .pending {
                 messages[mi].toolCalls[ci].status = .skipped
-                messages[mi].toolCalls[ci].output = "用户已停止本轮对话，命令未执行。"
+                messages[mi].toolCalls[ci].output = String(localized: "用户已停止本轮对话，命令未执行。")
             }
             persistToolCalls(messageID: messages[mi].id, sessionID: currentSession?.id)
         }
@@ -147,7 +147,7 @@ final class AssistantModel {
 
     /// 顶栏展示的会话标题。
     var sessionTitle: String {
-        currentSession?.displayTitle ?? "新对话"
+        currentSession?.displayTitle ?? String(localized: "新对话")
     }
 
     /// 全部已配置的 provider（外部灌入，按 sortOrder）。
@@ -196,7 +196,7 @@ final class AssistantModel {
                 }
                 if !live {
                     messages[mi].toolCalls[ci].status = .failed
-                    messages[mi].toolCalls[ci].output = "上次命令的执行结果未知，先核实主机状态。"
+                    messages[mi].toolCalls[ci].output = String(localized: "上次命令的执行结果未知，先核实主机状态。")
                     // This model cannot observe the execution. Keep the durable record intact:
                     // another window may still own the command and save its actual result.
                 }
@@ -360,16 +360,16 @@ final class AssistantModel {
     /// provider/key/baseURL 校验；任一缺失置 .failed 并返回 nil。
     private func resolvedTurnContext() -> TurnContext? {
         guard let provider = activeProvider else {
-            state = .failed("尚未配置模型服务"); return nil
+            state = .failed(String(localized: "尚未配置模型服务")); return nil
         }
         guard !provider.model.isEmpty else {
-            state = .failed("还没有选择模型：在输入区左下角的模型菜单里选一个"); return nil
+            state = .failed(String(localized: "还没有选择模型：在输入区左下角的模型菜单里选一个")); return nil
         }
         guard let key = keyOverride ?? keychain.load(for: provider.id) else {
-            state = .failed("所选模型服务缺少 API Key"); return nil
+            state = .failed(String(localized: "所选模型服务缺少 API Key")); return nil
         }
         guard let baseURL = resolveBaseURL(for: provider) else {
-            state = .failed("所选模型服务的 Base URL 无效或不安全"); return nil
+            state = .failed(String(localized: "所选模型服务的 Base URL 无效或不安全")); return nil
         }
         var config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
         config.tools = executor != nil ? [.runCommand] : []
@@ -454,8 +454,8 @@ final class AssistantModel {
             let visibleText = operation.message.text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if visibleText.isEmpty && toolCalls.isEmpty {
-                let message = "模型未返回任何内容"
-                operation.message.text = "[错误：\(message)]"
+                let message = String(localized: "模型未返回任何内容")
+                operation.message.text = Self.inlineErrorText(message)
                 operation.finalState = .failed(message)
             } else {
                 let pending = toolCalls.contains { $0.status == .pending }
@@ -465,7 +465,7 @@ final class AssistantModel {
             guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
             operation.buffer?.flush()
             let message = errorMessage(for: error, kind: context.kind)
-            operation.message.text += "\n[错误：\(message)]"
+            operation.message.text += "\n" + Self.inlineErrorText(message)
             operation.finalState = .failed(message)
         }
         publishStream(operation)
@@ -474,11 +474,11 @@ final class AssistantModel {
     // MARK: - 独立 AI 审批
 
     func approvalSummary(for call: ToolCallState) -> String? {
-        if reviewingToolCallID == call.id { return "AI 正在审批，仍可手动运行或跳过" }
+        if reviewingToolCallID == call.id { return String(localized: "AI 正在审批，仍可手动运行或跳过") }
         guard let reason = call.approvalReason else { return nil }
         switch call.approvedByAI {
-        case true?: return "AI 已批准：" + reason
-        case false?: return "需人工确认：" + reason
+        case true?: return String(localized: "AI 已批准：\(reason)")
+        case false?: return String(localized: "需人工确认：\(reason)")
         case nil: return reason   // 规则直接放行的只读命令，没有经过 AI
         }
     }
@@ -837,27 +837,39 @@ final class AssistantModel {
         case .httpError(let status, let body):
             if status == 401 {
                 switch kind {
-                case .anthropic: return "Anthropic API Key 无效，到「设置 › 模型服务」检查 API Key。"
-                case .openai:    return "OpenAI API Key 无效，到「设置 › 模型服务」检查 API Key。"
+                case .anthropic: return String(localized: "Anthropic API Key 无效，到「设置 › 模型服务」检查 API Key。")
+                case .openai:    return String(localized: "OpenAI API Key 无效，到「设置 › 模型服务」检查 API Key。")
                 }
             }
-            return "请求失败（HTTP \(status)）：\(body)"
+            return String(localized: "请求失败（HTTP \(String(status))）：\(body)")
         case .invalidResponse:
-            return "模型服务返回了无法解析的响应。"
+            return String(localized: "模型服务返回了无法解析的响应。")
         case .streamIdleTimeout:
-            return "响应流长时间没有新输出，已停止等待，可以重试。"
+            return String(localized: "响应流长时间没有新输出，已停止等待，可以重试。")
         case .streamError(let detail):
-            return "模型服务中途报错，回复不完整：\(detail)"
+            return String(localized: "模型服务中途报错，回复不完整：\(detail)")
         case .incompleteStream:
-            return "连接在回复说完之前断开，上面的内容不完整；可发送「继续」让它接着说。"
+            return String(localized: "连接在回复说完之前断开，上面的内容不完整；可发送「继续」让它接着说。")
         case .outputLimitReached:
-            return "回复达到单次输出上限被截断；可发送「继续」让它接着说。"
+            return String(localized: "回复达到单次输出上限被截断；可发送「继续」让它接着说。")
         }
+    }
+
+    /// 内联在助手消息末尾的错误文字（「[错误：…]」）。
+    nonisolated static func inlineErrorText(_ message: String) -> String {
+        String(localized: "[错误：\(message)]", comment: "内联在 Agent 回复末尾的错误")
+    }
+
+    /// `inlineErrorText` 插值之前的那段开头，用来认出末条气泡里已经内联了错误。
+    nonisolated static var inlineErrorPrefix: String {
+        let sentinel = "\u{1}"
+        return inlineErrorText(sentinel).components(separatedBy: sentinel).first ?? ""
     }
 
     private static func systemPrompt(serverContext: String) -> String {
         var s = "你是 uTerm（一个 macOS 原生 SSH 终端应用）内置的服务器工作台助手，"
             + "帮助用户处理服务器运维与命令行问题。简洁、准确地回答。"
+            + "用用户提问所用的语言回答；拿不准时用\(AgentReplyLanguage.displayName)。"
         if !serverContext.isEmpty {
             s += "\n\n当前上下文：\(serverContext)"
         }

@@ -17,42 +17,42 @@ struct SyncSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsPageHeader(title: "同步", subtitle: String(localized: "iCloud 后台同步与局域网快速同步"))
+            SettingsPageHeader(title: String(localized: "同步", comment: "设置分区"), subtitle: String(localized: "iCloud 后台同步与局域网快速同步"))
 
             SettingsGroup(title: "iCloud") {
-                SettingsRow(label: "iCloud 同步", hint: SyncStatusPresentation.cloudHint(loggedIn: loggedIntoiCloud)) {
+                SettingsRow(label: String(localized: "iCloud 同步"), hint: SyncStatusPresentation.cloudHint(loggedIn: loggedIntoiCloud)) {
                     let cloud = SyncStatusPresentation.cloud(syncStatus)
                     SettingsStatusLabel(symbol: cloud.symbol, tone: cloud.tone, text: syncStatus.label)
                 }
-                SettingsRow(label: "同步诊断",
+                SettingsRow(label: String(localized: "同步诊断"),
                             hint: SyncStatusPresentation.diagnosticsSubtitle(status: syncStatus,
                                                                             lastError: sync.lastError)) {
-                    UDButton(title: "查看事件…", style: .secondary) { showDiagnostics = true }
+                    UDButton(title: String(localized: "查看事件…"), style: .secondary) { showDiagnostics = true }
                 }
             }
 
-            SettingsGroup(title: "局域网",
+            SettingsGroup(title: String(localized: "局域网", comment: "设置分组：局域网同步"),
                           footer: String(localized: "Mac 发现同一局域网里的 iPhone / iPad 后，点「发送同步」把全量数据发过去，对方确认后才开始传输。在 iPhone / iPad 的「局域网同步」里输入上面的配对码。")) {
-                SettingsRow(label: "发送状态") {
+                SettingsRow(label: String(localized: "发送状态", comment: "局域网同步的发送状态")) {
                     let lan = SyncStatusPresentation.lan(lanSync.status)
                     SettingsStatusLabel(symbol: lan.symbol, tone: lan.tone, text: lanSync.status.label)
                 }
                 ForEach(lanSync.peers) { peer in
                     SettingsListRow(icon: settingsDeviceSymbol(for: peer.name), tint: UD.accent,
                                     title: peer.name, subtitle: String(localized: "已在局域网发现")) {
-                        UDButton(title: "发送同步", style: .secondary, systemImage: "arrow.up.circle") {
+                        UDButton(title: String(localized: "发送同步", comment: "局域网同步：发送数据"), style: .secondary, systemImage: "arrow.up.circle") {
                             lanSync.sendSync(to: peer)
                         }
                     }
                 }
-                SettingsRow(label: "配对码") {
+                SettingsRow(label: String(localized: "配对码", comment: "局域网同步的配对码")) {
                     HStack(spacing: 10) {
                         Text(lanSync.pairingCode)
                             .font(.system(size: 16, design: .monospaced).weight(.semibold))
                             .tracking(2)
                             .foregroundStyle(UD.text)
                             .textSelection(.enabled)
-                        UDButton(title: copiedCode ? "已拷贝" : "拷贝", style: .secondary) {
+                        UDButton(title: copiedCode ? String(localized: "已拷贝") : String(localized: "拷贝", comment: "拷贝到剪贴板的按钮"), style: .secondary) {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(lanSync.pairingCode, forType: .string)
                             copiedCode = true
@@ -65,11 +65,11 @@ struct SyncSettingsView: View {
                 }
             }
 
-            SettingsGroup(title: "历史",
+            SettingsGroup(title: String(localized: "历史", comment: "设置分组：历史记录"),
                           footer: ChatRetentionPresentation.footer(for: chatRetentionDays, platform: .macOS)) {
-                SettingsRow(label: "AI 对话保留") {
+                SettingsRow(label: String(localized: "AI 对话保留")) {
                     SettingsNumberField(value: $chatRetentionDays, width: 72,
-                                        minValue: 0, maxValue: 3_650, suffix: "天")
+                                        minValue: 0, maxValue: 3_650, suffix: String(localized: "天", comment: "数值输入框后的单位：天"))
                 }
             }
         }

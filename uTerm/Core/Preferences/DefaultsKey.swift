@@ -175,4 +175,6 @@ nonisolated enum DefaultsKey {
     static let appleActionOnDoubleClick = "AppleActionOnDoubleClick"
     /// AppKit 拖窗跨屏时按屏幕布局调整位置的开关，见 `WindowMoveBehavior`。
     static let screenLayoutAdjustOnWindowMove = "NSScreenLayoutAdjustOnWindowMove"
+    /// 本进程的界面语言顺序。`AppLanguage.applyToBundleLocalization` 按「设置 › 外观 › 语言」写它。
+    static let appleLanguages = "AppleLanguages"
 }

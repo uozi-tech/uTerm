@@ -15,21 +15,21 @@ enum LANSyncTransportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .connectionFailed(let message):
-            return "局域网连接失败：\(message)"
+            return String(localized: "局域网连接失败：\(message)")
         case .frameTooLarge(let bytes):
-            return "局域网同步收到超大数据帧（\(UFormat.bytes(bytes))），已中止"
+            return String(localized: "局域网同步收到超大数据帧（\(UFormat.bytes(bytes))），已中止")
         case .transferTooLarge:
-            return "局域网同步数据量超出上限，已中止"
+            return String(localized: "局域网同步数据量超出上限，已中止")
         case .invalidMessage:
-            return "局域网同步消息格式无效"
+            return String(localized: "局域网同步消息格式无效")
         case .protocolMismatch:
-            return "局域网同步协议版本不兼容"
+            return String(localized: "局域网同步协议版本不兼容")
         case .handshakeRequired:
-            return "局域网同步安全握手未完成"
+            return String(localized: "局域网同步安全握手未完成")
         case .authenticationFailed:
-            return "局域网同步配对码不正确或认证失败"
+            return String(localized: "局域网同步配对码不正确或认证失败")
         case .rejected:
-            return "iPhone 或 iPad 拒绝了本次同步"
+            return String(localized: "iPhone 或 iPad 拒绝了本次同步")
         }
     }
 }
@@ -106,7 +106,7 @@ nonisolated final class LANSyncFrameReader: @unchecked Sendable {
                            maximumLength: LANSyncConstants.maxFrameBytes) {
             [weak self] data, _, isComplete, error in
             guard let self else {
-                completion(.failure(LANSyncTransportError.connectionFailed("连接已释放")))
+                completion(.failure(LANSyncTransportError.connectionFailed(String(localized: "连接已释放"))))
                 return
             }
             if let error {

@@ -203,7 +203,7 @@ final class RemoteHostConnection {
                 // 不能按对方声明的能力决定要不要验：冒充者在握手里不报 key-confirm 就能跳过验证、被记进信任列表。
                 // 远控随 2.0 首发，能连上来的手机都带这一能力。
                 guard peer.supports(RemoteFeature.keyConfirmation) else {
-                    throw RemoteProtocolError.handshakeFailed("对方没有证明自己持有私钥")
+                    throw RemoteProtocolError.handshakeFailed(String(localized: "对方没有证明自己持有私钥"))
                 }
                 try await waitForKeyConfirmation()
             }
@@ -247,7 +247,7 @@ final class RemoteHostConnection {
     /// 任何一条不满足就断开。不弹审批框，否则任何拿到中继配置的人都能远程刷弹窗骗点击。
     private func authorizeFromInternet(peer: RemoteHello, expected: UUID) async throws {
         guard peer.deviceID == expected, peer.supports(RemoteFeature.keyConfirmation) else {
-            throw RemoteProtocolError.handshakeFailed("公网连接的身份与信令不符")
+            throw RemoteProtocolError.handshakeFailed(String(localized: "公网连接的身份与信令不符"))
         }
         try await waitForKeyConfirmation()
         guard !isClosed else { throw RemoteProtocolError.closed }
@@ -474,7 +474,7 @@ final class RemoteHostConnection {
         }
         guard let (request, _) = try? RemoteFileCodec.decode(RemoteFileRequest.self, from: payload) else {
             send(RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
-                                                    RemoteFileError(.invalid, "请求解不开")), compress: false))
+                                                    RemoteFileError(.invalid, String(localized: "请求解不开"))), compress: false))
             return
         }
         if let refusal = access.refusal(request.op) {
@@ -541,7 +541,7 @@ final class RemoteHostConnection {
         }
         server.claim(sessionID: request.sessionID, connection: self, channel: channel)
         attachment.onRemoteDisconnect = { [weak self] in
-            self?.detach(channel: channel, notify: true, reason: "已在 Mac 上断开")
+            self?.detach(channel: channel, notify: true, reason: String(localized: "已在 Mac 上断开"))
         }
         // 接入结果先于快照入队：连接队列先进先出，手机一定先收到「接入成功」再收到画面。
         sendAttachResult(channel, request.sessionID, error: nil)
@@ -561,7 +561,7 @@ final class RemoteHostConnection {
             switch await handle?.deliverImage(request.image) {
             case .success(let path): reply.path = path
             case .failure(let error): reply.error = error.message
-            case nil: reply.error = "这个终端不能接收图片"
+            case nil: reply.error = String(localized: "这个终端不能接收图片")
             }
             AppLogger.info("远控：\(device) 贴图 \(request.image.data.count) 字节 → \(reply.error ?? reply.path ?? "剪贴板")",
                            category: RemoteLog.category)
@@ -610,7 +610,7 @@ final class RemoteHostConnection {
     /// 会话列表变了：已经没了的会话，结束对应的接入。
     func sessionsChanged(alive: Set<UUID>) {
         for (channel, attachment) in attachments where !alive.contains(attachment.sessionID) {
-            detach(channel: channel, notify: true, reason: "这个终端已经关闭或断开")
+            detach(channel: channel, notify: true, reason: String(localized: "这个终端已经关闭或断开"))
         }
         sendSessions()
     }
@@ -619,7 +619,7 @@ final class RemoteHostConnection {
         guard !isClosed else { return }
         isClosed = true
         finishKeyConfirmation(false)
-        fileWaiters.failAll(RemoteFileError(.unreachable, "「\(peerName)」的连接断开了"))
+        fileWaiters.failAll(RemoteFileError(.unreachable, String(localized: "「\(peerName)」的连接断开了")))
         for channel in Array(attachments.keys) {
             detach(channel: channel, notify: false)
         }
@@ -663,14 +663,14 @@ extension RemoteHostConnection {
     nonisolated func exchangeFile(_ payload: Data, id: UUID, timeout: Duration) async throws -> Data {
         let (link, name) = try await MainActor.run { () throws -> (RemoteLink, String) in
             guard !isClosed, isAuthorized else {
-                throw RemoteFileError(.unreachable, "「\(peerName)」已经不连着这台 Mac 了")
+                throw RemoteFileError(.unreachable, String(localized: "「\(peerName)」已经不连着这台 Mac 了"))
             }
             guard peerSharesFilesFeature else {
-                throw RemoteFileError(.unsupported, "「\(peerName)」不提供文件（手机，或者那台 Mac 上的 uTerm 版本太旧）")
+                throw RemoteFileError(.unsupported, String(localized: "「\(peerName)」不提供文件（手机，或者那台 Mac 上的 uTerm 版本太旧）"))
             }
             return (self.link, peerName)
         }
-        return try await fileWaiters.exchange(payload, id: id, timeout: timeout, peer: "「\(name)」") { payload in
+        return try await fileWaiters.exchange(payload, id: id, timeout: timeout, peer: String(localized: "「\(name)」", comment: "给设备名加引号，用在「某设备在 N 秒内没有回应」里")) { payload in
             link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
         }
     }
@@ -697,7 +697,7 @@ extension RemoteHostConnection {
                 RemoteDesktopInfo(requestID: request.requestID, failure: failure, message: message))))
         }
         guard environment.isEnabled() else {
-            return reject(.disabled, "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。")
+            return reject(.disabled, String(localized: "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。"))
         }
         let clock = ContinuousClock()
         let started = clock.now
@@ -714,7 +714,7 @@ extension RemoteHostConnection {
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard canCapture else {
             return reject(.screenPermission,
-                          "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
+                          String(localized: "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。"))
         }
         server.rememberDesktopRequest(peerID: peerID, width: request.maxWidth, height: request.maxHeight,
                                       pointScale: request.pointScale)
@@ -722,7 +722,7 @@ extension RemoteHostConnection {
         let preparedAt = millis()
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard var display = environment.display(request.displayID) ?? environment.display(nil) else {
-            return reject(.captureFailed, "找不到 Mac 的显示器")
+            return reject(.captureFailed, String(localized: "找不到 Mac 的显示器"))
         }
         // 息屏时先把显示器叫醒再采集，否则 ScreenCaptureKit 找不到它。等的这会儿可能又来了新请求或断了。
         await earlyWake.value
@@ -763,7 +763,7 @@ extension RemoteHostConnection {
             }
             guard generation == desktopStartGeneration, !isClosed else { return }
             guard let window = environment.window(windowID) else {
-                return reject(.captureFailed, "找不到要看的窗口，它可能已经关闭或挪到了别的桌面")
+                return reject(.captureFailed, String(localized: "找不到要看的窗口，它可能已经关闭或挪到了别的桌面"))
             }
             display = window.display
             windowTitle = window.title
@@ -807,7 +807,7 @@ extension RemoteHostConnection {
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         AppLogger.info("远程桌面采集停止：\(error?.localizedDescription ?? "无错误")", category: RemoteLog.category)
-                        self?.stopDesktop(channel: channel, notify: true, reason: "Mac 上的屏幕采集已停止")
+                        self?.stopDesktop(channel: channel, notify: true, reason: String(localized: "Mac 上的屏幕采集已停止"))
                     }
                 }
             })
@@ -823,7 +823,7 @@ extension RemoteHostConnection {
             requestID: request.requestID, displayID: display.id,
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
-            controlNote: canControl ? nil : "Mac 上还没有给远程控制「辅助功能」权限，只能查看。在 Mac 的 uTerm「设置 › 远程控制」里授权，并按提示重新启动 uTerm，即可控制。",
+            controlNote: canControl ? nil : String(localized: "Mac 上还没有给远程控制「辅助功能」权限，只能查看。在 Mac 的 uTerm「设置 › 远程控制」里授权，并按提示重新启动 uTerm，即可控制。"),
             videoDatagrams: video != nil ? true : nil,
             displays: { let all = environment.listDisplays(); return all.isEmpty ? nil : all }(),
             windowID: display.windowID, windowTitle: windowTitle)
@@ -835,7 +835,7 @@ extension RemoteHostConnection {
             } catch {
                 guard desktop?.channel == channel else { return }
                 stopDesktop(channel: channel, notify: false)
-                reject(.captureFailed, "Mac 上的屏幕采集无法启动：\(error.localizedDescription)")
+                reject(.captureFailed, String(localized: "Mac 上的屏幕采集无法启动：\(error.localizedDescription)"))
                 return
             }
             guard desktop?.channel == channel, !isClosed else {
@@ -858,10 +858,10 @@ extension RemoteHostConnection {
                 RemoteDesktopWindowList(requestID: request.requestID, windows: windows, message: message))))
         }
         guard environment.isEnabled() else {
-            return reply([], "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。")
+            return reply([], String(localized: "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。"))
         }
         guard await environment.screenCaptureAuthorized() else {
-            return reply([], "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
+            return reply([], String(localized: "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。"))
         }
         reply(environment.listWindows())
     }
@@ -995,7 +995,7 @@ extension RemoteHostConnection {
                 RemoteDesktopAudioFormat(stream: stream, codec: nil, message: message))))
         }
         guard environment.isAudioEnabled(), let makeSource = environment.makeAudioSource else {
-            return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开「设置 › 远程控制 › 允许传输声音」")
+            return refuse(String(localized: "Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开「设置 › 远程控制 › 允许传输声音」"))
         }
         let display = current.streamer.display
         let numbers = audioStreams
@@ -1010,7 +1010,7 @@ extension RemoteHostConnection {
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         AppLogger.info("远程桌面声音采集停止：\(error?.localizedDescription ?? "无错误")", category: RemoteLog.category)
-                        self?.stopAudio(notify: "Mac 上的声音采集已停止")
+                        self?.stopAudio(notify: String(localized: "Mac 上的声音采集已停止"))
                     }
                 }
             })
@@ -1030,9 +1030,9 @@ extension RemoteHostConnection {
             audio = nil
             streamer.stop()
             if case RemoteAudioStreamerError.noCodec = error {
-                refuse("Mac 无法编码手机支持的声音格式")
+                refuse(String(localized: "Mac 无法编码手机支持的声音格式"))
             } else {
-                refuse("Mac 上的声音采集无法启动：\(error.localizedDescription)")
+                refuse(String(localized: "Mac 上的声音采集无法启动：\(error.localizedDescription)"))
             }
         }
     }
@@ -1077,7 +1077,7 @@ extension RemoteHostConnection {
         guard peerSupportsUnlock, let controller = server.screenController else { return }
         controller.onLocalCurtainRelease = { [weak self] in
             guard let self, let channel = self.desktop?.channel else { return }
-            self.stopDesktop(channel: channel, notify: true, reason: "已在 Mac 上解除帘幕")
+            self.stopDesktop(channel: channel, notify: true, reason: String(localized: "已在 Mac 上解除帘幕"))
         }
         let center = DistributedNotificationCenter.default()
         for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {

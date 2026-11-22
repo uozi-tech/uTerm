@@ -62,7 +62,7 @@ enum AgentModelMenu {
             let fetched = Set(entry?.models ?? [])
             let items = catalog.models(for: provider.id, including: provider.model).map { id in
                 AgentModelItem(providerID: provider.id, model: id,
-                               detail: entry?.fetchedAt != nil && !fetched.contains(id) ? "不在列表中" : nil)
+                               detail: entry?.fetchedAt != nil && !fetched.contains(id) ? String(localized: "不在列表中") : nil)
             }
             let status: AgentModelGroup.Status
             if entry?.isLoading == true || entry == nil {
@@ -95,20 +95,20 @@ enum AgentModelMenu {
 
     /// 「默认」+ 该模型支持的档位。
     static func effortOptions(_ support: AgentReasoningSupport) -> [AgentEffortOption] {
-        [AgentEffortOption(value: nil, label: "默认")]
+        [AgentEffortOption(value: nil, label: String(localized: "默认", comment: "思考深度：不指定"))]
             + support.levels.map { AgentEffortOption(value: $0.rawValue, label: $0.label) }
     }
 
     /// 触发器上显示的模型名。
     static func label(_ provider: AIProvider?) -> String {
-        guard let provider, !provider.model.isEmpty else { return "选择模型" }
+        guard let provider, !provider.model.isEmpty else { return String(localized: "选择模型") }
         return provider.model
     }
 
     /// 触发器的完整说明（macOS tooltip / iOS 读屏值）。
     static func help(_ provider: AIProvider?) -> String {
-        guard let provider else { return "还没有配置模型服务" }
-        return provider.model.isEmpty ? "\(provider.name)：还没有选择模型" : "\(provider.name) · \(provider.model)"
+        guard let provider else { return String(localized: "还没有配置模型服务") }
+        return provider.model.isEmpty ? String(localized: "\(provider.name)：还没有选择模型") : "\(provider.name) · \(provider.model)"
     }
 }
 
@@ -138,7 +138,7 @@ struct AgentEffortChoice {
     }
 
     var selectedLabel: String {
-        options.first { $0.value == selection }?.label ?? "默认"
+        options.first { $0.value == selection }?.label ?? String(localized: "默认", comment: "思考深度：不指定")
     }
 
     func select(_ value: String?) {
@@ -158,7 +158,7 @@ extension AssistantModel {
     /// 输入区上方的一行状态；只在用户停过本轮时出现。
     var composerStatus: String? {
         guard turnWasStopped else { return nil }
-        return state == .running ? "已停止后续步骤，已下发命令仍在运行" : "已停止"
+        return state == .running ? String(localized: "已停止后续步骤，已下发命令仍在运行") : String(localized: "已停止", comment: "Agent 本轮已被用户停止")
     }
 
     /// 忙碌时把占位符换成排队说明。Mac 上多交代一句 ⌘↩（立即发送 = 下一步送达，不打断）；
@@ -166,9 +166,9 @@ extension AssistantModel {
     func composerPlaceholder(_ idle: String) -> String {
         guard isBusy else { return idle }
         #if os(macOS)
-        return "Agent 正在处理，↩ 排队，⌘↩ 立即发送…"
+        return String(localized: "Agent 正在处理，↩ 排队，⌘↩ 立即发送…")
         #else
-        return "Agent 正在处理，输入会排队发送…"
+        return String(localized: "Agent 正在处理，输入会排队发送…")
         #endif
     }
 
@@ -183,7 +183,7 @@ extension AssistantModel {
 
     /// 「附加当前上下文」：把主机描述追加进草稿。
     func appendContext(_ serverContext: String) {
-        let snippet = "上下文：\n\(serverContext)"
+        let snippet = String(localized: "上下文：\n\(serverContext)")
         if input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             input = snippet
         } else {
@@ -207,7 +207,9 @@ extension AssistantModel {
     /// 失败发生在追加助手消息之前（没有内联文本），这时错误条是唯一的反馈。
     var bannerError: String? {
         guard case .failed(let message) = state else { return nil }
-        if let last = messages.last, last.role == .assistant, last.text.contains("[错误：") {
+        let errorPrefix = AssistantModel.inlineErrorPrefix
+        if let last = messages.last, last.role == .assistant,
+           !errorPrefix.isEmpty, last.text.contains(errorPrefix) {
             return nil
         }
         return message
@@ -249,9 +251,15 @@ enum AgentPromptExamples {
     }
 
     nonisolated static let groups: [Group] = [
-        .init(tag: "诊断", items: ["根分区是什么占满的", "最近的 5xx 集中在什么时间", "CPU 突然飙高是哪个进程"]),
-        .init(tag: "配置", items: ["给 upstream 加上 keepalive", "把 SSH 端口改成 2222", "开启 gzip 压缩"]),
-        .init(tag: "部署", items: ["拉取最新代码并重启服务", "回滚到上一个版本", "查看 systemd 服务状态"]),
+        .init(tag: String(localized: "诊断", comment: "Agent 示例提示的分组"),
+              items: [String(localized: "根分区是什么占满的"), String(localized: "最近的 5xx 集中在什么时间"),
+                      String(localized: "CPU 突然飙高是哪个进程")]),
+        .init(tag: String(localized: "配置", comment: "Agent 示例提示的分组"),
+              items: [String(localized: "给 upstream 加上 keepalive"), String(localized: "把 SSH 端口改成 2222"),
+                      String(localized: "开启 gzip 压缩")]),
+        .init(tag: String(localized: "部署", comment: "Agent 示例提示的分组"),
+              items: [String(localized: "拉取最新代码并重启服务"), String(localized: "回滚到上一个版本"),
+                      String(localized: "查看 systemd 服务状态")]),
     ]
 }
 

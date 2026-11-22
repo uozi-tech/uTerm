@@ -95,7 +95,7 @@ struct QuickCommandDetail: View {
     private var targetSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                sectionLabel("目标主机")
+                sectionLabel(String(localized: "目标主机"))
                 if serverCount > 1 { QCParallelTag() }
                 Spacer()
                 Text("\(serverCount) 台")
@@ -261,10 +261,11 @@ struct QuickCommandDetail: View {
         LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading),
                             GridItem(.flexible(), alignment: .leading)],
                   alignment: .leading, spacing: 14) {
-            metaCell("执行方式", serverCount > 1 ? "并行 · \(serverCount) 台" : "单台")
-            metaCell("上次运行", UTermFormat.relative(command.lastRunAt))
-            metaCell("运行次数", "\(command.runCount)", mono: true)
-            metaCell("AI 介入", command.aiAssisted ? "已开启" : "已关闭",
+            metaCell(String(localized: "执行方式"),
+                     serverCount > 1 ? String(localized: "并行 · \(serverCount) 台") : String(localized: "单台", comment: "执行方式：只在一台主机上执行"))
+            metaCell(String(localized: "上次运行"), UTermFormat.relative(command.lastRunAt))
+            metaCell(String(localized: "运行次数"), "\(command.runCount)", mono: true)
+            metaCell(String(localized: "AI 介入"), command.aiAssisted ? String(localized: "已开启") : String(localized: "已关闭"),
                      valueColor: command.aiAssisted ? UD.aiAccent : UD.text)
         }
     }
@@ -323,8 +324,8 @@ struct QuickCommandDetail: View {
             .disabled(isRunning)
             .keyboardShortcut(.return, modifiers: [])
 
-            squareButton(systemImage: "pencil", help: "编辑", action: onEdit)
-            squareButton(systemImage: "trash", help: "删除", danger: true, action: onDelete)
+            squareButton(systemImage: "pencil", help: String(localized: "编辑"), action: onEdit)
+            squareButton(systemImage: "trash", help: String(localized: "删除"), danger: true, action: onDelete)
         }
         .padding(EdgeInsets(top: 12, leading: 18, bottom: 16, trailing: 18))
         .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }

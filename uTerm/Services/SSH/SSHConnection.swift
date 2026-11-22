@@ -37,18 +37,22 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
         case notConnected
         case alreadyClosed
         case connectFailed(String)
+        /// 服务端拒绝了凭据。单独成一种，命令行据此报 `auth_failed`，不靠匹配消息文字。
+        case authenticationFailed(String)
         case jumpHostFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .notConnected:
-                return "SSH 连接尚未建立"
+                return String(localized: "SSH 连接尚未建立")
             case .alreadyClosed:
-                return "SSH 连接已关闭，无法再次连接"
+                return String(localized: "SSH 连接已关闭，无法再次连接")
             case .connectFailed(let message):
-                return "SSH 连接失败：\(message)"
+                return String(localized: "SSH 连接失败：\(message)")
+            case .authenticationFailed(let message):
+                return String(localized: "SSH 连接失败：认证失败：\(message)")
             case .jumpHostFailed(let message):
-                return "跳板机连接失败：\(message)"
+                return String(localized: "跳板机连接失败：\(message)")
             }
         }
     }

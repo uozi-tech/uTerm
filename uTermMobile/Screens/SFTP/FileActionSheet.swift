@@ -53,8 +53,16 @@ struct PermissionGrid: View {
             from: POSIXPermissionBits.initialMode(for: entry)))
     }
 
-    private let classes: [(String, Int)] = [("所有者", 0), ("群组", 3), ("其他", 6)]
-    private let cols: [(String, Int)] = [("读", 0), ("写", 1), ("执行", 2)]
+    private let classes: [(String, Int)] = [
+        (String(localized: "所有者", comment: "文件权限：所有者"), 0),
+        (String(localized: "群组", comment: "文件权限：所属群组"), 3),
+        (String(localized: "其他", comment: "文件权限：其他用户"), 6),
+    ]
+    private let cols: [(String, Int)] = [
+        (String(localized: "读", comment: "文件权限：读"), 0),
+        (String(localized: "写", comment: "文件权限：写"), 1),
+        (String(localized: "执行", comment: "文件权限：执行"), 2),
+    ]
 
     var body: some View {
         ScrollView {
@@ -97,13 +105,13 @@ struct PermissionGrid: View {
                 .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
                 .padding(.horizontal, 16)
 
-                MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPermissionBits.mode(from: bits)) }
+                MBtn(title: String(localized: "应用", comment: "应用权限修改"), full: true, height: 48) { onApply(POSIXPermissionBits.mode(from: bits)) }
                     .padding(.horizontal, 16).padding(.top, 20)
             }
             .padding(.vertical, 8)
         }
         .background(M.canvas)
-        .safeAreaInset(edge: .top, spacing: 0) { MSheetNavHeader(title: "权限") }
+        .safeAreaInset(edge: .top, spacing: 0) { MSheetNavHeader(title: String(localized: "权限", comment: "文件权限")) }
         .toolbar(.hidden, for: .navigationBar)   // 整栈隐藏系统栏：下钻全程 top inset 恒定
     }
 }
@@ -116,22 +124,22 @@ struct FileInfoView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                MInsetGroup(header: "信息") {
-                    MInsetRow(label: "名称", value: entry.name)
-                    MInsetRow(label: "类型", value: entry.kind.label)
+                MInsetGroup(header: String(localized: "信息", comment: "文件简介分组")) {
+                    MInsetRow(label: String(localized: "名称"), value: entry.name)
+                    MInsetRow(label: String(localized: "类型", comment: "文件类型"), value: entry.kind.label)
                     if !entry.isDirectory, entry.size != nil {
-                        MInsetRow(label: "大小", value: entry.sizeText)
+                        MInsetRow(label: String(localized: "大小", comment: "文件大小"), value: entry.sizeText)
                     }
                     if entry.permissions != nil {
-                        MInsetRow(label: "权限", value: entry.octalText, valueMono: true)
+                        MInsetRow(label: String(localized: "权限", comment: "文件权限"), value: entry.octalText, valueMono: true)
                     }
-                    MInsetRow(label: "路径", value: fullPath, valueMono: true, last: true)
+                    MInsetRow(label: String(localized: "路径", comment: "文件路径"), value: fullPath, valueMono: true, last: true)
                 }
             }
             .padding(.top, 12)
         }
         .background(M.canvas)
-        .safeAreaInset(edge: .top, spacing: 0) { MSheetNavHeader(title: "简介") }
+        .safeAreaInset(edge: .top, spacing: 0) { MSheetNavHeader(title: String(localized: "简介", comment: "文件简介")) }
         .toolbar(.hidden, for: .navigationBar)   // 整栈隐藏系统栏：下钻全程 top inset 恒定
     }
 }
@@ -176,18 +184,18 @@ struct FileActionSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     header.padding(.bottom, 8)
-                    if isFolder { actionRow("folder-tag", "进入文件夹", action: onEnter) }
-                    actionRow("download", "下载", action: onDownload)
-                    actionRow("copy", "拷贝路径", action: onCopyPath)
-                    actionRow("edit", "重命名", action: onRename)
+                    if isFolder { actionRow("folder-tag", String(localized: "进入文件夹"), action: onEnter) }
+                    actionRow("download", String(localized: "下载", comment: "下载文件"), action: onDownload)
+                    actionRow("copy", String(localized: "拷贝路径"), action: onCopyPath)
+                    actionRow("edit", String(localized: "重命名"), action: onRename)
                     NavigationLink { PermissionGrid(entry: entry, onApply: onChmod) } label: {
-                        actionLabel("lock", "权限…", chevron: true)
+                        actionLabel("lock", String(localized: "权限…"), chevron: true)
                     }.buttonStyle(MRowStyle())
                     NavigationLink { FileInfoView(entry: entry, fullPath: fullPath) } label: {
-                        actionLabel("info", "简介", chevron: true)
+                        actionLabel("info", String(localized: "简介", comment: "文件简介"), chevron: true)
                     }.buttonStyle(MRowStyle())
                     Rectangle().fill(M.divider).frame(height: 1).padding(.vertical, 8)
-                    actionRow("trash", "删除", danger: true, action: onDelete)
+                    actionRow("trash", String(localized: "删除", comment: "删除文件"), danger: true, action: onDelete)
                 }
                 .padding(.horizontal, MSheetMetrics.screenInset).padding(.top, 18).padding(.bottom, 30)
             }

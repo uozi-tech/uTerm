@@ -169,7 +169,7 @@ nonisolated enum ControlFilePayloadBuilder {
             return text.isEmpty ? code : "\(text)（\(code)）"
         }
         if let limit = error as? SFTPDownloadLimitExceeded {
-            return "内容超过本次上限（\(limit.observedBytes) > \(limit.maximumBytes) 字节）"
+            return String(localized: "内容超过本次上限（\(String(limit.observedBytes)) > \(String(limit.maximumBytes)) 字节）")
         }
         if let short = error as? SFTPShortReadError {
             return short.localizedDescription

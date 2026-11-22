@@ -1,0 +1,10 @@
+/* Name shown in System Settings (Accessibility, Files and Folders, Local Network…) and the permission prompts;
+   see the comment in Config/uterm-holder-Info.plist. */
+"CFBundleName" = "uTerm 터미널";
+"CFBundleDisplayName" = "uTerm 터미널";
+"NSLocalNetworkUsageDescription" = "uTerm 터미널이 로컬 네트워크의 기기에 연결합니다. 그래서 uTerm을 다시 시작해도 연결이 끊기지 않습니다.";
+"NSDocumentsFolderUsageDescription" = "uTerm 로컬 터미널에서 실행 중인 프로그램이 문서 폴더에 접근하려고 합니다.";
+"NSDesktopFolderUsageDescription" = "uTerm 로컬 터미널에서 실행 중인 프로그램이 데스크탑 폴더에 접근하려고 합니다.";
+"NSDownloadsFolderUsageDescription" = "uTerm 로컬 터미널에서 실행 중인 프로그램이 다운로드 폴더에 접근하려고 합니다.";
+"NSRemovableVolumesUsageDescription" = "uTerm 로컬 터미널에서 실행 중인 프로그램이 이동식 볼륨의 파일에 접근하려고 합니다.";
+"NSNetworkVolumesUsageDescription" = "uTerm 로컬 터미널에서 실행 중인 프로그램이 네트워크 볼륨의 파일에 접근하려고 합니다.";

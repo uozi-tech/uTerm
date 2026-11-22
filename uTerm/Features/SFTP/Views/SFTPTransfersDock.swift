@@ -108,16 +108,17 @@ struct SFTPTransfersDock: View {
                 Text(s.fileName).font(UD.mono(11)).foregroundStyle(UD.text2)
                     .lineLimit(1).truncationMode(.middle).frame(maxWidth: 168, alignment: .leading)
                 UDLinearBar(progress: queued ? 0 : fraction, height: 5).frame(width: 96)
-                Text(queued ? "排队" : pctText).font(UD.mono(11)).foregroundStyle(UD.text3)
+                Text(queued ? String(localized: "排队", comment: "传输状态：排队等待") : pctText).font(UD.mono(11)).foregroundStyle(UD.text3)
                     .frame(width: 32, alignment: .trailing)
                 Text(UTermFormat.transferRate(s.speedBytesPerSec)).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
         .buttonStyle(.udPlain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(s.direction == .up ? "上传" : "下载") \(s.fileName)")
-        .accessibilityValue(queued ? "排队中" : pctText)
-        DockCancelButton(title: "取消传输 \(s.fileName)") { onCancel(s.id) }
+        .accessibilityLabel(s.direction == .up
+            ? String(localized: "上传 \(s.fileName)") : String(localized: "下载 \(s.fileName)"))
+        .accessibilityValue(queued ? String(localized: "排队中") : pctText)
+        DockCancelButton(title: String(localized: "取消传输 \(s.fileName)")) { onCancel(s.id) }
     }
 
     @ViewBuilder private func aggregateChip(_ summary: SFTPTransfersDockSummary) -> some View {
@@ -127,7 +128,7 @@ struct SFTPTransfersDock: View {
             HStack(spacing: 8) {
                 statusIcon("arrow.up", color: UD.accent, weight: .medium,
                            yOffset: SFTPTransfersDockLayout.statusArrowYOffset)
-                Text("正在\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
+                Text(allUp ? "正在上传 \(summary.activeCount) 个文件" : "正在传输 \(summary.activeCount) 个文件")
                     .foregroundStyle(UD.text2)
                 UDLinearBar(progress: aggPct, height: 5).frame(width: 72)
                 Text(UTermFormat.progress(aggPct)).font(UD.mono(11)).foregroundStyle(UD.text3)
@@ -139,7 +140,7 @@ struct SFTPTransfersDock: View {
         }
         .buttonStyle(.udPlain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("正在\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
+        .accessibilityLabel(allUp ? "正在上传 \(summary.activeCount) 个文件" : "正在传输 \(summary.activeCount) 个文件")
         .accessibilityValue(UTermFormat.progress(aggPct))
         .accessibilityHint("展开传输列表")
     }
@@ -267,9 +268,9 @@ struct SFTPTransfersPanel: View {
                 .background(UD.fillSoft, in: Capsule())
             Spacer()
             if activeCount > 0 {
-                PanelLinkButton(title: "全部取消", danger: true, action: onCancelAll)
+                PanelLinkButton(title: String(localized: "全部取消"), danger: true, action: onCancelAll)
             } else if doneCount > 0 {
-                PanelLinkButton(title: "清除已完成", danger: false, action: onClearFinished)
+                PanelLinkButton(title: String(localized: "清除已完成"), danger: false, action: onClearFinished)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
@@ -325,11 +326,12 @@ struct SFTPTransferRow: View {
                                           bytesPerSecond: item.speedBytesPerSec)
             return ("\(bytesText) · \(speedText) · \(etaText)", UD.text4)
         case .queued:
-            return ("排队中 · \(UFormat.bytes(item.bytesTotal))", UD.text4)
+            return (String(localized: "排队中 · \(UFormat.bytes(item.bytesTotal))"), UD.text4)
         case .done:
-            return ("已完成 · \(UFormat.bytes(item.bytesTotal))", UD.text4)
+            return (String(localized: "已完成 · \(UFormat.bytes(item.bytesTotal))"), UD.text4)
         case .failed:
-            return (item.direction == .up ? "上传失败 · 点击重试" : "下载失败", UD.danger.opacity(0.8))
+            return (item.direction == .up ? String(localized: "上传失败 · 点击重试") : String(localized: "下载失败"),
+                    UD.danger.opacity(0.8))
         }
     }
 
@@ -358,8 +360,11 @@ struct SFTPTransferRow: View {
         .background(hover ? UD.rowHover : .clear)
         .onHover { hover = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.direction == .up ? "上传" : "下载") \(item.fileName)")
-        .accessibilityValue(item.status == .active ? "\(UTermFormat.progress(fraction))，\(subtitle.0)" : subtitle.0)
+        .accessibilityLabel(item.direction == .up
+            ? String(localized: "上传 \(item.fileName)") : String(localized: "下载 \(item.fileName)"))
+        .accessibilityValue(item.status == .active
+            ? String(localized: "\(UTermFormat.progress(fraction))，\(subtitle.0)", comment: "无障碍值：进度，状态")
+            : subtitle.0)
     }
 
     @ViewBuilder private var control: some View {
@@ -371,12 +376,12 @@ struct SFTPTransferRow: View {
         case .failed:
             HStack(spacing: 2) {
                 if item.direction == .up {
-                    RowControlButton(system: "arrow.clockwise", title: "重试", action: onRetry)
+                    RowControlButton(system: "arrow.clockwise", title: String(localized: "重试"), action: onRetry)
                 }
-                RowControlButton(system: "xmark", title: "移除", action: onCancel)
+                RowControlButton(system: "xmark", title: String(localized: "移除", comment: "从传输列表移除"), action: onCancel)
             }
         case .active, .queued:
-            RowControlButton(system: "xmark", title: "取消传输", redOnHover: true, action: onCancel)
+            RowControlButton(system: "xmark", title: String(localized: "取消传输"), redOnHover: true, action: onCancel)
         }
     }
 }

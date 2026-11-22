@@ -17,9 +17,9 @@ enum MobileBiometry {
         // 必须先 canEvaluatePolicy 一次，biometryType 才会被填充。
         _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
         switch ctx.biometryType {
-        case .faceID:  return ("面容 ID", "faceid")
-        case .touchID: return ("触控 ID", "touchid")
-        default:       return ("生物识别", "lock")
+        case .faceID:  return (String(localized: "面容 ID"), "faceid")
+        case .touchID: return (String(localized: "触控 ID"), "touchid")
+        default:       return (String(localized: "生物识别"), "lock")
         }
     }
 }
@@ -147,7 +147,7 @@ struct MobileLockCover: View {
                 if case .authenticating = model.state {
                     ProgressView().tint(M.accent)
                 } else {
-                    MBtn(title: "解锁", icon: "lock") {
+                    MBtn(title: String(localized: "解锁"), icon: "lock") {
                         Task { await model.authenticate() }
                     }
                 }

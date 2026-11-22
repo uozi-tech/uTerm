@@ -7,10 +7,10 @@ nonisolated enum CommandPaletteKind: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .host:    return "主机"
-        case .command: return "命令"
-        case .file:    return "文件"
-        case .setting: return "设置"
+        case .host:    return String(localized: "主机", comment: "命令面板分组标题")
+        case .command: return String(localized: "命令", comment: "命令面板分组标题")
+        case .file:    return String(localized: "文件", comment: "命令面板分组标题")
+        case .setting: return String(localized: "设置", comment: "命令面板分组标题")
         }
     }
 
@@ -144,19 +144,20 @@ nonisolated func dedupeCommandPaletteByID(_ items: [CommandPaletteItem]) -> [Com
 @MainActor
 func commandPaletteSettingsItems(openSettings: @escaping () -> Void) -> [CommandPaletteItem] {
     let tabs: [(SettingsSection, String)] = [
-        (.general,     "启动、更新"),
-        (.appearance,  "主题、强调色、语言"),
-        (.providers,   "Anthropic / OpenAI 兼容"),
-        (.terminal,    "光标、历史行数、退出行为"),
-        (.connection,  "SSH 超时、主机密钥校验、同时传输数"),
-        (.security,    "应用锁、SSH 密钥、主机分组"),
-        (.sync,        "iCloud、局域网同步、AI 对话保留"),
-        (.diagnostics, "日志等级、显示日志"),
+        (.general,     String(localized: "启动、更新")),
+        (.appearance,  String(localized: "主题、强调色、语言")),
+        (.providers,   String(localized: "Anthropic / OpenAI 兼容")),
+        (.terminal,    String(localized: "光标、历史行数、退出行为")),
+        (.connection,  String(localized: "SSH 超时、主机密钥校验、同时传输数")),
+        (.security,    String(localized: "应用锁、SSH 密钥、主机分组")),
+        (.sync,        String(localized: "iCloud、局域网同步、AI 对话保留")),
+        (.diagnostics, String(localized: "日志等级、显示日志")),
     ]
     return tabs.map { tab, detail in
         CommandPaletteItem(
             id: "setting.\(tab.rawValue)", kind: .setting,
-            title: "设置 · \(tab.title)", detail: detail, hint: "↵", group: nil) {
+            title: String(localized: "设置 · \(tab.title)", comment: "命令面板条目：设置 › 某个分页"),
+            detail: detail, hint: "↵", group: nil) {
                 UserDefaults.standard.set(tab.rawValue, forKey: SettingsTabSelection.key)
                 openSettings()
             }
@@ -170,9 +171,9 @@ func commandPaletteAccentItems(state: AccentState = .shared) -> [CommandPaletteI
         CommandPaletteItem(
             id: "setting.accent.\(color.rawValue)",
             kind: .setting,
-            title: "强调色 · \(color.label)",
-            detail: "切换全局界面强调色",
-            hint: state.selected == color ? "当前" : "↵",
+            title: String(localized: "强调色 · \(color.label)", comment: "命令面板条目：切换到某个强调色"),
+            detail: String(localized: "切换全局界面强调色"),
+            hint: state.selected == color ? String(localized: "当前", comment: "命令面板：当前选中的强调色") : "↵",
             group: nil
         ) {
             state.selected = color

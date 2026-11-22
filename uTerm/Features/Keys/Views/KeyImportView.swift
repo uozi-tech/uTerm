@@ -41,26 +41,26 @@ struct KeyImportView: View {
                         .font(.system(size: 12)).foregroundStyle(UD.text3)
                 }
 
-                DarkFormSection(title: "基础") {
-                    DarkFormField(label: "名称", hint: "留空则用文件名或 imported-key") {
-                        UDTextField(placeholder: "例如：prod-deploy", text: $name)
+                DarkFormSection(title: String(localized: "基础", comment: "表单分组：基础信息")) {
+                    DarkFormField(label: String(localized: "名称"), hint: String(localized: "留空则用文件名或 imported-key")) {
+                        UDTextField(placeholder: String(localized: "例如：prod-deploy"), text: $name)
                     }
                 }
 
-                DarkFormSection(title: "私钥") {
+                DarkFormSection(title: String(localized: "私钥")) {
                     keyEditor
                     HStack(spacing: 6) {
                         Text("支持 OpenSSH / PEM / PKCS#8，也可把文件拖进上面的框")
                             .font(.system(size: 11)).foregroundStyle(UD.text4)
                         Spacer(minLength: 8)
-                        UDButton(title: "粘贴", style: .ghost, systemImage: "doc.on.clipboard",
+                        UDButton(title: String(localized: "粘贴"), style: .ghost, systemImage: "doc.on.clipboard",
                                  height: 26, action: pasteFromClipboard)
-                        UDButton(title: "从文件读取…", style: .ghost, systemImage: "folder",
+                        UDButton(title: String(localized: "从文件读取…"), style: .ghost, systemImage: "folder",
                                  height: 26, action: chooseFile)
                     }
                     if showsPassphrase {
-                        DarkFormField(label: "口令", hint: "此私钥已加密") {
-                            UDTextField(placeholder: "私钥口令（不是主机登录密码）", text: $passphrase,
+                        DarkFormField(label: String(localized: "口令", comment: "私钥口令"), hint: String(localized: "此私钥已加密")) {
+                            UDTextField(placeholder: String(localized: "私钥口令（不是主机登录密码）"), text: $passphrase,
                                         isSecure: true, revealable: true)
                         }
                     }
@@ -75,8 +75,8 @@ struct KeyImportView: View {
 
                 HStack(spacing: 10) {
                     Spacer()
-                    UDButton(title: "取消", style: .secondary, action: onCancel)
-                    UDButton(title: importing ? "导入中…" : "导入密钥", isLoading: importing, action: runImport)
+                    UDButton(title: String(localized: "取消"), style: .secondary, action: onCancel)
+                    UDButton(title: importing ? String(localized: "导入中…") : String(localized: "导入密钥"), isLoading: importing, action: runImport)
                         .disabled(!canImport)
                 }
             }
@@ -130,7 +130,7 @@ struct KeyImportView: View {
 
     private func pasteFromClipboard() {
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
-            errorText = "剪贴板里没有文本"
+            errorText = String(localized: "剪贴板里没有文本")
             return
         }
         keyText = text
@@ -142,7 +142,7 @@ struct KeyImportView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
-        panel.message = "选择 SSH 私钥文件"
+        panel.message = String(localized: "选择 SSH 私钥文件")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         load(fileAt: url)
     }

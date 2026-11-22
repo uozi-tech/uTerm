@@ -7,7 +7,7 @@ struct SettingsAppearanceSection: View {
     private var appearanceRaw: String = AppearancePreference.system.rawValue
 
     var body: some View {
-        MInsetGroup(header: "外观") {
+        MInsetGroup(header: String(localized: "外观")) {
             VStack(alignment: .leading, spacing: 9) {
                 Text("主题").font(M.sans(14)).foregroundStyle(M.text2)
                 Picker("主题", selection: $appearanceRaw.rawValue(AppearancePreference.self, default: .system)) {

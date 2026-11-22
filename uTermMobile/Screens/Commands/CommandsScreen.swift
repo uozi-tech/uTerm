@@ -13,15 +13,16 @@ struct CommandsScreen: View {
         NavigationStack {
             // 与「主机 / 终端 / 文件 / 设置」四个标签同一套大标题页头（MScreen）：此前这里是系统
             // 内联导航栏 + 「快捷命令」小标题，五个标签里唯独它换了一种页头。
-            MScreen(title: "命令", sub: commands.isEmpty ? nil : "\(commands.count) 条快捷命令",
+            MScreen(title: String(localized: "命令", comment: "快捷命令标签页标题"),
+                    sub: commands.isEmpty ? nil : String(localized: "\(commands.count) 条快捷命令"),
                     maxContentWidth: M.gridContentWidth, embedsNavigationStack: false, pinsHeader: true, actions: {
                 MRoundBtn(icon: "plus", filled: true) { creating = true }
                     .accessibilityLabel(Text("新建命令"))
             }) {
                 if commands.isEmpty {
-                    MEmptyState(icon: "bolt", title: "还没有快捷命令",
-                                message: "把常用运维命令存成可复用条目，绑定主机一键执行。",
-                                actionTitle: "新建命令", action: { creating = true })
+                    MEmptyState(icon: "bolt", title: String(localized: "还没有快捷命令"),
+                                message: String(localized: "把常用运维命令存成可复用条目，绑定主机一键执行。"),
+                                actionTitle: String(localized: "新建命令"), action: { creating = true })
                 } else {
                     MCardGrid {
                         ForEach(commands) { cmd in
@@ -48,7 +49,7 @@ struct CommandCard: View {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 8) {
                     Text(cmd.name).font(M.sans(15.5, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
-                    if cmd.aiAssisted { MChip(text: "AI 介入", icon: "spark", tone: .accent) }
+                    if cmd.aiAssisted { MChip(text: String(localized: "AI 介入"), icon: "spark", tone: .accent) }
                     Spacer()
                     MIcon(name: "chev", size: 14, color: M.text4, weight: .semibold)
                 }
@@ -57,8 +58,8 @@ struct CommandCard: View {
                     // 多列时预留两行，同一行的卡片才一样高；单列时按实际行数收起。
                     .lineLimit(2, reservesSpace: gridColumns > 1).multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
-                    MChip(text: "\(cmd.serverIDs.count) 台主机", icon: "server")
-                    if cmd.runCount > 0 { MChip(text: "运行 \(cmd.runCount) 次") }
+                    MChip(text: String(localized: "\(cmd.serverIDs.count) 台主机"), icon: "server")
+                    if cmd.runCount > 0 { MChip(text: String(localized: "运行 \(cmd.runCount) 次")) }
                     Spacer()
                 }
             }
@@ -85,13 +86,13 @@ struct CommandFormSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 22) {
-                    MInsetGroup(header: "名称") {
+                    MInsetGroup(header: String(localized: "名称")) {
                         TextField("命令名称", text: $name).font(M.sans(15)).foregroundStyle(M.text)
                             .autocorrectionDisabled().textInputAutocapitalization(.sentences)
                             .padding(.horizontal, 14).padding(.vertical, 12)
                     }
 
-                    MInsetGroup(header: "AI 介入") {
+                    MInsetGroup(header: String(localized: "AI 介入")) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("启用 AI 介入").font(M.sans(15)).foregroundStyle(M.text)
@@ -104,9 +105,9 @@ struct CommandFormSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        MSectionCap(text: ai ? "AI 指令（自然语言）" : "Shell 命令").padding(.horizontal, 20)
+                        MSectionCap(text: ai ? String(localized: "AI 指令（自然语言）") : String(localized: "Shell 命令")).padding(.horizontal, 20)
                         MTextArea(text: ai ? $intent : $command,
-                                  placeholder: ai ? "如：重启 Nginx 并健康检查 /healthz" : "sudo systemctl restart nginx")
+                                  placeholder: ai ? String(localized: "如：重启 Nginx 并健康检查 /healthz") : "sudo systemctl restart nginx")
                             .padding(.horizontal, 16)
                     }
 
@@ -185,7 +186,7 @@ struct CommandFormSheet: View {
         let sel = selection
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("关联主机".uppercased())
+                Text(String(localized: "关联主机").uppercased())
                     .font(M.sans(12, weight: .semibold)).tracking(0.4).foregroundStyle(M.text4)
                 Spacer()
                 if !sel.selectable.isEmpty {

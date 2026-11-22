@@ -106,7 +106,7 @@ struct QuickCommandDetailView: View {
     private var targetsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                MSectionCap(text: "目标主机 · \(n) 台")
+                MSectionCap(text: String(localized: "目标主机 · \(n) 台"))
                 if n > 1 { Text("并行执行").font(M.sans(11)).foregroundStyle(M.success) }
             }
             VStack(spacing: 7) {
@@ -133,11 +133,12 @@ struct QuickCommandDetailView: View {
     }
 
     private var metaGrid: some View {
+        let aiLabel = String(localized: "AI 介入")
         let items: [(String, String, Bool)] = [
-            ("执行方式", n > 1 ? "并行 · \(n) 台" : "单台", false),
-            ("上次运行", lastRunText, false),
-            ("运行次数", "\(cmd.runCount)", true),
-            ("AI 介入", cmd.aiAssisted ? "已开启" : "已关闭", false),
+            (String(localized: "执行方式"), n > 1 ? String(localized: "并行 · \(n) 台") : String(localized: "单台"), false),
+            (String(localized: "上次运行"), lastRunText, false),
+            (String(localized: "运行次数"), "\(cmd.runCount)", true),
+            (aiLabel, cmd.aiAssisted ? String(localized: "已开启") : String(localized: "已关闭"), false),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
                          spacing: 16) {
@@ -145,7 +146,7 @@ struct QuickCommandDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.0.uppercased()).font(M.sans(11)).tracking(0.4).foregroundStyle(M.text4)
                     Text(item.1).font(item.2 ? M.mono(14.5) : M.sans(14.5))
-                        .foregroundStyle(item.0 == "AI 介入" && cmd.aiAssisted ? M.aiAccent : M.text)
+                        .foregroundStyle(item.0 == aiLabel && cmd.aiAssisted ? M.aiAccent : M.text)
                 }
             }
         }
@@ -171,7 +172,7 @@ struct QuickCommandDetailView: View {
     private var runLogs: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                MSectionCap(text: "执行日志")
+                MSectionCap(text: String(localized: "执行日志"))
                 Text("保留近 30 天").font(M.sans(10.5)).foregroundStyle(M.text3)
                     .padding(.horizontal, 8).padding(.vertical, 1)
                     .background(M.fillFaint)
@@ -229,7 +230,7 @@ struct QuickCommandDetailView: View {
     private var serversBadge: some View {
         Group {
             if n <= 1 {
-                Text(targets.first.map(QuickCommandTargets.displayName) ?? "\(n) 台").font(M.sans(12)).foregroundStyle(M.text3)
+                Text(targets.first.map(QuickCommandTargets.displayName) ?? String(localized: "\(n) 台")).font(M.sans(12)).foregroundStyle(M.text3)
                     .padding(.horizontal, 9).padding(.vertical, 3)
                     .background(M.fillFaint)
                     .clipShape(Capsule())
@@ -276,7 +277,7 @@ private struct RunLogRow: View {
                     MDot(color: tint, size: 8)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(timeText).font(M.sans(13.5, weight: .medium)).foregroundStyle(M.text)
-                        Text("\(run.results.count) 台 · 成功 \(run.results.count - fail)\(fail > 0 ? " · 失败 \(fail)" : "") · \(secText)")
+                        Text(summaryText)
                             .font(M.sans(11.5)).foregroundStyle(M.text4)
                     }
                     Spacer(minLength: 6)
@@ -336,4 +337,11 @@ private struct RunLogRow: View {
 
     private var timeText: String { UTermFormat.logTimestamp(run.startedAt) }
     private var secText: String { UFormat.duration(milliseconds: Double(run.durationMs)) }
+    private var summaryText: String {
+        let total = run.results.count
+        let ok = total - fail
+        return fail > 0
+            ? String(localized: "\(total) 台 · 成功 \(ok) · 失败 \(fail) · \(secText)")
+            : String(localized: "\(total) 台 · 成功 \(ok) · \(secText)")
+    }
 }

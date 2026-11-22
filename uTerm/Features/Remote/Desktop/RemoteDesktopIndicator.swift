@@ -45,7 +45,7 @@ final class RemoteDesktopIndicator {
         shown = viewer
         let server = self.server
         let content = RemoteDesktopIndicatorView(viewer: viewer) {
-            server.endDesktop(reason: "已在 Mac 上断开")
+            server.endDesktop(reason: String(localized: "已在 Mac 上断开"))
         }
         let hosting = NSHostingView(rootView: content)
         let size = hosting.fittingSize

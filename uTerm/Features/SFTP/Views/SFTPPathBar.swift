@@ -45,8 +45,8 @@ struct SFTPPathBar: View {
         HStack(spacing: 10) {
             if part != .trailing {
                 HStack(spacing: 2) {
-                    navArrow("chevron.left", enabled: canBack, label: "后退", action: onBack)
-                    navArrow("chevron.right", enabled: canFwd, label: "前进", action: onFwd)
+                    navArrow("chevron.left", enabled: canBack, label: String(localized: "后退", comment: "浏览历史"), action: onBack)
+                    navArrow("chevron.right", enabled: canFwd, label: String(localized: "前进", comment: "浏览历史"), action: onFwd)
                 }
 
                 breadcrumbs
@@ -54,9 +54,9 @@ struct SFTPPathBar: View {
 
                 filterField
 
-                SFTPToolButton(systemName: "square.and.arrow.up", help: "上传文件", action: onUpload)
-                SFTPToolButton(systemName: "folder.badge.plus", help: "新建文件夹", action: onNewFolder)
-                SFTPToolButton(systemName: "arrow.clockwise", help: "刷新", action: onRefresh)
+                SFTPToolButton(systemName: "square.and.arrow.up", help: String(localized: "上传文件"), action: onUpload)
+                SFTPToolButton(systemName: "folder.badge.plus", help: String(localized: "新建文件夹"), action: onNewFolder)
+                SFTPToolButton(systemName: "arrow.clockwise", help: String(localized: "刷新"), action: onRefresh)
             } else {
                 Spacer(minLength: 0)
             }
@@ -125,7 +125,7 @@ struct SFTPPathBar: View {
             .padding(.horizontal, 8).frame(height: 28)
             .contentShape(Rectangle())
         }
-        .help(i == 0 ? "根目录 /" : full)
+        .help(i == 0 ? String(localized: "根目录 /") : full)
         .accessibilityLabel(i == 0 ? "根目录" : "进入目录 \(name)")
         .accessibilityValue(full)
         .buttonStyle(.udPlain)
@@ -155,7 +155,7 @@ struct SFTPPathBar: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         } content: {
-            UDMenu(width: 200, head: "排序", items: actionsMenuItems)
+            UDMenu(width: 200, head: String(localized: "排序", comment: "文件列表排序方式"), items: actionsMenuItems)
         }
         .accessibilityLabel("操作菜单")
         .help(onOpenInTerminal == nil ? "排序、显示隐藏文件" : "排序、显示隐藏文件、在终端中打开")
@@ -166,10 +166,10 @@ struct SFTPPathBar: View {
             UDMenuItem(label: key.label, active: key == sortKey, action: { onSetSort(key) })
         }
         items.append(.divider())
-        items.append(UDMenuItem(label: "显示隐藏文件", active: showHidden, action: onToggleHidden))
+        items.append(UDMenuItem(label: String(localized: "显示隐藏文件"), active: showHidden, action: onToggleHidden))
         if let onOpenInTerminal {
             items.append(.divider())
-            items.append(UDMenuItem(label: "在终端中打开", systemImage: "terminal", action: onOpenInTerminal))
+            items.append(UDMenuItem(label: String(localized: "在终端中打开"), systemImage: "terminal", action: onOpenInTerminal))
         }
         return items
     }

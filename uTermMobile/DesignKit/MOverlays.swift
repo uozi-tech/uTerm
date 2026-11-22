@@ -67,7 +67,7 @@ struct MConfirmDialog: View {
     var title: String
     var message: String
     var danger: Bool = false
-    var confirmLabel: String = "确认"
+    var confirmLabel: String = String(localized: "确认")
     var onCancel: () -> Void
     var onConfirm: () -> Void
     @Environment(\.mAccent) private var accent
@@ -91,7 +91,7 @@ struct MConfirmDialog: View {
                 Spacer(minLength: 0)
             }
             HStack(spacing: 10) {
-                MBtn(title: "取消", kind: .secondary, full: true, height: 46, action: onCancel)
+                MBtn(title: String(localized: "取消"), kind: .secondary, full: true, height: 46, action: onCancel)
                 MBtn(title: confirmLabel, kind: danger ? .danger : .primary, full: true, height: 46, action: onConfirm)
             }
             .padding(.top, 18)

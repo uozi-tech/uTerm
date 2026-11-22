@@ -1,3 +1,23 @@
+## 原生多语言项目（必读）
+
+uTerm 是**原生多语言**项目：源语言简体中文，同时完整支持 **English、繁體中文（台湾）、日本語、한국어**。任何新增或修改面向用户的文字
+（界面、报错、通知、权限说明、命令行输出、README、官网、商店介绍），都要**同一次改动里把所有语言、所有位置一起更新**，
+不能只改中文、留着「以后再翻」。具体写法与流程见下面「文案目录」一节的「多语言」。要同步的位置：
+
+| 位置 | 文件 | 核对 |
+|---|---|---|
+| App 界面（两端） | `uTerm/Localizable.xcstrings` | `make sync-strings` 后 `make check-translations` |
+| 共享包 | uAppKit 各 target 的 `Sources/<target>/Localizable.xcstrings`（`bundle: .module`） | 改 uAppKit 时一起翻，发新 tag 后升级引用 |
+| 权限说明等 Info.plist 文字 | `uTerm/InfoPlist.xcstrings`、`uTermMobile/InfoPlist.xcstrings`、`Config/uterm-holder/<语言>.lproj/`、`uTermRemoteHost/<语言>.lproj/` | 新增 `NS…UsageDescription` 时四种语言都要写 |
+| 命令行客户端 | `scripts/utermctl` 的 `TRANSLATIONS` 表 | `make check-cli` |
+| README | `README.md` + `README.en.md` / `README.zh-Hant.md` / `README.ja.md` / `README.ko.md` | 改一份就改全部五份 |
+| 官网（维护者私有） | `internal/website/index.html` + `locales/<语言>.json` | `internal/website/scripts/build-i18n.py --check` |
+| App Store 介绍（维护者） | App Store Connect 里各语言的描述、关键词、截图 | 发版 skill 里核 |
+
+有意只用中文的：`CHANGELOG.md`、`docs/` 设计文档、`skills/` 技能文档（给 AI 读的）、日志、代码注释、提交说明。
+新加一种语言要改：上表全部位置 + pbxproj 的 `knownRegions` + `AppLanguage` + holder 的拷贝脚本 + `scripts/translations.py`
+与 `build-i18n.py` 的语言表。
+
 ## Vendored 依赖
 
 - `vendor/libghostty-spm`：终端引擎。上游 `Lakr233/libghostty-spm` 的 fork（基线 tag `2.2.2026111701` / `b9694b50`，Ghostty `5ebe501a`；我们提的回放入口、滚动小修、逐像素平滑滚动三个 PR 都已在这一版里），pbxproj 以 `XCLocalSwiftPackageReference` 引用，两个 App target 依赖它的 `GhosttyTerminal` / `GhosttyKit` / `GhosttyVt` 三个 product。fork 的原因：引擎要带我们的补丁（`Patches/ghostty/` 的 0023 保色相最低对比度，改 Ghostty 的 shader；逐像素平滑滚动现在是上游的 0022）；Swift 层要改 internal 的东西（surface 生灭回调、wakeup 重画、自写惯性、按键过滤）；libghostty-vt 要和 GhosttyKit 在同一棵打过补丁的源码树上编，影子终端和画面才逐格一致。**二进制不进版本库**：`make engine`（`scripts/fetch-ghostty-engine.sh`，自测 `scripts/fetch-ghostty-engine.test.sh`）按 `vendor/libghostty-spm/ENGINE.lock` 取 zip、校验 sha256、解到 `BinaryTarget/`，已是那一份就不动；`make build` / `archive` / `test*` / `archive-mobile` 等都先依赖它，`make clean` 不动 `vendor/`。zip 从 `UTERM_GHOSTTY_ARTIFACTS` 指向的目录取（维护者的目录在 `internal/config.mk`；不发布二进制，别人本地现编），取 zip 不联网；**取不到 zip（新克隆、换机器）时 `make engine` 自动退到从上游源码现编**（`make engine-build` = `scripts/build-ghostty-engine.sh`，自测 `scripts/build-ghostty-engine.test.sh`；按 `ENGINE.lock` 的来源几行取 tag / Ghostty 提交 / Zig，只编 macOS + iOS，约 15 分钟、要联网，stamp 记 `local-build <engine_version>`，不核 sha256；`UTERM_GHOSTTY_NO_BUILD=1` 关掉；发版用测过的 zip，不用现编的）。新克隆的仓库没跑 `make engine` 之前 Xcode 会报 binaryTarget 路径不存在。补丁清单与升级步骤见 `vendor/libghostty-spm/UTERM-PATCHES.md`（升级前必读，不要整目录覆盖 `Sources/`），从上游 tag 编出两个二进制的步骤见 `vendor/libghostty-spm/BUILD.md`。**升级算协议变更**：`ENGINE.lock` 的 `engine_version` 与 `TerminalEngineVersion.current` 必须一字不差（两端的 `TerminalEngineLockTests` 拦着），两端引擎版本不同会拒绝远控镜像终端、重启后丢弃旧版本存的 holder 检查点。
@@ -370,7 +390,7 @@ to-one 关系镜像成一个 `STRING` 引用字段，to-many 靠子表反向键�
 两端共用一份 String Catalog。里面的键是编译器抽出来的：`SWIFT_EMIT_LOC_STRINGS = YES` 让每个源文件编译时吐
 一份 `.stringsdata`（文件里进了 `LocalizedStringKey` 的字面量：`Text("…")` / `navigationTitle` / `.alert("…")` /
 `Window("…")` 等；走 `String` 参数的文案——`SettingsRow` 的 label / hint、`MInsetRow` 的 label、`UDButton` 的
-title——编译器不抽，本来就不进目录）。把 `.stringsdata` 合进目录这一步只有 Xcode 的 IDE 在构建后会做，
+title——编译器不抽，所以调用处要包 `String(localized:)`，见下面「多语言」）。把 `.stringsdata` 合进目录这一步只有 Xcode 的 IDE 在构建后会做，
 `xcodebuild` 不做，Apple 的 `xcstringstool sync` 只保留带翻译的条目（一跑会删光几百个未翻译的空壳键，别用）。
 
 - **抽文案用 `make sync-strings`**：先把 `uTerm`（mac）与 `uTermMobile`（iOS 模拟器）各编一遍拿到两端的
@@ -381,3 +401,37 @@ title——编译器不抽，本来就不进目录）。把 `.stringsdata` 合�
 - 两端的 `.stringsdata` 必须都给：mac-only 文件只有 mac 构建才产出，只喂一端会把另一端独有的键当成
   「代码里没了」。工具在某个目录下找不到 `.stringsdata` 会直接报错。
 - 自测：`bash scripts/sync-strings.test.sh`（含用仓库真实目录做的 round-trip 校验）。
+
+### 多语言（2026-11 起）
+
+源语言简体中文（`developmentRegion = zh-Hans`），另带 **en、zh-Hant（台湾用语）、ja、ko**。目录里每个键都要带齐这四种，
+`make check-translations`（`scripts/translations.py`，自测 `scripts/translations.test.sh`）缺一个或占位对不上就非零退出。
+
+- **写文案的规矩**（新代码照做，否则那句话永远是中文）：
+  - 走 `String` 参数的地方（`SettingsRow` / `MInsetRow` / uAppKit 的 `UDButton` 等的标题、模型里返回 `String` 的
+    `title` / `label` / `message`、`errorDescription`、交给 `NSAlert` 的文字）一律 `String(localized: "…")`。
+    SwiftUI 直接收字面量的（`Text("…")`、`Button("…")`、`.help`、`.alert` 标题、收 `LocalizedStringKey` 的自家 helper）不用包。
+  - 拼接写成一个带插值的整句（`String(localized: "已连接\(name)")`），别 `"…" + x`；列表分隔符用
+    `String(localized: "、", comment: "并列项之间的分隔符")`。
+  - 插值：`String` 直接插；表示**数量**的 `Int` 直接插（英文会走复数）；**标识**类整数（端口、PID、年份、版本、错误码、
+    核对码）插 `String(x)`，否则按区域加千分位（`47,310`）；`Double` 等先格式化成 `String`。
+  - 短而有歧义的词加 `comment:`。同一句中文在两处意思不同（如侧栏的「置顶」和菜单动作「置顶」）就给其中一处显式的键：
+    `String(localized: "sidebar.pinned", defaultValue: "置顶", comment: …)`，并在目录里手写它的 zh-Hans 值。
+  - 不翻译：日志、断言消息、`#Preview`、测试；示例终端输出用 `Text(verbatim:)`。**不要拿显示文字做比较 / 前缀匹配**
+    （换了语言就失效）——用错误类型或 code（例：`RemoteMacLocalFileError`、`SSHConnectionError.authenticationFailed`）。
+  - 发给大模型的提示词照旧用中文写，但要求模型回答用界面语言：`AgentReplyLanguage.displayName`（uAppKit 审批理由同理）。
+- **翻译流程**：`make sync-strings`（新键进目录）→ `python3 scripts/translations.py missing --out todo.json`（带源码位置）
+  → 翻成 `{"键": {"en": …, "zh-Hant": …, "ja": …, "ko": …}}` → `python3 scripts/translations.py merge todo-out.json`
+  → 再 `make sync-strings`（回到 Xcode 格式）→ `make check-translations`。术语统一：主机 host / 主機 / ホスト / 호스트，
+  中继 relay / 中繼 / リレー / 릴레이，远程控制 Remote Control / 遠端控制 / リモート操作 / 원격 제어，标签页 tab / 分頁 / タブ / 탭，
+  会话（终端）session / 工作階段 / セッション / 세션，对话（AI）conversation / 對話 / 会話 / 대화；句中「」引用的设置名必须和那个设置自己的译名一致。
+- **界面语言**：mac 的「设置 › 外观 › 语言」（`AppLanguage`）写本进程的 `AppleLanguages`，重启生效；iOS 用系统设置里的 App 语言。
+- **别的进程**：远控进程（`uTermRemoteHost`）与 `uTermShellAgent.xpc` 也带这份目录（pbxproj 里各有一条只含
+  `Localizable.xcstrings` 的例外；shell agent 为此加了 Resources 阶段）。裸可执行文件 `uterm-ssh` 没有 bundle，
+  `uTermSSH/SSHHelperBundle` 往上找外层的 `uTerm.app` 取文案。uAppKit 的每个 target 自带 `Localizable.xcstrings`，
+  包里的文字必须 `bundle: .module`。
+- **Info.plist 文案**：主程序 `uTerm/InfoPlist.xcstrings`（对 iOS 排除）、iOS `uTermMobile/InfoPlist.xcstrings`、
+  holder 的 `Config/uterm-holder/<语言>.lproj/InfoPlist.strings`（由 Run Script 拷，加语言要改脚本）、远控进程的
+  `uTermRemoteHost/<语言>.lproj/InfoPlist.strings`。
+- **命令行**：`scripts/utermctl` 自带翻译表（`TRANSLATIONS`，按 `UTERM_LANG` → 系统 `AppleLanguages` → `LANG` 选语言），
+  App 那一侧的 `ControlHandler*` 消息跟 App 的语言走。`--json` 的字段名、错误码不翻译。

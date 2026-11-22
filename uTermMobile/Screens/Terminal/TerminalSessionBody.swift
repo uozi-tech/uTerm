@@ -85,7 +85,9 @@ struct TerminalSessionBody: View {
     private var terminalBg: Color {
         Color(uiColor: TerminalColorScheme.resolve(dark: colorScheme == .dark).backgroundColor)
     }
-    private var serverContext: String { "\(tab.host.name)（\(tab.host.displayEndpoint)）" }
+    private var serverContext: String {
+        String(localized: "\(tab.host.name)（\(tab.host.displayEndpoint)）", comment: "Agent 的主机上下文：主机名（地址）")
+    }
 
     var body: some View {
         ZStack {
@@ -203,14 +205,14 @@ struct TerminalSessionBody: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: 340)
                 HStack(spacing: 10) {
-                    MBtn(title: "拷贝错误", icon: "copy", kind: .secondary, height: 44) {
+                    MBtn(title: String(localized: "拷贝错误"), icon: "copy", kind: .secondary, height: 44) {
                         UIPasteboard.general.string = msg
                     }.fixedSize()
                     if tab.controller.canReconnect {
-                        MBtn(title: "关闭", kind: .secondary, height: 44, action: onClose).fixedSize()
-                        MBtn(title: "重试", kind: .tinted, height: 44) { tab.controller.restart() }.fixedSize()
+                        MBtn(title: String(localized: "关闭"), kind: .secondary, height: 44, action: onClose).fixedSize()
+                        MBtn(title: String(localized: "重试"), kind: .tinted, height: 44) { tab.controller.restart() }.fixedSize()
                     } else {
-                        MBtn(title: "关闭", kind: .tinted, height: 44, action: onClose).fixedSize()
+                        MBtn(title: String(localized: "关闭"), kind: .tinted, height: 44, action: onClose).fixedSize()
                     }
                 }
                 .padding(.top, 6)

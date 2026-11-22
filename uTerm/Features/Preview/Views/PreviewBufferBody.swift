@@ -21,7 +21,7 @@ struct PreviewBufferBody: View {
             case .failed(let message):
                 PreviewUnavailableBody(
                     buffer: buffer,
-                    title: "无法预览此文件",
+                    title: String(localized: "无法预览此文件"),
                     message: message)
             case .loaded, .saving:
                 previewContent

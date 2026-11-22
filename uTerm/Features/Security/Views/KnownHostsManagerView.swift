@@ -33,14 +33,14 @@ struct KnownHostsManagerView: View {
         // 内容区与设置窗同一套：窗底上一张描边卡片列表（见 SettingsPrimitives）。
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "已知主机指纹"))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "已知主机指纹")))
         .overlay { deleteConfirmOverlay }
     }
 
     // MARK: - 搜索 / 列表
 
     private var searchBar: some View {
-        UDSearchField(text: $query, placeholder: "按地址或指纹搜索", showsHotkeyChip: false)
+        UDSearchField(text: $query, placeholder: String(localized: "按地址或指纹搜索"), showsHotkeyChip: false)
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             // 搜索条与列表同底色，底部 1pt 线分隔。

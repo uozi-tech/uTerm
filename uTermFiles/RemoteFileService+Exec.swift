@@ -20,7 +20,7 @@ nonisolated extension RemoteFileService {
     static func spawn(executable: String, arguments: [String], directory: String?, environment: [String]? = nil,
                       idleSeconds: TimeInterval, maxDuration: TimeInterval, maxBytes: Int) throws -> SpawnResult {
         var pipeEnds: [Int32] = [-1, -1]
-        guard pipe(&pipeEnds) == 0 else { throw RemoteFileError(.failed, "建管道失败：\(String(cString: strerror(errno)))") }
+        guard pipe(&pipeEnds) == 0 else { throw RemoteFileError(.failed, String(localized: "建管道失败：\(String(cString: strerror(errno)))")) }
         let readEnd = pipeEnds[0]
         let writeEnd = pipeEnds[1]
         defer { close(readEnd) }
@@ -60,7 +60,7 @@ nonisolated extension RemoteFileService {
         close(writeEnd)
         guard spawned == 0 else {
             throw RemoteFileError(spawned == ENOENT ? .notFound : .failed,
-                                  "\(executable) 起不来：\(String(cString: strerror(spawned)))")
+                                  String(localized: "\(executable) 起不来：\(String(cString: strerror(spawned)))"))
         }
         let watch = ExitWatch(pid)
         defer { watch.close() }
@@ -226,7 +226,7 @@ nonisolated extension RemoteFileService {
 
     /// 在用户的登录 shell 里跑一整串命令（管道、重定向、`;` 都行），目录缺省是主目录。
     static func exec(_ request: RemoteFileRequest, reply: inout RemoteFileReply, output: inout Data) throws {
-        guard let command = request.command, !command.isEmpty else { throw RemoteFileError(.invalid, "缺少要跑的命令") }
+        guard let command = request.command, !command.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少要跑的命令")) }
         let directory = try resolve(request.path ?? "~")
         var info = Darwin.stat()
         guard stat(directory, &info) == 0 else { throw posixError(directory) }
@@ -246,22 +246,22 @@ nonisolated extension RemoteFileService {
     /// 把文件里的一段文字换成另一段。要换的文字必须正好出现一次，除非说了全部替换。
     static func edit(_ request: RemoteFileRequest, reply: inout RemoteFileReply) throws {
         let path = try resolve(request.path)
-        guard let oldText = request.oldText, !oldText.isEmpty else { throw RemoteFileError(.invalid, "缺少要换掉的文字") }
-        guard let newText = request.newText else { throw RemoteFileError(.invalid, "缺少换成什么") }
+        guard let oldText = request.oldText, !oldText.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少要换掉的文字")) }
+        guard let newText = request.newText else { throw RemoteFileError(.invalid, String(localized: "缺少换成什么")) }
         let data = try loadText(path)
         if let expected = request.ifMatch {
             let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             guard actual.caseInsensitiveCompare(expected) == .orderedSame else {
-                throw RemoteFileError(.conflict, "\(path)：文件已经变了（现在的 sha256 是 \(actual)），重新读一遍再改")
+                throw RemoteFileError(.conflict, String(localized: "\(path)：文件已经变了（现在的 sha256 是 \(actual)），重新读一遍再改"))
             }
         }
         guard let text = String(data: data, encoding: .utf8) else {
-            throw RemoteFileError(.invalid, "\(path) 不是 UTF-8 文本，不能这样改")
+            throw RemoteFileError(.invalid, String(localized: "\(path) 不是 UTF-8 文本，不能这样改"))
         }
         let count = text.components(separatedBy: oldText).count - 1
-        guard count > 0 else { throw RemoteFileError(.noMatch, "\(path) 里没有找到要换掉的文字") }
+        guard count > 0 else { throw RemoteFileError(.noMatch, String(localized: "\(path) 里没有找到要换掉的文字")) }
         guard count == 1 || request.has(RemoteFileOption.all) else {
-            throw RemoteFileError(.ambiguous, "\(path) 里要换掉的文字出现了 \(count) 次：多带几行上下文让它唯一，或者说明全部替换")
+            throw RemoteFileError(.ambiguous, String(localized: "\(path) 里要换掉的文字出现了 \(count) 次：多带几行上下文让它唯一，或者说明全部替换"))
         }
         let updated = Data(text.replacingOccurrences(of: oldText, with: newText).utf8)
         try writeAtomically(updated, to: path, mode: nil)
@@ -274,10 +274,10 @@ nonisolated extension RemoteFileService {
     /// 打一份 unified diff。交给系统自带的 `/usr/bin/patch`，输出原样回去。
     static func patch(_ request: RemoteFileRequest, body: Data, reply: inout RemoteFileReply, output: inout Data) throws {
         let directory = try resolve(request.path ?? "~")
-        guard !body.isEmpty else { throw RemoteFileError(.invalid, "补丁是空的") }
+        guard !body.isEmpty else { throw RemoteFileError(.invalid, String(localized: "补丁是空的")) }
         let diff = NSTemporaryDirectory() + "uterm-patch-\(UUID().uuidString).diff"
         guard FileManager.default.createFile(atPath: diff, contents: body, attributes: [.posixPermissions: 0o600]) else {
-            throw RemoteFileError(.failed, "写不了临时补丁文件")
+            throw RemoteFileError(.failed, String(localized: "写不了临时补丁文件"))
         }
         defer { unlink(diff) }
         var arguments = ["patch", "-p\(max(0, request.strip ?? 1))", "--batch", "--forward", "--no-backup-if-mismatch",
@@ -290,7 +290,7 @@ nonisolated extension RemoteFileService {
         output = spawned.output
         if spawned.result.exitCode != 0 {
             let detail = String(decoding: spawned.output.suffix(2000), as: UTF8.self)
-            throw RemoteFileError(.conflict, "补丁没打上：\(detail)")
+            throw RemoteFileError(.conflict, String(localized: "补丁没打上：\(detail)"))
         }
     }
 
@@ -316,14 +316,14 @@ nonisolated extension RemoteFileService {
             | kFSEventStreamCreateFlagUseCFTypes)
         guard let stream = FSEventStreamCreate(nil, changeCallback, &context, [watched] as CFArray,
                                                FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, flags) else {
-            throw RemoteFileError(.failed, "没法监视 \(path)")
+            throw RemoteFileError(.failed, String(localized: "没法监视 \(path)"))
         }
         let queue = DispatchQueue(label: "com.uozi.uTerm.files.watch")
         FSEventStreamSetDispatchQueue(stream, queue)
         guard FSEventStreamStart(stream) else {
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
-            throw RemoteFileError(.failed, "没法监视 \(path)")
+            throw RemoteFileError(.failed, String(localized: "没法监视 \(path)"))
         }
         FSEventStreamFlushSync(stream)
         box.arm()

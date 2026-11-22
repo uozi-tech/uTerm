@@ -90,7 +90,7 @@ nonisolated struct AgentCommandStalled: LocalizedError, Equatable {
     let reason: String
 
     var errorDescription: String? {
-        let note = "[执行超时：\(reason)]"
+        let note = String(localized: "[执行超时：\(reason)]")
         return partialOutput.isEmpty ? note : partialOutput + "\n" + note
     }
 }

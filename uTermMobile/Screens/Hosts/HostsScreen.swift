@@ -42,7 +42,8 @@ struct HostsScreen: View {
         let recent = ServerGrouping.recent(hosts)
         let lazy = hosts.count > Self.eagerHostLimit
 
-        return MScreen(title: "主机", sub: "\(hosts.count) 台主机",
+        return MScreen(title: String(localized: "主机", comment: "主机标签页标题"),
+                       sub: String(localized: "\(hosts.count) 台主机"),
                        maxContentWidth: M.gridContentWidth, pinsHeader: true, actions: {
             // 有会话开着（工作区收起了）时给一个回去的入口。系统工具栏按钮，底由系统画。
             if let workspace, !workspace.isEmpty {
@@ -75,14 +76,14 @@ struct HostsScreen: View {
                 }
 
                 if hosts.isEmpty {
-                    MEmptyState(icon: "server", title: "还没有主机",
-                                message: "添加一台主机，即可连接终端、浏览文件或运行命令。",
-                                actionTitle: "添加主机", action: { creating = true })
+                    MEmptyState(icon: "server", title: String(localized: "还没有主机"),
+                                message: String(localized: "添加一台主机，即可连接终端、浏览文件或运行命令。"),
+                                actionTitle: String(localized: "添加主机"), action: { creating = true })
                 } else if filter == .recent {
                     // 宽屏（iPhone Duo 展开 / iPad / 横屏）一行排 2–3 张卡（MCardGrid 按宽度定列数），
                     // 窄屏仍是一列。分组标题在网格外，独占一行。
                     MCardList(alignment: .leading, lazy: lazy) {
-                        sectionLabel("最近连接 · \(recent.count)")
+                        sectionLabel(String(localized: "最近连接 · \(recent.count)"))
                         if recent.isEmpty {
                             Text("还没有连接记录").font(M.sans(13)).foregroundStyle(M.text4)
                                 .frame(maxWidth: .infinity).padding(.vertical, 24)
@@ -221,7 +222,7 @@ struct HostCard: View, Equatable {
     var onDelete: () -> Void
 
     /// 共享格式化器。**别改回「每行现建一个」**——这是逐行调用的。
-    private var lastText: String { UTermFormat.relative(info.lastConnectedAt, fallback: "从未连接") }
+    private var lastText: String { UTermFormat.relative(info.lastConnectedAt, fallback: String(localized: "从未连接")) }
 
     var body: some View {
         Button(action: onOpen) {
@@ -257,7 +258,7 @@ struct HostCard: View, Equatable {
                 HStack(spacing: 6) {
                     MGroupChip(info.groupLabel, tint: groupColor)
                     MChip(text: info.authLabel, icon: "key", tone: .accent)
-                    if info.sftpOnly { MChip(text: "仅 SFTP", icon: "folder") }
+                    if info.sftpOnly { MChip(text: String(localized: "仅 SFTP"), icon: "folder") }
                     Spacer(minLength: 6)
                     // 窄屏（iPhone Duo 分屏 ≈ 330pt）让位给 chip：时间单行截断，chip 不折行。
                     Text(lastText).font(M.sans(11.5)).foregroundStyle(M.text3)

@@ -69,9 +69,9 @@ struct HostStatusDot: View {
 
     private var label: String {
         switch entry.status {
-        case .online: "在线"
-        case .offline: "离线"
-        case .unknown: "在线状态未知"
+        case .online: String(localized: "在线", comment: "主机在线状态")
+        case .offline: String(localized: "离线", comment: "主机在线状态")
+        case .unknown: String(localized: "在线状态未知")
         }
     }
 }

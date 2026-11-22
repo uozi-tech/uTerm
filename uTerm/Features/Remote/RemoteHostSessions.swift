@@ -68,8 +68,8 @@ nonisolated enum RemoteHostAttachError: Error, Equatable, Sendable {
 
     var message: String {
         switch self {
-        case .unavailable: "这个终端已经关闭或断开"
-        case .appUnavailable: "Mac 上的 uTerm 正在重启，请稍后再试"
+        case .unavailable: String(localized: "这个终端已经关闭或断开")
+        case .appUnavailable: String(localized: "Mac 上的 uTerm 正在重启，请稍后再试")
         }
     }
 }

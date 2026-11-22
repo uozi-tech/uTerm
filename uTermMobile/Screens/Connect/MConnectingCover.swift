@@ -293,7 +293,7 @@ struct ConnectingCoverView: View {
     @ViewBuilder private var statusLine: some View {
         Group {
             if success {
-                Text("已连接 · 正在打开\(isSftp ? "文件" : "会话")…").foregroundStyle(M.success)
+                Text(isSftp ? "已连接 · 正在打开文件…" : "已连接 · 正在打开会话…").foregroundStyle(M.success)
             } else if failureMessage != nil {
                 Text("连接失败").foregroundStyle(M.danger)
             } else {
@@ -313,8 +313,8 @@ struct ConnectingCoverView: View {
                     .multilineTextAlignment(.center).lineSpacing(2)
                     .lineLimit(3).frame(maxWidth: 320)
                 HStack(spacing: 10) {
-                    MBtn(title: "返回", kind: .secondary, full: true, height: 48, action: onCancel)
-                    MBtn(title: "重试", icon: "refresh", kind: .primary, full: true, height: 48, action: onRetry)
+                    MBtn(title: String(localized: "返回"), kind: .secondary, full: true, height: 48, action: onCancel)
+                    MBtn(title: String(localized: "重试"), icon: "refresh", kind: .primary, full: true, height: 48, action: onRetry)
                 }
                 .frame(maxWidth: 320)
             }
@@ -324,7 +324,7 @@ struct ConnectingCoverView: View {
             VStack(spacing: 10) {
                 Text("连接耗时较长，可返回重试")
                     .font(M.sans(12.5)).foregroundStyle(M.text4)
-                MBtn(title: "返回", kind: .secondary, full: true, height: 48, action: onCancel)
+                MBtn(title: String(localized: "返回"), kind: .secondary, full: true, height: 48, action: onCancel)
                     .frame(maxWidth: 320)
             }
             .transition(.opacity)

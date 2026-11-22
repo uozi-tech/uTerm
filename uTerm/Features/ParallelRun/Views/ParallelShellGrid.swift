@@ -82,7 +82,9 @@ struct ParallelShellPane: View {
                 }
             } else {
                 // 有单条退出码（非 AI / AI 带初始命令）就显退出码；intent-only AI 无单一退出码 → 显成功/失败。
-                Text(state.exitCode.map { "退出码 \($0) · \(durationText)" } ?? "\(failed ? "失败" : "成功") · \(durationText)")
+                Text(state.exitCode.map { String(localized: "退出码 \(String($0)) · \(durationText)") }
+                     ?? (failed ? String(localized: "失败 · \(durationText)", comment: "并行执行：单台结果 · 耗时")
+                                : String(localized: "成功 · \(durationText)", comment: "并行执行：单台结果 · 耗时")))
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(failed ? UD.danger : UD.text4)
             }

@@ -101,8 +101,8 @@ private struct RemoteMacSessionView: View {
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法连接"),
                                    detail: [message, client.failureContext].compactMap { $0 }.joined(separator: "\n")) {
                     HStack(spacing: 8) {
-                        UDButton(title: "重试") { Task { await client.connectInteractively() } }
-                        UDButton(title: "网络诊断", style: .secondary) {
+                        UDButton(title: String(localized: "重试")) { Task { await client.connectInteractively() } }
+                        UDButton(title: String(localized: "网络诊断"), style: .secondary) {
                             openWindow(value: RemoteDiagnosticsWindowID(macID: macID))
                         }
                     }
@@ -130,7 +130,7 @@ private struct RemoteMacSessionView: View {
             noticeBar {
                 HStack(spacing: 8) {
                     SettingsInlineNote(tone: .warning, text: message)
-                    UDButton(title: "重试", style: .secondary) { Task { await model.client.connectInteractively() } }
+                    UDButton(title: String(localized: "重试"), style: .secondary) { Task { await model.client.connectInteractively() } }
                         .padding(.trailing, 10)
                 }
             }
@@ -169,15 +169,15 @@ private struct RemoteMacTerminalArea: View {
                 RemoteMacStateView(systemImage: "terminal", title: String(localized: "这台 Mac 上没有打开的终端"),
                                    detail: String(localized: "新建一个，那台 Mac 上也会弹出对应的终端窗口。")) {
                     HStack(spacing: 8) {
-                        UDButton(title: preparingShell ? "正在打开…" : "新建终端") { openNewShell() }
+                        UDButton(title: preparingShell ? String(localized: "正在打开…") : String(localized: "新建终端")) { openNewShell() }
                             .disabled(!canOpenShell)
                             .macWorkspaceDialog(emptyStateChoices) { open(in: $0) }
                         if model.client.supportsDesktop {
-                            UDButton(title: "查看屏幕", style: .secondary) { openDesktop() }
+                            UDButton(title: String(localized: "查看屏幕"), style: .secondary) { openDesktop() }
                                 .disabled(model.client.state != .connected)
                         }
                         if model.client.supportsFiles {
-                            UDButton(title: "浏览文件", style: .secondary) { openFiles() }
+                            UDButton(title: String(localized: "浏览文件"), style: .secondary) { openFiles() }
                                 .disabled(model.client.state != .connected)
                         }
                     }
@@ -325,7 +325,7 @@ private struct RemoteTerminalPaneView: View {
             case .failed(let message):
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法接入这个终端"),
                                    detail: message) {
-                    UDButton(title: "重试") { Task { await pane.start() } }
+                    UDButton(title: String(localized: "重试")) { Task { await pane.start() } }
                 }
             case .disconnected:
                 RemoteMacStateView(systemImage: "checkmark.circle", title: String(localized: "终端已结束"), detail: "")

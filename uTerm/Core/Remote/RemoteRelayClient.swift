@@ -147,7 +147,7 @@ actor RemoteRelayClient {
 
     func stop() {
         readLoop?.cancel()
-        reset(RemoteRelayError.unreachable("已断开"))
+        reset(RemoteRelayError.unreachable(String(localized: "已断开", comment: "中继控制连接已断开")))
     }
 
     // MARK: - 控制连接

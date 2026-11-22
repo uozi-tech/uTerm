@@ -37,7 +37,7 @@ struct KeyDetailView: View {
             KeyAvatarLarge(type: key.type)
             VStack(alignment: .leading, spacing: 4) {
                 if renaming {
-                    UDTextField(placeholder: "名称", text: $draftName)
+                    UDTextField(placeholder: String(localized: "名称"), text: $draftName)
                         .frame(maxWidth: 260)
                         .onSubmit(commitRename)
                 } else {
@@ -48,7 +48,8 @@ struct KeyDetailView: View {
                 Text(metaLine).font(UD.mono(12)).foregroundStyle(UD.text3)
             }
             Spacer(minLength: 0)
-            UDButton(title: renaming ? "完成" : "重命名", style: .secondary) {
+            UDButton(title: renaming ? String(localized: "完成", comment: "结束重命名")
+                                     : String(localized: "重命名"), style: .secondary) {
                 if renaming {
                     commitRename()
                 } else {
@@ -66,7 +67,8 @@ struct KeyDetailView: View {
         case .ecdsaP384: "ecdsa p384 · 384 bit"
         case .ecdsaP521: "ecdsa p521 · 521 bit"
         }
-        return "\(algo) · 创建于 \(UFormat.dateTime(key.createdAt))"
+        return String(localized: "\(algo) · 创建于 \(UFormat.dateTime(key.createdAt))",
+                      comment: "密钥详情：算法与位数 · 创建时间")
     }
 
     private func startRename() { draftName = key.name; renaming = true }
@@ -80,7 +82,7 @@ struct KeyDetailView: View {
 
     private var fingerprintBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionLabel("指纹")
+            sectionLabel(String(localized: "指纹", comment: "SSH 密钥指纹"))
             HStack(spacing: 10) {
                 Text(key.fingerprint.isEmpty ? "—" : key.fingerprint)
                     .font(UD.mono(11.5)).foregroundStyle(UD.text2)
@@ -99,9 +101,9 @@ struct KeyDetailView: View {
     private var publicKeyBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                sectionLabel("公钥")
+                sectionLabel(String(localized: "公钥"))
                 Spacer()
-                CopyButton(text: key.publicKey, label: "拷贝公钥", bordered: true)
+                CopyButton(text: key.publicKey, label: String(localized: "拷贝公钥"), bordered: true)
             }
             Text(key.publicKey.isEmpty ? "—" : key.publicKey)
                 .font(UD.mono(11.5)).foregroundStyle(UD.text2)
@@ -116,9 +118,11 @@ struct KeyDetailView: View {
 
     private var metaGrid: some View {
         HStack(spacing: 1) {
-            metaCell("注释", key.comment.isEmpty ? "—" : key.comment, mono: true)
-            metaCell("口令", key.hasPassphrase ? "已设置" : "未设置")
-            metaCell("上次使用", UTermFormat.relative(key.lastUsedAt))
+            metaCell(String(localized: "注释", comment: "SSH 密钥的注释字段"), key.comment.isEmpty ? "—" : key.comment, mono: true)
+            metaCell(String(localized: "口令", comment: "私钥口令"),
+                     key.hasPassphrase ? String(localized: "已设置", comment: "私钥口令已设置")
+                                       : String(localized: "未设置", comment: "私钥口令未设置"))
+            metaCell(String(localized: "上次使用"), UTermFormat.relative(key.lastUsedAt))
         }
         .background(UD.border)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -140,7 +144,7 @@ struct KeyDetailView: View {
 
     private var usageBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionLabel("使用此密钥的主机 · \(usedByNames.count)")
+            sectionLabel(String(localized: "使用此密钥的主机 · \(usedByNames.count)"))
             if usedByNames.isEmpty {
                 Text("暂未被任何主机使用")
                     .font(.system(size: 12)).foregroundStyle(UD.text4)
@@ -165,7 +169,7 @@ struct KeyDetailView: View {
                     .font(.system(size: 11.5)).foregroundStyle(UD.text2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            UDButton(title: "删除", style: .danger, action: onDelete)
+            UDButton(title: String(localized: "删除"), style: .danger, action: onDelete)
         }
         .padding(.horizontal, 16).padding(.vertical, 14)
         .background(RoundedRectangle(cornerRadius: 8).fill(danger.opacity(0.06)))
@@ -182,17 +186,17 @@ struct KeyDetailView: View {
 
 private struct CopyButton: View {
     let text: String
-    var label: String = "拷贝"
+    var label: String = String(localized: "拷贝")
     var bordered: Bool = false
     @State private var copied = false
 
     var body: some View {
-        UDButton(title: copied ? "已拷贝" : label, style: bordered ? .secondary : .ghost) {
+        UDButton(title: copied ? String(localized: "已拷贝") : label, style: bordered ? .secondary : .ghost) {
             guard !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
-            AccessibilityNotification.Announcement("已拷贝").post()
+            AccessibilityNotification.Announcement(String(localized: "已拷贝")).post()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
         }
         .accessibilityLabel(label)

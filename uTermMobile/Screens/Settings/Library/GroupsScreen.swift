@@ -19,16 +19,16 @@ struct GroupsScreen: View {
 
         return Group {
             if groups.isEmpty {
-                MEmptyState(icon: "folder-tag", title: "还没有分组",
-                            message: "把主机按环境（prod / dev）或项目归类，便于查找。",
-                            actionTitle: "新建分组", action: { creating = true })
+                MEmptyState(icon: "folder-tag", title: String(localized: "还没有分组"),
+                            message: String(localized: "把主机按环境（prod / dev）或项目归类，便于查找。"),
+                            actionTitle: String(localized: "新建分组"), action: { creating = true })
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
                         MInsetGroup {
                             ForEach(Array(groups.enumerated()), id: \.element.persistentModelID) { idx, g in
                                 NavigationLink { GroupDetailView(group: g) } label: {
-                                    MInsetRow(label: g.name, value: "\(counts[g.name] ?? 0) 台", chevron: true,
+                                    MInsetRow(label: g.name, value: String(localized: "\(counts[g.name] ?? 0) 台"), chevron: true,
                                               last: idx == groups.count - 1,
                                               trailing: AnyView(Circle().fill(g.color).frame(width: 14, height: 14)
                                                 .overlay(Circle().stroke(M.border, lineWidth: 1))))
@@ -71,14 +71,14 @@ struct GroupFormSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 22) {
-                    MInsetGroup(header: "名称") {
+                    MInsetGroup(header: String(localized: "名称")) {
                         TextField("分组名", text: $name)
                             .font(M.sans(15)).foregroundStyle(M.text)
                             .autocorrectionDisabled()
                             .padding(.horizontal, 14).padding(.vertical, 12)
                     }
                     VStack(alignment: .leading, spacing: 12) {
-                        MSectionCap(text: "颜色").padding(.horizontal, 20)
+                        MSectionCap(text: String(localized: "颜色")).padding(.horizontal, 20)
                         let cols = [GridItem](repeating: GridItem(.flexible()), count: 5)
                         LazyVGrid(columns: cols, spacing: 16) {
                             ForEach(ServerGroup.palette, id: \.self) { hex in
@@ -205,10 +205,10 @@ struct GroupDetailView: View {
 
     private var renameSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            MSectionCap(text: "分组名称")
+            MSectionCap(text: String(localized: "分组名称"))
             HStack(spacing: 9) {
                 MInput(text: $name)
-                MBtn(title: "保存", kind: .primary, height: 48, disabled: !dirty) { rename() }.fixedSize()
+                MBtn(title: String(localized: "保存"), kind: .primary, height: 48, disabled: !dirty) { rename() }.fixedSize()
             }
         }
         .padding(.top, 20)
@@ -216,7 +216,7 @@ struct GroupDetailView: View {
 
     private var colorSection: some View {
         VStack(alignment: .leading, spacing: 11) {
-            MSectionCap(text: "颜色")
+            MSectionCap(text: String(localized: "颜色"))
             FlowLayout(spacing: 12) {
                 ForEach(ServerGroup.palette, id: \.self) { hex in
                     let swatch = ServerGroupTint.color(hex: hex)
@@ -240,11 +240,11 @@ struct GroupDetailView: View {
     private var membersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                MSectionCap(text: "成员")
+                MSectionCap(text: String(localized: "成员"))
                 Spacer()
                 HStack(spacing: 3) {
-                    segBtn(0, "成员 \(members.count)")
-                    segBtn(1, "添加 \(candidates.count)")
+                    segBtn(0, String(localized: "成员 \(members.count)"))
+                    segBtn(1, String(localized: "添加 \(candidates.count)"))
                 }
                 .padding(3).background(M.fillFaint)
                 .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.xs, inset: 3)))

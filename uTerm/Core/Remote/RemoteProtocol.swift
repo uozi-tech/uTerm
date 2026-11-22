@@ -381,17 +381,18 @@ nonisolated enum RemoteProtocolError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .malformedMessage: return "远程控制消息格式无效"
-        case .unknownMessage(let kind): return "未知的远程控制消息类型 \(kind)"
-        case .frameTooLarge(let bytes): return "远程控制数据帧过大（\(bytes) 字节）"
-        case .versionMismatch(let version): return "远程控制协议版本不兼容（对端 \(version)，本机 \(RemoteConstants.protocolVersion)），把两端的 uTerm 更新到同一版本"
-        case .handshakeFailed(let reason): return "远程控制握手失败：\(reason)"
-        case .decryptionFailed: return "远程控制数据校验失败，连接已断开"
-        case .peerIdentityChanged: return "这台 Mac 的身份与配对时不一致，已拒绝连接。若重装过 uTerm，在手机上移除这台 Mac 后重新配对"
-        case .notPaired: return "这台设备尚未配对"
-        case .pairingRejected: return "Mac 拒绝了配对请求"
-        case .timeout: return "远程控制连接超时"
-        case .closed: return "远程控制已断开"
+        case .malformedMessage: return String(localized: "远程控制消息格式无效")
+        case .unknownMessage(let kind): return String(localized: "未知的远程控制消息类型 \(String(kind))")
+        case .frameTooLarge(let bytes): return String(localized: "远程控制数据帧过大（\(bytes) 字节）")
+        case .versionMismatch(let version):
+            return String(localized: "远程控制协议版本不兼容（对端 \(String(version))，本机 \(String(RemoteConstants.protocolVersion))），把两端的 uTerm 更新到同一版本")
+        case .handshakeFailed(let reason): return String(localized: "远程控制握手失败：\(reason)")
+        case .decryptionFailed: return String(localized: "远程控制数据校验失败，连接已断开")
+        case .peerIdentityChanged: return String(localized: "这台 Mac 的身份与配对时不一致，已拒绝连接。若重装过 uTerm，在手机上移除这台 Mac 后重新配对")
+        case .notPaired: return String(localized: "这台设备尚未配对")
+        case .pairingRejected: return String(localized: "Mac 拒绝了配对请求")
+        case .timeout: return String(localized: "远程控制连接超时")
+        case .closed: return String(localized: "远程控制已断开")
         }
     }
 
@@ -611,7 +612,7 @@ nonisolated enum RemoteTerminalSnapshotPiece {
 
 /// 两端终端引擎不是同一个版本时拒绝镜像：快照是引擎的二进制格式，画面也要同一个引擎才一致。
 nonisolated enum RemoteTerminalEngine {
-    static let mismatchMessage = "两端的终端引擎版本不同，没法镜像终端。把两端的 uTerm 更新到同一版本"
+    static var mismatchMessage: String { String(localized: "两端的终端引擎版本不同，没法镜像终端。把两端的 uTerm 更新到同一版本") }
 
     /// 对端握手里报的引擎版本和本机一样才行；老版本不报，同样不行。远控进程里 `local` 是 App 报来的版本。
     static func matches(_ remote: String?, local: String = TerminalEngineVersion.current) -> Bool {

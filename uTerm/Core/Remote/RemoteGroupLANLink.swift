@@ -73,11 +73,11 @@ nonisolated enum RemoteGroupLANHandshake {
                      transcript: Data, isInitiator: Bool) throws -> Keys {
         guard let remote = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerKey),
               let secret = try? identityKey.sharedSecretFromKeyAgreement(with: remote) else {
-            throw RemoteGroupLANError.handshake("对端公钥无效")
+            throw RemoteGroupLANError.handshake(String(localized: "对端公钥无效"))
         }
         let bytes = secret.withUnsafeBytes { Data($0) }
         // 小阶点会让共享秘密退化成全 0，任何人都算得出来。
-        guard bytes.contains(where: { $0 != 0 }) else { throw RemoteGroupLANError.handshake("共享秘密无效") }
+        guard bytes.contains(where: { $0 != 0 }) else { throw RemoteGroupLANError.handshake(String(localized: "共享秘密无效")) }
         let digest = Data(SHA256.hash(data: transcript))
         func derive(_ label: String) -> SymmetricKey {
             HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: bytes), salt: initiator.nonce + responder.nonce,
@@ -104,10 +104,10 @@ nonisolated enum RemoteGroupLANError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .handshake(let reason): return "快通道握手失败：\(reason)"
-        case .frame(let reason): return "快通道帧无效：\(reason)"
-        case .timeout: return "快通道超时"
-        case .closed: return "快通道已断开"
+        case .handshake(let reason): return String(localized: "快通道握手失败：\(reason)")
+        case .frame(let reason): return String(localized: "快通道帧无效：\(reason)")
+        case .timeout: return String(localized: "快通道超时")
+        case .closed: return String(localized: "快通道已断开")
         }
     }
 }
@@ -140,10 +140,10 @@ nonisolated struct RemoteGroupLANCipher {
     }
 
     mutating func open(_ sealed: Data) throws -> Data {
-        guard sealed.count >= 16 else { throw RemoteGroupLANError.frame("太短") }
+        guard sealed.count >= 16 else { throw RemoteGroupLANError.frame(String(localized: "太短", comment: "快通道帧无效的原因：密文太短")) }
         let box = try ChaChaPoly.SealedBox(nonce: nonce(), ciphertext: sealed.dropLast(16), tag: sealed.suffix(16))
         guard let plain = try? ChaChaPoly.open(box, using: key, authenticating: associatedData) else {
-            throw RemoteGroupLANError.frame("解不开（被改、重放或乱序）")
+            throw RemoteGroupLANError.frame(String(localized: "解不开（被改、重放或乱序）"))
         }
         counter += 1
         return plain
@@ -162,7 +162,7 @@ nonisolated struct RemoteGroupLANFrameReader {
         guard buffer.count >= 4 else { return nil }
         let start = buffer.startIndex
         let length = buffer[start..<(start + 4)].reduce(0) { $0 << 8 | Int($1) }
-        guard length > 0, length <= limit else { throw RemoteGroupLANError.frame("长度 \(length) 不在 1…\(limit)") }
+        guard length > 0, length <= limit else { throw RemoteGroupLANError.frame(String(localized: "长度 \(length) 不在 1…\(limit)")) }
         guard buffer.count >= 4 + length else { return nil }
         let frame = Data(buffer[(start + 4)..<(start + 4 + length)])
         buffer = Data(buffer[(start + 4 + length)...])
@@ -330,13 +330,13 @@ nonisolated final class RemoteGroupLANConnection: RemoteGroupPeerLink, @unchecke
         let plain = try cipher.open(frame)
         receiveCipher = cipher
         guard let type = plain.first.flatMap(RemoteGroupLANHandshake.FrameType.init(rawValue:)) else {
-            throw RemoteGroupLANError.frame("类型不认识")
+            throw RemoteGroupLANError.frame(String(localized: "类型不认识"))
         }
         let body = Data(plain.dropFirst())
         if !isEstablished {
             // 第一帧必须是证明帧，内容对得上抄本。
             guard type == .proof, cipher.counter == 1, body == keys.proof else {
-                throw RemoteGroupLANError.handshake("对端证明不了算得出会话密钥")
+                throw RemoteGroupLANError.handshake(String(localized: "对端证明不了算得出会话密钥"))
             }
             if case .responder = role { sendSealed(.proof, keys.proof) }
             establish()
@@ -345,26 +345,26 @@ nonisolated final class RemoteGroupLANConnection: RemoteGroupPeerLink, @unchecke
         switch type {
         case .data:
             if let onFrame { onFrame(body) } else {
-                guard pending.count < Self.maxPendingFrames else { throw RemoteGroupLANError.frame("积压太多") }
+                guard pending.count < Self.maxPendingFrames else { throw RemoteGroupLANError.frame(String(localized: "积压太多")) }
                 pending.append(body)
             }
         case .ping:
             break
         case .proof:
-            throw RemoteGroupLANError.frame("多余的证明帧")
+            throw RemoteGroupLANError.frame(String(localized: "多余的证明帧"))
         }
     }
 
     private func handleHello(_ frame: Data) throws {
         guard remoteHello == nil, let hello = RemoteGroupLANHandshake.parseHello(frame) else {
-            throw RemoteGroupLANError.handshake("hello 无效")
+            throw RemoteGroupLANError.handshake(String(localized: "hello 无效"))
         }
-        guard hello.id != local.id else { throw RemoteGroupLANError.handshake("连到了自己") }
+        guard hello.id != local.id else { throw RemoteGroupLANError.handshake(String(localized: "连到了自己")) }
         if case .initiator(let expected) = role, hello.id != expected {
-            throw RemoteGroupLANError.handshake("对端不是要连的那台")
+            throw RemoteGroupLANError.handshake(String(localized: "对端不是要连的那台"))
         }
         guard let entry = RemoteGroupLANHandshake.trustedEntry(for: hello, in: trusted()) else {
-            throw RemoteGroupLANError.handshake("对端不在钥匙串名册里，或公钥对不上")
+            throw RemoteGroupLANError.handshake(String(localized: "对端不在钥匙串名册里，或公钥对不上"))
         }
         remoteHello = hello
         remoteHelloBytes = frame
@@ -403,7 +403,7 @@ nonisolated final class RemoteGroupLANConnection: RemoteGroupPeerLink, @unchecke
         do {
             let sealed = try cipher.seal(Data([type.rawValue]) + body)
             sendCipher = cipher
-            guard sealed.count <= RemoteGroupLANHandshake.maxFrame else { return fail(RemoteGroupLANError.frame("要发的帧太大")) }
+            guard sealed.count <= RemoteGroupLANHandshake.maxFrame else { return fail(RemoteGroupLANError.frame(String(localized: "要发的帧太大"))) }
             write(sealed)
         } catch {
             fail(error)

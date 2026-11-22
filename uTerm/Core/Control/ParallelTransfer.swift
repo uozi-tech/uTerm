@@ -66,13 +66,13 @@ nonisolated enum ParallelTransfer {
         var errorDescription: String? {
             switch self {
             case .shortRead(let offset):
-                return "远端在 \(offset) 处提前结束（传输期间文件被改了？）"
+                return String(localized: "远端在 \(String(offset)) 处提前结束（传输期间文件被改了？）")
             case .localIO(let message):
                 return message
             case .invalidRange(let range, let size):
-                return "区间 [\(range.offset), \(range.end)) 超出文件大小 \(size)"
+                return String(localized: "区间 [\(String(range.offset)), \(String(range.end))) 超出文件大小 \(String(size))")
             case .sizeMismatch(let local, let remote):
-                return "上传后远端大小 \(remote) 与本地 \(local) 不一致"
+                return String(localized: "上传后远端大小 \(String(remote)) 与本地 \(String(local)) 不一致")
             }
         }
     }
@@ -95,7 +95,7 @@ nonisolated enum ParallelTransfer {
     ) async throws -> Int64 {
         let size = try await pool.withSFTP(for: host) { try await $0.stat(remotePath).size }
         onSize(size)
-        guard ftruncate(fd, off_t(size)) == 0 else { throw localError("截断本地文件失败") }
+        guard ftruncate(fd, off_t(size)) == 0 else { throw localError(String(localized: "截断本地文件失败")) }
         let wanted = try validated(ranges, size: size)
         try await run(
             host: host, pool: pool, remotePath: remotePath, writeMode: nil,
@@ -123,7 +123,7 @@ nonisolated enum ParallelTransfer {
         onSegment: @escaping @Sendable (ByteRange) -> Void
     ) async throws -> Int64 {
         var info = Darwin.stat()
-        guard fstat(fd, &info) == 0 else { throw localError("读取本地文件大小失败") }
+        guard fstat(fd, &info) == 0 else { throw localError(String(localized: "读取本地文件大小失败")) }
         let size = Int64(info.st_size)
         onSize(size)
         let wanted = try validated(ranges, size: size)
@@ -285,7 +285,7 @@ nonisolated enum ParallelTransfer {
         let read = try buffer.writeWithUnsafeMutableBytes(minimumWritableBytes: length) { raw in
             try preadAll(fd, raw, count: length, at: offset)
         }
-        guard read == length else { throw TransferError.localIO("本地文件在 \(offset) 处提前结束（上传期间被改短了？）") }
+        guard read == length else { throw TransferError.localIO(String(localized: "本地文件在 \(String(offset)) 处提前结束（上传期间被改短了？）")) }
         try await file.writeChunk(buffer, at: UInt64(offset))
     }
 
@@ -295,7 +295,7 @@ nonisolated enum ParallelTransfer {
             let n = pwrite(fd, raw.baseAddress! + written, raw.count - written, off_t(offset) + off_t(written))
             if n < 0 {
                 if errno == EINTR { continue }
-                throw localError("写本地文件失败")
+                throw localError(String(localized: "写本地文件失败"))
             }
             written += n
         }
@@ -307,7 +307,7 @@ nonisolated enum ParallelTransfer {
             let n = pread(fd, raw.baseAddress! + got, count - got, off_t(offset) + off_t(got))
             if n < 0 {
                 if errno == EINTR { continue }
-                throw localError("读本地文件失败")
+                throw localError(String(localized: "读本地文件失败"))
             }
             if n == 0 { break }
             got += n
@@ -315,8 +315,10 @@ nonisolated enum ParallelTransfer {
         return got
     }
 
-    private static func localError(_ what: String) -> TransferError {
-        .localIO("\(what)：\(String(cString: strerror(errno)))")
+    /// `what` 延后求值：先读 errno，再查文案（查本地化表可能动到 errno）。
+    private static func localError(_ what: @autoclosure () -> String) -> TransferError {
+        let reason = String(cString: strerror(errno))
+        return .localIO(String(localized: "\(what())：\(reason)", comment: "本地文件操作失败：系统错误原文"))
     }
 
     // MARK: - 区间

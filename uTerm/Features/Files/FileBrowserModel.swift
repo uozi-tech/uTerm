@@ -450,7 +450,7 @@ final class FileBrowserModel {
             if state == .browsing, didEverBrowse, !isTransport {
                 // 已经在浏览：列不出的目录（权限不足 / 不存在）不进去，留在原目录给个提示。
                 // 整页翻成失败只留给连接本身的问题与首次列目录。
-                transientError = "打开文件夹失败：\(FriendlyError.describe(error))"
+                transientError = String(localized: "打开文件夹失败：\(FriendlyError.describe(error))")
             } else {
                 state = .failed(FriendlyError.describe(error))
             }
@@ -564,7 +564,7 @@ final class FileBrowserModel {
             try await provider.upload(data: data, toRemotePath: Self.join(currentPath, fileName))
             await refresh()
         } catch {
-            report(error, action: "上传")
+            report(error, action: String(localized: "上传", comment: "操作名，接在「…失败：原因」前"))
         }
     }
 
@@ -579,7 +579,7 @@ final class FileBrowserModel {
             try await provider.upload(localURL: url, toRemotePath: destination, onProgress: nil)
             await refresh()
         } catch {
-            report(error, action: "上传")
+            report(error, action: String(localized: "上传", comment: "操作名，接在「…失败：原因」前"))
         }
     }
 
@@ -588,7 +588,7 @@ final class FileBrowserModel {
         do {
             try await provider.createDirectory(Self.join(currentPath, name))
             await refresh()
-        } catch { report(error, action: "新建文件夹") }
+        } catch { report(error, action: String(localized: "新建文件夹", comment: "操作名，接在「…失败：原因」前")) }
     }
 
     /// 在当前目录新建一个空文件（fail-if-exists，见 `SFTPProviding.createFile`）。
@@ -597,7 +597,7 @@ final class FileBrowserModel {
         do {
             try await provider.createFile(Self.join(currentPath, name))
             await refresh()
-        } catch { report(error, action: "新建文件") }
+        } catch { report(error, action: String(localized: "新建文件", comment: "操作名，接在「…失败：原因」前")) }
     }
 
     /// 同目录改名。名字去首尾空白；空名或没变不发请求、也不刷新（共享的
@@ -608,7 +608,7 @@ final class FileBrowserModel {
             guard try await RemoteFileOperations.rename(
                 entry, to: newName, in: directory ?? currentPath, provider: provider) else { return }
             await refresh()
-        } catch { report(error, action: "重命名") }
+        } catch { report(error, action: String(localized: "重命名", comment: "操作名，接在「…失败：原因」前")) }
     }
 
     /// 删除一个条目（等它结束）。见 `beginDelete`。
@@ -629,7 +629,7 @@ final class FileBrowserModel {
         // 同一条 SFTP 通道上一次只跑一个删除任务。静默吞掉第二次请求会让用户
         // 以为点击没生效（他刚在确认框上按了「删除」），故明确说一声。
         if let running = deletion {
-            transientError = "正在删除「\(running.name)」，等它结束后再删下一项。"
+            transientError = String(localized: "正在删除「\(running.name)」，等它结束后再删下一项。")
             return nil
         }
         let dir = directory ?? currentPath
@@ -652,7 +652,7 @@ final class FileBrowserModel {
             guard let self else { return }
             self.deletion = nil
             await self.refresh()
-            if let failure { self.report(failure, action: "删除", reconnect: false) }
+            if let failure { self.report(failure, action: String(localized: "删除", comment: "操作名，接在「…失败：原因」前"), reconnect: false) }
         }
     }
 
@@ -677,7 +677,7 @@ final class FileBrowserModel {
                 entry, in: directory ?? currentPath, mode: mode, recursive: recursive,
                 provider: provider)
             await refresh()
-        } catch { report(error, action: "权限设置") }
+        } catch { report(error, action: String(localized: "权限设置", comment: "操作名，接在「…失败：原因」前")) }
     }
 
     /// 把一次操作失败落成「操作失败」提示（`<动作>失败：<原因>`），浏览照常。
@@ -686,7 +686,8 @@ final class FileBrowserModel {
     /// - Parameter reconnect: 调用方已经刷新过（如删除收尾）时传 false，免得重复列目录。
     func report(_ error: Error, action: String, reconnect: Bool = true) {
         guard !isDisposed else { return }   // 已关闭：晚到的失败没人看
-        let message = "\(action)失败：\(FriendlyError.describe(error))"
+        let message = String(localized: "\(action)失败：\(FriendlyError.describe(error))",
+                             comment: "操作失败提示：第一个是操作名（上传、重命名…），第二个是原因")
         guard reconnect, Self.isRecoverableTransportError(error) else {
             transientError = message
             return
@@ -876,7 +877,7 @@ final class FileBrowserModel {
         } catch {
             finishTransfer(id, status: .failed)
             contexts[id]?.cancel = nil
-            transientError = "下载失败：\(FriendlyError.describe(error))"
+            transientError = String(localized: "下载失败：\(FriendlyError.describe(error))")
             completeDownload(id: id, success: false)
         }
         contexts[id]?.cancel = nil

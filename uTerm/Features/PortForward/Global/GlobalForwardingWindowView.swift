@@ -59,7 +59,7 @@ struct GlobalForwardingWindowView: View {
         .frame(minWidth: 680, minHeight: 560)
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "全局端口转发"))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "全局端口转发")))
         .hostKeySheet(relay)
         .overlay { editorOverlay }
     }

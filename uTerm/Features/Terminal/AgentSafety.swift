@@ -12,18 +12,18 @@ nonisolated enum AgentSafety: String, CaseIterable, Codable, Sendable, Identifia
     /// 拨盘标签。
     var label: String {
         switch self {
-        case .readAuto: return "只读自动"
-        case .confirm:  return "每步确认"
-        case .auto:     return "AI 代批"
+        case .readAuto: return String(localized: "只读自动", comment: "Agent 安全档位：只读命令自动运行")
+        case .confirm:  return String(localized: "每步确认", comment: "Agent 安全档位：每条命令都要确认")
+        case .auto:     return String(localized: "AI 代批", comment: "Agent 安全档位：由 AI 代为批准")
         }
     }
 
     /// 拨盘项的副说明。
     var detail: String {
         switch self {
-        case .readAuto: return "只读命令直接运行，其余操作人工确认"
-        case .confirm:  return "任何命令执行前都要确认"
-        case .auto:     return "只读命令直接运行，其余由 AI 代批，敏感或不确定的人工确认"
+        case .readAuto: return String(localized: "只读命令直接运行，其余操作人工确认")
+        case .confirm:  return String(localized: "任何命令执行前都要确认")
+        case .auto:     return String(localized: "只读命令直接运行，其余由 AI 代批，敏感或不确定的人工确认")
         }
     }
 

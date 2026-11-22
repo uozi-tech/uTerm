@@ -140,8 +140,8 @@ struct QuickCommandLogEntry: View {
 
     private func overview(results: [QuickCommandServerResult], failCount: Int) -> String {
         let ok = results.count - failCount
-        var parts = ["\(results.count) 台", "成功 \(ok)"]
-        if failCount > 0 { parts.append("失败 \(failCount)") }
+        var parts = [String(localized: "\(results.count) 台"), String(localized: "成功 \(ok)", comment: "执行日志：成功的台数")]
+        if failCount > 0 { parts.append(String(localized: "失败 \(failCount)", comment: "执行日志：失败的台数")) }
         parts.append(UFormat.duration(milliseconds: Double(run.durationMs)))
         return parts.joined(separator: " · ")
     }
@@ -174,8 +174,8 @@ struct QuickCommandLogEntry: View {
 
     private func resultDetail(_ result: QuickCommandServerResult) -> String {
         let duration = UFormat.duration(milliseconds: Double(result.durationMs))
-        guard let code = result.exitCode else { return "连接失败或超时 · \(duration)" }
-        return "退出码 \(code) · \(duration)"
+        guard let code = result.exitCode else { return String(localized: "连接失败或超时 · \(duration)") }
+        return String(localized: "退出码 \(String(code)) · \(duration)")
     }
 
     private func aiRecordBlock(_ ai: QuickCommandAIRecord) -> some View {

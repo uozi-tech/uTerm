@@ -75,6 +75,8 @@ struct uTermApp: App {
 
     init() {
         WindowMoveBehavior.disableScreenLayoutAdjustment()
+        // 「设置 › 外观 › 语言」写进 AppleLanguages 才对 Bundle 生效（下次启动）；同步过来的选择在这里补上。
+        AppLanguage.applyStoredPreference()
 
         // 两端共用的启动引导第 1–4 步（CloudKit 订阅 → 容器 → 偏好 → 局域网发送端），顺序见 `AppBootstrap`。
         let core = AppBootstrap.startCore(lanRole: .sender, makeContainer: AppModelContainer.make)
@@ -196,9 +198,9 @@ struct uTermApp: App {
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 remoteServer.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
                                                   keepAwake: settings.keepsAwakeForInternet)
-                if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
+                if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: String(localized: "Mac 上关闭了远程桌面")) }
                 remoteServer.desktopSettingsChanged()
-                if !settings.isDesktopAudioEnabled { remoteServer.endDesktopAudio(reason: "Mac 上关闭了「允许传输声音」") }
+                if !settings.isDesktopAudioEnabled { remoteServer.endDesktopAudio(reason: String(localized: "Mac 上关闭了「允许传输声音」")) }
             }
             // 用户在系统设置里关掉了远控进程的后台运行：远控服务改回在 App 里跑（审批框与指示条也由 App 显示）。
             hostBridge?.onFallback = { [remoteServer, remoteSettings] in

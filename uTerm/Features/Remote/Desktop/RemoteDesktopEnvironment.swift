@@ -132,7 +132,7 @@ struct RemoteDesktopEnvironment {
         let main = CGMainDisplayID()
         return ids.prefix(Int(count)).map { id in
             let bounds = CGDisplayBounds(id)
-            return RemoteDesktopDisplaySummary(id: id, name: names[id] ?? String(localized: "显示器 \(id)"),
+            return RemoteDesktopDisplaySummary(id: id, name: names[id] ?? String(localized: "显示器 \(String(id))"),
                                                width: bounds.width, height: bounds.height, isMain: id == main)
         }
         .sorted { $0.isMain && !$1.isMain }

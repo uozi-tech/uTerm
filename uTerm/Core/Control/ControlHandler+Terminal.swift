@@ -23,7 +23,7 @@ extension ControlHandler {
             let snapshots = deps.registry.snapshots()
             return .success(
                 id: request.id,
-                message: snapshots.isEmpty ? "当前没有活着的终端会话" : "共 \(snapshots.count) 条终端会话",
+                message: snapshots.isEmpty ? String(localized: "当前没有活着的终端会话") : String(localized: "共 \(snapshots.count) 条终端会话"),
                 terminals: snapshots
             )
 
@@ -32,7 +32,7 @@ extension ControlHandler {
             guard let session = deps.registry.session(for: entry.id) else {
                 throw ControlFailure(
                     code: .terminal_disconnected,
-                    message: "会话「\(entry.title)」已经不在了（窗口关了？）"
+                    message: String(localized: "会话「\(entry.title)」已经不在了（窗口关了？）")
                 )
             }
             let lines = clampScreenLines(request.lines)
@@ -40,7 +40,9 @@ extension ControlHandler {
                 lines: lines, maxBytes: ControlProtocol.maxScreenBytes)
             return .success(
                 id: request.id,
-                message: "读到 \(screen.lines.count) 行" + (screen.truncated ? "（上方已截断）" : ""),
+                message: screen.truncated
+                    ? String(localized: "读到 \(screen.lines.count) 行（上方已截断）")
+                    : String(localized: "读到 \(screen.lines.count) 行"),
                 screen: ControlScreenSnapshot(
                     terminal: entry.id.uuidString,
                     lines: screen.lines,
@@ -53,7 +55,7 @@ extension ControlHandler {
             guard let text = request.text, !text.isEmpty else {
                 throw ControlFailure(
                     code: .invalid_request,
-                    message: "terminal-send 需要非空的 text"
+                    message: String(localized: "terminal-send 需要非空的 text")
                 )
             }
             // 主机级硬规则：`sftpOnly` 主机拒绝一切终端操作。档案已被删的会话
@@ -62,7 +64,7 @@ extension ControlHandler {
             guard let session = deps.registry.session(for: entry.id) else {
                 throw ControlFailure(
                     code: .terminal_disconnected,
-                    message: "会话「\(entry.title)」已经不在了（窗口关了？）"
+                    message: String(localized: "会话「\(entry.title)」已经不在了（窗口关了？）")
                 )
             }
             do {
@@ -70,21 +72,21 @@ extension ControlHandler {
             } catch {
                 throw ControlFailure(
                     code: .terminal_disconnected,
-                    message: "会话「\(entry.title)」的连接已断开，没有写进去"
+                    message: String(localized: "会话「\(entry.title)」的连接已断开，没有写进去")
                 )
             }
             return .success(
                 id: request.id,
-                message: "已写入会话「\(entry.title)」"
-                    + ((request.enter ?? false) ? "（带回车）" : "（未回车，用户需自己按 Enter）")
-                    + "；注入没有输出边界，要结果请改用 run",
+                message: (request.enter ?? false)
+                    ? String(localized: "已写入会话「\(entry.title)」（带回车）；注入没有输出边界，要结果请改用 run")
+                    : String(localized: "已写入会话「\(entry.title)」（未回车，用户需自己按 Enter）；注入没有输出边界，要结果请改用 run"),
                 terminals: [deps.registry.snapshot(of: entry)]
             )
 
         case .terminalOpen:
             guard let needle = request.host?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !needle.isEmpty else {
-                throw ControlFailure(code: .invalid_request, message: "terminal-open 需要 --host")
+                throw ControlFailure(code: .invalid_request, message: String(localized: "terminal-open 需要 --host"))
             }
             let profile = try resolveHost(needle)
             try requireExecCapable(profile, action: .terminalOpen)
@@ -92,13 +94,13 @@ extension ControlHandler {
             guard let open = deps.registry.openTerminalWindow else {
                 throw ControlFailure(
                     code: .app_not_ready,
-                    message: "uTerm 还没接好开窗口的入口（主窗口尚未出现？）"
+                    message: String(localized: "uTerm 还没接好开窗口的入口（主窗口尚未出现？）")
                 )
             }
             guard let windowID = open(profile.id) else {
                 throw ControlFailure(
                     code: .operation_failed,
-                    message: "打开终端窗口失败"
+                    message: String(localized: "打开终端窗口失败")
                 )
             }
             // `openWindow` 是同步返回的，但窗口 / 会话都还在异步搭：等注册表里
@@ -108,22 +110,21 @@ extension ControlHandler {
                 guard let command else {
                     return .success(
                         id: request.id,
-                        message: "已为「\(profile.name)」打开终端窗口",
+                        message: String(localized: "已为「\(profile.name)」打开终端窗口"),
                         terminals: [deps.registry.snapshot(of: entry)]
                     )
                 }
                 guard let session = deps.registry.session(for: entry.id) else {
                     throw ControlFailure(
                         code: .terminal_disconnected,
-                        message: "窗口开了，但会话「\(entry.title)」随即不在了，命令没有执行"
+                        message: String(localized: "窗口开了，但会话「\(entry.title)」随即不在了，命令没有执行")
                     )
                 }
                 session.startTrackedRun(command)
+                let shortID = String(entry.id.uuidString.prefix(8))
                 return .success(
                     id: request.id,
-                    message: "已为「\(profile.name)」打开终端窗口，命令会在连上后自动执行。"
-                        + "需要输入（sudo 密码、确认提示）的话请用户在这个窗口里操作；"
-                        + "用 `terminal wait -t \(entry.id.uuidString.prefix(8))` 等它结束、拿退出码和输出。",
+                    message: String(localized: "已为「\(profile.name)」打开终端窗口，命令会在连上后自动执行。需要输入（sudo 密码、确认提示）的话请用户在这个窗口里操作；用 `terminal wait -t \(shortID)` 等它结束、拿退出码和输出。"),
                     terminals: [deps.registry.snapshot(of: entry)],
                     run: session.trackedRunSnapshot(
                         terminalID: entry.id, maxBytes: ControlProtocol.maxTerminalRunOutputBytes)
@@ -133,16 +134,12 @@ extension ControlHandler {
                 return .failure(
                     id: request.id,
                     code: .operation_failed,
-                    message: "已为「\(profile.name)」打开终端窗口 \(windowID.uuidString)，"
-                        + "但 \(terminalOpenWaitSeconds) 秒内还没有会话注册上来（可能卡在首连或主机密钥确认），"
-                        + "**命令没有执行**。等窗口连上后用 terminals 找到会话，再请用户在窗口里跑，或重新 terminal open。"
+                    message: String(localized: "已为「\(profile.name)」打开终端窗口 \(windowID.uuidString)，但 \(terminalOpenWaitSeconds) 秒内还没有会话注册上来（可能卡在首连或主机密钥确认），**命令没有执行**。等窗口连上后用 terminals 找到会话，再请用户在窗口里跑，或重新 terminal open。")
                 )
             }
             return .success(
                 id: request.id,
-                message: "已为「\(profile.name)」打开终端窗口 \(windowID.uuidString)，"
-                    + "但 \(terminalOpenWaitSeconds) 秒内还没有会话注册上来"
-                    + "（可能卡在首连或主机密钥确认）。稍后用 terminals 再看一次。",
+                message: String(localized: "已为「\(profile.name)」打开终端窗口 \(windowID.uuidString)，但 \(terminalOpenWaitSeconds) 秒内还没有会话注册上来（可能卡在首连或主机密钥确认）。稍后用 terminals 再看一次。"),
                 terminals: []
             )
 
@@ -151,14 +148,13 @@ extension ControlHandler {
             guard let session = deps.registry.session(for: entry.id) else {
                 throw ControlFailure(
                     code: .terminal_disconnected,
-                    message: "会话「\(entry.title)」已经不在了（窗口关了？）"
+                    message: String(localized: "会话「\(entry.title)」已经不在了（窗口关了？）")
                 )
             }
             guard session.trackedRun != nil else {
                 throw ControlFailure(
                     code: .invalid_request,
-                    message: "会话「\(entry.title)」里没有用 `terminal open -H <主机> -- <命令>` 跑过命令，"
-                        + "没有可等的结果。看屏幕用 terminal read。"
+                    message: String(localized: "会话「\(entry.title)」里没有用 `terminal open -H <主机> -- <命令>` 跑过命令，没有可等的结果。看屏幕用 terminal read。")
                 )
             }
             let seconds = min(
@@ -183,7 +179,7 @@ extension ControlHandler {
         default:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于终端组"
+                message: String(localized: "动作 \(request.action.rawValue) 不属于终端组")
             )
         }
     }
@@ -201,17 +197,17 @@ extension ControlHandler {
     }
 
     private static func waitMessage(_ run: ControlTerminalRun?, entry: TerminalSessionEntry) -> String {
-        let id = entry.id.uuidString.prefix(8)
+        let id = String(entry.id.uuidString.prefix(8))
         switch run?.state {
         case "finished":
-            return "命令已结束，退出码 \(run?.exitCode.map(String.init) ?? "未知")"
+            let exitText = run?.exitCode.map(String.init) ?? String(localized: "未知", comment: "退出码未知")
+            return String(localized: "命令已结束，退出码 \(exitText)")
         case "disconnected":
-            return "命令没跑完会话就断了（远端退出或网络断开），没有退出码"
+            return String(localized: "命令没跑完会话就断了（远端退出或网络断开），没有退出码")
         case "pending":
-            return "窗口还没连上 / 命令还没开始（可能在等首连或主机密钥确认）。再 `terminal wait -t \(id)`"
+            return String(localized: "窗口还没连上 / 命令还没开始（可能在等首连或主机密钥确认）。再 `terminal wait -t \(id)`")
         default:
-            return "命令还在跑（可能在等用户在窗口里输入）。再 `terminal wait -t \(id)` 继续等，"
-                + "或 `terminal read -t \(id)` 看看屏幕上停在哪"
+            return String(localized: "命令还在跑（可能在等用户在窗口里输入）。再 `terminal wait -t \(id)` 继续等，或 `terminal read -t \(id)` 看看屏幕上停在哪")
         }
     }
 
@@ -228,8 +224,7 @@ extension ControlHandler {
               !needle.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "\(request.action.rawValue) 需要 --terminal <会话 id 或唯一前缀>；"
-                    + "先用 terminals 列一下"
+                message: String(localized: "\(request.action.rawValue) 需要 --terminal <会话 id 或唯一前缀>；先用 terminals 列一下")
             )
         }
         return try deps.registry.resolve(needle)

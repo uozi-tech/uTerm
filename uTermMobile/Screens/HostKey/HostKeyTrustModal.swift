@@ -46,9 +46,9 @@ struct HostKeyTrustModal: View {
     private var fingerprints: some View {
         VStack(alignment: .leading, spacing: 13) {
             if let old = challenge.oldFingerprint {
-                fpRow(label: "已信任", value: old, dim: true)
+                fpRow(label: String(localized: "已信任", comment: "已信任的主机密钥指纹"), value: old, dim: true)
             }
-            fpRow(label: unknown ? "密钥指纹" : "本次出示", value: challenge.newFingerprint, danger: !unknown)
+            fpRow(label: unknown ? String(localized: "密钥指纹") : String(localized: "本次出示"), value: challenge.newFingerprint, danger: !unknown)
         }
         .padding(.horizontal, 18).padding(.top, 16)
     }
@@ -66,8 +66,8 @@ struct HostKeyTrustModal: View {
 
     private var buttons: some View {
         HStack(spacing: 10) {
-            MBtn(title: "取消", kind: .secondary, full: true, height: 46, action: onCancel)
-            MBtn(title: unknown ? "信任并连接" : "信任新密钥",
+            MBtn(title: String(localized: "取消"), kind: .secondary, full: true, height: 46, action: onCancel)
+            MBtn(title: unknown ? String(localized: "信任并连接") : String(localized: "信任新密钥"),
                  icon: unknown ? "shield" : nil,
                  kind: unknown ? .primary : .danger, full: true, height: 46, action: onTrust)
         }

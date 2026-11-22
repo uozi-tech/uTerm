@@ -87,7 +87,7 @@ final class CloudKitSyncMonitor {
             case "export": phase = .exporting
             default: break
             }
-            record("\(kind) 开始")
+            record(String(localized: "\(kind) 开始", comment: "CloudKit 同步事件：kind 是 setup / import / export"))
             AppLogger.info("CloudKit \(kind) started", category: "sync")
             return
         }
@@ -97,13 +97,13 @@ final class CloudKitSyncMonitor {
             lastSyncedAt = endDate
             hasEverSynced = true
             lastError = nil
-            record("\(kind) 完成 · \(durText)")
+            record(String(localized: "\(kind) 完成 · \(durText)", comment: "CloudKit 同步事件：kind 是 setup / import / export，后面是耗时"))
             AppLogger.info("CloudKit \(kind) ok in \(durText)", category: "sync")
         } else {
-            let desc = errorDesc ?? "未知错误"
+            let desc = errorDesc ?? String(localized: "未知错误")
             phase = .error
             lastError = desc
-            record("\(kind) 失败 · \(desc)")
+            record(String(localized: "\(kind) 失败 · \(desc)", comment: "CloudKit 同步事件：kind 是 setup / import / export，后面是错误说明"))
             AppLogger.error("CloudKit \(kind) FAILED: \(desc)", category: "sync")
         }
     }
@@ -118,6 +118,6 @@ final class CloudKitSyncMonitor {
     /// 复制用：把最近事件拼成纯文本（时间 + 文本，旧→新）。
     func exportText() -> String {
         let lines = recentEvents.map { "\(UFormat.time($0.date))  \($0.text)" }
-        return lines.isEmpty ? "（暂无同步事件）" : lines.joined(separator: "\n")
+        return lines.isEmpty ? String(localized: "（暂无同步事件）") : lines.joined(separator: "\n")
     }
 }

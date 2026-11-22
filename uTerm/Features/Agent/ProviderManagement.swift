@@ -19,7 +19,7 @@ enum ProviderManagement {
 
     /// 新建一条 provider 排在最后；`model` 留空，由输入区的模型菜单来选。
     @discardableResult
-    static func add(name: String = "新模型服务",
+    static func add(name: String = String(localized: "新模型服务"),
                     kind: ProviderKind = .anthropic,
                     baseURL: String? = nil,
                     in context: ModelContext) -> AIProvider {
@@ -77,13 +77,13 @@ enum ProviderManagement {
 
     /// 名称必填。
     nonisolated static func nameError(_ name: String) -> String? {
-        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "名称不能为空" : nil
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? String(localized: "名称不能为空") : nil
     }
 
     /// Base URL 必填；远程端点须 HTTPS，loopback 开发服务可用 HTTP。
     nonisolated static func baseURLError(_ baseURL: String, kind: ProviderKind) -> String? {
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Base URL 不能为空" }
+        if trimmed.isEmpty { return String(localized: "Base URL 不能为空") }
         return ProviderEndpointPolicy.validationMessage(configuredBaseURL: trimmed, kind: kind)
     }
 
@@ -123,20 +123,20 @@ enum ProviderManagement {
         let usesSavedKey = draft.isEmpty
         let key = usesSavedKey ? (keychain.load(for: provider.id) ?? "") : draft
         guard !key.isEmpty else {
-            return ConnectionResult(ok: false, message: "先填写或保存 API Key")
+            return ConnectionResult(ok: false, message: String(localized: "先填写或保存 API Key"))
         }
         guard case .success(let baseURL) = ProviderEndpointPolicy.resolve(
             configuredBaseURL: provider.baseURL, kind: provider.kind) else {
             return ConnectionResult(ok: false,
                                     message: baseURLError(provider.baseURL, kind: provider.kind)
-                                        ?? "Base URL 无效或不安全")
+                                        ?? String(localized: "Base URL 无效或不安全"))
         }
         do {
             let ids = try await ProviderModelCatalog.fetchModels(
                 kind: provider.kind, baseURL: baseURL, apiKey: key)
             if usesSavedKey { AgentModelDirectory.refreshOne(provider) }
-            return ConnectionResult(ok: true, message: ids.isEmpty ? "连接成功，但该端点没有列出任何模型"
-                                                                   : "连接成功 · \(ids.count) 个可用模型")
+            return ConnectionResult(ok: true, message: ids.isEmpty ? String(localized: "连接成功，但该端点没有列出任何模型")
+                                                                   : String(localized: "连接成功 · \(ids.count) 个可用模型"))
         } catch {
             return ConnectionResult(ok: false, message: AgentModelDirectory.describe(error))
         }

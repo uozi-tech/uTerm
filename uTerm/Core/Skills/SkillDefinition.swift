@@ -17,7 +17,7 @@ nonisolated struct SkillDefinition: Sendable {
     /// 唯一的一份：`SKILL.md` 讲定位客户端、探活、指定主机、主机密钥、远程执行与错误码，
     /// 文件 / 转发 / 终端会话放 `references/`，按需读。以前拆成四份技能，子技能靠
     /// 「前置见 uterm-run」互相引用，单独触发时模型常漏读前置，故合并。
-    static let uTerm = SkillDefinition(slug: "uterm", displayName: "uTerm 远程主机")
+    static let uTerm = SkillDefinition(slug: "uterm", displayName: String(localized: "uTerm 远程主机"))
 
     /// app 内置的全部 uTerm 技能；安装界面按工具整包装这些技能。必须与仓库 `skills/`
     /// 下的目录一一对应（`SkillDefinitionTests` 校验）。

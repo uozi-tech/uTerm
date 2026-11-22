@@ -178,7 +178,7 @@ final class PaneModel: Identifiable {
     /// 服务器配置已不存在时调用。
     func markServerMissing() {
         guard fileBuffer == nil else { return }
-        session.markFailed("主机已被删除")
+        session.markFailed(String(localized: "主机已被删除"))
     }
 
     /// 窗格被关闭/移除时调用。

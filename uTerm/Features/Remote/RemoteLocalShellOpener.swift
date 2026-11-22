@@ -21,7 +21,7 @@ nonisolated struct RemoteLocalShellOpener: Sendable {
         self.open = open
     }
 
-    static let unavailable = RemoteLocalShellOpener { _ in .failure(Failure(message: "这台 Mac 不支持打开本机终端")) }
+    static let unavailable = RemoteLocalShellOpener { _ in .failure(Failure(message: String(localized: "这台 Mac 不支持打开本机终端"))) }
 
     /// 开窗口之后等会话登记的上限：辅助程序冷启动 + 登录 shell 起来，正常一两秒。
     static let waitSeconds = 15

@@ -30,7 +30,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         NavigationStack {
-            MScreen(title: "设置", embedsNavigationStack: false, pinsHeader: true) {
+            MScreen(title: String(localized: "设置"), embedsNavigationStack: false, pinsHeader: true) {
                 VStack(spacing: 0) {
                     profileCard
                     actionsGroup
@@ -70,7 +70,7 @@ struct SettingsScreen: View {
 
     private var copyrightString: String {
         let year = Calendar.current.component(.year, from: Date())
-        return "© \(year) 柚子星云科技（深圳）有限公司"
+        return String(localized: "© \(String(year)) 柚子星云科技（深圳）有限公司")
     }
 
     // 品牌卡
@@ -93,8 +93,8 @@ struct SettingsScreen: View {
 
     // 动作（快捷命令已升为底部「命令」主标签，此处仅留命令面板）
     @ViewBuilder private var actionsGroup: some View {
-        MInsetGroup(header: "动作") {
-            MInsetRow(icon: "cmd", label: "命令面板", sub: "搜索主机、命令、密钥、分组",
+        MInsetGroup(header: String(localized: "动作")) {
+            MInsetRow(icon: "cmd", label: String(localized: "命令面板"), sub: String(localized: "搜索主机、命令、密钥、分组"),
                       chevron: true, last: true, onTap: { store.showPalette = true })
         }
     }

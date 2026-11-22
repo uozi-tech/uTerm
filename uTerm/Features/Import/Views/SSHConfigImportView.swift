@@ -34,7 +34,7 @@ struct SSHConfigImportView: View {
         .frame(minWidth: 680, minHeight: 520)
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "导入 SSH 配置"))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "导入 SSH 配置")))
         .onAppear { consumeInboxOrResetIfDone() }
         .onChange(of: ImportInbox.shared.serial) { _, _ in consumeInbox() }
         .onDisappear { cleanupStaging() }
@@ -42,9 +42,9 @@ struct SSHConfigImportView: View {
 
     private var phaseSteps: some View {
         HStack(spacing: 16) {
-            stepLabel("选择文件", .pick)
-            stepLabel("检查与选择", .review)
-            stepLabel("完成", .done)
+            stepLabel(String(localized: "选择文件", comment: "导入 SSH 配置的步骤"), .pick)
+            stepLabel(String(localized: "检查与选择", comment: "导入 SSH 配置的步骤"), .review)
+            stepLabel(String(localized: "完成", comment: "导入 SSH 配置的步骤"), .done)
             Spacer()
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
@@ -75,17 +75,17 @@ struct SSHConfigImportView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "选择 ~/.ssh 目录（用于读取 config 与私钥）"
+        panel.message = String(localized: "选择 ~/.ssh 目录（用于读取 config 与私钥）")
         if let home = FileManager.default.homeDirectoryForCurrentUser as URL? {
             panel.directoryURL = home.appendingPathComponent(".ssh")
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let configURL = url.appendingPathComponent("config")
         guard let text = try? String(contentsOf: configURL, encoding: .utf8) else {
-            pickError = "该目录下没有可读的 config 文件"; return
+            pickError = String(localized: "该目录下没有可读的 config 文件"); return
         }
         let hosts = parseSSHConfig(text)
-        guard !hosts.isEmpty else { pickError = "config 里没有解析到任何 Host"; return }
+        guard !hosts.isEmpty else { pickError = String(localized: "config 里没有解析到任何 Host"); return }
         dir = url
         rows = SSHConfigImporter.plan(hosts, existingNames: Set(profiles.map(\.name)))
         selection = Set(rows.filter { !$0.host.isWildcard && !$0.existing }.map(\.id))
@@ -130,8 +130,8 @@ struct SSHConfigImportView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(h.alias).font(UD.body).foregroundStyle(UD.text)
-                    if h.isWildcard { tag("通配", UD.text4) }
-                    if row.existing { tag("已存在", UD.caution) }
+                    if h.isWildcard { tag(Self.wildcardTag, UD.text4) }
+                    if row.existing { tag(Self.existingTag, UD.caution) }
                 }
                 // 去掉每行的 `.help`：tooltip 的 NSTrackingArea 是按行建的，
                 // 2000 行就是 2000 个（playbook「.help tooltip 风暴」）。完整的
@@ -152,7 +152,10 @@ struct SSHConfigImportView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selection.contains(row.id) ? .isSelected : [])
-        .accessibilityLabel("\(h.alias)\(h.isWildcard ? "，通配" : "")\(row.existing ? "，已存在" : "")")
+        .accessibilityLabel(([h.alias]
+            + (h.isWildcard ? [Self.wildcardTag] : [])
+            + (row.existing ? [Self.existingTag] : []))
+            .joined(separator: String(localized: "，", comment: "无障碍标签里主机别名与标记之间的分隔符")))
         .accessibilityValue(endpoint + identityFull)
         // `onTapGesture` 不带 AX 默认动作：只标 `.isButton` 的话读屏 / 全键盘
         // 控制按下去勾不上也取消不掉。显式补一条与手势同语义的默认动作。
@@ -160,6 +163,13 @@ struct SSHConfigImportView: View {
             guard !disabled else { return }
             if selection.contains(row.id) { selection.remove(row.id) } else { selection.insert(row.id) }
         }
+    }
+
+    private static var wildcardTag: String {
+        String(localized: "通配", comment: "SSH config 里用了通配符的 Host")
+    }
+    private static var existingTag: String {
+        String(localized: "已存在", comment: "SSH config 里的这台主机已在 uTerm 里")
     }
 
     private func tag(_ s: String, _ c: Color) -> some View {

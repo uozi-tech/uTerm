@@ -361,11 +361,11 @@ struct WorkspaceWindowView: View {
             return
         }
         let alert = NSAlert()
-        alert.messageText = "是否保存对「\(buf.displayName)」的更改？"
-        alert.informativeText = "如果不保存，你的更改将丢失。"
-        alert.addButton(withTitle: "保存")        // .alertFirstButtonReturn
-        alert.addButton(withTitle: "不保存")      // .alertSecondButtonReturn
-        alert.addButton(withTitle: "取消")        // .alertThirdButtonReturn
+        alert.messageText = String(localized: "是否保存对「\(buf.displayName)」的更改？")
+        alert.informativeText = String(localized: "如果不保存，你的更改将丢失。")
+        alert.addButton(withTitle: String(localized: "保存"))        // .alertFirstButtonReturn
+        alert.addButton(withTitle: String(localized: "不保存"))      // .alertSecondButtonReturn
+        alert.addButton(withTitle: String(localized: "取消"))        // .alertThirdButtonReturn
         switch alert.runModal() {
         case .alertFirstButtonReturn:             // 保存
             Task { @MainActor in
@@ -406,11 +406,11 @@ struct WorkspaceWindowView: View {
         switch result {
         case .conflict(let remoteMtime):
             let alert = NSAlert()
-            alert.messageText = "远程文件已变化"
-            alert.informativeText = "这个文件在你打开后被别处改过。覆盖会丢掉那些改动。"
-            alert.addButton(withTitle: "覆盖远程文件")
-            alert.addButton(withTitle: "放弃本地改动")
-            alert.addButton(withTitle: "取消")
+            alert.messageText = String(localized: "远程文件已变化")
+            alert.informativeText = String(localized: "这个文件在你打开后被别处改过。覆盖会丢掉那些改动。")
+            alert.addButton(withTitle: String(localized: "覆盖远程文件"))
+            alert.addButton(withTitle: String(localized: "放弃本地改动"))
+            alert.addButton(withTitle: String(localized: "取消"))
             switch alert.runModal() {
             case .alertFirstButtonReturn:
                 // 强制覆盖：把 mtimeWhenLoaded 推到远程值绕过 conflict guard
@@ -424,7 +424,7 @@ struct WorkspaceWindowView: View {
             }
         case .failed(let msg):
             let alert = NSAlert()
-            alert.messageText = "保存失败"
+            alert.messageText = String(localized: "保存失败")
             alert.informativeText = msg
             alert.runModal()
         case .saved, .noop: break

@@ -475,9 +475,9 @@ struct RemoteDesktopContent: View {
         } else if case .failed(let message) = client.state, session.state != .streaming {
             notice(spinner: false, title: String(localized: "无法连接 \(client.macName)"), message: message) {
                 HStack(spacing: 8) {
-                    UDButton(title: "重试") { Task { await model.start() } }
+                    UDButton(title: String(localized: "重试")) { Task { await model.start() } }
                     if let onDiagnose {
-                        UDButton(title: "网络诊断", style: .secondary, action: onDiagnose)
+                        UDButton(title: String(localized: "网络诊断"), style: .secondary, action: onDiagnose)
                     }
                 }
             }
@@ -539,7 +539,7 @@ struct RemoteDesktopContent: View {
                                     isSecure: true)
                             .frame(width: 220)
                             .onSubmit { submitUnlock() }
-                        UDButton(title: "解锁") { submitUnlock() }
+                        UDButton(title: String(localized: "解锁", comment: "按钮：解锁那台 Mac")) { submitUnlock() }
                             .disabled(password.isEmpty)
                     }
                 }
@@ -574,9 +574,9 @@ struct RemoteDesktopContent: View {
                             UDTextField(placeholder: String(localized: "登录密码"), text: $authPassword, isSecure: true)
                                 .frame(width: 200)
                                 .onSubmit { answerAuthPrompt(prompt, action: .fill) }
-                            UDButton(title: "填入密码") { answerAuthPrompt(prompt, action: .fill) }
+                            UDButton(title: String(localized: "填入密码")) { answerAuthPrompt(prompt, action: .fill) }
                                 .disabled(authPassword.isEmpty)
-                            UDButton(title: "取消请求", style: .secondary) { answerAuthPrompt(prompt, action: .cancel) }
+                            UDButton(title: String(localized: "取消请求"), style: .secondary) { answerAuthPrompt(prompt, action: .cancel) }
                         }
                     }
                 }

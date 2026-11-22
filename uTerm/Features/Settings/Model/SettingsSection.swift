@@ -37,17 +37,17 @@ nonisolated enum SettingsSection: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .general:     return "通用"
-        case .appearance:  return "外观"
-        case .terminal:    return "终端"
-        case .providers:   return "模型服务"
-        case .connection:  return "连接"
-        case .security:    return "安全"
-        case .sync:        return "同步"
-        case .remote:      return "远程控制"
-        case .cli:         return "命令行与技能"
-        case .diagnostics: return "诊断"
-        case .about:       return "关于"
+        case .general:     return String(localized: "通用", comment: "设置分区")
+        case .appearance:  return String(localized: "外观", comment: "设置分区")
+        case .terminal:    return String(localized: "终端", comment: "设置分区")
+        case .providers:   return String(localized: "模型服务")
+        case .connection:  return String(localized: "连接", comment: "设置分区")
+        case .security:    return String(localized: "安全", comment: "设置分区")
+        case .sync:        return String(localized: "同步", comment: "设置分区")
+        case .remote:      return String(localized: "远程控制")
+        case .cli:         return String(localized: "命令行与技能")
+        case .diagnostics: return String(localized: "诊断", comment: "设置分区")
+        case .about:       return String(localized: "关于", comment: "设置分区")
         }
     }
 

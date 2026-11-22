@@ -57,7 +57,7 @@ struct ChatCodeBlock: View {
             .accessibilityLabel(copied ? "已拷贝代码" : "拷贝代码")
             // tooltip 走悬停门控：`NSToolTipManager` 每个滚动 tick 都要全量重算
             // 全窗的 tooltip 区域，一条回复里七八个代码块就是七八块常驻区域。
-            .help(whenHovering: isHovering, "拷贝代码")
+            .help(whenHovering: isHovering, String(localized: "拷贝代码"))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -69,7 +69,7 @@ struct ChatCodeBlock: View {
         pb.clearContents()
         pb.setString(trimmed, forType: .string)
         copied = true
-        AccessibilityNotification.Announcement("已拷贝代码").post()
+        AccessibilityNotification.Announcement(String(localized: "已拷贝代码")).post()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             copied = false
         }

@@ -6,9 +6,9 @@ nonisolated enum RemoteEntrySortKey: String, CaseIterable, Identifiable, Sendabl
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .name: return "名称"
-        case .size: return "大小"
-        case .modified: return "修改时间"
+        case .name: return String(localized: "名称", comment: "文件列表排序键")
+        case .size: return String(localized: "大小", comment: "文件列表排序键")
+        case .modified: return String(localized: "修改时间", comment: "文件列表排序键")
         }
     }
 }

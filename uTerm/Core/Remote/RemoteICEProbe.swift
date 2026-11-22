@@ -184,26 +184,27 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
         let config = relay.relayConfig
         guard let session = RemoteICEProbeSession(stunHost: config.host, stunPort: UInt16(clamping: config.port),
                                                   echoes: false) else {
-            result.failure = "无法创建 ICE agent"
+            result.failure = String(localized: "无法创建 ICE agent")
             return result
         }
         defer { session.close() }
         do {
             let started = DispatchTime.now()
             guard session.gather() else {
-                result.failure = "无法开始收集地址"
+                result.failure = String(localized: "无法开始收集地址")
                 return result
             }
             await session.waitForGathering(limit: Self.gatherLimit)
             result.gatherMillis = Self.millis(since: started)
             guard let gathered = session.localDescription() else {
-                result.failure = "拿不到本机描述"
+                result.failure = String(localized: "拿不到本机描述")
                 return result
             }
             let description = RemoteICEDescriptionFilter.keep(gathered, family: family, publicOnly: publicOnly)
             result.localCandidates = Self.labels(description)
             guard !result.localCandidates.isEmpty else {
-                result.failure = "本机没有\(family?.label ?? "")公网候选地址"
+                result.failure = family.map { String(localized: "本机没有 \($0.name) 公网候选地址") }
+                    ?? String(localized: "本机没有公网候选地址")
                 return result
             }
 
@@ -212,16 +213,18 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
             let answer = RemoteICEDescriptionFilter.keep(fullAnswer, family: family, publicOnly: publicOnly)
             result.remoteCandidates = Self.labels(answer)
             guard !result.remoteCandidates.isEmpty else {
-                result.failure = "Mac 没有\(family?.label ?? "")公网候选地址"
+                result.failure = family.map { String(localized: "Mac 没有 \($0.name) 公网候选地址") }
+                    ?? String(localized: "Mac 没有公网候选地址")
                 return result
             }
             let answered = DispatchTime.now()
             guard session.setRemote(answer) else {
-                result.failure = "Mac 的描述解析失败"
+                result.failure = String(localized: "Mac 的描述解析失败")
                 return result
             }
             guard await session.waitForConnection(limit: Self.connectLimit) else {
-                result.failure = session.currentPhase == .failed ? "所有候选地址都不通" : "超时"
+                result.failure = session.currentPhase == .failed ? String(localized: "所有候选地址都不通")
+                    : String(localized: "超时", comment: "打洞诊断失败原因")
                 return result
             }
             result.connected = true
@@ -276,6 +279,8 @@ nonisolated enum RemoteICEAddressFamily: String, Codable, CaseIterable, Sendable
     case ipv6
 
     var label: String { self == .ipv4 ? " IPv4 " : " IPv6 " }
+    /// 不带空格的名字，给要本地化的整句插值用。
+    var name: String { self == .ipv4 ? "IPv4" : "IPv6" }
 }
 
 /// 按地址族筛候选地址，并去掉不出公网的地址（链路本地、IPv6 唯一本地）。不是候选地址的行（ufrag、密码……）原样留着。

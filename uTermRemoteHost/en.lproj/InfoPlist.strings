@@ -1,3 +1,8 @@
-/* Name shown in System Settings (Privacy & Security > Accessibility, etc.). */
+/* Name shown in System Settings (Privacy & Security > Accessibility, etc.) and the permission prompts.
+   See the zh-Hans file for why the name must be localized here. */
 "CFBundleName" = "uTerm Remote Control";
 "CFBundleDisplayName" = "uTerm Remote Control";
+"NSLocalNetworkUsageDescription" = "uTerm lets paired phones and Macs on your local network remotely control the terminals and screen on this Mac.";
+"NSDocumentsFolderUsageDescription" = "Paired devices read and write files on this Mac remotely through uTerm.";
+"NSDesktopFolderUsageDescription" = "Paired devices read and write files on this Mac remotely through uTerm.";
+"NSDownloadsFolderUsageDescription" = "Paired devices read and write files on this Mac remotely through uTerm.";

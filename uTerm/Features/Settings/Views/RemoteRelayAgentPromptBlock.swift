@@ -30,14 +30,14 @@ struct RemoteRelayAgentPromptBlock: View {
                 SettingsInlineNote(tone: .warning, text: text)
             }
             if !missingPrerequisites.isEmpty {
-                SettingsRow(label: "命令行与技能", hint: "打开「启用命令行接口」与「允许执行命令与写入」，并给所用的 AI 工具安装 uterm 技能") {
-                    UDButton(title: "前往", style: .secondary) {
+                SettingsRow(label: String(localized: "命令行与技能"), hint: String(localized: "打开「启用命令行接口」与「允许执行命令与写入」，并给所用的 AI 工具安装 uterm 技能")) {
+                    UDButton(title: String(localized: "前往", comment: "前往对应设置页"), style: .secondary) {
                         UserDefaults.standard.set(SettingsSection.cli.rawValue, forKey: SettingsTabSelection.key)
                     }
                 }
             }
             if purpose == .deploy, !exec.isEmpty {
-                SettingsRow(label: "装在哪台主机", hint: "也可以不选，让 AI 先问你") {
+                SettingsRow(label: String(localized: "装在哪台主机"), hint: String(localized: "也可以不选，让 AI 先问你")) {
                     SettingsPicker(selection: $hostID,
                                    options: [(UUID?.none, String(localized: "让 AI 问我"))]
                                        + exec.map { (Optional($0.id), $0.name) },
@@ -60,7 +60,7 @@ struct RemoteRelayAgentPromptBlock: View {
                         .foregroundStyle(UD.text3)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 12)
-                    UDButton(title: copied ? "已拷贝" : "拷贝提示词", style: .primary, systemImage: "doc.on.doc") {
+                    UDButton(title: copied ? String(localized: "已拷贝") : String(localized: "拷贝提示词"), style: .primary, systemImage: "doc.on.doc") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(prompt, forType: .string)
                         copied = true

@@ -22,23 +22,23 @@ enum BrowserFileKind: Equatable {
             .file(label: label, tag: tag, tagColor: c)
         }
         switch ext {
-        case "py":             return code("Python 脚本", "PY",  Color(red: 0.36, green: 0.61, blue: 0.84))
-        case "go":             return code("Go 源码",     "GO",  Color(red: 0.30, green: 0.77, blue: 0.84))
+        case "py":             return code(String(localized: "Python 脚本"), "PY",  Color(red: 0.36, green: 0.61, blue: 0.84))
+        case "go":             return code(String(localized: "Go 源码"),     "GO",  Color(red: 0.30, green: 0.77, blue: 0.84))
         case "yml", "yaml":    return code("YAML",        "YML", Color(red: 0.79, green: 0.55, blue: 0.86))
         case "md", "markdown": return .file(label: "Markdown", tag: "MD", tagColor: Color(red: 0.54, green: 0.70, blue: 0.97))
         case "gz", "tgz", "zip", "tar", "xz", "bz2":
-            return code("归档", "GZ", Color(red: 0.88, green: 0.64, blue: 0.35))
+            return code(String(localized: "归档", comment: "文件类型：压缩包"), "GZ", Color(red: 0.88, green: 0.64, blue: 0.35))
         case "json", "js", "ts", "sh", "conf", "toml", "xml", "html", "css":
             return code(ext.uppercased(), ext.uppercased(), Color(red: 0.54, green: 0.70, blue: 0.97))
         default:
-            return .file(label: "文件", tag: nil, tagColor: nil)
+            return .file(label: String(localized: "文件", comment: "文件类型：普通文件"), tag: nil, tagColor: nil)
         }
     }
 
     var label: String {
         switch self {
-        case .folder:                 return "文件夹"
-        case .symlink:                return "符号链接"
+        case .folder:                 return String(localized: "文件夹", comment: "文件类型")
+        case .symlink:                return String(localized: "符号链接", comment: "文件类型")
         case .file(let label, _, _):  return label
         }
     }

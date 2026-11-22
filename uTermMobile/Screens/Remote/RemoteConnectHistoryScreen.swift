@@ -21,7 +21,7 @@ struct RemoteConnectHistoryScreen: View {
                 ForEach(records) { record in
                     MInsetGroup(header: header(record), footer: footer(record)) {
                         MInsetRow(icon: record.ok ? "check" : "x", iconColor: record.ok ? M.success : M.danger,
-                                  label: record.outcome.isEmpty ? (record.ok ? "成功" : "失败") : record.outcome,
+                                  label: record.outcome.isEmpty ? (record.ok ? String(localized: "成功") : String(localized: "失败")) : record.outcome,
                                   value: "\(record.totalMillis) ms", last: record.steps.isEmpty)
                         ForEach(Array(record.steps.enumerated()), id: \.offset) { index, step in
                             MInsetRow(icon: icon(step), iconColor: color(step), label: step.stage.label,
@@ -59,7 +59,7 @@ struct RemoteConnectHistoryScreen: View {
     }
 
     private func header(_ record: RemoteConnectTraceRecord) -> String {
-        let kind = record.kind == .desktop ? String(localized: "打开屏幕") : String(localized: "连接")
+        let kind = record.kind == .desktop ? String(localized: "打开屏幕") : String(localized: "连接", comment: "连接记录的类型：连接 Mac")
         return "\(kind) \(record.macName) · \(record.startedAt.formatted(date: .omitted, time: .standard))"
     }
 

@@ -76,16 +76,16 @@ nonisolated enum ParallelAgentPolicy {
         switch e {
         case .httpError(let status, _):
             switch status {
-            case 401, 403: return "API Key 无效或没有权限（HTTP \(status)）"
-            case 404:      return "找不到所选模型或接口地址（HTTP 404）"
-            case 429:      return "请求太频繁被限流（HTTP 429）"
-            default:       return "请求失败（HTTP \(status)）"
+            case 401, 403: return String(localized: "API Key 无效或没有权限（HTTP \(String(status))）")
+            case 404:      return String(localized: "找不到所选模型或接口地址（HTTP 404）")
+            case 429:      return String(localized: "请求太频繁被限流（HTTP 429）")
+            default:       return String(localized: "请求失败（HTTP \(String(status))）")
             }
-        case .invalidResponse:    return "模型服务返回了无法解析的响应"
-        case .streamIdleTimeout:  return "响应长时间没有新内容"
-        case .streamError(let d): return "模型服务中途报错：\(d)"
-        case .incompleteStream:   return "连接在回复完成前断开"
-        case .outputLimitReached: return "回复超出单次输出上限"
+        case .invalidResponse:    return String(localized: "模型服务返回了无法解析的响应")
+        case .streamIdleTimeout:  return String(localized: "响应长时间没有新内容")
+        case .streamError(let d): return String(localized: "模型服务中途报错：\(d)")
+        case .incompleteStream:   return String(localized: "连接在回复完成前断开")
+        case .outputLimitReached: return String(localized: "回复超出单次输出上限")
         }
     }
 
@@ -149,9 +149,9 @@ nonisolated enum ParallelAgentPolicy {
     }
 
     /// 结论格式（两端一致）。
-    static let conclusionFormat = """
+    static var conclusionFormat: String { """
         当目标达成、或确认无法自动完成时，停止调用工具，只输出一个 JSON 作为结论：
-        {"status":"ok|failed","summary":"不超过2句中文白话结论"}
+        {"status":"ok|failed","summary":"不超过2句白话结论，用\(AgentReplyLanguage.displayName)写"}
         ok = 目标已达成（不论是本来就正常，还是你处理后达成并验证过）；failed = 无法达成（说明原因与人工建议）。只判成功或失败，不要单独区分「已修复」。
-        """
+        """ }
 }

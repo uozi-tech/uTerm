@@ -14,10 +14,10 @@ nonisolated enum RemotePathProbeMode: String, Codable, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .localNetwork: return "局域网"
-        case .directIPv6: return "直连 IPv6"
-        case .directIPv4: return "直连 IPv4"
-        case .relay: return "中继"
+        case .localNetwork: return String(localized: "局域网")
+        case .directIPv6: return String(localized: "直连 IPv6")
+        case .directIPv4: return String(localized: "直连 IPv4")
+        case .relay: return String(localized: "中继", comment: "远控连接路径：经中继")
         }
     }
 
@@ -61,9 +61,15 @@ nonisolated struct RemotePathProbeResult: Codable, Equatable, Identifiable, Send
 
     var summaryLine: String {
         let time = date.formatted(.iso8601)
-        let outcome = connected ? (selectedPair ?? "通") : "失败(\(failure ?? "未知"))"
-        return "\(time)\t第\(round)轮\t\(mode.label)\t\(note)\t\(network)\t\(outcome)\t建立\(setupMillis ?? -1)ms\t"
-            + "往返p50 \(Self.format(roundTripMillis))\tp95 \(Self.format(roundTripP95Millis))\t丢包\(lossPercent ?? -1)%"
+        let reason = failure ?? String(localized: "未知", comment: "网络诊断：失败原因未知")
+        let outcome = connected ? (selectedPair ?? String(localized: "通", comment: "网络诊断：这条路通了"))
+            : String(localized: "失败(\(reason))")
+        let roundLabel = String(localized: "第\(round)轮", comment: "网络诊断：第几轮")
+        let setup = String(localized: "建立\(setupMillis ?? -1)ms", comment: "网络诊断：建立连接耗时")
+        let roundTrip = String(localized: "往返p50 \(Self.format(roundTripMillis))")
+        let loss = String(localized: "丢包\(lossPercent ?? -1)%")
+        return "\(time)\t\(roundLabel)\t\(mode.label)\t\(note)\t\(network)\t\(outcome)\t\(setup)\t"
+            + "\(roundTrip)\tp95 \(Self.format(roundTripP95Millis))\t\(loss)"
     }
 
     static func format(_ millis: Double?) -> String {
@@ -105,14 +111,14 @@ nonisolated struct RemotePathProbeSummary: Equatable, Sendable {
         var counts: [String: Int] = [:]
         var order: [String] = []
         for result in results where result.mode == mode && !result.connected {
-            let reason = result.failure ?? "未知"
+            let reason = result.failure ?? String(localized: "未知", comment: "网络诊断：失败原因未知")
             if counts[reason] == nil { order.append(reason) }
             counts[reason, default: 0] += 1
         }
         return order.map { reason in
             let count = counts[reason] ?? 1
             return count > 1 ? "\(reason) ×\(count)" : reason
-        }.joined(separator: "；")
+        }.joined(separator: String(localized: "；", comment: "并列的长条目之间的分隔符"))
     }
 
     /// 毫秒读数的显示：10 以下留一位小数。
@@ -121,9 +127,11 @@ nonisolated struct RemotePathProbeSummary: Equatable, Sendable {
     }
 
     var line: String {
-        "\(mode.label)：成功 \(successes)/\(attempts)，建立 \(medianSetupMillis.map { "\($0)ms" } ?? "-")，"
-            + "往返 p50 \(RemotePathProbeResult.format(medianRoundTripMillis)) "
-            + "p95 \(RemotePathProbeResult.format(medianP95Millis))，丢包 \(meanLossPercent.map { "\($0)%" } ?? "-")"
+        let setup = medianSetupMillis.map { "\($0)ms" } ?? "-"
+        let p50 = RemotePathProbeResult.format(medianRoundTripMillis)
+        let p95 = RemotePathProbeResult.format(medianP95Millis)
+        let loss = meanLossPercent.map { "\($0)%" } ?? "-"
+        return String(localized: "\(mode.label)：成功 \(successes)/\(attempts)，建立 \(setup)，往返 p50 \(p50) p95 \(p95)，丢包 \(loss)")
     }
 }
 
@@ -135,7 +143,7 @@ nonisolated struct RemotePathMatrixRunner: Sendable {
     var lan: RemoteLANTarget?
     /// nil = 没配中继或 Mac 不在中继上（直连与中继都要经中继交换地址，直接判不通，原因见 `relayUnavailable`）。
     var relay: RemoteRelayClient?
-    var relayUnavailable = "没有配置中继"
+    var relayUnavailable = String(localized: "没有配置中继")
 
     func run(mac: RemotePeer, rounds: Int, modes: [RemotePathProbeMode] = RemotePathProbeMode.allCases,
              progress: @Sendable (RemotePathProbeResult) async -> Void) async -> [RemotePathProbeResult] {
@@ -157,7 +165,7 @@ nonisolated struct RemotePathMatrixRunner: Sendable {
     func probe(mac: RemotePeer, mode: RemotePathProbeMode) async -> RemotePathProbeResult {
         if mode == .localNetwork {
             guard let lan else {
-                return RemotePathProbeResult(mode: mode, connected: false, failure: "Mac 不在这个局域网里")
+                return RemotePathProbeResult(mode: mode, connected: false, failure: String(localized: "Mac 不在这个局域网里"))
             }
             return await RemoteLANProbe(identity: identity).run(lan)
         }
@@ -212,17 +220,17 @@ struct RemoteLANProbe {
             result.failure = message
             return result
         case .awaitingApproval:
-            result.failure = "Mac 上还没同意这台设备"
+            result.failure = String(localized: "Mac 上还没同意这台设备")
             return result
         case .idle, .connecting:
-            result.failure = "超时"
+            result.failure = String(localized: "超时", comment: "网络诊断失败原因")
             return result
         }
         result.setupMillis = RemoteRelayProbe.millis(since: started)
         let measured = await client.measureRoundTrips(count: pings)
         let percentiles = RemoteRoundTrips.percentiles(measured.millis.sorted())
         result.connected = true
-        result.selectedPair = "TCP 局域网"
+        result.selectedPair = String(localized: "TCP 局域网")
         result.roundTripMillis = percentiles.p50
         result.roundTripP95Millis = percentiles.p95
         result.lossPercent = measured.lost * 100 / max(1, pings)
@@ -266,13 +274,13 @@ nonisolated struct RemoteRelayProbe: Sendable {
         defer { transport.cancel() }
         let meter = RemoteStreamEchoMeter(transport: transport)
         guard await meter.start() else {
-            result.failure = "中继接上了但字节流起不来"
+            result.failure = String(localized: "中继接上了但字节流起不来")
             return result
         }
         result.setupMillis = Self.millis(since: started)
         let measured = await meter.measure(count: pings)
         result.connected = true
-        result.selectedPair = "TCP 中继"
+        result.selectedPair = String(localized: "TCP 中继")
         result.roundTripMillis = measured.p50
         result.roundTripP95Millis = measured.p95
         result.lossPercent = measured.lossPercent
@@ -311,7 +319,7 @@ nonisolated enum RemoteRelayProbeError: LocalizedError {
     case noAnswer
 
     var errorDescription: String? {
-        "\(Int(RemoteRelayProbe.signalTimeout)) 秒内没等到 Mac 回复（信令超时，或 Mac 版本不支持中继诊断）"
+        String(localized: "\(Int(RemoteRelayProbe.signalTimeout)) 秒内没等到 Mac 回复（信令超时，或 Mac 版本不支持中继诊断）")
     }
 }
 

@@ -20,7 +20,7 @@ enum RemoteControlPresentation {
     }
 
     static func connectedHint(_ devices: [String]) -> String? {
-        devices.isEmpty ? nil : "已连接：\(devices.joined(separator: "、"))"
+        devices.isEmpty ? nil : String(localized: "已连接：\(devices.joined(separator: String(localized: "、", comment: "并列设备名之间的分隔符")))")
     }
 
     // MARK: - 本机终端的辅助程序
@@ -36,15 +36,15 @@ enum RemoteControlPresentation {
         switch state {
         case .unknown: return .hidden
         case .checking: return .progress
-        case .ok: return .badge(symbol: "checkmark.circle.fill", tone: .success, label: "正常")
-        case .failed: return .badge(symbol: "exclamationmark.triangle.fill", tone: .danger, label: "无法连接")
+        case .ok: return .badge(symbol: "checkmark.circle.fill", tone: .success, label: String(localized: "正常", comment: "本机终端辅助程序状态"))
+        case .failed: return .badge(symbol: "exclamationmark.triangle.fill", tone: .danger, label: String(localized: "无法连接", comment: "本机终端辅助程序状态"))
         }
     }
 
     static func helperHint(_ state: LocalShellService.HelperState) -> String {
         switch state {
         case .failed(let reason): return reason
-        default: return "本机终端由 uTerm 内置的辅助程序启动（不受 App 沙盒限制，才能读写你的主目录），用到时自动运行，不需要额外授权。"
+        default: return String(localized: "本机终端由 uTerm 内置的辅助程序启动（不受 App 沙盒限制，才能读写你的主目录），用到时自动运行，不需要额外授权。")
         }
     }
 
@@ -52,9 +52,9 @@ enum RemoteControlPresentation {
 
     static func relayHint(_ config: RemoteRelayConfig?) -> String {
         if let config {
-            return "\(config.name)（\(config.endpointDescription)）。这份配置含成员密钥，二维码只给自己的设备扫。"
+            return String(localized: "\(config.name)（\(config.endpointDescription)）。这份配置含成员密钥，二维码只给自己的设备扫。")
         }
-        return "跨网络控制需要在你自己的主机上运行中继：可以让 AI 经 uterm 技能装到已保存的主机上，或导入 uterm-relay 生成的配置文件。"
+        return String(localized: "跨网络控制需要在你自己的主机上运行中继：可以让 AI 经 uterm 技能装到已保存的主机上，或导入 uterm-relay 生成的配置文件。")
     }
 
     /// 已配中继那一行的副标题：名字 · 地址 · 版本（知道时）。
@@ -65,11 +65,16 @@ enum RemoteControlPresentation {
     }
 
     static func relayUpdateHint(running: String?, host: String?) -> String {
-        let current = running.map { String(localized: "正在运行 \($0)。") } ?? ""
-        if let host {
-            return current + String(localized: "会在「\(host)」上下载、校验后替换并重启，新版本起不来会自动换回。")
+        switch (running, host) {
+        case let (running?, host?):
+            return String(localized: "正在运行 \(running)。会在「\(host)」上下载、校验后替换并重启，新版本起不来会自动换回。")
+        case let (nil, host?):
+            return String(localized: "会在「\(host)」上下载、校验后替换并重启，新版本起不来会自动换回。")
+        case let (running?, nil):
+            return String(localized: "正在运行 \(running)。尚未指定中继所在的主机：在「更多操作」菜单里选「指定所在主机…」，或让 AI 更新。")
+        case (nil, nil):
+            return String(localized: "尚未指定中继所在的主机：在「更多操作」菜单里选「指定所在主机…」，或让 AI 更新。")
         }
-        return current + String(localized: "尚未指定中继所在的主机：在「更多操作」菜单里选「指定所在主机…」，或让 AI 更新。")
     }
 
     struct Note: Equatable {
@@ -97,8 +102,13 @@ enum RemoteControlPresentation {
             case .skipped: return "–"
             }
         }
-        var summary = "TCP \(mark(result.tcp))   认证 \(mark(result.auth))   UDP \(mark(result.udp))"
-        if let rtt = result.rttMs { summary += String(localized: "   往返 \(String(rtt)) ms") }
+        let tcp = mark(result.tcp), auth = mark(result.auth), udp = mark(result.udp)
+        let summary: String
+        if let rtt = result.rttMs {
+            summary = String(localized: "TCP \(tcp)   认证 \(auth)   UDP \(udp)   往返 \(String(rtt)) ms", comment: "中继测试结果：每项后面是 ✓ / ✗ / –")
+        } else {
+            summary = String(localized: "TCP \(tcp)   认证 \(auth)   UDP \(udp)", comment: "中继测试结果：每项后面是 ✓ / ✗ / –")
+        }
         let tone: SettingsTone = !result.isUsable ? .danger : (result.udp == .ok ? .success : .warning)
         return [Note(tone: tone, text: summary)] + result.problems.map { Note(tone: .warning, text: $0) }
     }
@@ -106,18 +116,18 @@ enum RemoteControlPresentation {
     /// `state == nil` 表示中继连接还没建出来（刚打开开关），按「正在连接」显示。
     static func relayStatusLabel(_ state: RemoteRelayHostLink.State?) -> String {
         switch state {
-        case .registered: return "已连接中继"
-        case .connecting, .none: return "正在连接"
-        case .failed: return "无法连接"
-        case .superseded: return "被其他设备顶替"
-        case .stopped: return "已停止"
+        case .registered: return String(localized: "已连接中继")
+        case .connecting, .none: return String(localized: "正在连接")
+        case .failed: return String(localized: "无法连接")
+        case .superseded: return String(localized: "被其他设备顶替")
+        case .stopped: return String(localized: "已停止", comment: "中继连接状态")
         }
     }
 
     static func relayStatusHint(_ state: RemoteRelayHostLink.State?) -> String? {
         switch state {
         case .failed(let message): return message
-        case .superseded: return "另一台机器用这台 Mac 的身份注册了中继。稍后会自动再试，也可以现在重新连接。"
+        case .superseded: return String(localized: "另一台机器用这台 Mac 的身份注册了中继。稍后会自动再试，也可以现在重新连接。")
         default: return nil
         }
     }
@@ -125,17 +135,17 @@ enum RemoteControlPresentation {
     /// 这个 uTerm 不注册中继（开发构建 / 测试宿主）：设置页公网区顶上那一行。
     static func relayRegistrationBlockLabel(_ block: RemoteRelayRegistrationBlock) -> String {
         switch block {
-        case .developmentBuild: return "开发构建，不注册"
-        case .testHost: return "测试宿主，不注册"
+        case .developmentBuild: return String(localized: "开发构建，不注册")
+        case .testHost: return String(localized: "测试宿主，不注册")
         }
     }
 
     static func relayRegistrationBlockHint(_ block: RemoteRelayRegistrationBlock) -> String {
         switch block {
         case .developmentBuild:
-            return "这个 uTerm 不在「应用程序」文件夹里，不会以这台 Mac 的身份注册中继，以免顶替已安装的 uTerm。"
+            return String(localized: "这个 uTerm 不在「应用程序」文件夹里，不会以这台 Mac 的身份注册中继，以免顶替已安装的 uTerm。")
         case .testHost:
-            return "这是跑测试用的 uTerm，不连接中继，也不读写已安装的 uTerm 的远程控制设置。"
+            return String(localized: "这是跑测试用的 uTerm，不连接中继，也不读写已安装的 uTerm 的远程控制设置。")
         }
     }
 
@@ -159,7 +169,7 @@ enum RemoteControlPresentation {
 
     static func pairingHint(hasInvitation: Bool) -> String {
         hasInvitation
-            ? "二维码和链接 10 分钟内有效，只能用一次。"
-            : "不在同一局域网的设备用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码，或把链接发给对方。"
+            ? String(localized: "二维码和链接 10 分钟内有效，只能用一次。")
+            : String(localized: "不在同一局域网的设备用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码，或把链接发给对方。")
     }
 }

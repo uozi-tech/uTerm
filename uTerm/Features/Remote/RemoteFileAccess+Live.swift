@@ -7,10 +7,9 @@ extension RemoteFileAccess {
     @MainActor
     static func live(settings: RemoteControlSettings) -> RemoteFileAccess {
         RemoteFileAccess(refusal: { [weak settings] _ in
-            guard let settings else { return RemoteFileError(.unreachable, "uTerm 正在退出") }
+            guard let settings else { return RemoteFileError(.unreachable, String(localized: "uTerm 正在退出")) }
             guard settings.isLocalShellEnabled else {
-                return RemoteFileError(.disabled, "Mac 上没有打开「允许打开本机终端」（远程访问文件、执行命令和它共用这个开关）。"
-                                       + "在 Mac 的 uTerm 里打开「设置 › 远程控制」。")
+                return RemoteFileError(.disabled, String(localized: "Mac 上没有打开「允许打开本机终端」（远程访问文件、执行命令和它共用这个开关）。在 Mac 的 uTerm 里打开「设置 › 远程控制」。"))
             }
             return nil
         }, perform: { payload in
@@ -19,7 +18,7 @@ extension RemoteFileAccess {
             } catch {
                 return RemoteFileCodec.packReply(
                     .failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
-                             RemoteFileError(.unreachable, "Mac 上的辅助程序没有响应：\(error.localizedDescription)")),
+                             RemoteFileError(.unreachable, String(localized: "Mac 上的辅助程序没有响应：\(error.localizedDescription)"))),
                     compress: false)
             }
         })

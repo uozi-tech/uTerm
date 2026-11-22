@@ -37,7 +37,7 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
         let reason: String
         switch kind {
         case .conflict:
-            reason = String(localized: "监听端口 \(rule.listenPort) 已被占用")
+            reason = String(localized: "监听端口 \(String(rule.listenPort)) 已被占用")
         case .unreachable:
             reason = String(localized: "目标地址无法连接")
         case .denied:
@@ -47,7 +47,7 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
             if rule.kind == .remote {
                 reason = String(localized: "主机拒绝建立远程转发（可能需要在 SSH 服务端开启 GatewayPorts）")
             } else {
-                reason = String(localized: "本地端口 \(rule.listenPort) 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）")
+                reason = String(localized: "本地端口 \(String(rule.listenPort)) 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）")
             }
         case .auth:
             reason = String(localized: "认证失败")
@@ -57,14 +57,14 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
             // 保证用户永远看不到裸 errno 数字。
             reason = FriendlyError.describe(error)
         }
-        return ForwardingError(kind: kind, message: "\(rule.name)：\(reason)")
+        return ForwardingError(kind: kind, message: String(localized: "\(rule.name)：\(reason)"))
     }
 
     /// 看门狗判死（底层 SSH 传输已断）的专用文案。kind 取 `.unreachable`：
     /// 非 conflict → UI 行的恢复操作是「重试」，重试经 coordinator 重建连接。
     static func connectionLost(rule: ForwardingRuleSnapshot) -> ForwardingError {
         ForwardingError(kind: .unreachable,
-                        message: "\(rule.name)：\(String(localized: "SSH 连接已断开"))")
+                        message: String(localized: "\(rule.name)：SSH 连接已断开"))
     }
 
     // MARK: - 私有归类

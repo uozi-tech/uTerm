@@ -250,11 +250,11 @@ struct SFTPFileTable: View {
         HStack(spacing: SFTPFileTableColumnWidths.spacing) {
             // 与文件行 leading 图标（30）对齐——让「名称」列头压在文件名上方而非图标上。
             Color.clear.frame(width: SFTPFileTableColumnWidths.iconWidth)
-            headerCell("名称", .name).frame(width: widths.name, alignment: .leading)
-            staticHeader("所有者").frame(width: widths.owner, alignment: .leading)
-            staticHeader("权限").frame(width: widths.permissions, alignment: .leading)
-            headerCell("修改时间", .modified).frame(width: widths.modified, alignment: .leading)
-            headerCell("大小", .size).frame(width: widths.size, alignment: .trailing)
+            headerCell(String(localized: "名称", comment: "文件列表列头"), .name).frame(width: widths.name, alignment: .leading)
+            staticHeader(String(localized: "所有者", comment: "文件列表列头")).frame(width: widths.owner, alignment: .leading)
+            staticHeader(String(localized: "权限", comment: "文件列表列头")).frame(width: widths.permissions, alignment: .leading)
+            headerCell(String(localized: "修改时间", comment: "文件列表列头"), .modified).frame(width: widths.modified, alignment: .leading)
+            headerCell(String(localized: "大小", comment: "文件列表列头"), .size).frame(width: widths.size, alignment: .trailing)
         }
         .padding(.horizontal, SFTPFileTableColumnWidths.horizontalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -283,8 +283,8 @@ struct SFTPFileTable: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.udPlain)
-        .accessibilityLabel("按\(label)排序")
-        .help("按\(label)排序")
+        .accessibilityLabel(String(localized: "按\(label)排序", comment: "参数是列名"))
+        .help(String(localized: "按\(label)排序", comment: "参数是列名"))
     }
 
     // MARK: `..` 行
@@ -365,7 +365,7 @@ struct SFTPFileTable: View {
         // 文件夹无大小。
         if !e.isDirectory, e.size != nil { parts.append(e.sizeText) }
         if let m = e.modifiedAt { parts.append(UFormat.dateTime(m)) }
-        return parts.joined(separator: "，")
+        return parts.joined(separator: String(localized: "，", comment: "无障碍朗读值里各项之间的分隔符"))
     }
 
     /// 八进制权限 chip：mono 11 + `UD.fillSoft` 底胶囊；tooltip

@@ -321,7 +321,7 @@ final class RemoteDesktopSession {
         trace.setNetwork(client.path?.label ?? String(localized: "未连接"))
         if let tapped = openRequestedAt {
             openRequestedAt = nil
-            trace.event("点开屏幕之后 \(RemoteConnectTrace.millis(ContinuousClock.now - tapped)) ms 才开流")
+            trace.event(String(localized: "点开屏幕之后 \(RemoteConnectTrace.millis(ContinuousClock.now - tapped)) ms 才开流"))
         }
         awaitingFirstFrame = false
         contentFraction = CGSize(width: 1, height: 1)
@@ -423,7 +423,7 @@ final class RemoteDesktopSession {
             return
         }
         if info.failure != nil {
-            let message = info.message ?? "Mac 拒绝了远程桌面请求"
+            let message = info.message ?? String(localized: "Mac 拒绝了远程桌面请求")
             finishOpenTrace(ok: false, outcome: message)
             throw RemoteAttachError.rejected(message)
         }
@@ -554,7 +554,7 @@ final class RemoteDesktopSession {
         attachment = nil
         receiver.detach()
         if ended {
-            state = .ended(reason.isEmpty ? "远程桌面已结束" : reason)
+            state = .ended(reason.isEmpty ? String(localized: "远程桌面已结束") : reason)
             return
         }
         state = .reconnecting(reason)
@@ -712,7 +712,7 @@ final class RemoteDesktopSession {
         if format.codec == nil {
             wantsAudio = false
             stopAudioPlayback()
-            audioState = .unavailable(format.message ?? "Mac 没有传来声音")
+            audioState = .unavailable(format.message ?? String(localized: "Mac 没有传来声音"))
         } else {
             audioState = .playing
         }
@@ -727,16 +727,16 @@ final class RemoteDesktopSession {
         // 开屏时间线还开着（首帧还没上屏）就记下开声音占了主线程多久：这段时间「正在连接」那层撤不掉。
         // 播放引擎在自己的队列上启动（`RemoteAudioEnginePlayer`），这里应当只有几毫秒。
         defer {
-            openTrace?.event("开声音占主线程 \(RemoteConnectTrace.millis(clock.now - started)) ms")
+            openTrace?.event(String(localized: "开声音占主线程 \(RemoteConnectTrace.millis(clock.now - started)) ms"))
         }
         do {
             try audioOutput.start(pull: { receiver.pull(into: $0, frames: $1) })
             audioPlaying = true
         } catch {
             #if os(macOS)
-            audioState = .unavailable("这台 Mac 上无法播放声音：\(error.localizedDescription)")
+            audioState = .unavailable(String(localized: "这台 Mac 上无法播放声音：\(error.localizedDescription)"))
             #else
-            audioState = .unavailable("手机上无法播放声音：\(error.localizedDescription)")
+            audioState = .unavailable(String(localized: "手机上无法播放声音：\(error.localizedDescription)"))
             #endif
             wantsAudio = false
         }
@@ -1054,7 +1054,7 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
             firstImageProgress.lost += videoSequences.count
             if !firstImageProgress.reportedLost {
                 firstImageProgress.reportedLost = true
-                noteBeforeFirstImage("首帧前有帧没收齐、放弃（\(videoSequences.count) 帧）")
+                noteBeforeFirstImage(String(localized: "首帧前有帧没收齐、放弃（\(videoSequences.count) 帧）"))
             }
         }
         decoder.markReferenceLost()
@@ -1139,9 +1139,10 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         logReceiveIfDue(now: DispatchTime.now().uptimeNanoseconds)
         if awaitingFirstImage, !firstImageProgress.sawFrame {
             firstImageProgress.sawFrame = true
-            let kind = frame.isKeyframe ? "关键帧" : frame.flags.contains(.ltrRefresh) ? "刷新帧" : "普通帧"
-            noteBeforeFirstImage("收到首个视频帧（\(kind) \(payload.count / 1024) KB，序号 \(frame.sequence)，"
-                                 + "\(viaDatagram ? "直连数据报" : "可靠通道")）")
+            let kind = frame.isKeyframe ? String(localized: "关键帧")
+                : frame.flags.contains(.ltrRefresh) ? String(localized: "刷新帧") : String(localized: "普通帧")
+            let route = viaDatagram ? String(localized: "直连数据报") : String(localized: "可靠通道")
+            noteBeforeFirstImage(String(localized: "收到首个视频帧（\(kind) \(payload.count / 1024) KB，序号 \(String(frame.sequence))，\(route)）"))
         }
         // 后台暂停：只回确认（不报失败、不带 LTR 令牌——没解过），不解码不渲染。
         if paused {
@@ -1194,8 +1195,8 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
             lock.unlock()
             if let trace {
                 let p = firstImageProgress
-                trace.event("首帧解码完（\(frame.isKeyframe ? "关键帧" : "非关键帧")，解码 \(elapsed / 1_000_000) ms；此前"
-                            + "没收齐 \(p.lost)、等恢复帧跳过 \(p.skipped)、解码失败 \(p.failed)、旧流丢弃 \(p.stale)）")
+                let kind = frame.isKeyframe ? String(localized: "关键帧") : String(localized: "非关键帧")
+                trace.event(String(localized: "首帧解码完（\(kind)，解码 \(String(elapsed / 1_000_000)) ms；此前没收齐 \(p.lost)、等恢复帧跳过 \(p.skipped)、解码失败 \(p.failed)、旧流丢弃 \(p.stale)）"))
             }
             first?()
         } else if !sidecar {
@@ -1203,7 +1204,8 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
                 firstImageProgress.failed += 1
                 if !firstImageProgress.reportedFailure {
                     firstImageProgress.reportedFailure = true
-                    noteBeforeFirstImage("首帧前解码失败（\(frame.isKeyframe ? "关键帧" : "非关键帧")，序号 \(frame.sequence)）")
+                    let kind = frame.isKeyframe ? String(localized: "关键帧") : String(localized: "非关键帧")
+                    noteBeforeFirstImage(String(localized: "首帧前解码失败（\(kind)，序号 \(String(frame.sequence))）"))
                 }
             }
             requestKeyframe(force: false)

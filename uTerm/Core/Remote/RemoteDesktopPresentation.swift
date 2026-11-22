@@ -209,7 +209,7 @@ nonisolated struct RemoteDesktopStat: Equatable, Identifiable, Sendable {
     static func spokenText(_ items: [RemoteDesktopStat]) -> String {
         items.map { item in
             [item.label, item.value, item.unit, item.detail].compactMap(\.self).joined(separator: " ")
-        }.joined(separator: "，")
+        }.joined(separator: String(localized: "，", comment: "读屏文字里各段之间的分隔符"))
     }
 }
 

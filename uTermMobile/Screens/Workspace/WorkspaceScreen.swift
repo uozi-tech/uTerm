@@ -530,10 +530,10 @@ struct WorkspaceScreen: View {
             MIcon(name: "split", size: 30, color: M.text4, weight: .light)
             Text("在这一侧打开").font(M.sans(14, weight: .semibold)).foregroundStyle(M.text2)
             HStack(spacing: 10) {
-                MBtn(title: "新建终端", icon: "term", kind: .tinted, height: 40) {
+                MBtn(title: String(localized: "新建终端"), icon: "term", kind: .tinted, height: 40) {
                     requestNew(.terminal, in: pane)
                 }.fixedSize()
-                MBtn(title: "浏览文件", icon: "folder", kind: .secondary, height: 40) {
+                MBtn(title: String(localized: "浏览文件"), icon: "folder", kind: .secondary, height: 40) {
                     requestNew(.sftp, in: pane)
                 }.fixedSize()
             }

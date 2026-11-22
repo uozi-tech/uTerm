@@ -29,18 +29,19 @@ nonisolated struct TerminalPhrases: Codable, Equatable, Sendable {
         "codex resume --last",
         "codex resume",
     ]
-    /// 常用提示词。不放一点就有破坏性的（回退、推送）。
+    /// 常用提示词。不放一点就有破坏性的（回退、推送）。按系统语言给默认值；与默认值相同时存空串，
+    /// 换了语言的用户看到的是新语言的默认值。
     static let defaultPrompts = [
-        "继续",
-        "按你的方案做",
-        "先说方案，别改代码",
-        "这个方向不对，换个思路",
-        "修复这个错误",
-        "跑测试并修复失败项",
-        "解释一下刚才的改动",
-        "检查刚才的改动有没有问题",
-        "总结当前进度和下一步",
-        "提交当前改动",
+        String(localized: "继续", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "按你的方案做", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "先说方案，别改代码", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "这个方向不对，换个思路", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "修复这个错误", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "跑测试并修复失败项", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "解释一下刚才的改动", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "检查刚才的改动有没有问题", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "总结当前进度和下一步", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
+        String(localized: "提交当前改动", comment: "键盘条默认短语：一点就发给终端里 AI 命令行（Claude Code / Codex）的提示词"),
     ]
     /// Claude Code 与 Codex 都支持的斜杠命令。
     static let defaultSlash = ["/clear", "/compact", "/resume", "/model", "/status", "/init"]

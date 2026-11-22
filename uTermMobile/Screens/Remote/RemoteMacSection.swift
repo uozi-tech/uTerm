@@ -22,14 +22,16 @@ struct RemoteMacSection: View {
 
     private func group(_ directory: RemoteMacDirectory) -> some View {
         VStack(spacing: 12) {
-            MInsetGroup(header: "我的 Mac", headerTrailing: AnyView(scanButton)) {
+            MInsetGroup(header: String(localized: "我的 Mac"), headerTrailing: AnyView(scanButton)) {
                 if !directory.isActivated {
-                    MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端", chevron: true, last: true) {
+                    MInsetRow(icon: "mac", label: String(localized: "控制我的 Mac 上的终端"), chevron: true, last: true) {
                         directory.activate()
                     }
                 } else if directory.macs.isEmpty {
-                    MInsetRow(icon: "mac", label: "还没有配对的 Mac",
-                              sub: directory.nearbyMacs.isEmpty ? "在登录同一个 iCloud 账户的 Mac 上打开「远程控制」，或扫 Mac 上的二维码" : "在下面选一台开始配对",
+                    MInsetRow(icon: "mac", label: String(localized: "还没有配对的 Mac"),
+                              sub: directory.nearbyMacs.isEmpty
+                                  ? String(localized: "在登录同一个 iCloud 账户的 Mac 上打开「远程控制」，或扫 Mac 上的二维码")
+                                  : String(localized: "在下面选一台开始配对"),
                               last: true)
                 } else {
                     ForEach(directory.macs) { mac in
@@ -38,10 +40,10 @@ struct RemoteMacSection: View {
                 }
             }
             if directory.isActivated, !directory.nearbyMacs.isEmpty {
-                MInsetGroup(header: "附近的 Mac",
-                            footer: "同一局域网里、和这台设备登录同一个 iCloud 账户、还没配对的 Mac。点一下，在 Mac 上输入这里显示的 6 位数即可配对。") {
+                MInsetGroup(header: String(localized: "附近的 Mac"),
+                            footer: String(localized: "同一局域网里、和这台设备登录同一个 iCloud 账户、还没配对的 Mac。点一下，在 Mac 上输入这里显示的 6 位数即可配对。")) {
                     ForEach(directory.nearbyMacs) { mac in
-                        MInsetRow(icon: "mac", label: mac.name, value: "配对", chevron: true,
+                        MInsetRow(icon: "mac", label: mac.name, value: String(localized: "配对"), chevron: true,
                                   last: mac.id == directory.nearbyMacs.last?.id) {
                             selected = mac
                         }
@@ -203,8 +205,8 @@ struct RemoteMacSheet: View {
         case .failed(let message):
             scrolling {
                 MInsetGroup(footer: client.failureContext) {
-                    MInsetRow(icon: "warn", iconColor: M.danger, label: "连接失败", sub: message, last: false)
-                    MInsetRow(icon: "refresh", label: "重试", chevron: true, last: true) {
+                    MInsetRow(icon: "warn", iconColor: M.danger, label: String(localized: "连接失败"), sub: message, last: false)
+                    MInsetRow(icon: "refresh", label: String(localized: "重试"), chevron: true, last: true) {
                         Task { await client.connectInteractively() }
                     }
                 }
@@ -272,13 +274,13 @@ struct RemoteMacSheet: View {
     // List 而不是 MInsetGroup：swipeActions 只在 List 里生效。
     private var sessions: some View {
         List {
-            section("这台 Mac",
+            section(String(localized: "这台 Mac"),
                     footer: client.supportsLocalShell
-                        ? "在 Mac 上打开你的登录 shell，并在 Mac 上弹出对应的终端窗口；断开后终端仍留在 Mac 上，可以接着用。"
-                        : "Mac 上的 uTerm 版本过旧，无法新建终端。将其更新到最新版本后即可使用。") {
+                        ? String(localized: "在 Mac 上打开你的登录 shell，并在 Mac 上弹出对应的终端窗口；断开后终端仍留在 Mac 上，可以接着用。")
+                        : String(localized: "Mac 上的 uTerm 版本过旧，无法新建终端。将其更新到最新版本后即可使用。")) {
                 if client.supportsLocalShell {
-                    MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
-                              sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
+                    MInsetRow(icon: "term", label: openingShell ? String(localized: "正在打开…") : String(localized: "新建终端"),
+                              sub: String(localized: "Mac 本机的 shell"), chevron: !openingShell, last: true) {
                         guard !openingShell else { return }
                         Task { await chooseWorkspace() }
                     }
@@ -286,41 +288,42 @@ struct RemoteMacSheet: View {
                         Task { await openLocalShell(directory: directory) }
                     }
                 } else {
-                    MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "需要更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "term", iconColor: M.text3, label: String(localized: "新建终端"), sub: String(localized: "需要更新 Mac 上的 uTerm"), last: true)
                 }
             }
-            section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本过旧，不支持远程桌面。将其更新到最新版本后即可使用。") {
+            section(String(localized: "屏幕", comment: "Mac 面板分组：远程桌面"),
+                    footer: client.supportsDesktop ? nil : String(localized: "Mac 上的 uTerm 版本过旧，不支持远程桌面。将其更新到最新版本后即可使用。")) {
                 if client.supportsDesktop {
                     // 分隔线交给 List（`last: true` 关掉行自带的）。
-                    MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
+                    MInsetRow(icon: "display", label: String(localized: "查看并控制屏幕"), sub: String(localized: "像触控板一样操作 Mac 的鼠标与键盘"),
                               chevron: true, last: true) {
                         openDesktop()
                     }
                     if client.supportsDesktopWindows {
-                        MInsetRow(icon: "window", label: "窗口模式", sub: "只看一个窗口，并调成适合这里的大小",
+                        MInsetRow(icon: "window", label: String(localized: "窗口模式"), sub: String(localized: "只看一个窗口，并调成适合这里的大小"),
                                   chevron: true, last: true) {
                             choosingWindow = true
                         }
                     }
                 } else {
-                    MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "需要更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "display", iconColor: M.text3, label: String(localized: "查看并控制屏幕"), sub: String(localized: "需要更新 Mac 上的 uTerm"), last: true)
                 }
             }
-            section("文件", footer: client.supportsFiles
-                        ? "从主目录开始浏览这台 Mac 上的文件，可以上传、下载、改名和删除。Mac 不用打开 SSH。"
-                        : "Mac 上的 uTerm 版本过旧，不支持浏览文件。将其更新到最新版本后即可使用。") {
+            section(String(localized: "文件", comment: "Mac 面板分组：浏览文件"), footer: client.supportsFiles
+                        ? String(localized: "从主目录开始浏览这台 Mac 上的文件，可以上传、下载、改名和删除。Mac 不用打开 SSH。")
+                        : String(localized: "Mac 上的 uTerm 版本过旧，不支持浏览文件。将其更新到最新版本后即可使用。")) {
                 if client.supportsFiles {
-                    MInsetRow(icon: "folder", label: "浏览文件", sub: "Mac 上的文件", chevron: true, last: true) {
+                    MInsetRow(icon: "folder", label: String(localized: "浏览文件"), sub: String(localized: "Mac 上的文件"), chevron: true, last: true) {
                         openFiles()
                     }
                 } else {
-                    MInsetRow(icon: "folder", iconColor: M.text3, label: "浏览文件", sub: "需要更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "folder", iconColor: M.text3, label: String(localized: "浏览文件"), sub: String(localized: "需要更新 Mac 上的 uTerm"), last: true)
                 }
             }
-            section("Mac 上的终端",
-                    footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签页，之后 Mac 上新开或关闭终端，手机上的标签页也跟着变，直到点「断开全部终端」。接管期间它们按这台手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
+            section(String(localized: "Mac 上的终端"),
+                    footer: String(localized: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签页，之后 Mac 上新开或关闭终端，手机上的标签页也跟着变，直到点「断开全部终端」。接管期间它们按这台手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。")) {
                 if client.sessions.isEmpty {
-                    MInsetRow(icon: "term", label: "Mac 上没有已连接的终端", sub: "在 Mac 上打开一个终端后会出现在这里", last: true)
+                    MInsetRow(icon: "term", label: String(localized: "Mac 上没有已连接的终端"), sub: String(localized: "在 Mac 上打开一个终端后会出现在这里"), last: true)
                 } else {
                     ForEach(client.sessions) { session in
                         // 分隔线交给 List（`last: true` 关掉行自带的），滑动时才会跟着行走。
@@ -334,16 +337,16 @@ struct RemoteMacSheet: View {
                 }
                 if workspace.followedClients.contains(where: { $0 === client }) {
                     let taken = workspace.remoteTabIDs(of: client)
-                    MInsetRow(icon: "x", label: "断开全部终端",
-                              sub: taken.isEmpty ? "不再自动接入这台 Mac 新开的终端"
-                                  : "关闭手机上的 \(taken.count) 个标签页，Mac 上的终端继续运行",
+                    MInsetRow(icon: "x", label: String(localized: "断开全部终端"),
+                              sub: taken.isEmpty ? String(localized: "不再自动接入这台 Mac 新开的终端")
+                                  : String(localized: "关闭手机上的 \(taken.count) 个标签页，Mac 上的终端继续运行"),
                               last: true) {
                         endTakeover()
                     }
                 }
             }
             section(nil, footer: nil) {
-                MInsetRow(icon: "x", label: "忘记这台 Mac", danger: true, last: true) {
+                MInsetRow(icon: "x", label: String(localized: "忘记这台 Mac"), danger: true, last: true) {
                     endTakeover()
                     if let onForget { onForget() } else { client.forget() }
                     dismiss()
@@ -378,7 +381,7 @@ struct RemoteMacSheet: View {
 
     private func subtitle(_ session: RemoteSessionInfo) -> String {
         var parts = [session.serverName]
-        if let controller = session.controlledBy { parts.append("\(controller) 正在接管") }
+        if let controller = session.controlledBy { parts.append(String(localized: "\(controller) 正在接管")) }
         return parts.joined(separator: " · ")
     }
 
@@ -461,7 +464,7 @@ extension RemoteMacClient {
         let host = ServerProfile()
         host.id = RemoteConstants.localShellServerID
         host.name = macName
-        host.host = "本机"
+        host.host = String(localized: "本机")
         return host
     }
 
@@ -475,7 +478,7 @@ extension RemoteMacClient {
         } else {
             host.id = RemoteConstants.localShellServerID
             host.name = macName
-            host.host = "本机"
+            host.host = String(localized: "本机")
         }
         return host
     }

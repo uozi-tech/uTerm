@@ -202,7 +202,7 @@ final class ParallelRunModel {
         var initialNote: String?
         if !command.isEmpty {
             states[index].lines = [ParallelTermLine(kind: .cmd, text: command)]
-            states[index].activity = "正在执行 \(command)"
+            states[index].activity = String(localized: "正在执行 \(command)")
             let start = Date()
             let streamed = ParallelStreamedLineCount()
             let outcome = await Self.execBounded(
@@ -221,7 +221,7 @@ final class ParallelRunModel {
                 if streamed.count == 0, !partial.output.isEmpty {
                     states[index].lines.append(contentsOf: Self.outputLines(from: partial, failed: false))
                 }
-                states[index].lines.append(ParallelTermLine(kind: .err, text: "执行超时：" + stall.message))
+                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "执行超时：\(stall.message)")))
                 initialOutput = partial.output
                 initialNote = ParallelRunCopy.stalledNote(stall.message)
                 ranInitial = true
@@ -340,7 +340,7 @@ final class ParallelRunModel {
         }
         if let stall = outcome.stall {
             let partial = stall.stalled.partial
-            let reason = "执行超时：" + stall.message
+            let reason = String(localized: "执行超时：\(stall.message)")
             if streamed.count == 0, !partial.output.isEmpty {
                 states[index].lines.append(contentsOf: Self.outputLines(from: partial, failed: false))
             }
@@ -348,8 +348,8 @@ final class ParallelRunModel {
             return .stalled(partial: partial.output, reason: reason)
         }
         let reason = outcome.timedOut
-            ? "执行超时（超过 \(Self.backstopSeconds) 秒仍无结果）"
-            : "连接失败：\(ParallelRunCopy.connectionReason(outcome.errorText))"
+            ? String(localized: "执行超时（超过 \(Self.backstopSeconds) 秒仍无结果）")
+            : String(localized: "连接失败：\(ParallelRunCopy.connectionReason(outcome.errorText))")
         states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
         return .unreachable(reason: reason, timedOut: outcome.timedOut)
     }
@@ -361,20 +361,20 @@ final class ParallelRunModel {
         if let challenge = target.session.takeHostKeyChallenge() {
             let mismatch: Bool = { if case .mismatch = challenge.kind { return true }; return false }()
             states[index].failure = .hostKeyUntrusted(challenge)
-            states[index].lines.append(ParallelTermLine(kind: .err, text: "主机指纹未信任，连接被拒绝"))
+            states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))
             states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: mismatch)
         } else if let stall = outcome.stall {
             // 连通性预检（`true`）都卡住：多半是连接半死不活。
             markStalled(at: index, stall: stall, streamed: false)
         } else if outcome.timedOut {
-            let reason = "连接 / 执行超时（超过 \(Self.backstopSeconds) 秒仍无结果）"
+            let reason = String(localized: "连接 / 执行超时（超过 \(Self.backstopSeconds) 秒仍无结果）")
             states[index].failure = .connection(reason)
             states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
-            states[index].summary = "\(reason)，未能确认结果。"
+            states[index].summary = String(localized: "\(reason)，未能确认结果。")
         } else {
             let reason = ParallelRunCopy.connectionReason(outcome.errorText ?? target.session.setupErrorText)
             states[index].failure = .connection(reason)
-            states[index].lines.append(ParallelTermLine(kind: .err, text: "连接失败：\(reason)"))
+            states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "连接失败：\(reason)")))
             states[index].summary = ParallelRunCopy.unreachable(reason)
         }
     }
@@ -387,7 +387,7 @@ final class ParallelRunModel {
         if !streamed, !stall.stalled.partial.output.isEmpty {
             states[index].lines.append(contentsOf: Self.outputLines(from: stall.stalled.partial, failed: false))
         }
-        states[index].lines.append(ParallelTermLine(kind: .err, text: "执行超时：" + stall.message))
+        states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "执行超时：\(stall.message)")))
         states[index].summary = ParallelRunCopy.stalled(stall.message, signalled: stall.stalled.kill == .signalled)
     }
 
@@ -430,7 +430,9 @@ final class ParallelRunModel {
             let notable = states.filter { $0.tone == .failed }
             let summary = synthesis.isEmpty ? fallbackSynthesis() : synthesis
             aiRecord = QuickCommandAIRecord(summary: summary,
-                                            steps: notable.flatMap { lane in ["\(lane.name)：\(lane.summary)"] + lane.steps })
+                                            steps: notable.flatMap { lane in
+                                                [String(localized: "\(lane.name)：\(lane.summary)", comment: "运行日志：主机名：结论")] + lane.steps
+                                            })
         }
         let durationMs = Int((finishedAt ?? Date()).timeIntervalSince(startedAt) * 1000)
         store.recordRun(commandID: commandID, startedAt: startedAt, durationMs: durationMs,
@@ -440,9 +442,9 @@ final class ParallelRunModel {
     // MARK: 文案 / 解析
     nonisolated static var backstopSeconds: Int { Int(backstopTimeout.components.seconds) }
     nonisolated static func outputLines(from result: CommandResult?, failed: Bool) -> [ParallelTermLine] {
-        guard let result else { return [ParallelTermLine(kind: .err, text: "连接或执行失败")] }
+        guard let result else { return [ParallelTermLine(kind: .err, text: String(localized: "连接或执行失败"))] }
         if result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return [ParallelTermLine(kind: failed ? .err : .out, text: "（无输出）")]
+            return [ParallelTermLine(kind: failed ? .err : .out, text: String(localized: "（无输出）"))]
         }
         let raw = result.output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         return raw.enumerated().map { idx, text in

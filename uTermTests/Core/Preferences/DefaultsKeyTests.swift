@@ -106,6 +106,7 @@ final class DefaultsKeyTests: XCTestCase {
         // 系统定义
         (DefaultsKey.appleActionOnDoubleClick, "AppleActionOnDoubleClick"),
         (DefaultsKey.screenLayoutAdjustOnWindowMove, "NSScreenLayoutAdjustOnWindowMove"),
+        (DefaultsKey.appleLanguages, "AppleLanguages"),
     ]
 
     func testKeyValuesArePinned() {

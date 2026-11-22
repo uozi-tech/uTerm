@@ -51,12 +51,12 @@ struct PortForwardWindowView: View {
         if windowID != nil, let server {
             pfBody(server: server)
         } else {
-            placeholder(windowID == nil ? "正在恢复…" : "主机已删除",
+            placeholder(windowID == nil ? String(localized: "正在恢复…") : String(localized: "主机已删除"),
                         systemImage: windowID == nil ? "clock" : "server.rack")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: .top)
                 .background(UD.bg)
-                .background(WorkspaceWindowChrome(serverName: "端口转发"))
+                .background(WorkspaceWindowChrome(serverName: String(localized: "端口转发")))
         }
     }
 

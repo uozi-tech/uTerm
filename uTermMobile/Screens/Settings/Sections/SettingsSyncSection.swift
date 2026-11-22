@@ -13,9 +13,9 @@ struct SettingsSyncSection: View {
     @Environment(\.mAccent) private var accent
 
     var body: some View {
-        MInsetGroup(header: "同步", footer: ChatRetentionPresentation.footer(for: chatRetentionDays, platform: .iOS)) {
-            MInsetRow(icon: "icloud", label: "iCloud 同步", trailing: AnyView(cloudBadge))
-            MInsetRow(icon: "diag", label: "同步诊断", sub: diagnosticsSubtitle,
+        MInsetGroup(header: String(localized: "同步"), footer: ChatRetentionPresentation.footer(for: chatRetentionDays, platform: .iOS)) {
+            MInsetRow(icon: "icloud", label: String(localized: "iCloud 同步"), trailing: AnyView(cloudBadge))
+            MInsetRow(icon: "diag", label: String(localized: "同步诊断"), sub: diagnosticsSubtitle,
                       chevron: true, onTap: showDiagnostics)
             ChatRetentionRow(days: $chatRetentionDays, last: true)
         }
@@ -39,7 +39,7 @@ struct ChatRetentionRow: View {
     var last = false
 
     var body: some View {
-        MInsetRow(icon: "clock", label: "AI 对话保留", last: last,
+        MInsetRow(icon: "clock", label: String(localized: "AI 对话保留"), last: last,
                   trailing: AnyView(
                       MMenu {
                           ForEach(ChatRetentionPresentation.options, id: \.days) { option in

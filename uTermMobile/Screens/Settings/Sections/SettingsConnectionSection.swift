@@ -7,13 +7,13 @@ struct SettingsConnectionSection: View {
 
     private var summary: String {
         let policy = SSHHostKeyPolicy(rawValue: hostKeyPolicyRaw) ?? .ask
-        return "超时 \(ConnectionPresentation.timeoutLabel(connectTimeout)) · 密钥校验\(policy.localizedLabel)"
+        return String(localized: "超时 \(ConnectionPresentation.timeoutLabel(connectTimeout)) · 密钥校验\(policy.localizedLabel)")
     }
 
     var body: some View {
-        MInsetGroup(header: "连接") {
+        MInsetGroup(header: String(localized: "连接")) {
             NavigationLink { ConnectionSettingsScreen() } label: {
-                MInsetRow(icon: "network", label: "连接", sub: summary, chevron: true, last: true)
+                MInsetRow(icon: "network", label: String(localized: "连接", comment: "设置项：SSH 连接"), sub: summary, chevron: true, last: true)
             }.buttonStyle(MRowStyle())
         }
     }

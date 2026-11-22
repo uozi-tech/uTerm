@@ -100,24 +100,28 @@ struct PortForwardListView: View {
     private func toolbar(_ counts: ToolbarCounts) -> some View {
         HStack(spacing: 12) {
             UDSegmented(selection: $filter, options: [
-                (value: ForwardKind?.none, label: "全部 \(rules.count)"),
-                (value: ForwardKind?.some(.local), label: "本地 \(counts.byKind[.local] ?? 0)"),
-                (value: ForwardKind?.some(.remote), label: "远程 \(counts.byKind[.remote] ?? 0)"),
-                (value: ForwardKind?.some(.dynamic), label: "动态 \(counts.byKind[.dynamic] ?? 0)")
+                (value: ForwardKind?.none,
+                 label: String(localized: "全部 \(rules.count)", comment: "端口转发筛选：全部规则及数量")),
+                (value: ForwardKind?.some(.local),
+                 label: String(localized: "本地 \(counts.byKind[.local] ?? 0)", comment: "端口转发筛选：本地转发及数量")),
+                (value: ForwardKind?.some(.remote),
+                 label: String(localized: "远程 \(counts.byKind[.remote] ?? 0)", comment: "端口转发筛选：远程转发及数量")),
+                (value: ForwardKind?.some(.dynamic),
+                 label: String(localized: "动态 \(counts.byKind[.dynamic] ?? 0)", comment: "端口转发筛选：动态转发及数量"))
             ])
 
             Spacer(minLength: 0)
 
             summaryDot(color: counts.active > 0 ? UD.success : UD.text4,
-                       text: "\(counts.active) 活跃",
+                       text: String(localized: "\(counts.active) 活跃", comment: "活跃的端口转发规则数"),
                        tint: UD.text3)
             if counts.error > 0 {
                 summaryDot(color: UD.danger,
-                           text: "\(counts.error) 异常",
+                           text: String(localized: "\(counts.error) 异常", comment: "出错的端口转发规则数"),
                            tint: UD.danger)
             }
 
-            UDButton(title: "新建", style: .primary, systemImage: "plus") {
+            UDButton(title: String(localized: "新建", comment: "新建端口转发规则"), style: .primary, systemImage: "plus") {
                 beginEdit(.new)
             }
         }

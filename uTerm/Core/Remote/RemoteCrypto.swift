@@ -33,7 +33,7 @@ nonisolated enum RemoteKeySchedule {
             remoteEphemeral = try .init(rawRepresentation: remoteHello.ephemeralKey)
             remoteStatic = try .init(rawRepresentation: remoteHello.staticKey)
         } catch {
-            throw RemoteProtocolError.handshakeFailed("对端公钥无效")
+            throw RemoteProtocolError.handshakeFailed(String(localized: "对端公钥无效"))
         }
         let ee = try agree(localEphemeral, remoteEphemeral)
         // es 恒为「发起方临时 × 响应方长期」，se 恒为「发起方长期 × 响应方临时」，两端各自用
@@ -71,7 +71,7 @@ nonisolated enum RemoteKeySchedule {
         let bytes = secret.withUnsafeBytes { Data($0) }
         // 小阶点会让共享秘密退化成全 0，任何人都算得出来。
         guard bytes.contains(where: { $0 != 0 }) else {
-            throw RemoteProtocolError.handshakeFailed("对端公钥无效")
+            throw RemoteProtocolError.handshakeFailed(String(localized: "对端公钥无效"))
         }
         return bytes
     }

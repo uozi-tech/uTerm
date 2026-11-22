@@ -70,7 +70,7 @@ struct SyncDiagnosticsView: View {
                     board.setString(sync.exportText(), forType: .string)
                 }
                 Spacer()
-                UDButton(title: "完成", style: .primary) { dismiss() }
+                UDButton(title: String(localized: "完成", comment: "关闭面板的按钮"), style: .primary) { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 20)

@@ -161,7 +161,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 try sendPlain(helloBytes)
             }
             guard let remote = try? JSONDecoder().decode(RemoteHello.self, from: remoteBytes) else {
-                throw RemoteProtocolError.handshakeFailed("对端握手消息无效")
+                throw RemoteProtocolError.handshakeFailed(String(localized: "对端握手消息无效"))
             }
             guard remote.version == RemoteConstants.protocolVersion else {
                 throw RemoteProtocolError.versionMismatch(remote.version)

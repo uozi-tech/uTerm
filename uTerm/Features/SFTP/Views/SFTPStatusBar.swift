@@ -29,8 +29,9 @@ struct SFTPStatusBar: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("已连接")
             .accessibilityValue(path)
-            Text("\(UFormat.count(folderCount)) 个文件夹 · \(UFormat.count(fileCount)) 个文件"
-                + (selectedCount > 0 ? " · 已选择 \(UFormat.count(selectedCount)) 项" : ""))
+            Text(selectedCount > 0
+                 ? "\(UFormat.count(folderCount)) 个文件夹 · \(UFormat.count(fileCount)) 个文件 · 已选择 \(UFormat.count(selectedCount)) 项"
+                 : "\(UFormat.count(folderCount)) 个文件夹 · \(UFormat.count(fileCount)) 个文件")
                 .font(.system(size: 11)).foregroundStyle(UD.text4).lineLimit(1)
             Spacer(minLength: 12)
             if let externalOpen {

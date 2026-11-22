@@ -64,10 +64,10 @@ struct TerminalTrackedRun {
     /// 只收单行命令：多行打进 shell 会变成续行提示，`$?` 也对不上。
     static func validate(_ command: String) -> String? {
         if command.contains("\n") || command.contains("\r") {
-            return "命令不能有换行：多条命令用 && 或 ; 连起来，长脚本先 sftp put 到主机上再跑"
+            return String(localized: "命令不能有换行：多条命令用 && 或 ; 连起来，长脚本先 sftp put 到主机上再跑")
         }
         if command.utf8.count > maxCommandBytes {
-            return "命令超过 \(maxCommandBytes) 字节：先把脚本 sftp put 到主机上再跑"
+            return String(localized: "命令超过 \(maxCommandBytes) 字节：先把脚本 sftp put 到主机上再跑")
         }
         return nil
     }

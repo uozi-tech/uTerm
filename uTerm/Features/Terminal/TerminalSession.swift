@@ -156,9 +156,9 @@ final class TerminalSession: NSObject {
     /// 不管此刻第一响应者是谁。
     static func makeContextMenu(for terminalView: NSView) -> NSMenu {
         let menu = NSMenu()
-        let copyItem = NSMenuItem(title: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        let pasteItem = NSMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        let selectAllItem = NSMenuItem(title: "全选", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
+        let copyItem = NSMenuItem(title: String(localized: "拷贝"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let pasteItem = NSMenuItem(title: String(localized: "粘贴"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        let selectAllItem = NSMenuItem(title: String(localized: "全选"), action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
         for item in [copyItem, pasteItem, selectAllItem] {
             item.target = terminalView
         }

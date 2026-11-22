@@ -53,7 +53,7 @@ nonisolated enum RemoteMacTransfer {
             request.length = Int(piece.length)
             let (_, data) = try await perform(request, Data())
             guard Int64(data.count) == piece.length else {
-                throw RemoteFileError(.failed, "\(path)：传输途中文件变短了（偏移 \(piece.offset) 处只读到 \(data.count) 字节）")
+                throw RemoteFileError(.failed, String(localized: "\(path)：传输途中文件变短了（偏移 \(String(piece.offset)) 处只读到 \(data.count) 字节）"))
             }
             try sink(piece.offset, data)
             onPiece?(piece)
@@ -67,7 +67,7 @@ nonisolated enum RemoteMacTransfer {
         try await run(pieces(size: size, ranges: ranges), window: window) { piece in
             let data = try source(piece.offset, Int(piece.length))
             guard Int64(data.count) == piece.length else {
-                throw RemoteFileError(.failed, "本地文件在传输途中变短了（偏移 \(piece.offset)）")
+                throw RemoteMacLocalFileError(.read, String(localized: "本地文件在传输途中变短了（偏移 \(String(piece.offset))）"))
             }
             var request = RemoteFileRequest(op: .write, path: path)
             request.offset = UInt64(piece.offset)
@@ -157,7 +157,7 @@ actor RemoteMacFileProvider: SFTPProviding {
 
     func stat(_ path: String) async throws -> RemoteStat {
         let (reply, _) = try await perform(RemoteFileRequest(op: .stat, path: path))
-        guard let entry = reply.entry else { throw RemoteFileError(.failed, "\(path)：Mac 没有回属性") }
+        guard let entry = reply.entry else { throw RemoteFileError(.failed, String(localized: "\(path)：Mac 没有回属性")) }
         return RemoteStat(size: entry.size, mtime: Date(timeIntervalSince1970: entry.mtime), permissions: entry.mode)
     }
 
@@ -189,7 +189,7 @@ actor RemoteMacFileProvider: SFTPProviding {
         let temporary = localURL.deletingLastPathComponent()
             .appendingPathComponent(".\(localURL.lastPathComponent).uterm-\(UUID().uuidString.prefix(8))")
         let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
-        guard fd >= 0 else { throw RemoteFileError(.failed, "本地文件建不了：\(String(cString: strerror(errno)))") }
+        guard fd >= 0 else { throw RemoteFileError(.failed, String(localized: "本地文件建不了：\(String(cString: strerror(errno)))")) }
         let progress = ProgressCounter(total: size, report: onProgress)
         do {
             try await RemoteMacTransfer.download(path: remotePath, size: size, perform: performer,
@@ -226,10 +226,10 @@ actor RemoteMacFileProvider: SFTPProviding {
 
     func upload(localURL: URL, toRemotePath: String, onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
         let fd = open(localURL.path, O_RDONLY | O_CLOEXEC)
-        guard fd >= 0 else { throw RemoteFileError(.failed, "本地文件打不开：\(String(cString: strerror(errno)))") }
+        guard fd >= 0 else { throw RemoteFileError(.failed, String(localized: "本地文件打不开：\(String(cString: strerror(errno)))")) }
         defer { Darwin.close(fd) }
         var info = Darwin.stat()
-        guard fstat(fd, &info) == 0 else { throw RemoteFileError(.failed, "本地文件读不了属性") }
+        guard fstat(fd, &info) == 0 else { throw RemoteFileError(.failed, String(localized: "本地文件读不了属性")) }
         try await uploadReplacing(toRemotePath, size: Int64(info.st_size), onProgress: onProgress) { offset, length in
             try Self.preadAll(fd, at: offset, length: length)
         }
@@ -349,7 +349,7 @@ actor RemoteMacFileProvider: SFTPProviding {
             }
             if wrote < 0 {
                 if errno == EINTR { continue }
-                throw RemoteFileError(.failed, "写本地文件失败：\(String(cString: strerror(errno)))")
+                throw RemoteMacLocalFileError(.write, String(localized: "写本地文件失败：\(String(cString: strerror(errno)))"))
             }
             done += wrote
         }
@@ -364,7 +364,7 @@ actor RemoteMacFileProvider: SFTPProviding {
             }
             if got < 0 {
                 if errno == EINTR { continue }
-                throw RemoteFileError(.failed, "读本地文件失败：\(String(cString: strerror(errno)))")
+                throw RemoteMacLocalFileError(.read, String(localized: "读本地文件失败：\(String(cString: strerror(errno)))"))
             }
             if got == 0 { break }
             done += got
@@ -418,4 +418,20 @@ private nonisolated final class ProgressCounter: @unchecked Sendable {
         lock.unlock()
         if shouldEmit { report(TransferProgress(bytesDone: now, bytesTotal: total)) }
     }
+}
+
+/// 传输时读写**本机**文件失败（不是远端的错）。命令行据此报 `local_read_failed` / `local_write_failed`，
+/// 不靠匹配消息文字（消息随界面语言变）。只在主控端本机产生，不上线路。
+nonisolated struct RemoteMacLocalFileError: Error, LocalizedError, Equatable, Sendable {
+    enum Direction: Sendable { case read, write }
+
+    let direction: Direction
+    let message: String
+
+    init(_ direction: Direction, _ message: String) {
+        self.direction = direction
+        self.message = message
+    }
+
+    var errorDescription: String? { message }
 }

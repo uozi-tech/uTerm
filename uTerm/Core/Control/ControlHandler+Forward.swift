@@ -30,7 +30,7 @@ extension ControlHandler {
         default:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于转发组"
+                message: String(localized: "动作 \(request.action.rawValue) 不属于转发组")
             )
         }
     }
@@ -56,7 +56,7 @@ extension ControlHandler {
         }
         return .success(
             id: request.id,
-            message: "\(snapshots.count) 条转发规则",
+            message: String(localized: "\(snapshots.count) 条转发规则"),
             rules: snapshots
         )
     }
@@ -71,7 +71,7 @@ extension ControlHandler {
         guard let profile = serverProfile(rule.serverID, deps) else {
             throw ControlFailure(
                 code: .host_not_found,
-                message: "规则「\(rule.name)」关联的主机档案已不存在"
+                message: String(localized: "规则「\(rule.name)」关联的主机档案已不存在")
             )
         }
         let names = [rule.serverID: profile.name]
@@ -82,7 +82,7 @@ extension ControlHandler {
             let traffic = await deps.forwardingCoordinator.trafficSnapshot()
             return .success(
                 id: request.id,
-                message: "规则「\(rule.name)」已在运行",
+                message: String(localized: "规则「\(rule.name)」已在运行"),
                 rules: [snapshot(of: rule, names: names, traffic: traffic, deps)]
             )
         }
@@ -116,7 +116,7 @@ extension ControlHandler {
         case .started:
             return .success(
                 id: request.id,
-                message: "规则「\(ruleSnapshot.name)」已启动",
+                message: String(localized: "规则「\(ruleSnapshot.name)」已启动"),
                 rules: [snap]
             )
 
@@ -130,8 +130,8 @@ extension ControlHandler {
                 id: request.id,
                 code: changed ? .host_key_changed : .host_key_unknown,
                 message: changed
-                    ? "主机「\(profile.name)」的密钥与信任库不一致，请回 uTerm 界面处理"
-                    : "主机「\(profile.name)」的密钥尚未信任；核对后用 trust --fingerprint \(challenge.newFingerprint) 钉住",
+                    ? String(localized: "主机「\(profile.name)」的密钥与信任库不一致，请回 uTerm 界面处理")
+                    : String(localized: "主机「\(profile.name)」的密钥尚未信任；核对后用 trust --fingerprint \(challenge.newFingerprint) 钉住"),
                 hostKey: ControlHostKeyInfo(
                     host: challenge.host,
                     fingerprint: challenge.newFingerprint,
@@ -151,7 +151,7 @@ extension ControlHandler {
             return .failure(
                 id: request.id,
                 code: .forward_failed,
-                message: "规则「\(ruleSnapshot.name)」在启动期间被停止",
+                message: String(localized: "规则「\(ruleSnapshot.name)」在启动期间被停止"),
                 rules: [snap]
             )
 
@@ -159,7 +159,7 @@ extension ControlHandler {
             return .failure(
                 id: request.id,
                 code: .forward_failed,
-                message: "规则「\(ruleSnapshot.name)」\(seconds) 秒内未完成启动（仍在连接中）",
+                message: String(localized: "规则「\(ruleSnapshot.name)」\(seconds) 秒内未完成启动（仍在连接中）"),
                 rules: [snap]
             )
         }
@@ -248,7 +248,9 @@ extension ControlHandler {
         let traffic = await deps.forwardingCoordinator.trafficSnapshot()
         return .success(
             id: request.id,
-            message: wasRunning ? "规则「\(rule.name)」已停止" : "规则「\(rule.name)」本来就没在运行",
+            message: wasRunning
+                ? String(localized: "规则「\(rule.name)」已停止")
+                : String(localized: "规则「\(rule.name)」本来就没在运行"),
             rules: [snapshot(of: rule, names: names, traffic: traffic, deps)]
         )
     }
@@ -261,7 +263,7 @@ extension ControlHandler {
     ) async throws -> ControlResponse {
         let hostNeedle = request.host?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !hostNeedle.isEmpty else {
-            throw ControlFailure(code: .invalid_request, message: "forward-add 需要 --host")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "forward-add 需要 --host"))
         }
         let profile = try resolveHost(hostNeedle)
         let draft = try ForwardRuleDraft.make(name: request.name, spec: request.forward)
@@ -270,7 +272,7 @@ extension ControlHandler {
         if existing.contains(where: { $0.serverID == profile.id && $0.name == draft.name }) {
             throw ControlFailure(
                 code: .rule_exists,
-                message: "主机「\(profile.name)」上已有名为「\(draft.name)」的规则"
+                message: String(localized: "主机「\(profile.name)」上已有名为「\(draft.name)」的规则")
             )
         }
 
@@ -285,7 +287,7 @@ extension ControlHandler {
         ), clash.source == .rule {
             throw ControlFailure(
                 code: .port_in_use,
-                message: "端口 \(clash.port) 已被规则「\(clash.occupant)」占用"
+                message: String(localized: "端口 \(String(clash.port)) 已被规则「\(clash.occupant)」占用")
             )
         }
 
@@ -306,7 +308,7 @@ extension ControlHandler {
         let traffic = await deps.forwardingCoordinator.trafficSnapshot()
         return .success(
             id: request.id,
-            message: "已在「\(profile.name)」上新建规则「\(draft.name)」（未启动）",
+            message: String(localized: "已在「\(profile.name)」上新建规则「\(draft.name)」（未启动）"),
             rules: [snapshot(of: rule, names: [profile.id: profile.name], traffic: traffic, deps)]
         )
     }
@@ -321,7 +323,7 @@ extension ControlHandler {
         if rule.autostart || rule.launchAtAppStart {
             throw ControlFailure(
                 code: .rule_protected,
-                message: "规则「\(rule.name)」开着自启，是用户要一直开着的；只能在 uTerm 界面里删"
+                message: String(localized: "规则「\(rule.name)」开着自启，是用户要一直开着的；只能在 uTerm 界面里删")
             )
         }
         let names = [rule.serverID: serverProfile(rule.serverID, deps)?.name ?? ""]
@@ -336,7 +338,7 @@ extension ControlHandler {
         let name = rule.name
         deps.forwardingCoordinator.stop(rule.id)
         ForwardingRuleStore(context: deps.modelContainer.mainContext).delete(rule)
-        return .success(id: request.id, message: "已删除规则「\(name)」", rules: [before])
+        return .success(id: request.id, message: String(localized: "已删除规则「\(name)」"), rules: [before])
     }
 
     // MARK: - 端口预检
@@ -362,12 +364,12 @@ extension ControlHandler {
             excluding: rule.id,
             against: running
         ), clash.source == .rule {
-            return "端口 \(clash.port) 已被规则「\(clash.occupant)」占用"
+            return String(localized: "端口 \(String(clash.port)) 已被规则「\(clash.occupant)」占用")
         }
 
         if rule.kind != .remote,
            ControlLocalPortProbe.isBusy(host: rule.listenHost, port: rule.listenPort) {
-            return "本机 \(rule.listenHost):\(rule.listenPort) 已被其它进程占用"
+            return String(localized: "本机 \(rule.listenHost):\(String(rule.listenPort)) 已被其它进程占用")
         }
         return nil
     }
@@ -418,7 +420,7 @@ extension ControlHandler {
         guard !needle.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 需要 --rule"
+                message: String(localized: "动作 \(request.action.rawValue) 需要 --rule")
             )
         }
 
@@ -432,17 +434,18 @@ extension ControlHandler {
         switch HostResolver.resolve(needle, in: candidates) {
         case .matched(let id):
             guard let rule = pool.first(where: { $0.id == id }) else {
-                throw ControlFailure(code: .rule_not_found, message: "找不到转发规则「\(needle)」")
+                throw ControlFailure(code: .rule_not_found, message: String(localized: "找不到转发规则「\(needle)」"))
             }
             return rule
         case .ambiguous(let matches):
-            let listed = matches.map { "\($0.name)（\($0.id.uuidString)）" }.joined(separator: "、")
+            let listed = matches.map { String(localized: "\($0.name)（\($0.id.uuidString)）", comment: "名称（id）") }
+                .joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
             throw ControlFailure(
                 code: .rule_ambiguous,
-                message: "「\(needle)」匹配到多条规则：\(listed)；请改用 UUID"
+                message: String(localized: "「\(needle)」匹配到多条规则：\(listed)；请改用 UUID")
             )
         case .notFound:
-            throw ControlFailure(code: .rule_not_found, message: "找不到转发规则「\(needle)」")
+            throw ControlFailure(code: .rule_not_found, message: String(localized: "找不到转发规则「\(needle)」"))
         }
     }
 }
@@ -461,19 +464,19 @@ nonisolated struct ForwardRuleDraft: Equatable {
     static func make(name: String?, spec: ControlForwardSpec?) throws -> ForwardRuleDraft {
         let name = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
-            throw ControlFailure(code: .invalid_request, message: "forward-add 需要 --name")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "forward-add 需要 --name"))
         }
         guard let spec else {
-            throw ControlFailure(code: .invalid_request, message: "forward-add 缺少规则内容（类型与监听端口）")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "forward-add 缺少规则内容（类型与监听端口）"))
         }
         guard let kind = ForwardKind(rawValue: spec.kind.lowercased()) else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "未知的转发类型「\(spec.kind)」，只能是 local / remote / dynamic"
+                message: String(localized: "未知的转发类型「\(spec.kind)」，只能是 local / remote / dynamic")
             )
         }
         guard isPort(spec.listenPort) else {
-            throw ControlFailure(code: .invalid_request, message: "监听端口需在 1–65535 之间")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "监听端口需在 1–65535 之间"))
         }
         let listenHost = (spec.listenHost ?? "").trimmingCharacters(in: .whitespaces)
 
@@ -487,11 +490,11 @@ nonisolated struct ForwardRuleDraft: Equatable {
         guard !destHost.isEmpty, let destPort = spec.destPort else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "\(kind.flag) 规则需要目标地址（--dest HOST:PORT）"
+                message: String(localized: "\(kind.flag) 规则需要目标地址（--dest HOST:PORT）")
             )
         }
         guard isPort(destPort) else {
-            throw ControlFailure(code: .invalid_request, message: "目标端口需在 1–65535 之间")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "目标端口需在 1–65535 之间"))
         }
         return ForwardRuleDraft(
             name: name, kind: kind,

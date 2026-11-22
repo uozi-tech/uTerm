@@ -16,27 +16,27 @@ struct SecuritySettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsPageHeader(title: "安全", subtitle: String(localized: "应用锁与密钥"))
+            SettingsPageHeader(title: String(localized: "安全", comment: "设置分区"), subtitle: String(localized: "应用锁与密钥"))
 
-            SettingsGroup(title: "应用锁",
+            SettingsGroup(title: String(localized: "应用锁", comment: "设置分组：应用锁"),
                           footer: String(localized: "开启前先验证一次；下次启动 uTerm 时要求触控 ID 或登录密码。")) {
-                SettingsRow(label: "启动时验证身份") {
+                SettingsRow(label: String(localized: "启动时验证身份")) {
                     UDToggle(Binding(get: { appLock.isOn }, set: { appLock.set($0) }))
                 }
             }
-            SettingsGroup(title: "密钥、分组与指纹",
+            SettingsGroup(title: String(localized: "密钥、分组与指纹"),
                           footer: String(localized: "密钥与分组经 iCloud 同步到你的其他设备；删除已知主机指纹后，下次连接该主机会重新确认。")) {
                 SettingsListRow(icon: "key.fill", tint: UD.warning, title: String(localized: "SSH 密钥"),
                                 subtitle: String(localized: "\(counts.keys) 个密钥 · 生成、导入与查看")) {
-                    UDButton(title: "打开…", style: .secondary) { openWindow(id: "keys") }
+                    UDButton(title: String(localized: "打开…", comment: "打开对应管理窗口的按钮"), style: .secondary) { openWindow(id: "keys") }
                 }
                 SettingsListRow(icon: "tag.fill", tint: UD.info, title: String(localized: "主机分组"),
                                 subtitle: String(localized: "\(counts.groups) 个分组 · 建分组、改名、调整顺序")) {
-                    UDButton(title: "打开…", style: .secondary) { openWindow(id: "groups") }
+                    UDButton(title: String(localized: "打开…", comment: "打开对应管理窗口的按钮"), style: .secondary) { openWindow(id: "groups") }
                 }
                 SettingsListRow(icon: "checkmark.shield.fill", tint: UD.success, title: String(localized: "已知主机指纹"),
                                 subtitle: String(localized: "\(counts.knownHosts) 台已信任的主机")) {
-                    UDButton(title: "打开…", style: .secondary) { openWindow(id: "known-hosts") }
+                    UDButton(title: String(localized: "打开…", comment: "打开对应管理窗口的按钮"), style: .secondary) { openWindow(id: "known-hosts") }
                 }
             }
         }

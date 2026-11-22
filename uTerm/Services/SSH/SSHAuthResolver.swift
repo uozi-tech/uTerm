@@ -12,11 +12,11 @@ extension SSHAuthError: LocalizedError {
     nonisolated var errorDescription: String? {
         switch self {
         case .missingPassword:
-            return "未找到该主机的密码。在「编辑主机」里重新填写密码后重试。"
+            return String(localized: "未找到该主机的密码。在「编辑主机」里重新填写密码后重试。")
         case .missingPrivateKey:
-            return "未找到该主机的私钥。确认密钥已通过 iCloud 钥匙串同步到本机，或在「编辑主机」里重新选择 / 导入私钥。"
+            return String(localized: "未找到该主机的私钥。确认密钥已通过 iCloud 钥匙串同步到本机，或在「编辑主机」里重新选择 / 导入私钥。")
         case .keychainAccessFailed(let detail):
-            return "钥匙串访问失败：\(detail)。确认已登录 iCloud 并开启「钥匙串」，且 App 已获得钥匙串访问权限。"
+            return String(localized: "钥匙串访问失败：\(detail)。确认已登录 iCloud 并开启「钥匙串」，且 App 已获得钥匙串访问权限。")
         }
     }
 }

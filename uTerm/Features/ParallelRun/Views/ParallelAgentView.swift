@@ -97,11 +97,15 @@ struct ParallelAgentView: View {
 
     /// 「N 台」加粗强调，其余继承正文。用 AttributedString 避免 Text `+`（macOS 26 弃用）。
     private var openingText: AttributedString {
-        let head = AttributedString("正在 ")
-        var count = AttributedString("\(total) 台")
-        count.font = .system(size: 13, weight: .semibold)
-        let tail = AttributedString("主机上并行执行「\(commandName)」。每台都会完成操作并验证结果，遇到异常时自动诊断并尝试修复；下面逐台给出简要结论，无需查看 shell 输出。")
-        return head + count + tail
+        // 整句一个键（译者能调语序），再把其中的「N 台」那段找出来加粗。
+        let count = String(localized: "\(total) 台", comment: "并行执行开场白里加粗的主机数")
+        let sentence = String(localized: "正在 \(count)主机上并行执行「\(commandName)」。每台都会完成操作并验证结果，遇到异常时自动诊断并尝试修复；下面逐台给出简要结论，无需查看 shell 输出。",
+                              comment: "第一个参数是加粗的「N 台」，第二个是命令名")
+        var text = AttributedString(sentence)
+        if let range = text.range(of: count) {
+            text[range].font = .system(size: 13, weight: .semibold)
+        }
+        return text
     }
 
     private var opening: some View {
@@ -205,8 +209,8 @@ struct ParallelAILane: View {
     private var badgeText: String {
         switch state.tone {
         case .running: return state.laneStatusText
-        case .ok:      return "✓ 成功"
-        case .failed:  return "✕ 失败"
+        case .ok:      return String(localized: "✓ 成功")
+        case .failed:  return String(localized: "✕ 失败")
         }
     }
 

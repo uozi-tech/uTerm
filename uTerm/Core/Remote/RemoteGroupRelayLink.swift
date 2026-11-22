@@ -172,11 +172,11 @@ nonisolated enum RemoteGroupRelayHandshake {
                      transcript: Data, isClient: Bool) throws -> Keys {
         guard let remote = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerKey),
               let secret = try? identityKey.sharedSecretFromKeyAgreement(with: remote) else {
-            throw RemoteGroupRelayLinkError.handshake("对端公钥无效")
+            throw RemoteGroupRelayLinkError.handshake(String(localized: "对端公钥无效"))
         }
         let bytes = secret.withUnsafeBytes { Data($0) }
         // 小阶点会让共享秘密退化成全 0，任何人都算得出来。
-        guard bytes.contains(where: { $0 != 0 }) else { throw RemoteGroupRelayLinkError.handshake("共享秘密无效") }
+        guard bytes.contains(where: { $0 != 0 }) else { throw RemoteGroupRelayLinkError.handshake(String(localized: "共享秘密无效")) }
         let digest = Data(SHA256.hash(data: transcript))
         func derive(_ direction: String) -> SymmetricKey {
             HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: bytes), salt: clientNonce + mailboxNonce,
@@ -214,7 +214,7 @@ nonisolated struct RemoteGroupRelayReassembler {
     mutating func add(_ chunk: Data, more: Bool) throws -> Data? {
         guard buffer.count + chunk.count <= limit else {
             buffer = Data()
-            throw RemoteGroupRelayLinkError.frame("消息超过 \(limit) 字节")
+            throw RemoteGroupRelayLinkError.frame(String(localized: "消息超过 \(limit) 字节"))
         }
         buffer.append(chunk)
         guard !more else { return nil }
@@ -240,14 +240,14 @@ nonisolated enum RemoteGroupRelayLinkError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .handshake(let reason): return "中继线路握手失败：\(reason)"
-        case .frame(let reason): return "中继线路帧无效：\(reason)"
-        case .timeout: return "中继线路超时"
-        case .closed: return "中继线路已关闭"
-        case .closedByPeer: return "对方关闭了中继线路"
-        case .reset: return "对方信箱重连过"
-        case .undeliverable: return "对方信箱不在线"
-        case .replaced: return "换成了另一条线路"
+        case .handshake(let reason): return String(localized: "中继线路握手失败：\(reason)")
+        case .frame(let reason): return String(localized: "中继线路帧无效：\(reason)")
+        case .timeout: return String(localized: "中继线路超时")
+        case .closed: return String(localized: "中继线路已关闭")
+        case .closedByPeer: return String(localized: "对方关闭了中继线路")
+        case .reset: return String(localized: "对方信箱重连过")
+        case .undeliverable: return String(localized: "对方信箱不在线")
+        case .replaced: return String(localized: "换成了另一条线路")
         }
     }
 }
@@ -400,9 +400,9 @@ nonisolated final class RemoteGroupRelaySession: RemoteGroupPeerLink, @unchecked
         do {
             switch box {
             case .hello:
-                throw RemoteGroupRelayLinkError.handshake("多余的 hello")
+                throw RemoteGroupRelayLinkError.handshake(String(localized: "多余的 hello"))
             case .reply(_, let mailboxNonce):
-                guard role == .client, keys == nil, let hello else { throw RemoteGroupRelayLinkError.handshake("多余的 reply") }
+                guard role == .client, keys == nil, let hello else { throw RemoteGroupRelayLinkError.handshake(String(localized: "多余的 reply")) }
                 let transcript = RemoteGroupRelayHandshake.transcript(session: session, client: local.id, owner: peer.id,
                                                                       hello: hello, reply: box.encoded())
                 try installKeys(RemoteGroupRelayHandshake.keys(identityKey: identityKey, peerKey: peer.publicKey,
@@ -489,22 +489,22 @@ nonisolated final class RemoteGroupRelaySession: RemoteGroupPeerLink, @unchecked
     }
 
     private func handleSealed(_ body: Data) throws {
-        guard let keys, var cipher = receiveCipher else { throw RemoteGroupRelayLinkError.handshake("还没有会话密钥") }
+        guard let keys, var cipher = receiveCipher else { throw RemoteGroupRelayLinkError.handshake(String(localized: "还没有会话密钥")) }
         let plain: Data
         do {
             plain = try cipher.open(body)
         } catch {
-            throw RemoteGroupRelayLinkError.frame("解不开（被改、重放或乱序）")
+            throw RemoteGroupRelayLinkError.frame(String(localized: "解不开（被改、重放或乱序）"))
         }
         receiveCipher = cipher
         guard let type = plain.first.flatMap(RemoteGroupRelayHandshake.FrameType.init(rawValue:)) else {
-            throw RemoteGroupRelayLinkError.frame("类型不认识")
+            throw RemoteGroupRelayLinkError.frame(String(localized: "类型不认识"))
         }
         let content = Data(plain.dropFirst())
         if !isEstablished {
             // 第一帧必须是证明帧，内容对得上抄本。
             guard type == .proof, cipher.counter == 1, content == keys.proof else {
-                throw RemoteGroupRelayLinkError.handshake("对端证明不了算得出会话密钥")
+                throw RemoteGroupRelayLinkError.handshake(String(localized: "对端证明不了算得出会话密钥"))
             }
             if role == .client { sendSealed(.proof, keys.proof) }
             return establish()
@@ -513,7 +513,7 @@ nonisolated final class RemoteGroupRelaySession: RemoteGroupPeerLink, @unchecked
         case .data, .more:
             guard let message = try reassembler.add(content, more: type == .more) else { return }
             if let onFrame { onFrame(message) } else {
-                guard pending.count < Self.maxPendingFrames else { throw RemoteGroupRelayLinkError.frame("积压太多") }
+                guard pending.count < Self.maxPendingFrames else { throw RemoteGroupRelayLinkError.frame(String(localized: "积压太多")) }
                 pending.append(message)
             }
         case .ping:
@@ -521,7 +521,7 @@ nonisolated final class RemoteGroupRelaySession: RemoteGroupPeerLink, @unchecked
         case .bye:
             throw RemoteGroupRelayLinkError.closedByPeer
         case .proof:
-            throw RemoteGroupRelayLinkError.frame("多余的证明帧")
+            throw RemoteGroupRelayLinkError.frame(String(localized: "多余的证明帧"))
         }
     }
 

@@ -12,12 +12,12 @@ nonisolated enum ConnectionPresentation {
     static let sftpConcurrencyOptions = [1, 2, 4, 8, 16]
 
     /// 超时的显示名。mac 上能填任意值，不在预设里的照样显示成「N 秒」。
-    static func timeoutLabel(_ seconds: Int) -> String { "\(seconds) 秒" }
+    static func timeoutLabel(_ seconds: Int) -> String { String(localized: "\(seconds) 秒", comment: "SSH 连接超时时长") }
 
-    static func sftpConcurrencyLabel(_ count: Int) -> String { "\(count) 个" }
+    static func sftpConcurrencyLabel(_ count: Int) -> String { String(localized: "\(count) 个", comment: "SFTP 并发传输通道数") }
 }
 
 extension LogLevel {
     /// 设置页「日志等级」的说明（两端同一句）。
-    nonisolated static let settingsHint = "运行时立即生效；低于此等级的日志不会写入系统日志。"
+    nonisolated static let settingsHint = String(localized: "运行时立即生效；低于此等级的日志不会写入系统日志。")
 }

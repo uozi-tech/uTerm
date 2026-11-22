@@ -41,8 +41,8 @@ nonisolated enum LocalShellError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .agentUnavailable(let reason): return "无法连接终端辅助程序：\(reason)"
-        case .openFailed(let reason): return "终端未能启动：\(reason)"
+        case .agentUnavailable(let reason): return String(localized: "无法连接终端辅助程序：\(reason)")
+        case .openFailed(let reason): return String(localized: "终端未能启动：\(reason)")
         }
     }
 }
@@ -87,7 +87,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.ping { once.resume(returning: $0) }
@@ -100,7 +100,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.openSession(namespace: namespace, id: id.uuidString, directory: directory, columns: columns, rows: rows,
@@ -115,14 +115,14 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         let box: LocalShellHandlePair = try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.openSSHSession(namespace: namespace, id: id.uuidString, columns: columns, rows: rows) { holder, control, error in
                 if let holder {
                     once.resume(returning: LocalShellHandlePair(holder: holder, control: control))
                 } else {
-                    once.resume(throwing: LocalShellError.openFailed(error ?? "未知原因"))
+                    once.resume(throwing: LocalShellError.openFailed(error ?? String(localized: "未知原因")))
                 }
             }
         }
@@ -134,7 +134,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.connectSession(namespace: namespace, id: id.uuidString) { handle, error in
@@ -148,7 +148,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.fileRequest(payload) { once.resume(returning: $0) }
@@ -161,7 +161,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         return try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.scopedFileRequest(payload, scope: encoded) { once.resume(returning: $0) }
@@ -172,7 +172,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
-                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                once.resume(throwing: LocalShellError.agentUnavailable(String(localized: "无法建立连接")))
                 return
             }
             agent.listSessions(namespace: namespace) { ids in
@@ -218,7 +218,7 @@ nonisolated private extension LocalShellOnce where T == FileHandle {
         if let handle {
             resume(returning: handle)
         } else {
-            resume(throwing: LocalShellError.openFailed(error ?? "未知原因"))
+            resume(throwing: LocalShellError.openFailed(error ?? String(localized: "未知原因")))
         }
     }
 }

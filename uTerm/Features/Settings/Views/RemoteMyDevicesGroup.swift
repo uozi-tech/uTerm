@@ -119,7 +119,7 @@ struct RemoteMyDevicesGroup: View {
         SettingsListRow(icon: symbol(for: model.local), tint: UD.accent, title: model.local.name,
                         subtitle: [RemoteDeviceGroupCopy.thisDevice, RemoteDeviceGroupCopy.notJoined].joined(separator: " · ")) {
             if !isShowingCode(model) {
-                UDButton(title: "加入", style: .secondary) {
+                UDButton(title: String(localized: "加入", comment: "加入设备组"), style: .secondary) {
                     model.startJoin()
                     service.poke()
                 }
@@ -139,7 +139,7 @@ struct RemoteMyDevicesGroup: View {
                         .font(.system(size: 34, weight: .semibold, design: .monospaced))
                         .foregroundStyle(UD.text)
                         .textSelection(.enabled)
-                    UDButton(title: "取消", style: .secondary) { model.cancelJoin() }
+                    UDButton(title: String(localized: "取消", comment: "取消操作的按钮"), style: .secondary) { model.cancelJoin() }
                 }
             }
             .settingsDivider(inset: nil)
@@ -148,7 +148,7 @@ struct RemoteMyDevicesGroup: View {
                 VStack(spacing: 10) {
                     Text(RemoteDeviceGroupCopy.failedTitle)
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(UD.text)
-                    UDButton(title: "好", style: .secondary) { model.cancelJoin() }
+                    UDButton(title: String(localized: "好", comment: "确认提示的按钮（OK）"), style: .secondary) { model.cancelJoin() }
                 }
             }
             .settingsDivider(inset: nil)
@@ -220,9 +220,9 @@ struct RemoteGroupRemoveSheet: View {
             }
             HStack {
                 Spacer()
-                UDButton(title: "取消", style: .secondary) { onCancel() }
+                UDButton(title: String(localized: "取消", comment: "取消操作的按钮"), style: .secondary) { onCancel() }
                     .keyboardShortcut(.cancelAction)
-                UDButton(title: "移除", style: .danger) {
+                UDButton(title: String(localized: "移除", comment: "从设备组移除设备"), style: .danger) {
                     guard !isRemoving else { return }
                     isRemoving = true
                     Task {

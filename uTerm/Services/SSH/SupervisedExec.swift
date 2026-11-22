@@ -58,19 +58,20 @@ nonisolated enum SupervisedExec {
             let cause: String
             switch reason {
             case .idle:
-                cause = "连续 \(Int(limits.idle.components.seconds)) 秒没有任何输出，判定卡住"
+                cause = String(localized: "连续 \(String(Int(limits.idle.components.seconds))) 秒没有任何输出，判定卡住")
             case .maxDuration:
-                cause = "运行满 \(Int(limits.maxDuration.components.seconds)) 秒总时长上限"
+                cause = String(localized: "运行满 \(String(Int(limits.maxDuration.components.seconds))) 秒总时长上限")
             case .cancelled:
-                return kill == .signalled ? "已取消，已终止远端进程组。" : "已取消；命令可能仍在远端运行。"
+                return kill == .signalled ? String(localized: "已取消，已终止远端进程组。")
+                    : String(localized: "已取消；命令可能仍在远端运行。")
             }
             switch kill {
             case .signalled:
-                return cause + "，已终止远端进程组（TERM，\(SupervisedExec.killGraceSeconds) 秒后 KILL）。"
+                return String(localized: "\(cause)，已终止远端进程组（TERM，\(SupervisedExec.killGraceSeconds) 秒后 KILL）。")
             case .noPID:
-                return cause + "，已放弃等待；没拿到远端进程号，命令可能仍在远端运行。"
+                return String(localized: "\(cause)，已放弃等待；没拿到远端进程号，命令可能仍在远端运行。")
             case .failed(let why):
-                return cause + "，已放弃等待；终止远端进程失败（\(why)），命令可能仍在远端运行。"
+                return String(localized: "\(cause)，已放弃等待；终止远端进程失败（\(why)），命令可能仍在远端运行。")
             }
         }
     }
@@ -194,7 +195,7 @@ nonisolated enum SupervisedExec {
         switch outcome {
         case .completed: return .signalled
         case .failed(let failure): return .failed(failure.rawText)
-        case .timedOut: return .failed("终止命令本身在 \(killGraceSeconds + 10) 秒内没有返回")
+        case .timedOut: return .failed(String(localized: "终止命令本身在 \(killGraceSeconds + 10) 秒内没有返回"))
         }
     }
 }

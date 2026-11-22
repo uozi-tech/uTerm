@@ -59,10 +59,10 @@ struct TerminalPreview: View {
     @ViewBuilder
     private func promptLine(cmd: String) -> some View {
         HStack(spacing: 0) {
-            Text("root@demo-server").foregroundStyle(ansi(2))
-            Text(":").foregroundStyle(fg.opacity(0.6))
-            Text("~").foregroundStyle(ansi(4))
-            Text("$ ").foregroundStyle(fg.opacity(0.6))
+            Text(verbatim: "root@demo-server").foregroundStyle(ansi(2))
+            Text(verbatim: ":").foregroundStyle(fg.opacity(0.6))
+            Text(verbatim: "~").foregroundStyle(ansi(4))
+            Text(verbatim: "$ ").foregroundStyle(fg.opacity(0.6))
             Text(cmd).foregroundStyle(fg)
         }
     }

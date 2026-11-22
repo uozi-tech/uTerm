@@ -25,10 +25,10 @@ enum RemoteUnlockVaultError: Error {
     /// 给人看的原因（带系统错误码，便于排查）。
     static func describe(_ error: Error) -> String {
         switch error as? RemoteUnlockVaultError {
-        case .biometryUnavailable: return "这台手机没有可用的面容 ID 或触控 ID"
+        case .biometryUnavailable: return String(localized: "这台手机没有可用的面容 ID 或触控 ID")
         case .keychain(let status):
-            let text = SecCopyErrorMessageString(status, nil) as String? ?? "未知错误"
-            return "\(text)（\(status)）"
+            let text = SecCopyErrorMessageString(status, nil) as String? ?? String(localized: "未知错误")
+            return String(localized: "\(text)（\(String(status))）")
         case nil: return error.localizedDescription
         }
     }

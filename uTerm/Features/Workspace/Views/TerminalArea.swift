@@ -108,7 +108,8 @@ struct TerminalArea: View {
                                       icon: .system("doc.text"),
                                       isDirty: buffer.isDirty)
         }
-        let name = pane.tabTitle ?? profiles[pane.serverProfileID]?.name ?? "终端"
+        let name = pane.tabTitle ?? profiles[pane.serverProfileID]?.name
+            ?? String(localized: "终端", comment: "终端标签页的默认标题")
         let shellTitle = pane.session.shellTitle
         let display = ConnectionStatusDisplay(state: pane.session.connectionState)
         let context = "\(name) · \(display.label)"
@@ -213,7 +214,7 @@ struct TerminalArea: View {
                     .font(.callout)
                     .foregroundStyle(UD.text2)
             }
-            UDButton(title: "新建终端标签页", systemImage: "plus") {
+            UDButton(title: String(localized: "新建终端标签页"), systemImage: "plus") {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
         }

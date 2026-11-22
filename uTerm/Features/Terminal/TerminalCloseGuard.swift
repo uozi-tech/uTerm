@@ -29,7 +29,7 @@ enum TerminalCloseGuard {
         }
         Task {
             await probe.probe(ObjectIdentifier(session), activity: session.foregroundActivity) { prompt in
-                if let prompt, await !confirm(prompt, action: "关闭标签页", in: window) { return }
+                if let prompt, await !confirm(prompt, action: String(localized: "关闭标签页"), in: window) { return }
                 close()
             }
         }
@@ -41,7 +41,7 @@ enum TerminalCloseGuard {
         var activities: [TerminalActivity] = []
         for session in sessions { activities.append(await session.foregroundActivity()) }
         guard let prompt = TerminalClosePrompt.forWindow(activities) else { return true }
-        return await confirm(prompt, action: "关闭窗口", in: window)
+        return await confirm(prompt, action: String(localized: "关闭窗口"), in: window)
     }
 
     private static func confirm(_ prompt: TerminalClosePrompt, action: String, in window: NSWindow?) async -> Bool {
@@ -49,7 +49,7 @@ enum TerminalCloseGuard {
         alert.messageText = prompt.title
         alert.informativeText = prompt.message
         alert.addButton(withTitle: action).hasDestructiveAction = true
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: String(localized: "取消"))
         guard let window, window.isVisible else { return alert.runModal() == .alertFirstButtonReturn }
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn
     }

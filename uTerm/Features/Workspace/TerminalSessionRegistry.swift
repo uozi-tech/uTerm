@@ -308,13 +308,14 @@ final class TerminalSessionRegistry {
         if hits.isEmpty {
             throw ControlFailure(
                 code: .terminal_not_found,
-                message: "没有 id 以「\(needle)」开头的终端会话；先用 terminals 列一下"
+                message: String(localized: "没有 id 以「\(needle)」开头的终端会话；先用 terminals 列一下")
             )
         }
-        let candidates = hits.map { "\($0.id.uuidString)（\($0.serverName)）" }.joined(separator: "、")
+        let candidates = hits.map { String(localized: "\($0.id.uuidString)（\($0.serverName)）", comment: "会话 id（主机名）") }
+            .joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
         throw ControlFailure(
             code: .terminal_ambiguous,
-            message: "「\(needle)」匹配到多条会话：\(candidates)。请用完整 id。"
+            message: String(localized: "「\(needle)」匹配到多条会话：\(candidates)。请用完整 id。")
         )
     }
 

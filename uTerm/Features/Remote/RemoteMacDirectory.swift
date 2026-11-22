@@ -475,7 +475,7 @@ final class RemoteMacDirectory {
             if mac.isOnRelay {
                 runner.relay = relay
             } else {
-                runner.relayUnavailable = "Mac 不在中继上（未打开「允许经公网接入」，或未勾选这台设备）"
+                runner.relayUnavailable = String(localized: "Mac 不在中继上（未打开「允许经公网接入」，或未勾选这台设备）")
             }
         }
         return (runner, peer)

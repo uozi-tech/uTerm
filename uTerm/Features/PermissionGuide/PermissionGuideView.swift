@@ -42,7 +42,7 @@ struct PermissionGuideView: View {
         .fixedSize(horizontal: false, vertical: true)
         .background(UD.pageBg)
         .contentSizedUnderTitleBar()
-        .background(WorkspaceWindowChrome(serverName: "授权引导", background: WS.canvasNSColor))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "授权引导"), background: WS.canvasNSColor))
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         // 从系统设置切回来时重新读一遍（屏幕录制 / 辅助功能在本进程里通常仍是旧值，要重启才变）。
@@ -115,7 +115,7 @@ struct PermissionGuideView: View {
                 .foregroundStyle(UD.text)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
-            UDButton(title: "重新启动", style: .primary, height: PermissionGuideMetrics.buttonHeight) {
+            UDButton(title: String(localized: "重新启动"), style: .primary, height: PermissionGuideMetrics.buttonHeight) {
                 model.relaunch()
             }
         }
@@ -131,7 +131,7 @@ struct PermissionGuideView: View {
         HStack(spacing: 12) {
             PermissionProgress(granted: model.grantedCount, total: model.visibleKinds.count)
             Spacer()
-            UDButton(title: "完成", style: .primary) { dismiss() }
+            UDButton(title: String(localized: "完成"), style: .primary) { dismiss() }
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, PermissionGuideMetrics.inset - 4)
@@ -192,15 +192,15 @@ private struct PermissionGuideRow: View {
         case .checking, .granted:
             EmptyView()
         case .notAsked:
-            UDButton(title: "允许", style: .primary, height: height, action: request)
+            UDButton(title: String(localized: "允许", comment: "授权引导：请求系统权限"), style: .primary, height: height, action: request)
         case .notGranted where kind.takesEffectAfterRelaunch:
             // 横排，不叠两层：叠起来会把这一行撑得比别的行高一截。
             HStack(spacing: 10) {
-                UDButton(title: "打开系统设置", style: .link, height: height, action: openSettings)
-                UDButton(title: "授权", style: .primary, height: height, action: request)
+                UDButton(title: String(localized: "打开系统设置"), style: .link, height: height, action: openSettings)
+                UDButton(title: String(localized: "授权", comment: "授权引导：请求系统权限"), style: .primary, height: height, action: request)
             }
         case .notGranted, .needsRelaunch:
-            UDButton(title: "打开系统设置", style: .secondary, height: height, action: openSettings)
+            UDButton(title: String(localized: "打开系统设置"), style: .secondary, height: height, action: openSettings)
         }
     }
 }
@@ -246,11 +246,11 @@ private struct PermissionStatusChip: View {
 
     private var label: String {
         switch status {
-        case .checking: return "检测中"
-        case .notAsked: return "未询问"
-        case .granted: return "已允许"
-        case .notGranted: return "未允许"
-        case .needsRelaunch: return "重启后生效"
+        case .checking: return String(localized: "检测中", comment: "权限状态")
+        case .notAsked: return String(localized: "未询问", comment: "权限状态：还没问过用户")
+        case .granted: return String(localized: "已允许", comment: "权限状态")
+        case .notGranted: return String(localized: "未允许", comment: "权限状态")
+        case .needsRelaunch: return String(localized: "重启后生效", comment: "权限状态")
         }
     }
 
@@ -359,11 +359,11 @@ private struct PermissionGuideTitleBar: View {
 private extension PermissionKind {
     var title: String {
         switch self {
-        case .notifications: return "通知"
-        case .localNetwork: return "本地网络"
-        case .screenCapture: return "屏幕录制"
-        case .accessibility: return "辅助功能"
-        case .loginItem: return "后台登录项"
+        case .notifications: return String(localized: "通知", comment: "系统权限名称")
+        case .localNetwork: return String(localized: "本地网络", comment: "系统权限名称")
+        case .screenCapture: return String(localized: "屏幕录制", comment: "系统权限名称")
+        case .accessibility: return String(localized: "辅助功能", comment: "系统权限名称")
+        case .loginItem: return String(localized: "后台登录项", comment: "系统权限名称")
         }
     }
 
@@ -371,24 +371,24 @@ private extension PermissionKind {
     var purpose: String {
         switch self {
         case .notifications:
-            return "命令执行完毕或程序等待输入时，即使标签页不在前台也能通知你。"
+            return String(localized: "命令执行完毕或程序等待输入时，即使标签页不在前台也能通知你。")
         case .localNetwork:
-            return "局域网同步、用手机远程控制这台 Mac 都要用到。"
+            return String(localized: "局域网同步、用手机远程控制这台 Mac 都要用到。")
         case .screenCapture:
-            return "让配对过的手机看到这台 Mac 的屏幕。"
+            return String(localized: "让配对过的手机看到这台 Mac 的屏幕。")
         case .accessibility:
-            return "让手机操作这台 Mac 的鼠标和键盘；没有这项授权时手机只能查看。"
+            return String(localized: "让手机操作这台 Mac 的鼠标和键盘；没有这项授权时手机只能查看。")
         case .loginItem:
-            return "你已打开「登录后在后台启动」，还需要系统批准。"
+            return String(localized: "你已打开「登录后在后台启动」，还需要系统批准。")
         }
     }
 
     var detail: String? {
         switch self {
         case .localNetwork:
-            return "Mac 与 iPhone / iPad 之间同步要用。连接局域网里的主机时，系统会以「uTerm 终端」的名义再问一次。"
+            return String(localized: "Mac 与 iPhone / iPad 之间同步要用。连接局域网里的主机时，系统会以「uTerm 终端」的名义再问一次。")
         case .screenCapture:
-            return "macOS 会定期要求重新确认。"
+            return String(localized: "macOS 会定期要求重新确认。")
         case .notifications, .accessibility, .loginItem:
             return nil
         }

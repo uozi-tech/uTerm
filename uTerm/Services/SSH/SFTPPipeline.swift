@@ -64,7 +64,7 @@ nonisolated struct SFTPShortReadError: Error, Sendable, Equatable {
     let actual: Int
 
     var localizedDescription: String {
-        "SFTP 读 \(offset) 起的 \(expected) 字节只拿到 \(actual) 字节（数据不完整）"
+        String(localized: "SFTP 读 \(String(offset)) 起的 \(expected) 字节只拿到 \(actual) 字节（数据不完整）")
     }
 }
 

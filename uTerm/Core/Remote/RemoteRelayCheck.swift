@@ -103,7 +103,7 @@ nonisolated enum RemoteRelaySTUNProbe {
     static let attemptInterval: TimeInterval = 1
 
     static func run(host: String, port: Int) async -> Result<String, ProbeError> {
-        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return .failure(.init("端口无效")) }
+        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return .failure(.init(String(localized: "端口无效"))) }
         let transaction = (0..<12).map { _ in UInt8.random(in: 0...255) }
         let request = makeRequest(transaction: transaction)
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .udp)

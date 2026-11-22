@@ -51,7 +51,9 @@ struct HostDraft {
     /// 复制时的默认新名：`原名 副本`（原名为空则只 "副本"）。
     static func duplicateName(of original: String) -> String {
         let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "副本" : "\(trimmed) 副本"
+        return trimmed.isEmpty
+            ? String(localized: "副本", comment: "复制主机时新主机的默认名称")
+            : String(localized: "\(trimmed) 副本", comment: "复制主机时新主机的默认名称：原名 + 副本")
     }
 
     // MARK: - 规范化
@@ -73,8 +75,8 @@ struct HostDraft {
     var portError: String? {
         let trimmed = port.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return nil }
-        guard let p = Int(trimmed) else { return "端口必须是数字" }
-        guard (1...65535).contains(p) else { return "端口需在 1–65535 之间" }
+        guard let p = Int(trimmed) else { return String(localized: "端口必须是数字") }
+        guard (1...65535).contains(p) else { return String(localized: "端口需在 1–65535 之间") }
         return nil
     }
 

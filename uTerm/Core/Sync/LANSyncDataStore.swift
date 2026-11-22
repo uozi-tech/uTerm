@@ -619,5 +619,5 @@ nonisolated struct LANSyncMergeReport: Sendable, Equatable {
 
     var isEmpty: Bool { inserted == 0 && updated == 0 && deleted == 0 }
 
-    var summary: String { "新增 \(inserted) · 更新 \(updated) · 删除 \(deleted)" }
+    var summary: String { String(localized: "新增 \(inserted) · 更新 \(updated) · 删除 \(deleted)") }
 }

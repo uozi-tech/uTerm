@@ -1,0 +1,10 @@
+/* Name shown in System Settings (Accessibility, Files and Folders, Local Network…) and the permission prompts;
+   see the comment in Config/uterm-holder-Info.plist. */
+"CFBundleName" = "uTerm 終端機";
+"CFBundleDisplayName" = "uTerm 終端機";
+"NSLocalNetworkUsageDescription" = "uTerm 的終端機要連線到你區域網路裡的機器，這樣 uTerm 重新啟動時連線也不會中斷。";
+"NSDocumentsFolderUsageDescription" = "你在 uTerm 本機終端機裡執行的程式要取用「文件」檔案夾。";
+"NSDesktopFolderUsageDescription" = "你在 uTerm 本機終端機裡執行的程式要取用「桌面」檔案夾。";
+"NSDownloadsFolderUsageDescription" = "你在 uTerm 本機終端機裡執行的程式要取用「下載項目」檔案夾。";
+"NSRemovableVolumesUsageDescription" = "你在 uTerm 本機終端機裡執行的程式要取用卸除式卷宗上的檔案。";
+"NSNetworkVolumesUsageDescription" = "你在 uTerm 本機終端機裡執行的程式要取用網路卷宗上的檔案。";

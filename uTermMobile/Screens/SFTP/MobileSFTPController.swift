@@ -267,7 +267,7 @@ final class MobileSFTPController {
             if let destination {
                 try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
             }
-            browser.report(error, action: "下载")
+            browser.report(error, action: String(localized: "下载", comment: "操作名，接在「…失败：原因」前"))
             return nil
         }
     }

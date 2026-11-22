@@ -80,7 +80,7 @@ final class RemoteFileSharingStore {
             } catch {
                 return RemoteFileCodec.packReply(
                     .failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
-                             RemoteFileError(.unreachable, "那台 Mac 上的辅助程序没有响应：\(error.localizedDescription)")),
+                             RemoteFileError(.unreachable, String(localized: "那台 Mac 上的辅助程序没有响应：\(error.localizedDescription)"))),
                     compress: false)
             }
         })

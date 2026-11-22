@@ -14,9 +14,9 @@ enum StartupBehavior: String, CaseIterable, Identifiable {
 
     var localizedLabel: String {
         switch self {
-        case .welcome:  return "欢迎页"
-        case .restore:  return "上次会话"
-        case .lastHost: return "上次主机"
+        case .welcome:  return String(localized: "欢迎页", comment: "启动时：显示欢迎页")
+        case .restore:  return String(localized: "上次会话", comment: "启动时：恢复上次会话")
+        case .lastHost: return String(localized: "上次主机", comment: "启动时：连接上次的主机")
         }
     }
 }

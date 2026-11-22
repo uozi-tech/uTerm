@@ -391,9 +391,9 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
                 done(nil)
             } catch {
                 #if os(macOS)
-                done("这台 Mac 上无法播放声音：\(error.localizedDescription)")
+                done(String(localized: "这台 Mac 上无法播放声音：\(error.localizedDescription)"))
                 #else
-                done("手机上无法播放声音：\(error.localizedDescription)")
+                done(String(localized: "手机上无法播放声音：\(error.localizedDescription)"))
                 #endif
             }
         }
@@ -453,7 +453,7 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.isStarted, self.generation == current, let error else { return }
-                    self.onInterrupted?("\(failure)：\(error)")
+                    self.onInterrupted?(String(localized: "\(failure)：\(error)"))
                 }
             }
         }
@@ -484,7 +484,7 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
         observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
                                                                 object: host.engine, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.restart(failure: "声音输出设备已更改，无法继续播放", reactivateSession: false)
+                self?.restart(failure: String(localized: "声音输出设备已更改，无法继续播放"), reactivateSession: false)
             }
         })
     }
@@ -501,9 +501,9 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if options.contains(.shouldResume) {
-                    self.restart(failure: "声音被其他应用打断后无法恢复", reactivateSession: true)
+                    self.restart(failure: String(localized: "声音被其他应用打断后无法恢复"), reactivateSession: true)
                 } else {
-                    self.onInterrupted?("声音被其他应用打断")
+                    self.onInterrupted?(String(localized: "声音被其他应用打断"))
                 }
             }
         })
@@ -512,7 +512,7 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
             guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
             // 拔了耳机：按系统惯例停下，免得突然从扬声器外放。
-            MainActor.assumeIsolated { self?.onInterrupted?("耳机已断开") }
+            MainActor.assumeIsolated { self?.onInterrupted?(String(localized: "耳机已断开")) }
         })
     }
     #endif

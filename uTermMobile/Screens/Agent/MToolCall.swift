@@ -10,7 +10,7 @@ struct MToolCall: View {
         case done(output: String? = nil)
     }
 
-    var label: String = "运行命令"
+    var label: String = String(localized: "运行命令")
     let command: String
     var status: Status = .pending
     /// 待确认态审批是否可点：仅在状态机真正「等待批准」时为 true——流式仍在进行（卡片虽已
@@ -26,9 +26,9 @@ struct MToolCall: View {
 
     private var statusText: String {
         switch status {
-        case .pending: return "待确认"
-        case .running: return "运行中"
-        case .done:    return "已完成"
+        case .pending: return String(localized: "待确认")
+        case .running: return String(localized: "运行中", comment: "工具调用状态")
+        case .done:    return String(localized: "已完成", comment: "工具调用状态")
         }
     }
     private var statusColor: Color { isDone ? M.success : M.accent }

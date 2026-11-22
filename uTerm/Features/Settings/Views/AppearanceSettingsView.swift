@@ -8,24 +8,28 @@ struct AppearanceSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsPageHeader(title: "外观", subtitle: String(localized: "主题、强调色与界面语言"))
+            SettingsPageHeader(title: String(localized: "外观", comment: "设置分区"), subtitle: String(localized: "主题、强调色与界面语言"))
 
-            SettingsGroup(title: "外观",
+            SettingsGroup(title: String(localized: "外观", comment: "设置分区"),
                           footer: String(localized: "主题与强调色立即生效，终端配色随主题自动切换深 / 浅；语言重启 uTerm 后生效。")) {
-                SettingsRow(label: "主题") {
+                SettingsRow(label: String(localized: "主题", comment: "外观主题")) {
                     UDSegmented(
                         selection: $appearancePreferenceRaw.rawValue(AppearancePreference.self, default: .system),
                         options: AppearancePreference.allCases.map { ($0, $0.localizedLabel) })
                 }
-                SettingsRow(label: "强调色") {
+                SettingsRow(label: String(localized: "强调色")) {
                     UDAccentSwatches.shared
                 }
-                SettingsRow(label: "语言") {
-                    UDSegmented(
+                SettingsRow(label: String(localized: "语言", comment: "界面语言")) {
+                    SettingsPicker(
                         selection: $appLanguageRaw.rawValue(AppLanguage.self, default: .system),
-                        options: AppLanguage.allCases.map { ($0, $0.localizedLabel) })
+                        options: AppLanguage.allCases.map { ($0, $0.localizedLabel) },
+                        menuWidth: 160)
                 }
             }
+        }
+        .onChange(of: appLanguageRaw) { _, raw in
+            (AppLanguage(rawValue: raw) ?? .system).applyToBundleLocalization()
         }
     }
 }

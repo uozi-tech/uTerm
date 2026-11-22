@@ -27,10 +27,10 @@ struct KeyGenSheet: View {
                     Text("私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备；拷贝公钥后，把它添加到主机的 ~/.ssh/authorized_keys。")
                         .font(M.sans(13)).foregroundStyle(M.text3).lineSpacing(2)
 
-                    MField(label: "名称", hint: "在 uTerm 内引用") {
-                        MInput(text: $name, placeholder: "例如：default")
+                    MField(label: String(localized: "名称"), hint: String(localized: "在 uTerm 内引用")) {
+                        MInput(text: $name, placeholder: String(localized: "例如：default"))
                     }
-                    MField(label: "类型") {
+                    MField(label: String(localized: "类型")) {
                         Picker("类型", selection: $kind) {
                             Text("ed25519（推荐）").tag(SSHKeyKind.ed25519)
                             Text("RSA").tag(SSHKeyKind.rsa)
@@ -38,7 +38,7 @@ struct KeyGenSheet: View {
                         .pickerStyle(.segmented)
                     }
                     if kind == .rsa {
-                        MField(label: "位数") {
+                        MField(label: String(localized: "位数", comment: "RSA 密钥位数")) {
                             Picker("位数", selection: $bits) {
                                 Text("2048").tag(2048)
                                 Text("3072").tag(3072)
@@ -47,11 +47,11 @@ struct KeyGenSheet: View {
                             .pickerStyle(.segmented)
                         }
                     }
-                    MField(label: "注释", hint: "附在公钥末尾，便于辨识") {
+                    MField(label: String(localized: "注释", comment: "SSH 公钥末尾的注释字段"), hint: String(localized: "附在公钥末尾，便于辨识")) {
                         MInput(text: $comment, placeholder: "sz@laptop", mono: true)
                     }
                     if let error { Text(error).font(M.sans(12)).foregroundStyle(M.danger) }
-                    MBtn(title: busy ? "生成中…" : "生成密钥", kind: .primary, full: true, disabled: !valid || busy) {
+                    MBtn(title: busy ? String(localized: "生成中…") : String(localized: "生成密钥"), kind: .primary, full: true, disabled: !valid || busy) {
                         generate()
                     }
                     .padding(.top, 4)

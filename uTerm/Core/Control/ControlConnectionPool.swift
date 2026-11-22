@@ -314,7 +314,7 @@ actor ControlConnectionPool: ControlConnectionPooling {
             resumeOneSFTPWaiter(host.id)
             // 不是 `connectFailed`：握手、认证、主机密钥全过了，纯粹是建连期间
             // 这台主机被 disconnect 掉。报成「连接失败」会把人引去查不存在的网络故障。
-            throw ControlConnectError.released("建立期间该主机被断开")
+            throw ControlConnectError.released(String(localized: "建立期间该主机被断开"))
         }
         entry.sftp.pending -= 1
         entry.sftp.busy[ObjectIdentifier(session)] = session
@@ -725,6 +725,9 @@ extension ControlConnectionPool {
         }
         if let already = error as? ControlConnectError { return already }
         let text = FriendlyError.describe(error)
+        if case SSHConnection.SSHConnectionError.authenticationFailed = error {
+            return .authFailed(text)
+        }
         if text.contains("认证失败") || text.localizedCaseInsensitiveContains("authentication") {
             return .authFailed(text)
         }

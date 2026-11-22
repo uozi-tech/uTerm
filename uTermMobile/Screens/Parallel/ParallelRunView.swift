@@ -252,7 +252,9 @@ struct ParallelRunView: View {
         }
         .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityValue(Text("完成 \(c.doneCount)/\(c.total)" + (c.failedCount > 0 ? "，\(c.failedCount) 台失败" : "")))
+        .accessibilityValue(Text(c.failedCount > 0
+            ? String(localized: "完成 \(c.doneCount)/\(c.total)，\(c.failedCount) 台失败")
+            : String(localized: "完成 \(c.doneCount)/\(c.total)")))
     }
 
     private func tint(_ c: ParallelRunController) -> Color { c.mode == .ai ? M.aiAccent : accent }
@@ -518,20 +520,21 @@ struct ParallelRunView: View {
 
     private func overviewTitle(_ c: ParallelRunController, size: CGFloat) -> some View {
         let title: String = !c.allDone
-            ? "正在 \(c.total) 台主机上执行"
-            : (c.failedCount > 0 ? "已完成，\(c.failedCount) 台失败" : "全部 \(c.total) 台执行成功")
+            ? String(localized: "正在 \(c.total) 台主机上执行")
+            : (c.failedCount > 0 ? String(localized: "已完成，\(c.failedCount) 台失败")
+                                 : String(localized: "全部 \(c.total) 台执行成功"))
         return Text(title).font(M.sans(size, weight: .semibold)).foregroundStyle(M.text)
     }
 
     private func overviewCounts(_ c: ParallelRunController) -> some View {
         let running = c.total - c.doneCount
         return HStack(spacing: 12) {
-            countLabel("checkmark.circle.fill", "成功 \(c.okCount)", M.success)
+            countLabel("checkmark.circle.fill", String(localized: "成功 \(c.okCount)"), M.success)
             if c.failedCount > 0 {
-                countLabel("xmark.circle.fill", "失败 \(c.failedCount)", M.danger)
+                countLabel("xmark.circle.fill", String(localized: "失败 \(c.failedCount)"), M.danger)
             }
             if running > 0 {
-                countLabel("circle.dashed", "进行中 \(running)", M.aiAccent)
+                countLabel("circle.dashed", String(localized: "进行中 \(running)"), M.aiAccent)
             }
         }
         .animation(.snappy, value: c.doneCount)
@@ -653,8 +656,9 @@ private struct ParRunSubtitle: ViewModifier {
 
     private static func text(_ c: ParallelRunController, now: Date) -> String {
         let elapsed = (c.finishedAt ?? now).timeIntervalSince(c.startedAt)
-        var parts = ["\(c.mode == .ai ? "AI" : "并行") · \(c.total) 台", "完成 \(c.doneCount)/\(c.total)"]
-        if c.failedCount > 0 { parts.append("\(c.failedCount) 失败") }
+        var parts = [c.mode == .ai ? String(localized: "AI · \(c.total) 台") : String(localized: "并行 · \(c.total) 台"),
+                     String(localized: "完成 \(c.doneCount)/\(c.total)")]
+        if c.failedCount > 0 { parts.append(String(localized: "\(c.failedCount) 失败")) }
         parts.append(UFormat.duration(seconds: max(0, elapsed)))
         return parts.joined(separator: " · ")
     }
@@ -678,10 +682,10 @@ enum ParAIFilter: CaseIterable {
 
     var title: String {
         switch self {
-        case .all: return "全部"
-        case .failed: return "失败"
-        case .running: return "进行中"
-        case .ok: return "成功"
+        case .all: return String(localized: "全部", comment: "并行结果筛选")
+        case .failed: return String(localized: "失败", comment: "并行结果筛选")
+        case .running: return String(localized: "进行中", comment: "并行结果筛选")
+        case .ok: return String(localized: "成功", comment: "并行结果筛选")
         }
     }
 
@@ -771,13 +775,13 @@ struct ParShellPane: View {
             HStack(spacing: 4) {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(M.success)
                 if let code = state.exitCode {
-                    Text("退出码 \(code)").font(M.mono(11)).foregroundStyle(M.text4)
+                    Text("退出码 \(String(code))").font(M.mono(11)).foregroundStyle(M.text4)
                 }
             }
         case .failed:
             HStack(spacing: 4) {
                 Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(M.danger)
-                Text(state.exitCode.map { "退出码 \($0)" } ?? "失败")
+                Text(state.exitCode.map { String(localized: "退出码 \(String($0))") } ?? String(localized: "失败"))
                     .font(M.mono(11, weight: .medium)).foregroundStyle(M.danger)
             }
         }
@@ -806,7 +810,7 @@ struct ParShellPane: View {
                 .font(M.mono(12.5))
             }
             if state.hostKeyUntrusted {
-                MBtn(title: "信任并重试", icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                MBtn(title: String(localized: "信任并重试"), icon: "shield", kind: .tinted, height: 36, action: onTrust)
                     .fixedSize().padding(.top, 8)
             }
         }
@@ -948,7 +952,7 @@ struct ParAILane: View {
             VStack(alignment: .leading, spacing: 10) {
                 summaryText
                 if state.hostKeyUntrusted {
-                    MBtn(title: "信任并重试", icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                    MBtn(title: String(localized: "信任并重试"), icon: "shield", kind: .tinted, height: 36, action: onTrust)
                         .fixedSize()
                 }
             }
@@ -956,13 +960,13 @@ struct ParAILane: View {
             if stepCount > 0 || onShowOutput != nil || open {
                 HStack(spacing: 8) {
                     if stepCount > 0 {
-                        pill(icon: "chev", title: open ? "收起" : "处理过程 · \(stepCount) 步",
+                        pill(icon: "chev", title: open ? String(localized: "收起") : String(localized: "处理过程 · \(stepCount) 步"),
                              rotate: open) { withAnimation(.snappy) { open.toggle() } }
                     } else if open {
-                        pill(icon: "chev", title: "收起", rotate: true) { withAnimation(.snappy) { open = false } }
+                        pill(icon: "chev", title: String(localized: "收起"), rotate: true) { withAnimation(.snappy) { open = false } }
                     }
                     if let onShowOutput {
-                        pill(icon: "term", title: "原始输出", rotate: false, action: onShowOutput)
+                        pill(icon: "term", title: String(localized: "原始输出"), rotate: false, action: onShowOutput)
                     }
                 }
             }
@@ -1042,7 +1046,7 @@ struct ParStepTimeline: View {
                     }
                     Spacer(minLength: 0)
                     if let code = step.exitCode, code != 0 {
-                        Text("退出码 \(code)").font(M.mono(10.5)).foregroundStyle(M.danger)
+                        Text("退出码 \(String(code))").font(M.mono(10.5)).foregroundStyle(M.danger)
                     } else if step.state == .timedOut {
                         Text("超时").font(M.mono(10.5)).foregroundStyle(M.caution)
                     }

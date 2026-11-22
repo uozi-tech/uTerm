@@ -271,7 +271,7 @@ final class RemoteMacClient: Identifiable {
 
     /// 同上，带着变化后的网卡：连接走的网卡已经不在了（关了 Wi-Fi 改走蜂窝），不用等探测超时，直接断开重连。
     func networkChanged(_ snapshot: RemoteNetworkSnapshot) {
-        currentTrace?.event("网络变化：\(snapshot.label)（\(snapshot.interfaces.joined(separator: ","))）")
+        currentTrace?.event(String(localized: "网络变化：\(snapshot.label)（\(snapshot.interfaces.joined(separator: ","))）"))
         if snapshot.isSatisfied, let link, let name = link.interfaceName, !snapshot.interfaces.contains(name) {
             AppLogger.notice("远控连接走的网卡 \(name) 没了，断开重连", category: RemoteLog.category)
             link.close(RemoteProtocolError.closed)
@@ -391,7 +391,7 @@ final class RemoteMacClient: Identifiable {
             state = .connecting
         }
         guard let internetDialer else {
-            if endpoint == nil { state = .failed("Mac 不在线") }
+            if endpoint == nil { state = .failed(String(localized: "Mac 不在线")) }
             return
         }
         let context = RemoteDialContext(pairingToken: pairingToken, trace: trace)
@@ -426,7 +426,7 @@ final class RemoteMacClient: Identifiable {
         guard currentTrace === trace, state == .connecting else { return }
         expiredTraceID = trace.id
         let stage = connectStage?.label ?? "?"
-        trace.event("总时限 \(Self.secondsText(connectDeadline)) 到了，停在「\(stage)」")
+        trace.event(String(localized: "总时限 \(Self.secondsText(connectDeadline)) 到了，停在「\(stage)」"))
         failureIsPermanent = false
         state = .failed(String(localized: "连接超时（停在「\(stage)」）"))
         link?.close(RemoteProtocolError.timeout)
@@ -478,7 +478,7 @@ final class RemoteMacClient: Identifiable {
             onMessage: { [weak self, weak link] message in
                 guard let link else { return }
                 // 读数：配对结果到了链路（还没回主线程）。和「等待配对结果」这一步的结束对照，看是路上慢还是主线程慢。
-                if message.kind == .pairing { trace.event("配对结果到了链路") }
+                if message.kind == .pairing { trace.event(String(localized: "配对结果到了链路")) }
                 Self.route(message, link: link, table: table, client: self)
             },
             onClose: { [weak self] error in
@@ -665,7 +665,7 @@ final class RemoteMacClient: Identifiable {
         } else if case .awaitingApproval = state {
             pairingRefused = true
             failureIsPermanent = true
-            state = .failed(error?.localizedDescription ?? "Mac 没有确认配对")
+            state = .failed(error?.localizedDescription ?? String(localized: "Mac 没有确认配对"))
         }
         resumeOutcome()
         for (_, waiter) in attachWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
@@ -684,8 +684,9 @@ final class RemoteMacClient: Identifiable {
         windowListWaiters.removeAll()
         for (_, waiter) in revokeWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         revokeWaiters.removeAll()
-        fileWaiters.failAll(RemoteFileError(.unreachable, "与 Mac 的连接已断开"))
-        for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
+        let closedReason = String(localized: "与 Mac 的连接已断开")
+        fileWaiters.failAll(RemoteFileError(.unreachable, closedReason))
+        for sink in table.removeAll() { sink.onClosed(closedReason, false) }
     }
 
     // MARK: - 收消息
@@ -776,7 +777,7 @@ final class RemoteMacClient: Identifiable {
             if let sessionID = result.sessionID {
                 waiter.resume(returning: sessionID)
             } else {
-                waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 无法打开本机终端"))
+                waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? String(localized: "Mac 无法打开本机终端")))
             }
         case .localWorkspaces:
             guard let workspaces = try? RemoteJSON.decode(RemoteLocalWorkspaces.self, from: message.payload),
@@ -850,7 +851,7 @@ final class RemoteMacClient: Identifiable {
             throw connectionFailure
         }
         guard supportsSiblingRevoke else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能替你撤销。把 Mac 上的 uTerm 更新到最新版，或到那台 Mac 上撤销")
+            throw RemoteAttachError.rejected(String(localized: "这台 Mac 上的 uTerm 版本太旧，不能替你撤销。把 Mac 上的 uTerm 更新到最新版，或到那台 Mac 上撤销"))
         }
         let request = RemoteSiblingRevokeRequest(requestID: UUID(), deviceID: deviceID, publicKey: publicKey)
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteSiblingRevokeResult, Error>) in
@@ -867,7 +868,7 @@ final class RemoteMacClient: Identifiable {
             throw connectionFailure
         }
         guard supportsDeviceVouch else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能替别的设备开通。把 Mac 上的 uTerm 更新到最新版，或在那台设备上单独配对")
+            throw RemoteAttachError.rejected(String(localized: "这台 Mac 上的 uTerm 版本太旧，不能替别的设备开通。把 Mac 上的 uTerm 更新到最新版，或在那台设备上单独配对"))
         }
         let request = RemoteVouchRequest(requestID: UUID(), deviceID: device.id, name: device.name, model: device.model,
                                          platform: device.platform, publicKey: device.publicKey)
@@ -891,7 +892,7 @@ final class RemoteMacClient: Identifiable {
             throw connectionFailure
         }
         guard supportsDesktopWindows else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不支持窗口模式。把 Mac 上的 uTerm 更新到最新版")
+            throw RemoteAttachError.rejected(String(localized: "这台 Mac 上的 uTerm 版本太旧，不支持窗口模式。把 Mac 上的 uTerm 更新到最新版"))
         }
         let request = RemoteDesktopWindowListRequest(requestID: UUID())
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteDesktopWindowList, Error>) in
@@ -920,10 +921,10 @@ final class RemoteMacClient: Identifiable {
     /// SSH 会话传成了服务器上的文件（`.file`，路径由调用方粘进终端）。
     func sendTerminalImage(_ image: TerminalImage, over attachment: RemoteAttachment) async throws -> TerminalImageDelivery {
         guard supportsTerminalImage else {
-            throw TerminalImageError.unsupported("这台 Mac 上的 uTerm 版本太旧，不支持往终端里贴图片。把 Mac 上的 uTerm 更新到最新版后再试")
+            throw TerminalImageError.unsupported(String(localized: "这台 Mac 上的 uTerm 版本太旧，不支持往终端里贴图片。把 Mac 上的 uTerm 更新到最新版后再试"))
         }
         guard image.data.count <= RemoteTerminalImageRequest.maxImageBytes else {
-            throw TerminalImageError.unsupported("图片太大")
+            throw TerminalImageError.unsupported(String(localized: "图片太大"))
         }
         // 重连的空档里调用方手上可能还是旧连接的接入：发出去不会有回音，断开时也不会被收尾（只认当前连接）。
         guard attachment.link === link else { throw RemoteProtocolError.closed }
@@ -962,7 +963,7 @@ final class RemoteMacClient: Identifiable {
             throw connectionFailure
         }
         guard supportsLocalShell else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。把 Mac 上的 uTerm 更新到最新版后再试")
+            throw RemoteAttachError.rejected(String(localized: "这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。把 Mac 上的 uTerm 更新到最新版后再试"))
         }
         let requestID = UUID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
@@ -1006,11 +1007,11 @@ extension RemoteMacClient {
         await connect()
         guard state == .connected, let link else {
             let reason: String
-            if case .failed(let message) = state { reason = message } else { reason = "没有连上 Mac" }
+            if case .failed(let message) = state { reason = message } else { reason = String(localized: "没有连上 Mac") }
             throw RemoteFileError(.unreachable, reason)
         }
         guard supportsFiles else {
-            throw RemoteFileError(.unsupported, "这台 Mac 上的 uTerm 版本太旧，不支持远程访问文件。把 Mac 上的 uTerm 更新到最新版后再试")
+            throw RemoteFileError(.unsupported, String(localized: "这台 Mac 上的 uTerm 版本太旧，不支持远程访问文件。把 Mac 上的 uTerm 更新到最新版后再试"))
         }
         return try await fileWaiters.exchange(payload, id: id, timeout: timeout, peer: "Mac") { payload in
             link.send(RemoteMessage(.fileRequest, channel: RemoteConstants.fileChannel, payload: payload))
@@ -1030,18 +1031,17 @@ extension RemoteMacClient {
             send(RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(), error), compress: false))
         }
         guard let access = fileSharing else {
-            refuse(RemoteFileError(.unsupported, "那台设备不提供文件"))
+            refuse(RemoteFileError(.unsupported, String(localized: "那台设备不提供文件")))
             return
         }
         guard let (request, _) = try? RemoteFileCodec.decode(RemoteFileRequest.self, from: payload) else {
-            refuse(RemoteFileError(.invalid, "请求解不开"))
+            refuse(RemoteFileError(.invalid, String(localized: "请求解不开")))
             return
         }
         let scope = access.scope() ?? RemoteFileScope(roots: [])
         // 什么都没共享时，只有「问共享了什么」照常回（回一个空列表）。
         if scope.roots.isEmpty, request.op != .roots {
-            refuse(RemoteFileError(.disabled, "那台 Mac 没有给这台 Mac 共享任何文件夹。要读写它上面的文件，"
-                                   + "得由用户在那台 Mac 的 uTerm「动作 › 我的 Mac」里选中这台 Mac，添加共享文件夹"))
+            refuse(RemoteFileError(.disabled, String(localized: "那台 Mac 没有给这台 Mac 共享任何文件夹。要读写它上面的文件，得由用户在那台 Mac 的 uTerm「动作 › 我的 Mac」里选中这台 Mac，添加共享文件夹")))
             return
         }
         if request.op.isMutation, request.op != .write {
@@ -1098,7 +1098,7 @@ nonisolated enum RemoteDesktopError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .macTooOld: return "这台 Mac 上的 uTerm 版本太旧，不支持远程桌面。把 Mac 上的 uTerm 更新到最新版后再试"
+        case .macTooOld: return String(localized: "这台 Mac 上的 uTerm 版本太旧，不支持远程桌面。把 Mac 上的 uTerm 更新到最新版后再试")
         }
     }
 }

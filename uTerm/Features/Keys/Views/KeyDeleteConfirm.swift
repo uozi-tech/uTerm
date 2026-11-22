@@ -9,7 +9,7 @@ struct KeyDeleteConfirm: View {
     let onConfirm: () -> Void
 
     var body: some View {
-        UDConfirmModal(title: "删除密钥「\(key.name)」？", width: 400,
+        UDConfirmModal(title: String(localized: "删除密钥「\(key.name)」？"), width: 400,
                        onCancel: onCancel, onConfirm: onConfirm) {
             Text(message)
         }
@@ -17,8 +17,8 @@ struct KeyDeleteConfirm: View {
 
     private var message: String {
         if hostCount > 0 {
-            return "使用此密钥的 \(hostCount) 台主机将无法连接。此操作无法撤销。"
+            return String(localized: "使用此密钥的 \(hostCount) 台主机将无法连接。此操作无法撤销。")
         }
-        return "此密钥未被任何主机使用。此操作无法撤销。"
+        return String(localized: "此密钥未被任何主机使用。此操作无法撤销。")
     }
 }

@@ -251,11 +251,11 @@ private struct MDImageBlockView: View {
     @MainActor
     private func load() async {
         guard !source.isEmpty else {
-            phase = .failed("图片地址为空")
+            phase = .failed(String(localized: "图片地址为空"))
             return
         }
         guard let imageLoader else {
-            phase = .failed("图片预览不可用")
+            phase = .failed(String(localized: "图片预览不可用"))
             return
         }
 
@@ -263,12 +263,12 @@ private struct MDImageBlockView: View {
         do {
             let data = try await imageLoader(source)
             guard let loaded = await MarkdownImageDecoder.decode(data) else {
-                phase = .failed("无法解码图片")
+                phase = .failed(String(localized: "无法解码图片"))
                 return
             }
             phase = .loaded(loaded)
         } catch {
-            phase = .failed("图片加载失败：\(FriendlyError.describe(error))")
+            phase = .failed(String(localized: "图片加载失败：\(FriendlyError.describe(error))"))
         }
     }
 

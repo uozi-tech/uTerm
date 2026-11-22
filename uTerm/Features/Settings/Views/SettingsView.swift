@@ -76,7 +76,7 @@ struct SettingsView: View {
         // 预留。取代原「系统原生标题栏」——后者暗夜下是更浅的系统灰，与设计稿底色 UD.bg 不符。
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "设置"))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "设置", comment: "设置窗口的标题")))
     }
 }
 

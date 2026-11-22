@@ -1,0 +1,10 @@
+/* Name shown in System Settings (Accessibility, Files and Folders, Local Network…) and the permission prompts;
+   see the comment in Config/uterm-holder-Info.plist. */
+"CFBundleName" = "uTerm ターミナル";
+"CFBundleDisplayName" = "uTerm ターミナル";
+"NSLocalNetworkUsageDescription" = "uTerm のターミナルはローカルネットワーク上のマシンに接続します。これにより、uTerm を再起動しても接続は切れません。";
+"NSDocumentsFolderUsageDescription" = "uTerm のローカルターミナルで実行中のプログラムが「書類」フォルダにアクセスしようとしています。";
+"NSDesktopFolderUsageDescription" = "uTerm のローカルターミナルで実行中のプログラムが「デスクトップ」フォルダにアクセスしようとしています。";
+"NSDownloadsFolderUsageDescription" = "uTerm のローカルターミナルで実行中のプログラムが「ダウンロード」フォルダにアクセスしようとしています。";
+"NSRemovableVolumesUsageDescription" = "uTerm のローカルターミナルで実行中のプログラムがリムーバブルボリューム上のファイルにアクセスしようとしています。";
+"NSNetworkVolumesUsageDescription" = "uTerm のローカルターミナルで実行中のプログラムがネットワークボリューム上のファイルにアクセスしようとしています。";

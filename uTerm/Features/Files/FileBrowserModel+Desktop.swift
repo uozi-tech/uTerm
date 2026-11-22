@@ -53,7 +53,7 @@ extension FileBrowserModel {
                     completion(nil, false, NSError(
                         domain: "uTerm.RemoteFileDrag",
                         code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "下载失败"]))
+                        userInfo: [NSLocalizedDescriptionKey: String(localized: "下载失败")]))
                     return
                 }
                 progress.completedUnitCount = progress.totalUnitCount
@@ -88,7 +88,7 @@ extension FileBrowserModel {
             await refresh()
             return true
         } catch {
-            report(error, action: "移动")
+            report(error, action: String(localized: "移动", comment: "操作名，接在「…失败：原因」前"))
             return false
         }
     }

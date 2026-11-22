@@ -1,3 +1,10 @@
-/* Name shown in System Settings and permission prompts. */
+/* Name shown in System Settings (Accessibility, Files and Folders, Local Network…) and the permission prompts;
+   see the comment in Config/uterm-holder-Info.plist. */
 "CFBundleName" = "uTerm Terminal";
 "CFBundleDisplayName" = "uTerm Terminal";
+"NSLocalNetworkUsageDescription" = "uTerm's terminals connect to machines on your local network, so those connections stay up when uTerm restarts.";
+"NSDocumentsFolderUsageDescription" = "A program you're running in uTerm's local terminal wants to access your Documents folder.";
+"NSDesktopFolderUsageDescription" = "A program you're running in uTerm's local terminal wants to access your Desktop folder.";
+"NSDownloadsFolderUsageDescription" = "A program you're running in uTerm's local terminal wants to access your Downloads folder.";
+"NSRemovableVolumesUsageDescription" = "A program you're running in uTerm's local terminal wants to access files on removable volumes.";
+"NSNetworkVolumesUsageDescription" = "A program you're running in uTerm's local terminal wants to access files on network volumes.";

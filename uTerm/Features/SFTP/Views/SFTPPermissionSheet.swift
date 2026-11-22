@@ -20,8 +20,16 @@ struct SFTPPermissionSheet: View {
     @State private var bits: [Bool]
     @State private var recursive = false
 
-    private static let classes = ["所有者", "群组", "其他"]
-    private static let cols = ["读", "写", "执行"]
+    private static let classes = [
+        String(localized: "所有者", comment: "文件权限类别"),
+        String(localized: "群组", comment: "文件权限类别"),
+        String(localized: "其他", comment: "文件权限类别：其他用户"),
+    ]
+    private static let cols = [
+        String(localized: "读", comment: "文件权限"),
+        String(localized: "写", comment: "文件权限"),
+        String(localized: "执行", comment: "文件权限"),
+    ]
 
     init(entry: RemoteEntry, onApply: @escaping (UInt32, Bool) -> Void) {
         self.entry = entry
@@ -109,7 +117,7 @@ struct SFTPPermissionSheet: View {
                 if ri > 0 { Rectangle().fill(UD.border).frame(height: 1) }
                 gridRow(leading: Text(name).font(.system(size: 13)).foregroundStyle(UD.text)) { col in
                     PermCheckbox(on: bits[ri * 3 + col],
-                                 label: "\(name) \(Self.cols[col])") { bits[ri * 3 + col].toggle() }
+                                 label: String(localized: "\(name) \(Self.cols[col])", comment: "无障碍标签：权限类别 + 读 / 写 / 执行")) { bits[ri * 3 + col].toggle() }
                 }
                 .frame(height: 42)
             }
@@ -139,8 +147,8 @@ struct SFTPPermissionSheet: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Spacer()
-            UDButton(title: "取消", style: .secondary) { dismiss() }
-            UDButton(title: "应用", style: .primary) {
+            UDButton(title: String(localized: "取消"), style: .secondary) { dismiss() }
+            UDButton(title: String(localized: "应用", comment: "应用权限设置"), style: .primary) {
                 onApply(mode, recursive)
                 dismiss()
             }

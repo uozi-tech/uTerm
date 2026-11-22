@@ -139,7 +139,7 @@ struct RemoteDiagnosticsContent: View {
                     HStack {
                         Text(model.progressText).font(.system(size: 12.5)).foregroundStyle(UD.text2)
                         Spacer()
-                        UDButton(title: "停止", style: .secondary) { model.stop() }
+                        UDButton(title: String(localized: "停止", comment: "停止检测"), style: .secondary) { model.stop() }
                     }
                     ProgressView(value: Double(model.current.count), total: Double(max(1, model.currentTotal)))
                         .progressViewStyle(.linear)
@@ -149,7 +149,7 @@ struct RemoteDiagnosticsContent: View {
             } else {
                 SettingsRow(label: String(localized: "开始检测"),
                             hint: String(localized: "\(modes.count) 条路，每条 \(rounds) 轮，约需 \(Self.estimate(modes: modes.count, rounds: rounds))。")) {
-                    UDButton(title: "开始") { run() }
+                    UDButton(title: String(localized: "开始", comment: "开始检测")) { run() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(mac == nil || modes.isEmpty)
                 }
@@ -225,7 +225,7 @@ struct RemoteDiagnosticsContent: View {
             SettingsRow(label: model.historyCount == 0 ? String(localized: "还没有记录")
                         : String(localized: "共 \(model.historyCount) 条结果")) {
                 HStack(spacing: 6) {
-                    UDButton(title: showsHistory ? "收起" : "查看", style: .secondary) { toggleHistory() }
+                    UDButton(title: showsHistory ? String(localized: "收起", comment: "收起历史记录") : String(localized: "查看", comment: "查看历史记录"), style: .secondary) { toggleHistory() }
                     SettingsMoreMenu(items: [
                         UDMenuItem(label: copied ? String(localized: "已拷贝") : String(localized: "拷贝全部"),
                                    systemImage: "doc.on.doc") { copyAll() },

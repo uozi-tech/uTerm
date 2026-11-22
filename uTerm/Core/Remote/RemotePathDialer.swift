@@ -15,9 +15,9 @@ nonisolated enum RemoteLinkPath: String, Equatable, Sendable {
 
     var label: String {
         switch self {
-        case .localNetwork: return "局域网"
-        case .direct: return "直连"
-        case .relay: return "中继"
+        case .localNetwork: return String(localized: "局域网")
+        case .direct: return String(localized: "直连", comment: "远控连接路径：公网直连")
+        case .relay: return String(localized: "中继", comment: "远控连接路径：经中继")
         }
     }
 }
@@ -185,8 +185,10 @@ nonisolated struct RemotePathDialer: Sendable {
             detail = "\(local) → \(remote)"
         }
         // 对端有哪些地址、打通和确认各花多久（建连提速的读数）。
-        detail += " · 对端 \(Self.candidateSummary(remote) ?? "?") · 打通 \(RemoteConnectTrace.millis(connected - started)) ms"
-            + " · 确认 \(RemoteConnectTrace.millis(clock.now - connected)) ms"
+        let summary = Self.candidateSummary(remote) ?? "?"
+        let connectMillis = RemoteConnectTrace.millis(connected - started)
+        let verifyMillis = RemoteConnectTrace.millis(clock.now - connected)
+        detail += " · " + String(localized: "对端 \(summary) · 打通 \(connectMillis) ms · 确认 \(verifyMillis) ms")
         return (attempt.makeTransport(keys: keys.datagram), detail)
     }
 }

@@ -100,7 +100,7 @@ struct GroupsManagerView: View {
         .frame(minWidth: 860, minHeight: 580)
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "分组管理"))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "分组管理")))
         .overlay { deleteConfirmOverlay }
         .onAppear {
             if selection == nil {
@@ -123,7 +123,7 @@ struct GroupsManagerView: View {
                     }
                     if ungroupedCount > 0 {
                         GroupRowView(
-                            name: "未分组",
+                            name: String(localized: "未分组"),
                             color: ServerGroupTint.color(hex: "#9aa7b5"),
                             count: ungroupedCount,
                             pinned: false,
@@ -352,7 +352,9 @@ private struct GroupRowView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityLabel("\(name)，\(UFormat.count(count)) 台主机\(builtin ? "，系统内置" : "")")
+        .accessibilityLabel(builtin
+            ? String(localized: "\(name)，\(UFormat.count(count)) 台主机，系统内置")
+            : String(localized: "\(name)，\(UFormat.count(count)) 台主机"))
         // `onTapGesture` 不像 `Button` 那样自带 AX 默认动作：只标 `.isButton`
         // 的话 VoiceOver / 全键盘控制按下去是空转。显式补一条默认动作。
         .accessibilityAction { onSelect() }
@@ -475,15 +477,15 @@ private struct GroupDetailView: View {
         if isRenaming {
             HStack(alignment: .top, spacing: 8) {
                 UDTextField(
-                    placeholder: "分组名",
+                    placeholder: String(localized: "分组名"),
                     text: $renameDraft,
-                    errorMessage: renameError ? "名称不能为空或已存在" : nil
+                    errorMessage: renameError ? String(localized: "名称不能为空或已存在") : nil
                 )
                 .frame(width: 220)
                 .onSubmit { _ = onCommitRename() }
                 .onExitCommand(perform: onCancelRename)
 
-                UDButton(title: "保存", style: .primary) {
+                UDButton(title: String(localized: "保存"), style: .primary) {
                     _ = onCommitRename()
                 }
                 .disabled(!canSaveRename)
@@ -508,7 +510,7 @@ private struct GroupDetailView: View {
     }
 
     private var colorSection: some View {
-        GroupFormSection(title: "颜色") {
+        GroupFormSection(title: String(localized: "颜色", comment: "分组颜色")) {
             HStack(spacing: 8) {
                 ForEach(ServerGroup.palette, id: \.self) { hex in
                     colorSwatch(hex)
@@ -553,18 +555,19 @@ private struct GroupDetailView: View {
     }
 
     private var memberSection: some View {
-        GroupFormSection(title: "成员") {
+        GroupFormSection(title: String(localized: "成员", comment: "分组里的主机")) {
             memberTabs
         } content: {
             if tab == 0 {
                 if members.isEmpty {
-                    emptyBox(title: "这个分组还没有主机", hint: "切到「添加」标签页，把已有主机加入此分组")
+                    emptyBox(title: String(localized: "这个分组还没有主机"),
+                             hint: String(localized: "切到「添加」标签页，把已有主机加入此分组"))
                 } else {
                     memberList(members, action: .remove, scroll: false)
                 }
             } else {
                 if candidates.isEmpty {
-                    emptyBox(title: "所有主机都在这个分组里", hint: nil)
+                    emptyBox(title: String(localized: "所有主机都在这个分组里"), hint: nil)
                 } else {
                     memberList(candidates, action: .add, scroll: true)
                 }
@@ -574,8 +577,8 @@ private struct GroupDetailView: View {
 
     private var memberTabs: some View {
         HStack(spacing: 0) {
-            segButton("成员 \(members.count)", index: 0)
-            segButton("添加 \(candidates.count)", index: 1)
+            segButton(String(localized: "成员 \(members.count)", comment: "分组详情标签页，数字是主机数"), index: 0)
+            segButton(String(localized: "添加 \(candidates.count)", comment: "分组详情标签页，数字是可加入的主机数"), index: 1)
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillSoft))
@@ -711,7 +714,7 @@ private struct UngroupedDetailView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                GroupFormSection(title: "成员") {
+                GroupFormSection(title: String(localized: "成员", comment: "分组里的主机")) {
                     if members.isEmpty {
                         Text("没有未分组的主机")
                             .font(.system(size: 12.5))
@@ -787,7 +790,7 @@ private struct GroupDeleteConfirm: View {
     var onConfirm: () -> Void
 
     var body: some View {
-        UDConfirmModal(title: "删除分组「\(groupName)」？",
+        UDConfirmModal(title: String(localized: "删除分组「\(groupName)」？"),
                        onCancel: onCancel, onConfirm: onConfirm) {
             message
         }

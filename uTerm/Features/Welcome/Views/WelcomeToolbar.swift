@@ -18,12 +18,12 @@ struct WelcomeToolbar: View {
     var body: some View {
         HStack(spacing: 10) {
             UDSearchField(text: $query)
-            UDButton(title: "密钥", style: .secondary, systemImage: "key") {
+            UDButton(title: String(localized: "密钥", comment: "工具栏按钮：打开密钥管理"), style: .secondary, systemImage: "key") {
                 openWindow(id: "keys")
             }
-            UDButton(title: "本机终端", style: .secondary, systemImage: "terminal", action: onNewLocalShell)
+            UDButton(title: String(localized: "本机终端"), style: .secondary, systemImage: "terminal", action: onNewLocalShell)
                 .help("新建本机终端（⇧⌘N）")
-            UDButton(title: "新建", style: .primary, systemImage: "plus", action: onNewServer)
+            UDButton(title: String(localized: "新建", comment: "工具栏按钮：新建主机"), style: .primary, systemImage: "plus", action: onNewServer)
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)

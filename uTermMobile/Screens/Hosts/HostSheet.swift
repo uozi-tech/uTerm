@@ -30,11 +30,11 @@ struct HostSheet: View {
 
             metaGrid.padding(.top, 20)
 
-            MBtn(title: "连接终端", icon: "term", kind: .primary, full: true, height: 52, action: onConnect)
+            MBtn(title: String(localized: "连接终端"), icon: "term", kind: .primary, full: true, height: 52, action: onConnect)
                 .padding(.top, 22)
             HStack(spacing: 10) {
-                actionTile("folder-tag", "浏览文件", action: onSFTP)
-                actionTile("edit", "编辑", action: onEdit)
+                actionTile("folder-tag", String(localized: "浏览文件"), action: onSFTP)
+                actionTile("edit", String(localized: "编辑", comment: "编辑主机"), action: onEdit)
             }
             .padding(.top, 10)
         }
@@ -44,10 +44,10 @@ struct HostSheet: View {
 
     private var metaGrid: some View {
         let items: [(String, String, Bool)] = [
-            ("端口", "\(host.port)", true),
-            ("认证", host.authMethod.label, false),
-            ("上次连接", lastText, false),
-            ("分组", host.groupLabel, false),
+            (String(localized: "端口"), "\(host.port)", true),
+            (String(localized: "认证", comment: "主机的认证方式"), host.authMethod.label, false),
+            (String(localized: "上次连接"), lastText, false),
+            (String(localized: "分组", comment: "主机所属分组"), host.groupLabel, false),
         ]
         // 用 Grid 而不是 LazyVGrid：懒加载容器的格子不跟父视图的滑入转场走，面板还在往上滑时
         // 这几格文字就先停在了终点（实机反馈「弹窗还没弹完字体就出来了」）。只有四格，不需要懒加载。

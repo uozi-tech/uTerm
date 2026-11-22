@@ -17,25 +17,25 @@ struct ConnectionSettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                MInsetGroup(header: "SSH 连接", footer: "等待 SSH 连接建立的最长时间，修改后对新连接生效。") {
-                    MInsetRow(label: "连接超时", last: true,
+                MInsetGroup(header: String(localized: "SSH 连接"), footer: String(localized: "等待 SSH 连接建立的最长时间，修改后对新连接生效。")) {
+                    MInsetRow(label: String(localized: "连接超时"), last: true,
                               trailing: AnyView(menu(current: ConnectionPresentation.timeoutLabel(connectTimeout)) {
                                   ForEach(ConnectionPresentation.timeoutOptions, id: \.self) { seconds in
                                       Button(ConnectionPresentation.timeoutLabel(seconds)) { connectTimeout = seconds }
                                   }
                               }))
                 }
-                MInsetGroup(header: "主机密钥", footer: hostKeyPolicy.wrappedValue.settingsHint) {
-                    MInsetRow(label: "主机密钥校验", last: true,
+                MInsetGroup(header: String(localized: "主机密钥"), footer: hostKeyPolicy.wrappedValue.settingsHint) {
+                    MInsetRow(label: String(localized: "主机密钥校验"), last: true,
                               trailing: AnyView(menu(current: hostKeyPolicy.wrappedValue.localizedLabel) {
                                   ForEach(SSHHostKeyPolicy.allCases) { policy in
                                       Button(policy.localizedLabel) { hostKeyPolicy.wrappedValue = policy }
                                   }
                               }))
                 }
-                MInsetGroup(header: "文件传输",
-                            footer: "SFTP 同时传输的文件数上限，超出的排队依次开始。以上设置与 Mac 同步。") {
-                    MInsetRow(label: "并发传输", last: true,
+                MInsetGroup(header: String(localized: "文件传输"),
+                            footer: String(localized: "SFTP 同时传输的文件数上限，超出的排队依次开始。以上设置与 Mac 同步。")) {
+                    MInsetRow(label: String(localized: "并发传输"), last: true,
                               trailing: AnyView(menu(current: ConnectionPresentation.sftpConcurrencyLabel(sftpConcurrency)) {
                                   ForEach(ConnectionPresentation.sftpConcurrencyOptions, id: \.self) { count in
                                       Button(ConnectionPresentation.sftpConcurrencyLabel(count)) { sftpConcurrency = count }

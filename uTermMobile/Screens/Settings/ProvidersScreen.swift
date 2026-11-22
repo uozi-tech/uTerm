@@ -25,9 +25,9 @@ struct ProvidersScreen: View {
     private var content: some View {
         Group {
             if providers.isEmpty {
-                MEmptyState(icon: "spark", title: "还没有模型服务",
-                            message: "添加 Anthropic 或 OpenAI 兼容服务，Agent 就能协助你操作主机。",
-                            actionTitle: "添加模型服务", action: { adding = true })
+                MEmptyState(icon: "spark", title: String(localized: "还没有模型服务"),
+                            message: String(localized: "添加 Anthropic 或 OpenAI 兼容服务，Agent 就能协助你操作主机。"),
+                            actionTitle: String(localized: "添加模型服务"), action: { adding = true })
             } else {
                 list
             }
@@ -136,7 +136,7 @@ struct ProviderEditScreen: View {
             ProviderBasicsSection(name: $provider.name, kind: kindBinding, baseURL: $provider.baseURL)
 
             Section {
-                ProviderKeyField(text: $draft.keyDraft, placeholder: draft.hasKey ? "粘贴新的 API Key 以替换" : "sk-…")
+                ProviderKeyField(text: $draft.keyDraft, placeholder: draft.hasKey ? String(localized: "粘贴新的 API Key 以替换") : "sk-…")
                 Button("保存 API Key") { draft.saveKey(errorDescription: { $0.localizedDescription }) }
                     .disabled(!draft.canSaveKey)
             } header: {
@@ -167,7 +167,7 @@ struct ProviderEditScreen: View {
         }
         .scrollContentBackground(.hidden)
         .background(M.canvas)
-        .navigationTitle(provider.name.isEmpty ? "模型服务" : provider.name)
+        .navigationTitle(provider.name.isEmpty ? String(localized: "模型服务") : provider.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { draft.refreshHasKey() }
         .alert("删除「\(provider.name)」？", isPresented: $confirmingDelete) {

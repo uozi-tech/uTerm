@@ -11,21 +11,21 @@ struct RemotePairedDevicesGroup: View {
     @State private var renameText = ""
 
     var body: some View {
-        SettingsGroup(title: "已配对的设备",
+        SettingsGroup(title: String(localized: "已配对的设备"),
                       footer: String(localized: "配对过的设备才能连接这台 Mac：在这里扫码或审批，或者打开上面的开关，由同一个人已配对的设备替它开通。同一 Apple ID 本身不算数。撤销后这台设备要重新配对。")) {
             if settings.isEnabled {
                 SettingsListRow(icon: "qrcode", tint: UD.accent, title: String(localized: "扫码配对"),
                                 subtitle: RemoteControlPresentation.pairingHint(hasInvitation: server.pairingInvitation != nil)) {
                     if server.pairingInvitation == nil {
-                        UDButton(title: "显示二维码", style: .secondary) { server.showPairingInvitation() }
+                        UDButton(title: String(localized: "显示二维码"), style: .secondary) { server.showPairingInvitation() }
                     } else {
                         HStack(spacing: 8) {
-                            UDButton(title: "拷贝链接", style: .secondary) {
+                            UDButton(title: String(localized: "拷贝链接"), style: .secondary) {
                                 guard let invitation = server.pairingInvitation else { return }
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(invitation.url.absoluteString, forType: .string)
                             }
-                            UDButton(title: "收起", style: .secondary) { server.cancelPairingInvitation() }
+                            UDButton(title: String(localized: "收起", comment: "收起展开的内容"), style: .secondary) { server.cancelPairingInvitation() }
                         }
                     }
                 }

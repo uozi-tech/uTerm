@@ -70,7 +70,7 @@ struct QuickCommandList: View {
                         .foregroundStyle(UD.text4)
                 }
                 Spacer()
-                UDButton(title: "新建命令", style: .primary, systemImage: "plus") {
+                UDButton(title: String(localized: "新建命令"), style: .primary, systemImage: "plus") {
                     startCreate()
                 }
                 .controlSize(.small)
@@ -303,11 +303,15 @@ struct QuickCommandEmptyState: View {
 
     /// 「AI 介入」染紫，其余继承 text3。用 AttributedString 避免 Text `+` 拼接（macOS 26 已弃用）。
     private var blurb: AttributedString {
-        let head = AttributedString("把常用运维操作存成一条命令，绑定一台或多台主机并行执行，也可以让 ")
-        var ai = AttributedString("AI 介入")
-        ai.foregroundColor = UD.aiAccent
-        let tail = AttributedString("，自动诊断并续接。")
-        return head + ai + tail
+        // 整句一个键（译者能调语序），再把其中的「AI 介入」那段找出来染色。
+        let ai = String(localized: "AI 介入")
+        let sentence = String(localized: "把常用运维操作存成一条命令，绑定一台或多台主机并行执行，也可以让 \(ai)，自动诊断并续接。",
+                              comment: "参数是染色显示的「AI 介入」")
+        var text = AttributedString(sentence)
+        if let range = text.range(of: ai) {
+            text[range].foregroundColor = UD.aiAccent
+        }
+        return text
     }
 
     var body: some View {
@@ -325,7 +329,7 @@ struct QuickCommandEmptyState: View {
                 .frame(maxWidth: 360)
                 .padding(.top, 8)
 
-            UDButton(title: "新建命令", style: .primary, systemImage: "plus", action: onNew)
+            UDButton(title: String(localized: "新建命令"), style: .primary, systemImage: "plus", action: onNew)
                 .padding(.top, 22)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

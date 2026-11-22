@@ -85,10 +85,11 @@ nonisolated struct RemoteConnectTraceRecord: Codable, Equatable, Sendable, Ident
 
     var exportText: String {
         var lines = ["[\(id)] \(summaryLine)"]
-        lines.append("  \(startedAt.formatted(date: .numeric, time: .standard)) · \(network ?? "?") · 第 \(attempt) 次")
+        let attemptLabel = String(localized: "第 \(attempt) 次", comment: "建连记录：第几次尝试")
+        lines.append("  \(startedAt.formatted(date: .numeric, time: .standard)) · \(network ?? "?") · \(attemptLabel)")
         for step in steps {
             let result = step.ok.map { $0 ? "✓" : "✗" } ?? "…"
-            let duration = step.durationMillis.map { "\($0) ms" } ?? "未结束"
+            let duration = step.durationMillis.map { "\($0) ms" } ?? String(localized: "未结束", comment: "建连记录：这一步还没结束")
             lines.append("  +\(step.startMillis) ms \(step.stage.label) \(result) \(duration)"
                          + (step.detail.map { " · \($0)" } ?? ""))
         }

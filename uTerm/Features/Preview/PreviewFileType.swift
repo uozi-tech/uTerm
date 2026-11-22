@@ -11,7 +11,9 @@ import Foundation
 /// 配置/日志文件（`.p10k.zsh`、`.viminfo`、`nginx.conf`、`authorized_keys`），
 /// 白名单会把这些正常文本挡在外面。
 nonisolated enum PreviewFileType {
-    static let unsupportedMessage = "此类文件不支持预览。可以用本机应用打开，保存后自动上传回主机。"
+    static var unsupportedMessage: String {
+        String(localized: "此类文件不支持预览。可以用本机应用打开，保存后自动上传回主机。")
+    }
 
     /// 可以送进预览/编辑器吗？
     static func isPreviewable(path: String) -> Bool {

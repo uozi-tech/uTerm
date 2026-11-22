@@ -156,8 +156,8 @@ private struct RemoteMacFilesContent: View {
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法连接"),
                                    detail: [message, client.failureContext].compactMap { $0 }.joined(separator: "\n")) {
                     HStack(spacing: 8) {
-                        UDButton(title: "重试") { Task { await client.connectInteractively() } }
-                        UDButton(title: "网络诊断", style: .secondary) {
+                        UDButton(title: String(localized: "重试")) { Task { await client.connectInteractively() } }
+                        UDButton(title: String(localized: "网络诊断"), style: .secondary) {
                             openWindow(value: RemoteDiagnosticsWindowID(macID: macID))
                         }
                     }
@@ -181,7 +181,7 @@ private struct RemoteMacFilesContent: View {
         case .failed(let message):
             RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取文件"),
                                detail: message) {
-                UDButton(title: "重试") { Task { await model.open() } }
+                UDButton(title: String(localized: "重试")) { Task { await model.open() } }
             }
         case .browsing:
             if let browser = model.browser {
@@ -202,7 +202,7 @@ private struct RemoteMacFilesContent: View {
             noticeBar {
                 HStack(spacing: 8) {
                     SettingsInlineNote(tone: .warning, text: message)
-                    UDButton(title: "重试", style: .secondary) { Task { await model.client.connectInteractively() } }
+                    UDButton(title: String(localized: "重试"), style: .secondary) { Task { await model.client.connectInteractively() } }
                         .padding(.trailing, 10)
                 }
             }

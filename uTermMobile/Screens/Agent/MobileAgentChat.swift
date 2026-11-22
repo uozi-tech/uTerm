@@ -62,9 +62,9 @@ struct MobileAgentChat: View {
     var body: some View {
         Group {
             if providers.isEmpty {
-                MEmptyState(icon: "spark", title: "配置模型服务",
-                            message: "添加 Anthropic 或 OpenAI 兼容服务，即可让 Agent 协助你操作这台主机。",
-                            actionTitle: "添加模型服务", action: { addingProvider = true })
+                MEmptyState(icon: "spark", title: String(localized: "配置模型服务"),
+                            message: String(localized: "添加 Anthropic 或 OpenAI 兼容服务，即可让 Agent 协助你操作这台主机。"),
+                            actionTitle: String(localized: "添加模型服务"), action: { addingProvider = true })
                     .frame(maxHeight: .infinity)
             } else {
                 VStack(spacing: 0) {
@@ -341,7 +341,7 @@ struct MobileAgentChat: View {
                 ForEach(m.toolCalls) { call in
                     VStack(alignment: .leading, spacing: 4) {
                         MToolCall(
-                            label: call.explanation ?? "运行命令",
+                            label: call.explanation ?? String(localized: "运行命令"),
                             command: call.command,
                             status: mStatus(call),
                             approvalEnabled: model.state == .awaitingApproval,
@@ -376,7 +376,7 @@ struct MobileAgentChat: View {
                 model: model,
                 safety: safetyBinding,
                 activeProviderIDString: $activeProviderIDString,
-                placeholder: "描述你想做的事…",
+                placeholder: String(localized: "描述你想做的事…"),
                 onSend: send,
                 onAttach: { model.appendContext(ctx) },
                 onManageProviders: { managingProviders = true })

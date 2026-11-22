@@ -15,7 +15,7 @@ nonisolated enum FriendlyError {
     /// **保证**不会返回含 “IOError 错误N” / “Error Domain” 之类技术噪音的字符串。
     static func describe(
         _ error: Error,
-        fallback: String = String(localized: "操作未能完成，请稍后重试")
+        fallback: String = String(localized: "操作未能完成，请稍后重试", bundle: SSHHelperBundle.localization)
     ) -> String {
         if let code = posixErrno(of: error), let msg = message(forErrno: code) {
             return msg
@@ -27,7 +27,7 @@ nonisolated enum FriendlyError {
         if isTechnicalNoise(raw) {
             // 即便不在精选表，也尽量带上中性的错误码信息，而不是误导性的「错误1」。
             if let code = posixErrno(of: error) {
-                return String(localized: "操作未能完成（系统错误码 \(code)）")
+                return String(localized: "操作未能完成（系统错误码 \(String(code))）", bundle: SSHHelperBundle.localization)
             }
             return fallback
         }
@@ -43,13 +43,13 @@ nonisolated enum FriendlyError {
         case .connectTimeout(let amount):
             let seconds = Double(amount.nanoseconds) / 1_000_000_000
             let shown = seconds == seconds.rounded() ? String(Int(seconds)) : String(format: "%.1f", seconds)
-            return String(localized: "登录阶段超时：\(shown) 秒内未完成握手与认证（ChannelError.connectTimeout）")
+            return String(localized: "登录阶段超时：\(shown) 秒内未完成握手与认证（ChannelError.connectTimeout）", bundle: SSHHelperBundle.localization)
         case .ioOnClosedChannel:
-            return String(localized: "连接已关闭（ChannelError.ioOnClosedChannel）")
+            return String(localized: "连接已关闭（ChannelError.ioOnClosedChannel）", bundle: SSHHelperBundle.localization)
         case .alreadyClosed:
-            return String(localized: "连接已关闭（ChannelError.alreadyClosed）")
+            return String(localized: "连接已关闭（ChannelError.alreadyClosed）", bundle: SSHHelperBundle.localization)
         case .eof:
-            return String(localized: "对方已关闭连接（ChannelError.eof）")
+            return String(localized: "对方已关闭连接（ChannelError.eof）", bundle: SSHHelperBundle.localization)
         default:
             // 其余 case 走 NIO 自己的 description（如 "Connect pending"），附类型名便于定位。
             return "\(error)（NIOCore.ChannelError）"
@@ -70,32 +70,32 @@ nonisolated enum FriendlyError {
     static func message(forErrno code: Int32) -> String? {
         switch code {
         // —— 绑定 / 连接 ——
-        case EADDRINUSE:    return String(localized: "端口已被占用")
-        case EADDRNOTAVAIL: return String(localized: "无法绑定该地址（地址不属于本机）")
-        case EACCES:        return String(localized: "权限不足（端口可能需要管理员权限）")
-        case EPERM:         return String(localized: "操作被系统拒绝（端口低于 1024 需管理员权限，或被沙盒限制）")
-        case ECONNREFUSED:  return String(localized: "目标拒绝连接（服务可能未启动或端口不对）")
-        case ETIMEDOUT:     return String(localized: "连接超时")
-        case EHOSTUNREACH:  return String(localized: "无法连接到目标主机（路由不可达）")
-        case ENETUNREACH:   return String(localized: "网络不可达")
-        case EHOSTDOWN:     return String(localized: "目标主机已关闭")
-        case ENETDOWN:      return String(localized: "本机网络已断开")
+        case EADDRINUSE:    return String(localized: "端口已被占用", bundle: SSHHelperBundle.localization)
+        case EADDRNOTAVAIL: return String(localized: "无法绑定该地址（地址不属于本机）", bundle: SSHHelperBundle.localization)
+        case EACCES:        return String(localized: "权限不足（端口可能需要管理员权限）", bundle: SSHHelperBundle.localization)
+        case EPERM:         return String(localized: "操作被系统拒绝（端口低于 1024 需管理员权限，或被沙盒限制）", bundle: SSHHelperBundle.localization)
+        case ECONNREFUSED:  return String(localized: "目标拒绝连接（服务可能未启动或端口不对）", bundle: SSHHelperBundle.localization)
+        case ETIMEDOUT:     return String(localized: "连接超时", bundle: SSHHelperBundle.localization)
+        case EHOSTUNREACH:  return String(localized: "无法连接到目标主机（路由不可达）", bundle: SSHHelperBundle.localization)
+        case ENETUNREACH:   return String(localized: "网络不可达", bundle: SSHHelperBundle.localization)
+        case EHOSTDOWN:     return String(localized: "目标主机已关闭", bundle: SSHHelperBundle.localization)
+        case ENETDOWN:      return String(localized: "本机网络已断开", bundle: SSHHelperBundle.localization)
         // —— 连接中断 ——
-        case ECONNRESET:    return String(localized: "连接被对方重置")
-        case ECONNABORTED:  return String(localized: "连接被中断")
-        case EPIPE:         return String(localized: "连接已断开")
-        case ENOTCONN:      return String(localized: "尚未建立连接")
+        case ECONNRESET:    return String(localized: "连接被对方重置", bundle: SSHHelperBundle.localization)
+        case ECONNABORTED:  return String(localized: "连接被中断", bundle: SSHHelperBundle.localization)
+        case EPIPE:         return String(localized: "连接已断开", bundle: SSHHelperBundle.localization)
+        case ENOTCONN:      return String(localized: "尚未建立连接", bundle: SSHHelperBundle.localization)
         // —— 文件 / IO ——
-        case ENOENT:        return String(localized: "文件或路径不存在")
-        case EISDIR:        return String(localized: "目标是一个目录")
-        case ENOTDIR:       return String(localized: "路径中包含非目录项")
-        case EEXIST:        return String(localized: "目标已存在")
-        case ENOSPC:        return String(localized: "磁盘空间不足")
-        case EROFS:         return String(localized: "目标为只读，无法写入")
-        case EMFILE, ENFILE:return String(localized: "打开的文件过多，请稍后重试")
+        case ENOENT:        return String(localized: "文件或路径不存在", bundle: SSHHelperBundle.localization)
+        case EISDIR:        return String(localized: "目标是一个目录", bundle: SSHHelperBundle.localization)
+        case ENOTDIR:       return String(localized: "路径中包含非目录项", bundle: SSHHelperBundle.localization)
+        case EEXIST:        return String(localized: "目标已存在", bundle: SSHHelperBundle.localization)
+        case ENOSPC:        return String(localized: "磁盘空间不足", bundle: SSHHelperBundle.localization)
+        case EROFS:         return String(localized: "目标为只读，无法写入", bundle: SSHHelperBundle.localization)
+        case EMFILE, ENFILE:return String(localized: "打开的文件过多，请稍后重试", bundle: SSHHelperBundle.localization)
         // —— 通用 ——
-        case EAGAIN:        return String(localized: "资源暂时不可用，请重试")
-        case ECANCELED:     return String(localized: "操作已取消")
+        case EAGAIN:        return String(localized: "资源暂时不可用，请重试", bundle: SSHHelperBundle.localization)
+        case ECANCELED:     return String(localized: "操作已取消", bundle: SSHHelperBundle.localization)
         default:            return nil
         }
     }

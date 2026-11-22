@@ -14,7 +14,7 @@ import Foundation
 // Codable shapes the package must not know about.
 extension ChatSession {
     /// 历史列表 / 顶栏里显示的标题；还没起标题的会话叫「新对话」。
-    var displayTitle: String { title.isEmpty ? "新对话" : title }
+    var displayTitle: String { title.isEmpty ? String(localized: "新对话") : title }
 }
 
 extension ChatMessageRecord {

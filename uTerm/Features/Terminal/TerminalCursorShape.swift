@@ -12,9 +12,9 @@ nonisolated enum TerminalCursorShape: String, CaseIterable, Identifiable, Sendab
     /// 在设计稿 segmented control 中显示的标签（含 ASCII 预览字符）。
     var localizedLabel: String {
         switch self {
-        case .block:     return "█ 块"
-        case .underline: return "_ 下划线"
-        case .bar:       return "| 竖线"
+        case .block:     return String(localized: "█ 块", comment: "光标形状：块")
+        case .underline: return String(localized: "_ 下划线", comment: "光标形状：下划线")
+        case .bar:       return String(localized: "| 竖线", comment: "光标形状：竖线")
         }
     }
 

@@ -199,8 +199,7 @@ nonisolated extension RemoteFileService {
         var info = Darwin.stat()
         if stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR { throw posixError(path, EISDIR) }
         guard size <= Int64(RemoteFileLimits.maxTextFileBytes) else {
-            throw RemoteFileError(.tooLarge, "\(path) 有 \(size) 字节，按行读最多 \(RemoteFileLimits.maxTextFileBytes) 字节；"
-                                  + "用 tail / head 之外的 read 分段读，或者下载下来")
+            throw RemoteFileError(.tooLarge, String(localized: "\(path) 有 \(Int(size)) 字节，按行读最多 \(RemoteFileLimits.maxTextFileBytes) 字节；用 tail / head 之外的 read 分段读，或者下载下来"))
         }
         let data: Data
         do {
@@ -209,7 +208,7 @@ nonisolated extension RemoteFileService {
             throw foundationError(path, error)
         }
         guard !data.prefix(8192).contains(0) else {
-            throw RemoteFileError(.invalid, "\(path) 看起来是二进制文件，不能按行读")
+            throw RemoteFileError(.invalid, String(localized: "\(path) 看起来是二进制文件，不能按行读"))
         }
         return data
     }
@@ -218,7 +217,7 @@ nonisolated extension RemoteFileService {
 
     static func grep(_ request: RemoteFileRequest, reply: inout RemoteFileReply) throws {
         let root = try resolve(request.path ?? "~")
-        guard let pattern = request.pattern, !pattern.isEmpty else { throw RemoteFileError(.invalid, "缺少要搜的内容") }
+        guard let pattern = request.pattern, !pattern.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少要搜的内容")) }
         let fixed = request.has(RemoteFileOption.fixed)
         let ignoreCase = request.has(RemoteFileOption.ignoreCase)
         let regex: NSRegularExpression
@@ -226,7 +225,7 @@ nonisolated extension RemoteFileService {
             regex = try NSRegularExpression(pattern: fixed ? NSRegularExpression.escapedPattern(for: pattern) : pattern,
                                             options: ignoreCase ? [.caseInsensitive] : [])
         } catch {
-            throw RemoteFileError(.invalid, "正则写得不对：\(error.localizedDescription)")
+            throw RemoteFileError(.invalid, String(localized: "正则写得不对：\(error.localizedDescription)"))
         }
         let limit = min(max(1, request.limit ?? 200), 2000)
         let context = min(max(0, request.context ?? 0), 10)

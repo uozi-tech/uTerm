@@ -52,7 +52,7 @@ nonisolated struct ParallelAIDoctor: Sendable {
 
     /// 全部台落定后产出一句跨服务器汇总。`lanes` = 逐台 (名称, 状态文案, 结论)。
     func synthesize(commandName: String, lanes: [(name: String, tone: String, summary: String)]) async -> String? {
-        let system = "你是 uTerm 的运维助手。根据多台服务器的逐台执行结论，用 1-2 句中文白话给出整体汇总；"
+        let system = "你是 uTerm 的运维助手。根据多台服务器的逐台执行结论，用 1-2 句\(AgentReplyLanguage.displayName)白话给出整体汇总；"
             + "若有失败的服务器，点名并给一句复核建议（只讲成功 / 失败，不要单列「自愈」）。只输出汇总文本，不要 JSON、不要列表。"
         let body = lanes.map { "- \($0.name)：[\($0.tone)] \($0.summary)" }.joined(separator: "\n")
         let user = "命令「\(commandName)」在 \(lanes.count) 台服务器执行完成。逐台结论：\n\(body)"

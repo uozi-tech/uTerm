@@ -69,24 +69,25 @@ struct QuickCommandForm: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    QCField(label: "名称") {
-                        UDTextField(placeholder: "例如：重启 Nginx 并健康检查", text: $name)
+                    QCField(label: String(localized: "名称", comment: "快捷命令名称")) {
+                        UDTextField(placeholder: String(localized: "例如：重启 Nginx 并健康检查"), text: $name)
                     }
-                    QCField(label: "关联主机", hint: "可多选 · 并行执行") {
+                    QCField(label: String(localized: "关联主机"), hint: String(localized: "可多选 · 并行执行")) {
                         serverMultiSelect
                     }
                     // AI 介入开启时先出现「AI 指令（自然语言）」——AI 命令以说人话为主。
                     if aiAssisted {
-                        QCField(label: "AI 指令", hint: "自然语言 · 描述你想让 AI 做什么") {
+                        QCField(label: String(localized: "AI 指令"), hint: String(localized: "自然语言 · 描述你想让 AI 做什么")) {
                             intentEditor
                         }
                     }
                     // AI 时命令字段降级为「等效命令 · AI 实际执行 · 可留空让 AI 自行决定」；非 AI 时为必填的执行命令。
-                    QCField(label: aiAssisted ? "等效命令" : "执行命令",
-                            hint: aiAssisted ? "AI 实际执行 · 可留空让 AI 自行决定" : "支持 && 串联多条") {
+                    QCField(label: aiAssisted ? String(localized: "等效命令") : String(localized: "执行命令"),
+                            hint: aiAssisted ? String(localized: "AI 实际执行 · 可留空让 AI 自行决定")
+                                             : String(localized: "支持 && 串联多条")) {
                         commandEditor
                     }
-                    QCField(label: "AI 介入", hint: "可选") {
+                    QCField(label: String(localized: "AI 介入"), hint: String(localized: "可选")) {
                         aiToggleRow
                     }
                 }
@@ -95,9 +96,9 @@ struct QuickCommandForm: View {
 
             HStack(spacing: 10) {
                 Spacer()
-                UDButton(title: "取消", style: .secondary, action: onCancel)
+                UDButton(title: String(localized: "取消"), style: .secondary, action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                UDButton(title: "保存", style: .primary) {
+                UDButton(title: String(localized: "保存"), style: .primary) {
                     guard valid else { return }
                     onSave(FormData(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                     serverIDs: orderedSelection,
@@ -325,10 +326,15 @@ struct QuickCommandForm: View {
 
     /// 「续接下一步」用正文色强调，其余继承 text2。AttributedString 避免 Text `+`（macOS 26 弃用）。
     private var aiBlurb: AttributedString {
-        let head = AttributedString("运行时让 AI 读取输出、自动诊断并")
-        var emphasis = AttributedString("续接下一步")
-        emphasis.foregroundColor = UD.text
-        return head + emphasis
+        // 整句一个键（译者能调语序），再把其中强调的那段找出来上色。
+        let emphasis = String(localized: "续接下一步", comment: "「运行时让 AI 读取输出、自动诊断并续接下一步」里强调的部分")
+        let sentence = String(localized: "运行时让 AI 读取输出、自动诊断并\(emphasis)",
+                              comment: "参数是强调显示的「续接下一步」")
+        var text = AttributedString(sentence)
+        if let range = text.range(of: emphasis) {
+            text[range].foregroundColor = UD.text
+        }
+        return text
     }
 
     private var aiToggleRow: some View {

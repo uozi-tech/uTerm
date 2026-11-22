@@ -17,7 +17,7 @@ nonisolated struct ControlFailure: Error, Sendable {
     }
 
     static func notImplemented(_ what: String) -> ControlFailure {
-        ControlFailure(code: .not_implemented, message: "\(what) 尚未实现")
+        ControlFailure(code: .not_implemented, message: String(localized: "\(what) 尚未实现"))
     }
 }
 
@@ -93,7 +93,7 @@ final class ControlHandler {
             return .failure(
                 id: request.id,
                 code: .app_not_ready,
-                message: "uTerm 尚未完成启动"
+                message: String(localized: "uTerm 尚未完成启动")
             )
         }
 
@@ -101,7 +101,7 @@ final class ControlHandler {
         if request.action == .ping {
             return .success(
                 id: request.id,
-                message: "uTerm 正在运行",
+                message: String(localized: "uTerm 正在运行"),
                 app: await appInfo(deps)
             )
         }
@@ -110,7 +110,7 @@ final class ControlHandler {
             return .failure(
                 id: request.id,
                 code: .control_disabled,
-                message: "命令行接口未启用：在 uTerm「设置 › 命令行与技能」里打开「启用命令行接口」",
+                message: String(localized: "命令行接口未启用：在 uTerm「设置 › 命令行与技能」里打开「启用命令行接口」"),
                 app: await appInfo(deps)
             )
         }
@@ -119,7 +119,7 @@ final class ControlHandler {
             return .failure(
                 id: request.id,
                 code: .mutations_disabled,
-                message: "写入未启用：在 uTerm「设置 › 命令行与技能」里打开「允许执行命令与写入」",
+                message: String(localized: "写入未启用：在 uTerm「设置 › 命令行与技能」里打开「允许执行命令与写入」"),
                 app: await appInfo(deps)
             )
         }
@@ -184,7 +184,7 @@ final class ControlHandler {
     ) async throws -> ControlResponse {
         switch request.action {
         case .ping:
-            return .success(id: request.id, message: "uTerm 正在运行", app: await appInfo(deps))
+            return .success(id: request.id, message: String(localized: "uTerm 正在运行"), app: await appInfo(deps))
         case .disconnect:
             // 解析主机 → `deps.pool.disconnect(hostID:)`；无 `--host` 时全部释放。
             // 实现在 `ControlHandler+Hosts.swift`（它按主机走，与主机组共用解析入口）。
@@ -192,7 +192,7 @@ final class ControlHandler {
         default:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于 misc 组"
+                message: String(localized: "动作 \(request.action.rawValue) 不属于 misc 组")
             )
         }
     }

@@ -141,7 +141,7 @@ extension View {
 /// 全屏覆盖层导航栏左上角的「关闭」：iOS 26 用系统的关闭角色（液态玻璃 ×，随工具栏挪到
 /// iPhone Duo 的侧边列），更早的系统画一个同样语义的 × 按钮。
 struct MToolbarCloseButton: View {
-    var label: String = "关闭"
+    var label: String = String(localized: "关闭", comment: "关闭按钮")
     var action: () -> Void
 
     var body: some View {

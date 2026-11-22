@@ -249,7 +249,7 @@ struct SFTPBrowserView: View {
                     .multilineTextAlignment(.center).textSelection(.enabled)
                     .frame(maxWidth: 420)
                 // refresh() 对死连接会自动重连并保留当前目录（SSHTransportFailure）。
-                UDButton(title: "重新连接") { Task { await model.refresh() } }
+                UDButton(title: String(localized: "重新连接")) { Task { await model.refresh() } }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
         case .browsing:
             // 一张卡左右两栏：文件栏（路径栏前段 + 表格）| 1pt 竖线 | 检视器栏（路径栏后段 +
@@ -443,14 +443,14 @@ struct SFTPBrowserView: View {
 
     private var overwriteDialogTitle: String {
         overwriteConflictNames.count == 1
-            ? "「\(overwriteConflictNames[0])」已存在，覆盖？"
-            : "\(overwriteConflictNames.count) 个文件已存在，覆盖？"
+            ? String(localized: "「\(overwriteConflictNames[0])」已存在，覆盖？")
+            : String(localized: "\(overwriteConflictNames.count) 个文件已存在，覆盖？")
     }
 
     private var overwriteDialogMessage: String {
         overwriteConflictNames.count == 1
-            ? "该远程文件将被覆盖。"
-            : "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: "、"))"
+            ? String(localized: "该远程文件将被覆盖。")
+            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {

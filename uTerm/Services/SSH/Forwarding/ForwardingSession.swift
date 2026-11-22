@@ -120,7 +120,7 @@ actor ForwardingSession {
     func start(_ rule: ForwardingRuleSnapshot) async {
         guard !isClosed, let connected else {
             onStatus(rule.id, .error(ForwardingError(
-                kind: .unknown, message: "\(rule.name)：转发连接尚未建立")))
+                kind: .unknown, message: String(localized: "\(rule.name)：转发连接尚未建立"))))
             return
         }
         // 幂等：已在跑的先停。

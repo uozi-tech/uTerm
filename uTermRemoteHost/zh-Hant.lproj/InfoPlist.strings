@@ -1,0 +1,8 @@
+/* Name shown in System Settings (Privacy & Security > Accessibility, etc.) and the permission prompts.
+   See the zh-Hans file for why the name must be localized here. */
+"CFBundleName" = "uTerm 遠端控制";
+"CFBundleDisplayName" = "uTerm 遠端控制";
+"NSLocalNetworkUsageDescription" = "uTerm 讓配對過的手機和 Mac 在區域網路裡遠端控制這台 Mac 上的終端機和螢幕。";
+"NSDocumentsFolderUsageDescription" = "配對過的裝置透過 uTerm 遠端讀寫這台 Mac 上的檔案。";
+"NSDesktopFolderUsageDescription" = "配對過的裝置透過 uTerm 遠端讀寫這台 Mac 上的檔案。";
+"NSDownloadsFolderUsageDescription" = "配對過的裝置透過 uTerm 遠端讀寫這台 Mac 上的檔案。";

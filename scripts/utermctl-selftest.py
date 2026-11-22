@@ -23,6 +23,12 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLIENT = os.path.join(HERE, "utermctl")
 
+# 客户端的提示文字跟系统语言走；下面的断言比对的是简体中文原文，钉死成 zh-Hans，
+# 别的语言的机器上跑也一样（子进程继承这个环境变量）。
+os.environ["UTERM_LANG"] = "zh-Hans"
+# 按需启动那组用例会把 subprocess.Popen 换成替身（同一个模块对象），真起子进程时用这份。
+REAL_POPEN = subprocess.Popen
+
 FAILURES = []
 
 
@@ -527,6 +533,7 @@ def main():
         exercise_transfers(transfers, root)
         exercise_on_demand_launch(root)
         exercise_socket_path_too_long()
+        exercise_localization()
         print("")
         if FAILURES:
             print("%d 项失败：" % len(FAILURES))
@@ -1347,6 +1354,94 @@ def exercise_socket_path_too_long():
               "显式指定 UTERM_CONTROL_SOCKET 时不判")
     finally:
         os.environ.pop(client.ENV_SOCKET, None)
+
+
+def exercise_localization():
+    """语言探测与翻译表：译文的占位与原文一一对应，zh-Hans 原样返回。"""
+    import string
+    print("")
+    print("本地化")
+    client = load_client_module()
+
+    for tag, expected in (
+        ("zh-Hans", "zh-Hans"), ("zh-Hans-CN", "zh-Hans"), ("zh-CN", "zh-Hans"), ("zh-SG", "zh-Hans"),
+        ("zh_CN.UTF-8", "zh-Hans"), ("zh", "zh-Hans"), ("zh-Hant", "zh-Hant"), ("zh-Hant-HK", "zh-Hant"),
+        ("zh-TW", "zh-Hant"), ("zh_HK", "zh-Hant"), ("zh-MO", "zh-Hant"), ("ja-JP", "ja"), ("ja", "ja"),
+        ("ko-KR", "ko"), ("ko_KR.UTF-8", "ko"), ("en-US", "en"), ("fr-FR", "en"), ("de", "en"),
+        ("C", None), ("POSIX", None), ("", None),
+    ):
+        equal(client.normalize_language(tag), expected, "语言标记 %r → %r" % (tag, expected))
+    equal(client.normalize_language("fr-FR", fallback=None), None, "AppleLanguages 里不支持的语言跳过")
+
+    saved = {name: os.environ.get(name) for name in (client.ENV_LANG, "LC_ALL", "LC_MESSAGES", "LANG")}
+    original_apple = client.apple_languages
+    try:
+        client.apple_languages = lambda: ["fr-FR", "ja-JP", "en-US"]
+        os.environ.pop(client.ENV_LANG, None)
+        equal(client.detect_language(), "ja", "没有 UTERM_LANG：取 AppleLanguages 里第一个支持的")
+        client.apple_languages = lambda: ["fr-FR", "de-DE"]
+        equal(client.detect_language(), "en", "AppleLanguages 一个都不支持 → en")
+        client.apple_languages = lambda: []
+        for name in ("LC_ALL", "LC_MESSAGES"):
+            os.environ.pop(name, None)
+        os.environ["LANG"] = "zh_TW.UTF-8"
+        equal(client.detect_language(), "zh-Hant", "读不到 AppleLanguages：退回 LANG")
+        os.environ["LANG"] = "C"
+        equal(client.detect_language(), "en", "LANG=C → en")
+        os.environ[client.ENV_LANG] = "ko"
+        equal(client.detect_language(), "ko", "UTERM_LANG 优先")
+        os.environ[client.ENV_LANG] = "es"
+        equal(client.detect_language(), "en", "UTERM_LANG 不支持 → en")
+    finally:
+        client.apple_languages = original_apple
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def fields(text):
+        return sorted((name, conversion) for _, name, _, conversion in string.Formatter().parse(text)
+                      if name is not None)
+
+    broken = []
+    for source, translations in client.TRANSLATIONS.items():
+        if len(translations) != len(client.TRANSLATED_LANGUAGES):
+            broken.append(source)
+            continue
+        for text in translations:
+            if not text or fields(text) != fields(source) or ("%" in text) != ("%" in source):
+                broken.append(source)
+    equal(broken, [], "每条译文都有、占位与原文一致、不多出 %（argparse 会把 help 里的 % 当格式符）")
+
+    client._language = "zh-Hans"
+    source = "本地文件不存在：{path}"
+    equal(client._(source), source, "zh-Hans 原样返回")
+    client._language = "en"
+    equal(client._(source).format(path="/x"), "Local file doesn't exist: /x", "en 取译文")
+    equal(client._("表里没有的话"), "表里没有的话", "表里没有：原样返回")
+    client._language = None
+
+    patched_popen, subprocess.Popen = subprocess.Popen, REAL_POPEN
+    try:
+        help_in_languages(client)
+    finally:
+        subprocess.Popen = patched_popen
+
+
+def help_in_languages(client):
+    for language in ("en", "zh-Hant", "ja", "ko"):
+        env = dict(os.environ)
+        env["UTERM_LANG"] = language
+        env["UTERM_CONTROL_SOCKET"] = "/nonexistent/utermctl-selftest.sock"
+        proc = subprocess.run([sys.executable, CLIENT, "--help"], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        text = proc.stdout.decode("utf-8", "replace")
+        expected = client.TRANSLATIONS[
+            "通过正在运行的 uTerm 使用其已保存的主机执行命令、读写文件、启停转发"][
+            client.TRANSLATED_LANGUAGES.index(language)]
+        check(proc.returncode == 0 and expected.split()[0] in text,
+              "UTERM_LANG=%s 的 --help 出译文" % language)
 
 
 if __name__ == "__main__":

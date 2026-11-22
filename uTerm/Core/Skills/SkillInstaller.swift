@@ -26,10 +26,10 @@ nonisolated enum SkillInstallStatus: Sendable, Equatable {
 
     var displayLabel: String {
         switch self {
-        case .notInstalled: return "未安装"
-        case .installed: return "已安装"
-        case .brokenLink: return "需修复"
-        case .conflict: return "冲突"
+        case .notInstalled: return String(localized: "未安装", comment: "技能安装状态")
+        case .installed: return String(localized: "已安装", comment: "技能安装状态")
+        case .brokenLink: return String(localized: "需修复", comment: "技能安装状态：链接需要修复")
+        case .conflict: return String(localized: "冲突", comment: "技能安装状态：目标位置被占用")
         }
     }
 
@@ -119,7 +119,7 @@ nonisolated struct SkillInstaller: Sendable {
     var unavailableReason: String? {
         if let reason = Self.transientBundleReason(bundleURL) { return reason }
         guard Self.fileType(at: sourceDirectoryURL.appending(path: "SKILL.md")) == S_IFREG else {
-            return "uTerm.app 里缺少技能文件（\(definition.slug)），重新安装 uTerm 即可。"
+            return String(localized: "uTerm.app 里缺少技能文件（\(definition.slug)），重新安装 uTerm 即可。")
         }
         return nil
     }
@@ -133,8 +133,7 @@ nonisolated struct SkillInstaller: Sendable {
         let readOnly = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly == true
         guard readOnly || bundleURL.path.contains("/AppTranslocation/") else { return nil }
-        return "uTerm 正从临时位置运行（磁盘映像，或下载后没拖进「应用程序」），"
-            + "先把 uTerm.app 移到「应用程序」文件夹再安装。"
+        return String(localized: "uTerm 正从临时位置运行（磁盘映像，或下载后没拖进「应用程序」），先把 uTerm.app 移到「应用程序」文件夹再安装。")
     }
 
     func status(for target: SkillTarget) -> SkillInstallStatus {
@@ -144,11 +143,11 @@ nonisolated struct SkillInstaller: Sendable {
         }
         guard type == S_IFLNK else {
             return .conflict(reason: type == S_IFDIR
-                ? "已存在同名目录（非 uTerm 创建）"
-                : "已存在同名文件（非 uTerm 创建）")
+                ? String(localized: "已存在同名目录（非 uTerm 创建）")
+                : String(localized: "已存在同名文件（非 uTerm 创建）"))
         }
         guard let resolved = Self.linkDestination(of: link) else {
-            return .conflict(reason: "无法读取符号链接目标")
+            return .conflict(reason: String(localized: "无法读取符号链接目标"))
         }
         // 故意按字面路径比较、不做 resolvingSymlinksInPath：链接是用绝对路径建的，
         // 存的就是这个路径。解析符号链接反而可能在 /var → /private/var 这类前缀上误判。
@@ -158,28 +157,28 @@ nonisolated struct SkillInstaller: Sendable {
         if Self.looksLikeManagedSkillLocation(resolved, slug: definition.slug) {
             return .brokenLink
         }
-        return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
+        return .conflict(reason: String(localized: "符号链接指向其它位置：\(resolved.path)"))
     }
 
     /// 建（或改指）链接。真冲突抛错，不覆盖用户文件；app 在临时位置或包内缺技能时
     /// 抛错且**不动**既有链接。
     func install(target: SkillTarget) throws {
         if let reason = unavailableReason {
-            throw SkillInstallError.failed("\(target.displayName)：\(reason)")
+            throw SkillInstallError.failed(String(localized: "\(target.displayName)：\(reason)"))
         }
         let link = targetLinkURL(for: target)
         switch status(for: target) {
         case .installed:
             return // 幂等
         case .conflict(let reason):
-            throw SkillInstallError.failed("\(target.displayName)：\(reason)")
+            throw SkillInstallError.failed(String(localized: "\(target.displayName)：\(reason)"))
         case .brokenLink:
             // 只删这条已确认是 uTerm 建的符号链接，不碰它指向的东西。
             do {
                 try FileManager.default.removeItem(at: link)
             } catch {
                 throw SkillInstallError.failed(
-                    "\(target.displayName)：无法替换旧链接（\(error.localizedDescription)）"
+                    String(localized: "\(target.displayName)：无法替换旧链接（\(error.localizedDescription)）")
                 )
             }
         case .notInstalled:
@@ -191,7 +190,7 @@ nonisolated struct SkillInstaller: Sendable {
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: sourceDirectoryURL)
         } catch {
             throw SkillInstallError.failed(
-                "\(target.displayName)：无法写入 \(link.path)（\(error.localizedDescription)）"
+                String(localized: "\(target.displayName)：无法写入 \(link.path)（\(error.localizedDescription)）")
             )
         }
     }
@@ -204,7 +203,7 @@ nonisolated struct SkillInstaller: Sendable {
         case .notInstalled:
             return
         case .conflict(let reason):
-            throw SkillInstallError.failed("\(target.displayName)：未删除（\(reason)）")
+            throw SkillInstallError.failed(String(localized: "\(target.displayName)：未删除（\(reason)）"))
         }
     }
 
@@ -306,7 +305,7 @@ nonisolated extension SkillInstaller {
                 try FileManager.default.removeItem(at: link)
             } catch {
                 throw SkillInstallError.failed(
-                    "\(target.displayName)：无法删除旧技能链接 \(link.lastPathComponent)（\(error.localizedDescription)）"
+                    String(localized: "\(target.displayName)：无法删除旧技能链接 \(link.lastPathComponent)（\(error.localizedDescription)）")
                 )
             }
         }
@@ -453,11 +452,11 @@ nonisolated struct BinLinkInstaller: Sendable {
         }
         guard type == S_IFLNK else {
             return .conflict(reason: type == S_IFDIR
-                ? "~/.local/bin/\(name) 是一个目录"
-                : "~/.local/bin/\(name) 已被别的文件占用（非 uTerm 创建）")
+                ? String(localized: "~/.local/bin/\(name) 是一个目录")
+                : String(localized: "~/.local/bin/\(name) 已被别的文件占用（非 uTerm 创建）"))
         }
         guard let resolved = SkillInstaller.linkDestination(of: linkURL) else {
-            return .conflict(reason: "无法读取符号链接目标")
+            return .conflict(reason: String(localized: "无法读取符号链接目标"))
         }
         if resolved.path == sourceURL.path {
             return SkillInstaller.fileType(at: sourceURL) == nil ? .brokenLink : .installed
@@ -468,7 +467,7 @@ nonisolated struct BinLinkInstaller: Sendable {
             || looksLikeLegacyMaterializedClient(resolved) {
             return .brokenLink
         }
-        return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
+        return .conflict(reason: String(localized: "符号链接指向其它位置：\(resolved.path)"))
     }
 
     private func looksLikeLegacyMaterializedClient(_ url: URL) -> Bool {
@@ -488,7 +487,7 @@ nonisolated struct BinLinkInstaller: Sendable {
             throw SkillInstallError.failed(reason)
         }
         guard SkillInstaller.fileType(at: sourceURL) != nil else {
-            throw SkillInstallError.failed("uTerm.app 里缺少 \(Self.executableName)，重新安装 uTerm 即可。")
+            throw SkillInstallError.failed(String(localized: "uTerm.app 里缺少 \(Self.executableName)，重新安装 uTerm 即可。"))
         }
         switch status() {
         case .installed:
@@ -501,7 +500,7 @@ nonisolated struct BinLinkInstaller: Sendable {
                 try FileManager.default.removeItem(at: linkURL)
             } catch {
                 throw SkillInstallError.failed(
-                    "无法替换既有的 ~/.local/bin/\(Self.executableName)（\(error.localizedDescription)）"
+                    String(localized: "无法替换既有的 ~/.local/bin/\(Self.executableName)（\(error.localizedDescription)）")
                 )
             }
         case .notInstalled:
@@ -513,7 +512,7 @@ nonisolated struct BinLinkInstaller: Sendable {
             try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: sourceURL)
         } catch {
             throw SkillInstallError.failed(
-                "无法写入 \(linkURL.path)（\(error.localizedDescription)）"
+                String(localized: "无法写入 \(linkURL.path)（\(error.localizedDescription)）")
             )
         }
     }
@@ -526,7 +525,7 @@ nonisolated struct BinLinkInstaller: Sendable {
         case .notInstalled:
             return
         case .conflict(let reason):
-            throw SkillInstallError.failed("未删除（\(reason)）")
+            throw SkillInstallError.failed(String(localized: "未删除（\(reason)）"))
         }
     }
 }

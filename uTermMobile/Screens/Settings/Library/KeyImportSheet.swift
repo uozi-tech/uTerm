@@ -37,14 +37,14 @@ struct KeyImportSheet: View {
                     Text("粘贴私钥内容，或从文件导入。私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备。")
                         .font(M.sans(13)).foregroundStyle(M.text3).lineSpacing(2)
 
-                    MField(label: "名称", hint: "留空则用文件名或 imported-key") {
-                        MInput(text: $name, placeholder: "例如：prod-deploy")
+                    MField(label: String(localized: "名称"), hint: String(localized: "留空则用文件名或 imported-key")) {
+                        MInput(text: $name, placeholder: String(localized: "例如：prod-deploy"))
                     }
 
-                    MField(label: "私钥", hint: "支持 OpenSSH / PEM / PKCS#8") {
+                    MField(label: String(localized: "私钥"), hint: String(localized: "支持 OpenSSH / PEM / PKCS#8")) {
                         VStack(alignment: .leading, spacing: 10) {
                             MTextArea(text: $keyText,
-                                      placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----\n在此粘贴私钥内容…\n-----END OPENSSH PRIVATE KEY-----",
+                                      placeholder: String(localized: "-----BEGIN OPENSSH PRIVATE KEY-----\n在此粘贴私钥内容…\n-----END OPENSSH PRIVATE KEY-----"),
                                       minHeight: 180)
                                 .accessibilityLabel("私钥内容")
                             HStack(spacing: 10) {
@@ -69,8 +69,8 @@ struct KeyImportSheet: View {
                     }
 
                     if showsPassphrase {
-                        MField(label: "口令", hint: "此私钥已加密") {
-                            MInput(text: $passphrase, placeholder: "私钥口令（不是主机登录密码）",
+                        MField(label: String(localized: "口令", comment: "私钥口令"), hint: String(localized: "此私钥已加密")) {
+                            MInput(text: $passphrase, placeholder: String(localized: "私钥口令（不是主机登录密码）"),
                                    secure: true, revealable: true)
                         }
                     }
@@ -81,7 +81,7 @@ struct KeyImportSheet: View {
                             .textSelection(.enabled)
                     }
 
-                    MBtn(title: importing ? "导入中…" : "导入密钥", kind: .primary, full: true,
+                    MBtn(title: importing ? String(localized: "导入中…") : String(localized: "导入密钥"), kind: .primary, full: true,
                          disabled: !canImport, action: runImport)
                         .padding(.top, 4)
                 }
@@ -98,7 +98,7 @@ struct KeyImportSheet: View {
                       allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls): if let url = urls.first { load(fileAt: url) }
-            case .failure(let err): error = KeyImport.fileReadMessage(fileName: "所选文件", error: err)
+            case .failure(let err): error = KeyImport.fileReadMessage(fileName: String(localized: "所选文件"), error: err)
             }
         }
         .onChange(of: keyText) { _, _ in

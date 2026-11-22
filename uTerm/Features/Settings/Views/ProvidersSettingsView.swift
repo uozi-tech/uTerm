@@ -64,7 +64,7 @@ struct ProvidersSettingsView: View {
             }
 
             HStack(spacing: 6) {
-                UDAddButton(title: "添加服务") { addProvider() }
+                UDAddButton(title: String(localized: "添加服务")) { addProvider() }
                     .help("添加模型服务")
                 UDIconButton(systemImage: "trash", size: 32, style: .danger) { deleteSelected() }
                     .disabled(selectedID == nil)

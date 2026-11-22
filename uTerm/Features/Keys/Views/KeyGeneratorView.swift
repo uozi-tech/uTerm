@@ -54,7 +54,7 @@ struct KeyGeneratorView: View {
     }
 
     private var nameError: String? {
-        (nameTouched && nameEmpty) ? "名称不能为空" : nil
+        (nameTouched && nameEmpty) ? String(localized: "名称不能为空") : nil
     }
 
     private var canGenerate: Bool {
@@ -70,33 +70,33 @@ struct KeyGeneratorView: View {
                         .font(.system(size: 12)).foregroundStyle(UD.text3)
                 }
 
-                    DarkFormSection(title: "基础") {
-                    DarkFormField(label: "名称", hint: "在 uTerm 内引用") {
-                        UDTextField(placeholder: "例如：default", text: $name,
+                    DarkFormSection(title: String(localized: "基础", comment: "表单分组：基础信息")) {
+                    DarkFormField(label: String(localized: "名称"), hint: String(localized: "在 uTerm 内引用")) {
+                        UDTextField(placeholder: String(localized: "例如：default"), text: $name,
                                     errorMessage: nameError)
                             .accessibilityValue(nameError ?? "")
                             .onChange(of: name) { _, _ in nameTouched = true }
                     }
-                    DarkFormField(label: "类型") {
+                    DarkFormField(label: String(localized: "类型", comment: "SSH 密钥类型")) {
                         UDSegmented(selection: familyBinding, options: [
-                            (.ed25519, "Ed25519（推荐）"), (.rsa, "RSA"), (.ecdsa, "ECDSA"),
+                            (.ed25519, String(localized: "Ed25519（推荐）")), (.rsa, "RSA"), (.ecdsa, "ECDSA"),
                         ])
                     }
                     if isECDSA {
-                        DarkFormField(label: "曲线") {
+                        DarkFormField(label: String(localized: "曲线", comment: "ECDSA 密钥的椭圆曲线")) {
                             UDSegmented(selection: $type, options: [
                                 (.ecdsaP256, "P-256"), (.ecdsaP384, "P-384"), (.ecdsaP521, "P-521"),
                             ])
                         }
                     }
                     if type == .rsa {
-                        DarkFormField(label: "位数") {
+                        DarkFormField(label: String(localized: "位数", comment: "RSA 密钥位数")) {
                             UDSegmented(selection: $rsaBits, options: [
                                 (2048, "2048"), (3072, "3072"), (4096, "4096"),
                             ])
                         }
                     }
-                    DarkFormField(label: "注释", hint: "附在公钥末尾，便于辨识") {
+                    DarkFormField(label: String(localized: "注释", comment: "SSH 密钥的注释字段"), hint: String(localized: "附在公钥末尾，便于辨识")) {
                         UDTextField(placeholder: "", text: $comment, monospaced: true)
                     }
                 }
@@ -109,8 +109,8 @@ struct KeyGeneratorView: View {
                     Text(type == .rsa ? "生成约需 1 秒" : "立即生成")
                         .font(.system(size: 11)).foregroundStyle(UD.text4)
                     Spacer()
-                    UDButton(title: "取消", style: .secondary, action: onCancel)
-                    UDButton(title: generating ? "生成中…" : "生成密钥", action: generate)
+                    UDButton(title: String(localized: "取消"), style: .secondary, action: onCancel)
+                    UDButton(title: generating ? String(localized: "生成中…") : String(localized: "生成密钥"), action: generate)
                         .disabled(!canGenerate)
                 }
             }

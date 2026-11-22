@@ -80,7 +80,7 @@ extension ControlHandler {
             let entries = try await sftp.list(path: path)
             return .success(
                 id: request.id,
-                message: "\(path)：\(entries.count) 项",
+                message: String(localized: "\(path)：\(entries.count) 项"),
                 entries: ControlFilePayloadBuilder.entries(entries)
             )
 
@@ -100,49 +100,49 @@ extension ControlHandler {
 
         case .sftpGet, .sftpPut:
             // 传输不借单条会话，在 `handleSFTP` 入口就分流到 `transfer` 了。
-            throw ControlFailure(code: .invalid_request, message: "\(request.action.rawValue) 走并行传输通道")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "\(request.action.rawValue) 走并行传输通道"))
 
         case .sftpMkdir:
             let path = try Self.requiredPath(request.path)
             try await sftp.createDirectory(path)
-            return .success(id: request.id, message: "已创建目录 \(path)")
+            return .success(id: request.id, message: String(localized: "已创建目录 \(path)"))
 
         case .sftpRm:
             let path = try Self.requiredPath(request.path)
             try await sftp.removeFile(path)
-            return .success(id: request.id, message: "已删除 \(path)")
+            return .success(id: request.id, message: String(localized: "已删除 \(path)"))
 
         case .sftpRmdir:
             let path = try Self.requiredPath(request.path)
             try await sftp.removeDirectory(path)
-            return .success(id: request.id, message: "已删除目录 \(path)")
+            return .success(id: request.id, message: String(localized: "已删除目录 \(path)"))
 
         case .sftpMv:
             let path = try Self.requiredPath(request.path)
             guard let newPath = try Self.optionalPath(request.newPath) else {
-                throw ControlFailure(code: .invalid_request, message: "sftp-mv 需要 newPath")
+                throw ControlFailure(code: .invalid_request, message: String(localized: "sftp-mv 需要 newPath"))
             }
             try await sftp.rename(path, to: newPath)
-            return .success(id: request.id, message: "已重命名 \(path) → \(newPath)")
+            return .success(id: request.id, message: String(localized: "已重命名 \(path) → \(newPath)"))
 
         case .sftpChmod:
             let path = try Self.requiredPath(request.path)
             guard let mode = ControlFileMode.parse(request.mode) else {
                 throw ControlFailure(
                     code: .invalid_request,
-                    message: "mode 无法解析：期望八进制（如 644 / 0755）或十进制整数"
+                    message: String(localized: "mode 无法解析：期望八进制（如 644 / 0755）或十进制整数")
                 )
             }
             try await sftp.setPermissions(path: path, mode: mode)
             return .success(
                 id: request.id,
-                message: "已设置权限 \(String(mode, radix: 8)) → \(path)"
+                message: String(localized: "已设置权限 \(String(mode, radix: 8)) → \(path)")
             )
 
         default:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于文件组"
+                message: String(localized: "动作 \(request.action.rawValue) 不属于文件组")
             )
         }
     }
@@ -162,19 +162,19 @@ extension ControlHandler {
             // stat 失败通常就是最终答案（不存在 / 无权限 / 是目录），原样上抛。
             throw ControlFailure(
                 code: ControlFilePayloadBuilder.errorCode(for: error),
-                message: "\(path)：\(ControlFilePayloadBuilder.errorDetail(for: error))"
+                message: String(localized: "\(path)：\(ControlFilePayloadBuilder.errorDetail(for: error))", comment: "路径：出错原因")
             )
         }
         if let declaredSize, declaredSize > Int64(limit) {
             throw ControlFailure(
                 code: .file_too_large,
-                message: "\(path) 有 \(declaredSize) 字节，超过本次上限 \(limit) 字节"
+                message: String(localized: "\(path) 有 \(String(declaredSize)) 字节，超过本次上限 \(String(limit)) 字节")
             )
         }
         let data = try await sftp.download(remotePath: path, maximumBytes: limit)
         return .success(
             id: request.id,
-            message: "\(path)（\(data.count) 字节）",
+            message: String(localized: "\(path)（\(String(data.count)) 字节）"),
             file: ControlFilePayloadBuilder.payload(
                 path: path, data: data, declaredSize: declaredSize)
         )
@@ -200,8 +200,7 @@ extension ControlHandler {
         guard let context = ControlRequestContext.current, let fd = context.takeFileDescriptor() else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "\(request.action.rawValue) 需要随请求用 SCM_RIGHTS 交来本地文件的 fd"
-                    + "（utermctl 会自动做；自己写客户端见 uterm 技能的 references/files.md）"
+                message: String(localized: "\(request.action.rawValue) 需要随请求用 SCM_RIGHTS 交来本地文件的 fd（utermctl 会自动做；自己写客户端见 uterm 技能的 references/files.md）")
             )
         }
         defer { Darwin.close(fd) }
@@ -230,10 +229,12 @@ extension ControlHandler {
         }
         let seconds = Date().timeIntervalSince(started)
         let moved = request.ranges.map { $0.reduce(0) { $0 + $1.length } } ?? size
+        let secondsText = String(format: "%.1f", seconds)
         return .success(
             id: request.id,
-            message: "\(isGet ? "已下载" : "已上传") \(path)（\(moved) 字节，\(channels) 路，"
-                + String(format: "%.1f 秒）", seconds),
+            message: isGet
+                ? String(localized: "已下载 \(path)（\(String(moved)) 字节，\(channels) 路，\(secondsText) 秒）")
+                : String(localized: "已上传 \(path)（\(String(moved)) 字节，\(channels) 路，\(secondsText) 秒）"),
             transfer: ControlTransferResult(
                 path: path, bytes: moved, totalBytes: size, seconds: seconds, channels: channels)
         )
@@ -258,7 +259,7 @@ extension ControlHandler {
         case is ControlConnectError:
             return connectFailureResponse(error, id: request.id, profile: profile)
         case is CancellationError:
-            throw ControlFailure(code: .operation_failed, message: "\(path)：传输已取消（客户端断开或 uTerm 关闭了命令行接口）")
+            throw ControlFailure(code: .operation_failed, message: String(localized: "\(path)：传输已取消（客户端断开或 uTerm 关闭了命令行接口）"))
         case let transfer as ParallelTransfer.TransferError:
             let code: ControlErrorCode
             switch transfer {
@@ -266,7 +267,7 @@ extension ControlHandler {
             case .invalidRange: code = .invalid_request
             case .shortRead, .sizeMismatch: code = .operation_failed
             }
-            throw ControlFailure(code: code, message: "\(path)：\(transfer.localizedDescription)")
+            throw ControlFailure(code: code, message: String(localized: "\(path)：\(transfer.localizedDescription)", comment: "路径：出错原因"))
         default:
             var code = ControlFilePayloadBuilder.errorCode(for: error)
             if !isGet, request.ranges == nil {
@@ -276,7 +277,7 @@ extension ControlHandler {
             }
             throw ControlFailure(
                 code: code,
-                message: "\(path)：\(ControlFilePayloadBuilder.errorDetail(for: error))"
+                message: String(localized: "\(path)：\(ControlFilePayloadBuilder.errorDetail(for: error))", comment: "路径：出错原因")
             )
         }
     }
@@ -287,7 +288,7 @@ extension ControlHandler {
         guard (1...ControlProtocol.maxTransferChannels).contains(requested) else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "parallel 要在 1–\(ControlProtocol.maxTransferChannels) 之间，实得 \(requested)"
+                message: String(localized: "parallel 要在 1–\(ControlProtocol.maxTransferChannels) 之间，实得 \(requested)")
             )
         }
         return requested
@@ -320,7 +321,7 @@ extension ControlHandler {
         guard !needle.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 需要 --host"
+                message: String(localized: "动作 \(request.action.rawValue) 需要 --host")
             )
         }
         return needle
@@ -330,14 +331,14 @@ extension ControlHandler {
     private static func optionalPath(_ raw: String?) throws(ControlFailure) -> String? {
         guard let raw else { return nil }
         guard !raw.isEmpty else {
-            throw ControlFailure(code: .invalid_request, message: "路径不能为空")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "路径不能为空"))
         }
         return raw
     }
 
     private static func requiredPath(_ raw: String?) throws(ControlFailure) -> String {
         guard let path = try optionalPath(raw) else {
-            throw ControlFailure(code: .invalid_request, message: "缺少 --path")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "缺少 --path"))
         }
         return path
     }
@@ -353,7 +354,8 @@ extension ControlHandler {
     /// CLI 的 message 给**原话**，不给 `FriendlyError` 洗过的「操作未能完成，请稍后
     /// 重试」—— 那句对界面合适，对模型 / 开发者等于什么都没说。
     private static func sftpMessage(request: ControlRequest, error: Error) -> String {
-        let where_ = request.path.map { "\($0)：" } ?? ""
-        return "\(where_)\(ControlFilePayloadBuilder.errorDetail(for: error))"
+        let detail = ControlFilePayloadBuilder.errorDetail(for: error)
+        guard let path = request.path else { return detail }
+        return String(localized: "\(path)：\(detail)", comment: "路径：出错原因")
     }
 }

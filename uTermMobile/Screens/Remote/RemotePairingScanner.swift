@@ -54,7 +54,7 @@ struct RemotePairingScanner: View {
         switch access {
         case .authorized:
             if AVCaptureDevice.default(for: .video) == nil {
-                message("这台设备没有可用的相机")
+                message(String(localized: "这台设备没有可用的相机"))
             } else {
                 ZStack(alignment: .bottom) {
                     QRCodeCamera { text in
@@ -63,14 +63,14 @@ struct RemotePairingScanner: View {
                             return true
                         }
                         guard let invitation = RemotePairingInvitation(scanned: text) else {
-                            note = "这不是 uTerm 的配对码"
+                            note = String(localized: "这不是 uTerm 的配对码")
                             return false
                         }
                         onScanned(invitation)
                         return true
                     }
                     .ignoresSafeArea()
-                    Text(note ?? "对准 Mac 上「设置 › 远程控制 › 扫码配对」中的二维码")
+                    Text(note ?? String(localized: "对准 Mac 上「设置 › 远程控制 › 扫码配对」中的二维码"))
                         .font(M.sans(14, weight: .medium))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
@@ -83,8 +83,8 @@ struct RemotePairingScanner: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         default:
             VStack(spacing: 16) {
-                message("uTerm 没有相机权限。前往「设置」允许 uTerm 访问相机。")
-                MBtn(title: "打开设置", kind: .primary, height: 42) {
+                message(String(localized: "uTerm 没有相机权限。前往「设置」允许 uTerm 访问相机。"))
+                MBtn(title: String(localized: "打开设置"), kind: .primary, height: 42) {
                     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                 }
                 .fixedSize()
@@ -124,20 +124,20 @@ struct RemoteOtherNearbyMacsList: View {
     let directory: RemoteMacDirectory
     let onPick: (RemoteMacDirectory.Mac) -> Void
 
-    static let footer = "同一局域网里打开了远程控制、不在你 iCloud 账户里的 Mac。点一下，在那台 Mac 上输入这里显示的 6 位数即可配对。"
-    static let emptyHint = "同一局域网里没有找到其他打开了远程控制的 Mac。和这台设备登录同一个 iCloud 账户的 Mac 会直接出现在主机页的「附近的 Mac」里。"
+    static let footer = String(localized: "同一局域网里打开了远程控制、不在你 iCloud 账户里的 Mac。点一下，在那台 Mac 上输入这里显示的 6 位数即可配对。")
+    static let emptyHint = String(localized: "同一局域网里没有找到其他打开了远程控制的 Mac。和这台设备登录同一个 iCloud 账户的 Mac 会直接出现在主机页的「附近的 Mac」里。")
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
                 if directory.otherNearbyMacs.isEmpty {
                     MInsetGroup(footer: Self.emptyHint) {
-                        MInsetRow(icon: "mac", iconColor: M.text3, label: "没有找到其他 Mac", last: true)
+                        MInsetRow(icon: "mac", iconColor: M.text3, label: String(localized: "没有找到其他 Mac"), last: true)
                     }
                 } else {
                     MInsetGroup(footer: Self.footer) {
                         ForEach(directory.otherNearbyMacs) { mac in
-                            MInsetRow(icon: "mac", label: mac.name, value: "配对", chevron: true,
+                            MInsetRow(icon: "mac", label: mac.name, value: String(localized: "配对", comment: "行尾动作：与这台 Mac 配对"), chevron: true,
                                       last: mac.id == directory.otherNearbyMacs.last?.id) {
                                 onPick(mac)
                             }

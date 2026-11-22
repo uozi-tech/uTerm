@@ -462,6 +462,7 @@
 				Features/Workspace/WorkspaceStore.swift,
 				Features/Workspace/WorkspaceUIState.swift,
 				Features/Workspace/WorkspaceWindowID.swift,
+				InfoPlist.xcstrings,
 				Services/Update/AppUpdater.swift,
 				Shared/Views/ClickSelectActivate.swift,
 				Shared/Views/ConnectionStatusBadge.swift,
@@ -611,6 +612,7 @@
 				Features/Terminal/PasteProgress.swift,
 				Features/Terminal/ProgramStatus.swift,
 				Features/Terminal/Shadow/TerminalEngineVersion.swift,
+				Localizable.xcstrings,
 				Services/SSH/TerminalImage.swift,
 				Shared/Views/CodeFieldInput.swift,
 				Shared/Views/UCodeField.swift,
@@ -634,6 +636,13 @@
 				ShellAgentServer.swift,
 			);
 			target = 52484F53540000000000000E /* uTermRemoteHost */;
+		};
+		5348454C4C000000000000E1 /* Exceptions for "uTerm" folder in "uTermShellAgent" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Localizable.xcstrings,
+			);
+			target = 5348454C4C00000000000004 /* uTermShellAgent */;
 		};
 		5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -739,6 +748,7 @@
 			exceptions = (
 				10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */,
 				52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */,
+				5348454C4C000000000000E1 /* Exceptions for "uTerm" folder in "uTermShellAgent" target */,
 			);
 			path = uTerm;
 			sourceTree = "<group>";
@@ -1084,6 +1094,7 @@
 			buildPhases = (
 				5348454C4C00000000000006 /* Sources */,
 				5348454C4C00000000000007 /* Frameworks */,
+				5348454C4C000000000000E2 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -1264,6 +1275,9 @@
 				en,
 				"zh-Hans",
 				Base,
+				"zh-Hant",
+				ja,
+				ko,
 			);
 			mainGroup = 85D6BEE62FBC4E7E00FC90D8;
 			minimizedProjectReferenceProxies = 1;
@@ -1321,6 +1335,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5348454C4C000000000000E2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		52484F535400000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1370,6 +1391,9 @@
 				"$(SRCROOT)/Config/uterm-holder/AppIcon.icns",
 				"$(SRCROOT)/Config/uterm-holder/zh-Hans.lproj/InfoPlist.strings",
 				"$(SRCROOT)/Config/uterm-holder/en.lproj/InfoPlist.strings",
+				"$(SRCROOT)/Config/uterm-holder/zh-Hant.lproj/InfoPlist.strings",
+				"$(SRCROOT)/Config/uterm-holder/ja.lproj/InfoPlist.strings",
+				"$(SRCROOT)/Config/uterm-holder/ko.lproj/InfoPlist.strings",
 			);
 			name = "Copy Icon and Names";
 			outputFileListPaths = (
@@ -1378,10 +1402,13 @@
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/zh-Hans.lproj/InfoPlist.strings",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/en.lproj/InfoPlist.strings",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/zh-Hant.lproj/InfoPlist.strings",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ja.lproj/InfoPlist.strings",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ko.lproj/InfoPlist.strings",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n# holder 的源码在 uTermHolder/ 同步组里，那个组也编进主程序、iOS 与 uterm-ssh，资源放进去会被它们一起收走，\n# 所以图标与本地化名字放在 Config/uterm-holder/，在这里拷进包（签名在这一步之后）。\nsrc=\"${SRCROOT}/Config/uterm-holder\"\nres=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/bin/mkdir -p \"$res\"\n/bin/cp \"$src/AppIcon.icns\" \"$res/AppIcon.icns\"\nfor lang in zh-Hans en; do\n  /bin/mkdir -p \"$res/$lang.lproj\"\n  /bin/cp \"$src/$lang.lproj/InfoPlist.strings\" \"$res/$lang.lproj/InfoPlist.strings\"\ndone\n";
+			shellScript = "set -eu\n# holder 的源码在 uTermHolder/ 同步组里，那个组也编进主程序、iOS 与 uterm-ssh，资源放进去会被它们一起收走，\n# 所以图标与本地化名字放在 Config/uterm-holder/，在这里拷进包（签名在这一步之后）。\nsrc=\"${SRCROOT}/Config/uterm-holder\"\nres=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/bin/mkdir -p \"$res\"\n/bin/cp \"$src/AppIcon.icns\" \"$res/AppIcon.icns\"\nfor lang in zh-Hans zh-Hant en ja ko; do\n  /bin/mkdir -p \"$res/$lang.lproj\"\n  /bin/cp \"$src/$lang.lproj/InfoPlist.strings\" \"$res/$lang.lproj/InfoPlist.strings\"\ndone\n";
 		};
 		4C495645414354000000000B /* Set Build Number */ = {
 			isa = PBXShellScriptBuildPhase;

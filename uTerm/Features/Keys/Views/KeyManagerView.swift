@@ -38,7 +38,7 @@ struct KeyManagerView: View {
         // 暗夜标题栏）——后者正是「chrome 还是系统默认暗夜配色」的来源。
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "密钥管理"))
+        .background(WorkspaceWindowChrome(serverName: String(localized: "密钥管理")))
         .overlay { deleteConfirmOverlay }
         .onAppear { if selectedID == nil { selectedID = keys.first?.id } }
     }
@@ -48,9 +48,10 @@ struct KeyManagerView: View {
     private var sidebar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                UDButton(title: "生成", systemImage: "plus", action: startGenerating)
+                UDButton(title: String(localized: "生成", comment: "生成新的 SSH 密钥"), systemImage: "plus",
+                         action: startGenerating)
                 UDButton(
-                    title: "导入",
+                    title: String(localized: "导入", comment: "导入已有的 SSH 私钥"),
                     style: .secondary,
                     systemImage: "square.and.arrow.down",
                     action: startImporting

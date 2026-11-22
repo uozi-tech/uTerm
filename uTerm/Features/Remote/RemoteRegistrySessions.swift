@@ -179,13 +179,13 @@ private final class RegistryAttachment: RemoteHostTerminalAttachment {
 
     func deliverImage(_ image: TerminalImage) async -> Result<String?, RemoteHostImageError> {
         guard let backend = session?.backend as? any TerminalImageReceiving else {
-            return .failure(RemoteHostImageError(message: "这个终端不能接收图片"))
+            return .failure(RemoteHostImageError(message: String(localized: "这个终端不能接收图片")))
         }
         do {
             if case .file(let path) = try await backend.deliverImage(image) { return .success(path) }
             return .success(nil)
         } catch {
-            return .failure(RemoteHostImageError(message: "图片发送失败：\(error.localizedDescription)"))
+            return .failure(RemoteHostImageError(message: String(localized: "图片发送失败：\(error.localizedDescription)")))
         }
     }
 }

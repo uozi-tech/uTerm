@@ -42,12 +42,12 @@ extension RemotePathVerdict {
     nonisolated static func detail(chosen: RemotePathProbeSummary?, untested: [RemotePathProbeMode],
                                    skipsLocalNetwork: Bool) -> String {
         let notTested = untested.isEmpty ? ""
-            : String(localized: "这次未测试\(untested.map(\.label).joined(separator: "、"))（在「检测设置」中打开）。")
-        guard let chosen else { return String(localized: "各路径的失败原因见下方。") + notTested }
+            : String(localized: "这次未测试\(untested.map(\.label).joined(separator: String(localized: "、", comment: "并列项之间的分隔符")))（在「检测设置」中打开）。")
+        guard let chosen else { return String(localized: "各路径的失败原因见下方。\(notTested)") }
         let latency = chosen.medianRoundTripMillis.map { String(localized: "往返约 \(Int($0.rounded())) ms") }
             ?? String(localized: "往返未测出")
         let skip = skipsLocalNetwork ? String(localized: "「只走公网」已打开，正式连接会跳过局域网。") : ""
-        return String(localized: "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，\(latency)。") + skip + notTested
+        return String(localized: "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，\(latency)。\(skip)\(notTested)")
     }
 }
 

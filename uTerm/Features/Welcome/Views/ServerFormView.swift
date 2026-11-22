@@ -112,39 +112,39 @@ struct ServerFormView: View {
     }
 
     private var targetSection: some View {
-        DarkFormSection(title: "目标主机") {
-            DarkFormField(label: "名称") {
-                UDTextField(placeholder: "例如：api-prod", text: $draft.name)
+        DarkFormSection(title: String(localized: "目标主机")) {
+            DarkFormField(label: String(localized: "名称", comment: "主机名称")) {
+                UDTextField(placeholder: String(localized: "例如：api-prod"), text: $draft.name)
             }
             HStack(alignment: .top, spacing: 10) {
-                DarkFormField(label: "地址") {
+                DarkFormField(label: String(localized: "地址", comment: "主机地址")) {
                     UDTextField(placeholder: "host.example.com", text: $draft.host,
                                 errorMessage: hostError, monospaced: true)
-                        .accessibilityValue(draft.host.isEmpty ? "未填写" : draft.host)
+                        .accessibilityValue(draft.host.isEmpty ? String(localized: "未填写") : draft.host)
                         .onChange(of: draft.host) { _, _ in hostTouched = true }
                 }
-                DarkFormField(label: "端口") {
+                DarkFormField(label: String(localized: "端口")) {
                     UDTextField(placeholder: "22", text: $draft.port,
                                 errorMessage: draft.portError, monospaced: true)
-                        .accessibilityValue(draft.port.isEmpty ? "未填写" : draft.port)
+                        .accessibilityValue(draft.port.isEmpty ? String(localized: "未填写") : draft.port)
                 }
                 .frame(width: 96)
             }
-            DarkFormField(label: "用户名") {
+            DarkFormField(label: String(localized: "用户名")) {
                 UDTextField(placeholder: "root", text: $draft.username, monospaced: true)
             }
-            DarkFormField(label: "认证方式") {
+            DarkFormField(label: String(localized: "认证方式")) {
                 UDSegmented(selection: $draft.auth, options: [
-                    (.password, "密码"), (.privateKey, "私钥"),
+                    (.password, String(localized: "密码", comment: "认证方式")), (.privateKey, String(localized: "私钥", comment: "认证方式")),
                 ])
             }
             if draft.auth == .password {
-                DarkFormField(label: "密码", hint: "仅保存在系统钥匙串") {
+                DarkFormField(label: String(localized: "密码"), hint: String(localized: "仅保存在系统钥匙串")) {
                     UDTextField(placeholder: "••••••••", text: $draft.password,
                                 isSecure: true, revealable: true)
                 }
             } else {
-                DarkFormField(label: "密钥", hint: "从「密钥管理」中选择") {
+                DarkFormField(label: String(localized: "hostForm.key", defaultValue: "密钥", comment: "主机表单字段：选用的那一把 SSH 密钥（单数）"), hint: String(localized: "从「密钥管理」中选择")) {
                     KeySelectorView(
                         keys: allKeys, selected: selectedKey, open: $keyPickerOpen,
                         onPick: { draft.keyID = $0; keyPickerOpen = false },
@@ -155,9 +155,9 @@ struct ServerFormView: View {
     }
 
     private var groupSection: some View {
-        DarkFormSection(title: "分组") {
-            DarkFormField(label: "分组", hint: "可选") {
-                UDTextField(placeholder: "例如：prod", text: $draft.group)
+        DarkFormSection(title: String(localized: "分组")) {
+            DarkFormField(label: String(localized: "分组"), hint: String(localized: "可选")) {
+                UDTextField(placeholder: String(localized: "例如：prod"), text: $draft.group)
             }
             if !existingGroups.isEmpty {
                 FlowLayout(spacing: 6) {
@@ -172,7 +172,7 @@ struct ServerFormView: View {
     /// 「仅 SFTP 连接」小节（设计稿 `new-server.jsx`）：与「跳板机」一致的开关样式。
     /// 关：提示默认开启终端会话；开：强调色说明卡，声明终端会话与命令执行均被禁用。
     private var sftpSection: some View {
-        DarkFormSection(title: "仅 SFTP 连接", trailing: {
+        DarkFormSection(title: String(localized: "仅 SFTP 连接"), trailing: {
             UDToggle($draft.sftpOnly)
         }) {
             if !draft.sftpOnly {
@@ -202,7 +202,7 @@ struct ServerFormView: View {
     }
 
     private var jumpSection: some View {
-        DarkFormSection(title: "跳板机", trailing: {
+        DarkFormSection(title: String(localized: "跳板机"), trailing: {
             UDToggle($draft.useJumpHost)
         }) {
             if !draft.useJumpHost {
@@ -210,7 +210,7 @@ struct ServerFormView: View {
                     .font(.system(size: 11.5)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                DarkFormField(label: "跳板机", hint: "只能从已有主机中选择") {
+                DarkFormField(label: String(localized: "跳板机"), hint: String(localized: "只能从已有主机中选择")) {
                     JumpHostSelectorView(
                         hosts: availableJumps, selected: selectedJump, open: $jumpPickerOpen,
                         onPick: { draft.jumpHostID = $0; jumpPickerOpen = false })
@@ -223,7 +223,7 @@ struct ServerFormView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            UDButton(title: testInFlight ? "取消测试" : "测试连接", style: .secondary) {
+            UDButton(title: testInFlight ? String(localized: "取消测试") : String(localized: "测试连接"), style: .secondary) {
                 if testInFlight { cancelTest() } else { startTest() }
             }
             .disabled(!testInFlight && !canTest)
@@ -236,9 +236,9 @@ struct ServerFormView: View {
             }
 
             Spacer(minLength: 8)
-            UDButton(title: "取消", style: .secondary, trailingHint: "esc") { dismiss() }
+            UDButton(title: String(localized: "取消"), style: .secondary, trailingHint: "esc") { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            UDButton(title: "保存", trailingHint: "⌘↵") { save() }
+            UDButton(title: String(localized: "保存"), trailingHint: "⌘↵") { save() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!isValid)
         }
@@ -265,7 +265,7 @@ struct ServerFormView: View {
     /// 主机名 inline 校验：必填。仅在用户编辑过又清空时提示（避免开屏 / 编辑态即红）。
     private var hostError: String? {
         guard hostTouched else { return nil }
-        return draft.trimmedHost.isEmpty ? "填写主机地址" : nil
+        return draft.trimmedHost.isEmpty ? String(localized: "填写主机地址") : nil
     }
 
     /// 已有的非空分组名，去重 + locale 排序。
@@ -273,9 +273,9 @@ struct ServerFormView: View {
 
     /// 标题：编辑 / 复制 / 新建。
     private var titleText: String {
-        if editing != nil { return "编辑主机" }
-        if duplicating != nil { return "复制主机" }
-        return "新建主机"
+        if editing != nil { return String(localized: "编辑主机") }
+        if duplicating != nil { return String(localized: "复制主机") }
+        return String(localized: "新建主机")
     }
 
     // MARK: - 测试连接
@@ -337,7 +337,7 @@ struct ServerFormView: View {
             jumpAuth = try SSHAuthResolver.resolveJump(
                 jump.map(SSHAuthResolver.Lookup.init), keychain: keychain)
         } catch {
-            publish(false, "跳板机认证读取失败：\(describe(error))"); return
+            publish(false, String(localized: "跳板机认证读取失败：\(describe(error))")); return
         }
 
         // 3. 用表单标量字段建快照（尚未保存，无 profile 可摘）。
@@ -358,7 +358,7 @@ struct ServerFormView: View {
             _ = try? await connected.exec("true")
             await connected.close()
             guard !Task.isCancelled else { return }
-            publish(true, "连接成功")
+            publish(true, String(localized: "连接成功"))
         } catch {
             guard !Task.isCancelled else { return }
             publish(false, describe(error))

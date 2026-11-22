@@ -22,7 +22,7 @@ nonisolated struct QuickCommandHostRef: Identifiable, Equatable, Sendable {
 /// 把命令的 `serverIDs` 解析为展示信息。集中「名为空回退主机名」与「已删除服务器」占位，
 /// 避免列表行 / 详情 / 执行器各写一份且行为不一致。`@MainActor`（读 @Model 属性）。
 enum QuickCommandTargets {
-    static let deletedLabel = "已删除的主机"
+    static let deletedLabel = String(localized: "已删除的主机")
 
     static func displayName(_ profile: ServerProfile) -> String {
         profile.name.isEmpty ? profile.host : profile.name
@@ -66,7 +66,7 @@ enum QuickCommandTargets {
 // MARK: - 纯逻辑（可单测）
 
 nonisolated enum QuickCommandLogic {
-    static let ungroupedLabel = "未分组"
+    static let ungroupedLabel = String(localized: "未分组")
 
     /// 按 `group` 分组（空 → 「未分组」），保持出现顺序。纯函数。
     static func grouped(_ refs: [QuickCommandHostRef]) -> [(group: String, hosts: [QuickCommandHostRef])] {
@@ -94,15 +94,15 @@ nonisolated enum QuickCommandLogic {
         switch chosen.count {
         case 0: return nil
         case 1: return chosen[0].name
-        case 2: return "\(chosen[0].name)、\(chosen[1].name)"
-        default: return "\(chosen[0].name) 等 \(chosen.count) 台"
+        case 2: return String(localized: "\(chosen[0].name)、\(chosen[1].name)", comment: "两台主机名并列")
+        default: return String(localized: "\(chosen[0].name) 等 \(chosen.count) 台")
         }
     }
 
     /// 运行按钮文案（复刻原型 `QcDetail.runLabel`）：多台优先显示并行，单台按 AI 区分。
     static func runLabel(serverCount: Int, ai: Bool) -> String {
-        if serverCount > 1 { return "并行运行 · \(serverCount) 台" }
-        return ai ? "运行 · AI 介入" : "运行命令"
+        if serverCount > 1 { return String(localized: "并行运行 · \(serverCount) 台") }
+        return ai ? String(localized: "运行 · AI 介入") : String(localized: "运行命令")
     }
 
     /// AI 命令的「说人话」文案（复刻原型 `qcAiIntent`）：优先 `intent`（去空白），
@@ -110,7 +110,7 @@ nonisolated enum QuickCommandLogic {
     static func aiIntentText(name: String, intent: String) -> String {
         let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-        return "执行「\(name)」：运行后让 AI 读取输出、自动诊断并续接下一步。"
+        return String(localized: "执行「\(name)」：运行后让 AI 读取输出、自动诊断并续接下一步。")
     }
 
     /// AI 命令运行时交给 Agent 的预填文案：自然语言意图优先，其次等效命令，

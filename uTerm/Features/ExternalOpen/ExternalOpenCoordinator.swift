@@ -66,7 +66,7 @@ struct ExternalOpenSystem {
             alert.alertStyle = .warning
             alert.messageText = String(localized: "\(fileName) 可能正被远端程序使用")
             alert.informativeText = String(localized: """
-                远端存在 \(companions.joined(separator: "、"))，说明有程序正在写这个数据库（或上次异常退出）。\
+                远端存在 \(companions.joined(separator: String(localized: "、", comment: "并列项之间的分隔符")))，说明有程序正在写这个数据库（或上次异常退出）。\
                 uTable 会把整个库下载到本地，改动后再整体传回；如果远端程序同时在写，双方的改动会互相覆盖，\
                 甚至损坏数据库。建议先停掉使用它的服务，或只做查看。
                 """)

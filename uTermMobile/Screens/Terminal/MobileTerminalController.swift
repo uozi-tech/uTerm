@@ -328,7 +328,7 @@ final class MobileTerminalController {
             return conn
         case .failure(let error):
             // 工厂只会从认证材料解析那一步抛错（与抽工厂之前同义）。
-            state = .failed("凭据解析失败：\(error.localizedDescription)")
+            state = .failed(String(localized: "凭据解析失败：\(error.localizedDescription)"))
             return nil
         }
     }

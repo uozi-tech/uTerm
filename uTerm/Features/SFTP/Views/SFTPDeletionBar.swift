@@ -10,16 +10,16 @@ struct SFTPDeletionBar: View {
     let onCancel: () -> Void
 
     private var title: String {
-        if progress.isCancelling { return "正在取消删除「\(progress.name)」…" }
+        if progress.isCancelling { return String(localized: "正在取消删除「\(progress.name)」…") }
         return progress.phase == .counting
-            ? "正在统计「\(progress.name)」…"
-            : "正在删除「\(progress.name)」"
+            ? String(localized: "正在统计「\(progress.name)」…")
+            : String(localized: "正在删除「\(progress.name)」")
     }
 
     private var detail: String {
         switch progress.phase {
         case .counting:
-            return "已找到 \(UFormat.count(progress.count)) 项"
+            return String(localized: "已找到 \(UFormat.count(progress.count)) 项")
         case .deleting:
             let total = progress.total ?? progress.count
             return "\(UFormat.count(progress.count)) / \(UFormat.count(total))"

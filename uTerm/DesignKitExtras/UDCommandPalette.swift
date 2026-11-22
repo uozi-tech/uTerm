@@ -214,7 +214,7 @@ private struct CommandPaletteRow: View {
         var parts = [item.title]
         if !item.detail.isEmpty { parts.append(item.detail) }
         if !item.hint.isEmpty { parts.append(item.hint) }
-        return parts.joined(separator: "，")
+        return parts.joined(separator: String(localized: "，", comment: "读屏文字里各段之间的分隔符"))
     }
 }
 

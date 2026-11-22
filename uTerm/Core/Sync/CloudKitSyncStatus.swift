@@ -34,14 +34,14 @@ enum CloudKitSyncStatus: Equatable {
 
     var label: String {
         switch self {
-        case .localOnly:   "本地存储"
-        case .signedOut:   "未登录 iCloud"
-        case .connecting:  "连接中…"
-        case .downloading: "下载中…"
-        case .uploading:   "上传中…"
-        case .failed:      "同步出错"
-        case .synced:      "已同步"
-        case .waiting:     "等待同步"
+        case .localOnly:   String(localized: "本地存储")
+        case .signedOut:   String(localized: "未登录 iCloud")
+        case .connecting:  String(localized: "连接中…")
+        case .downloading: String(localized: "下载中…")
+        case .uploading:   String(localized: "上传中…")
+        case .failed:      String(localized: "同步出错")
+        case .synced:      String(localized: "已同步")
+        case .waiting:     String(localized: "等待同步")
         }
     }
 

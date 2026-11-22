@@ -69,7 +69,7 @@ struct AboutSettingsView: View {
 
     static func copyrightString(now: Date) -> String {
         let year = Calendar.current.component(.year, from: now)
-        return "© \(year) 柚子星云科技（深圳）有限公司"
+        return String(localized: "© \(String(year)) 柚子星云科技（深圳）有限公司")
     }
 }
 

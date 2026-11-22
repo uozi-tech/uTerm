@@ -11,7 +11,7 @@ extension ControlHandler {
 
     func handleMac(_ request: ControlRequest, _ deps: Dependencies) async throws -> ControlResponse {
         guard let macs = deps.macs else {
-            throw ControlFailure(code: .app_not_ready, message: "远程 Mac 的入口还没准备好，稍后重试")
+            throw ControlFailure(code: .app_not_ready, message: String(localized: "远程 Mac 的入口还没准备好，稍后重试"))
         }
         let arguments = request.mac ?? ControlMacArguments()
         let caller = arguments.session.flatMap(UUID.init(uuidString:))
@@ -21,15 +21,15 @@ extension ControlHandler {
             payload.macs = snapshots
             let controllers = snapshots.filter { $0.role == ControlMacRole.controller }.count
             let message = controllers == 0
-                ? "\(snapshots.count) 台配对过的 Mac"
-                : "\(snapshots.count - controllers) 台配对过的 Mac，\(controllers) 台设备正连着这台 Mac"
+                ? String(localized: "\(snapshots.count) 台配对过的 Mac")
+                : String(localized: "\(snapshots.count - controllers) 台配对过的 Mac，\(controllers) 台设备正连着这台 Mac")
             return Self.macResponse(request, message: message, payload)
         }
         // 写扩展属性也是改动，但读不是：动作级的门禁分不开，在这里补判。
         if request.action == .macXattr, ["set", "remove"].contains(arguments.attributeAction ?? "list"),
            !deps.settings.allowMutations {
             throw ControlFailure(code: .mutations_disabled,
-                                 message: "写入未启用：在 uTerm「设置 › 命令行与技能」里打开「允许执行命令与写入」")
+                                 message: String(localized: "写入未启用：在 uTerm「设置 › 命令行与技能」里打开「允许执行命令与写入」"))
         }
         let session = try await macs.provider(for: arguments.target ?? "", session: caller)
         defer { macs.finished(session) }
@@ -39,8 +39,11 @@ extension ControlHandler {
             throw failure
         } catch let error as RemoteFileError {
             throw ControlFailure(code: Self.macErrorCode(error), message: error.message)
+        } catch let error as RemoteMacLocalFileError {
+            throw ControlFailure(code: error.direction == .write ? .local_write_failed : .local_read_failed,
+                                 message: error.message)
         } catch is CancellationError {
-            throw ControlFailure(code: .operation_failed, message: "已取消（客户端断开或 uTerm 关闭了命令行接口）")
+            throw ControlFailure(code: .operation_failed, message: String(localized: "已取消（客户端断开或 uTerm 关闭了命令行接口）"))
         }
     }
 
@@ -85,7 +88,7 @@ extension ControlHandler {
             let (reply, _) = try await send(RemoteFileRequest(op: .list, path: request.path ?? "~"))
             let entries = (reply.entries ?? []).map(RemoteMacFileProvider.entry)
             payload.path = reply.path
-            var response = macResponse(request, message: "\(reply.path ?? ""): \(entries.count) 项", payload)
+            var response = macResponse(request, message: String(localized: "\(reply.path ?? ""): \(entries.count) 项"), payload)
             response.entries = ControlFilePayloadBuilder.entries(entries)
             return response
 
@@ -100,14 +103,14 @@ extension ControlHandler {
         case .macCat:
             let target = try path(request)
             let entry = try await stat(target, send)
-            guard !entry.isDirectory else { throw RemoteFileError(.isDirectory, "\(target)：是目录") }
+            guard !entry.isDirectory else { throw RemoteFileError(.isDirectory, String(localized: "\(target)：是目录")) }
             let limit = min(max(1, request.maxBytes ?? ControlProtocol.maxCatBytes), ControlProtocol.maxCatBytes)
             guard entry.size <= Int64(limit) else {
                 throw ControlFailure(code: .file_too_large,
-                                     message: "\(target) 有 \(entry.size) 字节，超过本次上限 \(limit) 字节；用 mac read 读一段，或 mac get 下载")
+                                     message: String(localized: "\(target) 有 \(String(entry.size)) 字节，超过本次上限 \(String(limit)) 字节；用 mac read 读一段，或 mac get 下载"))
             }
             let data = try await withHeartbeat { try await provider.readRange(target, offset: 0, length: limit) }
-            var response = macResponse(request, message: "\(target)（\(data.count) 字节）", payload)
+            var response = macResponse(request, message: String(localized: "\(target)（\(String(data.count)) 字节）"), payload)
             response.file = ControlFilePayloadBuilder.payload(path: entry.path ?? target, data: data, declaredSize: entry.size)
             return response
 
@@ -120,17 +123,17 @@ extension ControlHandler {
         case .macMkdir:
             let target = try path(request)
             _ = try await send(RemoteFileRequest(op: .mkdir, path: target))
-            return macResponse(request, message: "已创建目录 \(target)", payload)
+            return macResponse(request, message: String(localized: "已创建目录 \(target)"), payload)
 
         case .macRm:
             let target = try path(request)
             _ = try await send(RemoteFileRequest(op: .remove, path: target))
-            return macResponse(request, message: "已删除 \(target)", payload)
+            return macResponse(request, message: String(localized: "已删除 \(target)"), payload)
 
         case .macRmdir:
             let target = try path(request)
             _ = try await send(RemoteFileRequest(op: .rmdir, path: target))
-            return macResponse(request, message: "已删除目录 \(target)", payload)
+            return macResponse(request, message: String(localized: "已删除目录 \(target)"), payload)
 
         case .macMv, .macCp:
             let target = try path(request)
@@ -139,21 +142,24 @@ extension ControlHandler {
             file.newPath = destination
             file.options = (arguments.options ?? []) + (request.force == true ? [RemoteFileOption.replace] : [])
             _ = try await send(file)
-            return macResponse(request, message: "\(request.action == .macMv ? "已移动" : "已复制") \(target) → \(destination)", payload)
+            let message = request.action == .macMv
+                ? String(localized: "已移动 \(target) → \(destination)")
+                : String(localized: "已复制 \(target) → \(destination)")
+            return macResponse(request, message: message, payload)
 
         case .macChmod:
             let target = try path(request)
             guard let mode = ControlFileMode.parse(request.mode) else {
-                throw ControlFailure(code: .invalid_request, message: "mode 无法解析：期望八进制（如 644 / 0755）或十进制整数")
+                throw ControlFailure(code: .invalid_request, message: String(localized: "mode 无法解析：期望八进制（如 644 / 0755）或十进制整数"))
             }
             var file = RemoteFileRequest(op: .chmod, path: target)
             file.mode = mode
             _ = try await send(file)
-            return macResponse(request, message: "已设置权限 \(String(mode, radix: 8)) → \(target)", payload)
+            return macResponse(request, message: String(localized: "已设置权限 \(String(mode, radix: 8)) → \(target)"), payload)
 
         case .macGrep:
             guard let pattern = arguments.pattern, !pattern.isEmpty else {
-                throw ControlFailure(code: .invalid_request, message: "缺少要搜的内容")
+                throw ControlFailure(code: .invalid_request, message: String(localized: "缺少要搜的内容"))
             }
             var file = RemoteFileRequest(op: .grep, path: request.path ?? "~")
             file.pattern = pattern
@@ -169,8 +175,8 @@ extension ControlHandler {
             }
             payload.count = reply.count
             payload.truncated = reply.truncated
-            let note = reply.truncated == true ? "（结果被截断，缩小范围再搜）" : ""
-            return macResponse(request, message: "搜了 \(reply.count ?? 0) 个文件，\(payload.matches?.count ?? 0) 处匹配\(note)", payload)
+            let note = reply.truncated == true ? String(localized: "（结果被截断，缩小范围再搜）") : ""
+            return macResponse(request, message: String(localized: "搜了 \(reply.count ?? 0) 个文件，\(payload.matches?.count ?? 0) 处匹配\(note)"), payload)
 
         case .macFind:
             var file = RemoteFileRequest(op: .find, path: request.path ?? "~")
@@ -188,8 +194,8 @@ extension ControlHandler {
                                 permissions: Int($0.mode), sha256: $0.sha256)
             }
             payload.truncated = reply.truncated
-            let note = reply.truncated == true ? "（结果被截断，缩小范围再找）" : ""
-            return macResponse(request, message: "\(payload.found?.count ?? 0) 项\(note)", payload)
+            let note = reply.truncated == true ? String(localized: "（结果被截断，缩小范围再找）") : ""
+            return macResponse(request, message: String(localized: "\(payload.found?.count ?? 0) 项\(note)"), payload)
 
         case .macTree:
             var file = RemoteFileRequest(op: .tree, path: request.path ?? "~")
@@ -200,7 +206,7 @@ extension ControlHandler {
             payload.text = String(decoding: body, as: UTF8.self)
             payload.count = reply.count
             payload.truncated = reply.truncated
-            return macResponse(request, message: "\(reply.path ?? "")：\(reply.count ?? 0) 项", payload)
+            return macResponse(request, message: String(localized: "\(reply.path ?? "")：\(reply.count ?? 0) 项"), payload)
 
         case .macHash:
             let target = try path(request)
@@ -217,17 +223,17 @@ extension ControlHandler {
             payload.files = reply.files
             payload.directories = reply.directories
             payload.truncated = reply.truncated
-            return macResponse(request, message: "\(reply.path ?? "")：\(reply.bytes ?? 0) 字节，\(reply.files ?? 0) 个文件", payload)
+            return macResponse(request, message: String(localized: "\(reply.path ?? "")：\(String(reply.bytes ?? 0)) 字节，\(reply.files ?? 0) 个文件"), payload)
 
         case .macShares:
             let (reply, _) = try await send(RemoteFileRequest(op: .roots))
             guard let roots = reply.roots else {
-                return macResponse(request, message: "「\(session.name)」没有限定目录：整台 Mac 都能访问", payload)
+                return macResponse(request, message: String(localized: "「\(session.name)」没有限定目录：整台 Mac 都能访问"), payload)
             }
             payload.roots = roots.map { ControlMacRoot(path: $0.path, writable: $0.writable) }
             let message = roots.isEmpty
-                ? "「\(session.name)」没有给这台 Mac 共享任何文件夹（得由用户在那台 Mac 的 uTerm「动作 › 我的 Mac」里添加）"
-                : "「\(session.name)」共享了 \(roots.count) 个文件夹"
+                ? String(localized: "「\(session.name)」没有给这台 Mac 共享任何文件夹（得由用户在那台 Mac 的 uTerm「动作 › 我的 Mac」里添加）")
+                : String(localized: "「\(session.name)」共享了 \(roots.count) 个文件夹")
             return macResponse(request, message: message, payload)
 
         case .macDf:
@@ -235,11 +241,11 @@ extension ControlHandler {
             payload.path = reply.path
             payload.bytes = reply.bytes
             payload.totalBytes = reply.totalBytes
-            return macResponse(request, message: "可用 \(reply.bytes ?? 0) / 共 \(reply.totalBytes ?? 0) 字节", payload)
+            return macResponse(request, message: String(localized: "可用 \(String(reply.bytes ?? 0)) / 共 \(String(reply.totalBytes ?? 0)) 字节"), payload)
 
         case .macWrite:
             let target = try path(request)
-            guard let text = request.text else { throw ControlFailure(code: .invalid_request, message: "缺少要写入的内容") }
+            guard let text = request.text else { throw ControlFailure(code: .invalid_request, message: String(localized: "缺少要写入的内容")) }
             var file = RemoteFileRequest(op: .write, path: target)
             file.options = [RemoteFileOption.atomic]
             file.ifMatch = arguments.ifMatch
@@ -250,7 +256,7 @@ extension ControlHandler {
             payload.path = target
             payload.sha256 = reply.sha256
             payload.bytes = reply.size
-            return macResponse(request, message: "已写入 \(target)（\(reply.size ?? 0) 字节）", payload)
+            return macResponse(request, message: String(localized: "已写入 \(target)（\(String(reply.size ?? 0)) 字节）"), payload)
 
         case .macEdit:
             let target = try path(request)
@@ -263,23 +269,23 @@ extension ControlHandler {
             payload.sha256 = reply.sha256
             payload.count = reply.count
             payload.bytes = reply.size
-            return macResponse(request, message: "已替换 \(reply.count ?? 0) 处：\(target)", payload)
+            return macResponse(request, message: String(localized: "已替换 \(reply.count ?? 0) 处：\(target)"), payload)
 
         case .macPatch:
-            guard let diff = request.text, !diff.isEmpty else { throw ControlFailure(code: .invalid_request, message: "缺少补丁内容") }
+            guard let diff = request.text, !diff.isEmpty else { throw ControlFailure(code: .invalid_request, message: String(localized: "缺少补丁内容")) }
             var file = RemoteFileRequest(op: .patch, path: request.path ?? "~")
             file.strip = arguments.strip
             let (reply, body) = try await send(file, body: Data(diff.utf8))
             payload.path = reply.path
             payload.text = String(decoding: body, as: UTF8.self)
             let dryRun = arguments.options?.contains(RemoteFileOption.dryRun) == true
-            return macResponse(request, message: dryRun ? "补丁可以打上（没有改文件）" : "补丁已打上", payload)
+            return macResponse(request, message: dryRun ? String(localized: "补丁可以打上（没有改文件）") : String(localized: "补丁已打上"), payload)
 
         case .macTrash:
             let target = try path(request)
             let (reply, _) = try await send(RemoteFileRequest(op: .trash, path: target))
             payload.path = reply.path
-            return macResponse(request, message: "已移到废纸篓：\(target)", payload)
+            return macResponse(request, message: String(localized: "已移到废纸篓：\(target)"), payload)
 
         case .macLn:
             let target = try path(request)
@@ -287,7 +293,7 @@ extension ControlHandler {
             file.newPath = try newPath(request)
             file.options = (arguments.options ?? []) + (request.force == true ? [RemoteFileOption.replace] : [])
             _ = try await send(file)
-            return macResponse(request, message: "已建链接 \(target) → \(file.newPath ?? "")", payload)
+            return macResponse(request, message: String(localized: "已建链接 \(target) → \(file.newPath ?? "")"), payload)
 
         case .macReadlink:
             let target = try path(request)
@@ -300,7 +306,7 @@ extension ControlHandler {
             var file = RemoteFileRequest(op: .touch, path: target)
             file.seconds = arguments.seconds
             _ = try await send(file)
-            return macResponse(request, message: "已更新 \(target)", payload)
+            return macResponse(request, message: String(localized: "已更新 \(target)"), payload)
 
         case .macXattr:
             let target = try path(request)
@@ -324,13 +330,13 @@ extension ControlHandler {
             payload.path = reply.path
             payload.names = reply.names
             payload.timedOut = reply.timedOut
-            return macResponse(request, message: reply.timedOut == true ? "到时限也没有变化" : "有变化：\(reply.names?.count ?? 0) 处", payload)
+            return macResponse(request, message: reply.timedOut == true ? String(localized: "到时限也没有变化") : String(localized: "有变化：\(reply.names?.count ?? 0) 处"), payload)
 
         case .macRun:
             return try await run(request, session, payload, send)
 
         default:
-            throw ControlFailure(code: .invalid_request, message: "动作 \(request.action.rawValue) 不属于远程 Mac 组")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "动作 \(request.action.rawValue) 不属于远程 Mac 组"))
         }
     }
 
@@ -338,7 +344,7 @@ extension ControlHandler {
 
     private nonisolated static func stat(_ path: String, _ send: (RemoteFileRequest, Data) async throws -> (reply: RemoteFileReply, body: Data)) async throws -> RemoteFileEntry {
         let (reply, _) = try await send(RemoteFileRequest(op: .stat, path: path), Data())
-        guard let entry = reply.entry else { throw RemoteFileError(.failed, "\(path)：那台 Mac 没有回属性") }
+        guard let entry = reply.entry else { throw RemoteFileError(.failed, String(localized: "\(path)：那台 Mac 没有回属性")) }
         return entry
     }
 
@@ -356,7 +362,7 @@ extension ControlHandler {
             let length = min(max(1, arguments.length ?? ControlProtocol.maxCatBytes), ControlProtocol.maxCatBytes)
             let offset = UInt64(max(0, arguments.offset ?? 0))
             let data = try await withHeartbeat { try await provider.readRange(target, offset: offset, length: length) }
-            var response = macResponse(request, message: "\(target)：从 \(offset) 起 \(data.count) 字节", payload)
+            var response = macResponse(request, message: String(localized: "\(target)：从 \(String(offset)) 起 \(String(data.count)) 字节"), payload)
             response.file = ControlFilePayloadBuilder.payload(path: target, data: data, declaredSize: nil)
             return response
         }
@@ -373,8 +379,8 @@ extension ControlHandler {
         payload.sha256 = reply.sha256
         payload.bytes = reply.size
         payload.truncated = reply.truncated
-        let note = reply.truncated == true ? "（被截断，分段再读）" : ""
-        return macResponse(request, message: "\(target)：\(reply.count ?? 0) 行 / 共 \(reply.totalLines ?? 0) 行\(note)", payload)
+        let note = reply.truncated == true ? String(localized: "（被截断，分段再读）") : ""
+        return macResponse(request, message: String(localized: "\(target)：\(reply.count ?? 0) 行 / 共 \(reply.totalLines ?? 0) 行\(note)"), payload)
     }
 
     // MARK: - 跑命令
@@ -391,7 +397,7 @@ extension ControlHandler {
         file.maxDuration = Double(limits.maxDurationSeconds)
         file.maxBytes = limits.maxBytes
         let (reply, body) = try await send(file, Data())
-        guard let exec = reply.exec else { throw RemoteFileError(.failed, "那台 Mac 没有回执行结果") }
+        guard let exec = reply.exec else { throw RemoteFileError(.failed, String(localized: "那台 Mac 没有回执行结果")) }
         var output = String(decoding: body, as: UTF8.self)
         var truncated = exec.truncated
         // 行数上限：只留最后这么多行（同字节上限，结尾最有用）。
@@ -411,16 +417,29 @@ extension ControlHandler {
         if exec.timedOut {
             var response = ControlResponse.failure(
                 id: request.id, code: .command_timeout,
-                message: exec.timeoutReason == "idle"
-                    ? "连续 \(limits.timeoutSeconds) 秒没有输出，已判定卡住" + (exec.killed ? "并终止" : "，但没能终止，命令可能还在跑")
-                    : "跑满 \(limits.maxDurationSeconds) 秒的总时长上限" + (exec.killed ? "，已终止" : "，但没能终止，命令可能还在跑"),
+                message: Self.macTimeoutMessage(idle: exec.timeoutReason == "idle", killed: exec.killed, limits: limits),
                 results: [result])
             response.mac = payload
             return response
         }
-        var response = macResponse(request, message: "退出码 \(exec.exitCode.map(String.init) ?? "无（被信号终止）")", payload)
+        let exitText = exec.exitCode.map(String.init) ?? String(localized: "无（被信号终止）")
+        var response = macResponse(request, message: String(localized: "退出码 \(exitText)"), payload)
         response.result = result
         return response
+    }
+
+    /// `mac-run` 超时的文案：静默超时 / 总时长超时 × 终止成没成。
+    private nonisolated static func macTimeoutMessage(idle: Bool, killed: Bool, limits: RunLimits) -> String {
+        switch (idle, killed) {
+        case (true, true):
+            return String(localized: "连续 \(limits.timeoutSeconds) 秒没有输出，已判定卡住并终止")
+        case (true, false):
+            return String(localized: "连续 \(limits.timeoutSeconds) 秒没有输出，已判定卡住，但没能终止，命令可能还在跑")
+        case (false, true):
+            return String(localized: "跑满 \(limits.maxDurationSeconds) 秒的总时长上限，已终止")
+        case (false, false):
+            return String(localized: "跑满 \(limits.maxDurationSeconds) 秒的总时长上限，但没能终止，命令可能还在跑")
+        }
     }
 
     // MARK: - 传输
@@ -434,7 +453,7 @@ extension ControlHandler {
         let window = min(max(1, request.parallel ?? ControlProtocol.defaultTransferChannels), ControlProtocol.maxTransferChannels)
         guard let context = ControlRequestContext.current, let fd = context.takeFileDescriptor() else {
             throw ControlFailure(code: .invalid_request,
-                                 message: "\(request.action.rawValue) 需要随请求用 SCM_RIGHTS 交来本地文件的 fd（utermctl 会自动做）")
+                                 message: String(localized: "\(request.action.rawValue) 需要随请求用 SCM_RIGHTS 交来本地文件的 fd（utermctl 会自动做）"))
         }
         defer { Darwin.close(fd) }
         let isGet = request.action == .macGet
@@ -447,7 +466,7 @@ extension ControlHandler {
         let size: Int64
         if isGet {
             let entry = try await stat(target, send)
-            guard !entry.isDirectory else { throw RemoteFileError(.isDirectory, "\(target)：是目录") }
+            guard !entry.isDirectory else { throw RemoteFileError(.isDirectory, String(localized: "\(target)：是目录")) }
             size = entry.size
             try validate(ranges, size: size)
             context.setTotal(size)
@@ -455,13 +474,13 @@ extension ControlHandler {
                 try await RemoteMacTransfer.download(path: target, size: size, ranges: ranges, window: window, perform: perform,
                                                      sink: { offset, data in try RemoteMacFileProvider.pwriteAll(fd, data, at: offset) },
                                                      onPiece: onPiece)
-            } catch let error as RemoteFileError where error.message.hasPrefix("写本地文件失败") {
+            } catch let error as RemoteMacLocalFileError where error.direction == .write {
                 throw ControlFailure(code: .local_write_failed, message: error.message)
             }
         } else {
             var info = Darwin.stat()
             guard fstat(fd, &info) == 0 else {
-                throw ControlFailure(code: .local_read_failed, message: "读不了本地文件的属性：\(String(cString: strerror(errno)))")
+                throw ControlFailure(code: .local_read_failed, message: String(localized: "读不了本地文件的属性：\(String(cString: strerror(errno)))"))
             }
             size = Int64(info.st_size)
             try validate(ranges, size: size)
@@ -476,37 +495,40 @@ extension ControlHandler {
                 try await RemoteMacTransfer.upload(path: target, size: size, ranges: ranges, window: window, perform: perform,
                                                    source: { offset, length in try RemoteMacFileProvider.preadAll(fd, at: offset, length: length) },
                                                    onPiece: onPiece)
-            } catch let error as RemoteFileError where error.message.hasPrefix("读本地文件失败") || error.message.hasPrefix("本地文件") {
+            } catch let error as RemoteMacLocalFileError where error.direction == .read {
                 throw ControlFailure(code: .local_read_failed, message: error.message)
             }
             let remote = try await stat(target, send).size
             guard remote == size else {
-                throw ControlFailure(code: .operation_failed, message: "\(target)：传完之后远端是 \(remote) 字节，本地是 \(size) 字节")
+                throw ControlFailure(code: .operation_failed, message: String(localized: "\(target)：传完之后远端是 \(String(remote)) 字节，本地是 \(String(size)) 字节"))
             }
         }
         let seconds = Date().timeIntervalSince(started)
         let moved = ranges.map { $0.reduce(0) { $0 + $1.length } } ?? size
-        var response = macResponse(request, message: "\(isGet ? "已下载" : "已上传") \(target)（\(moved) 字节，"
-                                       + String(format: "%.1f 秒）", seconds), base)
+        let secondsText = String(format: "%.1f", seconds)
+        let message = isGet
+            ? String(localized: "已下载 \(target)（\(String(moved)) 字节，\(secondsText) 秒）")
+            : String(localized: "已上传 \(target)（\(String(moved)) 字节，\(secondsText) 秒）")
+        var response = macResponse(request, message: message, base)
         response.transfer = ControlTransferResult(path: target, bytes: moved, totalBytes: size, seconds: seconds, channels: window)
         return response
     }
 
     private nonisolated static func validate(_ ranges: [RemoteMacTransfer.Range]?, size: Int64) throws(ControlFailure) {
         for range in ranges ?? [] where range.offset < 0 || range.length <= 0 || range.offset + range.length > size {
-            throw ControlFailure(code: .invalid_request, message: "区间 \(range.offset)+\(range.length) 超出了文件大小 \(size)")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "区间 \(String(range.offset))+\(String(range.length)) 超出了文件大小 \(String(size))"))
         }
     }
 
     // MARK: - 参数与心跳
 
     private nonisolated static func path(_ request: ControlRequest) throws(ControlFailure) -> String {
-        guard let path = request.path, !path.isEmpty else { throw ControlFailure(code: .invalid_request, message: "缺少路径") }
+        guard let path = request.path, !path.isEmpty else { throw ControlFailure(code: .invalid_request, message: String(localized: "缺少路径")) }
         return path
     }
 
     private nonisolated static func newPath(_ request: ControlRequest) throws(ControlFailure) -> String {
-        guard let path = request.newPath, !path.isEmpty else { throw ControlFailure(code: .invalid_request, message: "缺少目标路径") }
+        guard let path = request.newPath, !path.isEmpty else { throw ControlFailure(code: .invalid_request, message: String(localized: "缺少目标路径")) }
         return path
     }
 

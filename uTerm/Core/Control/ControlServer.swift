@@ -157,8 +157,8 @@ nonisolated final class ControlServer: @unchecked Sendable {
     func start() -> String? {
         guard ControlProtocol.fitsInSunPath(socketURL) else {
             let pathBytes = socketURL.path.utf8.count
-            let message = "socket 路径过长（\(pathBytes) 字节，上限 \(ControlProtocol.maxSunPathLength - 1)）："
-                + "\(socketURL.path)。macOS 用户名太长，命令行接口无法启动。"
+            let limit = ControlProtocol.maxSunPathLength - 1
+            let message = String(localized: "socket 路径过长（\(pathBytes) 字节，上限 \(limit)）：\(socketURL.path)。macOS 用户名太长，命令行接口无法启动。")
             Self.logger.error("\(message, privacy: .public)")
             return message
         }
@@ -425,7 +425,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
         let response = ControlResponse.failure(
             id: nil,
             code: .server_busy,
-            message: "uTerm 命令行接口并发已满（上限 \(maxActiveClients) 条连接），稍后重试"
+            message: String(localized: "uTerm 命令行接口并发已满（上限 \(maxActiveClients) 条连接），稍后重试")
         )
         clientQueue.async { [self] in
             writeResponse(response, to: clientFD)
@@ -520,7 +520,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
                 response: .failure(
                     id: request.id,
                     code: .server_busy,
-                    message: "uTerm 的传输并发已满（上限 \(maxTransferClients) 个），稍后重试"
+                    message: String(localized: "uTerm 的传输并发已满（上限 \(maxTransferClients) 个），稍后重试")
                 ),
                 clientFD: clientFD,
                 token: token

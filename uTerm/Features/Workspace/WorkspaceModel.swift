@@ -47,7 +47,7 @@ final class WorkspaceModel {
     /// 回落来源，由 `TerminalArea` 注入。
     /// `@ObservationIgnored`：是接线不是状态，改它不该让任何视图失效。
     @ObservationIgnored private var defaultServerProfileID: UUID?
-    @ObservationIgnored private var defaultServerTitle: String = "终端"
+    @ObservationIgnored private var defaultServerTitle: String = String(localized: "终端", comment: "终端标签页的默认标题")
 
     /// 三栏 UI 状态：sidebar 折叠 / inspector 显隐 / 预览-终端比例。持久化进 snapshot。
     var uiState = WorkspaceUIState()
@@ -277,9 +277,10 @@ final class WorkspaceModel {
     /// 每次向工作区 Agent 发送消息时使用的实时上下文。活动文件来自预览模型，因而
     /// 切换编辑标签或分屏焦点后，Agent 能直接定位当前窗口对应的远端绝对路径。
     func assistantContext(for server: ServerProfile) -> String {
-        var lines = ["主机：\(server.name)（\(server.displayEndpoint)）"]
+        var lines = [String(localized: "主机：\(server.name)（\(server.displayEndpoint)）",
+                            comment: "附给 Agent 的上下文：当前主机名与地址")]
         if let path = filePreviewModel.activeBuffer?.remotePath {
-            lines.append("当前文件：\(path)")
+            lines.append(String(localized: "当前文件：\(path)", comment: "附给 Agent 的上下文：当前打开的远端文件"))
         }
         return lines.joined(separator: "\n")
     }
@@ -619,7 +620,8 @@ final class WorkspaceModel {
         let groups = terminalGroups.snapshot { tab -> TerminalTabSnapshot? in
             guard tab.payload.fileBuffer == nil else { return nil }
             return TerminalTabSnapshot(serverProfileID: tab.payload.serverProfileID,
-                                       title: tab.payload.tabTitle ?? "终端", sessionID: tab.payload.id)
+                                       title: tab.payload.tabTitle ?? String(localized: "终端", comment: "终端标签页的默认标题"),
+                                       sessionID: tab.payload.id)
         }
 
         var activeIdx: Int?
@@ -631,7 +633,7 @@ final class WorkspaceModel {
                 activeIdx = tabSnaps.count
             }
             tabSnaps.append(TabSnapshot(
-                title: tab.payload.tabTitle ?? "终端",
+                title: tab.payload.tabTitle ?? String(localized: "终端", comment: "终端标签页的默认标题"),
                 layout: .leaf(serverProfileID: tab.payload.serverProfileID)))
         }
         let (openFiles, activeFileIndex) = filePreviewModel.openFileSnapshots()

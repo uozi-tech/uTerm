@@ -115,7 +115,7 @@ private struct RemotePairingPanelView: View {
             }
             HStack {
                 Spacer()
-                UDButton(title: "拒绝", style: .secondary, action: onReject)
+                UDButton(title: String(localized: "拒绝", comment: "拒绝配对请求"), style: .secondary, action: onReject)
             }
         }
         .padding(20)

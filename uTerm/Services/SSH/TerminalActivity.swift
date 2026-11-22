@@ -41,14 +41,14 @@ nonisolated enum TerminalActivity: Equatable, Sendable {
         case .idle:
             return nil
         case .running(let name?):
-            return TerminalClosePrompt(title: "「\(name)」还在运行",
-                                       message: "关闭这个标签页可能会中断它。")
+            return TerminalClosePrompt(title: String(localized: "「\(name)」还在运行"),
+                                       message: String(localized: "关闭这个标签页可能会中断它。"))
         case .running(nil):
-            return TerminalClosePrompt(title: "这个标签页里还有程序在运行",
-                                       message: "关闭这个标签页可能会中断它。")
+            return TerminalClosePrompt(title: String(localized: "这个标签页里还有程序在运行"),
+                                       message: String(localized: "关闭这个标签页可能会中断它。"))
         case .unknown:
-            return TerminalClosePrompt(title: "这个标签页里可能还有程序在运行",
-                                       message: "无法确认它现在的状态。关闭标签页会断开这个终端，里面的程序可能被中断。")
+            return TerminalClosePrompt(title: String(localized: "这个标签页里可能还有程序在运行"),
+                                       message: String(localized: "无法确认它现在的状态。关闭标签页会断开这个终端，里面的程序可能被中断。"))
         }
     }
 }
@@ -75,15 +75,23 @@ nonisolated struct TerminalClosePrompt: Equatable, Sendable {
         }
         guard running + unknown > 0 else { return nil }
         guard running > 0 else {
-            return TerminalClosePrompt(title: "这个窗口里可能还有程序在运行",
-                                       message: "有 \(unknown) 个标签页无法确认状态。关闭窗口会断开它们，里面的程序可能被中断。")
+            return TerminalClosePrompt(title: String(localized: "这个窗口里可能还有程序在运行"),
+                                       message: String(localized: "有 \(unknown) 个标签页无法确认状态。关闭窗口会断开它们，里面的程序可能被中断。"))
         }
         let title = running == 1 && names.count == 1
-            ? "「\(names[0])」还在运行"
-            : "有 \(running) 个标签页还有程序在运行"
-        let listed = running > 1 && !names.isEmpty ? names.joined(separator: "、") + "。" : ""
-        let pronoun = running + unknown > 1 ? "它们" : "它"
-        return TerminalClosePrompt(title: title, message: "\(listed)关闭这个窗口可能会中断\(pronoun)。")
+            ? String(localized: "「\(names[0])」还在运行")
+            : String(localized: "有 \(running) 个标签页还有程序在运行")
+        let message: String
+        if running > 1 && !names.isEmpty {
+            // running > 1 时代词总是「它们」。
+            let listed = names.joined(separator: String(localized: "、", comment: "列举进程名的分隔符"))
+            message = String(localized: "\(listed)。关闭这个窗口可能会中断它们。")
+        } else if running + unknown > 1 {
+            message = String(localized: "关闭这个窗口可能会中断它们。")
+        } else {
+            message = String(localized: "关闭这个窗口可能会中断它。")
+        }
+        return TerminalClosePrompt(title: title, message: message)
     }
 }
 

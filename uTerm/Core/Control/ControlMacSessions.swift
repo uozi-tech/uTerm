@@ -141,18 +141,18 @@ final class ControlMacSessions: ControlRemoteMacs {
         case .connected:
             break
         case .awaitingApproval:
-            throw ControlFailure(code: .connect_failed, message: "「\(mac.name)」还在等那台 Mac 上的人确认配对")
+            throw ControlFailure(code: .connect_failed, message: String(localized: "「\(mac.name)」还在等那台 Mac 上的人确认配对"))
         case .failed(let reason):
-            throw ControlFailure(code: .connect_failed, message: "连不上「\(mac.name)」：\(reason)")
+            throw ControlFailure(code: .connect_failed, message: String(localized: "连不上「\(mac.name)」：\(reason)"))
         case .idle, .connecting:
-            throw ControlFailure(code: .connect_failed, message: "连不上「\(mac.name)」")
+            throw ControlFailure(code: .connect_failed, message: String(localized: "连不上「\(mac.name)」"))
         }
         guard client.supportsFiles else {
             throw ControlFailure(code: .operation_failed,
-                                 message: "「\(mac.name)」上的 uTerm 版本太旧，不支持远程访问文件。把那台 Mac 上的 uTerm 更新到最新版")
+                                 message: String(localized: "「\(mac.name)」上的 uTerm 版本太旧，不支持远程访问文件。把那台 Mac 上的 uTerm 更新到最新版"))
         }
         guard let session = held[mac.id]?.session else {
-            throw ControlFailure(code: .connect_failed, message: "到「\(mac.name)」的连接刚被放掉，再试一次")
+            throw ControlFailure(code: .connect_failed, message: String(localized: "到「\(mac.name)」的连接刚被放掉，再试一次"))
         }
         return session
     }
@@ -172,7 +172,7 @@ final class ControlMacSessions: ControlRemoteMacs {
         let name = controller.name
         let provider = RemoteMacFileProvider(send: { [weak host] request, body, timeout in
             guard let host = await MainActor.run(body: { host }) else {
-                throw RemoteFileError(.unreachable, "「\(name)」已经不连着这台 Mac 了")
+                throw RemoteFileError(.unreachable, String(localized: "「\(name)」已经不连着这台 Mac 了"))
             }
             return try await host.performSharedFile(toDevice: deviceID, name: name, request: request, body: body,
                                                     timeout: timeout)
@@ -183,12 +183,13 @@ final class ControlMacSessions: ControlRemoteMacs {
 
     private static func noFiles(_ controller: RemoteHostServer.Controller) -> String {
         controller.platform == RemoteDevicePlatform.mac.rawValue
-            ? "「\(controller.name)」上的 uTerm 版本太旧，不能共享文件夹。把那台 Mac 上的 uTerm 更新到最新版"
-            : "「\(controller.name)」不是 Mac，没有文件可以共享"
+            ? String(localized: "「\(controller.name)」上的 uTerm 版本太旧，不能共享文件夹。把那台 Mac 上的 uTerm 更新到最新版")
+            : String(localized: "「\(controller.name)」不是 Mac，没有文件可以共享")
     }
 
     private static func label(_ controller: RemoteHostServer.Controller) -> String {
-        "\(controller.name)（\(ControlMacRole.controllerPrefix)\(controller.deviceID.uuidString)）"
+        String(localized: "\(controller.name)（\(ControlMacRole.controllerPrefix + controller.deviceID.uuidString)）",
+               comment: "设备名（设备 id），id 原样给命令行用")
     }
 
     /// 没写 `--mac`（或写的是 `@controller`）时用哪台设备。几台设备同时连着本机时绝不猜：
@@ -200,10 +201,12 @@ final class ControlMacSessions: ControlRemoteMacs {
         if let session, let current = host?.controller(ofSession: session) {
             guard current.sharesFiles else {
                 let others = connected.filter { $0.sharesFiles }
+                let reason = String(localized: "此刻接管这个终端的是\(Self.noFiles(current))")
+                let othersList = others.map(Self.label).joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
                 throw ControlFailure(code: .operation_failed,
-                                     message: "此刻接管这个终端的是" + Self.noFiles(current)
-                                         + (others.isEmpty ? "" : "。还连着的有：" + others.map(Self.label).joined(separator: "、")
-                                            + "，要用它们请用 --mac 指定"))
+                                     message: others.isEmpty
+                                         ? reason
+                                         : String(localized: "\(reason)。还连着的有：\(othersList)，要用它们请用 --mac 指定"))
             }
             return current
         }
@@ -212,17 +215,18 @@ final class ControlMacSessions: ControlRemoteMacs {
         case 1:
             return sharing[0]
         case 0:
+            let connectedNames = connected.map(\.name).joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
             let hint = connected.isEmpty
-                ? "此刻没有设备连着这台 Mac"
-                : "此刻连着这台 Mac 的设备（" + connected.map(\.name).joined(separator: "、") + "）都不提供文件"
+                ? String(localized: "此刻没有设备连着这台 Mac")
+                : String(localized: "此刻连着这台 Mac 的设备（\(connectedNames)）都不提供文件")
             throw ControlFailure(code: .invalid_request,
-                                 message: "缺少 --mac：\(hint)。先跑 `utermctl macs` 看有哪些 Mac 可用")
+                                 message: String(localized: "缺少 --mac：\(hint)。先跑 `utermctl macs` 看有哪些 Mac 可用"))
         default:
+            let sharingList = sharing.map(Self.label).joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
             throw ControlFailure(code: .host_ambiguous,
-                                 message: "此刻有 \(sharing.count) 台设备连着这台 Mac："
-                                     + sharing.map(Self.label).joined(separator: "、")
-                                     + (session == nil ? "。这条命令不是在 uTerm 的终端里发的，" : "。这个终端此刻没有被哪台设备接管，")
-                                     + "分不出该用哪台，用 --mac 加括号里的 id 指定")
+                                 message: session == nil
+                                     ? String(localized: "此刻有 \(sharing.count) 台设备连着这台 Mac：\(sharingList)。这条命令不是在 uTerm 的终端里发的，分不出该用哪台，用 --mac 加括号里的 id 指定")
+                                     : String(localized: "此刻有 \(sharing.count) 台设备连着这台 Mac：\(sharingList)。这个终端此刻没有被哪台设备接管，分不出该用哪台，用 --mac 加括号里的 id 指定"))
         }
     }
 
@@ -236,7 +240,7 @@ final class ControlMacSessions: ControlRemoteMacs {
         if trimmed.hasPrefix(ControlMacRole.controllerPrefix) {
             let raw = String(trimmed.dropFirst(ControlMacRole.controllerPrefix.count))
             guard let id = UUID(uuidString: raw), let found = controllers.first(where: { $0.deviceID == id }) else {
-                throw ControlFailure(code: .host_not_found, message: "设备 \(raw) 此刻没有连着这台 Mac（跑 `utermctl macs` 看有哪些）")
+                throw ControlFailure(code: .host_not_found, message: String(localized: "设备 \(raw) 此刻没有连着这台 Mac（跑 `utermctl macs` 看有哪些）"))
             }
             return .controller(found)
         }
@@ -260,16 +264,17 @@ final class ControlMacSessions: ControlRemoteMacs {
         switch HostResolver.resolve(trimmed, in: candidates) {
         case .matched(let id):
             guard let target = targets[id] else {
-                throw ControlFailure(code: .host_not_found, message: "没有名为「\(trimmed)」的 Mac")
+                throw ControlFailure(code: .host_not_found, message: String(localized: "没有名为「\(trimmed)」的 Mac"))
             }
             return target
         case .ambiguous(let matches):
             let labels = matches.map { match in
-                controllerKeys[match.id].map { Self.label($0) + "，正连着这台 Mac" } ?? "\(match.name)（\(match.id.uuidString)），配对过的 Mac"
+                controllerKeys[match.id].map { String(localized: "\(Self.label($0))，正连着这台 Mac") }
+                    ?? String(localized: "\(match.name)（\(match.id.uuidString)），配对过的 Mac")
             }
+            let labelList = labels.joined(separator: String(localized: "；", comment: "并列的长条目之间的分隔符"))
             throw ControlFailure(code: .host_ambiguous,
-                                 message: "「\(trimmed)」匹配到 \(matches.count) 个：" + labels.joined(separator: "；")
-                                     + "。改用括号里的 id 重试。")
+                                 message: String(localized: "「\(trimmed)」匹配到 \(matches.count) 个：\(labelList)。改用括号里的 id 重试。"))
         case .notFound:
             // 只给了设备 UUID、它又只是正连着本机的主控设备（没有反过来配对过）。
             if let id = UUID(uuidString: trimmed), let found = controllers.first(where: { $0.deviceID == id }) {
@@ -277,8 +282,8 @@ final class ControlMacSessions: ControlRemoteMacs {
             }
             throw ControlFailure(code: .host_not_found,
                                  message: macs.isEmpty && controllers.isEmpty
-                                     ? "这台 Mac 还没有配对过别的 Mac，此刻也没有设备连着它。在 uTerm「动作 › 我的 Mac」里配对"
-                                     : "没有名为「\(trimmed)」的 Mac（跑 `utermctl macs` 看有哪些）")
+                                     ? String(localized: "这台 Mac 还没有配对过别的 Mac，此刻也没有设备连着它。在 uTerm「动作 › 我的 Mac」里配对")
+                                     : String(localized: "没有名为「\(trimmed)」的 Mac（跑 `utermctl macs` 看有哪些）"))
         }
     }
 

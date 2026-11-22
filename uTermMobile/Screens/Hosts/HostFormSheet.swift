@@ -26,14 +26,14 @@ struct HostFormSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 22) {
-                    MInsetGroup(header: "连接") {
-                        formInput("名称", "例如：prod-web-01", $draft.name, autocap: .sentences)
-                        formInput("主机地址", "example.com 或 10.0.0.1", $draft.host)
-                        formInput("端口", "22", $draft.port, keyboard: .numberPad, last: false)
-                        formInput("用户名", "root", $draft.username, last: true)
+                    MInsetGroup(header: String(localized: "连接", comment: "主机表单分组：连接参数")) {
+                        formInput(String(localized: "名称"), String(localized: "例如：prod-web-01"), $draft.name, autocap: .sentences)
+                        formInput(String(localized: "主机地址"), String(localized: "example.com 或 10.0.0.1"), $draft.host)
+                        formInput(String(localized: "端口"), "22", $draft.port, keyboard: .numberPad, last: false)
+                        formInput(String(localized: "用户名"), "root", $draft.username, last: true)
                     }
 
-                    MInsetGroup(header: "认证") {
+                    MInsetGroup(header: String(localized: "认证", comment: "主机表单分组：认证方式")) {
                         Picker("方式", selection: $draft.auth) {
                             Text("密码").tag(AuthMethod.password)
                             Text("SSH 密钥").tag(AuthMethod.privateKey)
@@ -65,7 +65,7 @@ struct HostFormSheet: View {
                         } else {
                             MRowDivider()
                             if keys.isEmpty {
-                                MInsetRow(label: "未找到密钥", sub: "先在「设置 › SSH 密钥」中添加", last: true)
+                                MInsetRow(label: String(localized: "未找到密钥"), sub: String(localized: "先在「设置 › SSH 密钥」中添加"), last: true)
                             } else {
                                 ForEach(Array(keys.enumerated()), id: \.element.id) { idx, key in
                                     keyRow(key, last: idx == keys.count - 1)
@@ -74,8 +74,8 @@ struct HostFormSheet: View {
                         }
                     }
 
-                    MInsetGroup(header: "选项") {
-                        formInput("分组", "如 prod / dev（可空）", $draft.group, autocap: .never, last: false)
+                    MInsetGroup(header: String(localized: "选项", comment: "主机表单分组")) {
+                        formInput(String(localized: "分组", comment: "主机所属分组"), String(localized: "如 prod / dev（可空）"), $draft.group, autocap: .never, last: false)
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("仅 SFTP").font(M.sans(15)).foregroundStyle(M.text)

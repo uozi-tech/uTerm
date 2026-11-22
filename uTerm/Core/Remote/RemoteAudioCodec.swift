@@ -21,7 +21,7 @@ nonisolated enum RemoteAudioCodecError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .converter(let status): return "声音编解码器出错（\(status)）"
+        case .converter(let status): return String(localized: "声音编解码器出错（\(String(status))）")
         }
     }
 }

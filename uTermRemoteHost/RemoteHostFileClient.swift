@@ -29,9 +29,9 @@ nonisolated final class RemoteHostFileClient: @unchecked Sendable {
                                                    RemoteFileError(.unreachable, message)), compress: false)
             }
             guard let proxy = proxy(onError: { @Sendable error in
-                once.resume(failure("Mac 上的辅助程序没有响应：\(error.localizedDescription)"))
+                once.resume(failure(String(localized: "Mac 上的辅助程序没有响应：\(error.localizedDescription)")))
             }) else {
-                return once.resume(failure("Mac 上的辅助程序没有响应"))
+                return once.resume(failure(String(localized: "Mac 上的辅助程序没有响应")))
             }
             proxy.fileRequest(payload) { once.resume($0) }
         }
@@ -41,10 +41,9 @@ nonisolated final class RemoteHostFileClient: @unchecked Sendable {
     @MainActor
     static func access(settings: RemoteControlSettings) -> RemoteFileAccess {
         RemoteFileAccess(refusal: { [weak settings] _ in
-            guard let settings else { return RemoteFileError(.unreachable, "远控进程正在退出") }
+            guard let settings else { return RemoteFileError(.unreachable, String(localized: "远控进程正在退出")) }
             guard settings.isLocalShellEnabled else {
-                return RemoteFileError(.disabled, "Mac 上没有打开「允许打开本机终端」（远程访问文件、执行命令和它共用这个开关）。"
-                                       + "在 Mac 的 uTerm 里打开「设置 › 远程控制」。")
+                return RemoteFileError(.disabled, String(localized: "Mac 上没有打开「允许打开本机终端」（远程访问文件、执行命令和它共用这个开关）。在 Mac 的 uTerm 里打开「设置 › 远程控制」。"))
             }
             return nil
         }, perform: { payload in await shared.perform(payload) })

@@ -121,9 +121,9 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
             case .connectFailed(let message):
                 return SSHBridgeFailure(kind: .connect, message: message)
             case .authenticationFailed(let message):
-                return SSHBridgeFailure(kind: .connect, message: "认证失败：\(message)")
+                return SSHBridgeFailure(kind: .connect, message: String(localized: "认证失败：\(message)", bundle: SSHHelperBundle.localization))
             case .hostKeyRejected(let message):
-                return SSHBridgeFailure(kind: .connect, message: "主机密钥被拒绝：\(message)")
+                return SSHBridgeFailure(kind: .connect, message: String(localized: "主机密钥被拒绝：\(message)", bundle: SSHHelperBundle.localization))
             default:
                 return SSHBridgeFailure(kind: .connect, message: error.errorDescription ?? FriendlyError.describe(error))
             }

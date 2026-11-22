@@ -121,9 +121,9 @@ struct ParallelRunWindowView: View {
     }
 
     private var placeholderText: String {
-        if windowID == nil { return "正在恢复…" }
-        if command == nil { return "命令已删除" }
-        return "没有可执行的目标主机"
+        if windowID == nil { return String(localized: "正在恢复…") }
+        if command == nil { return String(localized: "命令已删除") }
+        return String(localized: "没有可执行的目标主机")
     }
 
     // MARK: - 构建模型

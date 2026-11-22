@@ -1,0 +1,8 @@
+/* Name shown in System Settings (Privacy & Security > Accessibility, etc.) and the permission prompts.
+   See the zh-Hans file for why the name must be localized here. */
+"CFBundleName" = "uTerm 원격 제어";
+"CFBundleDisplayName" = "uTerm 원격 제어";
+"NSLocalNetworkUsageDescription" = "uTerm은 페어링된 휴대폰과 Mac이 로컬 네트워크에서 이 Mac의 터미널과 화면을 원격으로 제어할 수 있게 합니다.";
+"NSDocumentsFolderUsageDescription" = "페어링된 기기가 uTerm을 통해 이 Mac의 파일을 원격으로 읽고 씁니다.";
+"NSDesktopFolderUsageDescription" = "페어링된 기기가 uTerm을 통해 이 Mac의 파일을 원격으로 읽고 씁니다.";
+"NSDownloadsFolderUsageDescription" = "페어링된 기기가 uTerm을 통해 이 Mac의 파일을 원격으로 읽고 씁니다.";

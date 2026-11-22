@@ -21,7 +21,7 @@ struct EmptyServersState: View {
                 wordmark.padding(.top, 18)
                 tagline.padding(.top, 10)
 
-                UDButton(title: "新建主机", systemImage: "plus", action: onNewServer)
+                UDButton(title: String(localized: "新建主机"), systemImage: "plus", action: onNewServer)
                     .padding(.top, 36)
 
                 importHint.padding(.top, 18)

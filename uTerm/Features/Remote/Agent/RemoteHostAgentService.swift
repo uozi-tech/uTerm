@@ -193,7 +193,7 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
         default:
             break
         }
-        guard let server else { return RemoteHostAgentCommandReply(ok: false, error: "远控进程还没准备好") }
+        guard let server else { return RemoteHostAgentCommandReply(ok: false, error: String(localized: "远控进程还没准备好")) }
         switch command {
         case .approvePairing(let id): server.approvePairing(id)
         case .rejectPairing(let id): server.rejectPairing(id)
@@ -229,7 +229,7 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
             // 失败时 `data` 是 `RemoteFileError` 的 JSON：App 那头照原样抛出，命令行的重试规则（超时、断开才重试）不变。
             guard let connection = server.fileConnection(toDevice: device) else {
                 return RemoteHostAgentCommandReply(ok: false, data: RemoteHostAgentJSON.encode(
-                    RemoteFileError(.unreachable, "那台设备已经不连着这台 Mac 了")))
+                    RemoteFileError(.unreachable, String(localized: "那台设备已经不连着这台 Mac 了"))))
             }
             do {
                 let raw = try await connection.exchangeFile(payload, id: requestID, timeout: .milliseconds(timeout))
@@ -240,14 +240,14 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
             }
         case .groupAddController(let payload):
             guard let request = RemoteHostAgentJSON.decode(RemoteVouchRequest.self, from: payload) else {
-                return RemoteHostAgentCommandReply(ok: false, error: "请求不合法")
+                return RemoteHostAgentCommandReply(ok: false, error: String(localized: "请求不合法"))
             }
             let result = server.handleGroupController(request)
             scheduleStatePush()
             return RemoteHostAgentCommandReply(data: RemoteHostAgentJSON.encode(result))
         case .groupDropController(let payload):
             guard let request = RemoteHostAgentJSON.decode(RemoteSiblingRevokeRequest.self, from: payload) else {
-                return RemoteHostAgentCommandReply(ok: false, error: "请求不合法")
+                return RemoteHostAgentCommandReply(ok: false, error: String(localized: "请求不合法"))
             }
             let result = server.handleGroupDrop(request)
             scheduleStatePush()
@@ -289,12 +289,12 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
         server.localShellOpener = RemoteLocalShellOpener(workspaces: { [weak self] in
             self?.localWorkspaces ?? []
         }, open: { [weak self] directory in
-            guard let self else { return .failure(.init(message: "远控进程正在退出")) }
+            guard let self else { return .failure(.init(message: String(localized: "远控进程正在退出"))) }
             guard let reply = await self.sessions.request(.openLocalShell(directory: directory)) else {
                 return .failure(.init(message: RemoteHostAttachError.appUnavailable.message))
             }
             if let id = reply.sessionID { return .success(id) }
-            return .failure(.init(message: reply.error ?? "本机终端没开成"))
+            return .failure(.init(message: reply.error ?? String(localized: "本机终端没开成")))
         })
         server.fileAccess = environment.makeFileAccess(settings)
         server.onStateChange = { [weak self] in self?.scheduleStatePush() }
@@ -305,9 +305,9 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
             if settings.isEnabled { server.start() } else { server.stop() }
             server.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
                                         keepAwake: settings.keepsAwakeForInternet)
-            if !settings.isDesktopEnabled { server.endDesktop(reason: "Mac 上关闭了远程桌面") }
+            if !settings.isDesktopEnabled { server.endDesktop(reason: String(localized: "Mac 上关闭了远程桌面")) }
             server.desktopSettingsChanged()
-            if !settings.isDesktopAudioEnabled { server.endDesktopAudio(reason: "Mac 上关闭了「允许传输声音」") }
+            if !settings.isDesktopAudioEnabled { server.endDesktopAudio(reason: String(localized: "Mac 上关闭了「允许传输声音」")) }
         }
         observeServer()
     }
@@ -445,7 +445,7 @@ nonisolated private final class RemoteHostAgentEndpoint: NSObject, RemoteHostAge
 
     func command(_ payload: Data, reply: @escaping @Sendable (Data) -> Void) {
         guard let command = RemoteHostAgentJSON.decode(RemoteHostAgentCommand.self, from: payload) else {
-            reply(RemoteHostAgentJSON.encode(RemoteHostAgentCommandReply(ok: false, error: "远控进程不认得这个操作")))
+            reply(RemoteHostAgentJSON.encode(RemoteHostAgentCommandReply(ok: false, error: String(localized: "远控进程不认得这个操作"))))
             return
         }
         onMain { service in

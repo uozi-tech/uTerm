@@ -49,7 +49,7 @@ enum AgentModelDirectory {
 
     nonisolated static func describe(_ error: Error) -> String {
         if let invalid = error as? ProviderEndpointPolicy.ValidationError {
-            return "Base URL 无效：\(invalid.message)"
+            return String(localized: "Base URL 无效：\(invalid.message)")
         }
         return ProviderModelCatalog.message(for: error)
     }

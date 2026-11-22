@@ -36,9 +36,9 @@ struct AgentComposer: View {
             canSend: model.hasDraft,
             canStop: model.canStop,
             sendHelp: model.isBusy
-                ? "排队发送，Agent 空闲后依次处理（↩）；立即发送，不打断、这一步跑完就送达（⌘↩）"
-                : "发送（↩）",
-            stopHelp: "停止生成和审批，取消待执行命令；已下发命令继续回收结果（esc）",
+                ? String(localized: "排队发送，Agent 空闲后依次处理（↩）；立即发送，不打断、这一步跑完就送达（⌘↩）")
+                : String(localized: "发送（↩）"),
+            stopHelp: String(localized: "停止生成和审批，取消待执行命令；已下发命令继续回收结果（esc）"),
             onSend: onSend,
             onStop: model.stop,
             toolbar: {
@@ -79,7 +79,7 @@ struct AgentComposer: View {
             isRefreshing: catalog.isRefreshing,
             onOpen: { AgentModelDirectory.refresh(model.providers) },
             onRefresh: { AgentModelDirectory.refresh(model.providers, force: true) },
-            actions: [UDModelPickerAction(title: "管理模型服务…", systemImage: "slider.horizontal.3",
+            actions: [UDModelPickerAction(title: String(localized: "管理模型服务…"), systemImage: "slider.horizontal.3",
                                           action: onOpenSettings)],
             onSelect: select)
     }
@@ -126,7 +126,7 @@ struct AgentComposer: View {
             }
         } content: {
             // 每一项带一行说明 —— 三档的差别靠名字猜不出来，原先只能悬停看 tooltip。
-            UDOptionMenu(head: "审批档位", items: AgentSafety.byAutonomy.map { mode in
+            UDOptionMenu(head: String(localized: "审批档位"), items: AgentSafety.byAutonomy.map { mode in
                 UDOptionMenuItem(id: mode.rawValue, systemImage: mode.symbolName, tint: mode.tint,
                                  title: mode.label, detail: mode.detail,
                                  active: mode == safety, action: { safety = mode })

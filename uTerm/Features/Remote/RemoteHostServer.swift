@@ -21,9 +21,9 @@ final class RemoteHostServer {
 
         var label: String {
             switch self {
-            case .stopped: return "未开启"
-            case .listening: return "等待设备连接"
-            case .failed(let message): return "出错：\(message)"
+            case .stopped: return String(localized: "未开启", comment: "远程控制服务状态")
+            case .listening: return String(localized: "等待设备连接")
+            case .failed(let message): return String(localized: "出错：\(message)")
             }
         }
     }
@@ -264,7 +264,7 @@ final class RemoteHostServer {
     /// Bonjour 广播注册报 NoAuth（-65555），手机就发现不了这台 Mac。
     private static func describe(_ error: NWError) -> String {
         if case .dns(let code) = error, code == DNSServiceErrorType(kDNSServiceErr_NoAuth) {
-            return "macOS 没有允许 uTerm 使用本地网络。在「系统设置 › 隐私与安全性 › 本地网络」里打开 uTerm，再重新打开这个开关。"
+            return String(localized: "macOS 没有允许 uTerm 使用本地网络。在「系统设置 › 隐私与安全性 › 本地网络」里打开 uTerm，再重新打开这个开关。")
         }
         return error.localizedDescription
     }
@@ -505,7 +505,7 @@ final class RemoteHostServer {
                            timeout: Duration?) async throws -> (reply: RemoteFileReply, body: Data) {
         guard let agent else {
             guard let connection = fileConnection(toDevice: deviceID) else {
-                throw RemoteFileError(.unreachable, "「\(name)」已经不连着这台 Mac 了")
+                throw RemoteFileError(.unreachable, String(localized: "「\(name)」已经不连着这台 Mac 了"))
             }
             return try await connection.performFile(request, body: body, timeout: timeout)
         }
@@ -516,11 +516,11 @@ final class RemoteHostServer {
         let millis = Int(limit.components.seconds * 1000) + Int(limit.components.attoseconds / 1_000_000_000_000_000)
         guard let reply = await agent.send(.performFile(device: deviceID, payload: payload, requestID: request.id,
                                                         timeoutMilliseconds: millis)) else {
-            throw RemoteFileError(.unreachable, "Mac 上的远控进程没有响应")
+            throw RemoteFileError(.unreachable, String(localized: "Mac 上的远控进程没有响应"))
         }
         guard reply.ok, let raw = reply.data else {
             throw reply.data.flatMap { RemoteHostAgentJSON.decode(RemoteFileError.self, from: $0) }
-                ?? RemoteFileError(.unreachable, reply.error ?? "远控进程没有转出这条请求")
+                ?? RemoteFileError(.unreachable, reply.error ?? String(localized: "远控进程没有转出这条请求"))
         }
         let (fileReply, data) = try RemoteFileCodec.unpackReply(raw)
         if let error = fileReply.error { throw error }
@@ -943,7 +943,7 @@ final class RemoteHostServer {
         if let previous = controllers[sessionID],
            previous.connection != connection.id || previous.channel != channel,
            let holder = connections[previous.connection] {
-            holder.detach(channel: previous.channel, notify: true, reason: "已被 \(connection.peerName) 接管")
+            holder.detach(channel: previous.channel, notify: true, reason: String(localized: "已被 \(connection.peerName) 接管"))
         }
         controllers[sessionID] = (connection.id, channel)
         lastRemoteInput = Date()
@@ -1022,7 +1022,7 @@ final class RemoteHostServer {
         if let previous = desktopViewer,
            previous.connection != connection.id || previous.channel != channel,
            let holder = connections[previous.connection] {
-            holder.stopDesktop(channel: previous.channel, notify: true, reason: "已被 \(connection.peerName) 接管")
+            holder.stopDesktop(channel: previous.channel, notify: true, reason: String(localized: "已被 \(connection.peerName) 接管"))
         }
         desktopViewer = DesktopViewer(connection: connection.id, channel: channel, deviceName: connection.peerName,
                                       canControl: canControl)

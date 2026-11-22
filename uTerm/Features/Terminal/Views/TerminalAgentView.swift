@@ -60,7 +60,7 @@ struct TerminalAgentView: View {
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             } content: {
-                UDMenu(width: 240, head: "对话历史", maxHeight: 320, items: sessionMenuItems)
+                UDMenu(width: 240, head: String(localized: "对话历史"), maxHeight: 320, items: sessionMenuItems)
             }
             .fixedSize()
             .accessibilityLabel("对话历史")
@@ -232,7 +232,7 @@ struct TerminalAgentView: View {
                 }
                 ForEach(m.toolCalls) { call in
                     UDToolCall(
-                        label: call.explanation ?? "运行命令",
+                        label: call.explanation ?? String(localized: "运行命令"),
                         command: call.command,
                         status: udStatus(call),
                         approvalEnabled: model.state == .awaitingApproval,
@@ -322,7 +322,7 @@ struct TerminalAgentView: View {
                             insets: EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
             AgentComposer(
                 model: model,
-                placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
+                placeholder: String(localized: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M"),
                 minLines: 3,
                 safety: $safety,
                 activeProviderIDString: $activeProviderIDString,
@@ -367,7 +367,7 @@ struct TerminalAgentView: View {
 
     private var sessionMenuItems: [UDMenuItem] {
         guard !sessions.isEmpty else {
-            return [UDMenuItem(label: "还没有对话")]
+            return [UDMenuItem(label: String(localized: "还没有对话"))]
         }
         return sessions.map { session in
             UDMenuItem(
@@ -385,7 +385,7 @@ struct TerminalAgentView: View {
             Text("还没有添加模型服务").font(.headline).foregroundStyle(UD.text)
             Text("在「设置 › 模型服务」里添加 Anthropic 或 OpenAI。")
                 .font(.caption).foregroundStyle(UD.text3).multilineTextAlignment(.center)
-            UDButton(title: "打开设置", systemImage: "gearshape") { onOpenSettings() }
+            UDButton(title: String(localized: "打开设置"), systemImage: "gearshape") { onOpenSettings() }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

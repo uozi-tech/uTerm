@@ -43,8 +43,8 @@ final class AppLockModel {
         var message: String {
             switch self {
             case .unlocked:        ""
-            case .authenticating:  "正在验证身份…"
-            case .locked:          "uTerm 已锁定"
+            case .authenticating:  String(localized: "正在验证身份…")
+            case .locked:          String(localized: "uTerm 已锁定")
             case .failed(let msg): msg
             }
         }
@@ -62,7 +62,7 @@ final class AppLockModel {
 
     init(authenticator: BiometricAuthenticator,
          requireAuthAtLaunch: Bool,
-         reason: String = "解锁 uTerm") {
+         reason: String = String(localized: "解锁 uTerm")) {
         self.authenticator = authenticator
         self.reason = reason
         self.state = requireAuthAtLaunch ? .locked : .unlocked
@@ -75,7 +75,7 @@ final class AppLockModel {
     /// 两端设置页的开关都经 `AppLockToggleModel` 调它（mac 走 Touch ID 或登录密码）。
     static func confirmEnable(
         authenticator: BiometricAuthenticator = SystemBiometricAuthenticator(),
-        reason: String = "开启 uTerm 应用锁"
+        reason: String = String(localized: "开启 uTerm 应用锁")
     ) async -> AuthOutcome {
         let policy: LAPolicy
         if case .biometrics = authenticator.availability() {
@@ -119,9 +119,9 @@ final class AppLockModel {
             case .biometryLockout:
                 await authenticateWithPassword(generation: generation)   // 指纹被锁 → 退回登录密码
             case .canceled:
-                state = .failed("验证已取消")
+                state = .failed(String(localized: "验证已取消"))
             case .failed, .unavailable:
-                state = .failed("验证失败，再试一次")
+                state = .failed(String(localized: "验证失败，再试一次"))
             }
         case .passwordOnly:
             await authenticateWithPassword(generation: generation)
@@ -136,9 +136,9 @@ final class AppLockModel {
         case .success:
             state = .unlocked
         case .canceled:
-            state = .failed("验证已取消")
+            state = .failed(String(localized: "验证已取消"))
         case .failed, .biometryLockout, .unavailable:
-            state = .failed("验证失败，再试一次")
+            state = .failed(String(localized: "验证失败，再试一次"))
         }
     }
 }

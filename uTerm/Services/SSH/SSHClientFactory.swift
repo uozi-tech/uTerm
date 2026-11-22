@@ -139,7 +139,7 @@ nonisolated enum SSHClientFactory {
         let jumpHost: USSHKit.SSHJumpHost?
         if let jump = profile.jumpHost {
             guard let jumpHostAuth else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少登录凭据")
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"))
             }
             let jumpMaterial = packageAuth(jumpHostAuth)
             jumpHost = USSHKit.SSHJumpHost(
@@ -185,9 +185,9 @@ nonisolated enum SSHClientFactory {
             case .connectFailed(let message):
                 throw SSHConnection.SSHConnectionError.connectFailed(message)
             case .authenticationFailed(let message):
-                throw SSHConnection.SSHConnectionError.connectFailed("认证失败：\(message)")
+                throw SSHConnection.SSHConnectionError.authenticationFailed(message)
             case .hostKeyRejected(let message):
-                throw SSHConnection.SSHConnectionError.connectFailed("主机密钥被拒绝：\(message)")
+                throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "主机密钥被拒绝：\(message)"))
             default:
                 throw SSHConnection.SSHConnectionError.connectFailed(
                     error.errorDescription ?? FriendlyError.describe(error)

@@ -20,18 +20,18 @@ enum ForwardKind: String, CaseIterable, Sendable {
     /// 紧凑标签（徽章 / 分段控件）。
     nonisolated var shortLabel: String {
         switch self {
-        case .local:   return "本地"
-        case .remote:  return "远程"
-        case .dynamic: return "动态"
+        case .local:   return String(localized: "本地", comment: "端口转发类型：本地转发（-L）")
+        case .remote:  return String(localized: "远程", comment: "端口转发类型：远程转发（-R）")
+        case .dynamic: return String(localized: "动态", comment: "端口转发类型：动态转发（-D，SOCKS）")
         }
     }
 
     /// 完整标签（编辑器分段选项）。
     nonisolated var label: String {
         switch self {
-        case .local:   return "本地转发"
-        case .remote:  return "远程转发"
-        case .dynamic: return "动态转发"
+        case .local:   return String(localized: "本地转发")
+        case .remote:  return String(localized: "远程转发")
+        case .dynamic: return String(localized: "动态转发")
         }
     }
 
@@ -39,36 +39,36 @@ enum ForwardKind: String, CaseIterable, Sendable {
     nonisolated var desc: String {
         switch self {
         case .local:
-            return "将远端服务映射到本机端口：连本机端口即连到主机能访问的数据库 / 内网服务。"
+            return String(localized: "将远端服务映射到本机端口：连本机端口即连到主机能访问的数据库 / 内网服务。")
         case .remote:
-            return "将本机服务映射到主机端口：在主机上开一个端口，连它即连到本机（或本机可达）的服务。"
+            return String(localized: "将本机服务映射到主机端口：在主机上开一个端口，连它即连到本机（或本机可达）的服务。")
         case .dynamic:
-            return "在本机开一个 SOCKS5 代理，由客户端按需选目标。用于浏览器 / 工具经此主机访问内网。"
+            return String(localized: "在本机开一个 SOCKS5 代理，由客户端按需选目标。用于浏览器 / 工具经此主机访问内网。")
         }
     }
 
     /// 监听侧字段标题（开在哪一侧的端口）。
     nonisolated var srcLabel: String {
         switch self {
-        case .local, .dynamic: return "本机监听端口"
-        case .remote:          return "主机监听端口"
+        case .local, .dynamic: return String(localized: "本机监听端口")
+        case .remote:          return String(localized: "主机监听端口")
         }
     }
 
     /// 监听侧提示（字段标题下，说明这个口怎么用）。
     nonisolated var srcHint: String? {
         switch self {
-        case .local:   return "之后用客户端连这里，如 127.0.0.1:5432"
-        case .dynamic: return "把它设为浏览器 / 系统的 SOCKS5 代理"
-        case .remote:  return "在主机上开放的端口（允许外部访问需在 SSH 服务端开启 GatewayPorts）"
+        case .local:   return String(localized: "之后用客户端连这里，如 127.0.0.1:5432")
+        case .dynamic: return String(localized: "把它设为浏览器 / 系统的 SOCKS5 代理")
+        case .remote:  return String(localized: "在主机上开放的端口（允许外部访问需在 SSH 服务端开启 GatewayPorts）")
         }
     }
 
     /// 目标侧字段标题。dynamic 无固定目标 → nil。
     nonisolated var dstLabel: String? {
         switch self {
-        case .local:   return "要访问的目标"
-        case .remote:  return "本机目标地址"
+        case .local:   return String(localized: "要访问的目标")
+        case .remote:  return String(localized: "本机目标地址")
         case .dynamic: return nil
         }
     }
@@ -76,8 +76,8 @@ enum ForwardKind: String, CaseIterable, Sendable {
     /// 目标侧提示。
     nonisolated var dstHint: String? {
         switch self {
-        case .local:   return "主机内网里的地址，如数据库 10.0.0.1:5432"
-        case .remote:  return "把流量转回本机可达的地址，如 127.0.0.1:3000"
+        case .local:   return String(localized: "主机内网里的地址，如数据库 10.0.0.1:5432")
+        case .remote:  return String(localized: "把流量转回本机可达的地址，如 127.0.0.1:3000")
         case .dynamic: return nil
         }
     }

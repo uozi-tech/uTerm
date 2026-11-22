@@ -209,14 +209,14 @@ struct FileBrowserContent: View {
             )
 
             sortToggleRow(
-                label: "升序",
+                label: String(localized: "升序"),
                 binding: Binding(
                     get: { model.sortAscending },
                     set: { model.sortAscending = $0 }
                 )
             )
             sortToggleRow(
-                label: "文件夹优先",
+                label: String(localized: "文件夹优先"),
                 binding: Binding(
                     get: { model.foldersFirst },
                     set: { model.foldersFirst = $0 }
@@ -258,7 +258,7 @@ struct FileBrowserContent: View {
                     .multilineTextAlignment(.center).textSelection(.enabled)
                 // refresh() 对死连接会自动重连并保留当前目录（传输错误分类
                 // 见 SSHTransportFailure）；顶栏 ⟳ 同效，这里给个显眼入口。
-                UDButton(title: "重新连接") { Task { await model.refresh() } }
+                UDButton(title: String(localized: "重新连接")) { Task { await model.refresh() } }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
         case .browsing:
@@ -516,7 +516,7 @@ struct FileBrowserContent: View {
     private func entryAccessibilityValue(_ entry: RemoteEntry, kind: BrowserFileKind) -> String {
         var parts: [String] = [kind.label]
         if !entry.isDirectory, entry.size != nil { parts.append(entry.sizeText) }
-        return parts.joined(separator: "，")
+        return parts.joined(separator: String(localized: "，", comment: "无障碍朗读值里各项之间的分隔符"))
     }
 
     private func uploadDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
@@ -592,14 +592,14 @@ struct FileBrowserContent: View {
 
     private var overwriteDialogTitle: String {
         overwriteConflictNames.count == 1
-            ? "「\(overwriteConflictNames[0])」已存在，覆盖？"
-            : "\(overwriteConflictNames.count) 个文件已存在，覆盖？"
+            ? String(localized: "「\(overwriteConflictNames[0])」已存在，覆盖？")
+            : String(localized: "\(overwriteConflictNames.count) 个文件已存在，覆盖？")
     }
 
     private var overwriteDialogMessage: String {
         overwriteConflictNames.count == 1
-            ? "该远程文件将被覆盖。"
-            : "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: "、"))"
+            ? String(localized: "该远程文件将被覆盖。")
+            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {

@@ -7,7 +7,7 @@ nonisolated struct SSHCommandExecutor: CommandExecutor {
     static let sentinel = "__UTERM_EXIT__"
     /// 输出被裁剪时追加在末尾的标记。别在别处重复这串字面量 —— 截断与否读
     /// `CommandResult.truncated`。
-    static let truncationMarker = "… [输出已截断]"
+    static let truncationMarker = String(localized: "… [输出已截断]")
     /// 流式执行的首行标记：`__UTERM_PID__:<会话 shell 的 pid>`。见 `wrapAnnouncingPID`。
     static let pidMarker = "__UTERM_PID__"
     let maxLines: Int

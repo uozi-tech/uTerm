@@ -11,7 +11,7 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifi
     var displayName: String {
         switch self {
         case .anthropic: return "Anthropic"
-        case .openai:    return "OpenAI / 兼容"
+        case .openai:    return String(localized: "OpenAI / 兼容")
         }
     }
 

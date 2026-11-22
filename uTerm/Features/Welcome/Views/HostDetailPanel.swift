@@ -134,14 +134,14 @@ struct HostDetailPanel: View {
             alignment: .leading,
             spacing: 18
         ) {
-            metaCell("端口", "\(profile.port)", mono: true)
+            metaCell(String(localized: "端口"), "\(profile.port)", mono: true)
             if profile.sftpOnly {
-                metaCell("协议", "仅 SFTP")
+                metaCell(String(localized: "协议", comment: "主机详情字段"), String(localized: "仅 SFTP"))
             } else {
-                metaCell("认证", authLabel)
+                metaCell(String(localized: "认证", comment: "主机详情字段：认证方式"), authLabel)
             }
-            metaCell("上次连接", UTermFormat.relative(profile.lastConnectedAt))
-            metaCell("跳板机", jumpLabel)
+            metaCell(String(localized: "上次连接"), UTermFormat.relative(profile.lastConnectedAt))
+            metaCell(String(localized: "跳板机"), jumpLabel)
         }
     }
 
@@ -230,7 +230,7 @@ struct HostDetailPanel: View {
 
     private var jumpLabel: String {
         if let jump = profile.jumpHost, !jump.name.isEmpty { return jump.name }
-        return "无"
+        return String(localized: "无", comment: "没有跳板机")
     }
 }
 

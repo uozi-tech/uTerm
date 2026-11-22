@@ -70,8 +70,8 @@ extension AuthMethod {
     /// 认证方式的展示名：「SSH 密钥」/「密码」。
     nonisolated var label: String {
         switch self {
-        case .password: return "密码"
-        case .privateKey: return "SSH 密钥"
+        case .password: return String(localized: "密码", comment: "SSH 认证方式")
+        case .privateKey: return String(localized: "SSH 密钥")
         }
     }
 }

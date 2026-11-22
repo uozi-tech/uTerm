@@ -405,7 +405,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
                 let attachment = AppSideAttachment(handle: handle, pump: pump)
                 handle.onRemoteDisconnect = { [weak self] in
                     self?.attachments.removeValue(forKey: id)?.detach()
-                    agent.terminalEnded(id, reason: "已在 Mac 上断开")
+                    agent.terminalEnded(id, reason: String(localized: "已在 Mac 上断开"))
                 }
                 attachments[id] = attachment
                 agent.terminalAttached(id, error: nil)
@@ -443,7 +443,7 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             return await sessions.requestClose(sessionID: id) ? RemoteHostAppReply() : RemoteHostAppReply(error: "没找到")
         case .deliverImage(let id, let data, let format):
             guard let handle = attachments[id]?.handle, let format = TerminalImage.Format(rawValue: format) else {
-                return RemoteHostAppReply(error: "这个终端不能接收图片")
+                return RemoteHostAppReply(error: String(localized: "这个终端不能接收图片"))
             }
             switch await handle.deliverImage(TerminalImage(format: format, data: data)) {
             case .success(let path): return RemoteHostAppReply(path: path)
@@ -583,7 +583,7 @@ nonisolated private final class RemoteHostAppEndpoint: NSObject, RemoteHostAppXP
 
     func request(_ payload: Data, reply: @escaping @Sendable (Data) -> Void) {
         guard let request = RemoteHostAgentJSON.decode(RemoteHostAppRequest.self, from: payload) else {
-            reply(RemoteHostAgentJSON.encode(RemoteHostAppReply(error: "App 不认得这个请求")))
+            reply(RemoteHostAgentJSON.encode(RemoteHostAppReply(error: String(localized: "App 不认得这个请求"))))
             return
         }
         onMain { bridge in

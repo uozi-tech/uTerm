@@ -63,8 +63,10 @@ struct UDMenubarPanel: View {
 
     private var segmented: some View {
         HStack(spacing: 6) {
-            UDMenubarPill(title: "进行中 2", selected: selection == 0) { selection = 0 }
-            UDMenubarPill(title: "主机 4", selected: selection == 1) { selection = 1 }
+            UDMenubarPill(title: String(localized: "进行中 \(2)", comment: "菜单栏面板分段：进行中的会话数"),
+                          selected: selection == 0) { selection = 0 }
+            UDMenubarPill(title: String(localized: "主机 \(4)", comment: "菜单栏面板分段：主机数"),
+                          selected: selection == 1) { selection = 1 }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
@@ -96,10 +98,10 @@ struct UDMenubarPanel: View {
 
     private var actionsList: some View {
         VStack(spacing: 0) {
-            UDMenubarActionRow(systemImage: "plus", label: "新建主机…", kbd: "⌘N")
-            UDMenubarActionRow(systemImage: "magnifyingglass", label: "命令面板…", kbd: "⌘K")
-            UDMenubarActionRow(systemImage: "gearshape", label: "设置…", kbd: "⌘,")
-            UDMenubarActionRow(systemImage: "power", label: "退出 uTerm", kbd: "⌘Q")
+            UDMenubarActionRow(systemImage: "plus", label: String(localized: "新建主机…"), kbd: "⌘N")
+            UDMenubarActionRow(systemImage: "magnifyingglass", label: String(localized: "命令面板…"), kbd: "⌘K")
+            UDMenubarActionRow(systemImage: "gearshape", label: String(localized: "设置…"), kbd: "⌘,")
+            UDMenubarActionRow(systemImage: "power", label: String(localized: "退出 uTerm"), kbd: "⌘Q")
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 10)

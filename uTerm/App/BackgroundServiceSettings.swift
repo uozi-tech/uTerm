@@ -71,8 +71,8 @@ final class BackgroundServiceSettings {
             }
         } catch {
             loginItemError = requested
-                ? "无法启用登录后台启动：\(error.localizedDescription)"
-                : "无法关闭登录后台启动：\(error.localizedDescription)"
+                ? String(localized: "无法启用登录后台启动：\(error.localizedDescription)")
+                : String(localized: "无法关闭登录后台启动：\(error.localizedDescription)")
         }
         refreshLoginItemStatus(preserveError: true)
     }

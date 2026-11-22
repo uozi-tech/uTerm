@@ -120,7 +120,7 @@ struct FilesSessionBody: View {
             Text("\(UFormat.count(controller.entries.count)) 项").font(M.mono(12.5)).foregroundStyle(M.text3)
             Spacer()
             Text("长按文件查看操作").font(M.sans(11.5)).foregroundStyle(M.text4)
-            MBtn(title: "上传", icon: "upload", kind: .tinted, height: 36) { showImporter = true }
+            MBtn(title: String(localized: "上传", comment: "上传文件"), icon: "upload", kind: .tinted, height: 36) { showImporter = true }
                 .fixedSize()
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -184,11 +184,11 @@ struct FilesSessionBody: View {
             VStack(spacing: 12) { ProgressView(); Text("连接中…").font(M.sans(13)).foregroundStyle(M.text3) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let m):
-            MEmptyState(icon: "warn", title: "连接失败", message: m,
-                        actionTitle: "关闭", action: onClose)
+            MEmptyState(icon: "warn", title: String(localized: "连接失败"), message: m,
+                        actionTitle: String(localized: "关闭"), action: onClose)
         case .connected:
             if controller.entries.isEmpty && !controller.loading {
-                MEmptyState(icon: "folder", title: "空文件夹", message: "此文件夹没有内容。")
+                MEmptyState(icon: "folder", title: String(localized: "空文件夹"), message: String(localized: "此文件夹没有内容。"))
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -275,7 +275,7 @@ private struct FilesDeletionBanner: View {
     private var detail: String {
         switch progress.phase {
         case .counting:
-            return "正在统计… 已发现 \(UFormat.count(progress.count)) 项"
+            return String(localized: "正在统计… 已发现 \(UFormat.count(progress.count)) 项")
         case .deleting:
             return "\(UFormat.count(progress.count)) / \(UFormat.count(progress.total ?? 0))"
         }
@@ -296,7 +296,7 @@ private struct FilesDeletionBanner: View {
                 .tint(accent)
                 Text(detail).font(M.mono(11.5)).foregroundStyle(M.text3).lineLimit(1)
             }
-            MBtn(title: progress.isCancelling ? "正在取消…" : "取消", kind: .secondary, height: 36,
+            MBtn(title: progress.isCancelling ? String(localized: "正在取消…") : String(localized: "取消"), kind: .secondary, height: 36,
                  disabled: progress.isCancelling, action: onCancel)
                 .fixedSize()
         }

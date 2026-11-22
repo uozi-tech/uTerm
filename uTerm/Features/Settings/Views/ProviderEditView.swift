@@ -24,7 +24,7 @@ struct ProviderEditView: View {
     /// "Only unstyled text can be used with help(_:)"
     /// 已知 String 类型走 StringProtocol overload 跳过 markdown 解析。
     private let baseURLHelpText: String =
-        "只填到域名（和端口），不含 /v1 等路径。OpenAI 兼容端点同理，如 https://api.deepseek.com、http://localhost:11434。"
+        String(localized: "只填到域名（和端口），不含 /v1 等路径。OpenAI 兼容端点同理，如 https://api.deepseek.com、http://localhost:11434。")
 
     /// Base URL 必填；远程端点须 HTTPS，loopback 开发服务可用 HTTP。
     private var baseURLError: String? {
@@ -41,23 +41,23 @@ struct ProviderEditView: View {
             SettingsPageHeader(title: provider.name.isEmpty ? String(localized: "未命名") : provider.name,
                                subtitle: ProviderManagement.summary(provider))
 
-            SettingsGroup(title: "基本", footer: baseURLHelpText) {
-                SettingsRow(label: "名称") {
-                    UDTextField(placeholder: "名称",
+            SettingsGroup(title: String(localized: "基本", comment: "设置分组：基本信息"), footer: baseURLHelpText) {
+                SettingsRow(label: String(localized: "名称", comment: "模型服务的名称")) {
+                    UDTextField(placeholder: String(localized: "名称", comment: "模型服务的名称"),
                                 text: $provider.name,
                                 errorMessage: nameError)
                         .frame(minWidth: 140, maxWidth: 240)
                         .accessibilityLabel("名称")
                         .accessibilityValue(nameError ?? provider.name)
                 }
-                SettingsRow(label: "类型") {
+                SettingsRow(label: String(localized: "类型", comment: "模型服务的类型")) {
                     UDSegmented(
                         selection: kindBinding,
                         options: ProviderKind.allCases.map { (value: $0, label: $0.displayName) }
                     )
                 }
                 SettingsRow(label: "Base URL") {
-                    UDTextField(placeholder: "如 https://api.openai.com",
+                    UDTextField(placeholder: String(localized: "如 https://api.openai.com"),
                                 text: $provider.baseURL,
                                 errorMessage: baseURLError)
                         .frame(minWidth: 160, maxWidth: 360)
@@ -71,15 +71,15 @@ struct ProviderEditView: View {
                 SettingsRow(label: "API Key") {
                     HStack(spacing: 8) {
                         UDTextField(
-                            placeholder: "粘贴新 Key",
+                            placeholder: String(localized: "粘贴新 Key"),
                             text: $draft.keyDraft,
                             isSecure: true,
                             revealable: true
                         )
                         .frame(minWidth: 140, maxWidth: 280)
                         .accessibilityLabel("API Key")
-                        .accessibilityValue(draft.canSaveKey ? "已输入新 Key" : "未输入")
-                        UDButton(title: "保存", style: .primary) { draft.saveKey() }
+                        .accessibilityValue(draft.canSaveKey ? String(localized: "已输入新 Key") : String(localized: "未输入", comment: "API Key 输入框：还没输入新 Key"))
+                        UDButton(title: String(localized: "保存", comment: "保存按钮"), style: .primary) { draft.saveKey() }
                             .disabled(!draft.canSaveKey)
                     }
                 }
@@ -91,9 +91,9 @@ struct ProviderEditView: View {
                 }
             }
 
-            SettingsGroup(title: "诊断",
+            SettingsGroup(title: String(localized: "诊断", comment: "设置分区"),
                           footer: String(localized: "在 Agent 输入区的模型菜单里切换模型 —— 那里列出所有服务的全部可用模型（取自各自的 /v1/models）。")) {
-                SettingsRow(label: "测试连接", hint: String(localized: "用上面的 Base URL 与 API Key 请求一次模型列表")) {
+                SettingsRow(label: String(localized: "测试连接"), hint: String(localized: "用上面的 Base URL 与 API Key 请求一次模型列表")) {
                     HStack(spacing: 10) {
                         if draft.testInFlight {
                             UDIndeterminateBar()
@@ -103,7 +103,7 @@ struct ProviderEditView: View {
                                                 tone: r.ok ? .success : .danger, text: r.message)
                                 .frame(maxWidth: 220, alignment: .trailing)
                         }
-                        UDButton(title: "测试连接", style: .secondary) {
+                        UDButton(title: String(localized: "测试连接"), style: .secondary) {
                             Task { await draft.testConnection() }
                         }
                         .disabled(draft.testInFlight || baseURLError != nil)

@@ -13,9 +13,9 @@ nonisolated enum SyncDiagnosticsPresentation {
         let text: String
     }
 
-    static let title = "同步诊断"
-    static let copyButtonTitle = "拷贝日志"
-    static let emptyMessage = "暂无同步事件。登录 iCloud 并让 uTerm 留在前台后，CloudKit 的 setup / import / export 事件会显示在这里。"
+    static let title = String(localized: "同步诊断")
+    static let copyButtonTitle = String(localized: "拷贝日志")
+    static let emptyMessage = String(localized: "暂无同步事件。登录 iCloud 并让 uTerm 留在前台后，CloudKit 的 setup / import / export 事件会显示在这里。")
 
     /// 新→旧排列的行。
     static func rows(_ entries: [CloudKitSyncMonitor.Entry],

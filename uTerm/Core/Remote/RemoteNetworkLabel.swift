@@ -17,7 +17,11 @@ nonisolated enum RemoteNetworkLabel {
     }
 
     static func label(wifi: Bool, cellular: Bool, wired: Bool, ipv6: Bool) -> String {
-        let kind = wifi ? "Wi-Fi" : cellular ? "蜂窝网络" : wired ? "有线" : "其他"
-        return "\(kind) · \(ipv6 ? "有 IPv6" : "无 IPv6")"
+        let kind = wifi ? "Wi-Fi"
+            : cellular ? String(localized: "蜂窝网络")
+            : wired ? String(localized: "有线", comment: "网络类型：有线网络")
+            : String(localized: "其他", comment: "网络类型：其他")
+        let ipv6Label = ipv6 ? String(localized: "有 IPv6") : String(localized: "无 IPv6")
+        return "\(kind) · \(ipv6Label)"
     }
 }

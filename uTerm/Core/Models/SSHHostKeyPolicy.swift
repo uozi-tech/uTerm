@@ -17,9 +17,9 @@ enum SSHHostKeyPolicy: String, CaseIterable, Identifiable {
 
     var localizedLabel: String {
         switch self {
-        case .strict: return "严格"
-        case .ask:    return "询问"
-        case .none:   return "忽略"
+        case .strict: return String(localized: "严格", comment: "主机密钥校验策略")
+        case .ask:    return String(localized: "询问", comment: "主机密钥校验策略")
+        case .none:   return String(localized: "忽略", comment: "主机密钥校验策略")
         }
     }
 }

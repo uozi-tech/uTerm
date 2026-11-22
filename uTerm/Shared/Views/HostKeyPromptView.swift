@@ -15,7 +15,7 @@ struct HostKeyPromptView: View {
                     .font(.headline)
                 Text("\(challenge.host):\(String(challenge.port)) 的主机密钥尚未被信任。")
                     .foregroundStyle(UD.text3)
-                fingerprintRow("密钥指纹", challenge.newFingerprint)
+                fingerprintRow(String(localized: "密钥指纹"), challenge.newFingerprint)
             case .mismatch:
                 Label("主机密钥已变化", systemImage: "exclamationmark.triangle.fill")
                     .font(.headline)
@@ -23,9 +23,10 @@ struct HostKeyPromptView: View {
                 Text("\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不同。这可能是主机重装过系统，也可能是中间人攻击。")
                     .foregroundStyle(UD.danger)
                 if let old = challenge.oldFingerprint {
-                    fingerprintRow("已信任", old)
+                    fingerprintRow(String(localized: "已信任", comment: "主机密钥指纹：此前已信任的那一份"), old)
                 }
-                fingerprintRow("本次出示", challenge.newFingerprint)
+                fingerprintRow(String(localized: "本次出示", comment: "主机密钥指纹：这次连接主机出示的那一份"),
+                               challenge.newFingerprint)
             }
             HStack {
                 Button("取消") { decide(false) }

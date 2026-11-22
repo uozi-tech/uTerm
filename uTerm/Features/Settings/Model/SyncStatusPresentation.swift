@@ -44,14 +44,14 @@ enum SyncStatusPresentation {
     /// 「iCloud 同步」行的说明。
     static func cloudHint(loggedIn: Bool) -> String {
         loggedIn
-            ? "iCloud 在后台独立同步；局域网同步在同一 Wi-Fi 下由 Mac 主动发起并加密传输。"
-            : "未登录 iCloud，跨设备同步只能走下面的局域网通道。"
+            ? String(localized: "iCloud 在后台独立同步；局域网同步在同一 Wi-Fi 下由 Mac 主动发起并加密传输。")
+            : String(localized: "未登录 iCloud，跨设备同步只能走下面的局域网通道。")
     }
 
     /// 「同步诊断」行的副标题：能看细节时一句话提示有没有出错，否则直接报基础状态。
     /// 整段错误原文不放这里（CloudKit 的错误动辄三行，会把右侧按钮挤没），进「查看事件…」弹窗看。
     static func diagnosticsSubtitle(status: CloudKitSyncStatus, lastError: String?) -> String {
         guard status.isCloudActive else { return status.label }
-        return lastError == nil ? "查看最近同步事件 · 拷贝日志" : "最近一次同步出错，点右侧查看详情与日志"
+        return lastError == nil ? String(localized: "查看最近同步事件 · 拷贝日志") : String(localized: "最近一次同步出错，点右侧查看详情与日志")
     }
 }

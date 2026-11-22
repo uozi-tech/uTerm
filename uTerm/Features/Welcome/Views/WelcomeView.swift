@@ -341,33 +341,33 @@ struct WelcomeView: View {
             items.append(CommandPaletteItem(
                 id: "host.\(id.uuidString)", kind: .host,
                 title: name, detail: "\(p.username)@\(p.host)",
-                hint: "连接", group: p.group) {
+                hint: String(localized: "连接", comment: "命令面板：主机条目的动作提示"), group: p.group) {
                     openServer(p)
                 })
         }
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,
-            title: "新建主机…", detail: "添加一台主机", hint: "⌘N", group: nil) {
+            title: String(localized: "新建主机…"), detail: String(localized: "添加一台主机"), hint: "⌘N", group: nil) {
                 formRoute = .new
             })
         items.append(CommandPaletteItem(
             id: "cmd.newLocalShell", kind: .command,
-            title: "新建本机终端", detail: "在这台 Mac 上开一个 shell", hint: "⇧⌘N", group: nil) {
+            title: String(localized: "新建本机终端"), detail: String(localized: "在这台 Mac 上开一个 shell"), hint: "⇧⌘N", group: nil) {
                 openWindow.newLocalShellAskingFirst()
             })
         items.append(CommandPaletteItem(
             id: "cmd.manageGroups", kind: .command,
-            title: "管理分组…", detail: "新建 / 重命名 / 删除分组", hint: "↵", group: nil) {
+            title: String(localized: "管理分组…"), detail: String(localized: "新建 / 重命名 / 删除分组"), hint: "↵", group: nil) {
                 openWindow(id: "groups")
             })
         items.append(CommandPaletteItem(
             id: "cmd.importConfig", kind: .command,
-            title: "导入 ~/.ssh/config", detail: "从本地 SSH config 批量导入", hint: "↵", group: nil) {
+            title: String(localized: "导入 ~/.ssh/config"), detail: String(localized: "从本地 SSH config 批量导入"), hint: "↵", group: nil) {
                 openWindow(id: "import")
             })
         items.append(CommandPaletteItem(
             id: "cmd.globalForwarding", kind: .command,
-            title: "全局端口转发…", detail: "跨主机管理端口转发，可随 uTerm 启动", hint: "↵", group: nil) {
+            title: String(localized: "全局端口转发…"), detail: String(localized: "跨主机管理端口转发，可随 uTerm 启动"), hint: "↵", group: nil) {
                 openWindow(id: "global-forwarding")
             })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
@@ -557,17 +557,17 @@ private struct NewGroupPromptSheet: View {
                     .foregroundStyle(UD.text3)
             }
 
-            UDTextField(placeholder: "分组名", text: $name)
+            UDTextField(placeholder: String(localized: "分组名"), text: $name)
                 .onSubmit(submit)
 
             HStack(spacing: 8) {
                 Spacer()
-                UDButton(title: "取消", style: .secondary) {
+                UDButton(title: String(localized: "取消"), style: .secondary) {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
 
-                UDButton(title: "确定", style: .primary, action: submit)
+                UDButton(title: String(localized: "确定"), style: .primary, action: submit)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSubmit)
             }

@@ -79,10 +79,12 @@ struct RemoteDesktopScreen: View {
     @State private var hasSavedPassword = false
     /// 这一屏在显示中（控制屏幕常亮用，见 `keepsScreenAwake`）。
     @State private var onScreen = false
-    /// 本机的生物识别名称（面容 ID / 触控 ID）；以 ASCII 结尾时补一个空格，便于直接接中文。
+    /// 本机的生物识别名称（面容 ID / 触控 ID）。界面是中文时，以 ASCII 结尾的补一个空格，便于直接接中文；
+    /// 别的语言不补，空格由译文自己写。
     private static let biometryLead: String = {
         let title = MobileBiometry.describe().title
-        return title.last?.isASCII == true ? title + " " : title
+        let chinese = Bundle.main.preferredLocalizations.first?.hasPrefix("zh") == true
+        return chinese && title.last?.isASCII == true ? title + " " : title
     }()
 
     enum UnlockPhase: Equatable {
@@ -731,18 +733,18 @@ struct RemoteDesktopScreen: View {
             let working = unlockPhase == .working
             notice(spinner: working, title: String(localized: "Mac 已锁定"), message: lockMessage(session)) {
                 if !working {
-                    MBtn(title: vaultHasPassword ? "解锁 Mac" : "输入密码解锁", kind: .primary, height: 42) {
+                    MBtn(title: vaultHasPassword ? String(localized: "解锁 Mac") : String(localized: "输入密码解锁"), kind: .primary, height: 42) {
                         beginUnlock(session)
                     }.fixedSize()
                     if vaultHasPassword {
-                        MBtn(title: "改用其他密码", kind: .secondary, height: 42) {
+                        MBtn(title: String(localized: "改用其他密码"), kind: .secondary, height: 42) {
                             passwordDraft = ""
                             passwordSheetSavesOnly = false
                             enteringPassword = true
                         }.fixedSize()
                     }
                     // 关掉这层，直接在锁屏画面上用键盘输密码（这样解开的不会进帘幕）。
-                    MBtn(title: "在锁屏上输入", kind: .secondary, height: 42) { lockOverlayDismissed = true }.fixedSize()
+                    MBtn(title: String(localized: "在锁屏上输入"), kind: .secondary, height: 42) { lockOverlayDismissed = true }.fixedSize()
                 }
             }
         case .unlock:
@@ -754,8 +756,9 @@ struct RemoteDesktopScreen: View {
     private func lockMessage(_ session: RemoteDesktopSession) -> String {
         if case .failed(let reason) = unlockPhase { return reason }
         return vaultHasPassword
-            ? "用\(Self.biometryLead)取出已保存的密码解锁。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。"
-            : "输入这台 Mac 的登录密码。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。密码只保存在这台手机上。"
+            ? String(localized: "用\(Self.biometryLead)取出已保存的密码解锁。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。",
+                     comment: "%@ 是面容 ID / 触控 ID 等名称（中文界面下末尾自带空格，其他语言不带，译文自己留空格）")
+            : String(localized: "输入这台 Mac 的登录密码。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。密码只保存在这台手机上。")
     }
 
     private var vaultHasPassword: Bool { hasSavedPassword }
@@ -771,7 +774,8 @@ struct RemoteDesktopScreen: View {
                     SecureField("登录密码", text: $passwordDraft)
                         .textContentType(.password)
                 } footer: {
-                    Text("密码只保存在这台手机的钥匙串里，不会同步到 iCloud，取用时需要\(Self.biometryLead)验证。")
+                    Text("密码只保存在这台手机的钥匙串里，不会同步到 iCloud，取用时需要\(Self.biometryLead)验证。",
+                         comment: "%@ 是面容 ID / 触控 ID 等名称（中文界面下末尾自带空格，其他语言不带，译文自己留空格）")
                 }
                 .listRowBackground(M.card)
             }
@@ -794,9 +798,9 @@ struct RemoteDesktopScreen: View {
                         if let macID = client.macDeviceID {
                             do {
                                 try vault.save(password, forMac: macID)
-                                if passwordSheetSavesOnly { showPasteNote("已保存解锁密码") }
+                                if passwordSheetSavesOnly { showPasteNote(String(localized: "已保存解锁密码")) }
                             } catch {
-                                showPasteNote("无法把密码保存到钥匙串：\(RemoteUnlockVaultError.describe(error))")
+                                showPasteNote(String(localized: "无法把密码保存到钥匙串：\(RemoteUnlockVaultError.describe(error))"))
                             }
                         }
                         refreshVault()
@@ -824,7 +828,7 @@ struct RemoteDesktopScreen: View {
         unlockPhase = .working
         Task {
             do {
-                guard let password = try await vault.password(forMac: macID, reason: "解锁 \(client.macName)") else {
+                guard let password = try await vault.password(forMac: macID, reason: String(localized: "解锁 \(client.macName)")) else {
                     unlockPhase = .idle
                     passwordSheetSavesOnly = false
                     enteringPassword = true
@@ -832,7 +836,7 @@ struct RemoteDesktopScreen: View {
                 }
                 await submitUnlock(session, password: password)
             } catch {
-                unlockPhase = .failed("\(Self.biometryLead)验证未通过。")
+                unlockPhase = .failed(String(localized: "\(Self.biometryLead)验证未通过。", comment: "%@ 是面容 ID / 触控 ID 等名称（中文界面下末尾自带空格，其他语言不带，译文自己留空格）"))
             }
         }
     }
@@ -870,11 +874,13 @@ struct RemoteDesktopScreen: View {
                         ProgressView().tint(.white)
                     } else {
                         HStack(spacing: 8) {
-                            MBtn(title: vaultHasPassword ? "用\(Self.biometryLead)填入密码" : "输入密码", kind: .primary,
+                            MBtn(title: vaultHasPassword
+                                    ? String(localized: "用\(Self.biometryLead)填入密码", comment: "%@ 是面容 ID / 触控 ID 等名称（中文界面下末尾自带空格，其他语言不带，译文自己留空格）")
+                                    : String(localized: "输入密码"), kind: .primary,
                                  height: 40) {
                                 beginAuthPromptFill(session, prompt: prompt)
                             }.fixedSize()
-                            MBtn(title: "取消请求", kind: .secondary, height: 40) {
+                            MBtn(title: String(localized: "取消请求"), kind: .secondary, height: 40) {
                                 Task { await submitAuthPrompt(session, prompt: prompt, action: .cancel, password: nil) }
                             }.fixedSize()
                         }
@@ -905,13 +911,13 @@ struct RemoteDesktopScreen: View {
         authPromptPhase = .working
         Task {
             do {
-                guard let password = try await vault.password(forMac: macID, reason: "替 \(client.macName) 填写密码") else {
+                guard let password = try await vault.password(forMac: macID, reason: String(localized: "替 \(client.macName) 填写密码")) else {
                     authPromptPhase = .idle
                     return askForPassword()
                 }
                 await submitAuthPrompt(session, prompt: prompt, action: .fill, password: password)
             } catch {
-                authPromptPhase = .failed("\(Self.biometryLead)验证未通过。")
+                authPromptPhase = .failed(String(localized: "\(Self.biometryLead)验证未通过。", comment: "%@ 是面容 ID / 触控 ID 等名称（中文界面下末尾自带空格，其他语言不带，译文自己留空格）"))
             }
         }
     }

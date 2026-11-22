@@ -28,7 +28,7 @@ extension ControlHandler {
         default:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于执行组"
+                message: String(localized: "动作 \(request.action.rawValue) 不属于执行组")
             )
         }
     }
@@ -64,12 +64,11 @@ extension ControlHandler {
             return failure
         }
         if outcome.result.timedOut {
+            let reason = outcome.result.errorMessage ?? String(localized: "命令超时")
             return .failure(
                 id: request.id,
                 code: .command_timeout,
-                message: (outcome.result.errorMessage ?? "命令超时")
-                    + "需要长跑、又长时间没有输出的命令，请用 setsid / systemd-run 丢到后台"
-                    + "（nohup … & 仍在同一进程组，超时会被一起终止），再用 `run` 查状态。",
+                message: String(localized: "\(reason)需要长跑、又长时间没有输出的命令，请用 setsid / systemd-run 丢到后台（nohup … & 仍在同一进程组，超时会被一起终止），再用 `run` 查状态。"),
                 results: [outcome.result]
             )
         }
@@ -78,13 +77,14 @@ extension ControlHandler {
             return .failure(
                 id: request.id,
                 code: ControlErrorCode(rawValue: raw) ?? .operation_failed,
-                message: outcome.result.errorMessage ?? "在「\(profile.name)」上执行失败",
+                message: outcome.result.errorMessage ?? String(localized: "在「\(profile.name)」上执行失败"),
                 results: [outcome.result]
             )
         }
+        let exitText = outcome.result.exitCode.map(String.init) ?? String(localized: "未知", comment: "退出码未知")
         return .success(
             id: request.id,
-            message: "在「\(profile.name)」上执行完成，退出码 \(outcome.result.exitCode.map(String.init) ?? "未知")",
+            message: String(localized: "在「\(profile.name)」上执行完成，退出码 \(exitText)"),
             result: outcome.result
         )
     }
@@ -99,7 +99,7 @@ extension ControlHandler {
         guard !needles.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "缺少主机：run-many 至少要一个 `-H <主机>`"
+                message: String(localized: "缺少主机：run-many 至少要一个 `-H <主机>`")
             )
         }
         let command = try Self.commandText(request)
@@ -139,7 +139,7 @@ extension ControlHandler {
         }
         return .success(
             id: request.id,
-            message: snapshots.isEmpty ? "还没有快捷命令" : "共 \(snapshots.count) 条快捷命令",
+            message: snapshots.isEmpty ? String(localized: "还没有快捷命令") : String(localized: "共 \(snapshots.count) 条快捷命令"),
             quickCommands: snapshots
         )
     }
@@ -155,7 +155,7 @@ extension ControlHandler {
         guard let needle = Self.trimmed(request.name) ?? Self.trimmed(request.command) else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "缺少快捷命令名（先跑 `utermctl quick-commands` 看有哪些）"
+                message: String(localized: "缺少快捷命令名（先跑 `utermctl quick-commands` 看有哪些）")
             )
         }
         let commands = quickCommands(deps)
@@ -164,19 +164,19 @@ extension ControlHandler {
         switch HostResolver.resolve(needle, in: candidates) {
         case .matched(let id):
             guard let match = commands.first(where: { $0.id == id }) else {
-                throw ControlFailure(code: .invalid_request, message: "没有名为「\(needle)」的快捷命令")
+                throw ControlFailure(code: .invalid_request, message: String(localized: "没有名为「\(needle)」的快捷命令"))
             }
             command = match
         case .ambiguous(let matches):
+            let names = matches.map(\.name).joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
             throw ControlFailure(
                 code: .invalid_request,
-                message: "「\(needle)」匹配到 \(matches.count) 条快捷命令："
-                    + matches.map(\.name).joined(separator: "、") + "。改用 UUID 重试。"
+                message: String(localized: "「\(needle)」匹配到 \(matches.count) 条快捷命令：\(names)。改用 UUID 重试。")
             )
         case .notFound:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "没有名为「\(needle)」的快捷命令（跑 `utermctl quick-commands` 看有哪些）"
+                message: String(localized: "没有名为「\(needle)」的快捷命令（跑 `utermctl quick-commands` 看有哪些）")
             )
         }
 
@@ -184,8 +184,7 @@ extension ControlHandler {
         guard !shell.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "快捷命令「\(command.name)」没有等效 shell 命令（AI 介入命令），"
-                    + "CLI 跑不了它 —— 请在 uTerm 界面里运行，或用 `run` 自己下发命令。"
+                message: String(localized: "快捷命令「\(command.name)」没有等效 shell 命令（AI 介入命令），CLI 跑不了它 —— 请在 uTerm 界面里运行，或用 `run` 自己下发命令。")
             )
         }
 
@@ -204,7 +203,7 @@ extension ControlHandler {
         guard !prepared.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "快捷命令「\(command.name)」没有绑定任何主机，也没有给 `-H`"
+                message: String(localized: "快捷命令「\(command.name)」没有绑定任何主机，也没有给 `-H`")
             )
         }
 
@@ -241,7 +240,7 @@ extension ControlHandler {
 
         return batchResponse(
             id: request.id,
-            prefix: "快捷命令「\(command.name)」：",
+            prefix: String(localized: "快捷命令「\(command.name)」："),
             results: results,
             note: Self.mergedNote(merged)
         )
@@ -257,7 +256,7 @@ extension ControlHandler {
     /// 去重提示。`-H web1 -H web1`、名字 + UUID、大小写变体都会解析到同一台，
     /// 结果数组按**去重后的主机**一台一条，所以要在 message 里说清楚。
     nonisolated static func mergedNote(_ merged: Int) -> String {
-        merged > 0 ? "（有 \(merged) 个重复的 -H 已合并，结果按主机去重）" : ""
+        merged > 0 ? String(localized: "（有 \(merged) 个重复的 -H 已合并，结果按主机去重）") : ""
     }
 
     /// `run-many` / `quick-run` 的统一收口。
@@ -278,18 +277,18 @@ extension ControlHandler {
         guard !failed.isEmpty else {
             return .success(
                 id: id,
-                message: prefix + "\(results.count) 台全部执行成功" + note,
+                message: String(localized: "\(prefix)\(results.count) 台全部执行成功\(note)"),
                 results: results
             )
         }
         let pendingKey = results.first { $0.hostKey != nil }
         let allFailed = failed.count == results.count
-        var message = prefix + (allFailed
-            ? "\(results.count) 台全部失败"
-            : "\(results.count) 台中 \(failed.count) 台失败") + note
+        var message = allFailed
+            ? String(localized: "\(prefix)\(results.count) 台全部失败\(note)")
+            : String(localized: "\(prefix)\(results.count) 台中 \(failed.count) 台失败\(note)")
         if let info = pendingKey?.hostKey, let fingerprint = info.fingerprint {
-            message += "。主机「\(pendingKey?.host ?? info.host)」的密钥需要先处理"
-                + "（\(fingerprint)）—— 逐条的 hostKey 里有全部待处理的主机。"
+            let host = pendingKey?.host ?? info.host
+            message = String(localized: "\(message)。主机「\(host)」的密钥需要先处理（\(fingerprint)）—— 逐条的 hostKey 里有全部待处理的主机。")
         }
         return .failure(
             id: id,
@@ -364,7 +363,7 @@ extension ControlHandler {
                     hostName: id.uuidString,
                     endpoint: "",
                     target: nil,
-                    failure: (.host_not_found, "主机档案已不存在（\(id.uuidString)）")
+                    failure: (.host_not_found, String(localized: "主机档案已不存在（\(id.uuidString)）"))
                 )
             }
             if action.requiresExecCapableHost, profile.sftpOnly {
@@ -373,7 +372,7 @@ extension ControlHandler {
                     hostName: profile.name,
                     endpoint: Self.endpoint(profile),
                     target: nil,
-                    failure: (.host_sftp_only, "主机「\(profile.name)」被标记为仅 SFTP，不允许执行命令")
+                    failure: (.host_sftp_only, String(localized: "主机「\(profile.name)」被标记为仅 SFTP，不允许执行命令"))
                 )
             }
             return preparedTarget(profile, deps)
@@ -541,7 +540,7 @@ extension ControlHandler {
                     output: "",
                     durationMs: elapsed,
                     errorCode: ControlErrorCode.operation_failed.rawValue,
-                    errorMessage: "在「\(target.name)」上执行失败：\(failure.rawText)"
+                    errorMessage: String(localized: "在「\(target.name)」上执行失败：\(failure.rawText)")
                 ),
                 connectError: nil
             )
@@ -585,7 +584,7 @@ extension ControlHandler {
                 hostID: prepared[index].hostID.uuidString,
                 output: "",
                 errorCode: ControlErrorCode.operation_failed.rawValue,
-                errorMessage: "没有拿到执行结果"
+                errorMessage: String(localized: "没有拿到执行结果")
             )
         }
     }
@@ -597,7 +596,7 @@ extension ControlHandler {
         pool: any ControlConnectionPooling
     ) async -> ControlRunResult {
         guard let target = item.target else {
-            let failure = item.failure ?? (.operation_failed, "无法准备该主机")
+            let failure = item.failure ?? (.operation_failed, String(localized: "无法准备该主机"))
             return ControlRunResult(
                 host: item.hostName,
                 hostID: item.hostID.uuidString,
@@ -645,7 +644,7 @@ extension ControlHandler {
         }
         throw ControlFailure(
             code: .invalid_request,
-            message: "缺少命令：用 `-- <命令…>` 或 `-c \"<命令>\"` 指定"
+            message: String(localized: "缺少命令：用 `-- <命令…>` 或 `-c \"<命令>\"` 指定")
         )
     }
 

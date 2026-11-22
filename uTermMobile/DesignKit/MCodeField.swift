@@ -57,7 +57,7 @@ struct MCodeField: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(length) 位数字码"))
-        .accessibilityValue(Text(code.isEmpty ? "未输入" : CodeFieldInput.spoken(code)))
+        .accessibilityValue(code.isEmpty ? Text("未输入") : Text(verbatim: CodeFieldInput.spoken(code)))
         .accessibilityAction { focused = true }
     }
 

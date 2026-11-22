@@ -26,10 +26,10 @@ nonisolated enum KnownHostDisplay {
 
 /// 已知主机指纹相关的文案（删除确认 / 空状态），两端一字不差。
 nonisolated enum KnownHostCopy {
-    static func deleteTitle(address: String) -> String { "删除「\(address)」的指纹？" }
-    static let deleteMessage = "下次连接这台主机时会重新要求确认指纹。经 iCloud 同步的设备上也会删除。"
-    static let emptyTitle = "暂无已知主机"
-    static let emptyMessage = "首次连接并信任一台主机后，它的密钥指纹会记录在此。"
+    static func deleteTitle(address: String) -> String { String(localized: "删除「\(address)」的指纹？") }
+    static let deleteMessage = String(localized: "下次连接这台主机时会重新要求确认指纹。经 iCloud 同步的设备上也会删除。")
+    static let emptyTitle = String(localized: "暂无已知主机")
+    static let emptyMessage = String(localized: "首次连接并信任一台主机后，它的密钥指纹会记录在此。")
 }
 
 extension KnownHost {

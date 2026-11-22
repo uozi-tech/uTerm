@@ -28,9 +28,9 @@ nonisolated extension RemoteFileService {
         case .roots:
             return request
         case .exec:
-            throw RemoteFileError(.disabled, "共享文件夹只开放了文件，不能在那台 Mac 上跑命令")
+            throw RemoteFileError(.disabled, String(localized: "共享文件夹只开放了文件，不能在那台 Mac 上跑命令"))
         case .patch:
-            throw RemoteFileError(.disabled, "共享文件夹里不能用 patch（它要起别的程序）。改用 edit 或 write")
+            throw RemoteFileError(.disabled, String(localized: "共享文件夹里不能用 patch（它要起别的程序）。改用 edit 或 write"))
         default:
             break
         }
@@ -94,14 +94,14 @@ nonisolated extension RemoteFileService {
             if followFinal, isLink {
                 // 悬空的链接：跟着它写会在链接指向的地方新建文件。
                 guard let real = try? RemoteFileService.realPath(located) else {
-                    throw RemoteFileError(.permissionDenied, "\(path)：是一个指向不存在位置的符号链接")
+                    throw RemoteFileError(.permissionDenied, String(localized: "\(path)：是一个指向不存在位置的符号链接"))
                 }
                 _ = try root(containing: located, original: path)
                 located = real
             }
             let root = try root(containing: located, original: path)
             if writable, !root.writable {
-                throw RemoteFileError(.permissionDenied, "\(root.path) 是只读共享，不能改里面的东西")
+                throw RemoteFileError(.permissionDenied, String(localized: "\(root.path) 是只读共享，不能改里面的东西"))
             }
             return located
         }
@@ -126,11 +126,11 @@ nonisolated extension RemoteFileService {
                 // 解析不了又确实有东西在：悬空的符号链接，或者没权限看。两种都不往下走。
                 var info = Darwin.stat()
                 if lstat(current, &info) == 0 {
-                    throw RemoteFileError(.permissionDenied, "\(current)：路径里有一段解析不了（悬空的符号链接或没有权限）")
+                    throw RemoteFileError(.permissionDenied, String(localized: "\(current)：路径里有一段解析不了（悬空的符号链接或没有权限）"))
                 }
                 let name = (current as NSString).lastPathComponent
                 guard current != "/", !name.isEmpty, name != ".", name != ".." else {
-                    throw RemoteFileError(.invalid, "\(directory)：路径不对")
+                    throw RemoteFileError(.invalid, String(localized: "\(directory)：路径不对"))
                 }
                 pending.append(name)
                 current = (current as NSString).deletingLastPathComponent
@@ -142,25 +142,28 @@ nonisolated extension RemoteFileService {
             let matches = roots.filter { path == $0.path || path.hasPrefix($0.path == "/" ? "/" : $0.path + "/") }
             if let best = matches.max(by: { $0.path.count < $1.path.count }) { return best }
             guard !roots.isEmpty else {
-                throw RemoteFileError(.disabled, "那台 Mac 共享的文件夹都已经不存在了")
+                throw RemoteFileError(.disabled, String(localized: "那台 Mac 共享的文件夹都已经不存在了"))
             }
-            let shared = roots.map { "\($0.path)（\($0.writable ? "读写" : "只读")）" }.joined(separator: "、")
+            let shared = roots.map { root in
+                let access = root.writable ? String(localized: "读写", comment: "共享文件夹权限")
+                    : String(localized: "只读", comment: "共享文件夹权限")
+                return String(localized: "\(root.path)（\(access)）")
+            }.joined(separator: String(localized: "、", comment: "列举共享文件夹的分隔符"))
             throw RemoteFileError(.permissionDenied,
-                                  "\(original)：不在共享的文件夹里。那台 Mac 共享的有：\(shared)。"
-                                  + "要访问别的目录，得由用户在那台 Mac 的 uTerm 里添加共享文件夹")
+                                  String(localized: "\(original)：不在共享的文件夹里。那台 Mac 共享的有：\(shared)。要访问别的目录，得由用户在那台 Mac 的 uTerm 里添加共享文件夹"))
         }
 
         /// 新建的符号链接指向哪里：相对路径按链接所在的目录算，结果要落在同一个共享目录里。
         func requireTargetInside(link: String, target: String?) throws {
-            guard let target, !target.isEmpty else { throw RemoteFileError(.invalid, "缺少链接的指向") }
+            guard let target, !target.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少链接的指向")) }
             guard !target.hasPrefix("~") else {
-                throw RemoteFileError(.permissionDenied, "共享文件夹里的符号链接不能用 ~ 开头的指向")
+                throw RemoteFileError(.permissionDenied, String(localized: "共享文件夹里的符号链接不能用 ~ 开头的指向"))
             }
             let joined = target.hasPrefix("/") ? target : (link as NSString).deletingLastPathComponent + "/" + target
             let resolved = try entryPath(try RemoteFileService.resolve(joined))
             let home = try root(containing: link, original: link)
             guard resolved == home.path || resolved.hasPrefix(home.path + "/") else {
-                throw RemoteFileError(.permissionDenied, "符号链接只能指向同一个共享文件夹里面：\(target) 指到了外面")
+                throw RemoteFileError(.permissionDenied, String(localized: "符号链接只能指向同一个共享文件夹里面：\(target) 指到了外面"))
             }
         }
     }

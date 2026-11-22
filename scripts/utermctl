@@ -28,6 +28,1408 @@ import threading
 import time
 import uuid
 
+# ---------------------------------------------------------------------------
+# 本地化：给人看的文字（帮助、报错、提示、表头）跟系统语言走。
+#
+# 源文是简体中文，`_("中文原文")` 按原文查下面的翻译表，zh-Hans 原样返回。带格式的一律用命名占位
+# （`_("连接 {host} 失败").format(host=…)`），各语言可以调语序。命令名、参数名、JSON 字段名、
+# code、退出码不翻译。脚本是单文件、被拷进 app 包，翻译表只能内嵌在这里。
+#
+# 语言：`UTERM_LANG`（zh-Hans / en / zh-Hant / ja / ko）> macOS 全局首选语言（AppleLanguages 里
+# 第一个支持的；都不支持就是 en）> LC_ALL / LC_MESSAGES / LANG > en。第一次要出文字时探测一次。
+# ---------------------------------------------------------------------------
+ENV_LANG = "UTERM_LANG"
+SOURCE_LANGUAGE = "zh-Hans"
+# 翻译表里每条译文元组的顺序。
+TRANSLATED_LANGUAGES = ("en", "zh-Hant", "ja", "ko")
+_language = None
+
+
+def normalize_language(tag, fallback="en"):
+    """`zh-Hans-CN` / `zh_TW.UTF-8` / `ja-JP` → 支持的语言之一。
+
+    空的、C / POSIX 回 None；认得出但不支持的语言回 `fallback`。"""
+    tag = (tag or "").strip().split(".", 1)[0].split("@", 1)[0].replace("_", "-")
+    if not tag or tag.upper() in ("C", "POSIX"):
+        return None
+    parts = tag.lower().split("-")
+    if parts[0] == "zh":
+        if "hans" in parts:
+            return "zh-Hans"
+        if "hant" in parts or any(part in ("tw", "hk", "mo") for part in parts[1:]):
+            return "zh-Hant"
+        return "zh-Hans"
+    if parts[0] in ("en", "ja", "ko"):
+        return parts[0]
+    return fallback
+
+
+def apple_languages():
+    """macOS 的全局首选语言列表；读不到回 []。
+
+    先直接读偏好 plist（约 1 ms），读不到才起 `defaults`（几十毫秒，1 秒超时）。"""
+    if sys.platform != "darwin":
+        return []
+    for candidate in ("~/Library/Preferences/.GlobalPreferences.plist",
+                      "/Library/Preferences/.GlobalPreferences.plist"):
+        try:
+            with open(os.path.expanduser(candidate), "rb") as handle:
+                value = plistlib.load(handle).get("AppleLanguages")
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+        if isinstance(value, list) and value:
+            return [item for item in value if isinstance(item, str)]
+    try:
+        output = subprocess.run(["/usr/bin/defaults", "read", "-g", "AppleLanguages"],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=1).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    # 输出形如 `(\n    "zh-Hans-CN",\n    en\n)`。
+    return re.findall(r"^\s*\"?([A-Za-z][A-Za-z0-9_-]*)\"?,?\s*$", output, re.MULTILINE)
+
+
+def detect_language():
+    explicit = os.environ.get(ENV_LANG)
+    if explicit and explicit.strip():
+        return normalize_language(explicit) or "en"
+    preferred = apple_languages()
+    if preferred:
+        for tag in preferred:
+            found = normalize_language(tag, fallback=None)
+            if found:
+                return found
+        return "en"
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        found = normalize_language(os.environ.get(name))
+        if found:
+            return found
+    return "en"
+
+
+def current_language():
+    global _language
+    if _language is None:
+        _language = detect_language()
+    return _language
+
+
+def _(text):
+    """按当前语言取 `text`（简体中文原文）的译文；zh-Hans 或表里没有时原样返回。"""
+    language = current_language()
+    if language == SOURCE_LANGUAGE:
+        return text
+    translations = TRANSLATIONS.get(text)
+    if translations is None:
+        return text
+    return translations[TRANSLATED_LANGUAGES.index(language)]
+
+
+# 简体中文原文 → (en, zh-Hant, ja, ko)。键必须与 `_()` 里的原文一字不差。
+TRANSLATIONS = {
+    "macOS 用户名过长，uTerm 的 socket 路径连备用的短路径都超过系统上限 {limit} 字节（{path}），命令行接口无法启动。": (
+        "macOS user name is too long: even uTerm's fallback socket path exceeds the system limit of {limit} bytes ({path}), so the command-line interface can't start.",
+        "macOS 使用者名稱過長，uTerm 的 socket 路徑連備用的短路徑都超過系統上限 {limit} 位元組（{path}），命令列介面無法啟動。",
+        "macOS のユーザ名が長すぎます。uTerm の socket パスは予備の短いパスでもシステム上限の {limit} バイトを超えるため（{path}）、コマンドラインインターフェイスを起動できません。",
+        "macOS 사용자 이름이 너무 깁니다. uTerm의 socket 경로가 예비용 짧은 경로조차 시스템 한도 {limit}바이트를 넘어서({path}) 명령줄 인터페이스를 시작할 수 없습니다."),
+    "macOS 用户名过长，uTerm 默认的 socket 路径（{bytes} 字节）超过系统上限 {limit} 字节：{path}。uTerm 2.1.6 及更早的版本在这样的账户上无法启动命令行接口，请把 uTerm 更新到最新版本（新版本会自动改用更短的路径）。": (
+        "macOS user name is too long: uTerm's default socket path ({bytes} bytes) exceeds the system limit of {limit} bytes: {path}. uTerm 2.1.6 and earlier can't start the command-line interface on such accounts. Update uTerm to the latest version (it switches to a shorter path automatically).",
+        "macOS 使用者名稱過長，uTerm 預設的 socket 路徑（{bytes} 位元組）超過系統上限 {limit} 位元組：{path}。uTerm 2.1.6 及更早的版本在這種帳號上無法啟動命令列介面，請把 uTerm 更新到最新版本（新版本會自動改用較短的路徑）。",
+        "macOS のユーザ名が長すぎます。uTerm の既定の socket パス（{bytes} バイト）がシステム上限の {limit} バイトを超えています：{path}。uTerm 2.1.6 以前はこのようなアカウントでコマンドラインインターフェイスを起動できません。uTerm を最新バージョンにアップデートしてください（新しいバージョンは自動的に短いパスを使います）。",
+        "macOS 사용자 이름이 너무 깁니다. uTerm의 기본 socket 경로({bytes}바이트)가 시스템 한도 {limit}바이트를 넘습니다: {path}. uTerm 2.1.6 이하 버전은 이런 계정에서 명령줄 인터페이스를 시작할 수 없으니 uTerm을 최신 버전으로 업데이트하세요(새 버전은 자동으로 더 짧은 경로를 사용합니다)."),
+    "已请求后台启动 uTerm，但接口在 10 秒内没有就绪。若 uTerm 本来就在运行，确认设置 ▸ 命令行与技能 里已打开「启用命令行接口」。": (
+        "Asked uTerm to start in the background, but its interface wasn't ready within 10 seconds. If uTerm is already running, make sure “Enable Command-Line Interface” is on in Settings ▸ Command Line & Skills.",
+        "已要求在背景啟動 uTerm，但介面在 10 秒內沒有就緒。若 uTerm 本來就在執行，請確認「設定 ▸ 命令列與技能」裡已開啟「啟用命令列介面」。",
+        "uTerm のバックグラウンド起動を要求しましたが、10 秒以内にインターフェイスの準備ができませんでした。uTerm がすでに起動している場合は、「設定 ▸ コマンドラインとスキル」で「コマンドラインインターフェイスを有効にする」がオンになっているか確認してください。",
+        "uTerm을 백그라운드에서 시작하도록 요청했지만 10초 안에 인터페이스가 준비되지 않았습니다. uTerm이 이미 실행 중이라면 설정 ▸ 명령줄 및 스킬에서 '명령줄 인터페이스 활성화'가 켜져 있는지 확인하세요."),
+    "uTerm 未运行，且设置中没有允许 CLI 按需启动。用户在 uTerm 设置 ▸ 命令行与技能 里打开「允许 CLI 按需启动」之后，utermctl 会自己在后台把它起起来。": (
+        "uTerm isn't running, and its settings don't allow the CLI to launch it on demand. Once the user turns on “Allow CLI to Launch on Demand” in uTerm Settings ▸ Command Line & Skills, utermctl starts it in the background by itself.",
+        "uTerm 未在執行，且設定中沒有允許 CLI 依需求啟動。使用者在 uTerm「設定 ▸ 命令列與技能」裡開啟「允許 CLI 依需求啟動」之後，utermctl 會自行在背景把它啟動。",
+        "uTerm は起動しておらず、設定で CLI からのオンデマンド起動も許可されていません。ユーザが uTerm の「設定 ▸ コマンドラインとスキル」で「CLI からのオンデマンド起動を許可」をオンにすると、utermctl が自動的にバックグラウンドで起動します。",
+        "uTerm이 실행 중이 아니며 설정에서 CLI 요청 시 실행이 허용되어 있지 않습니다. 사용자가 uTerm 설정 ▸ 명령줄 및 스킬에서 'CLI가 필요할 때 실행하도록 허용'을 켜면 utermctl이 백그라운드에서 직접 실행합니다."),
+    "uTerm 命令行接口未启用；按需启动设置不会绕过接口门禁。": (
+        "uTerm's command-line interface is disabled; the on-demand launch setting doesn't bypass that gate.",
+        "uTerm 命令列介面未啟用；依需求啟動的設定不會繞過介面的門檻。",
+        "uTerm のコマンドラインインターフェイスが無効です。オンデマンド起動の設定ではこの制限を回避できません。",
+        "uTerm 명령줄 인터페이스가 꺼져 있습니다. 요청 시 실행 설정으로는 이 제한을 우회할 수 없습니다."),
+    "无法唤起 uTerm 后台实例：{error}": (
+        "Couldn't start a background uTerm instance: {error}",
+        "無法喚起 uTerm 背景實例：{error}",
+        "uTerm のバックグラウンドインスタンスを起動できません：{error}",
+        "uTerm 백그라운드 인스턴스를 시작할 수 없습니다: {error}"),
+    "uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开「允许 CLI 按需启动」和「启用命令行接口」。": (
+        "uTerm refused the on-demand launch: turn on both “Allow CLI to Launch on Demand” and “Enable Command-Line Interface” in uTerm Settings ▸ Command Line & Skills.",
+        "uTerm 拒絕了依需求啟動：需要在 uTerm「設定 ▸ 命令列與技能」裡同時開啟「允許 CLI 依需求啟動」和「啟用命令列介面」。",
+        "uTerm がオンデマンド起動を拒否しました。uTerm の「設定 ▸ コマンドラインとスキル」で「CLI からのオンデマンド起動を許可」と「コマンドラインインターフェイスを有効にする」の両方をオンにしてください。",
+        "uTerm이 요청 시 실행을 거부했습니다. uTerm 설정 ▸ 명령줄 및 스킬에서 'CLI가 필요할 때 실행하도록 허용'과 '명령줄 인터페이스 활성화'를 모두 켜세요."),
+    "通过正在运行的 uTerm 使用其已保存的主机执行命令、读写文件、启停转发": (
+        "Use the hosts saved in a running uTerm to run commands, read and write files, and start or stop forwards",
+        "透過正在執行的 uTerm 使用其已儲存的主機執行指令、讀寫檔案、啟停轉送",
+        "起動中の uTerm に保存されたホストでコマンドの実行、ファイルの読み書き、転送の開始・停止を行います",
+        "실행 중인 uTerm에 저장된 호스트로 명령 실행, 파일 읽기·쓰기, 포워딩 시작·중지"),
+    "主机名或 UUID": (
+        "Host name or UUID",
+        "主機名稱或 UUID",
+        "ホスト名または UUID",
+        "호스트 이름 또는 UUID"),
+    "主机名或 UUID，可重复": (
+        "Host name or UUID; repeatable",
+        "主機名稱或 UUID，可重複",
+        "ホスト名または UUID（複数指定可）",
+        "호스트 이름 또는 UUID, 여러 번 지정 가능"),
+    "探活并报告版本与两个开关的状态": (
+        "Check that uTerm is alive and report its version and both switches",
+        "檢查 uTerm 是否存活，並回報版本與兩個開關的狀態",
+        "uTerm の死活を確認し、バージョンと 2 つのスイッチの状態を表示",
+        "uTerm 동작 여부 확인 및 버전과 두 스위치 상태 표시"),
+    "列出已保存的主机": (
+        "List saved hosts",
+        "列出已儲存的主機",
+        "保存済みのホストを一覧表示",
+        "저장된 호스트 목록 표시"),
+    "查一台主机在信任库里的记录": (
+        "Show a host's entry in the trust store",
+        "查詢一台主機在信任庫裡的記錄",
+        "ホストの信頼ストア上の記録を表示",
+        "신뢰 저장소에 있는 호스트 기록 조회"),
+    "按指纹钉住一台主机的密钥": (
+        "Pin a host's key by fingerprint",
+        "依指紋釘住一台主機的金鑰",
+        "フィンガープリントでホストの鍵を固定",
+        "지문으로 호스트 키 고정"),
+    "必须与当前挑战一致的 SHA256:… 指纹": (
+        "SHA256:… fingerprint; must match the current challenge",
+        "必須與目前挑戰一致的 SHA256:… 指紋",
+        "現在のチャレンジと一致する SHA256:… フィンガープリント",
+        "현재 챌린지와 일치해야 하는 SHA256:… 지문"),
+    "整串 shell 命令（与 -- 之后的 argv 二选一）": (
+        "Whole shell command (or give argv after --, not both)",
+        "整串 shell 指令（與 -- 之後的 argv 二選一）",
+        "シェルコマンド全体（-- 以降の argv とどちらか一方）",
+        "셸 명령 전체(-- 뒤의 argv와 둘 중 하나)"),
+    "静默超时（秒）：连续这么久没有任何输出就终止命令；默认 60，封顶 1800": (
+        "Idle timeout in seconds: stop the command after this long with no output; default 60, max 1800",
+        "靜默逾時（秒）：連續這麼久沒有任何輸出就終止指令；預設 60，上限 1800",
+        "無出力タイムアウト（秒）：この時間出力がなければコマンドを終了。既定 60、上限 1800",
+        "무출력 제한 시간(초): 이 시간 동안 출력이 없으면 명령 종료. 기본 60, 최대 1800"),
+    "总时长上限（秒）：不管有没有输出，跑满就终止；默认 3600，封顶 21600": (
+        "Total time limit in seconds: stop when reached, output or not; default 3600, max 21600",
+        "總時長上限（秒）：不管有沒有輸出，跑滿就終止；預設 3600，上限 21600",
+        "総実行時間の上限（秒）：出力の有無にかかわらず達したら終了。既定 3600、上限 21600",
+        "총 실행 시간 상한(초): 출력 여부와 관계없이 도달하면 종료. 기본 3600, 최대 21600"),
+    "输出行数上限，默认 200": (
+        "Maximum output lines; default 200",
+        "輸出行數上限，預設 200",
+        "出力行数の上限。既定 200",
+        "출력 줄 수 상한, 기본 200"),
+    "输出字节上限，默认 16000，封顶 1 MiB": (
+        "Maximum output bytes; default 16000, max 1 MiB",
+        "輸出位元組上限，預設 16000，上限 1 MiB",
+        "出力バイト数の上限。既定 16000、上限 1 MiB",
+        "출력 바이트 상한, 기본 16000, 최대 1 MiB"),
+    "-- 之后的命令与参数（原样拼成一条命令）": (
+        "Command and arguments after -- (joined into one command as-is)",
+        "-- 之後的指令與參數（原樣拼成一條指令）",
+        "-- 以降のコマンドと引数（そのまま 1 つのコマンドに連結）",
+        "-- 뒤의 명령과 인수(그대로 하나의 명령으로 연결)"),
+    "在一台主机上跑一条命令": (
+        "Run a command on one host",
+        "在一台主機上執行一條指令",
+        "1 台のホストでコマンドを実行",
+        "호스트 한 대에서 명령 실행"),
+    "在多台主机上并行跑同一条命令": (
+        "Run the same command on several hosts in parallel",
+        "在多台主機上平行執行同一條指令",
+        "複数のホストで同じコマンドを並列実行",
+        "여러 호스트에서 같은 명령을 병렬 실행"),
+    "列出快捷命令": (
+        "List Quick Commands",
+        "列出快速指令",
+        "クイックコマンドを一覧表示",
+        "빠른 명령 목록 표시"),
+    "跑一条已保存的快捷命令": (
+        "Run a saved Quick Command",
+        "執行一條已儲存的快速指令",
+        "保存済みのクイックコマンドを実行",
+        "저장된 빠른 명령 실행"),
+    "快捷命令的名字或 UUID": (
+        "Quick Command name or UUID",
+        "快速指令的名稱或 UUID",
+        "クイックコマンドの名前または UUID",
+        "빠른 명령 이름 또는 UUID"),
+    "覆盖目标主机，可重复": (
+        "Override the target hosts; repeatable",
+        "覆寫目標主機，可重複",
+        "対象ホストを上書き（複数指定可）",
+        "대상 호스트 재지정, 여러 번 지정 가능"),
+    "静默超时（秒），同 run": (
+        "Idle timeout in seconds, as in run",
+        "靜默逾時（秒），同 run",
+        "無出力タイムアウト（秒）。run と同じ",
+        "무출력 제한 시간(초), run과 동일"),
+    "总时长上限（秒），同 run": (
+        "Total time limit in seconds, as in run",
+        "總時長上限（秒），同 run",
+        "総実行時間の上限（秒）。run と同じ",
+        "총 실행 시간 상한(초), run과 동일"),
+    "远程文件操作": (
+        "Remote file operations",
+        "遠端檔案操作",
+        "リモートファイル操作",
+        "원격 파일 작업"),
+    "列目录": (
+        "List a directory",
+        "列出目錄",
+        "ディレクトリを一覧表示",
+        "디렉터리 목록 표시"),
+    "看一个文件的类型、大小、权限与修改时间": (
+        "Show a file's type, size, permissions, and modification time",
+        "查看一個檔案的類型、大小、權限與修改時間",
+        "ファイルの種類・サイズ・権限・更新日時を表示",
+        "파일 종류, 크기, 권한, 수정 시간 표시"),
+    "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）": (
+        "Print a text file (up to 1 MiB; larger returns file_too_large, use get instead)",
+        "印出一個文字檔（上限 1 MiB，超過回 file_too_large，改用 get）",
+        "テキストファイルを表示（上限 1 MiB。超えると file_too_large、代わりに get を使用）",
+        "텍스트 파일 출력(최대 1 MiB, 초과 시 file_too_large 반환, 대신 get 사용)"),
+    "下载一个文件到本地（uTerm 多通道并行，大小不限）": (
+        "Download a file (uTerm transfers over parallel channels; any size)",
+        "下載一個檔案到本機（uTerm 多通道平行，大小不限）",
+        "ファイルをローカルにダウンロード（uTerm が複数チャネルで並列転送、サイズ無制限）",
+        "파일을 로컬로 다운로드(uTerm 다중 채널 병렬 전송, 크기 제한 없음)"),
+    "本地落盘路径": (
+        "Local destination path",
+        "本機存放路徑",
+        "ローカルの保存先パス",
+        "로컬 저장 경로"),
+    "覆盖已存在的本地文件": (
+        "Overwrite an existing local file",
+        "覆寫已存在的本機檔案",
+        "既存のローカルファイルを上書き",
+        "기존 로컬 파일 덮어쓰기"),
+    "上传一个本地文件（uTerm 多通道并行，大小不限）": (
+        "Upload a local file (uTerm transfers over parallel channels; any size)",
+        "上傳一個本機檔案（uTerm 多通道平行，大小不限）",
+        "ローカルファイルをアップロード（uTerm が複数チャネルで並列転送、サイズ無制限）",
+        "로컬 파일 업로드(uTerm 다중 채널 병렬 전송, 크기 제한 없음)"),
+    "本地文件路径": (
+        "Local file path",
+        "本機檔案路徑",
+        "ローカルファイルのパス",
+        "로컬 파일 경로"),
+    "远端目标路径": (
+        "Remote destination path",
+        "遠端目標路徑",
+        "リモートの保存先パス",
+        "원격 대상 경로"),
+    "覆盖已存在的远端文件": (
+        "Overwrite an existing remote file",
+        "覆寫已存在的遠端檔案",
+        "既存のリモートファイルを上書き",
+        "기존 원격 파일 덮어쓰기"),
+    "建目录": (
+        "Create a directory",
+        "建立目錄",
+        "ディレクトリを作成",
+        "디렉터리 생성"),
+    "删文件": (
+        "Delete a file",
+        "刪除檔案",
+        "ファイルを削除",
+        "파일 삭제"),
+    "删空目录": (
+        "Delete an empty directory",
+        "刪除空目錄",
+        "空のディレクトリを削除",
+        "빈 디렉터리 삭제"),
+    "改名 / 移动": (
+        "Rename / move",
+        "重新命名 / 移動",
+        "名前変更 / 移動",
+        "이름 변경 / 이동"),
+    "改权限": (
+        "Change permissions",
+        "變更權限",
+        "権限を変更",
+        "권한 변경"),
+    "八进制，如 644": (
+        "Octal, e.g. 644",
+        "八進位，如 644",
+        "8 進数（例：644）",
+        "8진수, 예: 644"),
+    "端口转发规则的增删与启停": (
+        "Add, remove, start, and stop port forwarding rules",
+        "連接埠轉送規則的新增、刪除與啟停",
+        "ポートフォワーディングのルールを追加・削除・開始・停止",
+        "포트 포워딩 규칙 추가·삭제·시작·중지"),
+    "列出规则与运行状态": (
+        "List rules and their status",
+        "列出規則與執行狀態",
+        "ルールと実行状態を一覧表示",
+        "규칙과 실행 상태 목록 표시"),
+    "只列这台主机的规则": (
+        "Only list this host's rules",
+        "只列出這台主機的規則",
+        "このホストのルールだけを表示",
+        "이 호스트의 규칙만 표시"),
+    "启动一条规则": (
+        "Start a rule",
+        "啟動一條規則",
+        "ルールを開始",
+        "규칙 시작"),
+    "停掉一条规则": (
+        "Stop a rule",
+        "停止一條規則",
+        "ルールを停止",
+        "규칙 중지"),
+    "删一条规则（在跑就先停；自启的规则拒绝）": (
+        "Delete a rule (stops it first if running; refuses auto-start rules)",
+        "刪除一條規則（執行中就先停止；自動啟動的規則拒絕）",
+        "ルールを削除（実行中なら先に停止。自動起動のルールは拒否）",
+        "규칙 삭제(실행 중이면 먼저 중지, 자동 시작 규칙은 거부)"),
+    "规则名或 UUID": (
+        "Rule name or UUID",
+        "規則名稱或 UUID",
+        "ルール名または UUID",
+        "규칙 이름 또는 UUID"),
+    "只在这台主机的规则里找（同名规则跨主机时用）": (
+        "Only look among this host's rules (for same-named rules on different hosts)",
+        "只在這台主機的規則裡找（同名規則跨主機時使用）",
+        "このホストのルールだけから探す（同名のルールが複数ホストにある場合）",
+        "이 호스트의 규칙에서만 찾기(이름이 같은 규칙이 여러 호스트에 있을 때)"),
+    "在一台主机上新建一条规则（不启动）": (
+        "Create a rule on a host (doesn't start it)",
+        "在一台主機上新增一條規則（不啟動）",
+        "ホストに新しいルールを作成（開始はしない）",
+        "호스트에 새 규칙 생성(시작하지 않음)"),
+    "规则名（同一台主机上不能重名）": (
+        "Rule name (unique per host)",
+        "規則名稱（同一台主機上不能重複）",
+        "ルール名（同じホスト内で重複不可）",
+        "규칙 이름(같은 호스트 안에서 중복 불가)"),
+    "local = -L，remote = -R，dynamic = -D（SOCKS5）": (
+        "local = -L, remote = -R, dynamic = -D (SOCKS5)",
+        "local = -L，remote = -R，dynamic = -D（SOCKS5）",
+        "local = -L、remote = -R、dynamic = -D（SOCKS5）",
+        "local = -L, remote = -R, dynamic = -D(SOCKS5)"),
+    "监听地址。local / dynamic 开在本机，remote 开在服务器上；HOST 缺省 127.0.0.1": (
+        "Listen address: local / dynamic listen on this Mac, remote on the server; HOST defaults to 127.0.0.1",
+        "監聽位址。local / dynamic 開在本機，remote 開在伺服器上；HOST 預設 127.0.0.1",
+        "待ち受けアドレス。local / dynamic はこの Mac、remote はサーバ上で待ち受け。HOST の既定は 127.0.0.1",
+        "수신 주소. local / dynamic은 이 Mac에서, remote는 서버에서 수신. HOST 기본값 127.0.0.1"),
+    "目标地址：local 是服务器能到的地址，remote 是本机能到的地址；dynamic 不给": (
+        "Destination: for local, an address the server can reach; for remote, one this Mac can reach; omit for dynamic",
+        "目標位址：local 是伺服器能連到的位址，remote 是本機能連到的位址；dynamic 不用給",
+        "転送先アドレス：local ではサーバから届くアドレス、remote ではこの Mac から届くアドレス。dynamic では指定しない",
+        "대상 주소: local은 서버에서 닿는 주소, remote는 이 Mac에서 닿는 주소, dynamic은 지정하지 않음"),
+    "列出所有窗口里的终端会话": (
+        "List terminal sessions in all windows",
+        "列出所有視窗裡的終端機工作階段",
+        "すべてのウインドウのターミナルセッションを一覧表示",
+        "모든 윈도우의 터미널 세션 목록 표시"),
+    "终端会话读屏 / 注入 / 开窗": (
+        "Read, type into, or open terminal sessions",
+        "終端機工作階段讀取畫面 / 注入 / 開視窗",
+        "ターミナルセッションの画面読み取り / 入力 / ウインドウ表示",
+        "터미널 세션 화면 읽기 / 입력 주입 / 윈도우 열기"),
+    "读一个会话的当前屏幕（快照）": (
+        "Read a session's current screen (snapshot)",
+        "讀取一個工作階段的目前畫面（快照）",
+        "セッションの現在の画面を読み取る（スナップショット）",
+        "세션의 현재 화면 읽기(스냅숏)"),
+    "会话 id 或其唯一前缀": (
+        "Session id or a unique prefix of it",
+        "工作階段 id 或其唯一前綴",
+        "セッション id またはその一意な先頭部分",
+        "세션 id 또는 고유한 앞부분"),
+    "行数，默认 80": (
+        "Number of lines; default 80",
+        "行數，預設 80",
+        "行数。既定 80",
+        "줄 수, 기본 80"),
+    "往一个会话注入文本": (
+        "Type text into a session",
+        "向一個工作階段注入文字",
+        "セッションにテキストを入力",
+        "세션에 텍스트 주입"),
+    "要写入 PTY 的文本": (
+        "Text to write to the PTY",
+        "要寫入 PTY 的文字",
+        "PTY に書き込むテキスト",
+        "PTY에 쓸 텍스트"),
+    "末尾追加回车": (
+        "Append a Return at the end",
+        "結尾附加 Return",
+        "末尾に Return を追加",
+        "끝에 Return 추가"),
+    "给一台主机开一个新终端窗口；给了命令就在窗口里跑它（用户可在窗口里交互）": (
+        "Open a new terminal window for a host; given a command, run it there (the user can interact in the window)",
+        "為一台主機開啟新的終端機視窗；給了指令就在視窗裡執行（使用者可在視窗裡互動）",
+        "ホストの新しいターミナルウインドウを開く。コマンドを指定するとそのウインドウで実行（ユーザはウインドウで操作可能）",
+        "호스트의 새 터미널 윈도우 열기. 명령을 주면 그 윈도우에서 실행(사용자가 윈도우에서 상호작용 가능)"),
+    "连上后在窗口里跑的整串命令（与 -- 之后的 argv 二选一）": (
+        "Whole command to run in the window once connected (or give argv after --, not both)",
+        "連線後在視窗裡執行的整串指令（與 -- 之後的 argv 二選一）",
+        "接続後にウインドウで実行するコマンド全体（-- 以降の argv とどちらか一方）",
+        "연결 후 윈도우에서 실행할 명령 전체(-- 뒤의 argv와 둘 중 하나)"),
+    "-- 之后的命令与参数": (
+        "Command and arguments after --",
+        "-- 之後的指令與參數",
+        "-- 以降のコマンドと引数",
+        "-- 뒤의 명령과 인수"),
+    "等 terminal open -- <命令> 跑的那条命令结束，拿退出码与输出": (
+        "Wait for the command started by terminal open -- <command> to finish; get its exit code and output",
+        "等 terminal open -- <指令> 執行的那條指令結束，取得結束碼與輸出",
+        "terminal open -- <コマンド> で実行したコマンドの終了を待ち、終了コードと出力を取得",
+        "terminal open -- <명령>으로 실행한 명령이 끝나기를 기다려 종료 코드와 출력 받기"),
+    "最多等几秒，默认 90，封顶 1800；没跑完回 state=running": (
+        "Maximum seconds to wait; default 90, max 1800; returns state=running if not done",
+        "最多等幾秒，預設 90，上限 1800；沒跑完回 state=running",
+        "最大待ち時間（秒）。既定 90、上限 1800。終わっていなければ state=running を返す",
+        "최대 대기 시간(초), 기본 90, 최대 1800. 끝나지 않으면 state=running 반환"),
+    "自建中继：安装命令、导入配置、测试连通": (
+        "Self-hosted relay: install command, import config, test connectivity",
+        "自架中繼：安裝指令、匯入設定、測試連線",
+        "セルフホストのリレー：インストールコマンド、設定の読み込み、接続テスト",
+        "자체 호스팅 릴레이: 설치 명령, 설정 가져오기, 연결 테스트"),
+    "让 uTerm 经 SFTP 读主机上安装脚本写的设备配置并存进钥匙串（密钥不经过本客户端）": (
+        "Have uTerm read, over SFTP, the device config written by the install script on the host and save it to the keychain (keys never pass through this client)",
+        "讓 uTerm 經 SFTP 讀取主機上安裝腳本寫的裝置設定並存進鑰匙圈（金鑰不經過本用戶端）",
+        "ホスト上でインストールスクリプトが書き出したデバイス設定を uTerm が SFTP で読み取り、キーチェーンに保存（鍵はこのクライアントを経由しない）",
+        "호스트에서 설치 스크립트가 쓴 기기 설정을 uTerm이 SFTP로 읽어 키체인에 저장(키는 이 클라이언트를 거치지 않음)"),
+    "装着中继的主机名或 UUID": (
+        "Name or UUID of the host running the relay",
+        "安裝了中繼的主機名稱或 UUID",
+        "リレーをインストールしたホストの名前または UUID",
+        "릴레이가 설치된 호스트 이름 또는 UUID"),
+    "设备配置在远端的路径，默认 ~/.config/uterm-relay/client.json": (
+        "Remote path of the device config; default ~/.config/uterm-relay/client.json",
+        "裝置設定在遠端的路徑，預設 ~/.config/uterm-relay/client.json",
+        "デバイス設定のリモートパス。既定 ~/.config/uterm-relay/client.json",
+        "기기 설정의 원격 경로, 기본 ~/.config/uterm-relay/client.json"),
+    "已经导入了另一台中继时换成这一台": (
+        "Replace a previously imported relay with this one",
+        "已經匯入另一台中繼時換成這一台",
+        "別のリレーを読み込み済みの場合はこれに置き換える",
+        "다른 릴레이를 이미 가져온 경우 이것으로 교체"),
+    "从这台 Mac 测已导入的中继：TCP、成员认证、UDP，附带版本": (
+        "Test the imported relay from this Mac: TCP, member auth, UDP, plus its version",
+        "從這台 Mac 測試已匯入的中繼：TCP、成員驗證、UDP，附帶版本",
+        "読み込み済みのリレーをこの Mac からテスト：TCP、メンバー認証、UDP、バージョン",
+        "가져온 릴레이를 이 Mac에서 테스트: TCP, 멤버 인증, UDP, 버전"),
+    "打印在服务器上安装 / 更新中继的那一行命令（安装脚本放在哪由这个 uTerm 构建决定）": (
+        "Print the one-line command that installs / updates the relay on a server (where the install script lives depends on this uTerm build)",
+        "印出在伺服器上安裝 / 更新中繼的那一行指令（安裝腳本放在哪由這個 uTerm 建置決定）",
+        "サーバにリレーをインストール / アップデートする 1 行のコマンドを表示（インストールスクリプトの場所はこの uTerm のビルドで決まる）",
+        "서버에 릴레이를 설치 / 업데이트하는 한 줄 명령 출력(설치 스크립트 위치는 이 uTerm 빌드가 결정)"),
+    "给要输 sudo 密码的终端用（curl … | sudo sh）；缺省是 root 直接跑、其他用户 sudo -n 的版本": (
+        "For a terminal where you'll type the sudo password (curl … | sudo sh); by default prints the version that runs directly as root and with sudo -n otherwise",
+        "給要輸入 sudo 密碼的終端機用（curl … | sudo sh）；預設是 root 直接執行、其他使用者 sudo -n 的版本",
+        "sudo のパスワードを入力するターミナル向け（curl … | sudo sh）。既定は root ならそのまま、それ以外は sudo -n で実行する版",
+        "sudo 암호를 입력할 터미널용(curl … | sudo sh). 기본값은 root면 바로 실행, 다른 사용자는 sudo -n으로 실행하는 버전"),
+    "-- 之后是安装脚本的参数，缺省 install；例：-- update": (
+        "Install script arguments after --; default install; e.g. -- update",
+        "-- 之後是安裝腳本的參數，預設 install；例：-- update",
+        "-- 以降はインストールスクリプトの引数。既定 install。例：-- update",
+        "-- 뒤는 설치 스크립트 인수, 기본 install. 예: -- update"),
+    "松开命令行连接池对主机的持有": (
+        "Release the CLI connection pool's hold on a host",
+        "放開命令列連線池對主機的持有",
+        "CLI 接続プールが保持しているホストの接続を解放",
+        "CLI 연결 풀이 잡고 있는 호스트 연결 해제"),
+    "不给就释放全部": (
+        "Omit to release all",
+        "不給就釋放全部",
+        "省略するとすべて解放",
+        "생략하면 모두 해제"),
+    "列出配对过的 Mac（经远控链路访问它们的文件、跑命令，不需要 SSH）": (
+        "List paired Macs (access their files and run commands over Remote Control, no SSH needed)",
+        "列出配對過的 Mac（經遠端控制連線存取它們的檔案、執行指令，不需要 SSH）",
+        "ペアリング済みの Mac を一覧表示（リモート操作の経路でファイルにアクセスしコマンドを実行。SSH 不要）",
+        "페어링된 Mac 목록 표시(원격 제어 경로로 파일 접근·명령 실행, SSH 불필요)"),
+    "配对过的 Mac：读写文件、搜代码、跑命令": (
+        "Paired Macs: read and write files, search code, run commands",
+        "配對過的 Mac：讀寫檔案、搜尋程式碼、執行指令",
+        "ペアリング済みの Mac：ファイルの読み書き、コード検索、コマンド実行",
+        "페어링된 Mac: 파일 읽기·쓰기, 코드 검색, 명령 실행"),
+    "Mac 的名字或 id（见 utermctl macs）。不写 = 此刻正在用这个终端的那台设备（只在被别的设备远程控制着的 uTerm 终端里有意义）": (
+        "Mac name or id (see utermctl macs). Omit to target the device currently using this terminal (only meaningful in a uTerm terminal under Remote Control from another device)",
+        "Mac 的名稱或 id（見 utermctl macs）。不寫 = 此刻正在使用這個終端機的那台裝置（只在被其他裝置遠端控制中的 uTerm 終端機裡有意義）",
+        "Mac の名前または id（utermctl macs を参照）。省略すると、いまこのターミナルを使っているデバイス（別のデバイスからリモート操作されている uTerm のターミナル内でのみ有効）",
+        "Mac 이름 또는 id(utermctl macs 참고). 생략하면 지금 이 터미널을 사용 중인 기기(다른 기기에서 원격 제어 중인 uTerm 터미널 안에서만 의미 있음)"),
+    "连隐藏文件一起": (
+        "Include hidden files",
+        "連同隱藏檔案",
+        "隠しファイルも含める",
+        "숨김 파일 포함"),
+    "不按 .gitignore 过滤": (
+        "Don't filter by .gitignore",
+        "不依 .gitignore 過濾",
+        ".gitignore で除外しない",
+        ".gitignore로 거르지 않음"),
+    "打印一个文本文件（上限 1 MiB；更大的用 read 读一段或 get 下载）": (
+        "Print a text file (up to 1 MiB; for larger files, read part with read or download with get)",
+        "印出一個文字檔（上限 1 MiB；更大的用 read 讀一段或 get 下載）",
+        "テキストファイルを表示（上限 1 MiB。それより大きければ read で一部を読むか get でダウンロード）",
+        "텍스트 파일 출력(최대 1 MiB, 더 크면 read로 일부 읽기 또는 get으로 다운로드)"),
+    "读文件的一段：按行（--lines / --head / --tail）或按字节（--offset / --length）": (
+        "Read part of a file: by line (--lines / --head / --tail) or by byte (--offset / --length)",
+        "讀取檔案的一段：依行（--lines / --head / --tail）或依位元組（--offset / --length）",
+        "ファイルの一部を読む：行単位（--lines / --head / --tail）またはバイト単位（--offset / --length）",
+        "파일 일부 읽기: 줄 단위(--lines / --head / --tail) 또는 바이트 단위(--offset / --length)"),
+    "第 A 行到第 B 行（从 1 起，两端都含；B 可省）": (
+        "Lines A through B (1-based, inclusive; B optional)",
+        "第 A 行到第 B 行（從 1 起，兩端都含；B 可省略）",
+        "A 行目から B 行目まで（1 始まり、両端を含む。B は省略可）",
+        "A번째 줄부터 B번째 줄까지(1부터, 양 끝 포함, B 생략 가능)"),
+    "开头 N 行": (
+        "First N lines",
+        "開頭 N 行",
+        "先頭 N 行",
+        "처음 N줄"),
+    "最后 N 行": (
+        "Last N lines",
+        "最後 N 行",
+        "末尾 N 行",
+        "마지막 N줄"),
+    "按字节读：起点": (
+        "Byte read: start offset",
+        "依位元組讀取：起點",
+        "バイト単位の読み取り：開始位置",
+        "바이트 단위 읽기: 시작 위치"),
+    "按字节读：长度，封顶 1 MiB": (
+        "Byte read: length, max 1 MiB",
+        "依位元組讀取：長度，上限 1 MiB",
+        "バイト単位の読み取り：長さ。上限 1 MiB",
+        "바이트 단위 읽기: 길이, 최대 1 MiB"),
+    "按行读时内容的字节上限，默认 256 KiB": (
+        "Byte limit for line reads; default 256 KiB",
+        "依行讀取時內容的位元組上限，預設 256 KiB",
+        "行単位で読むときの内容のバイト上限。既定 256 KiB",
+        "줄 단위 읽기 시 내용의 바이트 상한, 기본 256 KiB"),
+    "在目录里搜文件内容（正则；默认跳过 .gitignore 里的和二进制文件）": (
+        "Search file contents in a directory (regex; skips .gitignore'd and binary files by default)",
+        "在目錄裡搜尋檔案內容（正規表示式；預設略過 .gitignore 裡的和二進位檔案）",
+        "ディレクトリ内でファイルの内容を検索（正規表現。既定で .gitignore 対象とバイナリファイルはスキップ）",
+        "디렉터리에서 파일 내용 검색(정규식, 기본으로 .gitignore 대상과 바이너리 파일은 건너뜀)"),
+    "按字面量搜，不当正则": (
+        "Search for the literal text, not a regex",
+        "依字面搜尋，不當成正規表示式",
+        "正規表現ではなく文字列そのままで検索",
+        "정규식이 아닌 문자 그대로 검색"),
+    "只搜名字匹配的文件，可重复": (
+        "Only search files whose names match; repeatable",
+        "只搜尋名稱符合的檔案，可重複",
+        "名前が一致するファイルだけを検索（複数指定可）",
+        "이름이 일치하는 파일만 검색, 여러 번 지정 가능"),
+    "跳过名字匹配的文件，可重复": (
+        "Skip files whose names match; repeatable",
+        "略過名稱符合的檔案，可重複",
+        "名前が一致するファイルをスキップ（複数指定可）",
+        "이름이 일치하는 파일 건너뜀, 여러 번 지정 가능"),
+    "每处匹配前后各带 N 行": (
+        "Show N lines before and after each match",
+        "每處符合前後各帶 N 行",
+        "一致箇所ごとに前後 N 行を表示",
+        "일치하는 곳마다 앞뒤 N줄 표시"),
+    "最多回多少处，默认 200，封顶 2000": (
+        "Maximum matches to return; default 200, max 2000",
+        "最多回傳幾處，預設 200，上限 2000",
+        "返す一致件数の上限。既定 200、上限 2000",
+        "반환할 최대 일치 수, 기본 200, 최대 2000"),
+    "按名字找文件 / 目录": (
+        "Find files / directories by name",
+        "依名稱尋找檔案 / 目錄",
+        "名前でファイル / ディレクトリを検索",
+        "이름으로 파일 / 디렉터리 찾기"),
+    "名字的通配符，如 '*.swift'": (
+        "Name glob, e.g. '*.swift'",
+        "名稱的萬用字元，如 '*.swift'",
+        "名前のワイルドカード（例：'*.swift'）",
+        "이름 와일드카드, 예: '*.swift'"),
+    "只要文件（f）或只要目录（d）": (
+        "Files only (f) or directories only (d)",
+        "只要檔案（f）或只要目錄（d）",
+        "ファイルのみ（f）またはディレクトリのみ（d）",
+        "파일만(f) 또는 디렉터리만(d)"),
+    "最多往下几层": (
+        "Maximum depth",
+        "最多往下幾層",
+        "最大の深さ",
+        "최대 깊이"),
+    "只要最近这么多秒内改过的": (
+        "Only items modified within this many seconds",
+        "只要最近這麼多秒內修改過的",
+        "この秒数以内に変更されたものだけ",
+        "최근 이 초 이내에 수정된 것만"),
+    "每个文件带 sha256": (
+        "Include each file's sha256",
+        "每個檔案附 sha256",
+        "各ファイルの sha256 を含める",
+        "파일마다 sha256 포함"),
+    "最多回多少项，默认 500，封顶 5000": (
+        "Maximum items to return; default 500, max 5000",
+        "最多回傳幾項，預設 500，上限 5000",
+        "返す項目数の上限。既定 500、上限 5000",
+        "반환할 최대 항목 수, 기본 500, 최대 5000"),
+    "目录树（文本）": (
+        "Directory tree (text)",
+        "目錄樹（文字）",
+        "ディレクトリツリー（テキスト）",
+        "디렉터리 트리(텍스트)"),
+    "层数，默认 3": (
+        "Depth; default 3",
+        "層數，預設 3",
+        "階層数。既定 3",
+        "깊이, 기본 3"),
+    "最多多少项，默认 400": (
+        "Maximum items; default 400",
+        "最多幾項，預設 400",
+        "項目数の上限。既定 400",
+        "최대 항목 수, 기본 400"),
+    "算一个文件的 sha256": (
+        "Compute a file's sha256",
+        "計算一個檔案的 sha256",
+        "ファイルの sha256 を計算",
+        "파일의 sha256 계산"),
+    "一个目录占多少空间": (
+        "Show how much space a directory uses",
+        "一個目錄佔用多少空間",
+        "ディレクトリの使用容量を表示",
+        "디렉터리가 차지하는 공간 표시"),
+    "所在磁盘的可用空间": (
+        "Show free space on the containing disk",
+        "所在磁碟的可用空間",
+        "そのディスクの空き容量を表示",
+        "해당 디스크의 사용 가능 공간 표시"),
+    "下载一个文件（-r 下载整个目录）": (
+        "Download a file (-r downloads a whole directory)",
+        "下載一個檔案（-r 下載整個目錄）",
+        "ファイルをダウンロード（-r でディレクトリ全体）",
+        "파일 다운로드(-r이면 디렉터리 전체)"),
+    "下载整个目录": (
+        "Download the whole directory",
+        "下載整個目錄",
+        "ディレクトリ全体をダウンロード",
+        "디렉터리 전체 다운로드"),
+    "上传一个本地文件（-r 上传整个目录）": (
+        "Upload a local file (-r uploads a whole directory)",
+        "上傳一個本機檔案（-r 上傳整個目錄）",
+        "ローカルファイルをアップロード（-r でディレクトリ全体）",
+        "로컬 파일 업로드(-r이면 디렉터리 전체)"),
+    "那台 Mac 上的目标路径": (
+        "Destination path on that Mac",
+        "那台 Mac 上的目標路徑",
+        "相手の Mac 上の保存先パス",
+        "그 Mac의 대상 경로"),
+    "上传整个目录": (
+        "Upload the whole directory",
+        "上傳整個目錄",
+        "ディレクトリ全体をアップロード",
+        "디렉터리 전체 업로드"),
+    "把一个目录同步过去 / 同步回来：只传大小或修改时间不一样的文件": (
+        "Sync a directory there / back: only transfer files whose size or modification time differ",
+        "把一個目錄同步過去 / 同步回來：只傳大小或修改時間不同的檔案",
+        "ディレクトリを相手へ / 手元へ同期：サイズか更新日時が異なるファイルだけを転送",
+        "디렉터리를 보내거나 / 받아서 동기화: 크기나 수정 시간이 다른 파일만 전송"),
+    "up：本地 → 那台 Mac；down：反过来": (
+        "up: local → that Mac; down: the reverse",
+        "up：本機 → 那台 Mac；down：反過來",
+        "up：ローカル → 相手の Mac、down：その逆",
+        "up: 로컬 → 그 Mac, down: 반대"),
+    "本地目录": (
+        "Local directory",
+        "本機目錄",
+        "ローカルのディレクトリ",
+        "로컬 디렉터리"),
+    "那台 Mac 上的目录": (
+        "Directory on that Mac",
+        "那台 Mac 上的目錄",
+        "相手の Mac 上のディレクトリ",
+        "그 Mac의 디렉터리"),
+    "目标里多出来的文件删掉（up 时移进那台 Mac 的废纸篓）": (
+        "Delete extra files in the destination (with up, they're moved to that Mac's Trash)",
+        "刪除目標裡多出來的檔案（up 時移到那台 Mac 的垃圾桶）",
+        "転送先にしかないファイルを削除（up では相手の Mac のゴミ箱に移動）",
+        "대상에만 있는 파일 삭제(up이면 그 Mac의 휴지통으로 이동)"),
+    "大小相同、时间不同的文件先比 sha256，一样就不传": (
+        "For files with the same size but different times, compare sha256 first and skip if identical",
+        "大小相同、時間不同的檔案先比對 sha256，一樣就不傳",
+        "サイズが同じで日時が異なるファイルは先に sha256 を比較し、同じなら転送しない",
+        "크기는 같고 시간이 다른 파일은 먼저 sha256을 비교해 같으면 전송하지 않음"),
+    "只列要做什么，不动文件": (
+        "Only list what would be done; don't touch files",
+        "只列出要做什麼，不動檔案",
+        "実行内容を表示するだけで、ファイルは変更しない",
+        "할 일만 나열하고 파일은 건드리지 않음"),
+    "跳过名字匹配的文件或目录，可重复": (
+        "Skip files or directories whose names match; repeatable",
+        "略過名稱符合的檔案或目錄，可重複",
+        "名前が一致するファイルまたはディレクトリをスキップ（複数指定可）",
+        "이름이 일치하는 파일 또는 디렉터리 건너뜀, 여러 번 지정 가능"),
+    "连上级目录一起建；已存在不算错": (
+        "Create parent directories too; not an error if it exists",
+        "連同上層目錄一起建立；已存在不算錯誤",
+        "親ディレクトリもまとめて作成。既存でもエラーにしない",
+        "상위 디렉터리도 함께 생성, 이미 있어도 오류 아님"),
+    "删文件（-r 删整个目录；想留后路用 trash）": (
+        "Delete a file (-r deletes a whole directory; use trash to keep a way back)",
+        "刪除檔案（-r 刪除整個目錄；想留後路用 trash）",
+        "ファイルを削除（-r でディレクトリ全体。元に戻せるようにするなら trash）",
+        "파일 삭제(-r이면 디렉터리 전체, 되돌릴 여지를 남기려면 trash)"),
+    "移到废纸篓（能从废纸篓放回）": (
+        "Move to Trash (can be put back from the Trash)",
+        "移到垃圾桶（可從垃圾桶放回）",
+        "ゴミ箱に入れる（ゴミ箱から戻せる）",
+        "휴지통으로 이동(휴지통에서 복원 가능)"),
+    "复制（目录整个复制）": (
+        "Copy (directories are copied whole)",
+        "複製（目錄整個複製）",
+        "コピー（ディレクトリは丸ごとコピー）",
+        "복사(디렉터리는 통째로 복사)"),
+    "目标已存在时覆盖": (
+        "Overwrite if the destination exists",
+        "目標已存在時覆寫",
+        "転送先が既にあれば上書き",
+        "대상이 이미 있으면 덮어쓰기"),
+    "建符号链接": (
+        "Create a symbolic link",
+        "建立符號連結",
+        "シンボリックリンクを作成",
+        "심볼릭 링크 생성"),
+    "链接指向哪里": (
+        "Where the link points",
+        "連結指向哪裡",
+        "リンクの指す先",
+        "링크가 가리킬 곳"),
+    "链接放在哪里": (
+        "Where to put the link",
+        "連結放在哪裡",
+        "リンクを置く場所",
+        "링크를 둘 곳"),
+    "已存在时替换": (
+        "Replace if it exists",
+        "已存在時取代",
+        "既にあれば置き換える",
+        "이미 있으면 교체"),
+    "看符号链接指向哪里": (
+        "Show where a symbolic link points",
+        "查看符號連結指向哪裡",
+        "シンボリックリンクの指す先を表示",
+        "심볼릭 링크가 가리키는 곳 표시"),
+    "建空文件 / 更新修改时间": (
+        "Create an empty file / update the modification time",
+        "建立空檔案 / 更新修改時間",
+        "空ファイルを作成 / 更新日時を更新",
+        "빈 파일 생성 / 수정 시간 갱신"),
+    "写一个文本文件（内容来自 --text、--file 或标准输入）；默认只肯新建": (
+        "Write a text file (content from --text, --file, or stdin); only creates new files by default",
+        "寫入一個文字檔（內容來自 --text、--file 或標準輸入）；預設只肯新建",
+        "テキストファイルを書き込む（内容は --text、--file、または標準入力から）。既定では新規作成のみ",
+        "텍스트 파일 쓰기(내용은 --text, --file 또는 표준 입력에서). 기본으로 새 파일만 생성"),
+    "要写的内容": (
+        "Content to write",
+        "要寫入的內容",
+        "書き込む内容",
+        "쓸 내용"),
+    "从这个本地文件读内容": (
+        "Read the content from this local file",
+        "從這個本機檔案讀取內容",
+        "このローカルファイルから内容を読む",
+        "이 로컬 파일에서 내용 읽기"),
+    "覆盖已存在的文件": (
+        "Overwrite an existing file",
+        "覆寫已存在的檔案",
+        "既存のファイルを上書き",
+        "기존 파일 덮어쓰기"),
+    "只有文件现在的 sha256 是这个才写（防止盖掉别人的改动）": (
+        "Only write if the file's current sha256 is this (avoids clobbering someone else's changes)",
+        "只有檔案目前的 sha256 是這個才寫入（防止蓋掉別人的修改）",
+        "ファイルの現在の sha256 がこれと一致するときだけ書き込む（他人の変更を上書きしないため）",
+        "파일의 현재 sha256이 이 값일 때만 쓰기(다른 사람의 변경을 덮어쓰지 않도록)"),
+    "新文件的权限，八进制": (
+        "Permissions for a new file, in octal",
+        "新檔案的權限，八進位",
+        "新しいファイルの権限（8 進数）",
+        "새 파일 권한, 8진수"),
+    "把文件里的一段文字换成另一段（要换的文字必须只出现一次，除非 --all）": (
+        "Replace a piece of text in a file with another (the text must occur exactly once unless --all)",
+        "把檔案裡的一段文字換成另一段（要換的文字必須只出現一次，除非 --all）",
+        "ファイル内のテキストを別のテキストに置き換える（置換対象は 1 回だけ出現している必要あり。--all を除く）",
+        "파일의 텍스트 일부를 다른 텍스트로 바꾸기(--all이 아니면 바꿀 텍스트가 정확히 한 번만 나와야 함)"),
+    "原文，一字不差": (
+        "Original text, exactly",
+        "原文，一字不差",
+        "元のテキスト（完全一致）",
+        "원래 텍스트, 정확히 일치"),
+    "换成什么": (
+        "Replacement text",
+        "換成什麼",
+        "置き換え後のテキスト",
+        "바꿀 텍스트"),
+    "出现几次换几次": (
+        "Replace every occurrence",
+        "出現幾次換幾次",
+        "すべての出現箇所を置き換える",
+        "나오는 곳을 모두 바꾸기"),
+    "打一个 unified diff（来自 --file 或标准输入）": (
+        "Apply a unified diff (from --file or stdin)",
+        "套用一個 unified diff（來自 --file 或標準輸入）",
+        "unified diff を適用（--file または標準入力から）",
+        "unified diff 적용(--file 또는 표준 입력에서)"),
+    "在哪个目录下打，默认主目录": (
+        "Directory to apply it in; default home directory",
+        "在哪個目錄下套用，預設主目錄",
+        "適用するディレクトリ。既定はホームディレクトリ",
+        "적용할 디렉터리, 기본 홈 디렉터리"),
+    "本地的 diff 文件": (
+        "Local diff file",
+        "本機的 diff 檔案",
+        "ローカルの diff ファイル",
+        "로컬 diff 파일"),
+    "去掉路径前几段，同 patch -p，默认 1": (
+        "Strip leading path components, as patch -p; default 1",
+        "去掉路徑前幾段，同 patch -p，預設 1",
+        "パスの先頭から取り除く要素数（patch -p と同じ）。既定 1",
+        "경로 앞부분 제거 개수, patch -p와 동일, 기본 1"),
+    "只检查能不能打上": (
+        "Only check whether it applies",
+        "只檢查能不能套用",
+        "適用できるかどうかだけを確認",
+        "적용 가능한지만 확인"),
+    "扩展属性：list / get / set / remove": (
+        "Extended attributes: list / get / set / remove",
+        "延伸屬性：list / get / set / remove",
+        "拡張属性：list / get / set / remove",
+        "확장 속성: list / get / set / remove"),
+    "那台设备给这台 Mac 开放了哪些目录（整台 Mac，还是几个共享文件夹）": (
+        "Which directories that device shares with this Mac (the whole Mac, or a few shared folders)",
+        "那台裝置向這台 Mac 開放了哪些目錄（整台 Mac，還是幾個共享檔案夾）",
+        "相手のデバイスがこの Mac に公開しているディレクトリ（Mac 全体か、いくつかの共有フォルダか）",
+        "그 기기가 이 Mac에 공개한 디렉터리(Mac 전체인지, 몇 개의 공유 폴더인지)"),
+    "等一个文件或目录有变化": (
+        "Wait for a file or directory to change",
+        "等待一個檔案或目錄有變化",
+        "ファイルまたはディレクトリの変化を待つ",
+        "파일 또는 디렉터리 변경 대기"),
+    "最多等几秒，默认 30，封顶 600": (
+        "Maximum seconds to wait; default 30, max 600",
+        "最多等幾秒，預設 30，上限 600",
+        "最大待ち時間（秒）。既定 30、上限 600",
+        "최대 대기 시간(초), 기본 30, 최대 600"),
+    "在那台 Mac 上跑一条命令（登录 shell，没有 stdin）": (
+        "Run a command on that Mac (login shell, no stdin)",
+        "在那台 Mac 上執行一條指令（登入 shell，沒有 stdin）",
+        "相手の Mac でコマンドを実行（ログインシェル、stdin なし）",
+        "그 Mac에서 명령 실행(로그인 셸, stdin 없음)"),
+    "在哪个目录下跑，默认主目录": (
+        "Directory to run in; default home directory",
+        "在哪個目錄下執行，預設主目錄",
+        "実行するディレクトリ。既定はホームディレクトリ",
+        "실행할 디렉터리, 기본 홈 디렉터리"),
+    "静默超时（秒），默认 60，封顶 1800": (
+        "Idle timeout in seconds; default 60, max 1800",
+        "靜默逾時（秒），預設 60，上限 1800",
+        "無出力タイムアウト（秒）。既定 60、上限 1800",
+        "무출력 제한 시간(초), 기본 60, 최대 1800"),
+    "总时长上限（秒），默认 3600，封顶 21600": (
+        "Total time limit in seconds; default 3600, max 21600",
+        "總時長上限（秒），預設 3600，上限 21600",
+        "総実行時間の上限（秒）。既定 3600、上限 21600",
+        "총 실행 시간 상한(초), 기본 3600, 최대 21600"),
+    "断点续传：按续传状态文件补没传完的区间（与 --force 互斥）": (
+        "Resume: transfer only the ranges missing according to the resume-state file (can't be combined with --force)",
+        "斷點續傳：依續傳狀態檔補上沒傳完的區段（與 --force 互斥）",
+        "中断箇所から再開：再開状態ファイルに基づき未転送の範囲だけを転送（--force とは併用不可）",
+        "이어받기: 이어받기 상태 파일에 따라 남은 구간만 전송(--force와 함께 쓸 수 없음)"),
+    "uTerm 用几条 SFTP 通道并行传，1–{max}，默认 {default}": (
+        "Number of parallel SFTP channels uTerm uses, 1–{max}; default {default}",
+        "uTerm 用幾條 SFTP 通道平行傳輸，1–{max}，預設 {default}",
+        "uTerm が並列に使う SFTP チャネル数。1–{max}、既定 {default}",
+        "uTerm이 병렬로 쓰는 SFTP 채널 수, 1–{max}, 기본 {default}"),
+    "传完不比对 sha256（默认对 8 MiB 以上的文件校验）": (
+        "Skip the sha256 comparison afterward (by default files of 8 MiB or more are verified)",
+        "傳完不比對 sha256（預設對 8 MiB 以上的檔案驗證）",
+        "転送後に sha256 を比較しない（既定では 8 MiB 以上のファイルを検証）",
+        "전송 후 sha256 비교 생략(기본으로 8 MiB 이상 파일은 검증)"),
+    "不刷进度行（结束仍打一行汇总到 stderr）": (
+        "Don't show the progress line (a summary line still goes to stderr at the end)",
+        "不顯示進度行（結束時仍印一行摘要到 stderr）",
+        "進捗行を表示しない（終了時の要約 1 行は stderr に出力）",
+        "진행 줄을 표시하지 않음(끝나면 요약 한 줄은 stderr에 출력)"),
+    "{flag} 写成 [IPv6]:PORT：{text}": (
+        "Write {flag} as [IPv6]:PORT: {text}",
+        "{flag} 要寫成 [IPv6]:PORT：{text}",
+        "{flag} は [IPv6]:PORT の形式で指定してください：{text}",
+        "{flag}은(는) [IPv6]:PORT 형식으로 쓰세요: {text}"),
+    "{flag} 里的 IPv6 地址要加方括号，如 [::1]:8080：{text}": (
+        "IPv6 addresses in {flag} need brackets, e.g. [::1]:8080: {text}",
+        "{flag} 裡的 IPv6 位址要加方括號，如 [::1]:8080：{text}",
+        "{flag} の IPv6 アドレスは角かっこで囲んでください（例：[::1]:8080）：{text}",
+        "{flag}의 IPv6 주소는 대괄호로 감싸야 합니다(예: [::1]:8080): {text}"),
+    "{flag} 的端口需在 1–65535 之间：{text}": (
+        "The port in {flag} must be between 1 and 65535: {text}",
+        "{flag} 的連接埠需介於 1–65535：{text}",
+        "{flag} のポートは 1–65535 の範囲で指定してください：{text}",
+        "{flag}의 포트는 1–65535 사이여야 합니다: {text}"),
+    "{flag} 要写成 HOST:PORT：{text}": (
+        "Write {flag} as HOST:PORT: {text}",
+        "{flag} 要寫成 HOST:PORT：{text}",
+        "{flag} は HOST:PORT の形式で指定してください：{text}",
+        "{flag}은(는) HOST:PORT 형식으로 쓰세요: {text}"),
+    "dynamic（SOCKS5）规则没有固定目标，不要给 --dest": (
+        "Dynamic (SOCKS5) rules have no fixed destination; don't pass --dest",
+        "dynamic（SOCKS5）規則沒有固定目標，不要給 --dest",
+        "dynamic（SOCKS5）ルールには固定の転送先がないため、--dest は指定しないでください",
+        "dynamic(SOCKS5) 규칙에는 고정 대상이 없으니 --dest를 주지 마세요"),
+    "{kind} 规则需要 --dest HOST:PORT": (
+        "{kind} rules need --dest HOST:PORT",
+        "{kind} 規則需要 --dest HOST:PORT",
+        "{kind} ルールには --dest HOST:PORT が必要です",
+        "{kind} 규칙에는 --dest HOST:PORT가 필요합니다"),
+    "-c 与 -- 之后的命令只能给一个": (
+        "Give either -c or a command after --, not both",
+        "-c 與 -- 之後的指令只能給一個",
+        "-c と -- 以降のコマンドは、どちらか一方だけを指定してください",
+        "-c와 -- 뒤의 명령 중 하나만 주세요"),
+    "缺少命令：用 -c \"…\" 或在 -- 之后写命令": (
+        "Missing command: use -c \"…\" or put the command after --",
+        "缺少指令：用 -c \"…\" 或在 -- 之後寫指令",
+        "コマンドがありません：-c \"…\" を使うか、-- の後にコマンドを書いてください",
+        "명령이 없습니다: -c \"…\"를 쓰거나 -- 뒤에 명령을 쓰세요"),
+    "socket 文件还在但没有进程在监听（{paths}）。uTerm 多半正在重启或刚被强制退出 —— 等它起来后重试一次；若 uTerm 确实没在运行，这个文件会在下次启动时自动清掉。": (
+        "The socket file exists but nothing is listening ({paths}). uTerm is probably restarting or was just force-quit — retry once it's back up; if uTerm really isn't running, the file is cleaned up the next time it starts.",
+        "socket 檔案還在但沒有程序在監聽（{paths}）。uTerm 多半正在重新啟動或剛被強制結束 —— 等它啟動後重試一次；若 uTerm 確實沒在執行，這個檔案會在下次啟動時自動清除。",
+        "socket ファイルはありますが、待ち受けているプロセスがありません（{paths}）。uTerm が再起動中か、強制終了された直後と思われます —— 起動を待ってからもう一度試してください。uTerm が本当に起動していない場合、このファイルは次回の起動時に自動的に削除されます。",
+        "socket 파일은 있지만 수신 중인 프로세스가 없습니다({paths}). uTerm이 재시작 중이거나 방금 강제 종료된 것 같습니다 —— 다시 뜨면 한 번 더 시도하세요. uTerm이 정말 실행 중이 아니라면 이 파일은 다음 실행 때 자동으로 정리됩니다."),
+    "、": (
+        ", ",
+        "、",
+        "、",
+        ", "),
+    " 按需启动没成功：{error}": (
+        " On-demand launch failed: {error}",
+        " 依需求啟動沒成功：{error}",
+        " オンデマンド起動に失敗しました：{error}",
+        " 요청 시 실행에 실패했습니다: {error}"),
+    "uTerm 的 IPC socket 不存在（试过 {paths}）。确认 uTerm 正在运行，且设置 ▸ 命令行与技能 里已打开「启用命令行接口」。": (
+        "uTerm's IPC socket doesn't exist (tried {paths}). Make sure uTerm is running and “Enable Command-Line Interface” is on in Settings ▸ Command Line & Skills.",
+        "uTerm 的 IPC socket 不存在（試過 {paths}）。請確認 uTerm 正在執行，且「設定 ▸ 命令列與技能」裡已開啟「啟用命令列介面」。",
+        "uTerm の IPC socket が見つかりません（{paths} を確認）。uTerm が起動していて、「設定 ▸ コマンドラインとスキル」で「コマンドラインインターフェイスを有効にする」がオンになっているか確認してください。",
+        "uTerm의 IPC socket이 없습니다({paths} 확인함). uTerm이 실행 중이고 설정 ▸ 명령줄 및 스킬에서 '명령줄 인터페이스 활성화'가 켜져 있는지 확인하세요."),
+    "uTerm 连续 {seconds} 秒没有任何回应（处理中每 10 秒一次的心跳也没有），多半是 uTerm 本身卡住了；请求可能已经执行了一部分。": (
+        "uTerm hasn't responded for {seconds} seconds (not even the heartbeat it sends every 10 seconds while working); uTerm itself is probably stuck. The request may have partly run.",
+        "uTerm 連續 {seconds} 秒沒有任何回應（處理中每 10 秒一次的心跳也沒有），多半是 uTerm 本身卡住了；請求可能已經執行了一部分。",
+        "uTerm から {seconds} 秒間まったく応答がありません（処理中に 10 秒ごとに送るハートビートもありません）。uTerm 自体が固まっている可能性があります。リクエストは一部実行済みかもしれません。",
+        "uTerm이 {seconds}초 동안 아무 응답이 없습니다(처리 중 10초마다 보내는 하트비트도 없음). uTerm 자체가 멈춘 것 같습니다. 요청이 일부 실행되었을 수 있습니다."),
+    "uTerm IPC 返回了空响应或读不懂的内容": (
+        "uTerm IPC returned an empty or unreadable response",
+        "uTerm IPC 回傳了空的回應或無法解讀的內容",
+        "uTerm IPC から空の応答または解釈できない内容が返されました",
+        "uTerm IPC가 빈 응답 또는 읽을 수 없는 내용을 반환했습니다"),
+    "--parallel 要在 1–{max} 之间，实得 {value}": (
+        "--parallel must be between 1 and {max}, got {value}",
+        "--parallel 要介於 1–{max}，實際為 {value}",
+        "--parallel は 1–{max} の範囲で指定してください（指定値 {value}）",
+        "--parallel은 1–{max} 사이여야 합니다(받은 값 {value})"),
+    "续传状态文件写不了（{error}）—— 这趟传完之前断了就没法 --resume": (
+        "Can't write the resume-state file ({error}) — if this transfer breaks before finishing, --resume won't be possible",
+        "續傳狀態檔寫不了（{error}）—— 這趟傳完之前中斷就沒辦法 --resume",
+        "再開状態ファイルを書き込めません（{error}）—— この転送が完了前に途切れると --resume できません",
+        "이어받기 상태 파일을 쓸 수 없습니다({error}) —— 이번 전송이 끝나기 전에 끊기면 --resume할 수 없습니다"),
+    "没有续传状态（{note}）—— 删掉 {target} 整份重传": (
+        "No resume state ({note}) — delete {target} and transfer it again in full",
+        "沒有續傳狀態（{note}）—— 刪除 {target} 整份重傳",
+        "再開状態がありません（{note}）—— {target} を削除して最初から転送し直してください",
+        "이어받기 상태가 없습니다({note}) —— {target}을(를) 지우고 처음부터 다시 전송하세요"),
+    "还没有任何区间完成 —— 整份重传（目标已存在时加 --force）": (
+        "No ranges finished yet — transfer it again in full (add --force if the destination exists)",
+        "還沒有任何區段完成 —— 整份重傳（目標已存在時加 --force）",
+        "まだ完了した範囲がありません —— 最初から転送し直してください（転送先が既にあれば --force を付ける）",
+        "아직 완료된 구간이 없습니다 —— 처음부터 다시 전송하세요(대상이 이미 있으면 --force 추가)"),
+    "续传状态在 {path}，加 --resume 接着传（别去动 {target}）": (
+        "Resume state is in {path}; add --resume to continue (don't touch {target})",
+        "續傳狀態在 {path}，加 --resume 接著傳（別去動 {target}）",
+        "再開状態は {path} にあります。--resume を付けて続きから転送してください（{target} には触れないこと）",
+        "이어받기 상태는 {path}에 있습니다. --resume을 붙여 이어서 전송하세요({target}은(는) 건드리지 마세요)"),
+    "没有续传状态文件 {path} —— 上一趟没留下可续的记录，去掉 --resume 整份重传": (
+        "No resume-state file {path} — the previous run left nothing to resume; drop --resume and transfer in full",
+        "沒有續傳狀態檔 {path} —— 上一趟沒留下可續傳的記錄，去掉 --resume 整份重傳",
+        "再開状態ファイル {path} がありません —— 前回の転送は再開できる記録を残していません。--resume を外して最初から転送してください",
+        "이어받기 상태 파일 {path}이(가) 없습니다 —— 지난번 전송이 이어받을 기록을 남기지 않았으니 --resume을 빼고 처음부터 전송하세요"),
+    "续传状态文件 {path} 记的是 {saved_direction} {saved_remote}，与这次的 {direction} {remote} 不是一回事 —— 删掉它，或换一个本地路径": (
+        "Resume-state file {path} records {saved_direction} {saved_remote}, which isn't this {direction} {remote} — delete it or use a different local path",
+        "續傳狀態檔 {path} 記錄的是 {saved_direction} {saved_remote}，與這次的 {direction} {remote} 不是同一回事 —— 刪除它，或換一個本機路徑",
+        "再開状態ファイル {path} に記録されているのは {saved_direction} {saved_remote} で、今回の {direction} {remote} とは別物です —— 削除するか、別のローカルパスを使ってください",
+        "이어받기 상태 파일 {path}에 기록된 것은 {saved_direction} {saved_remote}(으)로, 이번의 {direction} {remote}와(과) 다릅니다 —— 지우거나 다른 로컬 경로를 쓰세요"),
+    "续传状态文件 {path} 记的文件已经变了（记的 {saved!r}，现在 {current!r}）—— 接着传会拼出一个错的文件。删掉它再整份重传": (
+        "The file recorded in resume-state file {path} has changed (recorded {saved!r}, now {current!r}) — resuming would assemble a corrupt file. Delete it and transfer again in full",
+        "續傳狀態檔 {path} 記錄的檔案已經變了（記錄的是 {saved!r}，現在是 {current!r}）—— 接著傳會拼出一個錯誤的檔案。刪除它再整份重傳",
+        "再開状態ファイル {path} に記録されたファイルが変更されています（記録 {saved!r}、現在 {current!r}）—— 続きから転送すると壊れたファイルになります。削除して最初から転送し直してください",
+        "이어받기 상태 파일 {path}에 기록된 파일이 바뀌었습니다(기록 {saved!r}, 현재 {current!r}) —— 이어서 전송하면 잘못된 파일이 됩니다. 지우고 처음부터 다시 전송하세요"),
+    "那台 Mac 算 sha256 没成（{code}：{message}），跳过校验": (
+        "That Mac couldn't compute sha256 ({code}: {message}); skipping verification",
+        "那台 Mac 計算 sha256 沒成功（{code}：{message}），略過驗證",
+        "相手の Mac で sha256 を計算できませんでした（{code}：{message}）。検証をスキップします",
+        "그 Mac에서 sha256 계산에 실패했습니다({code}: {message}). 검증을 건너뜁니다"),
+    "远端算 sha256 没跑成（{code}：{message}），跳过校验": (
+        "Couldn't compute sha256 on the remote ({code}: {message}); skipping verification",
+        "遠端計算 sha256 沒成功（{code}：{message}），略過驗證",
+        "リモートで sha256 を計算できませんでした（{code}：{message}）。検証をスキップします",
+        "원격에서 sha256 계산에 실패했습니다({code}: {message}). 검증을 건너뜁니다"),
+    "远端既没有 sha256sum 也没有 shasum，跳过校验": (
+        "The remote has neither sha256sum nor shasum; skipping verification",
+        "遠端既沒有 sha256sum 也沒有 shasum，略過驗證",
+        "リモートには sha256sum も shasum もありません。検証をスキップします",
+        "원격에 sha256sum도 shasum도 없습니다. 검증을 건너뜁니다"),
+    "已用 --no-verify 关掉校验": (
+        "Verification turned off with --no-verify",
+        "已用 --no-verify 關閉驗證",
+        "--no-verify で検証をオフにしました",
+        "--no-verify로 검증을 껐습니다"),
+    "小于 {size}，默认不做 sha256 校验": (
+        "Smaller than {size}; not verified with sha256 by default",
+        "小於 {size}，預設不做 sha256 驗證",
+        "{size} 未満のため、既定では sha256 を検証しません",
+        "{size}보다 작아 기본으로 sha256 검증을 하지 않습니다"),
+    "sha256 不一致：本地 {local}，远端 {remote}": (
+        "sha256 mismatch: local {local}, remote {remote}",
+        "sha256 不一致：本機 {local}，遠端 {remote}",
+        "sha256 が一致しません：ローカル {local}、リモート {remote}",
+        "sha256 불일치: 로컬 {local}, 원격 {remote}"),
+    "传输失败": (
+        "Transfer failed",
+        "傳輸失敗",
+        "転送に失敗しました",
+        "전송 실패"),
+    "本地文件不存在：{path}": (
+        "Local file doesn't exist: {path}",
+        "本機檔案不存在：{path}",
+        "ローカルファイルがありません：{path}",
+        "로컬 파일이 없습니다: {path}"),
+    "续传状态文件 {path} 说这份文件已经传完了 —— 要重传就删掉它，或去掉 --resume 加 --force": (
+        "Resume-state file {path} says this file has already been fully uploaded — to upload again, delete it, or drop --resume and add --force",
+        "續傳狀態檔 {path} 說這份檔案已經傳完了 —— 要重傳就刪除它，或去掉 --resume 加 --force",
+        "再開状態ファイル {path} によると、このファイルは転送済みです —— 再転送するにはファイルを削除するか、--resume を外して --force を付けてください",
+        "이어받기 상태 파일 {path}에 따르면 이 파일은 이미 다 전송되었습니다 —— 다시 전송하려면 그 파일을 지우거나 --resume을 빼고 --force를 붙이세요"),
+    "上传失败（local_read_failed）：{error}": (
+        "Upload failed (local_read_failed): {error}",
+        "上傳失敗（local_read_failed）：{error}",
+        "アップロードに失敗しました（local_read_failed）：{error}",
+        "업로드 실패(local_read_failed): {error}"),
+    "{path}：{error}": (
+        "{path}: {error}",
+        "{path}：{error}",
+        "{path}：{error}",
+        "{path}: {error}"),
+    "上传失败（file_exists）：远端已存在 {path}，要覆盖请加 --force": (
+        "Upload failed (file_exists): {path} already exists on the remote; add --force to overwrite",
+        "上傳失敗（file_exists）：遠端已存在 {path}，要覆寫請加 --force",
+        "アップロードに失敗しました（file_exists）：リモートに {path} が既にあります。上書きするには --force を付けてください",
+        "업로드 실패(file_exists): 원격에 {path}이(가) 이미 있습니다. 덮어쓰려면 --force를 붙이세요"),
+    "上传失败（{code}）：已传 {moved} / {total}。{incomplete}{hint}": (
+        "Upload failed ({code}): sent {moved} / {total}. {incomplete}{hint}",
+        "上傳失敗（{code}）：已傳 {moved} / {total}。{incomplete}{hint}",
+        "アップロードに失敗しました（{code}）：{moved} / {total} 転送済み。{incomplete}{hint}",
+        "업로드 실패({code}): {moved} / {total} 전송됨. {incomplete}{hint}"),
+    "远端 {path} 现在是**不完整**的文件；": (
+        "The remote {path} is now an **incomplete** file. ",
+        "遠端 {path} 現在是**不完整**的檔案；",
+        "リモートの {path} は現在**不完全な**ファイルです。",
+        "원격 {path}은(는) 현재 **불완전한** 파일입니다. "),
+    "上传": (
+        "Upload",
+        "上傳",
+        "アップロード",
+        "업로드"),
+    "本地目录不存在：{path}": (
+        "Local directory doesn't exist: {path}",
+        "本機目錄不存在：{path}",
+        "ローカルのディレクトリがありません：{path}",
+        "로컬 디렉터리가 없습니다: {path}"),
+    "本地已存在 {path}；要覆盖请加 --force，要接着传请加 --resume": (
+        "{path} already exists locally; add --force to overwrite or --resume to continue",
+        "本機已存在 {path}；要覆寫請加 --force，要接著傳請加 --resume",
+        "ローカルに {path} が既にあります。上書きするには --force、続きから転送するには --resume を付けてください",
+        "로컬에 {path}이(가) 이미 있습니다. 덮어쓰려면 --force, 이어서 받으려면 --resume을 붙이세요"),
+    "续传状态文件 {path} 在，但半成品 {part} 不见了 —— 删掉状态文件重新下载": (
+        "Resume-state file {path} exists but the partial file {part} is gone — delete the state file and download again",
+        "續傳狀態檔 {path} 還在，但半成品 {part} 不見了 —— 刪除狀態檔重新下載",
+        "再開状態ファイル {path} はありますが、途中までのファイル {part} が見つかりません —— 状態ファイルを削除してダウンロードし直してください",
+        "이어받기 상태 파일 {path}은(는) 있지만 받다 만 파일 {part}이(가) 없습니다 —— 상태 파일을 지우고 다시 다운로드하세요"),
+    "续传状态文件 {path} 说这份文件已经下完了 —— 要重下就删掉它，或去掉 --resume 加 --force": (
+        "Resume-state file {path} says this file has already been fully downloaded — to download again, delete it, or drop --resume and add --force",
+        "續傳狀態檔 {path} 說這份檔案已經下載完了 —— 要重新下載就刪除它，或去掉 --resume 加 --force",
+        "再開状態ファイル {path} によると、このファイルはダウンロード済みです —— ダウンロードし直すにはファイルを削除するか、--resume を外して --force を付けてください",
+        "이어받기 상태 파일 {path}에 따르면 이 파일은 이미 다 다운로드되었습니다 —— 다시 받으려면 그 파일을 지우거나 --resume을 빼고 --force를 붙이세요"),
+    "下载失败（local_write_failed）：{error}": (
+        "Download failed (local_write_failed): {error}",
+        "下載失敗（local_write_failed）：{error}",
+        "ダウンロードに失敗しました（local_write_failed）：{error}",
+        "다운로드 실패(local_write_failed): {error}"),
+    "下载失败（{code}）：已收 {moved} / {total}。半成品在 {part}（目标 {target} 还没生成，内容**不完整**）；{hint}": (
+        "Download failed ({code}): received {moved} / {total}. The partial file is {part} ({target} hasn't been created; contents are **incomplete**). {hint}",
+        "下載失敗（{code}）：已收 {moved} / {total}。半成品在 {part}（目標 {target} 還沒產生，內容**不完整**）；{hint}",
+        "ダウンロードに失敗しました（{code}）：{moved} / {total} 受信済み。途中までのファイルは {part} です（{target} はまだ作成されておらず、内容は**不完全**）。{hint}",
+        "다운로드 실패({code}): {moved} / {total} 받음. 받다 만 파일은 {part}입니다({target}은(는) 아직 만들어지지 않았고 내용이 **불완전**함). {hint}"),
+    "把 {part} 改名成 {target} 失败：{error}": (
+        "Couldn't rename {part} to {target}: {error}",
+        "把 {part} 重新命名為 {target} 失敗：{error}",
+        "{part} を {target} に名前変更できませんでした：{error}",
+        "{part}을(를) {target}(으)로 이름 변경하지 못했습니다: {error}"),
+    "下载": (
+        "Download",
+        "下載",
+        "ダウンロード",
+        "다운로드"),
+    "{verb}完成：{moved} → {target}，{total}，{parallel} 路，{seconds}s，{speed} MiB/s": (
+        "{verb} complete: {moved} → {target}, {total}, {parallel} channels, {seconds}s, {speed} MiB/s",
+        "{verb}完成：{moved} → {target}，{total}，{parallel} 路，{seconds}s，{speed} MiB/s",
+        "{verb}完了：{moved} → {target}、{total}、{parallel} チャネル、{seconds}s、{speed} MiB/s",
+        "{verb} 완료: {moved} → {target}, {total}, {parallel}개 채널, {seconds}s, {speed} MiB/s"),
+    "（从 {size} 续传）": (
+        " (resumed from {size})",
+        "（從 {size} 續傳）",
+        "（{size} から再開）",
+        "({size}부터 이어받음)"),
+    "半成品留在 {part}（目标名没生成）": (
+        "the partial file is left at {part} (the destination name wasn't created)",
+        "半成品留在 {part}（目標名稱沒產生）",
+        "途中までのファイルは {part} に残っています（転送先の名前では作成していません）",
+        "받다 만 파일은 {part}에 남아 있습니다(대상 이름으로는 만들지 않음)"),
+    "远端是完整大小但内容不对": (
+        "the remote file is full size but its contents are wrong",
+        "遠端是完整大小但內容不對",
+        "リモートのファイルはサイズは揃っていますが内容が違います",
+        "원격 파일은 크기는 맞지만 내용이 틀립니다"),
+    "sha256 不一致": (
+        "sha256 mismatch",
+        "sha256 不一致",
+        "sha256 が一致しません",
+        "sha256 불일치"),
+    " —— {where}；续传状态已清掉，整份重传（去掉 --resume，目标已存在时加 --force）": (
+        " — {where}; resume state has been cleared, transfer again in full (drop --resume, and add --force if the destination exists)",
+        " —— {where}；續傳狀態已清除，整份重傳（去掉 --resume，目標已存在時加 --force）",
+        " —— {where}。再開状態は消去しました。最初から転送し直してください（--resume を外し、転送先が既にあれば --force を付ける）",
+        " —— {where}. 이어받기 상태는 지웠으니 처음부터 다시 전송하세요(--resume을 빼고, 대상이 이미 있으면 --force 추가)"),
+    "，sha256 已校验": (
+        ", sha256 verified",
+        "，sha256 已驗證",
+        "、sha256 検証済み",
+        ", sha256 검증됨"),
+    "，未校验：{note}": (
+        ", not verified: {note}",
+        "，未驗證：{note}",
+        "、未検証：{note}",
+        ", 검증 안 함: {note}"),
+    "--text 与 --file 只能给一个": (
+        "Give either --text or --file, not both",
+        "--text 與 --file 只能給一個",
+        "--text と --file は、どちらか一方だけを指定してください",
+        "--text와 --file 중 하나만 주세요"),
+    "读不了 {path}：{error}": (
+        "Can't read {path}: {error}",
+        "讀不了 {path}：{error}",
+        "{path} を読み込めません：{error}",
+        "{path}을(를) 읽을 수 없습니다: {error}"),
+    "缺少要写的内容：用 --text、--file，或从标准输入给": (
+        "Missing content to write: use --text, --file, or standard input",
+        "缺少要寫入的內容：用 --text、--file，或從標準輸入給",
+        "書き込む内容がありません：--text、--file、または標準入力で渡してください",
+        "쓸 내용이 없습니다: --text, --file 또는 표준 입력으로 주세요"),
+    "缺少补丁：用 --text、--file，或从标准输入给": (
+        "Missing patch: use --text, --file, or standard input",
+        "缺少修補檔：用 --text、--file，或從標準輸入給",
+        "パッチがありません：--text、--file、または標準入力で渡してください",
+        "패치가 없습니다: --text, --file 또는 표준 입력으로 주세요"),
+    "内容不是 UTF-8 文本：二进制文件用 `mac put`": (
+        "Content isn't UTF-8 text: use `mac put` for binary files",
+        "內容不是 UTF-8 文字：二進位檔案用 `mac put`",
+        "内容が UTF-8 テキストではありません：バイナリファイルは `mac put` を使ってください",
+        "내용이 UTF-8 텍스트가 아닙니다: 바이너리 파일은 `mac put`을 쓰세요"),
+    "内容超过 {size}：先写到本地文件，再用 `mac put` 传": (
+        "Content exceeds {size}: write it to a local file first, then send it with `mac put`",
+        "內容超過 {size}：先寫到本機檔案，再用 `mac put` 傳",
+        "内容が {size} を超えています：ローカルファイルに書き出してから `mac put` で転送してください",
+        "내용이 {size}을(를) 넘습니다: 먼저 로컬 파일에 쓴 다음 `mac put`으로 보내세요"),
+    "--lines / --head / --tail / --offset 只能给一种": (
+        "Give only one of --lines / --head / --tail / --offset",
+        "--lines / --head / --tail / --offset 只能給一種",
+        "--lines / --head / --tail / --offset は 1 つだけ指定してください",
+        "--lines / --head / --tail / --offset 중 하나만 주세요"),
+    "--lines 要写成 A:B（如 120:180），实得 {value}": (
+        "Write --lines as A:B (e.g. 120:180), got {value}",
+        "--lines 要寫成 A:B（如 120:180），實際為 {value}",
+        "--lines は A:B の形式で指定してください（例：120:180）。指定値 {value}",
+        "--lines는 A:B 형식으로 쓰세요(예: 120:180). 받은 값 {value}"),
+    "xattr {action} 要给属性名": (
+        "xattr {action} needs an attribute name",
+        "xattr {action} 要給屬性名稱",
+        "xattr {action} には属性名が必要です",
+        "xattr {action}에는 속성 이름이 필요합니다"),
+    "xattr set 要给值": (
+        "xattr set needs a value",
+        "xattr set 要給值",
+        "xattr set には値が必要です",
+        "xattr set에는 값이 필요합니다"),
+    "本地这边没法传（已存在且没给 --force，或读写不了）": (
+        "Can't transfer on the local side (already exists without --force, or can't read/write)",
+        "本機這邊沒辦法傳（已存在且沒給 --force，或無法讀寫）",
+        "ローカル側で転送できません（既に存在していて --force がない、または読み書きできない）",
+        "로컬 쪽에서 전송할 수 없습니다(이미 있는데 --force가 없거나 읽기·쓰기 불가)"),
+    "；{count} 个没成，见 failed": (
+        "; {count} failed, see failed",
+        "；{count} 個沒成功，見 failed",
+        "。{count} 件が失敗、failed を参照",
+        "; {count}개 실패, failed 참고"),
+    "{verb}：{message}": (
+        "{verb}: {message}",
+        "{verb}：{message}",
+        "{verb}：{message}",
+        "{verb}: {message}"),
+    "整个目录不用 --resume：重跑一遍（加 --force）或用 `mac sync`，已经一样的文件不会重传": (
+        "Whole directories don't use --resume: run it again (with --force) or use `mac sync`; identical files aren't sent again",
+        "整個目錄不用 --resume：重跑一次（加 --force）或用 `mac sync`，已經一樣的檔案不會重傳",
+        "ディレクトリ全体には --resume を使いません：もう一度実行する（--force を付ける）か `mac sync` を使ってください。同じファイルは再転送されません",
+        "디렉터리 전체에는 --resume을 쓰지 않습니다: 다시 실행하거나(--force 추가) `mac sync`를 쓰세요. 이미 같은 파일은 다시 보내지 않습니다"),
+    "本地 {path} 不是目录": (
+        "Local {path} isn't a directory",
+        "本機 {path} 不是目錄",
+        "ローカルの {path} はディレクトリではありません",
+        "로컬 {path}은(는) 디렉터리가 아닙니다"),
+    "{files} 个文件，{size}，{directories} 个目录，{seconds}s": (
+        "{files} files, {size}, {directories} directories, {seconds}s",
+        "{files} 個檔案，{size}，{directories} 個目錄，{seconds}s",
+        "ファイル {files} 件、{size}、ディレクトリ {directories} 件、{seconds}s",
+        "파일 {files}개, {size}, 디렉터리 {directories}개, {seconds}s"),
+    "；跳过 {count} 个符号链接": (
+        "; skipped {count} symbolic links",
+        "；略過 {count} 個符號連結",
+        "。シンボリックリンク {count} 件をスキップ",
+        "; 심볼릭 링크 {count}개 건너뜀"),
+    "上传完成": (
+        "Upload complete",
+        "上傳完成",
+        "アップロード完了",
+        "업로드 완료"),
+    "下载完成": (
+        "Download complete",
+        "下載完成",
+        "ダウンロード完了",
+        "다운로드 완료"),
+    "要传 {changed} 个文件，{unchanged} 个不用动": (
+        "Would transfer {changed} files, {unchanged} unchanged",
+        "要傳 {changed} 個檔案，{unchanged} 個不用動",
+        "転送するファイル {changed} 件、変更不要 {unchanged} 件",
+        "전송할 파일 {changed}개, 그대로 둘 파일 {unchanged}개"),
+    "，要删 {count} 个": (
+        ", would delete {count}",
+        "，要刪除 {count} 個",
+        "、削除 {count} 件",
+        ", 삭제할 파일 {count}개"),
+    "（--dry-run，没有动文件）": (
+        " (--dry-run, no files changed)",
+        "（--dry-run，沒有動檔案）",
+        "（--dry-run のため、ファイルは変更していません）",
+        "(--dry-run, 파일은 건드리지 않음)"),
+    "传了 {files} 个文件（{size}），{unchanged} 个没变": (
+        "Transferred {files} files ({size}), {unchanged} unchanged",
+        "傳了 {files} 個檔案（{size}），{unchanged} 個沒變",
+        "ファイル {files} 件を転送（{size}）、変更なし {unchanged} 件",
+        "파일 {files}개 전송({size}), 변경 없음 {unchanged}개"),
+    "，删了 {count} 个（在那台 Mac 的废纸篓里）": (
+        ", deleted {count} (in that Mac's Trash)",
+        "，刪除了 {count} 個（在那台 Mac 的垃圾桶裡）",
+        "、{count} 件を削除（相手の Mac のゴミ箱内）",
+        ", {count}개 삭제(그 Mac의 휴지통에 있음)"),
+    "，删了 {count} 个": (
+        ", deleted {count}",
+        "，刪除了 {count} 個",
+        "、{count} 件を削除",
+        ", {count}개 삭제"),
+    "同步完成：{message}": (
+        "Sync complete: {message}",
+        "同步完成：{message}",
+        "同期完了：{message}",
+        "동기화 완료: {message}"),
+    "没有配对过的 Mac": (
+        "No paired Macs",
+        "沒有配對過的 Mac",
+        "ペアリング済みの Mac はありません",
+        "페어링된 Mac이 없습니다"),
+    "只读": (
+        "read-only",
+        "唯讀",
+        "読み出し専用",
+        "읽기 전용"),
+    "读写": (
+        "read-write",
+        "讀寫",
+        "読み書き",
+        "읽기·쓰기"),
+    "-- {path} 不是 UTF-8 文本（{bytes} 字节）：用 `mac get` 下载后本地处理": (
+        "-- {path} isn't UTF-8 text ({bytes} bytes): download it with `mac get` and handle it locally",
+        "-- {path} 不是 UTF-8 文字（{bytes} 位元組）：用 `mac get` 下載後在本機處理",
+        "-- {path} は UTF-8 テキストではありません（{bytes} バイト）：`mac get` でダウンロードしてローカルで処理してください",
+        "-- {path}은(는) UTF-8 텍스트가 아닙니다({bytes}바이트): `mac get`으로 다운로드해 로컬에서 처리하세요"),
+    "（没有扩展属性）": (
+        "(no extended attributes)",
+        "（沒有延伸屬性）",
+        "（拡張属性はありません）",
+        "(확장 속성 없음)"),
+    "值": (
+        "Value",
+        "值",
+        "値",
+        "값"),
+    "字段": (
+        "Field",
+        "欄位",
+        "フィールド",
+        "필드"),
+    "否": (
+        "no",
+        "否",
+        "いいえ",
+        "아니요"),
+    "是": (
+        "yes",
+        "是",
+        "はい",
+        "예"),
+    "-- 输出已截断（--max-lines / --max-bytes 可放宽）": (
+        "-- Output truncated (raise --max-lines / --max-bytes)",
+        "-- 輸出已截斷（--max-lines / --max-bytes 可放寬）",
+        "-- 出力を切り詰めました（--max-lines / --max-bytes で緩和できます）",
+        "-- 출력이 잘렸습니다(--max-lines / --max-bytes로 늘릴 수 있음)"),
+    "-- 已超时；**命令可能还在远端继续跑**": (
+        "-- Timed out; **the command may still be running on the remote**",
+        "-- 已逾時；**指令可能還在遠端繼續執行**",
+        "-- タイムアウトしました。**コマンドはリモートでまだ実行中の可能性があります**",
+        "-- 시간 초과. **명령이 원격에서 아직 실행 중일 수 있습니다**"),
+    "-- 输出太长，只给了最后一段": (
+        "-- Output too long; only the last part is shown",
+        "-- 輸出太長，只給了最後一段",
+        "-- 出力が長すぎるため、最後の部分だけを表示しています",
+        "-- 출력이 너무 길어 마지막 부분만 표시합니다"),
+    "\n-- 内容不完整：读取期间远端文件变大了": (
+        "\n-- Content incomplete: the remote file grew while it was being read",
+        "\n-- 內容不完整：讀取期間遠端檔案變大了",
+        "\n-- 内容が不完全です：読み取り中にリモートのファイルが大きくなりました",
+        "\n-- 내용이 불완전합니다: 읽는 동안 원격 파일이 커졌습니다"),
+    "-- {path} 不是 UTF-8 文本（{bytes} 字节）：用 `sftp get` 下载后本地处理": (
+        "-- {path} isn't UTF-8 text ({bytes} bytes): download it with `sftp get` and handle it locally",
+        "-- {path} 不是 UTF-8 文字（{bytes} 位元組）：用 `sftp get` 下載後在本機處理",
+        "-- {path} は UTF-8 テキストではありません（{bytes} バイト）：`sftp get` でダウンロードしてローカルで処理してください",
+        "-- {path}은(는) UTF-8 텍스트가 아닙니다({bytes}바이트): `sftp get`으로 다운로드해 로컬에서 처리하세요"),
+    "\n-- 读屏已截断": (
+        "\n-- Screen read truncated",
+        "\n-- 讀取畫面已截斷",
+        "\n-- 画面の読み取りを切り詰めました",
+        "\n-- 화면 읽기가 잘렸습니다"),
+}
+
+
 ENV_SOCKET = "UTERM_CONTROL_SOCKET"
 # uTerm 开本机终端时写进 shell 环境的终端编号（见 `mac_target`）。
 ENV_SESSION = "UTERM_SESSION_ID"
@@ -151,13 +1553,13 @@ def socket_path_too_long_response(request, paths, launch_error):
     if primary_bytes <= MAX_SOCKET_PATH_BYTES:
         return None
     if len(fallback.encode("utf-8")) > MAX_SOCKET_PATH_BYTES:
-        message = ("macOS 用户名过长，uTerm 的 socket 路径连备用的短路径都超过系统上限 %d 字节（%s），"
-                   "命令行接口无法启动。" % (MAX_SOCKET_PATH_BYTES, fallback))
+        message = _("macOS 用户名过长，uTerm 的 socket 路径连备用的短路径都超过系统上限 {limit} 字节（{path}），"
+                    "命令行接口无法启动。").format(limit=MAX_SOCKET_PATH_BYTES, path=fallback)
     elif launch_error in (None, LAUNCH_NOT_READY_MESSAGE):
-        message = ("macOS 用户名过长，uTerm 默认的 socket 路径（%d 字节）超过系统上限 %d 字节：%s。"
-                   "uTerm 2.1.6 及更早的版本在这样的账户上无法启动命令行接口，"
-                   "请把 uTerm 更新到最新版本（新版本会自动改用更短的路径）。"
-                   % (primary_bytes, MAX_SOCKET_PATH_BYTES, primary))
+        message = _("macOS 用户名过长，uTerm 默认的 socket 路径（{bytes} 字节）超过系统上限 {limit} 字节：{path}。"
+                    "uTerm 2.1.6 及更早的版本在这样的账户上无法启动命令行接口，"
+                    "请把 uTerm 更新到最新版本（新版本会自动改用更短的路径）。"
+                    ).format(bytes=primary_bytes, limit=MAX_SOCKET_PATH_BYTES, path=primary)
     else:
         return None
     return {"id": request.get("id"), "ok": False, "code": CODE_SOCKET_PATH_TOO_LONG, "message": message}
@@ -206,23 +1608,23 @@ def launch_command():
             + ["--args", "--background", "--launch-source", "cli"])
 
 
-LAUNCH_NOT_READY_MESSAGE = ("已请求后台启动 uTerm，但接口在 10 秒内没有就绪。若 uTerm 本来就在运行，"
-                            "确认设置 ▸ 命令行与技能 里已打开「启用命令行接口」。")
+LAUNCH_NOT_READY_MESSAGE = _("已请求后台启动 uTerm，但接口在 10 秒内没有就绪。若 uTerm 本来就在运行，"
+                              "确认设置 ▸ 命令行与技能 里已打开「启用命令行接口」。")
 
 
 def start_background_and_wait():
     # 读得到设置就先在本地拦下，报得准、也不白起一次进程；读不到（None）照样请求启动，
     # uTerm 收到 `--launch-source cli` 会自己检查这两项，不满足就立刻退出。
     if on_demand_launch_allowed() is False:
-        return False, ("uTerm 未运行，且设置中没有允许 CLI 按需启动。用户在 uTerm 设置 ▸ 命令行与技能 里"
-                       "打开「允许 CLI 按需启动」之后，utermctl 会自己在后台把它起起来。")
+        return False, _("uTerm 未运行，且设置中没有允许 CLI 按需启动。用户在 uTerm 设置 ▸ 命令行与技能 里"
+                        "打开「允许 CLI 按需启动」之后，utermctl 会自己在后台把它起起来。")
     if preference_value(CONTROL_ENABLED_KEY) is False:
-        return False, "uTerm 命令行接口未启用；按需启动设置不会绕过接口门禁。"
+        return False, _("uTerm 命令行接口未启用；按需启动设置不会绕过接口门禁。")
     try:
         launcher = subprocess.Popen(
             launch_command(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     except OSError as error:
-        return False, "无法唤起 uTerm 后台实例：%s" % error
+        return False, _("无法唤起 uTerm 后台实例：{error}").format(error=error)
 
     try:
         deadline = time.monotonic() + 10
@@ -239,9 +1641,10 @@ def start_background_and_wait():
             code = launcher.poll()
             if code is not None:
                 if code != 0:
-                    return False, "无法唤起 uTerm 后台实例：%s" % launcher.stderr.read().strip()
-                return False, ("uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开"
-                               "「允许 CLI 按需启动」和「启用命令行接口」。")
+                    return False, _("无法唤起 uTerm 后台实例：{error}").format(
+                        error=launcher.stderr.read().strip())
+                return False, _("uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开"
+                                "「允许 CLI 按需启动」和「启用命令行接口」。")
             time.sleep(0.1)
         return False, LAUNCH_NOT_READY_MESSAGE
     finally:
@@ -261,7 +1664,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="utermctl",
         parents=[shared],
-        description="通过正在运行的 uTerm 使用其已保存的主机执行命令、读写文件、启停转发",
+        description=_("通过正在运行的 uTerm 使用其已保存的主机执行命令、读写文件、启停转发"),
     )
     # 别在这里 set_defaults(format=…)：argparse 会把默认值写回**共享的** action 对象，
     # 于是每个子解析器都拿到一个真实默认值，反手把顶层给的 --format 覆盖掉。
@@ -270,324 +1673,324 @@ def build_parser():
     def add(name, help_text, host=False, hosts=False):
         p = sub.add_parser(name, parents=[shared], help=help_text)
         if host:
-            p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+            p.add_argument("--host", "-H", required=True, help=_("主机名或 UUID"))
         if hosts:
             p.add_argument("--host", "-H", action="append", required=True,
-                           help="主机名或 UUID，可重复")
+                           help=_("主机名或 UUID，可重复"))
         return p
 
-    add("ping", "探活并报告版本与两个开关的状态")
-    add("hosts", "列出已保存的主机")
-    add("host-key", "查一台主机在信任库里的记录", host=True)
+    add("ping", _("探活并报告版本与两个开关的状态"))
+    add("hosts", _("列出已保存的主机"))
+    add("host-key", _("查一台主机在信任库里的记录"), host=True)
 
-    p = add("trust", "按指纹钉住一台主机的密钥", host=True)
-    p.add_argument("--fingerprint", required=True, help="必须与当前挑战一致的 SHA256:… 指纹")
+    p = add("trust", _("按指纹钉住一台主机的密钥"), host=True)
+    p.add_argument("--fingerprint", required=True, help=_("必须与当前挑战一致的 SHA256:… 指纹"))
 
     def with_command(p):
-        p.add_argument("--command", "-c", help="整串 shell 命令（与 -- 之后的 argv 二选一）")
+        p.add_argument("--command", "-c", help=_("整串 shell 命令（与 -- 之后的 argv 二选一）"))
         p.add_argument("--timeout", type=int,
-                       help="静默超时（秒）：连续这么久没有任何输出就终止命令；默认 60，封顶 1800")
+                       help=_("静默超时（秒）：连续这么久没有任何输出就终止命令；默认 60，封顶 1800"))
         p.add_argument("--max-duration", type=int,
-                       help="总时长上限（秒）：不管有没有输出，跑满就终止；默认 3600，封顶 21600")
-        p.add_argument("--max-lines", type=int, help="输出行数上限，默认 200")
-        p.add_argument("--max-bytes", type=int, help="输出字节上限，默认 16000，封顶 1 MiB")
-        p.add_argument("argv", nargs="*", help="-- 之后的命令与参数（原样拼成一条命令）")
+                       help=_("总时长上限（秒）：不管有没有输出，跑满就终止；默认 3600，封顶 21600"))
+        p.add_argument("--max-lines", type=int, help=_("输出行数上限，默认 200"))
+        p.add_argument("--max-bytes", type=int, help=_("输出字节上限，默认 16000，封顶 1 MiB"))
+        p.add_argument("argv", nargs="*", help=_("-- 之后的命令与参数（原样拼成一条命令）"))
         return p
 
-    with_command(add("run", "在一台主机上跑一条命令", host=True))
-    with_command(add("run-many", "在多台主机上并行跑同一条命令", hosts=True))
+    with_command(add("run", _("在一台主机上跑一条命令"), host=True))
+    with_command(add("run-many", _("在多台主机上并行跑同一条命令"), hosts=True))
 
-    add("quick-commands", "列出快捷命令")
-    p = sub.add_parser("quick-run", parents=[shared], help="跑一条已保存的快捷命令")
-    p.add_argument("name", help="快捷命令的名字或 UUID")
-    p.add_argument("--host", "-H", action="append", help="覆盖目标主机，可重复")
-    p.add_argument("--timeout", type=int, help="静默超时（秒），同 run")
-    p.add_argument("--max-duration", type=int, help="总时长上限（秒），同 run")
+    add("quick-commands", _("列出快捷命令"))
+    p = sub.add_parser("quick-run", parents=[shared], help=_("跑一条已保存的快捷命令"))
+    p.add_argument("name", help=_("快捷命令的名字或 UUID"))
+    p.add_argument("--host", "-H", action="append", help=_("覆盖目标主机，可重复"))
+    p.add_argument("--timeout", type=int, help=_("静默超时（秒），同 run"))
+    p.add_argument("--max-duration", type=int, help=_("总时长上限（秒），同 run"))
 
     # --- sftp ---
-    sftp = sub.add_parser("sftp", parents=[shared], help="远程文件操作")
+    sftp = sub.add_parser("sftp", parents=[shared], help=_("远程文件操作"))
     sftp_sub = sftp.add_subparsers(dest="sftp_action", required=True)
 
     def sftp_add(name, help_text):
         p = sftp_sub.add_parser(name, parents=[shared], help=help_text)
-        p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+        p.add_argument("--host", "-H", required=True, help=_("主机名或 UUID"))
         return p
 
-    p = sftp_add("ls", "列目录")
+    p = sftp_add("ls", _("列目录"))
     p.add_argument("path", nargs="?", default=".")
 
-    p = sftp_add("stat", "看一个文件的类型、大小、权限与修改时间")
+    p = sftp_add("stat", _("看一个文件的类型、大小、权限与修改时间"))
     p.add_argument("path")
 
-    p = sftp_add("cat", "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）")
+    p = sftp_add("cat", _("打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）"))
     p.add_argument("path")
     p.add_argument("--max-bytes", type=int)
 
-    p = sftp_add("get", "下载一个文件到本地（uTerm 多通道并行，大小不限）")
+    p = sftp_add("get", _("下载一个文件到本地（uTerm 多通道并行，大小不限）"))
     p.add_argument("path")
-    p.add_argument("local", help="本地落盘路径")
-    transfer_options(p, "覆盖已存在的本地文件")
+    p.add_argument("local", help=_("本地落盘路径"))
+    transfer_options(p, _("覆盖已存在的本地文件"))
 
-    p = sftp_add("put", "上传一个本地文件（uTerm 多通道并行，大小不限）")
-    p.add_argument("local", help="本地文件路径")
-    p.add_argument("path", help="远端目标路径")
-    transfer_options(p, "覆盖已存在的远端文件")
+    p = sftp_add("put", _("上传一个本地文件（uTerm 多通道并行，大小不限）"))
+    p.add_argument("local", help=_("本地文件路径"))
+    p.add_argument("path", help=_("远端目标路径"))
+    transfer_options(p, _("覆盖已存在的远端文件"))
 
     for name, help_text in (
-        ("mkdir", "建目录"),
-        ("rm", "删文件"),
-        ("rmdir", "删空目录"),
+        ("mkdir", _("建目录")),
+        ("rm", _("删文件")),
+        ("rmdir", _("删空目录")),
     ):
         sftp_add(name, help_text).add_argument("path")
 
-    p = sftp_add("mv", "改名 / 移动")
+    p = sftp_add("mv", _("改名 / 移动"))
     p.add_argument("path")
     p.add_argument("new_path", metavar="new-path")
 
-    p = sftp_add("chmod", "改权限")
+    p = sftp_add("chmod", _("改权限"))
     p.add_argument("path")
-    p.add_argument("mode", help="八进制，如 644")
+    p.add_argument("mode", help=_("八进制，如 644"))
 
     # --- forward ---
-    forward = sub.add_parser("forward", parents=[shared], help="端口转发规则的增删与启停")
+    forward = sub.add_parser("forward", parents=[shared], help=_("端口转发规则的增删与启停"))
     forward_sub = forward.add_subparsers(dest="forward_action", required=True)
-    p = forward_sub.add_parser("list", parents=[shared], help="列出规则与运行状态")
-    p.add_argument("--host", "-H", help="只列这台主机的规则")
+    p = forward_sub.add_parser("list", parents=[shared], help=_("列出规则与运行状态"))
+    p.add_argument("--host", "-H", help=_("只列这台主机的规则"))
     for name, help_text in (
-        ("start", "启动一条规则"),
-        ("stop", "停掉一条规则"),
-        ("remove", "删一条规则（在跑就先停；自启的规则拒绝）"),
+        ("start", _("启动一条规则")),
+        ("stop", _("停掉一条规则")),
+        ("remove", _("删一条规则（在跑就先停；自启的规则拒绝）")),
     ):
         p = forward_sub.add_parser(name, parents=[shared], help=help_text)
-        p.add_argument("--rule", "-r", required=True, help="规则名或 UUID")
-        p.add_argument("--host", "-H", help="只在这台主机的规则里找（同名规则跨主机时用）")
+        p.add_argument("--rule", "-r", required=True, help=_("规则名或 UUID"))
+        p.add_argument("--host", "-H", help=_("只在这台主机的规则里找（同名规则跨主机时用）"))
 
-    p = forward_sub.add_parser("add", parents=[shared], help="在一台主机上新建一条规则（不启动）")
-    p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
-    p.add_argument("--name", "-n", required=True, help="规则名（同一台主机上不能重名）")
+    p = forward_sub.add_parser("add", parents=[shared], help=_("在一台主机上新建一条规则（不启动）"))
+    p.add_argument("--host", "-H", required=True, help=_("主机名或 UUID"))
+    p.add_argument("--name", "-n", required=True, help=_("规则名（同一台主机上不能重名）"))
     p.add_argument("--kind", "-k", required=True, choices=("local", "remote", "dynamic"),
-                   help="local = -L，remote = -R，dynamic = -D（SOCKS5）")
+                   help=_("local = -L，remote = -R，dynamic = -D（SOCKS5）"))
     p.add_argument("--listen", "-l", required=True, metavar="[HOST:]PORT",
-                   help="监听地址。local / dynamic 开在本机，remote 开在服务器上；HOST 缺省 127.0.0.1")
+                   help=_("监听地址。local / dynamic 开在本机，remote 开在服务器上；HOST 缺省 127.0.0.1"))
     p.add_argument("--dest", "-d", metavar="HOST:PORT",
-                   help="目标地址：local 是服务器能到的地址，remote 是本机能到的地址；dynamic 不给")
+                   help=_("目标地址：local 是服务器能到的地址，remote 是本机能到的地址；dynamic 不给"))
 
     # --- terminal ---
-    add("terminals", "列出所有窗口里的终端会话")
-    terminal = sub.add_parser("terminal", parents=[shared], help="终端会话读屏 / 注入 / 开窗")
+    add("terminals", _("列出所有窗口里的终端会话"))
+    terminal = sub.add_parser("terminal", parents=[shared], help=_("终端会话读屏 / 注入 / 开窗"))
     terminal_sub = terminal.add_subparsers(dest="terminal_action", required=True)
 
-    p = terminal_sub.add_parser("read", parents=[shared], help="读一个会话的当前屏幕（快照）")
-    p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
-    p.add_argument("--lines", type=int, help="行数，默认 80")
+    p = terminal_sub.add_parser("read", parents=[shared], help=_("读一个会话的当前屏幕（快照）"))
+    p.add_argument("--terminal", "-t", required=True, help=_("会话 id 或其唯一前缀"))
+    p.add_argument("--lines", type=int, help=_("行数，默认 80"))
 
-    p = terminal_sub.add_parser("send", parents=[shared], help="往一个会话注入文本")
-    p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
-    p.add_argument("text", help="要写入 PTY 的文本")
-    p.add_argument("--enter", action="store_true", help="末尾追加回车")
+    p = terminal_sub.add_parser("send", parents=[shared], help=_("往一个会话注入文本"))
+    p.add_argument("--terminal", "-t", required=True, help=_("会话 id 或其唯一前缀"))
+    p.add_argument("text", help=_("要写入 PTY 的文本"))
+    p.add_argument("--enter", action="store_true", help=_("末尾追加回车"))
 
     p = terminal_sub.add_parser("open", parents=[shared],
-                                help="给一台主机开一个新终端窗口；给了命令就在窗口里跑它（用户可在窗口里交互）")
-    p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
-    p.add_argument("--command", "-c", help="连上后在窗口里跑的整串命令（与 -- 之后的 argv 二选一）")
-    p.add_argument("argv", nargs="*", help="-- 之后的命令与参数")
+                                help=_("给一台主机开一个新终端窗口；给了命令就在窗口里跑它（用户可在窗口里交互）"))
+    p.add_argument("--host", "-H", required=True, help=_("主机名或 UUID"))
+    p.add_argument("--command", "-c", help=_("连上后在窗口里跑的整串命令（与 -- 之后的 argv 二选一）"))
+    p.add_argument("argv", nargs="*", help=_("-- 之后的命令与参数"))
 
     p = terminal_sub.add_parser("wait", parents=[shared],
-                                help="等 terminal open -- <命令> 跑的那条命令结束，拿退出码与输出")
-    p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
-    p.add_argument("--wait", type=float, help="最多等几秒，默认 90，封顶 1800；没跑完回 state=running")
+                                help=_("等 terminal open -- <命令> 跑的那条命令结束，拿退出码与输出"))
+    p.add_argument("--terminal", "-t", required=True, help=_("会话 id 或其唯一前缀"))
+    p.add_argument("--wait", type=float, help=_("最多等几秒，默认 90，封顶 1800；没跑完回 state=running"))
 
     # --- relay ---
-    relay = sub.add_parser("relay", parents=[shared], help="自建中继：安装命令、导入配置、测试连通")
+    relay = sub.add_parser("relay", parents=[shared], help=_("自建中继：安装命令、导入配置、测试连通"))
     relay_sub = relay.add_subparsers(dest="relay_action", required=True)
     p = relay_sub.add_parser("import", parents=[shared],
-                             help="让 uTerm 经 SFTP 读主机上安装脚本写的设备配置并存进钥匙串（密钥不经过本客户端）")
-    p.add_argument("--host", "-H", required=True, help="装着中继的主机名或 UUID")
-    p.add_argument("--path", help="设备配置在远端的路径，默认 ~/.config/uterm-relay/client.json")
-    p.add_argument("--replace", action="store_true", help="已经导入了另一台中继时换成这一台")
+                             help=_("让 uTerm 经 SFTP 读主机上安装脚本写的设备配置并存进钥匙串（密钥不经过本客户端）"))
+    p.add_argument("--host", "-H", required=True, help=_("装着中继的主机名或 UUID"))
+    p.add_argument("--path", help=_("设备配置在远端的路径，默认 ~/.config/uterm-relay/client.json"))
+    p.add_argument("--replace", action="store_true", help=_("已经导入了另一台中继时换成这一台"))
     relay_sub.add_parser("check", parents=[shared],
-                         help="从这台 Mac 测已导入的中继：TCP、成员认证、UDP，附带版本")
+                         help=_("从这台 Mac 测已导入的中继：TCP、成员认证、UDP，附带版本"))
     p = relay_sub.add_parser("install-command", parents=[shared],
-                             help="打印在服务器上安装 / 更新中继的那一行命令（安装脚本放在哪由这个 uTerm 构建决定）")
+                             help=_("打印在服务器上安装 / 更新中继的那一行命令（安装脚本放在哪由这个 uTerm 构建决定）"))
     p.add_argument("--interactive", action="store_true",
-                   help="给要输 sudo 密码的终端用（curl … | sudo sh）；缺省是 root 直接跑、其他用户 sudo -n 的版本")
-    p.add_argument("argv", nargs="*", help="-- 之后是安装脚本的参数，缺省 install；例：-- update")
+                   help=_("给要输 sudo 密码的终端用（curl … | sudo sh）；缺省是 root 直接跑、其他用户 sudo -n 的版本"))
+    p.add_argument("argv", nargs="*", help=_("-- 之后是安装脚本的参数，缺省 install；例：-- update"))
 
-    p = add("disconnect", "松开命令行连接池对主机的持有")
-    p.add_argument("--host", "-H", help="不给就释放全部")
+    p = add("disconnect", _("松开命令行连接池对主机的持有"))
+    p.add_argument("--host", "-H", help=_("不给就释放全部"))
 
     # --- mac ---
-    add("macs", "列出配对过的 Mac（经远控链路访问它们的文件、跑命令，不需要 SSH）")
+    add("macs", _("列出配对过的 Mac（经远控链路访问它们的文件、跑命令，不需要 SSH）"))
     build_mac_parser(sub, shared)
 
     return parser
 
 
 def build_mac_parser(sub, shared):
-    mac = sub.add_parser("mac", parents=[shared], help="配对过的 Mac：读写文件、搜代码、跑命令")
+    mac = sub.add_parser("mac", parents=[shared], help=_("配对过的 Mac：读写文件、搜代码、跑命令"))
     mac_sub = mac.add_subparsers(dest="mac_action", required=True)
 
     def mac_add(name, help_text):
         p = mac_sub.add_parser(name, parents=[shared], help=help_text)
         p.add_argument("--mac", "-M",
-                       help="Mac 的名字或 id（见 utermctl macs）。不写 = 此刻正在用这个终端的那台设备"
-                            "（只在被别的设备远程控制着的 uTerm 终端里有意义）")
+                       help=_("Mac 的名字或 id（见 utermctl macs）。不写 = 此刻正在用这个终端的那台设备"
+                              "（只在被别的设备远程控制着的 uTerm 终端里有意义）"))
         return p
 
     def walk_flags(p):
-        p.add_argument("--hidden", action="store_true", help="连隐藏文件一起")
-        p.add_argument("--no-ignore", action="store_true", help="不按 .gitignore 过滤")
+        p.add_argument("--hidden", action="store_true", help=_("连隐藏文件一起"))
+        p.add_argument("--no-ignore", action="store_true", help=_("不按 .gitignore 过滤"))
 
-    p = mac_add("ls", "列目录")
+    p = mac_add("ls", _("列目录"))
     p.add_argument("path", nargs="?", default="~")
 
-    p = mac_add("stat", "看一个文件的类型、大小、权限与修改时间")
+    p = mac_add("stat", _("看一个文件的类型、大小、权限与修改时间"))
     p.add_argument("path")
 
-    p = mac_add("cat", "打印一个文本文件（上限 1 MiB；更大的用 read 读一段或 get 下载）")
+    p = mac_add("cat", _("打印一个文本文件（上限 1 MiB；更大的用 read 读一段或 get 下载）"))
     p.add_argument("path")
     p.add_argument("--max-bytes", type=int)
 
-    p = mac_add("read", "读文件的一段：按行（--lines / --head / --tail）或按字节（--offset / --length）")
+    p = mac_add("read", _("读文件的一段：按行（--lines / --head / --tail）或按字节（--offset / --length）"))
     p.add_argument("path")
-    p.add_argument("--lines", dest="line_range", metavar="A:B", help="第 A 行到第 B 行（从 1 起，两端都含；B 可省）")
-    p.add_argument("--head", type=int, metavar="N", help="开头 N 行")
-    p.add_argument("--tail", type=int, metavar="N", help="最后 N 行")
-    p.add_argument("--offset", type=int, help="按字节读：起点")
-    p.add_argument("--length", type=int, help="按字节读：长度，封顶 1 MiB")
-    p.add_argument("--max-bytes", type=int, help="按行读时内容的字节上限，默认 256 KiB")
+    p.add_argument("--lines", dest="line_range", metavar="A:B", help=_("第 A 行到第 B 行（从 1 起，两端都含；B 可省）"))
+    p.add_argument("--head", type=int, metavar="N", help=_("开头 N 行"))
+    p.add_argument("--tail", type=int, metavar="N", help=_("最后 N 行"))
+    p.add_argument("--offset", type=int, help=_("按字节读：起点"))
+    p.add_argument("--length", type=int, help=_("按字节读：长度，封顶 1 MiB"))
+    p.add_argument("--max-bytes", type=int, help=_("按行读时内容的字节上限，默认 256 KiB"))
 
-    p = mac_add("grep", "在目录里搜文件内容（正则；默认跳过 .gitignore 里的和二进制文件）")
+    p = mac_add("grep", _("在目录里搜文件内容（正则；默认跳过 .gitignore 里的和二进制文件）"))
     p.add_argument("pattern")
     p.add_argument("path", nargs="?", default="~")
     p.add_argument("--ignore-case", "-i", action="store_true")
-    p.add_argument("--fixed", "-F", action="store_true", help="按字面量搜，不当正则")
-    p.add_argument("--include", action="append", metavar="GLOB", help="只搜名字匹配的文件，可重复")
-    p.add_argument("--exclude", action="append", metavar="GLOB", help="跳过名字匹配的文件，可重复")
-    p.add_argument("--context", "-C", type=int, metavar="N", help="每处匹配前后各带 N 行")
-    p.add_argument("--limit", type=int, help="最多回多少处，默认 200，封顶 2000")
+    p.add_argument("--fixed", "-F", action="store_true", help=_("按字面量搜，不当正则"))
+    p.add_argument("--include", action="append", metavar="GLOB", help=_("只搜名字匹配的文件，可重复"))
+    p.add_argument("--exclude", action="append", metavar="GLOB", help=_("跳过名字匹配的文件，可重复"))
+    p.add_argument("--context", "-C", type=int, metavar="N", help=_("每处匹配前后各带 N 行"))
+    p.add_argument("--limit", type=int, help=_("最多回多少处，默认 200，封顶 2000"))
     walk_flags(p)
 
-    p = mac_add("find", "按名字找文件 / 目录")
+    p = mac_add("find", _("按名字找文件 / 目录"))
     p.add_argument("path", nargs="?", default="~")
-    p.add_argument("--name", metavar="GLOB", help="名字的通配符，如 '*.swift'")
-    p.add_argument("--type", choices=["f", "d"], help="只要文件（f）或只要目录（d）")
-    p.add_argument("--depth", type=int, help="最多往下几层")
-    p.add_argument("--newer", type=float, metavar="SECONDS", help="只要最近这么多秒内改过的")
-    p.add_argument("--hash", action="store_true", help="每个文件带 sha256")
+    p.add_argument("--name", metavar="GLOB", help=_("名字的通配符，如 '*.swift'"))
+    p.add_argument("--type", choices=["f", "d"], help=_("只要文件（f）或只要目录（d）"))
+    p.add_argument("--depth", type=int, help=_("最多往下几层"))
+    p.add_argument("--newer", type=float, metavar="SECONDS", help=_("只要最近这么多秒内改过的"))
+    p.add_argument("--hash", action="store_true", help=_("每个文件带 sha256"))
     p.add_argument("--exclude", action="append", metavar="GLOB")
     p.add_argument("--ignore-case", "-i", action="store_true")
-    p.add_argument("--limit", type=int, help="最多回多少项，默认 500，封顶 5000")
+    p.add_argument("--limit", type=int, help=_("最多回多少项，默认 500，封顶 5000"))
     walk_flags(p)
 
-    p = mac_add("tree", "目录树（文本）")
+    p = mac_add("tree", _("目录树（文本）"))
     p.add_argument("path", nargs="?", default="~")
-    p.add_argument("--depth", type=int, help="层数，默认 3")
-    p.add_argument("--limit", type=int, help="最多多少项，默认 400")
+    p.add_argument("--depth", type=int, help=_("层数，默认 3"))
+    p.add_argument("--limit", type=int, help=_("最多多少项，默认 400"))
     walk_flags(p)
 
-    p = mac_add("hash", "算一个文件的 sha256")
+    p = mac_add("hash", _("算一个文件的 sha256"))
     p.add_argument("path")
-    p = mac_add("du", "一个目录占多少空间")
+    p = mac_add("du", _("一个目录占多少空间"))
     p.add_argument("path", nargs="?", default="~")
-    p = mac_add("df", "所在磁盘的可用空间")
+    p = mac_add("df", _("所在磁盘的可用空间"))
     p.add_argument("path", nargs="?", default="~")
 
-    p = mac_add("get", "下载一个文件（-r 下载整个目录）")
+    p = mac_add("get", _("下载一个文件（-r 下载整个目录）"))
     p.add_argument("path")
-    p.add_argument("local", help="本地落盘路径")
-    p.add_argument("--recursive", "-r", action="store_true", help="下载整个目录")
-    transfer_options(p, "覆盖已存在的本地文件")
+    p.add_argument("local", help=_("本地落盘路径"))
+    p.add_argument("--recursive", "-r", action="store_true", help=_("下载整个目录"))
+    transfer_options(p, _("覆盖已存在的本地文件"))
 
-    p = mac_add("put", "上传一个本地文件（-r 上传整个目录）")
-    p.add_argument("local", help="本地文件路径")
-    p.add_argument("path", help="那台 Mac 上的目标路径")
-    p.add_argument("--recursive", "-r", action="store_true", help="上传整个目录")
-    transfer_options(p, "覆盖已存在的远端文件")
+    p = mac_add("put", _("上传一个本地文件（-r 上传整个目录）"))
+    p.add_argument("local", help=_("本地文件路径"))
+    p.add_argument("path", help=_("那台 Mac 上的目标路径"))
+    p.add_argument("--recursive", "-r", action="store_true", help=_("上传整个目录"))
+    transfer_options(p, _("覆盖已存在的远端文件"))
 
-    p = mac_add("sync", "把一个目录同步过去 / 同步回来：只传大小或修改时间不一样的文件")
-    p.add_argument("direction", choices=["up", "down"], help="up：本地 → 那台 Mac；down：反过来")
-    p.add_argument("local", help="本地目录")
-    p.add_argument("path", help="那台 Mac 上的目录")
-    p.add_argument("--delete", action="store_true", help="目标里多出来的文件删掉（up 时移进那台 Mac 的废纸篓）")
-    p.add_argument("--checksum", action="store_true", help="大小相同、时间不同的文件先比 sha256，一样就不传")
-    p.add_argument("--dry-run", action="store_true", help="只列要做什么，不动文件")
-    p.add_argument("--exclude", action="append", metavar="GLOB", help="跳过名字匹配的文件或目录，可重复")
+    p = mac_add("sync", _("把一个目录同步过去 / 同步回来：只传大小或修改时间不一样的文件"))
+    p.add_argument("direction", choices=["up", "down"], help=_("up：本地 → 那台 Mac；down：反过来"))
+    p.add_argument("local", help=_("本地目录"))
+    p.add_argument("path", help=_("那台 Mac 上的目录"))
+    p.add_argument("--delete", action="store_true", help=_("目标里多出来的文件删掉（up 时移进那台 Mac 的废纸篓）"))
+    p.add_argument("--checksum", action="store_true", help=_("大小相同、时间不同的文件先比 sha256，一样就不传"))
+    p.add_argument("--dry-run", action="store_true", help=_("只列要做什么，不动文件"))
+    p.add_argument("--exclude", action="append", metavar="GLOB", help=_("跳过名字匹配的文件或目录，可重复"))
     p.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL)
     p.add_argument("--quiet", action="store_true")
 
-    p = mac_add("mkdir", "建目录")
+    p = mac_add("mkdir", _("建目录"))
     p.add_argument("path")
-    p.add_argument("--parents", "-p", action="store_true", help="连上级目录一起建；已存在不算错")
+    p.add_argument("--parents", "-p", action="store_true", help=_("连上级目录一起建；已存在不算错"))
 
-    p = mac_add("rm", "删文件（-r 删整个目录；想留后路用 trash）")
+    p = mac_add("rm", _("删文件（-r 删整个目录；想留后路用 trash）"))
     p.add_argument("path")
     p.add_argument("--recursive", "-r", action="store_true")
 
-    mac_add("rmdir", "删空目录").add_argument("path")
-    mac_add("trash", "移到废纸篓（能从废纸篓放回）").add_argument("path")
+    mac_add("rmdir", _("删空目录")).add_argument("path")
+    mac_add("trash", _("移到废纸篓（能从废纸篓放回）")).add_argument("path")
 
-    for name, help_text in (("mv", "改名 / 移动"), ("cp", "复制（目录整个复制）")):
+    for name, help_text in (("mv", _("改名 / 移动")), ("cp", _("复制（目录整个复制）"))):
         p = mac_add(name, help_text)
         p.add_argument("path")
         p.add_argument("new_path", metavar="new-path")
-        p.add_argument("--force", action="store_true", help="目标已存在时覆盖")
+        p.add_argument("--force", action="store_true", help=_("目标已存在时覆盖"))
 
-    p = mac_add("chmod", "改权限")
+    p = mac_add("chmod", _("改权限"))
     p.add_argument("path")
-    p.add_argument("mode", help="八进制，如 644")
+    p.add_argument("mode", help=_("八进制，如 644"))
     p.add_argument("--recursive", "-R", action="store_true")
 
-    p = mac_add("ln", "建符号链接")
-    p.add_argument("target", help="链接指向哪里")
-    p.add_argument("path", help="链接放在哪里")
-    p.add_argument("--force", action="store_true", help="已存在时替换")
-    mac_add("readlink", "看符号链接指向哪里").add_argument("path")
+    p = mac_add("ln", _("建符号链接"))
+    p.add_argument("target", help=_("链接指向哪里"))
+    p.add_argument("path", help=_("链接放在哪里"))
+    p.add_argument("--force", action="store_true", help=_("已存在时替换"))
+    mac_add("readlink", _("看符号链接指向哪里")).add_argument("path")
 
-    p = mac_add("touch", "建空文件 / 更新修改时间")
+    p = mac_add("touch", _("建空文件 / 更新修改时间"))
     p.add_argument("path")
 
-    p = mac_add("write", "写一个文本文件（内容来自 --text、--file 或标准输入）；默认只肯新建")
+    p = mac_add("write", _("写一个文本文件（内容来自 --text、--file 或标准输入）；默认只肯新建"))
     p.add_argument("path")
-    p.add_argument("--text", help="要写的内容")
-    p.add_argument("--file", dest="source", help="从这个本地文件读内容")
-    p.add_argument("--force", action="store_true", help="覆盖已存在的文件")
-    p.add_argument("--if-match", metavar="SHA256", help="只有文件现在的 sha256 是这个才写（防止盖掉别人的改动）")
-    p.add_argument("--mode", help="新文件的权限，八进制")
+    p.add_argument("--text", help=_("要写的内容"))
+    p.add_argument("--file", dest="source", help=_("从这个本地文件读内容"))
+    p.add_argument("--force", action="store_true", help=_("覆盖已存在的文件"))
+    p.add_argument("--if-match", metavar="SHA256", help=_("只有文件现在的 sha256 是这个才写（防止盖掉别人的改动）"))
+    p.add_argument("--mode", help=_("新文件的权限，八进制"))
 
-    p = mac_add("edit", "把文件里的一段文字换成另一段（要换的文字必须只出现一次，除非 --all）")
+    p = mac_add("edit", _("把文件里的一段文字换成另一段（要换的文字必须只出现一次，除非 --all）"))
     p.add_argument("path")
-    p.add_argument("--old", required=True, help="原文，一字不差")
-    p.add_argument("--new", required=True, help="换成什么")
-    p.add_argument("--all", action="store_true", help="出现几次换几次")
+    p.add_argument("--old", required=True, help=_("原文，一字不差"))
+    p.add_argument("--new", required=True, help=_("换成什么"))
+    p.add_argument("--all", action="store_true", help=_("出现几次换几次"))
     p.add_argument("--if-match", metavar="SHA256")
 
-    p = mac_add("patch", "打一个 unified diff（来自 --file 或标准输入）")
-    p.add_argument("path", nargs="?", default="~", help="在哪个目录下打，默认主目录")
-    p.add_argument("--file", dest="source", help="本地的 diff 文件")
-    p.add_argument("--strip", "-p", type=int, help="去掉路径前几段，同 patch -p，默认 1")
-    p.add_argument("--dry-run", action="store_true", help="只检查能不能打上")
+    p = mac_add("patch", _("打一个 unified diff（来自 --file 或标准输入）"))
+    p.add_argument("path", nargs="?", default="~", help=_("在哪个目录下打，默认主目录"))
+    p.add_argument("--file", dest="source", help=_("本地的 diff 文件"))
+    p.add_argument("--strip", "-p", type=int, help=_("去掉路径前几段，同 patch -p，默认 1"))
+    p.add_argument("--dry-run", action="store_true", help=_("只检查能不能打上"))
 
-    p = mac_add("xattr", "扩展属性：list / get / set / remove")
+    p = mac_add("xattr", _("扩展属性：list / get / set / remove"))
     p.add_argument("path")
     p.add_argument("attribute_action", nargs="?", default="list", choices=["list", "get", "set", "remove"])
     p.add_argument("attribute", nargs="?")
     p.add_argument("value", nargs="?")
 
-    mac_add("shares", "那台设备给这台 Mac 开放了哪些目录（整台 Mac，还是几个共享文件夹）")
+    mac_add("shares", _("那台设备给这台 Mac 开放了哪些目录（整台 Mac，还是几个共享文件夹）"))
 
-    p = mac_add("wait-change", "等一个文件或目录有变化")
+    p = mac_add("wait-change", _("等一个文件或目录有变化"))
     p.add_argument("path")
-    p.add_argument("--wait", type=float, help="最多等几秒，默认 30，封顶 600")
+    p.add_argument("--wait", type=float, help=_("最多等几秒，默认 30，封顶 600"))
 
-    p = mac_add("run", "在那台 Mac 上跑一条命令（登录 shell，没有 stdin）")
-    p.add_argument("--cwd", help="在哪个目录下跑，默认主目录")
-    p.add_argument("--command", "-c", help="整串 shell 命令（与 -- 之后的 argv 二选一）")
-    p.add_argument("--timeout", type=int, help="静默超时（秒），默认 60，封顶 1800")
-    p.add_argument("--max-duration", type=int, help="总时长上限（秒），默认 3600，封顶 21600")
-    p.add_argument("--max-lines", type=int, help="输出行数上限，默认 200")
-    p.add_argument("--max-bytes", type=int, help="输出字节上限，默认 16000，封顶 1 MiB")
-    p.add_argument("argv", nargs="*", help="-- 之后的命令与参数")
+    p = mac_add("run", _("在那台 Mac 上跑一条命令（登录 shell，没有 stdin）"))
+    p.add_argument("--cwd", help=_("在哪个目录下跑，默认主目录"))
+    p.add_argument("--command", "-c", help=_("整串 shell 命令（与 -- 之后的 argv 二选一）"))
+    p.add_argument("--timeout", type=int, help=_("静默超时（秒），默认 60，封顶 1800"))
+    p.add_argument("--max-duration", type=int, help=_("总时长上限（秒），默认 3600，封顶 21600"))
+    p.add_argument("--max-lines", type=int, help=_("输出行数上限，默认 200"))
+    p.add_argument("--max-bytes", type=int, help=_("输出字节上限，默认 16000，封顶 1 MiB"))
+    p.add_argument("argv", nargs="*", help=_("-- 之后的命令与参数"))
 
 
 def transfer_options(p, force_help):
@@ -599,13 +2002,14 @@ def transfer_options(p, force_help):
     exclusive = p.add_mutually_exclusive_group()
     exclusive.add_argument("--force", action="store_true", help=force_help)
     exclusive.add_argument("--resume", action="store_true",
-                           help="断点续传：按续传状态文件补没传完的区间（与 --force 互斥）")
+                           help=_("断点续传：按续传状态文件补没传完的区间（与 --force 互斥）"))
     p.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL,
-                   help="uTerm 用几条 SFTP 通道并行传，1–%d，默认 %d" % (MAX_PARALLEL, DEFAULT_PARALLEL))
+                   help=_("uTerm 用几条 SFTP 通道并行传，1–{max}，默认 {default}").format(
+                       max=MAX_PARALLEL, default=DEFAULT_PARALLEL))
     p.add_argument("--no-verify", dest="verify", action="store_false", default=True,
-                   help="传完不比对 sha256（默认对 8 MiB 以上的文件校验）")
+                   help=_("传完不比对 sha256（默认对 8 MiB 以上的文件校验）"))
     p.add_argument("--quiet", action="store_true",
-                   help="不刷进度行（结束仍打一行汇总到 stderr）")
+                   help=_("不刷进度行（结束仍打一行汇总到 stderr）"))
     return p
 
 
@@ -617,16 +2021,16 @@ def parse_endpoint(text, flag, need_host):
     if text.startswith("["):
         close = text.find("]")
         if close < 0 or text[close + 1:close + 2] != ":":
-            fail("%s 写成 [IPv6]:PORT：%s" % (flag, text))
+            fail(_("{flag} 写成 [IPv6]:PORT：{text}").format(flag=flag, text=text))
         host, port_text = text[1:close], text[close + 2:]
     elif ":" in text:
         if text.count(":") > 1:
-            fail("%s 里的 IPv6 地址要加方括号，如 [::1]:8080：%s" % (flag, text))
+            fail(_("{flag} 里的 IPv6 地址要加方括号，如 [::1]:8080：{text}").format(flag=flag, text=text))
         host, port_text = text.rsplit(":", 1)
     if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
-        fail("%s 的端口需在 1–65535 之间：%s" % (flag, text))
+        fail(_("{flag} 的端口需在 1–65535 之间：{text}").format(flag=flag, text=text))
     if need_host and not host:
-        fail("%s 要写成 HOST:PORT：%s" % (flag, text))
+        fail(_("{flag} 要写成 HOST:PORT：{text}").format(flag=flag, text=text))
     return host or None, int(port_text)
 
 
@@ -637,10 +2041,10 @@ def forward_spec(args):
         spec["listenHost"] = listen_host
     if args.kind == "dynamic":
         if args.dest:
-            fail("dynamic（SOCKS5）规则没有固定目标，不要给 --dest")
+            fail(_("dynamic（SOCKS5）规则没有固定目标，不要给 --dest"))
         return spec
     if not args.dest:
-        fail("%s 规则需要 --dest HOST:PORT" % args.kind)
+        fail(_("{kind} 规则需要 --dest HOST:PORT").format(kind=args.kind))
     dest_host, dest_port = parse_endpoint(args.dest, "--dest", need_host=True)
     spec["destHost"] = dest_host
     spec["destPort"] = dest_port
@@ -667,14 +2071,14 @@ def command_string(args, optional=False):
     if argv[:1] == ["--"]:
         argv = argv[1:]
     if inline and argv:
-        fail("-c 与 -- 之后的命令只能给一个")
+        fail(_("-c 与 -- 之后的命令只能给一个"))
     if inline:
         return inline
     if argv:
         return shlex.join(argv)
     if optional:
         return None
-    fail("缺少命令：用 -c \"…\" 或在 -- 之后写命令")
+    fail(_("缺少命令：用 -c \"…\" 或在 -- 之后写命令"))
 
 
 def make_request(args):
@@ -790,11 +2194,13 @@ def send_request(request, fd=None, on_progress=None):
             "id": request.get("id"),
             "ok": False,
             "code": CODE_SOCKET_STALE,
-            "message": ("socket 文件还在但没有进程在监听（" + "、".join(stale) + "）。"
-                        "uTerm 多半正在重启或刚被强制退出 —— 等它起来后重试一次；"
-                        "若 uTerm 确实没在运行，这个文件会在下次启动时自动清掉。"
+            "message": (_("socket 文件还在但没有进程在监听（{paths}）。"
+                          "uTerm 多半正在重启或刚被强制退出 —— 等它起来后重试一次；"
+                          "若 uTerm 确实没在运行，这个文件会在下次启动时自动清掉。"
+                          ).format(paths=_("、").join(stale))
                         # 残留 socket 时也试过按需启动：没起来的原因别吞掉，否则调用方只会干等。
-                        + (" 按需启动没成功：" + launch_error if launch_error else "")),
+                        + (_(" 按需启动没成功：{error}").format(error=launch_error)
+                           if launch_error else "")),
         }
     too_long = socket_path_too_long_response(request, paths, launch_error)
     if too_long:
@@ -803,8 +2209,9 @@ def send_request(request, fd=None, on_progress=None):
         "id": request.get("id"),
         "ok": False,
         "code": CODE_NOT_RUNNING,
-        "message": ("uTerm 的 IPC socket 不存在（试过 " + "、".join(paths) + "）。"
-                    "确认 uTerm 正在运行，且设置 ▸ 命令行与技能 里已打开「启用命令行接口」。"),
+        "message": _("uTerm 的 IPC socket 不存在（试过 {paths}）。"
+                     "确认 uTerm 正在运行，且设置 ▸ 命令行与技能 里已打开「启用命令行接口」。"
+                     ).format(paths=_("、").join(paths)),
     }
 
 
@@ -873,9 +2280,9 @@ def exchange(path, request, fd=None, on_progress=None):
             "id": request.get("id"),
             "ok": False,
             "code": "client_timeout",
-            "message": ("uTerm 连续 %d 秒没有任何回应（处理中每 10 秒一次的心跳也没有），"
-                        "多半是 uTerm 本身卡住了；请求可能已经执行了一部分。"
-                        % CLIENT_IDLE_TIMEOUT),
+            "message": _("uTerm 连续 {seconds} 秒没有任何回应（处理中每 10 秒一次的心跳也没有），"
+                         "多半是 uTerm 本身卡住了；请求可能已经执行了一部分。"
+                         ).format(seconds="%d" % CLIENT_IDLE_TIMEOUT),
         }
     finally:
         sock.close()
@@ -912,7 +2319,7 @@ def _exchange(sock, path, request, fd=None, on_progress=None):
             "id": request.get("id"),
             "ok": False,
             "code": "empty_response",
-            "message": "uTerm IPC 返回了空响应或读不懂的内容",
+            "message": _("uTerm IPC 返回了空响应或读不懂的内容"),
         }
     return response
 
@@ -1025,7 +2432,7 @@ def send_with_retry(attempt):
 def parallel_for(args):
     value = getattr(args, "parallel", DEFAULT_PARALLEL)
     if value < 1 or value > MAX_PARALLEL:
-        fail("--parallel 要在 1–%d 之间，实得 %d" % (MAX_PARALLEL, value))
+        fail(_("--parallel 要在 1–{max} 之间，实得 {value}").format(max=MAX_PARALLEL, value="%d" % value))
     return value
 
 
@@ -1183,7 +2590,7 @@ class TransferState(object):
         except OSError as error:
             # 写不了状态文件（目录只读之类）不该让传输失败，但要说清「这趟不能续传」。
             self.disabled = True
-            self.note = "续传状态文件写不了（%s）—— 这趟传完之前断了就没法 --resume" % error
+            self.note = _("续传状态文件写不了（{error}）—— 这趟传完之前断了就没法 --resume").format(error=error)
             try:
                 os.unlink(tmp)
             except OSError:
@@ -1199,10 +2606,10 @@ class TransferState(object):
     def hint(self, target):
         """失败时给用户的续传提示。"""
         if self.disabled:
-            return "没有续传状态（%s）—— 删掉 %s 整份重传" % (self.note, target)
+            return _("没有续传状态（{note}）—— 删掉 {target} 整份重传").format(note=self.note, target=target)
         if not self.armed:
-            return "还没有任何区间完成 —— 整份重传（目标已存在时加 --force）"
-        return "续传状态在 %s，加 --resume 接着传（别去动 %s）" % (self.path, target)
+            return _("还没有任何区间完成 —— 整份重传（目标已存在时加 --force）")
+        return _("续传状态在 {path}，加 --resume 接着传（别去动 {target}）").format(path=self.path, target=target)
 
 
 def sidecar_path(local):
@@ -1242,14 +2649,15 @@ def state_for(direction, args, local, total, identity):
         return TransferState(path, direction, args.path, local, total, identity)
     saved = TransferState.load(path)
     if saved is None:
-        fail("没有续传状态文件 %s —— 上一趟没留下可续的记录，去掉 --resume 整份重传" % path)
+        fail(_("没有续传状态文件 {path} —— 上一趟没留下可续的记录，去掉 --resume 整份重传").format(path=path))
     if saved.get("direction") != direction or saved.get("remotePath") != args.path:
-        fail("续传状态文件 %s 记的是 %s %s，与这次的 %s %s 不是一回事 —— "
-             "删掉它，或换一个本地路径" % (path, saved.get("direction"),
-                                      saved.get("remotePath"), direction, args.path))
+        fail(_("续传状态文件 {path} 记的是 {saved_direction} {saved_remote}，与这次的 {direction} {remote} 不是一回事 —— "
+               "删掉它，或换一个本地路径").format(
+                   path=path, saved_direction=saved.get("direction"), saved_remote=saved.get("remotePath"),
+                   direction=direction, remote=args.path))
     if not identity_matches(saved.get("identity") or {}, identity):
-        fail("续传状态文件 %s 记的文件已经变了（记的 %r，现在 %r）—— 接着传会拼出一个"
-             "错的文件。删掉它再整份重传" % (path, saved.get("identity"), identity))
+        fail(_("续传状态文件 {path} 记的文件已经变了（记的 {saved!r}，现在 {current!r}）—— 接着传会拼出一个"
+               "错的文件。删掉它再整份重传").format(path=path, saved=saved.get("identity"), current=identity))
     return TransferState(path, direction, args.path, local, total, identity,
                          done=saved.get("done") or [])
 
@@ -1315,8 +2723,8 @@ def remote_sha256(args, path):
     if is_mac(args):
         response = send_request(new_request("mac-hash", path=path, **target_fields(args)))
         if not response.get("ok"):
-            return None, ("那台 Mac 算 sha256 没成（%s：%s），跳过校验"
-                          % (response.get("code"), response.get("message") or ""))
+            return None, _("那台 Mac 算 sha256 没成（{code}：{message}），跳过校验").format(
+                code=response.get("code"), message=response.get("message") or "")
         return ((response.get("mac") or {}).get("sha256") or "").lower() or None, None
     host = args.host
     quoted = shlex.quote(path)
@@ -1326,11 +2734,11 @@ def remote_sha256(args, path):
         "run", host=host, command=command,
         timeoutSeconds=REMOTE_SHA256_TIMEOUT, maxLines=5))
     if not response.get("ok"):
-        return None, ("远端算 sha256 没跑成（%s：%s），跳过校验"
-                      % (response.get("code"), response.get("message") or ""))
+        return None, _("远端算 sha256 没跑成（{code}：{message}），跳过校验").format(
+            code=response.get("code"), message=response.get("message") or "")
     match = SHA256_RE.search((response.get("result") or {}).get("output") or "")
     if match is None:
-        return None, "远端既没有 sha256sum 也没有 shasum，跳过校验"
+        return None, _("远端既没有 sha256sum 也没有 shasum，跳过校验")
     return match.group(1).lower(), None
 
 
@@ -1339,10 +2747,10 @@ def verify_pair(args, local_path, total):
     写入」开关管，小文件的只读下载不该被它拖下水；大文件才值得多花一次远端哈希。"""
     verdict = {"sha256": None, "verified": False, "note": None, "remote": None}
     if not getattr(args, "verify", True):
-        verdict["note"] = "已用 --no-verify 关掉校验"
+        verdict["note"] = _("已用 --no-verify 关掉校验")
         return verdict
     if total < VERIFY_MIN_BYTES:
-        verdict["note"] = "小于 %s，默认不做 sha256 校验" % human(VERIFY_MIN_BYTES)
+        verdict["note"] = _("小于 {size}，默认不做 sha256 校验").format(size=human(VERIFY_MIN_BYTES))
         return verdict
     verdict["sha256"] = local_sha256(local_path)
     remote, note = remote_sha256(args, args.path)
@@ -1352,7 +2760,8 @@ def verify_pair(args, local_path, total):
         return verdict
     verdict["verified"] = remote == verdict["sha256"]
     if not verdict["verified"]:
-        verdict["note"] = "sha256 不一致：本地 %s，远端 %s" % (verdict["sha256"], remote)
+        verdict["note"] = _("sha256 不一致：本地 {local}，远端 {remote}").format(
+            local=verdict["sha256"], remote=remote)
     return verdict
 
 
@@ -1396,7 +2805,7 @@ def transfer_failure(response, stats):
         "id": response.get("id"),
         "ok": False,
         "code": response.get("code") or "operation_failed",
-        "message": response.get("message") or "传输失败",
+        "message": response.get("message") or _("传输失败"),
         "hostKey": response.get("hostKey"),
         "transfer": stats,
     }
@@ -1434,15 +2843,15 @@ def run_transfer(action, args, fd, state, workers, progress, base_fields):
 def do_put(args):
     local = os.path.expanduser(args.local)
     if not os.path.isfile(local):
-        fail("本地文件不存在：" + local)
+        fail(_("本地文件不存在：{path}").format(path=local))
     total = os.path.getsize(local)
     workers = parallel_for(args)
     started = time.time()
     state = state_for("put", args, local, total, local_identity(local))
     resumed = state.completed
     if args.resume and not state.missing():
-        fail("续传状态文件 %s 说这份文件已经传完了 —— 要重传就删掉它，或去掉 --resume "
-             "加 --force" % state.path)
+        fail(_("续传状态文件 {path} 说这份文件已经传完了 —— 要重传就删掉它，或去掉 --resume "
+               "加 --force").format(path=state.path))
     in_tree = getattr(args, "in_tree", False)
     if in_tree:
         state.disabled = True     # 整棵目录里的单个文件不留续传状态：重跑一遍就是续传
@@ -1458,9 +2867,10 @@ def do_put(args):
     try:
         fd = os.open(local, os.O_RDONLY)
     except OSError as error:
-        progress.finish("上传失败（local_read_failed）：%s" % error)
+        progress.finish(_("上传失败（local_read_failed）：{error}").format(error=error))
         return transfer_failure(
-            {"code": "local_read_failed", "message": "%s：%s" % (local, error)}, stats())
+            {"code": "local_read_failed", "message": _("{path}：{error}").format(path=local, error=error)},
+            stats())
     try:
         response = run_transfer(transfer_action(args, "put"), args, fd, state, workers, progress,
                                 {"force": True if args.force else None})
@@ -1470,16 +2880,16 @@ def do_put(args):
     if not response.get("ok") and response.get("code") == "file_exists" and not state.done:
         # 根本没开始传：不留续传状态，也不提 --resume（接着传的前提是上一趟传了一半）。
         state.remove()
-        progress.finish("上传失败（file_exists）：远端已存在 %s，要覆盖请加 --force" % args.path)
+        progress.finish(_("上传失败（file_exists）：远端已存在 {path}，要覆盖请加 --force").format(path=args.path))
         return transfer_failure(response, stats())
     if not response.get("ok"):
         moved = state.completed - resumed
         incomplete = state.completed > 0
-        progress.finish("上传失败（%s）：已传 %s / %s。%s%s"
-                        % (response.get("code"), human(moved), human(total),
-                           ("远端 %s 现在是**不完整**的文件；" % args.path)
-                           if incomplete else "",
-                           state.hint(args.path)))
+        progress.finish(_("上传失败（{code}）：已传 {moved} / {total}。{incomplete}{hint}").format(
+            code=response.get("code"), moved=human(moved), total=human(total),
+            incomplete=(_("远端 {path} 现在是**不完整**的文件；").format(path=args.path)
+                        if incomplete else ""),
+            hint=state.hint(args.path)))
         return transfer_failure(response, stats(
             incomplete=incomplete, resumable=state.armed and not state.disabled,
             statePath=state.path if state.armed else None))
@@ -1489,7 +2899,7 @@ def do_put(args):
         verdict["note"] = state.note
     # 全部区间都成了：内容对不上是**内容**的问题，补区间补不回来，删掉状态文件整份重传。
     state.remove()
-    return finish_transfer("上传", args.path, progress, stats(
+    return finish_transfer(_("上传"), args.path, progress, stats(
         bytes=total - resumed, sha256=verdict["sha256"], verified=verdict["verified"],
         verifyNote=verdict["note"]), verdict)
 
@@ -1498,9 +2908,9 @@ def do_get(args):
     local = os.path.expanduser(args.local)
     directory = os.path.dirname(os.path.abspath(local))
     if directory and not os.path.isdir(directory):
-        fail("本地目录不存在：" + directory)
+        fail(_("本地目录不存在：{path}").format(path=directory))
     if os.path.exists(local) and not (args.force or args.resume):
-        fail("本地已存在 " + local + "；要覆盖请加 --force，要接着传请加 --resume")
+        fail(_("本地已存在 {path}；要覆盖请加 --force，要接着传请加 --resume").format(path=local))
     workers = parallel_for(args)
     started = time.time()
     # 成功之前绝不占用目标名：半截文件写在 `<目标>.part`，校验过了才 rename 过去。
@@ -1515,11 +2925,11 @@ def do_get(args):
     resumed = state.completed
     if args.resume:
         if not os.path.exists(part):
-            fail("续传状态文件 %s 在，但半成品 %s 不见了 —— 删掉状态文件重新下载"
-                 % (state.path, part))
+            fail(_("续传状态文件 {path} 在，但半成品 {part} 不见了 —— 删掉状态文件重新下载").format(
+                path=state.path, part=part))
         if not state.missing():
-            fail("续传状态文件 %s 说这份文件已经下完了 —— 要重下就删掉它，或去掉 --resume "
-                 "加 --force" % state.path)
+            fail(_("续传状态文件 {path} 说这份文件已经下完了 —— 要重下就删掉它，或去掉 --resume "
+                   "加 --force").format(path=state.path))
     in_tree = getattr(args, "in_tree", False)
     if in_tree:
         state.disabled = True
@@ -1536,9 +2946,10 @@ def do_get(args):
         flags = os.O_RDWR | os.O_CREAT | (0 if args.resume else os.O_TRUNC)
         fd = os.open(part, flags, 0o644)
     except OSError as raised:
-        progress.finish("下载失败（local_write_failed）：%s" % raised)
+        progress.finish(_("下载失败（local_write_failed）：{error}").format(error=raised))
         return transfer_failure(
-            {"code": "local_write_failed", "message": "%s：%s" % (part, raised)}, stats())
+            {"code": "local_write_failed", "message": _("{path}：{error}").format(path=part, error=raised)},
+            stats())
     try:
         response = run_transfer(transfer_action(args, "get"), args, fd, state, workers, progress, {})
     finally:
@@ -1546,9 +2957,9 @@ def do_get(args):
 
     if not response.get("ok"):
         progress.finish(
-            "下载失败（%s）：已收 %s / %s。半成品在 %s（目标 %s 还没生成，内容**不完整**）；%s"
-            % (response.get("code"), human(state.completed - resumed), human(size), part,
-               local, state.hint(part)))
+            _("下载失败（{code}）：已收 {moved} / {total}。半成品在 {part}（目标 {target} 还没生成，内容**不完整**）；{hint}"
+              ).format(code=response.get("code"), moved=human(state.completed - resumed), total=human(size),
+                       part=part, target=local, hint=state.hint(part)))
         return transfer_failure(response, stats(
             incomplete=state.completed > 0, resumable=state.armed and not state.disabled,
             partPath=part, statePath=state.path if state.armed else None))
@@ -1563,38 +2974,39 @@ def do_get(args):
         try:
             os.replace(part, local)       # 校验过了才占用目标名
         except OSError as raised:
-            progress.finish("下载失败（local_write_failed）：%s" % raised)
+            progress.finish(_("下载失败（local_write_failed）：{error}").format(error=raised))
             return transfer_failure(
                 {"code": "local_write_failed",
-                 "message": "把 %s 改名成 %s 失败：%s" % (part, local, raised)},
+                 "message": _("把 {part} 改名成 {target} 失败：{error}").format(
+                     part=part, target=local, error=raised)},
                 stats(partPath=part))
-    return finish_transfer("下载", local, progress, stats(
+    return finish_transfer(_("下载"), local, progress, stats(
         bytes=size - resumed, sha256=verdict["sha256"], verified=verdict["verified"],
         verifyNote=verdict["note"], partPath=part if mismatched else None), verdict)
 
 
 def finish_transfer(verb, target, progress, stats, verdict):
-    summary = "%s完成：%s → %s，%s，%d 路，%.1fs，%.2f MiB/s" % (
-        verb, human(stats["bytes"]), target, human(stats["totalBytes"]),
-        stats["parallel"], stats["seconds"], stats["mbps"])
+    summary = _("{verb}完成：{moved} → {target}，{total}，{parallel} 路，{seconds}s，{speed} MiB/s").format(
+        verb=verb, moved=human(stats["bytes"]), target=target, total=human(stats["totalBytes"]),
+        parallel="%d" % stats["parallel"], seconds="%.1f" % stats["seconds"], speed="%.2f" % stats["mbps"])
     if stats["resumedFrom"]:
-        summary += "（从 %s 续传）" % human(stats["resumedFrom"])
+        summary += _("（从 {size} 续传）").format(size=human(stats["resumedFrom"]))
     if verdict["remote"] is not None and not verdict["verified"]:
         # 区间都传完了，内容却对不上 —— 补区间补不回来，只能整份重传。
-        where = ("半成品留在 %s（目标名没生成）" % stats["partPath"]
-                 if stats.get("partPath") else "远端是完整大小但内容不对")
+        where = (_("半成品留在 {part}（目标名没生成）").format(part=stats["partPath"])
+                 if stats.get("partPath") else _("远端是完整大小但内容不对"))
         progress.finish(summary + "\n" + (verdict["note"] or ""))
         return {
             "id": str(uuid.uuid4()), "ok": False, "code": "checksum_mismatch",
-            "message": ((verdict["note"] or "sha256 不一致")
-                        + " —— %s；续传状态已清掉，整份重传（去掉 --resume，"
-                          "目标已存在时加 --force）" % where),
+            "message": ((verdict["note"] or _("sha256 不一致"))
+                        + _(" —— {where}；续传状态已清掉，整份重传（去掉 --resume，"
+                            "目标已存在时加 --force）").format(where=where)),
             "transfer": stats,
         }
     if stats["verified"]:
-        summary += "，sha256 已校验"
+        summary += _("，sha256 已校验")
     elif verdict["note"]:
-        summary += "，未校验：" + verdict["note"]
+        summary += _("，未校验：{note}").format(note=verdict["note"])
     progress.finish(summary)
     return {"id": str(uuid.uuid4()), "ok": True, "code": "ok",
             "message": summary, "transfer": stats}
@@ -1613,29 +3025,29 @@ MAX_INLINE_TEXT = 512 * 1024
 TREE_WORKERS = 4
 
 
-def inline_text(args, what):
+def inline_text(args, missing):
     """`mac write` / `mac patch` 的内容：--text、--file 或标准输入。"""
     text = getattr(args, "text", None)
     source = getattr(args, "source", None)
     if text is not None and source:
-        fail("--text 与 --file 只能给一个")
+        fail(_("--text 与 --file 只能给一个"))
     if text is None:
         if source:
             try:
                 with open(os.path.expanduser(source), "rb") as handle:
                     data = handle.read()
             except OSError as error:
-                fail("读不了 %s：%s" % (source, error))
+                fail(_("读不了 {path}：{error}").format(path=source, error=error))
         elif not sys.stdin.isatty():
             data = sys.stdin.buffer.read()
         else:
-            fail("缺少%s：用 --text、--file，或从标准输入给" % what)
+            fail(missing)
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
-            fail("内容不是 UTF-8 文本：二进制文件用 `mac put`")
+            fail(_("内容不是 UTF-8 文本：二进制文件用 `mac put`"))
     if len(text.encode("utf-8")) > MAX_INLINE_TEXT:
-        fail("内容超过 %s：先写到本地文件，再用 `mac put` 传" % human(MAX_INLINE_TEXT))
+        fail(_("内容超过 {size}：先写到本地文件，再用 `mac put` 传").format(size=human(MAX_INLINE_TEXT)))
     return text
 
 
@@ -1682,34 +3094,34 @@ def make_mac_request(args):
     elif leaf == "read":
         picked = [x for x in (args.line_range, args.head, args.tail, args.offset) if x is not None]
         if len(picked) > 1:
-            fail("--lines / --head / --tail / --offset 只能给一种")
+            fail(_("--lines / --head / --tail / --offset 只能给一种"))
         if args.line_range:
-            first, _, last = args.line_range.partition(":")
+            first, _sep, last = args.line_range.partition(":")
             try:
                 mac["startLine"] = int(first) if first else 1
                 if last:
                     mac["endLine"] = int(last)
             except ValueError:
-                fail("--lines 要写成 A:B（如 120:180），实得 " + args.line_range)
+                fail(_("--lines 要写成 A:B（如 120:180），实得 {value}").format(value=args.line_range))
         if args.head is not None:
             mac["startLine"], mac["endLine"] = 1, args.head
     elif leaf == "ln":
         request["newPath"] = args.target
     elif leaf == "write":
-        request["text"] = inline_text(args, "要写的内容")
+        request["text"] = inline_text(args, _("缺少要写的内容：用 --text、--file，或从标准输入给"))
     elif leaf == "edit":
         mac["oldText"], mac["newText"] = args.old, args.new
     elif leaf == "patch":
-        request["text"] = inline_text(args, "补丁")
+        request["text"] = inline_text(args, _("缺少补丁：用 --text、--file，或从标准输入给"))
     elif leaf == "xattr":
         mac["attributeAction"] = args.attribute_action
         if args.attribute:
             mac["attribute"] = args.attribute
         if args.attribute_action != "list" and not args.attribute:
-            fail("xattr %s 要给属性名" % args.attribute_action)
+            fail(_("xattr {action} 要给属性名").format(action=args.attribute_action))
         if args.attribute_action == "set":
             if args.value is None:
-                fail("xattr set 要给值")
+                fail(_("xattr set 要给值"))
             request["text"] = args.value
     elif leaf == "run":
         request["command"] = command_string(args)
@@ -1804,7 +3216,7 @@ def transfer_one(args, direction, local, remote, force=True):
         else:
             response = do_put(one)
     except SystemExit:
-        return {"code": "local_failure", "message": "本地这边没法传（已存在且没给 --force，或读写不了）"}
+        return {"code": "local_failure", "message": _("本地这边没法传（已存在且没给 --force，或读写不了）")}
     except BaseException as raised:      # noqa: BLE001
         return {"code": "local_failure", "message": "%s: %s" % (type(raised).__name__, raised)}
     if response.get("ok"):
@@ -1844,8 +3256,8 @@ def transfer_many(args, direction, jobs, label, after=None):
 def tree_response(verb, summary, failed, **payload):
     payload["failed"] = failed
     ok = not failed
-    message = summary if ok else summary + "；%d 个没成，见 failed" % len(failed)
-    sys.stderr.write(verb + "：" + message + "\n")
+    message = summary if ok else summary + _("；{count} 个没成，见 failed").format(count=len(failed))
+    sys.stderr.write(_("{verb}：{message}").format(verb=verb, message=message) + "\n")
     return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed",
             "message": message, "tree": payload}
 
@@ -1853,12 +3265,12 @@ def tree_response(verb, summary, failed, **payload):
 def do_mac_tree(args, direction):
     """`mac get -r` / `mac put -r`。"""
     if args.resume:
-        fail("整个目录不用 --resume：重跑一遍（加 --force）或用 `mac sync`，已经一样的文件不会重传")
+        fail(_("整个目录不用 --resume：重跑一遍（加 --force）或用 `mac sync`，已经一样的文件不会重传"))
     local = os.path.abspath(os.path.expanduser(args.local))
     started = time.time()
     if direction == "down":
         if os.path.exists(local) and not os.path.isdir(local):
-            fail("本地 %s 不是目录" % local)
+            fail(_("本地 {path} 不是目录").format(path=local))
         directories, files, links, error = remote_tree(args, args.path, None)
         if error is not None:
             return error
@@ -1869,7 +3281,7 @@ def do_mac_tree(args, direction):
                  int(entry.get("size") or 0)) for relative, entry in sorted(files.items())]
     else:
         if not os.path.isdir(local):
-            fail("本地目录不存在：" + local)
+            fail(_("本地目录不存在：{path}").format(path=local))
         directories, files, links = local_tree(local, None)
         for relative in [""] + directories:
             response = mac_call(args, "mac-mkdir", mac={"options": ["parents"]},
@@ -1881,10 +3293,11 @@ def do_mac_tree(args, direction):
     done, failed, moved = transfer_many(args, direction, jobs,
                                         ("↓ " if direction == "down" else "↑ ") + os.path.basename(local))
     seconds = round(time.time() - started, 3)
-    summary = "%d 个文件，%s，%d 个目录，%.1fs" % (len(done), human(moved), len(directories), seconds)
+    summary = _("{files} 个文件，{size}，{directories} 个目录，{seconds}s").format(
+        files=len(done), size=human(moved), directories=len(directories), seconds="%.1f" % seconds)
     if links:
-        summary += "；跳过 %d 个符号链接" % len(links)
-    return tree_response("下载完成" if direction == "down" else "上传完成", summary, failed,
+        summary += _("；跳过 {count} 个符号链接").format(count=len(links))
+    return tree_response(_("下载完成") if direction == "down" else _("上传完成"), summary, failed,
                          localPath=local, remotePath=args.path, files=len(done), bytes=moved,
                          directories=len(directories), skippedLinks=links, seconds=seconds)
 
@@ -1895,9 +3308,9 @@ def do_mac_sync(args):
     up = args.direction == "up"
     started = time.time()
     if up and not os.path.isdir(local):
-        fail("本地目录不存在：" + local)
+        fail(_("本地目录不存在：{path}").format(path=local))
     if not up and os.path.exists(local) and not os.path.isdir(local):
-        fail("本地 %s 不是目录" % local)
+        fail(_("本地 {path} 不是目录").format(path=local))
 
     local_dirs, local_files, local_links = local_tree(local, args.exclude) if os.path.isdir(local) else ([], {}, [])
     remote_dirs, remote_files, remote_links, error = remote_tree(args, args.path, args.exclude)
@@ -1932,10 +3345,11 @@ def do_mac_sync(args):
     extra = sorted(set(target) - set(source)) if args.delete else []
 
     if args.dry_run:
-        message = "要传 %d 个文件，%d 个不用动" % (len(changed), unchanged)
+        message = _("要传 {changed} 个文件，{unchanged} 个不用动").format(changed=len(changed), unchanged=unchanged)
         if extra:
-            message += "，要删 %d 个" % len(extra)
-        return {"id": str(uuid.uuid4()), "ok": True, "code": "ok", "message": message + "（--dry-run，没有动文件）",
+            message += _("，要删 {count} 个").format(count=len(extra))
+        return {"id": str(uuid.uuid4()), "ok": True, "code": "ok",
+                "message": message + _("（--dry-run，没有动文件）"),
                 "sync": {"direction": args.direction, "dryRun": True, "transfer": changed,
                          "delete": extra, "unchanged": unchanged}}
 
@@ -1988,15 +3402,17 @@ def do_mac_sync(args):
                 failed.append({"path": relative, "code": "local_write_failed", "message": str(raised)})
 
     seconds = round(time.time() - started, 3)
-    summary = "传了 %d 个文件（%s），%d 个没变" % (len(done), human(moved), unchanged)
+    summary = _("传了 {files} 个文件（{size}），{unchanged} 个没变").format(
+        files=len(done), size=human(moved), unchanged=unchanged)
     if deleted:
-        summary += "，删了 %d 个%s" % (len(deleted), "（在那台 Mac 的废纸篓里）" if up else "")
+        summary += (_("，删了 {count} 个（在那台 Mac 的废纸篓里）") if up
+                    else _("，删了 {count} 个")).format(count=len(deleted))
     links = local_links if up else remote_links
     if links:
-        summary += "；跳过 %d 个符号链接" % len(links)
+        summary += _("；跳过 {count} 个符号链接").format(count=len(links))
     ok = not failed
-    message = summary if ok else summary + "；%d 个没成，见 failed" % len(failed)
-    sys.stderr.write("同步完成：" + message + "\n")
+    message = summary if ok else summary + _("；{count} 个没成，见 failed").format(count=len(failed))
+    sys.stderr.write(_("同步完成：{message}").format(message=message) + "\n")
     return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed", "message": message,
             "sync": {"direction": args.direction, "dryRun": False, "transferred": done, "deleted": deleted,
                      "unchanged": unchanged, "bytes": moved, "failed": failed, "skippedLinks": links,
@@ -2012,7 +3428,7 @@ def mac_output(response, fmt, action):
     if action == "macs":
         rows = [[cell(item.get(c)) for c in MAC_COLUMNS] for item in mac.get("macs") or []]
         if not rows:
-            return response.get("message") or "没有配对过的 Mac"
+            return response.get("message") or _("没有配对过的 Mac")
         return render_table(MAC_COLUMNS, rows) if fmt == "table" else render_csv(MAC_COLUMNS, rows)
     if action == "mac-run":
         return run_output(response)
@@ -2020,14 +3436,14 @@ def mac_output(response, fmt, action):
         roots = mac.get("roots")
         if not roots:
             return response.get("message") or ""
-        rows = [[item.get("path", ""), "读写" if item.get("writable") else "只读"] for item in roots]
+        rows = [[item.get("path", ""), _("读写") if item.get("writable") else _("只读")] for item in roots]
         return render_table(["path", "access"], rows) if fmt == "table" else render_csv(["path", "access"], rows)
     payload = response.get("file")
     if isinstance(payload, dict):
         if payload.get("text") is not None:
             return payload["text"]
-        return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `mac get` 下载后本地处理"
-                % (payload.get("path", "?"), payload.get("bytes", "?")))
+        return _("-- {path} 不是 UTF-8 文本（{bytes} 字节）：用 `mac get` 下载后本地处理").format(
+            path=payload.get("path", "?"), bytes=payload.get("bytes", "?"))
     if action == "mac-grep":
         matches = mac.get("matches") or []
         if fmt == "csv":
@@ -2065,7 +3481,7 @@ def mac_output(response, fmt, action):
             body += "\n-- " + (response.get("message") or "")
         return body
     if action == "mac-xattr" and mac.get("names") is not None:
-        return "\n".join(mac["names"]) or "（没有扩展属性）"
+        return "\n".join(mac["names"]) or _("（没有扩展属性）")
     if action == "mac-wait-change" and mac.get("names"):
         return "\n".join(mac["names"]) + "\n-- " + (response.get("message") or "")
     if action in ("mac-get", "mac-put", "mac-sync"):
@@ -2084,7 +3500,7 @@ def render_transfer(response, fmt):
     if fmt == "json" or not response.get("ok"):
         return as_json(response)
     transfer = response.get("transfer") or {}
-    header = ["字段", "值"]
+    header = [_("字段"), _("值")]
     rows = [[key, cell(transfer.get(key))] for key in TRANSFER_COLUMNS]
     return render_table(header, rows) if fmt == "table" else render_csv(header, rows)
 
@@ -2096,7 +3512,7 @@ def cell(value):
         # false 必须画成「否」而不是空白：空白与「字段缺失」（"-"）分不开，
         # hosts 的 sftpOnly / cliConnected、terminals 的 isKeyWindowFocused、
         # forward list 的 autostart 在表格里本来整列都是空的。
-        return "是" if value else "否"
+        return _("是") if value else _("否")
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return str(value)
@@ -2206,9 +3622,9 @@ def run_output(response):
         if body:
             blocks.append(body.rstrip("\n"))
         if item.get("truncated"):
-            blocks.append("-- 输出已截断（--max-lines / --max-bytes 可放宽）")
+            blocks.append(_("-- 输出已截断（--max-lines / --max-bytes 可放宽）"))
         if item.get("timedOut"):
-            blocks.append("-- 已超时；**命令可能还在远端继续跑**")
+            blocks.append(_("-- 已超时；**命令可能还在远端继续跑**"))
     return "\n".join(blocks)
 
 
@@ -2219,7 +3635,7 @@ def terminal_run_output(response):
     if run.get("output"):
         parts.append(run["output"])
     if run.get("truncated"):
-        parts.append("-- 输出太长，只给了最后一段")
+        parts.append(_("-- 输出太长，只给了最后一段"))
     state = run.get("state", "?")
     if run.get("exitCode") is not None:
         state += "  exit=%s" % run["exitCode"]
@@ -2243,7 +3659,7 @@ def relay_output(response, fmt):
     check = relay.get("check") or {}
     rows = [[key, cell(relay.get(key))] for key in RELAY_FIELDS]
     rows += [["check." + key, cell(check.get(key))] for key in RELAY_CHECK_FIELDS if check]
-    header = ["字段", "值"]
+    header = [_("字段"), _("值")]
     table = render_table(header, rows) if fmt == "table" else render_csv(header, rows)
     return (response.get("message") or "") + "\n\n" + table
 
@@ -2275,10 +3691,10 @@ def render(response, fmt, args):
         if payload.get("text") is not None:
             body = payload["text"]
             if payload.get("truncated"):
-                body += "\n-- 内容不完整：读取期间远端文件变大了"
+                body += _("\n-- 内容不完整：读取期间远端文件变大了")
             return body
-        return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `sftp get` 下载后本地处理"
-                % (payload.get("path", "?"), payload.get("bytes", "?")))
+        return _("-- {path} 不是 UTF-8 文本（{bytes} 字节）：用 `sftp get` 下载后本地处理").format(
+            path=payload.get("path", "?"), bytes=payload.get("bytes", "?"))
 
     run = response.get("run")
     if isinstance(run, dict):
@@ -2288,7 +3704,7 @@ def render(response, fmt, args):
     if isinstance(screen, dict):
         body = "\n".join(screen.get("lines") or [])
         if screen.get("truncated"):
-            body += "\n-- 读屏已截断"
+            body += _("\n-- 读屏已截断")
         return body
 
     if action in ("run", "run-many", "quick-run"):

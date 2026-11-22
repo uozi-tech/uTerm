@@ -31,7 +31,7 @@ extension ControlHandler {
     func handleRelay(_ request: ControlRequest, _ deps: Dependencies) async throws -> ControlResponse {
         if request.action == .relayInstallCommand { return try Self.relayInstallCommand(request) }
         guard let relay = deps.relay else {
-            throw ControlFailure(code: .app_not_ready, message: "远程控制服务还没有启动")
+            throw ControlFailure(code: .app_not_ready, message: String(localized: "远程控制服务还没有启动"))
         }
         switch request.action {
         case .relayImport:
@@ -39,7 +39,7 @@ extension ControlHandler {
         case .relayCheck:
             return try await checkRelay(request, deps, relay: relay)
         default:
-            throw ControlFailure(code: .invalid_request, message: "动作 \(request.action.rawValue) 不属于中继组")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "动作 \(request.action.rawValue) 不属于中继组"))
         }
     }
 
@@ -49,7 +49,7 @@ extension ControlHandler {
                              relay: any ControlRelayManaging) async throws -> ControlResponse {
         let needle = (request.host ?? "").trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else {
-            throw ControlFailure(code: .invalid_request, message: "relay-import 需要 --host：装着中继的那台已保存主机")
+            throw ControlFailure(code: .invalid_request, message: String(localized: "relay-import 需要 --host：装着中继的那台已保存主机"))
         }
         let profile = try resolveHost(needle)
         let path = Self.relayConfigPath(request.path)
@@ -76,19 +76,19 @@ extension ControlHandler {
 
         guard let config = RemoteRelayConfig(importing: data) else {
             throw ControlFailure(code: .relay_config_invalid,
-                                 message: "\(profile.name):\(path) 不是 uterm-relay 的设备配置。用安装脚本的 client-config 重新生成。")
+                                 message: String(localized: "\(profile.name):\(path) 不是 uterm-relay 的设备配置。用安装脚本的 client-config 重新生成。"))
         }
         if let existing = relay.loadRelayConfig(), existing.relayID != config.relayID, request.force != true {
             throw ControlFailure(code: .relay_exists,
-                                 message: "uTerm 已经导入了另一台中继「\(existing.name)」（\(existing.endpointDescription)）。问过用户确定要换，再加 --replace。")
+                                 message: String(localized: "uTerm 已经导入了另一台中继「\(existing.name)」（\(existing.endpointDescription)）。问过用户确定要换，再加 --replace。"))
         }
         guard relay.importRelayConfig(config) else {
-            throw ControlFailure(code: .operation_failed, message: "保存中继配置到钥匙串失败")
+            throw ControlFailure(code: .operation_failed, message: String(localized: "保存中继配置到钥匙串失败"))
         }
         relay.relayManagedHosts.set(profile.id, for: config.relayID)
         return .success(
             id: request.id,
-            message: "已导入中继「\(config.name)」（\(config.endpointDescription)），由主机 \(profile.name) 管理。接着运行 relay check 测试连通。",
+            message: String(localized: "已导入中继「\(config.name)」（\(config.endpointDescription)），由主机 \(profile.name) 管理。接着运行 relay check 测试连通。"),
             relay: relayInfo(config, relay: relay, deps: deps)
         )
     }
@@ -104,13 +104,13 @@ extension ControlHandler {
     private static func readFailureMessage(code: ControlErrorCode, path: String, host: String, detail: String) -> String {
         switch code {
         case .file_not_found:
-            return "\(host) 上没有 \(path)。中继装好了吗？安装脚本的 install（或装过以后的 client-config）会以当前 SSH 用户写这个文件。"
+            return String(localized: "\(host) 上没有 \(path)。中继装好了吗？安装脚本的 install（或装过以后的 client-config）会以当前 SSH 用户写这个文件。")
         case .permission_denied:
-            return "\(host) 上的 \(path) 读不了（权限不够）。它应该属于 SSH 登录用户；用安装脚本的 client-config 重新生成。"
+            return String(localized: "\(host) 上的 \(path) 读不了（权限不够）。它应该属于 SSH 登录用户；用安装脚本的 client-config 重新生成。")
         case .file_too_large:
-            return "\(host) 上的 \(path) 太大，不是中继的设备配置"
+            return String(localized: "\(host) 上的 \(path) 太大，不是中继的设备配置")
         default:
-            return "读取 \(host):\(path) 失败：\(detail)"
+            return String(localized: "读取 \(host):\(path) 失败：\(detail)")
         }
     }
 
@@ -124,8 +124,7 @@ extension ControlHandler {
             : RemoteRelayRelease.remoteCommand(arguments)
         guard let command else {
             throw ControlFailure(code: .relay_release_unavailable,
-                                 message: "这个 uTerm 构建没有配置中继的发布地址，不能一键安装。"
-                                     + "按 uTerm 仓库的 relay/README.md 从源码编译部署 uterm-relay。")
+                                 message: String(localized: "这个 uTerm 构建没有配置中继的发布地址，不能一键安装。按 uTerm 仓库的 relay/README.md 从源码编译部署 uterm-relay。"))
         }
         return .success(id: request.id, message: command)
     }
@@ -136,7 +135,7 @@ extension ControlHandler {
                             relay: any ControlRelayManaging) async throws -> ControlResponse {
         guard let config = relay.loadRelayConfig() else {
             throw ControlFailure(code: .relay_not_configured,
-                                 message: "uTerm 还没有导入中继。先在装好中继的主机上跑 relay import --host <主机>。")
+                                 message: String(localized: "uTerm 还没有导入中继。先在装好中继的主机上跑 relay import --host <主机>。"))
         }
         let result = await RemoteRelayCheck.run(config: config)
         if result.tcp == .ok {
@@ -156,14 +155,19 @@ extension ControlHandler {
     static func checkSummary(_ result: RemoteRelayCheckResult) -> String {
         func mark(_ outcome: RemoteRelayCheckResult.Outcome) -> String {
             switch outcome {
-            case .ok: return "通"
-            case .failed: return "不通"
-            case .skipped: return "未测"
+            case .ok: return String(localized: "通", comment: "中继连通性检查的一项：通过")
+            case .failed: return String(localized: "不通", comment: "中继连通性检查的一项：失败")
+            case .skipped: return String(localized: "未测", comment: "中继连通性检查的一项：没测")
             }
         }
-        var line = "TCP \(mark(result.tcp)) · 认证 \(mark(result.auth)) · UDP \(mark(result.udp))"
-        if let rtt = result.rttMs { line += " · 往返 \(rtt) ms" }
-        if let version = result.serverVersion { line += " · 中继 \(version)" }
+        var parts = [
+            String(localized: "TCP \(mark(result.tcp))", comment: "中继检查摘要的一段，值是「通 / 不通 / 未测」"),
+            String(localized: "认证 \(mark(result.auth))", comment: "中继检查摘要的一段，值是「通 / 不通 / 未测」"),
+            String(localized: "UDP \(mark(result.udp))", comment: "中继检查摘要的一段，值是「通 / 不通 / 未测」"),
+        ]
+        if let rtt = result.rttMs { parts.append(String(localized: "往返 \(String(rtt)) ms")) }
+        if let version = result.serverVersion { parts.append(String(localized: "中继 \(version)", comment: "中继检查摘要的一段，值是中继的版本号")) }
+        let line = parts.joined(separator: " · ")
         guard !result.problems.isEmpty else { return line }
         return ([line] + result.problems).joined(separator: "\n")
     }

@@ -456,9 +456,9 @@ nonisolated enum RemoteDesktopCaptureError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .displayNotFound: return "找不到要采集的显示器"
-        case .windowNotFound: return "找不到要看的窗口，它可能已经关闭或挪到了别的桌面"
-        case .heldByScreenSharing: return "这台 Mac 正被系统「屏幕共享」连着，它独占了显示器。断开屏幕共享后再试"
+        case .displayNotFound: return String(localized: "找不到要采集的显示器")
+        case .windowNotFound: return String(localized: "找不到要看的窗口，它可能已经关闭或挪到了别的桌面")
+        case .heldByScreenSharing: return String(localized: "这台 Mac 正被系统「屏幕共享」连着，它独占了显示器。断开屏幕共享后再试")
         }
     }
 }

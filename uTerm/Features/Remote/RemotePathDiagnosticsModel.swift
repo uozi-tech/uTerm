@@ -44,11 +44,14 @@ final class RemotePathDiagnosticsModel {
     }
 
     var progressText: String {
-        guard current.count < currentTotal, !plannedModes.isEmpty else { return "收尾中…" }
+        guard current.count < currentTotal, !plannedModes.isEmpty else { return String(localized: "收尾中…") }
         let index = current.count
         let rounds = currentTotal / plannedModes.count
-        let round = rounds > 1 ? "第 \(index / plannedModes.count + 1) 轮 · " : ""
-        return "\(round)正在测试\(plannedModes[index % plannedModes.count].label)（\(index + 1)/\(currentTotal)）"
+        let mode = plannedModes[index % plannedModes.count].label
+        let step = index + 1
+        guard rounds > 1 else { return String(localized: "正在测试\(mode)（\(step)/\(currentTotal)）") }
+        let round = index / plannedModes.count + 1
+        return String(localized: "第 \(round) 轮 · 正在测试\(mode)（\(step)/\(currentTotal)）")
     }
 
     func reloadHistory() {

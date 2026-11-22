@@ -111,17 +111,15 @@ extension ControlConnectError {
     func message(host: String) -> String {
         switch self {
         case .hostKeyUnknown(let fingerprint, _):
-            return "主机「\(host)」的密钥尚未信任（\(fingerprint)）。"
-                + "请让用户核对指纹，确认无误后跑 `utermctl trust -H \(host) --fingerprint \(fingerprint)`。"
+            return String(localized: "主机「\(host)」的密钥尚未信任（\(fingerprint)）。请让用户核对指纹，确认无误后跑 `utermctl trust -H \(host) --fingerprint \(fingerprint)`。")
         case .hostKeyChanged(let fingerprint, _):
-            return "主机「\(host)」的密钥与信任库里的记录不一致（当前 \(fingerprint)）。"
-                + "这可能是中间人攻击。CLI 不允许覆盖，请到 uTerm 界面里连接一次并由用户处理。"
+            return String(localized: "主机「\(host)」的密钥与信任库里的记录不一致（当前 \(fingerprint)）。这可能是中间人攻击。CLI 不允许覆盖，请到 uTerm 界面里连接一次并由用户处理。")
         case .connectFailed(let reason):
-            return "连接「\(host)」失败：\(reason)"
+            return String(localized: "连接「\(host)」失败：\(reason)")
         case .authFailed(let reason):
-            return "「\(host)」认证失败：\(reason)"
+            return String(localized: "「\(host)」认证失败：\(reason)")
         case .released(let reason):
-            return "「\(host)」的连接在建立过程中被释放（\(reason)），请重试。"
+            return String(localized: "「\(host)」的连接在建立过程中被释放（\(reason)），请重试。")
         }
     }
 
@@ -162,8 +160,7 @@ nonisolated struct SFTPChannelsBusyError: Error, Sendable, Equatable {
     let waitedSeconds: Double
 
     func message(host: String) -> String {
-        "主机「\(host)」的 SFTP 通道已满（\(limit) 条全在传输中），"
-            + "等待 \(Int(waitedSeconds.rounded())) 秒仍未排到，请稍后重试。"
+        String(localized: "主机「\(host)」的 SFTP 通道已满（\(limit) 条全在传输中），等待 \(Int(waitedSeconds.rounded())) 秒仍未排到，请稍后重试。")
     }
 }
 

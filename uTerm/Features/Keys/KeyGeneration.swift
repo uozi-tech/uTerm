@@ -27,7 +27,7 @@ enum KeyGeneration {
         keyStore: KeyStore = KeyStore()
     ) async -> Result<SSHKey, Failure> {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return .failure(.failed("名称不能为空")) }
+        guard !trimmedName.isEmpty else { return .failure(.failed(String(localized: "名称不能为空"))) }
         let trimmedComment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let generated: SSHKeyGenerator.GeneratedKey
@@ -72,7 +72,7 @@ enum KeyGeneration {
     /// 给用户看的失败文案：优先取 `LocalizedError.errorDescription`。
     nonisolated static func message(for error: Error) -> String {
         let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        return "生成失败：\(detail)"
+        return String(localized: "生成失败：\(detail)")
     }
 
     private nonisolated static func generate(

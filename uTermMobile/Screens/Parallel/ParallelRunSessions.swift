@@ -26,10 +26,11 @@ final class ParallelRunSession: Identifiable {
 
     /// 一句话进度：「完成 3/12 · 1 失败」。
     var progressText: String {
-        guard let c = controller else { return "准备中…" }
-        var s = "完成 \(c.doneCount)/\(c.total)"
-        if c.failedCount > 0 { s += " · \(c.failedCount) 失败" }
-        return s
+        guard let c = controller else { return String(localized: "准备中…") }
+        if c.failedCount > 0 {
+            return String(localized: "完成 \(c.doneCount)/\(c.total) · \(c.failedCount) 失败")
+        }
+        return String(localized: "完成 \(c.doneCount)/\(c.total)")
     }
 }
 
@@ -104,7 +105,7 @@ final class ParallelBackgroundKeeper {
             // 单调不减：重新运行 / 新开一批会让「完成量」回落，回落不报（系统按「没进展」算会收回任务）。
             reported = min(total, max(reported, done))
             let first = running[0]
-            let title = running.count == 1 ? first.title : "\(first.title) 等 \(running.count) 个"
+            let title = running.count == 1 ? first.title : String(localized: "\(first.title) 等 \(running.count) 个")
             lease.report(total: total, completed: reported, title: title, subtitle: first.progressText)
         }
         return true
@@ -156,7 +157,7 @@ final class ParallelBackgroundKeeper {
     @available(iOS 26.0, *)
     private func submitContinuedTask(title: String) {
         // 已经有一个在跑 / 在排队：沿用，标题由 tick 更新。现在跑不了：退到后台时走 beginBackgroundTask。
-        lease.submit(title: title, subtitle: "准备中…")
+        lease.submit(title: title, subtitle: String(localized: "准备中…"))
     }
 
     // MARK: 兜底：beginBackgroundTask
@@ -190,8 +191,8 @@ final class ParallelBackgroundKeeper {
             let content = UNMutableNotificationContent()
             content.title = c.commandName
             content.body = c.failedCount == 0
-                ? "\(c.total) 台全部执行成功。"
-                : "\(c.total) 台中 \(c.total - c.failedCount) 台成功，\(c.failedCount) 台失败。"
+                ? String(localized: "\(c.total) 台全部执行成功。")
+                : String(localized: "\(c.total) 台中 \(c.total - c.failedCount) 台成功，\(c.failedCount) 台失败。")
             content.sound = .default
             UNUserNotificationCenter.current().add(
                 UNNotificationRequest(identifier: "parallel-\(session.id)", content: content, trigger: nil))

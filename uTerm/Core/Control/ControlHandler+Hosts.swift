@@ -21,7 +21,7 @@ extension ControlHandler {
         default:
             throw ControlFailure(
                 code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于主机组"
+                message: String(localized: "动作 \(request.action.rawValue) 不属于主机组")
             )
         }
     }
@@ -39,8 +39,8 @@ extension ControlHandler {
         return .success(
             id: request.id,
             message: snapshots.isEmpty
-                ? "还没有保存任何主机（在 uTerm 里新建一台后再试）"
-                : "共 \(snapshots.count) 台主机",
+                ? String(localized: "还没有保存任何主机（在 uTerm 里新建一台后再试）")
+                : String(localized: "共 \(snapshots.count) 台主机"),
             hosts: snapshots
         )
     }
@@ -58,8 +58,7 @@ extension ControlHandler {
         guard let newest = known.first else {
             return .success(
                 id: request.id,
-                message: "主机「\(profile.name)」的密钥尚未信任。跑一次 `run` 会拿到指纹，"
-                    + "核对无误后用 `trust --fingerprint` 钉住。",
+                message: String(localized: "主机「\(profile.name)」的密钥尚未信任。跑一次 `run` 会拿到指纹，核对无误后用 `trust --fingerprint` 钉住。"),
                 hostKey: ControlHostKeyInfo(host: endpoint, status: "unknown")
             )
         }
@@ -69,8 +68,8 @@ extension ControlHandler {
         return .success(
             id: request.id,
             message: consistent
-                ? "主机「\(profile.name)」的密钥已在信任库里"
-                : "主机「\(profile.name)」在信任库里有 \(known.count) 条互相冲突的记录，请到 uTerm 界面里处理",
+                ? String(localized: "主机「\(profile.name)」的密钥已在信任库里")
+                : String(localized: "主机「\(profile.name)」在信任库里有 \(known.count) 条互相冲突的记录，请到 uTerm 界面里处理"),
             hostKey: ControlHostKeyInfo(
                 host: endpoint,
                 algorithm: newest.keyTypeRaw.isEmpty ? nil : newest.keyTypeRaw,
@@ -101,15 +100,14 @@ extension ControlHandler {
         guard let fingerprint = Self.trimmed(request.fingerprint) else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "缺少 --fingerprint：trust 必须钉住一个指纹，不接受「信任任何新密钥」"
+                message: String(localized: "缺少 --fingerprint：trust 必须钉住一个指纹，不接受「信任任何新密钥」")
             )
         }
 
         guard let challenge = await deps.pool.lastHostKeyChallenge(hostID: profile.id) else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "还没有主机「\(profile.name)」的待信任指纹。"
-                    + "先跑一次 `utermctl run -H \(profile.name) -- true` 触发建连拿到指纹，再来 trust。"
+                message: String(localized: "还没有主机「\(profile.name)」的待信任指纹。先跑一次 `utermctl run -H \(profile.name) -- true` 触发建连拿到指纹，再来 trust。")
             )
         }
 
@@ -117,8 +115,7 @@ extension ControlHandler {
             return .failure(
                 id: request.id,
                 code: .host_key_changed,
-                message: "主机「\(profile.name)」的密钥与信任库里的记录不一致（当前 \(challenge.newFingerprint)）。"
-                    + "这可能是中间人攻击。CLI 不允许覆盖已信任的主机密钥，请由用户在 uTerm 界面里处理。",
+                message: String(localized: "主机「\(profile.name)」的密钥与信任库里的记录不一致（当前 \(challenge.newFingerprint)）。这可能是中间人攻击。CLI 不允许覆盖已信任的主机密钥，请由用户在 uTerm 界面里处理。"),
                 hostKey: ControlHostKeyInfo(
                     host: endpoint,
                     fingerprint: challenge.newFingerprint,
@@ -131,8 +128,7 @@ extension ControlHandler {
             return .failure(
                 id: request.id,
                 code: .host_key_mismatch,
-                message: "指纹对不上：主机「\(profile.name)」当前出示的是 \(challenge.newFingerprint)，"
-                    + "而你要钉住的是 \(fingerprint)。请让用户核对后重试。",
+                message: String(localized: "指纹对不上：主机「\(profile.name)」当前出示的是 \(challenge.newFingerprint)，而你要钉住的是 \(fingerprint)。请让用户核对后重试。"),
                 hostKey: ControlHostKeyInfo(
                     host: endpoint,
                     fingerprint: challenge.newFingerprint,
@@ -150,7 +146,7 @@ extension ControlHandler {
 
         return .success(
             id: request.id,
-            message: "已信任主机「\(profile.name)」的密钥 \(fingerprint)",
+            message: String(localized: "已信任主机「\(profile.name)」的密钥 \(fingerprint)"),
             hostKey: ControlHostKeyInfo(
                 host: endpoint,
                 fingerprint: fingerprint,
@@ -169,11 +165,11 @@ extension ControlHandler {
     ) async throws -> ControlResponse {
         guard let needle = Self.trimmed(request.host) else {
             await deps.pool.disconnectAll()
-            return .success(id: request.id, message: "已释放 CLI 持有的全部主机连接")
+            return .success(id: request.id, message: String(localized: "已释放 CLI 持有的全部主机连接"))
         }
         let profile = try resolveHost(needle)
         await deps.pool.disconnect(hostID: profile.id)
-        return .success(id: request.id, message: "已释放对主机「\(profile.name)」的连接")
+        return .success(id: request.id, message: String(localized: "已释放对主机「\(profile.name)」的连接"))
     }
 
     // MARK: - 解析
@@ -187,7 +183,7 @@ extension ControlHandler {
     /// - Important: 所有需要主机的动作都必须经此入口，不要各自 fetch。
     func resolveHost(_ needle: String) throws(ControlFailure) -> ServerProfile {
         guard let deps = dependencies else {
-            throw ControlFailure(code: .app_not_ready, message: "uTerm 尚未完成启动")
+            throw ControlFailure(code: .app_not_ready, message: String(localized: "uTerm 尚未完成启动"))
         }
         return try resolveHost(needle, in: sortedProfiles(deps), deps)
     }
@@ -205,7 +201,7 @@ extension ControlHandler {
         guard !trimmed.isEmpty else {
             throw ControlFailure(
                 code: .invalid_request,
-                message: "缺少 --host（先跑 `utermctl hosts` 看有哪些主机）"
+                message: String(localized: "缺少 --host（先跑 `utermctl hosts` 看有哪些主机）")
             )
         }
         let candidates = profiles.map { HostResolver.Candidate(id: $0.id, name: $0.name) }
@@ -214,7 +210,7 @@ extension ControlHandler {
             guard let profile = profiles.first(where: { $0.id == id }) else {
                 throw ControlFailure(
                     code: .host_not_found,
-                    message: "没有名为「\(trimmed)」的主机"
+                    message: String(localized: "没有名为「\(trimmed)」的主机")
                 )
             }
             return profile
@@ -225,17 +221,16 @@ extension ControlHandler {
             let snapshots = profiles
                 .filter { ids.contains($0.id) }
                 .map { hostSnapshot($0, held: [], deps) }
+            let names = matches.map(\.name).joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
             throw ControlFailure(
                 code: .host_ambiguous,
-                message: "「\(trimmed)」匹配到 \(matches.count) 台主机："
-                    + matches.map(\.name).joined(separator: "、")
-                    + "。改用响应里的 UUID 重试。",
+                message: String(localized: "「\(trimmed)」匹配到 \(matches.count) 台主机：\(names)。改用响应里的 UUID 重试。"),
                 hosts: snapshots
             )
         case .notFound:
             throw ControlFailure(
                 code: .host_not_found,
-                message: "没有名为「\(trimmed)」的主机（跑 `utermctl hosts` 看有哪些）"
+                message: String(localized: "没有名为「\(trimmed)」的主机（跑 `utermctl hosts` 看有哪些）")
             )
         }
     }
@@ -250,7 +245,7 @@ extension ControlHandler {
         guard action.requiresExecCapableHost, profile.sftpOnly else { return }
         throw ControlFailure(
             code: .host_sftp_only,
-            message: "主机「\(profile.name)」被标记为仅 SFTP，不允许执行命令或操作终端"
+            message: String(localized: "主机「\(profile.name)」被标记为仅 SFTP，不允许执行命令或操作终端")
         )
     }
 
@@ -334,7 +329,7 @@ extension ControlHandler {
             return .failure(
                 id: id,
                 code: .connect_failed,
-                message: "连接「\(profile.name)」失败：\(FriendlyError.describe(error))"
+                message: String(localized: "连接「\(profile.name)」失败：\(FriendlyError.describe(error))")
             )
         }
         return response(for: connect, id: id, host: profile.name)

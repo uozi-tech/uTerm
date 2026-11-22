@@ -56,7 +56,7 @@ struct SFTPWindowView: View {
         if windowID != nil, let server {
             sftpBody(server: server)
         } else {
-            placeholder(windowID == nil ? "正在恢复…" : "主机已删除",
+            placeholder(windowID == nil ? String(localized: "正在恢复…") : String(localized: "主机已删除"),
                         systemImage: windowID == nil ? "clock" : "server.rack")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: .top)
@@ -345,9 +345,9 @@ struct SFTPStatusPill: View {
 
     private var info: (text: String, color: Color) {
         switch state {
-        case .browsing:          return ("已连接", UD.success)
-        case .connecting, .idle: return ("连接中", UD.warning)
-        case .failed:            return ("连接失败", UD.danger)
+        case .browsing:          return (String(localized: "已连接"), UD.success)
+        case .connecting, .idle: return (String(localized: "连接中"), UD.warning)
+        case .failed:            return (String(localized: "连接失败"), UD.danger)
         }
     }
 

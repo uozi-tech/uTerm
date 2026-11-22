@@ -14,18 +14,18 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsPageHeader(title: "通用",
+            SettingsPageHeader(title: String(localized: "通用", comment: "设置分区"),
                                subtitle: appUpdater.isAvailable ? String(localized: "启动与更新") : String(localized: "启动"))
 
-            SettingsGroup(title: "启动") {
-                SettingsRow(label: "启动时",
-                            hint: "打开 uTerm 时首先展示的页面") {
+            SettingsGroup(title: String(localized: "启动", comment: "设置分组：App 启动行为")) {
+                SettingsRow(label: String(localized: "启动时", comment: "设置项：App 启动时显示什么"),
+                            hint: String(localized: "打开 uTerm 时首先展示的页面")) {
                     UDSegmented(
                         selection: $startupBehaviorRaw.rawValue(StartupBehavior.self, default: .welcome),
                         options: StartupBehavior.allCases.map { ($0, $0.localizedLabel) })
                 }
-                SettingsRow(label: "恢复终端会话",
-                            hint: "启动时重新加载上次工作区的标签页与分屏布局") {
+                SettingsRow(label: String(localized: "恢复终端会话"),
+                            hint: String(localized: "启动时重新加载上次工作区的标签页与分屏布局")) {
                     UDToggle($restoreTerminalSession)
                 }
             }
@@ -38,8 +38,8 @@ struct GeneralSettingsView: View {
 
     /// 没配更新源的构建（公开仓库默认如此）没有这一组。
     private var updateGroup: some View {
-        SettingsGroup(title: "更新") {
-            SettingsRow(label: "自动检查更新") {
+        SettingsGroup(title: String(localized: "更新", comment: "设置分组：App 更新")) {
+            SettingsRow(label: String(localized: "自动检查更新")) {
                 UDToggle(Binding(
                     get: { appUpdater.automaticallyChecksForUpdates },
                     set: { appUpdater.automaticallyChecksForUpdates = $0 }
@@ -48,7 +48,7 @@ struct GeneralSettingsView: View {
             SettingsListRow(icon: "arrow.down.circle", tint: UD.accent,
                             title: "uTerm \(AppUpdater.currentVersionString)",
                             subtitle: lastCheckLine) {
-                UDButton(title: "检查更新", style: .secondary) {
+                UDButton(title: String(localized: "检查更新"), style: .secondary) {
                     appUpdater.checkForUpdates()
                 }
                 .disabled(!appUpdater.canCheckForUpdates)

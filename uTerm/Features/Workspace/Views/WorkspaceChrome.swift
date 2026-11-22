@@ -14,19 +14,21 @@ enum ServerChromeTitle {
     }
 
     nonisolated static func terminalWindowTitle(serverName: String, groupName: String?) -> String {
-        windowTitle(serverTitle(serverName: serverName, groupName: groupName), kind: "终端")
+        windowTitle(serverTitle(serverName: serverName, groupName: groupName),
+                    kind: String(localized: "终端", comment: "窗口类型，用于窗口标题「主机 — 终端」"))
     }
 
     nonisolated static func portForwardWindowTitle(serverName: String, groupName: String?) -> String {
-        windowTitle(serverTitle(serverName: serverName, groupName: groupName), kind: "端口转发")
+        windowTitle(serverTitle(serverName: serverName, groupName: groupName),
+                    kind: String(localized: "端口转发", comment: "窗口类型，用于窗口标题「主机 — 端口转发」"))
     }
 
     nonisolated static func parallelRunWindowTitle(commandName: String?) -> String {
-        windowTitle(commandName ?? "", kind: "并行执行")
+        windowTitle(commandName ?? "", kind: String(localized: "并行执行", comment: "窗口类型，用于窗口标题"))
     }
 
     nonisolated static func localShellWindowTitle(tabTitle: String?) -> String {
-        windowTitle(tabTitle ?? "", kind: "本机终端")
+        windowTitle(tabTitle ?? "", kind: String(localized: "本机终端", comment: "窗口类型，用于窗口标题"))
     }
 
     /// Dock 菜单、「窗口」菜单和调度中心列出的窗口标题：内容在前、窗口类型在后，
@@ -115,19 +117,20 @@ struct WorkspaceTitleBar: View {
                 // 让位窗口红绿灯（标准位 ~x13–68）。
                 Color.clear.frame(width: 68)
                 WSIconButton(systemName: "sidebar.leading",
-                             help: "显示/隐藏文件（⌥⌘1）",
+                             help: String(localized: "显示/隐藏文件（⌥⌘1）"),
                              action: onToggleSidebar)
                 Spacer()
                 // 右侧图标簇：Agent 聊天气泡 + 端口转发 + 设置齿轮（对齐 Cursor 右上）。
                 WSIconButton(systemName: inspectorPresented ? "bubble.left.fill" : "bubble.left",
-                             help: inspectorPresented ? "隐藏 Agent（⌥⌘2）" : "显示 Agent（⌥⌘2）",
+                             help: inspectorPresented ? String(localized: "隐藏 Agent（⌥⌘2）")
+                                                      : String(localized: "显示 Agent（⌥⌘2）"),
                              selected: inspectorPresented,
                              action: onToggleInspector)
                 // 端口转发：有活跃隧道时右上角叠计数徽章（ZStack .topTrailing + 小偏移，
                 // 避免徽章溢出 38px 栏；clipping 关掉让徽章可探出按钮命中框外）。
                 ZStack(alignment: .topTrailing) {
                     WSIconButton(systemName: "arrow.left.arrow.right",
-                                 help: "端口转发",
+                                 help: String(localized: "端口转发"),
                                  action: onOpenForwarding)
                     if activeForwardCount > 0 {
                         UDCountBadge(activeForwardCount, accent: true)
@@ -137,7 +140,7 @@ struct WorkspaceTitleBar: View {
                     }
                 }
                 WSIconButton(systemName: "gearshape",
-                             help: "设置（⌘,）",
+                             help: String(localized: "设置（⌘,）"),
                              action: onOpenSettings)
             }
             .padding(.horizontal, 8)
@@ -198,7 +201,7 @@ struct WSCanvasTab<Leading: View>: View {
     let active: Bool
     /// 激活胶囊的底色 = 下面内容卡的颜色（SFTP 是 `UD.panel`，终端是终端底色）。
     var activeFill: Color = UD.panel
-    var closeHelp = "关闭标签页"
+    var closeHelp = String(localized: "关闭标签页")
     let onSelect: () -> Void
     let onClose: () -> Void
     @ViewBuilder let leading: (_ active: Bool) -> Leading

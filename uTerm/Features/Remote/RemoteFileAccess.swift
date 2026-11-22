@@ -17,9 +17,9 @@ nonisolated struct RemoteFileAccess: Sendable {
     }
 
     static let unavailable = RemoteFileAccess(
-        refusal: { _ in RemoteFileError(.disabled, "这台 Mac 不支持远程访问文件") },
+        refusal: { _ in RemoteFileError(.disabled, String(localized: "这台 Mac 不支持远程访问文件")) },
         perform: { payload in
             RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
-                                               RemoteFileError(.disabled, "这台 Mac 不支持远程访问文件")), compress: false)
+                                               RemoteFileError(.disabled, String(localized: "这台 Mac 不支持远程访问文件"))), compress: false)
         })
 }

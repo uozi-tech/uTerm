@@ -28,9 +28,9 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
 
     var localizedLabel: String {
         switch self {
-        case .light:  return "浅色"
-        case .dark:   return "深色"
-        case .system: return "跟随系统"
+        case .light:  return String(localized: "浅色", comment: "外观：浅色主题")
+        case .dark:   return String(localized: "深色", comment: "外观：深色主题")
+        case .system: return String(localized: "跟随系统")
         }
     }
 

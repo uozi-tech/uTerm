@@ -10,8 +10,8 @@ struct SettingsDiagnosticsSection: View {
     }
 
     var body: some View {
-        MInsetGroup(header: "诊断", footer: LogLevel.settingsHint) {
-            MInsetRow(icon: "diag", label: "日志等级", last: true,
+        MInsetGroup(header: String(localized: "诊断"), footer: LogLevel.settingsHint) {
+            MInsetRow(icon: "diag", label: String(localized: "日志等级"), last: true,
                       trailing: AnyView(
                           MMenu {
                               ForEach(LogLevel.allCases) { level in
@@ -37,8 +37,8 @@ private struct DebugLayoutDiagnosticsGroup: View {
     @AppStorage(MLayoutDiagnostics.key) private var layoutDiagnostics = false
 
     var body: some View {
-        MInsetGroup(header: "调试", footer: "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。") {
-            MInsetRow(label: "布局诊断", last: true,
+        MInsetGroup(header: String(localized: "调试"), footer: String(localized: "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。")) {
+            MInsetRow(label: String(localized: "布局诊断"), last: true,
                       trailing: AnyView(MSwitch(on: $layoutDiagnostics)))
         }
     }

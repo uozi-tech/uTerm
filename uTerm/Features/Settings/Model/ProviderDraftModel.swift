@@ -63,7 +63,7 @@ final class ProviderDraftModel {
             keySaved = true
             hasKey = true
         } catch {
-            keySaveError = "保存到钥匙串失败：\(errorDescription(error))"
+            keySaveError = String(localized: "保存到钥匙串失败：\(errorDescription(error))")
             keySaved = false
         }
     }

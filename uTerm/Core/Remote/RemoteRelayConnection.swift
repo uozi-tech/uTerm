@@ -97,28 +97,28 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .unreachable(let reason): return "无法连接中继：\(reason)"
+        case .unreachable(let reason): return String(localized: "无法连接中继：\(reason)")
         case .refused(let reason): return Self.describe(reason)
-        case .timeout: return "中继没有响应（网络可能刚切换或信号太差）"
-        case .noReply: return "Mac 没有回应。它可能已睡眠、没有允许这台设备经公网连接，或者网络太差"
-        case .malformed: return "中继的回应无法识别"
-        case .closed: return "连接已断开"
-        case .rejected: return "中继没有接受这份配置（成员密钥不对、配置不属于这台中继，或版本不一致），需要重新导入"
-        case .macOffline: return "Mac 不在线。它可能已睡眠，或者没有打开「允许经公网接入」"
-        case .notAllowed: return "这台设备还不能经公网连接。在 Mac 的「设置 › 远程控制」里的「允许经公网连接的设备」中勾选它"
-        case .notConfigured: return "还没有配置中继"
+        case .timeout: return String(localized: "中继没有响应（网络可能刚切换或信号太差）")
+        case .noReply: return String(localized: "Mac 没有回应。它可能已睡眠、没有允许这台设备经公网连接，或者网络太差")
+        case .malformed: return String(localized: "中继的回应无法识别")
+        case .closed: return String(localized: "连接已断开")
+        case .rejected: return String(localized: "中继没有接受这份配置（成员密钥不对、配置不属于这台中继，或版本不一致），需要重新导入")
+        case .macOffline: return String(localized: "Mac 不在线。它可能已睡眠，或者没有打开「允许经公网接入」")
+        case .notAllowed: return String(localized: "这台设备还不能经公网连接。在 Mac 的「设置 › 远程控制」里的「允许经公网连接的设备」中勾选它")
+        case .notConfigured: return String(localized: "还没有配置中继")
         case .certificateExpired:
-            return "这台 Mac 给的中继授权已过期（很久没连过它）。在同一网络里连一次这台 Mac，或重新扫码配对，就会自动续上"
+            return String(localized: "这台 Mac 给的中继授权已过期（很久没连过它）。在同一网络里连一次这台 Mac，或重新扫码配对，就会自动续上")
         }
     }
 
     private static func describe(_ reason: String) -> String {
         switch reason {
-        case "full": return "中继已满"
-        case "offline": return "Mac 不在线"
-        case "hostKey": return "这台 Mac 在中继上登记的身份不一致。如果重装过 uTerm，在中继所在的主机上运行 uterm-relay forget"
-        case "ticket": return "Mac 没有及时响应"
-        default: return "中继拒绝了连接（\(reason)）"
+        case "full": return String(localized: "中继已满")
+        case "offline": return String(localized: "Mac 不在线")
+        case "hostKey": return String(localized: "这台 Mac 在中继上登记的身份不一致。如果重装过 uTerm，在中继所在的主机上运行 uterm-relay forget")
+        case "ticket": return String(localized: "Mac 没有及时响应")
+        default: return String(localized: "中继拒绝了连接（\(reason)）")
         }
     }
 }
@@ -205,7 +205,7 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
             readyWaiter = nil
             if case .waiting = state { connection.cancel() }
         case .cancelled:
-            readyWaiter?.resume(throwing: openTimedOut ? RemoteRelayError.timeout : RemoteRelayError.unreachable("连接已关闭"))
+            readyWaiter?.resume(throwing: openTimedOut ? RemoteRelayError.timeout : RemoteRelayError.unreachable(String(localized: "连接已关闭")))
             readyWaiter = nil
         default:
             break
@@ -261,7 +261,7 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
                     // 对端正常关闭（FIN），不是网络出错。
                     continuation.resume(throwing: RemoteRelayError.closed)
                 } else {
-                    continuation.resume(throwing: RemoteRelayError.unreachable(error?.localizedDescription ?? "连接已断开"))
+                    continuation.resume(throwing: RemoteRelayError.unreachable(error?.localizedDescription ?? String(localized: "连接已断开")))
                 }
             }
         }

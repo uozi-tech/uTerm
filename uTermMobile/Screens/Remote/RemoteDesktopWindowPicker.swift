@@ -161,10 +161,10 @@ struct RemoteWindowTextScalePicker: View {
     var body: some View {
         Picker("文字大小", selection: $selection) {
             Text("最清晰").tag(RemoteDesktopWindowFit.sharpest)
-            Text("小").tag(0.8)
-            Text("标准").tag(1.0)
-            Text("大").tag(1.25)
-            Text("特大").tag(1.5)
+            Text("小", comment: "远程窗口的文字大小").tag(0.8)
+            Text("标准", comment: "远程窗口的文字大小").tag(1.0)
+            Text("大", comment: "远程窗口的文字大小").tag(1.25)
+            Text("特大", comment: "远程窗口的文字大小").tag(1.5)
         }
         .pickerStyle(.segmented)
     }

@@ -119,8 +119,8 @@ nonisolated enum RemoteFileService {
 
     /// `~`、相对主目录的路径都解析成绝对路径。不解析符号链接。
     static func resolve(_ raw: String?) throws -> String {
-        guard let raw, !raw.isEmpty else { throw RemoteFileError(.invalid, "缺少路径") }
-        guard !raw.utf8.contains(0) else { throw RemoteFileError(.invalid, "路径里有空字符") }
+        guard let raw, !raw.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少路径")) }
+        guard !raw.utf8.contains(0) else { throw RemoteFileError(.invalid, String(localized: "路径里有空字符")) }
         let home = NSHomeDirectory()
         var path = raw
         if path == "~" {
@@ -142,16 +142,15 @@ nonisolated enum RemoteFileService {
     static func posixError(_ path: String, _ code: Int32 = errno) -> RemoteFileError {
         let reason = String(cString: strerror(code))
         switch code {
-        case ENOENT: return RemoteFileError(.notFound, "\(path)：不存在")
-        case EACCES: return RemoteFileError(.permissionDenied, "\(path)：没有权限")
+        case ENOENT: return RemoteFileError(.notFound, String(localized: "\(path)：不存在"))
+        case EACCES: return RemoteFileError(.permissionDenied, String(localized: "\(path)：没有权限"))
         case EPERM:
             return RemoteFileError(.permissionDenied,
-                                   "\(path)：系统不允许（\(reason)）。文稿、桌面、下载这些目录受隐私保护，"
-                                   + "要在那台 Mac 的「系统设置 › 隐私与安全性 › 文件与文件夹」里给 uTerm 授权")
-        case EEXIST: return RemoteFileError(.exists, "\(path)：已经存在")
-        case EISDIR: return RemoteFileError(.isDirectory, "\(path)：是目录")
-        case ENOTDIR: return RemoteFileError(.notDirectory, "\(path)：路径里有一段不是目录")
-        case ENOTEMPTY: return RemoteFileError(.notEmpty, "\(path)：目录不是空的")
+                                   String(localized: "\(path)：系统不允许（\(reason)）。文稿、桌面、下载这些目录受隐私保护，要在那台 Mac 的「系统设置 › 隐私与安全性 › 文件与文件夹」里给 uTerm 授权"))
+        case EEXIST: return RemoteFileError(.exists, String(localized: "\(path)：已经存在"))
+        case EISDIR: return RemoteFileError(.isDirectory, String(localized: "\(path)：是目录"))
+        case ENOTDIR: return RemoteFileError(.notDirectory, String(localized: "\(path)：路径里有一段不是目录"))
+        case ENOTEMPTY: return RemoteFileError(.notEmpty, String(localized: "\(path)：目录不是空的"))
         default: return RemoteFileError(.failed, "\(path)：\(reason)")
         }
     }
@@ -299,7 +298,7 @@ nonisolated enum RemoteFileService {
     private static func write(_ request: RemoteFileRequest, body: Data, reply: inout RemoteFileReply) throws {
         let path = try resolve(request.path)
         guard body.count <= RemoteFileLimits.maxChunkBytes else {
-            throw RemoteFileError(.tooLarge, "一次最多写 \(RemoteFileLimits.maxChunkBytes) 字节，分片再发")
+            throw RemoteFileError(.tooLarge, String(localized: "一次最多写 \(RemoteFileLimits.maxChunkBytes) 字节，分片再发"))
         }
         if let expected = request.ifMatch { try requireMatch(path, expected) }
         if request.has(RemoteFileOption.atomic) {
@@ -314,7 +313,7 @@ nonisolated enum RemoteFileService {
         case "create": flags |= O_EXCL
         case "overwrite": flags |= O_TRUNC
         case "write": break
-        default: throw RemoteFileError(.invalid, "writeMode 只能是 create / overwrite / write")
+        default: throw RemoteFileError(.invalid, String(localized: "writeMode 只能是 create / overwrite / write"))
         }
         let fd = open(path, flags, mode_t(request.mode ?? 0o644))
         guard fd >= 0 else { throw posixError(path) }
@@ -366,7 +365,7 @@ nonisolated enum RemoteFileService {
     static func requireMatch(_ path: String, _ expected: String) throws {
         let actual = try sha256(of: path)
         guard actual.caseInsensitiveCompare(expected) == .orderedSame else {
-            throw RemoteFileError(.conflict, "\(path)：文件已经变了（现在的 sha256 是 \(actual)），重新读一遍再改")
+            throw RemoteFileError(.conflict, String(localized: "\(path)：文件已经变了（现在的 sha256 是 \(actual)），重新读一遍再改"))
         }
     }
 
@@ -430,7 +429,7 @@ nonisolated enum RemoteFileService {
 
     private static func changeMode(_ request: RemoteFileRequest) throws {
         let path = try resolve(request.path)
-        guard let mode = request.mode else { throw RemoteFileError(.invalid, "缺少 mode") }
+        guard let mode = request.mode else { throw RemoteFileError(.invalid, String(localized: "缺少 mode")) }
         let bits = mode_t(mode & 0o7777)
         guard chmod(path, bits) == 0 else { throw posixError(path) }
         guard request.has(RemoteFileOption.recursive) else { return }
@@ -469,7 +468,7 @@ nonisolated enum RemoteFileService {
     }
 
     private static func makeSymlink(at path: String, target: String?, replace: Bool) throws {
-        guard let target, !target.isEmpty else { throw RemoteFileError(.invalid, "缺少链接的指向") }
+        guard let target, !target.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少链接的指向")) }
         if replace {
             var info = Darwin.stat()
             if lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFLNK { unlink(path) }
@@ -534,16 +533,16 @@ nonisolated enum RemoteFileService {
             let name = try attributeName(request)
             guard removexattr(path, name, 0) == 0 else { throw attributeError(path, name) }
         default:
-            throw RemoteFileError(.invalid, "xattr 的 action 只能是 list / get / set / remove")
+            throw RemoteFileError(.invalid, String(localized: "xattr 的 action 只能是 list / get / set / remove"))
         }
     }
 
     private static func attributeName(_ request: RemoteFileRequest) throws -> String {
-        guard let name = request.name, !name.isEmpty else { throw RemoteFileError(.invalid, "缺少属性名") }
+        guard let name = request.name, !name.isEmpty else { throw RemoteFileError(.invalid, String(localized: "缺少属性名")) }
         return name
     }
 
     private static func attributeError(_ path: String, _ name: String) -> RemoteFileError {
-        errno == ENOATTR ? RemoteFileError(.notFound, "\(path)：没有扩展属性 \(name)") : posixError(path)
+        errno == ENOATTR ? RemoteFileError(.notFound, String(localized: "\(path)：没有扩展属性 \(name)")) : posixError(path)
     }
 }

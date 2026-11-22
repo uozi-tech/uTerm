@@ -23,23 +23,23 @@ struct KeysScreen: View {
 
         return Group {
             if keys.isEmpty {
-                MEmptyState(icon: "key", title: "密钥库为空",
-                            message: "生成新的 SSH 密钥，或导入已有私钥。私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备。",
-                            actionTitle: "生成密钥", action: { generating = true },
-                            secondaryTitle: "导入密钥", secondaryIcon: "import",
+                MEmptyState(icon: "key", title: String(localized: "密钥库为空"),
+                            message: String(localized: "生成新的 SSH 密钥，或导入已有私钥。私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备。"),
+                            actionTitle: String(localized: "生成密钥"), action: { generating = true },
+                            secondaryTitle: String(localized: "导入密钥"), secondaryIcon: "import",
                             secondaryAction: { importing = true })
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
                         HStack(spacing: 10) {
-                            MBtn(title: "生成密钥", icon: "plus", kind: .tinted, full: true, height: 44) { generating = true }
-                            MBtn(title: "导入密钥", icon: "import", kind: .secondary, full: true, height: 44) { importing = true }
+                            MBtn(title: String(localized: "生成密钥"), icon: "plus", kind: .tinted, full: true, height: 44) { generating = true }
+                            MBtn(title: String(localized: "导入密钥"), icon: "import", kind: .secondary, full: true, height: 44) { importing = true }
                         }
                         .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
                         MInsetGroup {
                             ForEach(Array(keys.enumerated()), id: \.element.id) { idx, key in
                                 MInsetRow(icon: "key", iconColor: M.warning, label: key.name,
-                                          sub: "\(key.typeLabel) · \(usage[key.id] ?? 0) 台主机", chevron: true,
+                                          sub: String(localized: "\(key.typeLabel) · \(usage[key.id] ?? 0) 台主机"), chevron: true,
                                           last: idx == keys.count - 1,
                                           onTap: { detail = key })
                             }
@@ -94,25 +94,25 @@ struct KeyDetailSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    MInsetGroup(header: "信息") {
-                        MInsetRow(label: "名称", value: key.name)
-                        MInsetRow(label: "算法", value: key.typeLabel, valueMono: true)
-                        MInsetRow(label: "注释", value: key.comment.isEmpty ? "—" : key.comment)
-                        MInsetRow(label: "口令保护", value: key.hasPassphrase ? "是" : "否", last: true)
+                    MInsetGroup(header: String(localized: "信息")) {
+                        MInsetRow(label: String(localized: "名称"), value: key.name)
+                        MInsetRow(label: String(localized: "算法"), value: key.typeLabel, valueMono: true)
+                        MInsetRow(label: String(localized: "注释", comment: "SSH 公钥末尾的注释字段"), value: key.comment.isEmpty ? "—" : key.comment)
+                        MInsetRow(label: String(localized: "口令保护"), value: key.hasPassphrase ? String(localized: "是", comment: "口令保护：有") : String(localized: "否", comment: "口令保护：无"), last: true)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        MSectionCap(text: "指纹").padding(.horizontal, 20)
+                        MSectionCap(text: String(localized: "指纹")).padding(.horizontal, 20)
                         MCopyField(value: key.fingerprint).padding(.horizontal, 16)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        MSectionCap(text: "公钥").padding(.horizontal, 20)
+                        MSectionCap(text: String(localized: "公钥")).padding(.horizontal, 20)
                         MCopyField(value: key.publicKey).padding(.horizontal, 16)
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        MSectionCap(text: "使用此密钥的主机 · \(usedBy.count)").padding(.horizontal, 20)
+                        MSectionCap(text: String(localized: "使用此密钥的主机 · \(usedBy.count)")).padding(.horizontal, 20)
                         if usedBy.isEmpty {
                             Text("暂未被任何主机使用").font(M.sans(12.5)).foregroundStyle(M.text4)
                                 .frame(maxWidth: .infinity).padding(.vertical, 16)
@@ -127,7 +127,7 @@ struct KeyDetailSheet: View {
                         Text("删除此密钥").font(M.sans(14, weight: .semibold)).foregroundStyle(Color(hex: 0xFCA5A5))
                         Text("密钥将从钥匙串删除，经 iCloud 钥匙串同步的设备上也会删除；使用此密钥的 \(usedBy.count) 台主机将无法连接。")
                             .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
-                        MBtn(title: "删除密钥", icon: "trash", kind: .dangerTint, height: 42) { pendingDelete = true }
+                        MBtn(title: String(localized: "删除密钥"), icon: "trash", kind: .dangerTint, height: 42) { pendingDelete = true }
                             .fixedSize().padding(.top, 4)
                     }
                     .padding(14).frame(maxWidth: .infinity, alignment: .leading)

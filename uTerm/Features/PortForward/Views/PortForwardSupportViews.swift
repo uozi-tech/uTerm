@@ -26,7 +26,7 @@ struct PFEmptyState: View {
     let onAdd: () -> Void
 
     private var subtitle: String {
-        kind?.desc ?? "把端口经 SSH 隧道在本机与远端之间打通，或开一个 SOCKS5 代理。"
+        kind?.desc ?? String(localized: "把端口经 SSH 隧道在本机与远端之间打通，或开一个 SOCKS5 代理。")
     }
 
     var body: some View {
@@ -40,7 +40,7 @@ struct PFEmptyState: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
                 .lineSpacing(2)
-            UDButton(title: "新建转发", style: .primary, action: onAdd)
+            UDButton(title: String(localized: "新建转发"), style: .primary, action: onAdd)
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
@@ -60,18 +60,17 @@ struct PortForwardDeleteConfirm: View {
     let onConfirm: () -> Void
 
     var body: some View {
-        UDConfirmModal(title: "删除「\(rule.name)」？",
+        UDConfirmModal(title: String(localized: "删除「\(rule.name)」？"),
                        onCancel: onCancel, onConfirm: onConfirm) {
             message
         }
     }
 
     private var message: Text {
-        let lead = Text("将删除这条\(rule.kind.label)规则").foregroundStyle(UD.text2)
-        let addr = Text(" \(rule.kind.flag) \(rule.listenHost):\(String(rule.listenPort))")
+        let addr = Text(verbatim: " \(rule.kind.flag) \(rule.listenHost):\(String(rule.listenPort))")
             .font(UD.mono(12)).foregroundStyle(UD.text3)
-        let tail = Text("。").foregroundStyle(UD.text2)
-        return Text("\(lead)\(addr)\(tail)")
+        // 整句一个键：`addr` 自带的字体与颜色优先于外层的 text2。
+        return Text("将删除这条\(rule.kind.label)规则\(addr)。").foregroundStyle(UD.text2)
     }
 }
 

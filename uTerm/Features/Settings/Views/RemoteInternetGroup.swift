@@ -23,10 +23,10 @@ struct RemoteInternetGroup: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            SettingsGroup(title: "公网接入",
+            SettingsGroup(title: String(localized: "公网接入"),
                           footer: String(localized: "打开后，这台 Mac 会注册到中继，允许的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容全程端到端加密。Mac 睡眠时会与中继断开，手机无法远程唤醒它。同一 Apple ID 的手机经 iCloud 钥匙串自动拿到中继配置，其他手机扫二维码或用「分享到我的设备」。")) {
                 if let block = server.relayRegistrationBlock {
-                    SettingsRow(label: "中继注册", hint: RemoteControlPresentation.relayRegistrationBlockHint(block)) {
+                    SettingsRow(label: String(localized: "中继注册", comment: "设置项：中继注册状态"), hint: RemoteControlPresentation.relayRegistrationBlockHint(block)) {
                         SettingsStatusLabel(symbol: "hammer.fill", tone: .warning,
                                             text: RemoteControlPresentation.relayRegistrationBlockLabel(block))
                     }
@@ -46,23 +46,23 @@ struct RemoteInternetGroup: View {
                     relayManagementRows(config)
                 }
                 if server.relayConfig != nil {
-                    SettingsRow(label: "允许经公网接入", hint: "不在同一局域网的设备也能连接") {
+                    SettingsRow(label: String(localized: "允许经公网接入"), hint: String(localized: "不在同一局域网的设备也能连接")) {
                         UDToggle(Binding(get: { settings.isInternetEnabled }, set: { settings.isInternetEnabled = $0 }))
                     }
                 }
                 if server.relayConfig != nil, settings.isInternetEnabled, server.relayRegistrationBlock == nil {
                     let relayState = server.relayState
-                    SettingsRow(label: "中继状态", hint: RemoteControlPresentation.relayStatusHint(relayState)) {
+                    SettingsRow(label: String(localized: "中继状态", comment: "设置项：中继连接状态"), hint: RemoteControlPresentation.relayStatusHint(relayState)) {
                         let status = RemoteControlPresentation.relayStatus(relayState)
                         HStack(spacing: 10) {
                             SettingsStatusLabel(symbol: status.symbol, tone: status.tone,
                                                 text: RemoteControlPresentation.relayStatusLabel(relayState))
                             if relayState == .superseded {
-                                UDButton(title: "重新连接", style: .secondary) { server.reconnectRelay() }
+                                UDButton(title: String(localized: "重新连接"), style: .secondary) { server.reconnectRelay() }
                             }
                         }
                     }
-                    SettingsRow(label: "保持唤醒", hint: "公网接入期间不让 Mac 闲置睡眠") {
+                    SettingsRow(label: String(localized: "保持唤醒", comment: "不让 Mac 睡眠"), hint: String(localized: "公网接入期间不让 Mac 闲置睡眠")) {
                         UDToggle(Binding(get: { settings.keepsAwakeForInternet }, set: { settings.keepsAwakeForInternet = $0 }))
                     }
                     // 「保持唤醒」只拦闲置睡眠，合盖照样睡（系统规则，App 拦不住），紧贴开关说清楚。
@@ -72,7 +72,7 @@ struct RemoteInternetGroup: View {
             }
 
             if server.relayConfig != nil, settings.isInternetEnabled {
-                SettingsGroup(title: "允许经公网连接的设备",
+                SettingsGroup(title: String(localized: "允许经公网连接的设备"),
                               footer: String(localized: "配对过的设备不会自动获得公网权限，要在这里逐台打开。")) {
                     if server.internetAccessCandidates.isEmpty {
                         SettingsEmptyRow(symbol: "iphone.slash", text: String(localized: "还没有可以放行的设备"))
@@ -158,10 +158,10 @@ struct RemoteInternetGroup: View {
                             title: String(localized: "中继"),
                             subtitle: RemoteControlPresentation.relayHint(nil)) {
                 HStack(spacing: 8) {
-                    UDButton(title: showsAgentPrompt ? "收起" : "让 AI 部署…", style: .secondary) {
+                    UDButton(title: showsAgentPrompt ? String(localized: "收起", comment: "收起展开的内容") : String(localized: "让 AI 部署…"), style: .secondary) {
                         showsAgentPrompt.toggle()
                     }
-                    UDButton(title: "导入配置", style: .primary) { importingRelayConfig = true }
+                    UDButton(title: String(localized: "导入配置"), style: .primary) { importingRelayConfig = true }
                 }
             }
         }
@@ -170,7 +170,7 @@ struct RemoteInternetGroup: View {
     /// 已配中继时：所在主机、版本与更新、测试结果。
     @ViewBuilder private func relayManagementRows(_ config: RemoteRelayConfig) -> some View {
         if choosingManagedHost {
-            SettingsRow(label: "所在主机", hint: "中继装在哪台已保存的主机上。uTerm 用它来更新中继") {
+            SettingsRow(label: String(localized: "所在主机", comment: "中继装在哪台主机上"), hint: String(localized: "中继装在哪台已保存的主机上。uTerm 用它来更新中继")) {
                 SettingsPicker(selection: Binding(get: { managedHostID }, set: { id in
                                    server.relayManagedHosts.set(id, for: config.relayID)
                                    managedHostID = id
@@ -185,11 +185,11 @@ struct RemoteInternetGroup: View {
             SettingsRow(label: String(localized: "有新版本 \(latest)"),
                         hint: RemoteControlPresentation.relayUpdateHint(running: updates.runningVersion, host: managedHost?.name)) {
                 if managedHost != nil {
-                    UDButton(title: "更新", style: .primary, isLoading: manager.updatePhase == .running) {
+                    UDButton(title: String(localized: "更新", comment: "更新中继到新版本"), style: .primary, isLoading: manager.updatePhase == .running) {
                         confirmingUpdate = true
                     }
                 } else {
-                    UDButton(title: showsAgentPrompt ? "收起" : "让 AI 更新…", style: .secondary) {
+                    UDButton(title: showsAgentPrompt ? String(localized: "收起", comment: "收起展开的内容") : String(localized: "让 AI 更新…"), style: .secondary) {
                         showsAgentPrompt.toggle()
                     }
                 }
@@ -266,11 +266,11 @@ struct RemoteInternetGroup: View {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             guard let config = RemoteRelayConfig(importing: try Data(contentsOf: url)) else {
-                relayImportError = "这不是 uterm-relay 的配置文件。在中继所在的主机上运行 uterm-relay config 生成。"
+                relayImportError = String(localized: "这不是 uterm-relay 的配置文件。在中继所在的主机上运行 uterm-relay config 生成。")
                 return
             }
             guard server.importRelayConfig(config) else {
-                relayImportError = "保存到钥匙串失败。"
+                relayImportError = String(localized: "保存到钥匙串失败。")
                 return
             }
             refreshInternetAccess()

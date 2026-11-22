@@ -29,28 +29,28 @@ nonisolated struct AgentToolCallPresentation: Equatable, Sendable {
         switch call.status {
         case .pending:
             return AgentToolCallPresentation(
-                title: "等待确认", systemImage: "hand.raised.fill", tone: .warning,
+                title: String(localized: "等待确认"), systemImage: "hand.raised.fill", tone: .warning,
                 isProgressVisible: false, isApprovalVisible: true)
         case .running:
             return AgentToolCallPresentation(
-                title: "运行中", systemImage: "terminal.fill", tone: .accent,
+                title: String(localized: "运行中", comment: "工具调用状态"), systemImage: "terminal.fill", tone: .accent,
                 isProgressVisible: true, isApprovalVisible: false)
         case .done:
             if let exitCode = call.exitCode, exitCode != 0 {
                 return AgentToolCallPresentation(
-                    title: "退出码 \(exitCode)", systemImage: "exclamationmark.triangle.fill",
+                    title: String(localized: "退出码 \(String(exitCode))"), systemImage: "exclamationmark.triangle.fill",
                     tone: .danger, isProgressVisible: false, isApprovalVisible: false)
             }
             return AgentToolCallPresentation(
-                title: "已完成", systemImage: "checkmark.circle.fill", tone: .success,
+                title: String(localized: "已完成", comment: "工具调用状态"), systemImage: "checkmark.circle.fill", tone: .success,
                 isProgressVisible: false, isApprovalVisible: false)
         case .failed:
             return AgentToolCallPresentation(
-                title: "执行失败", systemImage: "xmark.circle.fill", tone: .danger,
+                title: String(localized: "执行失败"), systemImage: "xmark.circle.fill", tone: .danger,
                 isProgressVisible: false, isApprovalVisible: false)
         case .skipped:
             return AgentToolCallPresentation(
-                title: "已跳过", systemImage: "forward.end.fill", tone: .muted,
+                title: String(localized: "已跳过", comment: "工具调用状态"), systemImage: "forward.end.fill", tone: .muted,
                 isProgressVisible: false, isApprovalVisible: false)
         }
     }
@@ -283,7 +283,7 @@ struct AssistantView: View {
             Text("在「设置 › 模型服务」里添加 Anthropic 或 OpenAI 兼容的服务。")
                 .font(.caption).foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
-            UDButton(title: "打开设置", systemImage: "gearshape") {
+            UDButton(title: String(localized: "打开设置"), systemImage: "gearshape") {
                 openWindow(id: SettingsWindow.id)
             }
         }
@@ -353,7 +353,7 @@ struct AssistantView: View {
                 }
                 .onChange(of: model.state) { old, now in
                     if old == .streaming && now != .streaming {
-                        AccessibilityNotification.Announcement("回答已完成").post()
+                        AccessibilityNotification.Announcement(String(localized: "回答已完成")).post()
                     }
                 }
                 .onDisappear {
@@ -367,9 +367,9 @@ struct AssistantView: View {
     }
 
     private static let starterPrompts = [
-        "检查主机健康状态",
-        "分析最近的错误日志",
-        "给出当前服务的排查步骤",
+        String(localized: "检查主机健康状态"),
+        String(localized: "分析最近的错误日志"),
+        String(localized: "给出当前服务的排查步骤"),
     ]
 
     private var conversationEmptyState: some View {
@@ -395,9 +395,9 @@ struct AssistantView: View {
             }
 
             HStack(spacing: 10) {
-                capabilityLabel("读上下文", systemImage: "doc.text.magnifyingglass")
-                capabilityLabel("工具审批", systemImage: "hand.raised")
-                capabilityLabel("持续追问", systemImage: "arrow.trianglehead.2.clockwise")
+                capabilityLabel(String(localized: "读上下文"), systemImage: "doc.text.magnifyingglass")
+                capabilityLabel(String(localized: "工具审批"), systemImage: "hand.raised")
+                capabilityLabel(String(localized: "持续追问"), systemImage: "arrow.trianglehead.2.clockwise")
             }
 
             VStack(alignment: .leading, spacing: 7) {
@@ -582,7 +582,7 @@ struct AssistantView: View {
     private var inputBar: some View {
         AgentComposer(
             model: model,
-            placeholder: "描述目标，交给 Agent 处理…",
+            placeholder: String(localized: "描述目标，交给 Agent 处理…"),
             minLines: 2,
             safety: safetyBinding,
             activeProviderIDString: $activeProviderIDString,
@@ -631,10 +631,10 @@ struct AssistantView: View {
     private func currentContextSnippet() -> String {
         let context = serverContext.trimmingCharacters(in: .whitespacesAndNewlines)
         if !context.isEmpty {
-            return "上下文：\n\(context)"
+            return String(localized: "上下文：\n\(context)")
         }
         let name = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "" : "当前主机：\(name)"
+        return name.isEmpty ? "" : String(localized: "当前主机：\(name)")
     }
 }
 
@@ -669,7 +669,7 @@ private struct AgentToolCallCard: View {
 
     private var displayTitle: String {
         let explanation = call.explanation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return explanation.isEmpty ? "运行 Shell 命令" : explanation
+        return explanation.isEmpty ? String(localized: "运行 Shell 命令") : explanation
     }
 
     private var toolLabel: String {
@@ -736,8 +736,8 @@ private struct AgentToolCallCard: View {
     private var autoApprovalTag: String? {
         guard call.approvalReason != nil else { return nil }
         switch call.approvedByAI {
-        case nil: return "只读 · 自动"
-        case true?: return "AI 已批准"
+        case nil: return String(localized: "只读 · 自动")
+        case true?: return String(localized: "AI 已批准")
         case false?: return nil
         }
     }
@@ -766,7 +766,7 @@ private struct AgentToolCallCard: View {
                             .fixedSize()
                     }
                     if let exitCode = call.exitCode, exitCode != 0 {
-                        Text("退出码 \(exitCode)")
+                        Text("退出码 \(String(exitCode))")
                             .font(UD.mono(9.5))
                             .foregroundStyle(UD.danger)
                             .fixedSize()
@@ -835,7 +835,7 @@ private struct AgentToolCallCard: View {
     private var compactAccessibilityLabel: String {
         var parts = [presentation.title, call.command]
         if let tag = autoApprovalTag { parts.append(tag) }
-        return parts.joined(separator: "，")
+        return parts.joined(separator: String(localized: "，", comment: "读屏标签各段之间的分隔符"))
     }
 
     // MARK: 完整卡片
@@ -886,7 +886,7 @@ private struct AgentToolCallCard: View {
         HStack(alignment: .top, spacing: 8) {
             Text("$")
                 .foregroundStyle(UD.accent)
-            Text(call.command.isEmpty ? "正在接收工具参数…" : call.command)
+            Text(call.command.isEmpty ? String(localized: "正在接收工具参数…") : call.command)
                 .foregroundStyle(call.command.isEmpty ? UD.text4 : UD.text2)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -902,7 +902,8 @@ private struct AgentToolCallCard: View {
             .buttonStyle(.udPlain)
             .disabled(call.command.isEmpty)
             .accessibilityLabel(isCommandCopied ? "命令已拷贝" : "拷贝命令")
-            .help(whenHovering: isHoveringCommandRow, isCommandCopied ? "已拷贝" : "拷贝命令")
+            .help(whenHovering: isHoveringCommandRow,
+                  isCommandCopied ? String(localized: "已拷贝") : String(localized: "拷贝命令"))
         }
         .font(UD.mono(11))
         .padding(.leading, 11)
@@ -928,7 +929,7 @@ private struct AgentToolCallCard: View {
                     Text(call.status == .failed ? "错误输出" : "工具输出")
                         .font(.system(size: 10.5, weight: .medium))
                     if let exitCode = call.exitCode {
-                        Text("退出码 \(exitCode)")
+                        Text("退出码 \(String(exitCode))")
                             .font(UD.mono(9.5))
                             .foregroundStyle(exitCode == 0 ? UD.text4 : UD.danger)
                     }
@@ -966,10 +967,10 @@ private struct AgentToolCallCard: View {
 
     /// 待确认时底栏左侧那句话：AI 审批中 / 为什么要人确认 / 默认提示。
     private var approvalNote: (text: String, isWarning: Bool) {
-        if isReviewing { return ("AI 正在审批，也可以直接运行或跳过", false) }
-        if !approvalEnabled { return ("正在准备操作", false) }
+        if isReviewing { return (String(localized: "AI 正在审批，也可以直接运行或跳过"), false) }
+        if !approvalEnabled { return (String(localized: "正在准备操作"), false) }
         if call.approvedByAI == false, let reason = call.approvalReason { return (reason, true) }
-        return ("需要你的确认", false)
+        return (String(localized: "需要你的确认"), false)
     }
 
     /// 待确认卡片的底栏：上一行说明（为什么要你确认 / AI 审批中），下一行运行 / 跳过。
@@ -1137,7 +1138,7 @@ private struct UserMessageRow: View {
                 .hoverGated { isHovering = $0 }
                 // 悬停门控：行上本来就有 `isHovering`，不悬停的行不必给
                 // `NSToolTipManager` 留一块每个滚动 tick 都要重算的区域。
-                .help(whenHovering: isHovering && canEdit, "点击编辑并重发")
+                .help(whenHovering: isHovering && canEdit, String(localized: "点击编辑并重发"))
                 // 悬停铅笔是纯装饰（`accessibilityHidden`），点击进编辑的能力
                 // 全靠 `onTapGesture` —— 对 AX 完全不可见。显式补 label +
                 // isButton + 默认动作 + 命名动作，读屏 / 全键盘控制才进得去编辑态。

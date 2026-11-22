@@ -93,7 +93,7 @@ struct TunnelRow: View {
                                 .foregroundStyle(UD.text4)
                                 // 行内 tooltip 一律走悬停门控：不悬停就不装那块常驻追踪区
                                 // （一行 4 处 × 上百行，滚动时全要跟着重算）。
-                                .help(whenHovering: hover, "连接时自动启动")
+                                .help(whenHovering: hover, String(localized: "连接时自动启动"))
                         }
                     }
                     if let label = rule.destLabel, !label.isEmpty {
@@ -124,8 +124,8 @@ struct TunnelRow: View {
             // 视图本来就被 SwiftUI 排除在无障碍树之外。
             HStack(spacing: 2) {
                 if hover {
-                    iconButton("pencil", tint: UD.text3, help: "编辑", action: onEdit)
-                    iconButton("trash", tint: UD.danger, help: "删除", action: onDelete)
+                    iconButton("pencil", tint: UD.text3, help: String(localized: "编辑"), action: onEdit)
+                    iconButton("trash", tint: UD.danger, help: String(localized: "删除"), action: onDelete)
                 } else {
                     Color.clear.frame(width: Self.hoverActionsWidth, height: 26)
                 }
@@ -136,7 +136,7 @@ struct TunnelRow: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(UD.warning)
-                    .help(whenHovering: hover, "最近连接失败：\(issue)")
+                    .help(whenHovering: hover, String(localized: "最近连接失败：\(issue)"))
                     .accessibilityLabel("最近连接失败：\(issue)")
             }
             // 右侧：error 显红 chip，否则 UDToggle。共享 76pt 宽。
@@ -214,9 +214,9 @@ struct TunnelRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if isConflict {
-                recoveryButton("改端口", icon: nil, action: onChangePort)
+                recoveryButton(String(localized: "改端口"), icon: nil, action: onChangePort)
             } else {
-                recoveryButton("重试", icon: "arrow.clockwise", action: onRetry)
+                recoveryButton(String(localized: "重试"), icon: "arrow.clockwise", action: onRetry)
             }
         }
         .padding(.leading, 14)

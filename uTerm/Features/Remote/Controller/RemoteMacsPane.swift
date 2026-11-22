@@ -458,9 +458,9 @@ struct RemotePairingOtherMacSheet: View {
             }
             HStack {
                 Spacer()
-                UDButton(title: "取消", style: .secondary) { onDone(nil) }
+                UDButton(title: String(localized: "取消"), style: .secondary) { onDone(nil) }
                     .keyboardShortcut(.cancelAction)
-                UDButton(title: "配对") { pair() }
+                UDButton(title: String(localized: "配对")) { pair() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(invitation == nil)
             }
@@ -498,7 +498,7 @@ struct RemotePairingOtherMacSheet: View {
                                     .lineLimit(1)
                                     .truncationMode(.tail)
                                 Spacer(minLength: 8)
-                                UDButton(title: "配对…", style: .secondary) { onDone(mac) }
+                                UDButton(title: String(localized: "配对…"), style: .secondary) { onDone(mac) }
                             }
                             .padding(.vertical, 6)
                             .accessibilityElement(children: .contain)

@@ -545,7 +545,7 @@ struct MSegmented<T: Hashable>: View {
 
 struct MSearchField: View {
     @Binding var text: String
-    var placeholder: String = "搜索"
+    var placeholder: String = String(localized: "搜索")
     @FocusState private var focused: Bool
     @Environment(\.mAccent) private var accent
     var body: some View {

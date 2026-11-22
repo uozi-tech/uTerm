@@ -33,9 +33,12 @@ struct HostKeyRetryCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if isMismatch, let old = challenge.oldFingerprint {
-                fingerprintRow("已信任", old)
+                fingerprintRow(String(localized: "已信任", comment: "此前已信任的主机密钥指纹"), old)
             }
-            fingerprintRow(isMismatch ? "本次出示" : "指纹", challenge.newFingerprint)
+            fingerprintRow(isMismatch
+                ? String(localized: "本次出示", comment: "主机这次出示的密钥指纹")
+                : String(localized: "指纹", comment: "主机密钥指纹"),
+                challenge.newFingerprint)
 
             HStack {
                 Spacer(minLength: 0)

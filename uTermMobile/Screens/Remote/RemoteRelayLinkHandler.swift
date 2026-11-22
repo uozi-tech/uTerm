@@ -21,7 +21,7 @@ struct RemoteRelayLinkHandler: ViewModifier {
                 }
                 Button("取消", role: .cancel) { pending = nil }
             } message: {
-                Text(pending.map { "「\($0.name)」（\($0.endpointDescription)）。导入后，不在同一网络时也能连接已允许这台手机的 Mac。只导入你自己部署的中继。" } ?? "")
+                Text(pending.map { String(localized: "「\($0.name)」（\($0.endpointDescription)）。导入后，不在同一网络时也能连接已允许这台手机的 Mac。只导入你自己部署的中继。") } ?? "")
             }
             .alert("无法导入中继", isPresented: $failed) {
                 Button("好", role: .cancel) {}

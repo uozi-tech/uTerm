@@ -54,7 +54,7 @@ extension RemoteFileWaiters {
                 let watchdog = Task {
                     try? await Task.sleep(for: timeout)
                     guard !Task.isCancelled else { return }
-                    self.fail(id, RemoteFileError(.timeout, "\(peer) 在 \(RemoteConnectTrace.millis(timeout) / 1000) 秒内没有回应"))
+                    self.fail(id, RemoteFileError(.timeout, String(localized: "\(peer) 在 \(RemoteConnectTrace.millis(timeout) / 1000) 秒内没有回应")))
                 }
                 add(id, continuation, watchdog: watchdog)
                 // 取消可能早于登记：那时取消回调已经扑空了，这里补上。

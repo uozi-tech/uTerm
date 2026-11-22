@@ -135,9 +135,9 @@ struct ExternalSyncChip: View {
 
     private func stateLabel(_ state: ExternalOpenCoordinator.SessionState) -> String {
         switch state {
-        case .watching:  return "监听中"
-        case .uploading: return "上传中…"
-        case .failed:    return "上传失败"
+        case .watching:  return String(localized: "监听中", comment: "外部编辑的文件：正在监听本地改动")
+        case .uploading: return String(localized: "上传中…")
+        case .failed:    return String(localized: "上传失败")
         }
     }
 }

@@ -23,12 +23,12 @@ nonisolated enum WelcomeSidebarLayout {
         var rows = [
             WelcomeSidebarBuiltInRow(section: .allHosts,
                                      icon: "square.grid.2x2",
-                                     title: "全部")
+                                     title: String(localized: "全部", comment: "侧栏：全部主机"))
         ]
         if ungroupedCount > 0 {
             rows.append(WelcomeSidebarBuiltInRow(section: .ungrouped,
                                                  icon: "minus.circle",
-                                                 title: "未分组"))
+                                                 title: String(localized: "未分组")))
         }
         return rows
     }
@@ -225,18 +225,18 @@ struct WelcomeSidebar: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
                 if showViewSection {
-                    UDSidebarSectionHeader("视图")
+                    UDSidebarSectionHeader(String(localized: "视图", comment: "侧栏分区标题"))
                         .accessibilityAddTraits(.isHeader)
                 }
                 if pinnedCount > 0 {
-                    navRow(.pinned, icon: "star.fill", title: "置顶", counts: counts, entries: navEntries)
+                    navRow(.pinned, icon: "star.fill", title: String(localized: "sidebar.pinned", defaultValue: "置顶", comment: "侧栏：置顶的主机（列表名，不是动作）"), counts: counts, entries: navEntries)
                 }
                 if recentCount > 0 {
-                    navRow(.recent, icon: "clock", title: "最近", counts: counts, entries: navEntries)
+                    navRow(.recent, icon: "clock", title: String(localized: "最近", comment: "侧栏：最近连接的主机"), counts: counts, entries: navEntries)
                 }
                 if showGroupSection {
                     HStack(spacing: 0) {
-                        UDSidebarSectionHeader("分组")
+                        UDSidebarSectionHeader(String(localized: "分组"))
                             .accessibilityAddTraits(.isHeader)
                         Spacer()
                         Button { openWindow(id: "groups") } label: {
@@ -286,12 +286,12 @@ struct WelcomeSidebar: View {
                 }
 
                 // 动作分组：快捷命令库入口（功能文档 §1 入口；闪电图标 + 数量徽标，始终可见）。
-                UDSidebarSectionHeader("动作")
+                UDSidebarSectionHeader(String(localized: "动作", comment: "侧栏分区标题"))
                     .accessibilityAddTraits(.isHeader)
                     .padding(.top, (showViewSection || showGroupSection) ? Self.sectionGap : 0)
                 UDSidebarRow(
                     systemImage: "bolt.fill",
-                    label: "快捷命令",
+                    label: String(localized: "快捷命令"),
                     count: quickCommands.count,
                     selected: pane == .quickCommands,
                     action: { pane = .quickCommands },
@@ -300,12 +300,12 @@ struct WelcomeSidebar: View {
                 .padding(.horizontal, 8)
                 // 去控制别的 Mac：与快捷命令一样在本窗口右侧换成「我的 Mac」面板。
                 // 它是设备入口而不是「动作」，单独一组。
-                UDSidebarSectionHeader("远程控制")
+                UDSidebarSectionHeader(String(localized: "远程控制"))
                     .accessibilityAddTraits(.isHeader)
                     .padding(.top, Self.sectionGap)
                 UDSidebarRow(
                     systemImage: "desktopcomputer",
-                    label: "我的 Mac",
+                    label: String(localized: "我的 Mac"),
                     selected: pane == .remoteMacs,
                     action: { pane = .remoteMacs },
                     shortcutHint: WelcomeSidebarNav.shortcutHint(for: .remoteMacs, in: navEntries)

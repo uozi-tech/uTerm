@@ -147,9 +147,9 @@ struct RemoteDeviceGroupPromptView: View {
             HStack {
                 Spacer()
                 if acceptsCode {
-                    UDButton(title: "拒绝", style: .secondary) { service.reject(request) }
+                    UDButton(title: String(localized: "拒绝", comment: "拒绝加入设备组的请求"), style: .secondary) { service.reject(request) }
                 } else {
-                    UDButton(title: "关闭", style: .secondary) { service.hidePrompt(request) }
+                    UDButton(title: String(localized: "关闭", comment: "关闭弹窗"), style: .secondary) { service.hidePrompt(request) }
                 }
             }
         }

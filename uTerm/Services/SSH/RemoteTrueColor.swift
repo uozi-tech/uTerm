@@ -113,9 +113,9 @@ nonisolated enum RemoteTrueColorError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConnected: "终端尚未连接"
-        case .timedOut: "主机没有响应"
-        case .unexpectedOutput: "主机没有确认写入，检查登录 shell 和主目录的写权限"
+        case .notConnected: String(localized: "终端尚未连接")
+        case .timedOut: String(localized: "主机没有响应")
+        case .unexpectedOutput: String(localized: "主机没有确认写入，检查登录 shell 和主目录的写权限")
         }
     }
 }

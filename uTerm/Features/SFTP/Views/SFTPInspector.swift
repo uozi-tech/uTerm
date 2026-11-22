@@ -48,11 +48,11 @@ struct SFTPInspector: View {
         let fullPath = item.fullPath(in: currentPath)
         let sizeText = item.sizeOrKindText
         let rows: [(String, String, Bool)] = [
-            ("种类", kind.label, false),
-            ("大小", sizeText, false),
-            ("修改时间", item.modifiedAt.map { UFormat.dateTime($0) } ?? UFormat.placeholder, false),
-            ("权限", item.symbolicText, true),
-            ("所有者", item.ownerDisplayText, false),
+            (String(localized: "种类", comment: "文件详情字段"), kind.label, false),
+            (String(localized: "大小", comment: "文件详情字段"), sizeText, false),
+            (String(localized: "修改时间", comment: "文件详情字段"), item.modifiedAt.map { UFormat.dateTime($0) } ?? UFormat.placeholder, false),
+            (String(localized: "权限", comment: "文件详情字段"), item.symbolicText, true),
+            (String(localized: "所有者", comment: "文件详情字段"), item.ownerDisplayText, false),
         ]
         return VStack(spacing: 0) {
             ScrollView {
@@ -122,10 +122,10 @@ struct SFTPInspector: View {
                     }
                     .help(RemoteFileAction.download.help)
                 }
-                SFTPSecondaryButton(label: "权限设置…", systemImage: "lock") { onPermissions(item) }
+                SFTPSecondaryButton(label: String(localized: "权限设置…"), systemImage: "lock") { onPermissions(item) }
                 HStack(spacing: 8) {
-                    SFTPSecondaryButton(label: "重命名") { onRename(item) }
-                    SFTPSecondaryButton(label: "删除", danger: true) { onDelete(item) }
+                    SFTPSecondaryButton(label: String(localized: "重命名")) { onRename(item) }
+                    SFTPSecondaryButton(label: String(localized: "删除"), danger: true) { onDelete(item) }
                 }
             }
             .padding(14)

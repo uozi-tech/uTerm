@@ -57,7 +57,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         // 范围解不开就什么都不放行，不能退回成「不限定」。
         guard let scope = try? JSONDecoder().decode(RemoteFileScope.self, from: scope) else {
             reply(RemoteFileCodec.packReply(.failure(RemoteFileCodec.requestID(of: payload) ?? UUID(),
-                                                     RemoteFileError(.invalid, "共享范围解不开")), compress: false))
+                                                     RemoteFileError(.invalid, String(localized: "共享范围解不开"))), compress: false))
             return
         }
         let isLong = RemoteFileCodec.operation(of: payload)?.isLongRunning ?? false
@@ -102,7 +102,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                     return
                 }
                 var pair: [Int32] = [-1, -1]
-                guard socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 else { throw AgentError("建控制通道失败") }
+                guard socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 else { throw AgentError(String(localized: "建控制通道失败")) }
                 _ = fcntl(pair[0], F_SETFD, FD_CLOEXEC)
                 _ = fcntl(pair[1], F_SETFD, FD_CLOEXEC)
                 // 这一头 XPC 编码回复时会 dup 一份。另一头传给 holder 之后这边就不留了。
@@ -126,11 +126,11 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         let deadline = Date().addingTimeInterval(Self.spawnWaitSeconds)
         while Date() < deadline {
             if let connected = connect(directory: directory, name: name) { return connected }
-            guard kill(pid, 0) == 0 else { throw AgentError("holder 启动后立刻退出了，详情见 \(directory)/holder.log") }
+            guard kill(pid, 0) == 0 else { throw AgentError(String(localized: "holder 启动后立刻退出了，详情见 \(directory)/holder.log")) }
             usleep(5_000)
         }
         kill(pid, SIGKILL)
-        throw AgentError("等 holder 就绪超时")
+        throw AgentError(String(localized: "等 holder 就绪超时"))
     }
 
     func connectSession(namespace: String, id: String, reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
@@ -139,7 +139,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                 let directory = try self.directory(namespace: namespace)
                 let name = try Self.socketName(id: id)
                 guard let connected = self.connect(directory: directory, name: name) else {
-                    throw AgentError("这个终端已经不在了")
+                    throw AgentError(String(localized: "这个终端已经不在了"))
                 }
                 reply(connected, nil)
             } catch {
@@ -172,13 +172,13 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
 
     private static func socketName(id: String) throws -> String {
         // id 来自主程序，但要拼路径，只认 UUID。
-        guard UUID(uuidString: id) != nil else { throw AgentError("会话 id 无效") }
+        guard UUID(uuidString: id) != nil else { throw AgentError(String(localized: "会话 id 无效")) }
         return id.lowercased() + ".sock"
     }
 
     private func directory(namespace: String) throws -> String {
         guard !namespace.isEmpty, namespace.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else {
-            throw AgentError("命名空间无效")
+            throw AgentError(String(localized: "命名空间无效"))
         }
         let path = NSHomeDirectory() + "/Library/Application Support/uTerm/sessions/" + namespace
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true,
@@ -225,7 +225,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
     private func helper(_ name: String) throws -> String {
         let path = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Helpers/\(name)").path
-        guard FileManager.default.isExecutableFile(atPath: path) else { throw AgentError("找不到 \(path)") }
+        guard FileManager.default.isExecutableFile(atPath: path) else { throw AgentError(String(localized: "找不到 \(path)")) }
         return path
     }
 
@@ -267,7 +267,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         }
         var pid: pid_t = 0
         let result = posix_spawn(&pid, holder, &actions, &attributes, cArguments, cEnvironment)
-        guard result == 0 else { throw AgentError("起 holder 失败：\(String(cString: strerror(result)))") }
+        guard result == 0 else { throw AgentError(String(localized: "起 holder 失败：\(String(cString: strerror(result)))")) }
         log.info("起 holder \(name, privacy: .public) pid=\(pid) \(executable, privacy: .public) \(columns)×\(rows)")
         return pid
     }

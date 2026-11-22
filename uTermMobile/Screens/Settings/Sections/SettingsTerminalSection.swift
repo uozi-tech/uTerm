@@ -15,12 +15,12 @@ struct SettingsTerminalSection: View {
     private var cursorShape: TerminalCursorShape { TerminalCursorPreference.shape(rawValue: cursorShapeRaw) }
 
     var body: some View {
-        MInsetGroup(header: "终端") {
-            MInsetRow(label: "字体", value: "系统等宽", valueMono: true)
+        MInsetGroup(header: String(localized: "终端")) {
+            MInsetRow(label: String(localized: "字体"), value: String(localized: "系统等宽"), valueMono: true)
             // 移动端终端字号随可用宽度自适应（9–13pt，见 TerminalSessionBody.adaptiveFontSize），
             // 不是固定 13pt——iPhone Duo 外屏 / 分屏更小、展开 / iPad 更大。
-            MInsetRow(label: "字号", value: "随宽度自适应")
-            MInsetRow(label: "光标形状",
+            MInsetRow(label: String(localized: "字号"), value: String(localized: "随宽度自适应"))
+            MInsetRow(label: String(localized: "光标形状"),
                       trailing: AnyView(MMenu {
                           ForEach(TerminalCursorShape.allCases) { shape in
                               Button(shape.localizedLabel) { cursorShapeRaw = shape.rawValue }
@@ -31,13 +31,13 @@ struct SettingsTerminalSection: View {
                               MIcon(name: "chev-down", size: 11, color: M.text4)
                           }
                       }))
-            MInsetRow(label: "闪烁",
+            MInsetRow(label: String(localized: "闪烁", comment: "终端光标闪烁"),
                       trailing: AnyView(MSwitch(on: $cursorBlink)))
-            MInsetRow(label: "灵动岛与锁屏", sub: "Claude Code 等程序在运行或等你处理时显示",
+            MInsetRow(label: String(localized: "灵动岛与锁屏"), sub: String(localized: "Claude Code 等程序在运行或等你处理时显示"),
                       trailing: AnyView(MSwitch(on: $liveActivity)))
             // 键盘条 AI 面板里的启动命令 / 提示词 / 斜杠命令。只在本机，不跨设备同步。
             NavigationLink { TerminalPhrasesScreen() } label: {
-                MInsetRow(label: "键盘条短语", sub: "启动命令、提示词、斜杠命令", chevron: true, last: true)
+                MInsetRow(label: String(localized: "键盘条短语"), sub: String(localized: "启动命令、提示词、斜杠命令"), chevron: true, last: true)
             }
             .buttonStyle(MRowStyle())
         }

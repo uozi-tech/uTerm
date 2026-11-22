@@ -116,16 +116,16 @@ final class FilePreviewModel {
         var errorDescription: String? {
             switch self {
             case .providerUnavailable:
-                return "SFTP 尚未连接"
+                return String(localized: "SFTP 尚未连接")
             case .missingBuffer:
-                return "文件缓冲区不存在"
+                return String(localized: "文件缓冲区不存在")
             case .invalidMarkdownImageSource:
-                return "图片地址为空或无效"
+                return String(localized: "图片地址为空或无效")
             case .unsupportedMarkdownImageSource(let source):
-                return "为保护本机网络，Markdown 只预览同一 SFTP 主机上的图片：\(source)"
+                return String(localized: "为保护本机网络，Markdown 只预览同一 SFTP 主机上的图片：\(source)")
             case .markdownImageTooLarge(let bytes):
                 let cap = UFormat.bytes(MarkdownImageCache.perImageByteCap)
-                return "图片超过 \(cap)（实际约 \(UFormat.bytes(bytes))），已跳过预览"
+                return String(localized: "图片超过 \(cap)（实际约 \(UFormat.bytes(bytes))），已跳过预览")
             }
         }
     }
@@ -243,7 +243,7 @@ final class FilePreviewModel {
 
         // 大小检查
         if let fileSize, fileSize > Self.maximumPreviewBytes {
-            buf.state = .failed("文件超过 50 MB，用本机应用打开")
+            buf.state = .failed(String(localized: "文件超过 50 MB，用本机应用打开"))
             return
         }
 
@@ -400,7 +400,7 @@ final class FilePreviewModel {
                 guard remote.size <= Self.maximumPreviewBytes else {
                     buf.byteSize = remote.size
                     buf.mtimeWhenLoaded = remote.mtime
-                    buf.state = .failed("文件超过 50 MB，用本机应用打开")
+                    buf.state = .failed(String(localized: "文件超过 50 MB，用本机应用打开"))
                     continue
                 }
 
@@ -450,13 +450,13 @@ final class FilePreviewModel {
         }
 
         if let byteSize = buf.byteSize, byteSize > Self.maximumPreviewBytes {
-            buf.state = .failed("文件超过 50 MB，用本机应用打开")
+            buf.state = .failed(String(localized: "文件超过 50 MB，用本机应用打开"))
             return
         }
 
         guard let sftp = sftpProvider() else {
             if failIfProviderMissing {
-                buf.state = .failed("SFTP 尚未连接")
+                buf.state = .failed(String(localized: "SFTP 尚未连接"))
             }
             return
         }
@@ -550,7 +550,7 @@ final class FilePreviewModel {
         }
         guard case .loaded = buf.state else { return .noop }
         guard buf.isDirty else { return .noop }
-        guard let sftp = sftpProvider() else { return .failed("SFTP 尚未连接") }
+        guard let sftp = sftpProvider() else { return .failed(String(localized: "SFTP 尚未连接")) }
 
         // mtime 冲突检测
         do {
@@ -637,7 +637,7 @@ final class FilePreviewModel {
             guard let img = NSImage(data: data) else {
                 buf.imageData = nil
                 buf.imageSize = .zero
-                buf.state = .failed("图片无法解码，不支持预览。可以用本机应用打开，保存后自动上传回主机。")
+                buf.state = .failed(String(localized: "图片无法解码，不支持预览。可以用本机应用打开，保存后自动上传回主机。"))
                 return false
             }
             buf.imageData = data
@@ -645,7 +645,7 @@ final class FilePreviewModel {
         case .code, .markdown, .plainText:
             guard let text = previewableText(from: data) else {
                 buf.text = ""
-                buf.state = .failed("检测到二进制内容，不支持预览。可以用本机应用打开，保存后自动上传回主机。")
+                buf.state = .failed(String(localized: "检测到二进制内容，不支持预览。可以用本机应用打开，保存后自动上传回主机。"))
                 return false
             }
             buf.text = text
@@ -656,7 +656,7 @@ final class FilePreviewModel {
     private static func applyPreviewLoadFailure(_ error: Error, to buf: FileBuffer) {
         if let limitError = error as? SFTPDownloadLimitExceeded {
             buf.byteSize = limitError.observedBytes
-            buf.state = .failed("文件超过 50 MB，用本机应用打开")
+            buf.state = .failed(String(localized: "文件超过 50 MB，用本机应用打开"))
         } else {
             buf.state = .failed("\(error)")
         }

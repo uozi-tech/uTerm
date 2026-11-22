@@ -42,20 +42,20 @@ struct CommandPaletteView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 2) {
                             if r.showNewHost {
-                                cap("动作")
-                                row(icon: "plus", title: "新建主机…", detail: "添加一台 SSH 主机", tinted: true) {
+                                cap(String(localized: "动作", comment: "命令面板分组：操作"))
+                                row(icon: "plus", title: String(localized: "新建主机…"), detail: String(localized: "添加一台 SSH 主机"), tinted: true) {
                                     close(); store.tab = .hosts; store.requestNewServer = true
                                 }
                             }
                             if !r.hosts.isEmpty {
-                                cap("主机")
+                                cap(String(localized: "主机", comment: "命令面板分组"))
                                 ForEach(r.hosts) { h in
                                     row(icon: "server", title: h.name, detail: h.displayEndpoint,
-                                        hint: "连接", tinted: true, mono: true) { connect(h) }
+                                        hint: String(localized: "连接", comment: "命令面板：连接这台主机"), tinted: true, mono: true) { connect(h) }
                                 }
                             }
                             if !r.commands.isEmpty {
-                                cap("命令")
+                                cap(String(localized: "命令", comment: "命令面板分组：快捷命令"))
                                 ForEach(r.commands) { c in
                                     row(icon: c.aiAssisted ? "spark" : "bolt",
                                         title: c.name,
@@ -65,7 +65,7 @@ struct CommandPaletteView: View {
                                 }
                             }
                             if !r.keys.isEmpty {
-                                cap("密钥")
+                                cap(String(localized: "密钥", comment: "命令面板分组：SSH 密钥"))
                                 ForEach(r.keys) { k in
                                     row(icon: "key", title: k.name, detail: k.typeLabel, mono: true) {
                                         close(); store.tab = .settings
@@ -73,9 +73,9 @@ struct CommandPaletteView: View {
                                 }
                             }
                             if !r.groups.isEmpty {
-                                cap("分组")
+                                cap(String(localized: "分组", comment: "命令面板分组：主机分组"))
                                 ForEach(r.groups) { g in
-                                    row(icon: "tag", title: g.name, detail: "\(g.members) 台主机") {
+                                    row(icon: "tag", title: g.name, detail: String(localized: "\(g.members) 台主机")) {
                                         close(); store.tab = .settings
                                     }
                                 }
@@ -249,7 +249,7 @@ final class PaletteMemo {
                                 members: counts[$0.name] ?? 0)
             }
         }
-        out.showNewHost = hit("新建主机") || hit("new host")
+        out.showNewHost = hit(String(localized: "新建主机")) || hit("新建主机") || hit("new host")
         return out
     }
 }

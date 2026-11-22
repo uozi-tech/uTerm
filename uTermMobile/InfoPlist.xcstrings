@@ -1,0 +1,111 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "NSLocalNetworkUsageDescription": {
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "uTerm 使用局域网发现 Mac，用于同步设置，以及远程控制 Mac 上的终端和屏幕。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm uses the local network to find your Mac, sync settings, and remotely control the terminals and screen on your Mac."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm 使用區域網路尋找 Mac，用於同步設定，以及遠端控制 Mac 上的終端機和螢幕。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm はローカルネットワークで Mac を検出し、設定の同期や Mac のターミナルと画面のリモート操作に使用します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm은 로컬 네트워크에서 Mac을 찾아 설정을 동기화하고 Mac의 터미널과 화면을 원격으로 제어합니다."
+          }
+        }
+      }
+    },
+    "NSCameraUsageDescription": {
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "uTerm 使用相机扫描 Mac 上显示的配对二维码。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm uses the camera to scan the pairing QR code shown on your Mac."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm 使用相機掃描 Mac 上顯示的配對 QR 碼。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm はカメラを使って Mac に表示されたペアリング用 QR コードを読み取ります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm은 카메라로 Mac에 표시된 페어링 QR 코드를 스캔합니다."
+          }
+        }
+      }
+    },
+    "NSFaceIDUsageDescription": {
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "uTerm 使用面容 ID 解锁应用，并在远程解锁 Mac 时取用你保存的登录密码。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm uses Face ID to unlock the app and to use the login password you saved when remotely unlocking your Mac."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm 使用 Face ID 解鎖 App，並在遠端解鎖 Mac 時取用你儲存的登入密碼。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm は Face ID を使って App のロックを解除し、Mac をリモートでロック解除するときに保存済みのログインパスワードを使用します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uTerm은 Face ID로 앱을 잠금 해제하고, Mac을 원격으로 잠금 해제할 때 저장된 로그인 암호를 사용합니다."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

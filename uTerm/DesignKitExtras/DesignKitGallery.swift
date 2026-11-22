@@ -5,6 +5,8 @@ import SwiftUI
 ///
 /// 把 `UD` 基础组件按家族（基础 token / Chrome / 控件 / 浮层 / 对话与状态）铺成
 /// 可滚动画廊，顶部可切深 / 浅外观，供肉眼对照设计稿。纯展示，不接入任何业务。
+///
+/// 只给开发者看，文案不进文案目录（`Text(verbatim:)`），不翻译。
 struct DesignKitGallery: View {
     /// 内置外观初值（默认深色；离屏渲染时可指定）。
     var initialScheme: ColorScheme = .dark
@@ -85,7 +87,7 @@ struct DesignKitGallery: View {
                     UDToggle($toggleHotReload)
                     UDToggle(.constant(false)).disabled(true)
                     HStack(spacing: 10) {
-                        Text("热加载").font(UD.body).foregroundStyle(UD.text)
+                        Text(verbatim: "热加载").font(UD.body).foregroundStyle(UD.text)
                         UDToggle($toggleHotReload)
                     }
                 }
@@ -97,7 +99,7 @@ struct DesignKitGallery: View {
     private var header: some View {
         HStack(spacing: 12) {
             ULogo(size: 24)
-            Text("uTerm · DesignKit")
+            Text(verbatim: "uTerm · DesignKit")
                 .font(UD.h2)
                 .foregroundStyle(UD.text)
             Spacer()
@@ -130,9 +132,9 @@ struct DesignKitGallery: View {
             }
             Group(label: "字体 Type") {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("连接到主机 demo-server").font(UD.title).foregroundStyle(UD.text)
-                    Text("快速开始 · 支持热加载与 SFTP").font(UD.h2).foregroundStyle(UD.text2)
-                    Text("root@demo-server:~$ systemctl status nginx")
+                    Text(verbatim: "连接到主机 demo-server").font(UD.title).foregroundStyle(UD.text)
+                    Text(verbatim: "快速开始 · 支持热加载与 SFTP").font(UD.h2).foregroundStyle(UD.text2)
+                    Text(verbatim: "root@demo-server:~$ systemctl status nginx")
                         .font(UD.monoTerminal).foregroundStyle(UD.text2)
                 }
             }
@@ -300,11 +302,11 @@ struct DesignKitGallery: View {
         Section(title: "对话与状态 · Agent · Footer", subtitle: "对话气泡 / 工具调用 / 输入区 / 遥测状态栏") {
             HStack(alignment: .top, spacing: 28) {
                 UDChatMessage(role: .user) {
-                    Text("为什么 nginx 偶尔会 502？日志里看不出明显规律。")
+                    Text(verbatim: "为什么 nginx 偶尔会 502？日志里看不出明显规律。")
                 }
                 UDChatMessage(role: .assistant) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("先看 worker 进程数与 upstream 配置：")
+                        Text(verbatim: "先看 worker 进程数与 upstream 配置：")
                         UDCodeChip("nginx -T | grep -E \"worker|upstream\"")
                     }
                 }

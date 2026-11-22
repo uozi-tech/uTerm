@@ -18,7 +18,7 @@ struct CLISettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsPageHeader(title: "命令行与技能",
+            SettingsPageHeader(title: String(localized: "命令行与技能"),
                                subtitle: String(localized: "让本机的 AI 工具经 uTerm 使用你保存的主机"))
             interfaceGroup
             backgroundGroup
@@ -35,15 +35,15 @@ struct CLISettingsView: View {
     }
 
     private var backgroundGroup: some View {
-        SettingsGroup(title: "后台服务",
+        SettingsGroup(title: String(localized: "后台服务"),
                       footer: String(localized: "后台实例不弹窗口，也不显示 Dock 图标。")) {
-            SettingsRow(label: "登录后在后台启动", hint: "登录 macOS 后启动 uTerm 的本机服务") {
+            SettingsRow(label: String(localized: "登录后在后台启动"), hint: String(localized: "登录 macOS 后启动 uTerm 的本机服务")) {
                 UDToggle(Binding(
                     get: { backgroundSettings.launchAtLogin },
                     set: { backgroundSettings.setLaunchAtLogin($0) }
                 ))
             }
-            SettingsRow(label: "允许 CLI 按需启动", hint: "uTerm 未运行时，utermctl 可以静默启动一个后台实例并等待接口就绪") {
+            SettingsRow(label: String(localized: "允许 CLI 按需启动"), hint: String(localized: "uTerm 未运行时，utermctl 可以静默启动一个后台实例并等待接口就绪")) {
                 UDToggle(Binding(
                     get: { backgroundSettings.allowOnDemandLaunch },
                     set: { backgroundSettings.allowOnDemandLaunch = $0 }
@@ -64,11 +64,11 @@ struct CLISettingsView: View {
     // MARK: - 接口
 
     private var interfaceGroup: some View {
-        SettingsGroup(title: "命令行接口",
+        SettingsGroup(title: String(localized: "命令行接口"),
                       footer: String(localized: "密码与私钥不会交给命令行工具。执行任意 shell 命令等同于对该主机的完全访问，按需开启写入。")) {
             SettingsRow(
-                label: "启用命令行接口",
-                hint: "本机的 AI 工具可以经 uTerm 使用你已保存的主机执行命令、读写文件、启停隧道"
+                label: String(localized: "启用命令行接口"),
+                hint: String(localized: "本机的 AI 工具可以经 uTerm 使用你已保存的主机执行命令、读写文件、启停隧道")
             ) {
                 UDToggle(
                     Binding(get: { settings.isEnabled }, set: { settings.isEnabled = $0 })
@@ -76,8 +76,8 @@ struct CLISettingsView: View {
             }
 
             SettingsRow(
-                label: "允许执行命令与写入",
-                hint: "放开 run、SFTP 写入、端口转发启停与终端注入"
+                label: String(localized: "允许执行命令与写入"),
+                hint: String(localized: "放开 run、SFTP 写入、端口转发启停与终端注入")
             ) {
                 UDToggle(
                     Binding(get: { settings.allowMutations }, set: { settings.allowMutations = $0 })
@@ -95,8 +95,8 @@ struct CLISettingsView: View {
     }
 
     private var socketRow: some View {
-        SettingsRow(label: "接口地址", hint: settings.socketPath, hintStyle: .monospaced) {
-            UDButton(title: copied ? "已拷贝" : "拷贝", style: .secondary) {
+        SettingsRow(label: String(localized: "接口地址"), hint: settings.socketPath, hintStyle: .monospaced) {
+            UDButton(title: copied ? String(localized: "已拷贝") : String(localized: "拷贝", comment: "拷贝到剪贴板的按钮"), style: .secondary) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(settings.socketPath, forType: .string)
                 copied = true
@@ -113,10 +113,8 @@ struct CLISettingsView: View {
     @ViewBuilder
     private var skillsGroup: some View {
         SettingsGroup(
-            title: "AI 技能",
-            footer: "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 "
-                + SkillDefinition.catalog.map(\.slug).joined(separator: "、")
-                + " 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后，下次启动会自动更新链接。"
+            title: String(localized: "AI 技能"),
+            footer: String(localized: "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 \(SkillDefinition.catalog.map(\.slug).joined(separator: String(localized: "、", comment: "并列名称之间的分隔符"))) 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后，下次启动会自动更新链接。")
         ) {
             if !skills.didLoad {
                 SettingsEmptyRow(symbol: "magnifyingglass", text: String(localized: "正在检测本机的 AI 命令行工具…"))
@@ -147,12 +145,12 @@ struct CLISettingsView: View {
                 // 已安装不再挂「已安装」徽标：右侧已经有「卸载」，状态一目了然（user 要求去掉）。
                 if case .installed = status {} else { statusPill(status) }
                 if status.canInstall {
-                    UDButton(title: "安装", style: .primary, isLoading: busy) {
+                    UDButton(title: String(localized: "安装", comment: "安装 AI 技能"), style: .primary, isLoading: busy) {
                         Task { await skills.install(target) }
                     }
                     .disabled(busy)
                 } else if status.canUninstall {
-                    UDButton(title: "卸载", style: .secondary, isLoading: busy) {
+                    UDButton(title: String(localized: "卸载", comment: "卸载 AI 技能"), style: .secondary, isLoading: busy) {
                         Task { await skills.uninstall(target) }
                     }
                     .disabled(busy)
@@ -173,7 +171,7 @@ struct CLISettingsView: View {
     /// 可选的 PATH 链接。与技能安装分开：不装技能也能只要这条链接。
     private var binLinkRow: some View {
         SettingsRow(
-            label: "同时链接到 ~/.local/bin/utermctl",
+            label: String(localized: "同时链接到 ~/.local/bin/utermctl"),
             hint: binLinkHint
         ) {
             UDToggle(Binding(
@@ -188,25 +186,24 @@ struct CLISettingsView: View {
     }
 
     private var binLinkHint: String {
-        let base = "在自己的终端里也能直接敲 utermctl，与技能自带的那份同源"
         switch skills.binLinkStatus {
         case .installed:
-            return base + "（已链接）"
+            return String(localized: "在自己的终端里也能直接敲 utermctl，与技能自带的那份同源（已链接）")
         case .conflict(let reason):
-            return base + "（\(reason)）"
+            return String(localized: "在自己的终端里也能直接敲 utermctl，与技能自带的那份同源（\(reason)）")
         case .brokenLink:
-            return base + "（链接指向旧位置，关掉再打开开关即可修复）"
+            return String(localized: "在自己的终端里也能直接敲 utermctl，与技能自带的那份同源（链接指向旧位置，关掉再打开开关即可修复）")
         case .notInstalled:
-            return base
+            return String(localized: "在自己的终端里也能直接敲 utermctl，与技能自带的那份同源")
         }
     }
 
     private func statusHint(_ status: SkillInstallStatus) -> String {
         switch status {
-        case .installed: return "技能已安装，可直接在对话里使用"
-        case .notInstalled: return "尚未安装"
-        case .brokenLink: return "链接指向旧位置或有技能缺失，点安装即可修复"
-        case .conflict: return "目标位置被占用"
+        case .installed: return String(localized: "技能已安装，可直接在对话里使用")
+        case .notInstalled: return String(localized: "尚未安装", comment: "AI 技能安装状态")
+        case .brokenLink: return String(localized: "链接指向旧位置或有技能缺失，点安装即可修复")
+        case .conflict: return String(localized: "目标位置被占用")
         }
     }
 

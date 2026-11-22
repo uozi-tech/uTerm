@@ -99,9 +99,9 @@ struct ParallelServerState: Identifiable {
     /// AI 泳道右侧状态徽标文案。
     var laneStatusText: String {
         switch tone {
-        case .running: return diagnosing ? "诊断中…" : "运行中…"
-        case .ok:      return "成功"
-        case .failed:  return "失败"
+        case .running: return diagnosing ? String(localized: "诊断中…") : String(localized: "运行中…")
+        case .ok:      return String(localized: "成功", comment: "并行执行：单台结果")
+        case .failed:  return String(localized: "失败", comment: "并行执行：单台结果")
         }
     }
 }

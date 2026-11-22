@@ -49,7 +49,7 @@ private struct LockCoverView: View {
                     UDIndeterminateBar()
                         .frame(width: 84)
                 } else {
-                    UDButton(title: "解锁", style: .primary, systemImage: "lock.open") {
+                    UDButton(title: String(localized: "解锁", comment: "应用锁屏上的解锁按钮"), style: .primary, systemImage: "lock.open") {
                         Task { await model.authenticate() }
                     }
                 }

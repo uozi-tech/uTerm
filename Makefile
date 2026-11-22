@@ -58,7 +58,7 @@ BUILD_NUMBER ?= $(shell echo $$(( $$(git rev-list --count HEAD) + $$(cat Config/
 .PHONY: help gallery gallery-diff test-fast test-relay-e2e test-weak-network relay-dist test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	engine engine-build check-engine holder test-holder test-holder-e2e build test test-mobile check-cli check-skills check-cloudkit-schema clean install \
-	sync-strings sync-strings-build check-strings tag
+	sync-strings sync-strings-build check-strings check-translations tag
 
 help::
 	@printf '%s\n' 'uTerm packaging commands:'
@@ -86,6 +86,7 @@ help::
 	@printf '%s\n' '  make check-cloudkit-schema             Diff @Model against the deployed CloudKit schema'
 	@printf '%s\n' '  make sync-strings                      Build both targets, merge new strings into Localizable.xcstrings'
 	@printf '%s\n' '  make check-strings                     Same, but only fail if the catalog is behind the code'
+	@printf '%s\n' '  make check-translations                Fail if any catalog key lacks en/zh-Hant/ja/ko or has mismatched placeholders'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
 	@printf '%s\n' ''
@@ -299,6 +300,12 @@ sync-strings: sync-strings-build $(SYNC_STRINGS_TOOL)
 check-strings: sync-strings-build $(SYNC_STRINGS_TOOL)
 	"$(SYNC_STRINGS_TOOL)" --catalog "$(STRINGS_CATALOG)" --check \
 		--stringsdata-dir "$(STRINGSDATA_MAC)" --stringsdata-dir "$(STRINGSDATA_MOBILE)"
+
+# 目录里每个要翻译的键都带齐 en / zh-Hant / ja / ko，格式占位与原文一致（scripts/translations.py，
+# 自测 scripts/translations.test.sh）。不用编译；新键先 `make sync-strings` 进目录，再按脚本说明翻译、merge。
+check-translations:
+	python3 -I scripts/translations.py check --catalog "$(STRINGS_CATALOG)"
+	bash scripts/translations.test.sh
 
 # 命令行客户端的离线自测：起一个假的 Unix socket 服务端，把每个子命令跑一遍
 # （请求编码 / 输出格式化 / 退出码映射）。不需要 Xcode，也不需要 uTerm 在跑。

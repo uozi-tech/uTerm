@@ -299,16 +299,16 @@ nonisolated enum RemoteFileCodec {
     static func decode<Header: Decodable>(_ type: Header.Type, from data: Data) throws -> (header: Header, body: Data) {
         // 调用方给的可能是切片，下标不从 0 开始。
         let data = Data(data)
-        guard data.count >= 4 else { throw RemoteFileError(.invalid, "消息太短") }
+        guard data.count >= 4 else { throw RemoteFileError(.invalid, String(localized: "消息太短")) }
         let count = data.prefix(4).reduce(0) { $0 << 8 | Int($1) }
         guard count <= RemoteFileLimits.maxHeaderBytes, data.count >= 4 + count else {
-            throw RemoteFileError(.invalid, "消息头长度不对")
+            throw RemoteFileError(.invalid, String(localized: "消息头长度不对"))
         }
         let header: Header
         do {
             header = try JSONDecoder().decode(type, from: data.subdata(in: 4..<(4 + count)))
         } catch {
-            throw RemoteFileError(.invalid, "消息头解不开：\(error.localizedDescription)")
+            throw RemoteFileError(.invalid, String(localized: "消息头解不开：\(error.localizedDescription)"))
         }
         return (header, data.subdata(in: (4 + count)..<data.count))
     }
@@ -322,9 +322,9 @@ nonisolated enum RemoteFileCodec {
 
     static func decompress(_ body: Data, method: String?) throws -> Data {
         guard let method else { return body }
-        guard method == RemoteFileLimits.lzfse else { throw RemoteFileError(.invalid, "不认识的压缩方式 \(method)") }
+        guard method == RemoteFileLimits.lzfse else { throw RemoteFileError(.invalid, String(localized: "不认识的压缩方式 \(method)")) }
         guard let plain = try? (body as NSData).decompressed(using: .lzfse) as Data else {
-            throw RemoteFileError(.invalid, "正文解压失败")
+            throw RemoteFileError(.invalid, String(localized: "正文解压失败"))
         }
         return plain
     }

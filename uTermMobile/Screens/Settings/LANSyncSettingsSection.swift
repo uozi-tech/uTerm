@@ -9,12 +9,12 @@ struct LANSyncSettingsSection: View {
     @State private var draftCode = ""
 
     var body: some View {
-        MInsetGroup(header: "局域网接收", footer: "手机与 Mac 需连接同一 Wi-Fi。Mac 发起全量加密同步后，需在这里确认才会覆盖本机数据；密码、私钥和 API Key 会随本次加密会话传输。") {
-            MInsetRow(icon: "wifi", label: "接收状态", sub: lanSync.status.label,
-                      value: "前台监听", last: false)
+        MInsetGroup(header: String(localized: "局域网接收"), footer: String(localized: "手机与 Mac 需连接同一 Wi-Fi。Mac 发起全量加密同步后，需在这里确认才会覆盖本机数据；密码、私钥和 API Key 会随本次加密会话传输。")) {
+            MInsetRow(icon: "wifi", label: String(localized: "接收状态"), sub: lanSync.status.label,
+                      value: String(localized: "前台监听"), last: false)
             // 点按后在弹窗里输入：行内常驻的数字键盘没有「完成」键，聚焦后键盘关不掉（实机反馈）。
-            MInsetRow(label: "配对码", sub: "输入 Mac 上「设置 › 同步」中显示的 6 位配对码",
-                      value: pairingCode.isEmpty ? "未设置" : pairingCode, valueMono: !pairingCode.isEmpty,
+            MInsetRow(label: String(localized: "配对码"), sub: String(localized: "输入 Mac 上「设置 › 同步」中显示的 6 位配对码"),
+                      value: pairingCode.isEmpty ? String(localized: "未设置") : pairingCode, valueMono: !pairingCode.isEmpty,
                       chevron: true, last: true,
                       onTap: { draftCode = ""; editingCode = true })
         }
@@ -61,9 +61,9 @@ private struct PairingCodeSheet: View {
             }
             HStack(spacing: 10) {
                 if hasSavedCode {
-                    MBtn(title: "清除配对码", kind: .dangerTint, full: true, height: 44, action: onClear)
+                    MBtn(title: String(localized: "清除配对码"), kind: .dangerTint, full: true, height: 44, action: onClear)
                 }
-                MBtn(title: "取消", kind: .secondary, full: true, height: 44) { dismiss() }
+                MBtn(title: String(localized: "取消"), kind: .secondary, full: true, height: 44) { dismiss() }
             }
         }
         .padding(.horizontal, 24)
@@ -110,6 +110,6 @@ private struct MobileLANSyncHost: ViewModifier {
 
     private var pendingOfferMessage: String {
         guard let offer = lanSync.pendingOffer else { return "" }
-        return "设备：\(offer.deviceName)\n配置与历史记录：\(offer.recordCount) 条\n偏好设置：\(offer.preferenceCount) 项\n敏感凭据：\(offer.secretCount) 项\n\n确认后本机数据将与这台 Mac 完全一致：本机有、Mac 上没有的主机、密钥、命令与对话记录会被删除，并经 iCloud 同步到你的其他设备。"
+        return String(localized: "设备：\(offer.deviceName)\n配置与历史记录：\(offer.recordCount) 条\n偏好设置：\(offer.preferenceCount) 项\n敏感凭据：\(offer.secretCount) 项\n\n确认后本机数据将与这台 Mac 完全一致：本机有、Mac 上没有的主机、密钥、命令与对话记录会被删除，并经 iCloud 同步到你的其他设备。")
     }
 }

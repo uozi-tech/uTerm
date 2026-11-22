@@ -95,13 +95,13 @@ struct ForwardEditorSheet: View {
     /// 监听端口范围校验（1–65535）。空值不在此处报错（交给禁用按钮 + 命令预览 `?`）。
     private var listenPortRangeError: String? {
         guard !listenPortText.isEmpty else { return nil }
-        return (portNum >= 1 && portNum <= 65535) ? nil : "端口需在 1–65535 之间"
+        return (portNum >= 1 && portNum <= 65535) ? nil : String(localized: "端口需在 1–65535 之间")
     }
 
     private var destPortNum: Int { Int(destPortText) ?? 0 }
     private var destPortRangeError: String? {
         guard needsDest, !destPortText.isEmpty else { return nil }
-        return (destPortNum >= 1 && destPortNum <= 65535) ? nil : "端口需在 1–65535 之间"
+        return (destPortNum >= 1 && destPortNum <= 65535) ? nil : String(localized: "端口需在 1–65535 之间")
     }
 
     /// 监听端口字段的错误文案：范围错误优先于冲突。
@@ -168,12 +168,12 @@ struct ForwardEditorSheet: View {
     private var formBody: some View {
         VStack(alignment: .leading, spacing: 20) {
             // 类型 + 说明。
-            FormField(label: "转发类型") {
+            FormField(label: String(localized: "转发类型")) {
                 VStack(alignment: .leading, spacing: 8) {
                     UDSegmented(selection: $kind, options: [
-                        (value: ForwardKind.local, label: "本地 -L"),
-                        (value: ForwardKind.remote, label: "远程 -R"),
-                        (value: ForwardKind.dynamic, label: "动态 -D")
+                        (value: ForwardKind.local, label: String(localized: "本地 -L")),
+                        (value: ForwardKind.remote, label: String(localized: "远程 -R")),
+                        (value: ForwardKind.dynamic, label: String(localized: "动态 -D"))
                     ])
                     Text(kind.desc)
                         .font(.system(size: 11.5))
@@ -181,23 +181,23 @@ struct ForwardEditorSheet: View {
                 }
             }
 
-            FormField(label: "备注名称") {
-                UDTextField(placeholder: "例如：生产数据库", text: $name)
+            FormField(label: String(localized: "备注名称")) {
+                UDTextField(placeholder: String(localized: "例如：生产数据库"), text: $name)
             }
 
             // 监听段。
             FormSection(title: kind.srcLabel, hint: kind.srcHint) {
                 FormRow {
-                    FormField(label: "地址", flex: 2) {
+                    FormField(label: String(localized: "地址", comment: "端口转发：监听地址"), flex: 2) {
                         UDTextField(placeholder: kind == .remote ? "0.0.0.0" : "127.0.0.1",
                                     text: $listenHost, monospaced: true)
                     }
-                    FormField(label: "端口", flex: 1) {
-                        UDTextField(placeholder: "端口",
+                    FormField(label: String(localized: "端口"), flex: 1) {
+                        UDTextField(placeholder: String(localized: "端口"),
                                     text: portBinding($listenPortText),
                                     errorMessage: listenPortError,
                                     monospaced: true)
-                            .accessibilityValue(listenPortRangeError ?? (conflict != nil ? "端口冲突" : ""))
+                            .accessibilityValue(listenPortRangeError ?? (conflict != nil ? String(localized: "端口冲突") : ""))
                     }
                 }
                 if let listenPortRangeError {
@@ -213,12 +213,12 @@ struct ForwardEditorSheet: View {
             if needsDest, let dstLabel = kind.dstLabel {
                 FormSection(title: dstLabel, hint: kind.dstHint) {
                     FormRow {
-                        FormField(label: "主机", flex: 2) {
+                        FormField(label: String(localized: "主机", comment: "端口转发：目标主机"), flex: 2) {
                             UDTextField(placeholder: kind == .remote ? "localhost" : "10.0.0.1",
                                         text: $destHost, monospaced: true)
                         }
-                        FormField(label: "端口", flex: 1) {
-                            UDTextField(placeholder: "端口",
+                        FormField(label: String(localized: "端口"), flex: 1) {
+                            UDTextField(placeholder: String(localized: "端口"),
                                         text: portBinding($destPortText),
                                         errorMessage: destPortRangeError,
                                         monospaced: true)
@@ -320,8 +320,8 @@ struct ForwardEditorSheet: View {
                     .foregroundStyle(UD.danger)
             }
             Spacer(minLength: 0)
-            UDButton(title: "取消", style: .secondary, action: onCancel)
-            UDButton(title: existing == nil ? "创建" : "保存", style: .primary) {
+            UDButton(title: String(localized: "取消"), style: .secondary, action: onCancel)
+            UDButton(title: existing == nil ? String(localized: "创建", comment: "创建端口转发规则") : String(localized: "保存"), style: .primary) {
                 guard valid else { return }
                 onSave(makeDraft())
             }

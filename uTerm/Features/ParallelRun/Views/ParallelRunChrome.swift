@@ -192,13 +192,11 @@ struct ParallelBroadcastBar: View {
 
     private var stats: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 0) {
-                Text("完成 ").foregroundStyle(UD.text2)
-                Text("\(doneCount)").foregroundStyle(UD.text)
-                Text("/\(total)").foregroundStyle(UD.text3)
-            }
-            statDot(color: UD.success, text: "\(okCount) 成功")
-            if failedCount > 0 { statDot(color: UD.danger, text: "\(failedCount) 失败") }
+            Text("完成 \(Text(doneCount, format: .number).foregroundStyle(UD.text))\(Text("/\(total)").foregroundStyle(UD.text3))",
+                 comment: "并行执行进度：完成 N/总数")
+                .foregroundStyle(UD.text2)
+            statDot(color: UD.success, text: String(localized: "\(okCount) 成功"))
+            if failedCount > 0 { statDot(color: UD.danger, text: String(localized: "\(failedCount) 失败")) }
             TimelineView(.periodic(from: startedAt, by: 0.1)) { ctx in
                 let end = finishedAt ?? ctx.date
                 Text(UFormat.duration(seconds: max(0, end.timeIntervalSince(startedAt))))

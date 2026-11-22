@@ -86,7 +86,7 @@ struct GlobalForwardRow: View {
             // `Button` 再 `opacity(0)` 藏起来，上千行时那就是上千个真控件。不悬停时换成
             // 等宽占位色块，几何一模一样（26pt）。
             if hover {
-                iconButton("pencil", tint: UD.text3, help: "编辑配置", action: onEdit)
+                iconButton("pencil", tint: UD.text3, help: String(localized: "编辑配置"), action: onEdit)
             } else {
                 Color.clear.frame(width: 26, height: 26)
             }
@@ -95,10 +95,10 @@ struct GlobalForwardRow: View {
 
             TunnelStatusBadge(status: status, recentIssue: recentIssue, onRetry: retry)
                 .help(whenHovering: hover,
-                      errorMessage ?? recentIssue.map { "最近连接失败：\($0)" } ?? "")
+                      errorMessage ?? recentIssue.map { String(localized: "最近连接失败：\($0)") } ?? "")
 
             UDToggle(Binding(get: { rule.launchAtAppStart }, set: { setKeepConnected($0) }))
-                .help(whenHovering: hover, "保持连接 · 随 uTerm 启动自动建立")
+                .help(whenHovering: hover, String(localized: "保持连接 · 随 uTerm 启动自动建立"))
                 .accessibilityLabel(rule.launchAtAppStart
                     ? "停止并取消保持「\(rule.name)」" : "保持连接「\(rule.name)」")
         }
@@ -173,7 +173,8 @@ struct GlobalForwardRow: View {
                 .foregroundStyle(UD.text3)
                 .lineLimit(1)
                 .help(whenHovering: hover,
-                      "累计  ↑ \(UFormat.bytes(Int64(clamping: t.up))) · ↓ \(UFormat.bytes(Int64(clamping: t.down)))")
+                      String(localized: "累计  ↑ \(UFormat.bytes(Int64(clamping: t.up))) · ↓ \(UFormat.bytes(Int64(clamping: t.down)))",
+                             comment: "端口转发累计流量：上行 / 下行字节数"))
             }
         }
         .frame(width: 104, alignment: .trailing)
@@ -216,7 +217,7 @@ struct TunnelStatusBadge: View {
         Group {
             switch status {
             case .inactive:
-                dotLabel("未连接", dot: UD.text4, text: UD.text4)
+                dotLabel(String(localized: "未连接"), dot: UD.text4, text: UD.text4)
             case .starting:
                 HStack(spacing: 5) {
                     ProgressView().controlSize(.small).tint(UD.accent)
@@ -231,7 +232,7 @@ struct TunnelStatusBadge: View {
                             .font(.system(size: 8)).foregroundStyle(UD.warning)
                     }
                 } else {
-                    dotLabel("已连接", dot: UD.success, text: UD.success)
+                    dotLabel(String(localized: "已连接"), dot: UD.success, text: UD.success)
                 }
             case .error:
                 Button(action: onRetry) {

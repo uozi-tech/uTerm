@@ -14,7 +14,7 @@ struct EmptyBody: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 if !model.recents.isEmpty {
-                    UDButton(title: "清空", style: .ghost) { model.clearRecents() }
+                    UDButton(title: String(localized: "清空", comment: "清空最近打开的文件列表"), style: .ghost) { model.clearRecents() }
                 }
             }
             if model.recents.isEmpty {

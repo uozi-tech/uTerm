@@ -97,7 +97,8 @@ struct TerminalWindowView: View {
                     TerminalAgentView(
                         model: workspace.assistantModel,
                         host: server.displayEndpoint,
-                        serverContext: "主机：\(server.name)（\(server.displayEndpoint)）",
+                        serverContext: String(localized: "主机：\(server.name)（\(server.displayEndpoint)）",
+                                              comment: "附给 Agent 的上下文：当前主机名与地址"),
                         safety: safetyBinding,
                         activeProviderIDString: $activeProviderIDString,
                         onOpenSettings: { openWindow(id: SettingsWindow.id) })
@@ -213,26 +214,28 @@ struct TerminalWindowView: View {
         let single = workspace.terminalGroups.groupCount <= 1
         return [
             CommandPaletteItem(id: "term.splitH", kind: .command,
-                               title: "向右分屏", detail: "", hint: "⌘D", group: nil) {
+                               title: String(localized: "向右分屏"), detail: "", hint: "⌘D", group: nil) {
                 mode = .terminal
                 workspace.splitActiveGroup(direction: .horizontal)
             },
             CommandPaletteItem(id: "term.splitV", kind: .command,
-                               title: "向下分屏", detail: "", hint: "⇧⌘D", group: nil) {
+                               title: String(localized: "向下分屏"), detail: "", hint: "⇧⌘D", group: nil) {
                 mode = .terminal
                 workspace.splitActiveGroup(direction: .vertical)
             },
             CommandPaletteItem(id: "term.closePane", kind: .command,
-                               title: "关闭当前终端标签页", detail: single ? "仅一个分组" : "", hint: "⌘W", group: nil) {
+                               title: String(localized: "关闭当前终端标签页"),
+                               detail: single ? String(localized: "仅一个分组") : "", hint: "⌘W", group: nil) {
                 workspace.requestCloseActiveTerminalTab()
             },
             CommandPaletteItem(id: "term.newTab", kind: .command,
-                               title: "新建终端标签页", detail: "", hint: "⌘T", group: nil) {
+                               title: String(localized: "新建终端标签页"), detail: "", hint: "⌘T", group: nil) {
                 workspace.openServer(profileID: server.id, title: server.name)
                 mode = .terminal
             },
             CommandPaletteItem(id: "term.agent", kind: .command,
-                               title: "切换到 Agent 模式", detail: "用自然语言操作", hint: "", group: nil) {
+                               title: String(localized: "切换到 Agent 模式"), detail: String(localized: "用自然语言操作"),
+                               hint: "", group: nil) {
                 mode = .agent
             },
         ] + hostCommandItems()
@@ -250,7 +253,7 @@ struct TerminalWindowView: View {
                     id: "host.\(id.uuidString)", kind: .host,
                     title: profile.name.isEmpty ? profile.host : profile.name,
                     detail: profile.displayEndpoint,
-                    hint: "新标签页", group: profile.group) {
+                    hint: String(localized: "新标签页", comment: "命令面板提示：在新标签页中打开这台主机"), group: profile.group) {
                         openTab(serverID: id)
                     }
             }
@@ -339,7 +342,7 @@ struct TerminalWindowTitleBar: View {
                 Spacer()
                 ZStack(alignment: .topTrailing) {
                     WSIconButton(systemName: "arrow.left.arrow.right",
-                                 help: "端口转发", action: onOpenForwarding)
+                                 help: String(localized: "端口转发"), action: onOpenForwarding)
                     if activeForwardCount > 0 {
                         UDCountBadge(activeForwardCount, accent: true)
                             .scaleEffect(0.72)
@@ -362,7 +365,7 @@ struct TerminalModeToggle: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            segment(.terminal, label: "终端", systemImage: "terminal")
+            segment(.terminal, label: String(localized: "终端", comment: "终端 / Agent 模式切换"), systemImage: "terminal")
             segment(.agent, label: "Agent", systemImage: "sparkles")
         }
         .padding(2)
