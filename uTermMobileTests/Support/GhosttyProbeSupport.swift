@@ -112,6 +112,8 @@ nonisolated enum ThreadCPU {
 nonisolated enum GhosttyPresentLog {
     private static let lock = NSLock()
     private nonisolated(unsafe) static var times: [Double] = []
+    /// 和 `times` 一一对应：这一帧是不是在主线程上交的（主线程同步重画 = true，渲染线程自己画 = false）。
+    private nonisolated(unsafe) static var onMain: [Bool] = []
     private nonisolated(unsafe) static var offMain = 0
     private nonisolated(unsafe) static var rawCalls = 0
     private nonisolated(unsafe) static var nilCalls = 0
@@ -154,18 +156,25 @@ nonisolated enum GhosttyPresentLog {
         }
         if !isNil, times.last.map({ now - $0 > 0.002 }) ?? true {
             times.append(now)
+            onMain.append(main)
             if !main { offMain += 1 }
         }
         lock.unlock()
     }
 
     static func reset() {
-        lock.lock(); times.removeAll(); offMain = 0; rawCalls = 0; nilCalls = 0; perLayer.removeAll(); lock.unlock()
+        lock.lock(); times.removeAll(); onMain.removeAll(); offMain = 0; rawCalls = 0; nilCalls = 0; perLayer.removeAll(); lock.unlock()
     }
 
     static func read() -> (times: [Double], offMain: Int) {
         lock.lock(); defer { lock.unlock() }
         return (times, offMain)
+    }
+
+    /// 每一帧交出的时刻和是不是主线程交的。
+    static func readThreads() -> [(time: Double, main: Bool)] {
+        lock.lock(); defer { lock.unlock() }
+        return zip(times, onMain).map { (time: $0, main: $1) }
     }
 
     /// 各 layer 交的帧数（去重后），按帧数从多到少。
