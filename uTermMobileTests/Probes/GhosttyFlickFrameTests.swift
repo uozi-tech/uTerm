@@ -369,9 +369,24 @@ final class GhosttyFlickFrameTests: XCTestCase {
         return (host.view, host.window, (Int(host.grid.cols), Int(host.grid.rows)), { host.close() })
     }
 
-    /// 和 user 手机上的路径只差真手指：SwiftUI 外壳、标签条、键盘条都在，可见窗口。
     private func workspaceTerminal(size: CGSize) async throws
         -> (MGhosttyTerminalView, UIWindow, (cols: Int, rows: Int), () -> Void) {
+        let session = try await workspaceSession(size: size)
+        return (session.view, session.window, session.grid, session.close)
+    }
+
+    struct WorkspaceSession {
+        let view: MGhosttyTerminalView
+        let window: UIWindow
+        let bridge: GhosttyTerminalBridge
+        let grid: (cols: Int, rows: Int)
+        /// 假 SSH 后端往终端里写字节（程序输出）。
+        let write: @MainActor (String) async -> Void
+        let close: () -> Void
+    }
+
+    /// 和 user 手机上的路径只差真手指：SwiftUI 外壳、标签条、键盘条都在，可见窗口。
+    private func workspaceSession(size: CGSize) async throws -> WorkspaceSession {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
         let store = MobileStore()
@@ -400,10 +415,12 @@ final class GhosttyFlickFrameTests: XCTestCase {
         _ = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.view.uTermCellPixels != nil }
         try await Task.sleep(for: .milliseconds(800))
         let window = try XCTUnwrap(bridge.view.window)
-        return (bridge.view, window, (Int(cols), Int(bridge.grid?.rows ?? 0)), {
-            tab.controller.close()
-            MobileProbeWindow.closeAll()
-        })
+        return WorkspaceSession(view: bridge.view, window: window, bridge: bridge, grid: (Int(cols), Int(bridge.grid?.rows ?? 0)),
+                                write: { text in await transport.write(Data(text.utf8)) },
+                                close: {
+                                    tab.controller.close()
+                                    MobileProbeWindow.closeAll()
+                                })
     }
 
     // MARK: 用例
@@ -601,5 +618,190 @@ final class GhosttyFlickFrameTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+    }
+
+    // MARK: 静置之后
+
+    /// 按下、匀速拖 `seconds`、按住 6 帧（松手不甩）、抬起。返回开始拖的时刻。
+    private func slowDrag(speed: Double, seconds: Double, startY: CGFloat, x: CGFloat, finger: SyntheticFinger,
+                          ticker: Slow.EarlyTicker) async throws -> Double {
+        var failure: Error?
+        var begin = 0.0
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            var startTarget: Double?
+            var held = 0
+            ticker.step = { link in
+                do {
+                    guard let start = startTarget else {
+                        try finger.down(at: CGPoint(x: x, y: startY))
+                        startTarget = link.targetTimestamp
+                        begin = CACurrentMediaTime()
+                        return
+                    }
+                    let elapsed = link.targetTimestamp - start
+                    if elapsed < seconds {
+                        try finger.move(to: CGPoint(x: x, y: startY - CGFloat(speed * elapsed)))
+                    } else if held < 6 {
+                        try finger.hold()
+                        held += 1
+                    } else {
+                        try finger.up()
+                        ticker.step = nil
+                        done.resume()
+                    }
+                } catch {
+                    failure = error
+                    ticker.step = nil
+                    done.resume()
+                }
+            }
+        }
+        if let failure { throw failure }
+        return begin
+    }
+
+    /// user：「静置一段时间后，不要出现泄漏或者什么问题导致又变卡了」。工作区界面里：
+    /// 量一轮（慢拖 80 pt/s + 甩 2000 pt/s）→ 前台静置 `UTERM_SOAK_IDLE` 秒（默认 600，屏幕常亮，每 10 s 来一行程序输出）
+    /// → 再量一轮 → 退后台 `UTERM_SOAK_BACKGROUND` 秒（默认 70，过了 60 s 放掉 surface 的时限）→ 回前台再量一轮。
+    /// 静置期间记：推迟 wakeup 的次数、轮询次数、display link 起了几次、同步重画几次、主线程 CPU、内存（phys_footprint）。
+    /// 后台：标签不在屏上（`setOnScreen(false)`，容器隐藏时同一个入口）+ 应用的前后台通知（协调器按它停 tick）。
+    func testSoakIdle() async throws {
+        let idleSeconds = Self.env["UTERM_SOAK_IDLE"].flatMap(Double.init) ?? 600
+        let backgroundSeconds = Self.env["UTERM_SOAK_BACKGROUND"].flatMap(Double.init) ?? 70
+        let ticker = Slow.EarlyTicker()
+        ticker.start()
+        defer { ticker.stop() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let size = scene.screen.bounds.size
+        let session = try await workspaceSession(size: size)
+        defer { session.close() }
+        let view = session.view
+        let finger = try SyntheticFinger(window: session.window)
+        let scale = Double(session.window.screen.nativeScale)
+        var lines: [String] = [String(format: "SOAK-META variant=%@ idle=%.0fs background=%.0fs policy=%@ link-speed=%.0f",
+                                      Self.variant, idleSeconds, backgroundSeconds,
+                                      UTermScrollTrace.scrollWakeupSyncDraw.rawValue, UTermScrollTrace.wakeupDisplayLinkMinimumSpeed)]
+        print(lines[0])
+
+        /// 一次手势的逐帧账，返回一行摘要和「出事」的帧数。
+        func record(_ label: String, gesture: () async throws -> Double, from offset: Double) async throws -> (String, Int) {
+            let scrollView = try XCTUnwrap(view.uTermSystemScrollView)
+            let cell = try XCTUnwrap(view.uTermCellPixels)
+            let layer = try XCTUnwrap(OnScreen.surfaceLayer(in: view.layer), "找不到 IOSurfaceLayer")
+            var decoder = OnScreen.BarcodeDecoder(cell: cell)
+            let sampler = OnScreen.CommitSampler()
+            var samples: [(time: Double, shown: Double?, offset: Double)] = []
+            sampler.read = {
+                let value = decoder.position(of: layer)
+                samples.append((CACurrentMediaTime(), value, Double(scrollView.contentOffset.y)))
+                return value ?? 0
+            }
+            let clock = Clock()
+            UTermScrollTrace.isEnabled = true
+            GhosttyPresentLog.reset()
+            sampler.start()
+            clock.start()
+            let start = try await gesture()
+            try await waitForRest(position: { Double(scrollView.contentOffset.y) },
+                                  moving: { !view.uTermScrollState.isAtRest || scrollView.isDecelerating })
+            clock.stop()
+            sampler.stop()
+            let trace = UTermScrollTrace.drain()
+            UTermScrollTrace.isEnabled = false
+            guard let run = analyze(label: label, policy: "soak", speed: 0, targets: sampler.targets, lift: start + offset,
+                                    samples: samples, scale: scale, trace: trace, presents: GhosttyPresentLog.readThreads(),
+                                    clock: clock, isReference: false) else {
+                XCTFail("\(label)：没量到")
+                return ("\(label) -", 0)
+            }
+            let frames = run.window.map { run.frames[$0] }
+            let kinds = ["zero", "double", "stall", "spike", "late"]
+            let counts = kinds.map { kind in frames.filter { $0.flags.contains(kind) }.count }
+            let bad = frames.filter { f in f.flags.contains { ["zero", "double", "late"].contains($0) } }.count
+            let summary = "\(label)[frames=\(frames.count) " + zip(kinds, counts).map { "\($0)=\($1)" }.joined(separator: " ")
+                + " tick-draws=\(trace.filter { $0.kind == "tick-draw" }.count) deferred=\(trace.filter { $0.kind == "wakeup-deferred" }.count)"
+                + " link-starts=\(trace.filter { $0.kind == "link-start" }.count)]"
+            return (summary, bad)
+        }
+
+        func round(_ name: String) async throws {
+            _ = view.surface?.scrollToRow(1500)
+            try await Task.sleep(for: .milliseconds(400))
+            let (drag, dragBad) = try await record("drag80", gesture: {
+                try await slowDrag(speed: 80, seconds: 1.6, startY: size.height * 0.8, x: size.width / 2, finger: finger, ticker: ticker)
+            }, from: 0.35)
+            try await Task.sleep(for: .milliseconds(300))
+            _ = view.surface?.scrollToRow(600)
+            try await Task.sleep(for: .milliseconds(400))
+            let (fling, flingBad) = try await record("flick2000", gesture: {
+                try await flick(speed: 2000, direction: 1, startY: size.height * 0.8, x: size.width / 2, finger: finger, ticker: ticker)
+            }, from: 0)
+            let line = String(format: "SOAK-ROUND %@ %@ %@ bad=%d/%d footprint=%.1fMB", name, drag, fling, dragBad, flingBad,
+                              ProbeMetrics.footprintMB())
+            print(line)
+            lines.append(line)
+        }
+
+        /// 静置 `seconds`：测试自己不开 display link；每 10 s 写一行输出。
+        func idle(_ name: String, seconds: Double, output: Bool) async throws {
+            ticker.stop()
+            defer { ticker.start() }
+            let footprint0 = ProbeMetrics.footprintMB()
+            let cpu0 = ThreadCPU.current()
+            let wall0 = CACurrentMediaTime()
+            UTermScrollTrace.isEnabled = true
+            var written = 0
+            while CACurrentMediaTime() - wall0 < seconds {
+                if output {
+                    await session.write("soak output \(written) \(Date())\r\n")
+                    written += 1
+                }
+                try await Task.sleep(for: .seconds(min(10, max(0.1, seconds - (CACurrentMediaTime() - wall0)))))
+            }
+            let trace = UTermScrollTrace.drain()
+            UTermScrollTrace.isEnabled = false
+            let cpu = (ThreadCPU.current() - cpu0) * 1000
+            let wall = CACurrentMediaTime() - wall0
+            func count(_ kind: String) -> Int { trace.filter { $0.kind == kind }.count }
+            let line = String(format: "SOAK-IDLE %@ wall=%.0fs lines=%d wakeups=%d deferred=%d polls=%d link-starts=%d tick-app=%d "
+                + "tick-draws=%d trace-events=%d main-cpu=%.0fms (%.2f ms/s) footprint %.1f→%.1fMB released=%@",
+                name, wall, written, count("wakeup-tick"), count("wakeup-deferred"), count("wakeup-poll"), count("link-start"),
+                count("tick-app"), count("tick-draw"), trace.count, cpu, cpu / wall, footprint0, ProbeMetrics.footprintMB(),
+                view.uTermIsSurfaceReleased ? "yes" : "no")
+            print(line)
+            lines.append(line)
+        }
+
+        try await round("start")
+        try await idle("foreground", seconds: idleSeconds, output: true)
+        try await round("after-idle")
+        // 后台：标签不在屏上 + 应用进后台；过了 surface 放掉的时限再回来。
+        session.bridge.setOnScreen(false)
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: UIApplication.shared)
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: UIApplication.shared)
+        try await idle("background", seconds: backgroundSeconds, output: true)
+        let releasedInBackground = view.uTermIsSurfaceReleased
+        NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: UIApplication.shared)
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: UIApplication.shared)
+        session.bridge.setOnScreen(true)
+        let deadline = CACurrentMediaTime() + 5
+        while CACurrentMediaTime() < deadline,
+              !(view.surface != nil && session.bridge.isSurfaceReady && session.bridge.outputPump.isFeedingSurface) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try await Task.sleep(for: .milliseconds(1500))
+        let line = "SOAK-RESTORE released-in-background=\(releasedInBackground) surface=\(view.surface != nil) "
+            + "ready=\(session.bridge.isSurfaceReady)"
+        print(line)
+        lines.append(line)
+        try await round("after-background")
+        try await idle("final-rest", seconds: 20, output: false)
+
+        let text = lines.joined(separator: "\n")
+        let attachment = XCTAttachment(data: Data(text.utf8), uniformTypeIdentifier: "public.plain-text")
+        attachment.name = "ios-soak-\(Self.variant).txt"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(releasedInBackground || backgroundSeconds < 60, "后台 \(backgroundSeconds) s 没放掉 surface：没走到放掉 / 重建那条路")
     }
 }

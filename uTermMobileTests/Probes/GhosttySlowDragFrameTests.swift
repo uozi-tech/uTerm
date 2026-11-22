@@ -448,9 +448,12 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         UTermScrollTrace.isEnabled = false
         let rows = trace.filter { $0.kind == "row" }.map(\.value)
         let crossings = zip(rows, rows.dropFirst()).filter { $0 != $1 }.count
-        let draws = trace.filter { $0.kind == "tick-draw" }.count
+        // 只看手指真在动的那一段（第一步到最后一步）：停住（松手前按住的那几帧）之后补的那次同步重画是该有的。
+        let dragTimes = trace.filter { $0.kind == "drag" }.map(\.time)
+        let moving = (dragTimes.first ?? 0)...(dragTimes.last ?? 0)
+        let draws = trace.filter { $0.kind == "tick-draw" && moving.contains($0.time) }.count
         let deferred = trace.filter { $0.kind == "wakeup-deferred" }.count
-        print("SLOWDRAG-REGRESSION crossings=\(crossings) tick-draws=\(draws) wakeup-deferred=\(deferred) "
+        print("SLOWDRAG-REGRESSION crossings=\(crossings) tick-draws=\(draws) (all \(trace.filter { $0.kind == "tick-draw" }.count)) wakeup-deferred=\(deferred) "
             + "tick-app=\(trace.filter { $0.kind == "tick-app" }.count) drags=\(trace.filter { $0.kind == "drag" }.count)")
         XCTAssertGreaterThanOrEqual(crossings, 5, "拖动没跨过几行，量的不是那条路径")
         XCTAssertEqual(draws, 0, "手指拖着时引擎的 wakeup 在主线程同步重画了")
@@ -469,6 +472,47 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         }
         UTermScrollTrace.isEnabled = false
         XCTAssertGreaterThan(restDraws, 0, "停下之后引擎的 wakeup 不再同步重画了（只该在系统滚动动着时跳过）")
+    }
+
+    /// 回归（不挂测量门）：静止时，系统滚动「忙」的标志卡住（这里是 contentOffset 越界停着：UIKit 不会自己弹回，
+    /// 终端也不在忙的时候对齐），引擎的 wakeup 不能因此被推迟——照常同步重画、不留 50 ms 一次的轮询。
+    /// 补丁 #20 第一版按 `systemScrollIsBusy` 推迟，这种状态下每个 wakeup 都不同步重画、轮询一直跑。
+    func testStuckBusyStateDoesNotDeferWakeupsAtRest() async throws {
+        let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 700))
+        defer { host.close() }
+        host.window.removeGestureRecognizer(host.touchWatch)
+        try await host.waitUntilReady()
+        host.feedAndWait(OnScreen.barcodeHistory(lines: 400, cols: host.grid.cols))
+        try await Task.sleep(for: .milliseconds(400))
+        let scrollView = try XCTUnwrap(host.view.uTermSystemScrollView)
+        // 越界停着，最后一步很慢（速度远低于 `wakeupDisplayLinkMinimumSpeed`）。
+        scrollView.contentOffset.y = -40
+        try await Task.sleep(for: .milliseconds(40))
+        scrollView.contentOffset.y = -39.9
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertLessThan(scrollView.contentOffset.y, 0, "前提：越界停着")
+        UTermScrollTrace.isEnabled = true
+        // 程序改标题（OSC 0）：走 app 邮箱 → wakeup，不改回滚的长度（改了 contentSize 的话 UIKit 自己把越界的 contentOffset
+        // 拉回范围里，卡住的状态就自己好了）。
+        for line in 0..<5 {
+            host.feedAndWait("\u{1B}]0;soak \(line)\u{07}")
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await Task.sleep(for: .milliseconds(1500))
+        let trace = UTermScrollTrace.drain()
+        func count(_ kind: String, _ events: [UTermScrollTrace.Event]) -> Int { events.filter { $0.kind == kind }.count }
+        // 再静置 1 s：不该还有轮询。
+        try await Task.sleep(for: .milliseconds(1000))
+        let later = UTermScrollTrace.drain()
+        UTermScrollTrace.isEnabled = false
+        print("SLOWDRAG-STUCK offset=\(scrollView.contentOffset.y) wakeups=\(count("wakeup-tick", trace)) "
+            + "deferred=\(count("wakeup-deferred", trace)) polls=\(count("wakeup-poll", trace)) tick-draws=\(count("tick-draw", trace)) "
+            + "link-starts=\(count("link-start", trace)) later-polls=\(count("wakeup-poll", later))")
+        XCTAssertGreaterThan(count("wakeup-tick", trace), 0, "前提：改标题触发了 wakeup")
+        XCTAssertLessThan(scrollView.contentOffset.y, 0, "前提：全程越界停着")
+        XCTAssertEqual(count("wakeup-deferred", trace), 0, "静止时 wakeup 被推迟了（越界停着被当成在滚）")
+        XCTAssertGreaterThan(count("tick-draw", trace), 0, "静止时 wakeup 没同步重画")
+        XCTAssertEqual(count("wakeup-poll", later), 0, "静止 1.5 s 之后推迟的轮询还在跑")
     }
 
     func testSlowDragFrames() async throws {
