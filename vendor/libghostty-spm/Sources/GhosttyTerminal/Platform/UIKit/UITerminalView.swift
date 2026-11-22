@@ -243,16 +243,17 @@
                 // 哪一段算「途中」按 `UTermScrollTrace.scrollWakeupSyncDraw`。
                 core.wakeupDefersSyncDraw = { [weak self] in
                     guard let self, systemScroll.driver != nil else { return false }
+                    // 只认「这会儿真在动」（`systemScrollMovedRecently`），静止时不管哪个标志卡住都照常同步重画。
                     switch UTermScrollTrace.scrollWakeupSyncDraw {
-                    case .deferWhileMoving, .deferDrawKeepLink: return systemScrollIsBusy
+                    case .deferWhileMoving, .deferDrawKeepLink: return systemScrollMovedRecently
                     // `isTracking` / `isDragging` 在 UIKit 松手后的减速里还是 true，只认拖动手势本身。
-                    case .deferWhileTouching: return momentumScroll.panIsActive
+                    case .deferWhileTouching: return momentumScroll.panIsActive && systemScrollMovedRecently
                     case .always: return false
                     }
                 }
                 core.wakeupDefersDisplayLink = { [weak self] in
                     guard let self, systemScroll.driver != nil else { return false }
-                    return UTermScrollTrace.scrollWakeupSyncDraw == .deferWhileMoving && systemScrollIsBusy
+                    return UTermScrollTrace.scrollWakeupSyncDraw == .deferWhileMoving && systemScrollMovedRecently
                         && Double(systemScroll.speed) < UTermScrollTrace.wakeupDisplayLinkMinimumSpeed
                 }
             #endif

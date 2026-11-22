@@ -118,6 +118,14 @@
                 systemScrollBusy(countingRecentScroll: true)
             }
 
+            /// uTerm 本地补丁：系统滚动这会儿真在动——最近 0.1 s 里有过 `scrollViewDidScroll`（手指拖、减速、回弹、对齐
+            /// 每帧都写 contentOffset）。补丁 #20 的两种推迟只认它，不认 `systemScrollIsBusy`：那个把越界停着、
+            /// 卡住没清的标志也算忙，静止时一旦卡住，每个 wakeup 都不同步重画、推迟的轮询一直跑。宿主同步位置
+            ///（`isSyncing`）不算动。
+            var systemScrollMovedRecently: Bool {
+                systemScroll.driver != nil && CACurrentMediaTime() - systemScroll.lastDidScroll < 0.1
+            }
+
             /// `countingRecentScroll`: a `scrollViewDidScroll` in the last
             /// 50 ms counts as motion — whatever else moves the scroll view
             /// without reporting deceleration. Not counted right after a

@@ -8,6 +8,7 @@
 import DisplayLink
 import Foundation
 import GhosttyKit
+import QuartzCore
 
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
@@ -204,7 +205,7 @@ final class TerminalSurfaceCoordinator {
 
     func requestImmediateTick(syncDraw: Bool = true) {
         // uTerm 本地补丁：系统滚动动着时引擎的 wakeup 就地 refresh，不开 display link（见 `wakeupDefersDisplayLink`）。
-        if !syncDraw, wakeupDefersDisplayLink() {
+        if !syncDraw, canRenderFrame, wakeupDefersDisplayLink() {
             deferWakeupTick()
             return
         }
@@ -220,9 +221,13 @@ final class TerminalSurfaceCoordinator {
     /// 这里只差 refresh；滚动的每一步渲染线程自己画。停下之后补一次正常的 tick（`flushDeferredWakeupTick`）。
     var wakeupDefersDisplayLink: () -> Bool = { false }
     private var hasDeferredWakeupTick = false
+    /// 这一串推迟从什么时候开始的（`flushDeferredWakeupTick` 的上限从这里算）。
+    private var deferredWakeupSince: CFTimeInterval = 0
+    /// 推迟最多这么久：到点不管还在不在滚，都补一次正常的 tick（再来的 wakeup 重新开始算）。宿主判断「在滚」出了错，
+    /// 也只是多 1 s 没同步重画，不会一直推迟下去。
+    static let deferredWakeupLimit: CFTimeInterval = 1.0
 
     private func deferWakeupTick() {
-        guard canRenderFrame else { return }
         UTermScrollTrace.record("wakeup-deferred", 1)
         surface?.refresh()
         onPostRender?()
@@ -230,19 +235,24 @@ final class TerminalSurfaceCoordinator {
         if !pendingImmediateTick { releaseDisplayLink() }
         guard !hasDeferredWakeupTick else { return }
         hasDeferredWakeupTick = true
+        deferredWakeupSince = CACurrentMediaTime()
         flushDeferredWakeupTick()
     }
 
-    /// 滚动还在动就 50 ms 后再看；停了就按平常那样补一次 wakeup 的 tick（该同步重画的照旧同步重画）。
+    /// 滚动还在动就 50 ms 后再看；停了（或推迟满 `deferredWakeupLimit`）就按平常那样补一次 wakeup 的 tick
+    ///（该同步重画的照旧同步重画）。视图没了就停。
     private func flushDeferredWakeupTick() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self, hasDeferredWakeupTick else { return }
-            if wakeupDefersDisplayLink() {
+            UTermScrollTrace.record("wakeup-poll", 1)
+            if wakeupDefersDisplayLink(), CACurrentMediaTime() - deferredWakeupSince < Self.deferredWakeupLimit {
                 flushDeferredWakeupTick()
                 return
             }
             hasDeferredWakeupTick = false
-            requestImmediateTick(syncDraw: false)
+            pendingImmediateTick = true
+            if Self.wakeupDrawsSynchronously, !wakeupDefersSyncDraw() { pendingSyncDraw = true }
+            ensureDisplayLink()
         }
     }
 
@@ -785,6 +795,8 @@ final class TerminalSurfaceCoordinator {
             return
         }
         idleFrameCount = 0
+        // uTerm 测量打点：display link 真的起来了（从停着到跑起来）。
+        if displayLink?.isPaused ?? true { UTermScrollTrace.record("link-start", 1) }
         if let displayLink {
             guard displayLink.isPaused else { return }
             displayLink.isPaused = false

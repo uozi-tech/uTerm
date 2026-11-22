@@ -542,6 +542,13 @@ xctrace 录换屏表按上玻璃对（上玻璃模式：减速期间测试自己
 - 玻璃上（工作区界面，300 / 800 / 2000 / 4000 pt/s 各两次）：减速后段停 ≥ 1.4 倍的帧 71 → 33（普通 UIScrollView 24），节奏乱
   （相邻两个换帧间隔不同）21–49% → 9–29%；前段 120 Hz 不变。
 
+**静止时不留尾巴。** 两种推迟都只认「这会儿真在动」（`systemScrollMovedRecently`：最近 0.1 s 里有过 `scrollViewDidScroll`），
+不认 `systemScrollIsBusy`：后者把越界停着、卡住没清的标志（`isUIKitMoving`、`panIsActive`）也算忙。第一版按它判，
+contentOffset 越界停着时（改标题这类不改回滚长度的 wakeup 不会让 UIKit 把它拉回范围），每个 wakeup 都不同步重画、
+50 ms 一次的轮询一直跑（`testStuckBusyStateDoesNotDeferWakeupsAtRest` 改前 5 个 wakeup 全推迟、0 次同步重画）。另外：
+推迟的轮询最多 1 s（`deferredWakeupLimit`），到点不管在不在滚都补一次正常的 tick；画不了（surface 放掉、在后台）的时候不推迟，
+照原路记下要 tick。轮询只捕获 weak self，视图没了就停；钩子挂在协调器上，surface 放掉 / 重建之后照旧。
+
 A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `moving`（默认，上面两步）、`moving-link`（只有第一步）、
 `touching`（只在手指拖着时不同步重画）、`always`（补丁 #20 之前）；`wakeupDisplayLinkMinimumSpeed` 调门槛。uTerm 的 Debug 构建
 认启动参数 `-GhosttySyncDrawDuringScroll YES|touching|moving-link|moving`（`GhosttyScrollDebugSwitch`）。
@@ -550,7 +557,9 @@ A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `mo
 一帧里来 0 个或 2 个触摸就是 0 / 2 步。真手指的触摸在 iOS 上是不是按显示帧对齐派发的，测试量不到；对齐时（上面那组）为 0。
 
 回归用例：`GhosttySlowDragFrameTests.testDragAcrossRowsDoesNotSyncDraw`（拖着跨 5 行以上 `tick-draw` 必须 0 次、wakeup 不开 display link
-（`wakeup-deferred`），停下后的 wakeup 仍同步重画；改前每跨一行同步重画一次），测量用 `testSlowDragFrames` 与
+（`wakeup-deferred`），停下后的 wakeup 仍同步重画；改前每跨一行同步重画一次）、`testStuckBusyStateDoesNotDeferWakeupsAtRest`
+（越界停着时 wakeup 照常同步重画、没有轮询），测量用 `testSlowDragFrames`、`GhosttyFlickFrameTests.testSoakIdle`（静置 10 分钟、
+退后台 70 s 前后各量一轮）与
 `GhosttyFlickFrameTests.testFlickFrames`（`TEST_RUNNER_UTERM_MEASURE=1`，真机；后者 `UTERM_FLICK_GLASS=1` 是上玻璃模式，配 xctrace）。
 真手指的手感要 user 在 Duo 上验。
 
