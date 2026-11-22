@@ -20,7 +20,11 @@ enum TerminalActivityDemo {
         guard isRequested, workspace.isEmpty else { return }
         let host = ServerProfile()
         host.name = "demo-host"
-        let tab = TermTab(host: host, transportFactory: MobileTerminalTransportFactory { _ in DemoBackend() })
+        // 值写 `scroll`：不报程序状态，一上来灌 3000 行带编号的回滚，真机上只拿来试滚动手感。
+        let scrollOnly = mode == "scroll"
+        let tab = TermTab(host: host, transportFactory: MobileTerminalTransportFactory { _ in
+            scrollOnly ? ScrollBackend() as any TerminalBackend : DemoBackend()
+        })
         tab.controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
         workspace.open(.terminal(tab))
         store.showWorkspace = true
@@ -31,6 +35,39 @@ enum TerminalActivityDemo {
                 FileHandle.standardError.write(Data("[live-activity] demo keep-alive submitted=\(ok)\n".utf8))
             }
         }
+    }
+
+    /// 一次灌 3000 行回滚，之后静止：每行带编号、隔行换色，十行一条亮行，滚动时好看出有没有跳、有没有往回。
+    private actor ScrollBackend: TerminalBackend {
+        nonisolated let outputItems: AsyncStream<TerminalOutputItem>
+        nonisolated let exitStream: AsyncStream<Void>
+        private let output: AsyncStream<TerminalOutputItem>.Continuation
+
+        init() {
+            var out: AsyncStream<TerminalOutputItem>.Continuation!
+            outputItems = AsyncStream { out = $0 }
+            output = out
+            exitStream = AsyncStream { _ in }
+        }
+
+        func connect() async throws {
+            var text = ""
+            for line in 1 ... 3000 {
+                let number = String(format: "%04d", line)
+                if line % 10 == 0 {
+                    text += "\u{1b}[1;30;43m \(number) ──────────── row \(number) ──────────── \u{1b}[0m\r\n"
+                } else {
+                    let color = line % 2 == 0 ? 36 : 37
+                    text += "\u{1b}[\(color)m\(number)\u{1b}[0m  the quick brown fox jumps over the lazy dog \(number)\r\n"
+                }
+            }
+            text += "\u{1b}[32m-- end of scrollback test (3000 lines) --\u{1b}[0m\r\n"
+            output.yield(.bytes(Data(text.utf8)))
+        }
+
+        func write(_ data: Data) async {}
+        func resize(cols: UInt16, rows: UInt16) async {}
+        func close() async {}
     }
 
     private actor DemoBackend: TerminalBackend {
