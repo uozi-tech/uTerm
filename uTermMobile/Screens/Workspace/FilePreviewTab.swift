@@ -52,6 +52,8 @@ final class MobileFilePreviewController {
     @ObservationIgnored private var connecting: Task<(any SFTPProviding)?, Never>?
     @ObservationIgnored private let connect: () async throws -> any SFTPProviding
     @ObservationIgnored private var closed = false
+    /// Markdown 里引用的图片（按主机上的路径）。重读时清掉：图多半是和文档一起刚生成的。
+    @ObservationIgnored private var markdownImages: [String: UIImage] = [:]
 
     /// `connect` 第一次加载时才调，之后复用那条会话。
     init(path: String, connect: @escaping () async throws -> any SFTPProviding) {
@@ -78,6 +80,7 @@ final class MobileFilePreviewController {
         generation &+= 1
         let attempt = generation
         phase = .loading
+        markdownImages.removeAll()
         let path = path
         Task { [weak self] in
             guard let self else { return }
@@ -94,6 +97,34 @@ final class MobileFilePreviewController {
             guard !self.closed, self.generation == attempt else { return }
             self.phase = next
         }
+    }
+
+    /// 开之前先看一眼（`TerminalLinkTarget`）：是普通文件才开。连不上算可以开（标签里会显示连接失败），
+    /// 别的 stat 失败（多半是不存在）不开。
+    func isOpenableFile(_ path: String) async -> Bool {
+        guard !closed, let provider = await session() else { return true }
+        guard let stat = try? await provider.stat(path) else { return false }
+        return TerminalLinkTarget.isOpenableFile(stat)
+    }
+
+    enum MarkdownImageError: Error {
+        /// 网址、`data:` 之类：不读（见 `RemoteMarkdownImagePath`）。
+        case notOnThisHost
+        case undecodable
+        case unavailable
+    }
+
+    /// Markdown 预览里 `![](…)` 的图：按文档所在目录解析、只读同一台主机上的文件，单张上限同 Mac（8 MiB）。
+    func markdownImage(_ source: String) async throws -> UIImage {
+        guard case .path(let path) = RemoteMarkdownImagePath.resolve(source, documentPath: self.path) else {
+            throw MarkdownImageError.notOnThisHost
+        }
+        if let cached = markdownImages[path] { return cached }
+        guard !closed, let provider = await session() else { throw MarkdownImageError.unavailable }
+        let data = try await provider.download(remotePath: path, maximumBytes: 8 * 1024 * 1024)
+        guard let image = UIImage(data: data) else { throw MarkdownImageError.undecodable }
+        markdownImages[path] = image
+        return image
     }
 
     func close() {
@@ -198,6 +229,9 @@ struct FilePreviewSessionBody: View {
                 MStreamingMarkdown(text: text, isStreaming: false)
                     .textSelection(.enabled)
                     .padding(16)
+                    .environment(\.mMarkdownImageLoader, MMarkdownImageLoader { [controller] source in
+                        try await controller.markdownImage(source)
+                    })
             }
         case .loaded(.text(let text)):
             ScrollView([.vertical, .horizontal]) {

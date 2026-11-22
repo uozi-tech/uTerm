@@ -146,6 +146,10 @@ final class FilePreviewModel {
     var autosaveDelay: Duration = .seconds(1)
     private var autosaveTasks: [UUID: Task<Void, Never>] = [:]
 
+    /// 还在的模型（每个工作区 / 终端窗口一个）：退出 App 时一起存（`EditorCloseGuard.shouldTerminate`）。
+    private static let live = NSHashTable<FilePreviewModel>.weakObjects()
+    static var allLive: [FilePreviewModel] { live.allObjects }
+
     nonisolated static func autosavePreference(_ defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: DefaultsKey.editorAutoSave) as? Bool ?? true
     }
@@ -164,6 +168,7 @@ final class FilePreviewModel {
             releasesHiddenEditorFocusOnTabSwitch: true,
             keepAlive: .allTabs))
         self.recents = recentsStore.load()
+        Self.live.add(self)
 
         // 关标签 → 引用计数 → 没人再引用才释放文档。改造前是「关 buffer」，于是
         // 同一个文件被两个面板引用时必然出岔子（见 reconcilePanelsAfterClosingBuffer）。
@@ -697,6 +702,32 @@ final class FilePreviewModel {
         }
     }
 
+    /// 改了没存的文档：预览区的和终端区的（游离）都算。图片不会脏。
+    var unsavedBuffers: [FileBuffer] {
+        (buffers + detached.values.map(\.buffer)).filter(\.isDirty)
+    }
+
+    /// 关窗 / 退出前：不等自动保存的那一秒，立刻全存。正在写的等它写完再看（写的途中又改了就再存一次）。
+    /// 返回存不上的（远端被别处改过、写失败）。
+    func saveAllUnsaved() async -> [FileBuffer] {
+        for buf in unsavedBuffers {
+            for _ in 0..<500 {   // 最多等 10 秒
+                guard case .saving = buf.state else { break }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            switch await save(buf.id) {
+            case .conflict: buf.autosaveIssue = .conflict
+            case .failed(let message): buf.autosaveIssue = .failed(message)
+            case .saved, .noop: break
+            }
+            // 写的途中又改了：save 已经排了自动保存，这里不等那一秒，再存一次。
+            if buf.isDirty, case .loaded = buf.state, buf.autosaveIssue == nil {
+                _ = await save(buf.id)
+            }
+        }
+        return unsavedBuffers
+    }
+
     private func cancelAutosave(_ id: UUID) {
         autosaveTasks.removeValue(forKey: id)?.cancel()
     }
@@ -836,77 +867,19 @@ final class FilePreviewModel {
             throw PreviewDownloadError.invalidMarkdownImageSource
         }
 
-        if let url = URL(string: trimmed),
-           let scheme = url.scheme?.lowercased(),
-           !scheme.isEmpty {
+        switch RemoteMarkdownImagePath.resolve(trimmed, documentPath: baseRemotePath) {
+        case .external:
             // 远程 Markdown 属于不可信输入。自动访问其中的 http(s) 地址会泄漏
             // 本机网络可达性/IP，并可被用来探测 localhost、路由器或云元数据服务。
             // 图片必须留在已经通过 SSH 主机密钥验证的 SFTP 信任边界内。
             throw PreviewDownloadError.unsupportedMarkdownImageSource(trimmed)
-        }
-
-        let path = markdownImageRemotePath(source: trimmed, baseRemotePath: baseRemotePath)
-        guard !path.isEmpty else {
+        case .invalid:
             throw PreviewDownloadError.invalidMarkdownImageSource
+        case .path(let path):
+            return .remotePath(path)
         }
-        return .remotePath(path)
     }
 
-    private static func markdownImageRemotePath(source: String, baseRemotePath: String) -> String {
-        let localSource = sanitizedLocalMarkdownResource(source)
-        if localSource.hasPrefix("/") {
-            return normalizedRemotePath(localSource)
-        }
-
-        let baseDir = remoteDirectory(of: baseRemotePath)
-        return normalizedRemotePath(joinRemotePath(baseDir, localSource))
-    }
-
-    private static func sanitizedLocalMarkdownResource(_ source: String) -> String {
-        let withoutFragment = source.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first
-            .map(String.init) ?? source
-        let withoutQuery = withoutFragment.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
-            .map(String.init) ?? withoutFragment
-        return withoutQuery.removingPercentEncoding ?? withoutQuery
-    }
-
-    private static func remoteDirectory(of path: String) -> String {
-        let directory = (path as NSString).deletingLastPathComponent
-        return directory == "." ? "" : directory
-    }
-
-    private static func joinRemotePath(_ baseDir: String, _ child: String) -> String {
-        if baseDir.isEmpty { return child }
-        if baseDir == "/" { return "/\(child)" }
-        return "\(baseDir)/\(child)"
-    }
-
-    private static func normalizedRemotePath(_ path: String) -> String {
-        let isAbsolute = path.hasPrefix("/")
-        var parts: [String] = []
-
-        for rawPart in path.split(separator: "/", omittingEmptySubsequences: true) {
-            let part = String(rawPart)
-            switch part {
-            case ".":
-                continue
-            case "..":
-                if !parts.isEmpty {
-                    parts.removeLast()
-                } else if !isAbsolute {
-                    parts.append(part)
-                }
-            default:
-                parts.append(part)
-            }
-        }
-
-        let joined = parts.joined(separator: "/")
-        if isAbsolute {
-            return joined.isEmpty ? "/" : "/\(joined)"
-        }
-        return joined
-    }
 }
 
 // MARK: 带提示的保存（⌘S、关标签）

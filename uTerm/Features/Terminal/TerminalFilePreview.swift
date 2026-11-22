@@ -314,3 +314,82 @@ nonisolated enum TerminalLinkDetector {
         return String(result)
     }
 }
+
+/// ⌘ 点的路径、程序请求预览的文件，开之前先 stat 看一眼：只开普通文件。目录、不存在的不理（正文里像路径的词也会被认成链接）。
+/// 两端共用。服务端没给权限位时当文件。
+nonisolated enum TerminalLinkTarget {
+    static func isOpenableFile(_ stat: RemoteStat) -> Bool {
+        guard let mode = stat.permissions else { return true }
+        return mode & 0o170000 != 0o040000
+    }
+}
+
+/// 远程 Markdown 里 `![](…)` 引用的图片在主机上的哪个路径（两端的预览共用，规则原本在 Mac 的 `FilePreviewModel` 里）。
+///
+/// 只认同一台主机上的文件：带 scheme 的（`http:`、`file:`、`data:` …）一律不读——远程 Markdown 是不可信输入，
+/// 自动访问里面的网址会泄漏本机网络可达性，还能拿来探测 localhost、路由器、云元数据服务。相对路径按文档所在目录，
+/// 去掉 `#…` `?…`、解百分号编码、收拢 `.` `..`。
+nonisolated enum RemoteMarkdownImagePath {
+    enum Resolution: Equatable {
+        case path(String)
+        /// 网址或别的 scheme。
+        case external
+        /// 空的、解析完什么都不剩。
+        case invalid
+    }
+
+    static func resolve(_ source: String, documentPath: String) -> Resolution {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .invalid }
+        if let url = URL(string: trimmed), let scheme = url.scheme, !scheme.isEmpty {
+            return .external
+        }
+        let local = sanitized(trimmed)
+        let path = local.hasPrefix("/")
+            ? normalized(local)
+            : normalized(join(directory(of: documentPath), local))
+        return path.isEmpty ? .invalid : .path(path)
+    }
+
+    private static func sanitized(_ source: String) -> String {
+        let withoutFragment = source.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first
+            .map(String.init) ?? source
+        let withoutQuery = withoutFragment.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
+            .map(String.init) ?? withoutFragment
+        return withoutQuery.removingPercentEncoding ?? withoutQuery
+    }
+
+    private static func directory(of path: String) -> String {
+        let directory = (path as NSString).deletingLastPathComponent
+        return directory == "." ? "" : directory
+    }
+
+    private static func join(_ baseDir: String, _ child: String) -> String {
+        if baseDir.isEmpty { return child }
+        if baseDir == "/" { return "/\(child)" }
+        return "\(baseDir)/\(child)"
+    }
+
+    private static func normalized(_ path: String) -> String {
+        let isAbsolute = path.hasPrefix("/")
+        var parts: [String] = []
+        for rawPart in path.split(separator: "/", omittingEmptySubsequences: true) {
+            let part = String(rawPart)
+            switch part {
+            case ".":
+                continue
+            case "..":
+                if !parts.isEmpty {
+                    parts.removeLast()
+                } else if !isAbsolute {
+                    parts.append(part)
+                }
+            default:
+                parts.append(part)
+            }
+        }
+        let joined = parts.joined(separator: "/")
+        if isAbsolute { return joined.isEmpty ? "/" : "/\(joined)" }
+        return joined
+    }
+}

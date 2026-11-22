@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import uTerm
 
@@ -218,4 +219,91 @@ final class FileAutosaveTests: XCTestCase {
         defaults.set(false, forKey: DefaultsKey.editorAutoSave)
         XCTAssertFalse(FilePreviewModel.autosavePreference(defaults))
     }
+
+    // MARK: 关窗 / 退出前
+
+    func testClosingStoresTheLastSecondWithoutAsking() async throws {
+        let (m, mock) = makeModel()
+        m.autosaveDelay = .seconds(60)
+        let buf = try await open(m, mock)
+        buf.applyEdit("b")
+
+        var asked = 0
+        let proceed = await EditorCloseGuard.resolve([m], quitting: false,
+                                                     ask: { _, _ in asked += 1; return .cancel },
+                                                     askAfterFailure: { _, _ in asked += 1; return false })
+        XCTAssertTrue(proceed)
+        XCTAssertEqual(asked, 0, "自动保存开着：直接存，不问")
+        let written = try await remote(mock)
+        XCTAssertEqual(written, "b")
+    }
+
+    func testClosingAsksAboutWhatCouldNotBeSaved() async throws {
+        let (m, mock) = makeModel()
+        m.autosaveDelay = .seconds(60)
+        let buf = try await open(m, mock)
+        await mock.setFile("/x.md", data: Data("theirs".utf8), mtime: Date(timeIntervalSince1970: 2_000))
+        buf.applyEdit("mine")
+
+        var failed: [FileBuffer] = []
+        let proceed = await EditorCloseGuard.resolve([m], quitting: false,
+                                                     ask: { _, _ in .cancel },
+                                                     askAfterFailure: { left, _ in failed = left; return false })
+        XCTAssertFalse(proceed, "用户选「回去处理」")
+        XCTAssertTrue(failed.first === buf)
+        XCTAssertEqual(buf.autosaveIssue, .conflict)
+        let written = try await remote(mock)
+        XCTAssertEqual(written, "theirs")
+    }
+
+    func testClosingWithAutosaveOffAsksFirst() async throws {
+        let (m, mock) = makeModel(enabled: false)
+        let buf = try await open(m, mock)
+        buf.applyEdit("b")
+
+        let cancelled = await EditorCloseGuard.resolve([m], quitting: true, ask: { _, _ in .cancel })
+        XCTAssertFalse(cancelled)
+        let discarded = await EditorCloseGuard.resolve([m], quitting: true, ask: { _, _ in .discard })
+        XCTAssertTrue(discarded)
+        var writes = await mock.wholeWriteCount
+        XCTAssertEqual(writes, 0)
+
+        let saved = await EditorCloseGuard.resolve([m], quitting: true, ask: { _, _ in .save })
+        XCTAssertTrue(saved)
+        writes = await mock.wholeWriteCount
+        XCTAssertEqual(writes, 1)
+        XCTAssertFalse(buf.isDirty)
+    }
+
+    func testNothingToSaveDoesNotAsk() async throws {
+        let (m, mock) = makeModel(enabled: false)
+        _ = try await open(m, mock)
+        let proceed = await EditorCloseGuard.resolve([m], quitting: false, ask: { _, _ in
+            XCTFail("没改过不该问")
+            return .cancel
+        })
+        XCTAssertTrue(proceed)
+    }
+
+    func testWindowClosesOnlyAfterTheEditSaved() async throws {
+        let (m, mock) = makeModel()
+        m.autosaveDelay = .seconds(60)
+        let buf = try await open(m, mock)
+        buf.applyEdit("b")
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+                                      styleMask: [.titled, .closable])
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let proxy = WindowCloseProxy.installed(on: window)
+        proxy.editors = { [m] }
+        window.makeKeyAndOrderFront(nil)
+
+        window.performClose(nil)
+        XCTAssertTrue(window.isVisible, "先拒绝这次关闭，存好再关")
+        try await waitUntil("存好后关掉") { !window.isVisible }
+        let written = try await remote(mock)
+        XCTAssertEqual(written, "b")
+        XCTAssertFalse(buf.isDirty)
+    }
+
 }

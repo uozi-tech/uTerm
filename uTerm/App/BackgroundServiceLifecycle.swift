@@ -176,11 +176,11 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
         Self.backgroundedWindows.hideAll()
     }
 
-    /// 退出前依次问：运行中的终端怎么办（`TerminalQuitPolicy`）；「打开」出去、还没传回服务器的文件
-    ///（`ExternalEditCloseGuard`）。任何一步取消都不退出。
+    /// 退出前依次问：运行中的终端怎么办（`TerminalQuitPolicy`）；编辑器里改了没存的文件（`EditorCloseGuard`）；
+    /// 「打开」出去、还没传回服务器的文件（`ExternalEditCloseGuard`）。任何一步取消都不退出。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard TerminalQuitPolicy.shared.confirmQuit() else { return .terminateCancel }
-        let reply = ExternalEditCloseGuard.shouldTerminate(sender)
+        let reply = EditorCloseGuard.shouldTerminate(sender) { ExternalEditCloseGuard.shouldTerminate($0) }
         if reply == .terminateCancel { TerminalQuitPolicy.shared.quitCancelled() }
         return reply
     }

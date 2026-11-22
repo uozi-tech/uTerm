@@ -31,6 +31,8 @@ struct WorkspaceScreen: View {
     @State private var awaitingConnect = false
     /// 关标签前的确认流程（弹窗挂在对应标签上，见 `WorkspaceTabChip`）。
     @State private var closeFlow = MTabCloseFlow()
+    /// 正在 stat、还没开预览标签的主机（`showPreview`）。
+    @State private var previewsBeingChecked: Set<PersistentIdentifier> = []
 
     private var visible: Bool { store.showWorkspace }
 
@@ -244,19 +246,32 @@ struct WorkspaceScreen: View {
 
     /// 终端里的程序请在旁边预览一个文件（`TerminalFilePreview`）：这台主机已有预览标签就换内容，没有就开一个，
     /// 放在终端旁边那一格，键盘留在终端上。体验主机没有真文件系统可读。
+    /// 先 stat 再开（目录、不存在的不开，同 Mac）。这台主机已有预览标签就复用它的会话去看；还没有就先建控制器、
+    /// 看过再放进工作区，看的期间同一台主机再来的请求不另开一个。
     private func showPreview(_ path: String, beside term: TermTab) {
         let host = term.host
         guard !DemoHostProfile.isDemo(host) else { return }
         if let existing = workspace.existingPreview(host: host.persistentModelID) {
-            existing.controller.show(path)
-            workspace.placePreview(existing, beside: term)
+            Task {
+                guard await existing.controller.isOpenableFile(path) else { return }
+                existing.controller.show(path)
+                workspace.placePreview(existing, beside: term)
+            }
             return
         }
+        guard !previewsBeingChecked.contains(host.persistentModelID) else { return }
+        previewsBeingChecked.insert(host.persistentModelID)
         let controller = MobileFilePreviewController(path: path, profile: host,
                                                      container: context.container, relay: relay)
-        let preview = FilePreviewTab(host: host, controller: controller)
-        controller.reload()
-        workspace.placePreview(preview, beside: term)
+        Task {
+            defer { previewsBeingChecked.remove(host.persistentModelID) }
+            guard await controller.isOpenableFile(path), workspace.tab(term.id) != nil else {
+                controller.close()
+                return
+            }
+            controller.reload()
+            workspace.placePreview(FilePreviewTab(host: host, controller: controller), beside: term)
+        }
     }
 
     /// 用户要关一个标签：要不要先问由 `MTabCloseFlow` 裁决。

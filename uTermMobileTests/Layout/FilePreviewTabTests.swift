@@ -131,6 +131,44 @@ final class FilePreviewTabTests: XCTestCase {
         controller.close()
     }
 
+    func testOnlyRegularFilesAreOpened() async throws {
+        let provider = MobileFakeSFTPProvider(entries: 0)
+        try await provider.createDirectory("/proj")
+        try await provider.seedFile("/proj/plan.md", data: Data("# Plan".utf8))
+        let controller = MobileFilePreviewController(path: "/proj/plan.md") { provider }
+
+        let file = await controller.isOpenableFile("/proj/plan.md")
+        let directory = await controller.isOpenableFile("/proj")
+        let missing = await controller.isOpenableFile("/proj/nope.md")
+        XCTAssertTrue(file)
+        XCTAssertFalse(directory, "目录不开预览标签")
+        XCTAssertFalse(missing, "正文里像路径的词：不存在就不开")
+        controller.close()
+    }
+
+    func testMarkdownImagesComeFromTheSameHost() async throws {
+        let provider = MobileFakeSFTPProvider(entries: 0)
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 4, height: 3)).image { _ in }.pngData())
+        for dir in ["/proj", "/proj/docs", "/proj/docs/img"] { try await provider.createDirectory(dir) }
+        try await provider.seedFile("/proj/docs/plan.md", data: Data("![chart](img/chart.png)".utf8))
+        try await provider.seedFile("/proj/docs/img/chart.png", data: png)
+        try await provider.seedFile("/proj/shared.png", data: png)
+        let controller = MobileFilePreviewController(path: "/proj/docs/plan.md") { provider }
+
+        let relative = try await controller.markdownImage("img/chart.png")
+        XCTAssertEqual(relative.size.width * relative.scale, 4 * UIScreen.main.scale, accuracy: 0.5)
+        _ = try await controller.markdownImage("../shared.png?raw=1")
+        do {
+            _ = try await controller.markdownImage("https://example.com/x.png")
+            XCTFail("网址不读")
+        } catch MobileFilePreviewController.MarkdownImageError.notOnThisHost {}
+        do {
+            _ = try await controller.markdownImage("missing.png")
+            XCTFail("不存在的图")
+        } catch {}
+        controller.close()
+    }
+
     private func waitUntilLoaded(_ controller: MobileFilePreviewController) async throws {
         for _ in 0..<200 {
             if case .loading = controller.phase {

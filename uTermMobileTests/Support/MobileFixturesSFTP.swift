@@ -527,7 +527,8 @@ actor MobileFakeSFTPProvider: SFTPProviding {
             throw MobileFakeSFTPError.noSuchFile(path)
         }
         return RemoteStat(size: Int64(clamping: entry.size ?? 0),
-                          mtime: entry.modifiedAt ?? Date())
+                          mtime: entry.modifiedAt ?? Date(),
+                          permissions: entry.permissions)
     }
 
     func exec(_ command: String) async throws -> String {

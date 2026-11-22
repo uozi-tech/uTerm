@@ -301,6 +301,8 @@ struct WorkspaceWindowView: View {
                 RemoteFileDownload.saveAs(remotePath: path, size: size,
                                           using: workspace.fileBrowserModel)
             }))
+        // 关窗前先存编辑器里改了没存的文件（自动保存还没到点的那一秒也算）。
+        .background(EditorWindowCloseGuardInstaller(models: { [workspace.filePreviewModel] }))
         .background(TerminalWindowCloseGuardInstaller(sessions: {
             workspace.terminalGroups.allTabs.map(\.payload.session)
         }))

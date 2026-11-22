@@ -119,12 +119,19 @@ struct ExternalEditCloseGuardInstaller: NSViewRepresentable {
 /// 关窗前的检查都挂在这一个代理上。窗口的 delegate 是弱引用，由各个 installer 视图持有它。
 final class WindowCloseProxy: NSObject, NSWindowDelegate {
     private enum TerminalCheck { case notStarted, probing, approved }
+    private enum EditorCheck { case notStarted, saving, approved }
 
     /// AppKit 在主线程上转发消息，但 `responds(to:)` / `forwardingTarget(for:)` 声明为
     /// nonisolated，读它们要绕过隔离检查。只在 init 写一次。
     nonisolated(unsafe) private weak var original: NSWindowDelegate?
     var coordinators: () -> [ExternalOpenCoordinator] = { [] }
     var terminalSessions: () -> [TerminalSession] = { [] }
+    /// 窗口里的编辑器（预览区、终端区的文件标签）：改了没存的先存（`EditorCloseGuard`）。
+    var editors: () -> [FilePreviewModel] = { [] }
+    /// 默认弹框、走网络，单测里换掉。
+    var resolveEditors: ([FilePreviewModel]) async -> Bool = {
+        await EditorCloseGuard.resolve($0, quitting: false)
+    }
     /// 问未上传的文件、立刻上传。默认弹 `runModal`，单测里换掉，否则会挂住。
     var askAboutUnsyncedFiles: ([ExternalOpenCoordinator]) -> ExternalEditCloseGuard.Decision = {
         ExternalEditCloseGuard.ask($0, quitting: false)
@@ -133,6 +140,7 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
         await ExternalEditCloseGuard.flush($0)
     }
     private var terminalCheck = TerminalCheck.notStarted
+    private var editorCheck = EditorCheck.notStarted
 
     init(original: NSWindowDelegate?) {
         self.original = original
@@ -157,6 +165,7 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard terminalsAllowClosing(sender) else { return false }
+        guard editorsAllowClosing(sender) else { return false }
         let coordinators = coordinators()
         switch askAboutUnsyncedFiles(coordinators) {
         case .cancel:
@@ -172,6 +181,29 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
             return false
         case .proceed:
             return original?.windowShouldClose?(sender) ?? true
+        }
+    }
+
+    /// 存文件要走网络，同终端那一步：先拒绝这次关闭，存好（或用户选了放弃）再重走 `performClose`。
+    private func editorsAllowClosing(_ window: NSWindow) -> Bool {
+        switch editorCheck {
+        case .approved:
+            editorCheck = .notStarted
+            return true
+        case .saving:
+            return false
+        case .notStarted:
+            let models = editors()
+            guard models.contains(where: { !$0.unsavedBuffers.isEmpty }) else { return true }
+            editorCheck = .saving
+            Task { @MainActor in
+                let approved = await resolveEditors(models)
+                editorCheck = approved ? .approved : .notStarted
+                guard approved else { return }
+                terminalCheck = .approved   // 终端刚问过，别再问一遍。
+                window.performClose(nil)
+            }
+            return false
         }
     }
 

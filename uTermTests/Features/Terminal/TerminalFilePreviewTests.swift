@@ -365,4 +365,21 @@ final class TerminalFilePreviewTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(workspace.filePreviewModel.buffers.isEmpty, "侧栏没连着这台主机：不进预览区")
     }
+
+    func testOnlyRegularFilesCountAsOpenable() {
+        XCTAssertTrue(TerminalLinkTarget.isOpenableFile(RemoteStat(size: 1, mtime: .now, permissions: 0o100644)))
+        XCTAssertFalse(TerminalLinkTarget.isOpenableFile(RemoteStat(size: 1, mtime: .now, permissions: 0o040755)))
+        XCTAssertTrue(TerminalLinkTarget.isOpenableFile(RemoteStat(size: 1, mtime: .now)), "服务端没给权限位当文件")
+    }
+
+    func testMarkdownImagePathsStayOnTheHost() {
+        let doc = "/srv/proj/docs/plan.md"
+        XCTAssertEqual(RemoteMarkdownImagePath.resolve("img/a.png", documentPath: doc), .path("/srv/proj/docs/img/a.png"))
+        XCTAssertEqual(RemoteMarkdownImagePath.resolve("./../b%20c.png#x", documentPath: doc), .path("/srv/proj/b c.png"))
+        XCTAssertEqual(RemoteMarkdownImagePath.resolve("/abs/c.png?raw=1", documentPath: doc), .path("/abs/c.png"))
+        XCTAssertEqual(RemoteMarkdownImagePath.resolve("https://example.com/x.png", documentPath: doc), .external)
+        XCTAssertEqual(RemoteMarkdownImagePath.resolve("data:image/png;base64,AAAA", documentPath: doc), .external)
+        XCTAssertEqual(RemoteMarkdownImagePath.resolve("  ", documentPath: doc), .invalid)
+    }
+
 }

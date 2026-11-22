@@ -461,7 +461,7 @@ final class WorkspaceModel {
            let sftp = fileBrowserModel.sftpProvider {
             Task {
                 guard let stat = try? await sftp.stat(path) else { return }
-                if Self.isDirectory(stat) {
+                if !TerminalLinkTarget.isOpenableFile(stat) {
                     await fileBrowserModel.load(path)
                 } else {
                     await filePreviewModel.reveal(path: path)
@@ -485,11 +485,6 @@ final class WorkspaceModel {
         }
     }
 
-    private static func isDirectory(_ stat: RemoteStat) -> Bool {
-        guard let mode = stat.permissions else { return false }
-        return mode & 0o170000 == 0o040000
-    }
-
     private func fileProvider(for serverID: UUID) async -> (any SFTPProviding)? {
         if let cached = fileProviders[serverID] { return cached }
         guard let make = makeFileProvider, let provider = try? await make(serverID) else { return nil }
@@ -504,7 +499,7 @@ final class WorkspaceModel {
     /// 终端区里开文件，见 `terminalRequestedPreview`。
     func openInTerminalArea(_ path: String, serverID: UUID, besidePane paneID: UUID?) async {
         guard let sftp = await fileProvider(for: serverID) else { return }
-        guard let stat = try? await sftp.stat(path), !Self.isDirectory(stat) else { return }
+        guard let stat = try? await sftp.stat(path), TerminalLinkTarget.isOpenableFile(stat) else { return }
         let sourceTabID = paneID.flatMap { id in terminalGroups.allTabs.first { $0.payload.id == id }?.id }
         let source = sourceTabID.flatMap { terminalGroups.locateTab($0) }
 

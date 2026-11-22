@@ -27,7 +27,7 @@ ESC ] 6975 ; open ; <绝对路径> BEL
 | 接的人 | `WorkspaceModel.terminalRequestedPreview`：工作区窗口里、侧栏 SFTP 连着的那台主机上的终端进预览区；其余（纯终端窗口、工作区里别的主机的终端）在终端区开文件标签 | `MobileWorkspace.onFilePreviewRequest` → `WorkspaceScreen.showPreview` |
 | 显示 | 预览区的预览（临时）标签（`FilePreviewModel.reveal(path:)`）：没开过就开、顶替上一个预览标签；开着就切过去并重读，脏的不重读。终端区：临时文件标签放在发请求那个终端旁边一格（只有一格就拆到右边），同一主机同一路径已开着就切过去并重读 | 只读预览标签（`FilePreviewTab`）：一台主机一个，换内容；放在终端旁边那一格（没分屏就拆出第二格） |
 | 焦点 | 不抢编辑器焦点 | 键盘留在终端那一格 |
-| 内容 | 预览区原有的一套（编辑器 / Markdown 含图片 / 图片） | 图片（可缩放）、Markdown（`MStreamingMarkdown`，图片只显示替代文字）、等宽纯文本；上限 16 MiB |
+| 内容 | 预览区原有的一套（编辑器 / Markdown 含图片 / 图片） | 图片（可缩放）、Markdown（`MStreamingMarkdown`；单独成段的图片经 `MMarkdownImageLoader` 读出来画，规则同 Mac：`RemoteMarkdownImagePath`，只读同一台主机上的文件，单张 8 MiB；行内的图仍是替代文字）、等宽纯文本；上限 16 MiB |
 
 终端区的文件标签（`WorkspaceModel.openInTerminalArea`）：文件经这台主机单独的 SFTP 连接读（`makeFileProvider`，按主机缓存，
 窗口关时一起关；两种窗口都用 `WorkspaceModel.liveFileProvider`），文档不进侧栏的那份列表（`FilePreviewModel.openDetached`，
@@ -37,9 +37,11 @@ ESC ] 6975 ; open ; <绝对路径> BEL
 停顿 1 秒写回这个文档所在的主机（`FilePreviewModel.scheduleAutosave`）。远端在打开之后被别处改过（比如 Claude 又写了一遍）
 不自动覆盖，编辑器上方出一条提示，按 ⌘S 或提示里的按钮选「覆盖 / 放弃本地改动」，选完才恢复自动保存；写失败也是一条提示，
 内容留在编辑器里，下次改动或 ⌘S 再试。关最后一个引用它的标签时先存（自动保存关着就问「保存 / 不保存」），终端区的文件标签
-同样，之前那里关掉会直接丢掉没存的改动。⌘S 在纯终端窗口里也认（`saveInteractively`）。
+同样，之前那里关掉会直接丢掉没存的改动。⌘S 在纯终端窗口里也认（`saveInteractively`）。关窗口、退出 App 之前
+（`EditorCloseGuard`，挂在 `WindowCloseProxy` 与 `applicationShouldTerminate` 上）：自动保存开着就不问、立刻全存（不等那一秒），
+存不上的才问「回去处理 / 放弃改动」；关着就问「保存后关闭 / 直接关闭 / 取消」。
 
-没做：Mac 本机终端（预览区只走 SFTP；沙盒也读不到用户文件）、远控镜像；关窗口 / 退出时还没到点的那一秒改动不会补存。
+没做：Mac 本机终端（预览区只走 SFTP；沙盒也读不到用户文件）、远控镜像。
 
 ## ⌘ 点终端里的链接
 
@@ -61,7 +63,8 @@ OSC 8 超链接同样。⌘ 点之后以 `open_url` 交给宿主（文字里认�
   整段像链接、或单行里恰好一个像链接的词才出这一项，两头的中英文引号、括号、句末标点去掉。之后和 ⌘ 点同一条路
   （`MGhosttyTerminalView.onOpenLink` → `openTerminalLink`）。远控镜像不出这一项（路径在被控的 Mac 上）。
 - iOS：`SurfaceDelegate` 交给 `MobileTerminalController.openTerminalLink`（接了键盘和指针才 ⌘ 点得到）。之前任何 scheme 都交给
-  `UIApplication.open`，现在只放行上面三种。目录 / 不存在的文件会在预览标签里显示失败，还没像 Mac 那样先 stat。
+  `UIApplication.open`，现在只放行上面三种。开之前同 Mac 先 stat（`MobileFilePreviewController.isOpenableFile`，判定共用 `TerminalLinkTarget`）：目录、不存在的不开；
+  连不上照样开，标签里显示连接失败。
 - 真 sshd 用例：`ForegroundActivityIntegrationTests.testForegroundDirectoriesFollowTheForegroundProcess`
   （`TEST_RUNNER_UTERM_TEST_FOREGROUND_SSH_PORT`，用户名密码默认 tester / tester）。
 

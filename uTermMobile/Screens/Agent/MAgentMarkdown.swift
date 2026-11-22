@@ -11,8 +11,8 @@ import Markdown
 /// 无法直接进 iOS target，故按本仓「共享后端、各端自绘 UI」的惯例镜像一份。
 ///
 /// 与 macOS 的取舍差异：代码块走**纯等宽**（不引入仅 macOS 的 CodeHighlighter / tree-sitter，
-/// 它们已在移动端 target 排除），与 macOS 流式态的渲染一致；图片块按 alt 文本内联（聊天不做
-/// 远端图片加载），不挂 `MarkdownImageLoader`。
+/// 它们已在移动端 target 排除），与 macOS 流式态的渲染一致；图片默认按 alt 文本内联（聊天不做
+/// 远端图片加载）。文档预览经环境放进 `MMarkdownImageLoader`，只有一张图的段落就画成图。
 
 // MARK: - 流式渲染包装
 
@@ -43,6 +43,75 @@ struct MStreamingMarkdown: View {
     }
 }
 
+// MARK: - 图片
+
+/// 给 Markdown 读图的人（文档预览标签：读同一台主机上的文件）。没有时图片按替代文字内联。
+struct MMarkdownImageLoader {
+    let load: @MainActor (String) async throws -> UIImage
+}
+
+extension EnvironmentValues {
+    @Entry var mMarkdownImageLoader: MMarkdownImageLoader? = nil
+}
+
+/// 段落里除了空白只有图片：可以画成图片块（文档里 `![图](chart.png)` 单独一段是最常见的写法）。
+private func standaloneImages(in paragraph: Paragraph) -> [MarkdownImage]? {
+    var images: [MarkdownImage] = []
+    for child in paragraph.children {
+        switch child {
+        case let image as MarkdownImage: images.append(image)
+        case is SoftBreak, is LineBreak: continue
+        case let text as MarkdownText where text.string.allSatisfy(\.isWhitespace): continue
+        default: return nil
+        }
+    }
+    return images.isEmpty ? nil : images
+}
+
+private struct MMDImageView: View {
+    let source: String
+    let alt: String
+    let loader: MMarkdownImageLoader
+
+    private enum Phase { case loading, loaded(UIImage), failed }
+    @State private var phase = Phase.loading
+
+    var body: some View {
+        Group {
+            switch phase {
+            case .loading:
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            case .loaded(let image):
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(maxWidth: image.size.width, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.xs))
+                    .accessibilityLabel(Text(verbatim: alt.isEmpty ? source : alt))
+            case .failed:
+                Label {
+                    Text(verbatim: alt.isEmpty ? source : alt)
+                } icon: {
+                    Image(systemName: "photo")
+                }
+                .font(M.sans(13))
+                .foregroundStyle(M.text3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: source) {
+            phase = .loading
+            do {
+                phase = .loaded(try await loader.load(source))
+            } catch {
+                phase = .failed
+            }
+        }
+    }
+}
+
 // MARK: - 分块渲染内核
 
 /// 把已解析的 `Document` 渲染成纵向 block 列表（无内层 ScrollView，滚动由调用方负责）。
@@ -64,11 +133,21 @@ struct MMarkdownBlocks: View {
 private struct MMDBlockView: View {
     let block: Markup
     var isStreaming: Bool = false
+    @Environment(\.mMarkdownImageLoader) private var imageLoader
 
     var body: some View {
         switch block {
         case let h as Heading:         AnyView(headingView(h))
-        case let p as Paragraph:       AnyView(MMDInlineView(node: p))
+        case let p as Paragraph:
+            if let imageLoader, let images = standaloneImages(in: p) {
+                AnyView(VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                        MMDImageView(source: image.source ?? "", alt: image.plainText, loader: imageLoader)
+                    }
+                })
+            } else {
+                AnyView(MMDInlineView(node: p))
+            }
         case let cb as CodeBlock:      AnyView(MChatCodeBlock(code: cb.code, language: cb.language, isStreaming: isStreaming))
         case let ul as UnorderedList:  AnyView(listView(items: Array(ul.listItems), ordered: false))
         case let ol as OrderedList:    AnyView(listView(items: Array(ol.listItems), ordered: true))
