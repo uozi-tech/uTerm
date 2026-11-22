@@ -262,6 +262,7 @@ final class RemoteMacClient: Identifiable {
     /// 问一声；正在退避等待重连的，马上再试一次。
     func networkChanged(isSatisfied: Bool) {
         guard isSatisfied else {
+            if link != nil { AppLogger.notice("远控：没网了，断开与 \(self.macName) 的连接", category: RemoteLog.category) }
             link?.close(RemoteProtocolError.closed)
             return
         }
@@ -621,6 +622,7 @@ final class RemoteMacClient: Identifiable {
             pairingToken = nil
             pairingRefused = false
             state = .connected
+            connectedAt = .now
             link?.startHeartbeat(heartbeat)
             resumeOutcome()
             // 一个标签把连接接回来了：同一台 Mac 的其它标签与桌面流还睡在各自的退避里（没人看的最长一分钟），
@@ -642,8 +644,12 @@ final class RemoteMacClient: Identifiable {
     }
 
     func disconnect() {
+        if link != nil { AppLogger.notice("远控：本机断开与 \(self.macName) 的连接", category: RemoteLog.category) }
         link?.close()
     }
+
+    /// 这条连接什么时候通过配对的（日志用：断开时记下连了多久）。
+    @ObservationIgnored private var connectedAt: ContinuousClock.Instant?
 
     /// 忘记这台 Mac：下次连接重新配对。
     func forget() {
@@ -653,6 +659,13 @@ final class RemoteMacClient: Identifiable {
 
     private func linkClosed(_ closedLink: RemoteLink, error: Error?) {
         guard closedLink === link else { return }
+        if state == .connected, let connectedAt {
+            // 哪条路、连了多久、为什么断：回前台后连接刚建好就断这类问题只能靠它查（手机上抓不到别的现场）。
+            AppLogger.notice("远控：与 \(self.macName) 的连接断开（\(self.path?.label ?? "?")，连上 "
+                             + "\(RemoteConnectTrace.millis(ContinuousClock.now - connectedAt)) ms）："
+                             + (error?.localizedDescription ?? "正常关闭"), category: RemoteLog.category)
+        }
+        connectedAt = nil
         link = nil
         path = nil
         roundTripMillis = nil

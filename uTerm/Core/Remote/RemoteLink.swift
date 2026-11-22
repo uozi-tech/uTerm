@@ -64,6 +64,10 @@ nonisolated final class RemoteLink: @unchecked Sendable {
 
     // 存活判定（只在 `queue` 上读写）。
     private var lastReceived = DispatchTime.now()
+    /// 上一次真的收到对端的东西。和 `lastReceived` 的区别：App 刚从挂起回来时心跳会把 `lastReceived` 拨到现在
+    ///（挂起期间收不到东西不算链路死了），这只钟不拨。回前台的那次探测看它：探测发出后要真有回音才算活着，
+    /// 否则那一拨会让探测永远「收到过」，判死退回心跳的 20 秒。
+    private var lastArrival = DispatchTime.now()
     /// 上一次收到「Mac 听得见我们」的证据：pong（回 ping）或 linkAck（确认收到我们发的字节）。单向断（Mac → 手机通、
     /// 手机 → Mac 断）时数据报（尤其不等确认的声音）会一直到，Mac 的控制消息也照发不误——它不知道我们听不见回音，
     /// KCP 窗口没满就一直送（光标、换声音档的格式通知……），每一条都会把「控制通道收到字节」的钟拨回去。
@@ -105,6 +109,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         queue.async { [self] in
             guard !isClosed else { return }
             lastReceived = .now()
+            lastArrival = lastReceived
             seesDatagrams = true
             if let pathTrip { transportRoundTrip = pathTrip }
         }
@@ -409,6 +414,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             guard let self, !self.isClosed else { return }
             if let data {
                 self.lastReceived = .now()
+                self.lastArrival = self.lastReceived
                 if !self.seesDatagrams { self.lastReplyReceived = self.lastReceived }
                 self.frames.append(data)
             }
@@ -495,6 +501,8 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 return
             }
             if quiet > heartbeat.replyLimit {
+                AppLogger.notice("远控连接：\(String(format: "%.1f", quiet)) 秒没收到任何数据，判断已断开",
+                                 category: RemoteLog.category)
                 link.fail(RemoteProtocolError.timeout)
             } else if quiet > heartbeat.pingInterval || silent > heartbeat.pingInterval
                         || link.secondsSinceLastPing > heartbeat.roundTripRefresh {
@@ -576,7 +584,9 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             let asked = DispatchTime.now()
             self.sendOnQueue(RemoteMessage(.ping))
             self.queue.asyncAfter(deadline: asked + replyLimit) { [weak self] in
-                guard let self, !self.isClosed, self.lastReceived < asked else { return }
+                guard let self, !self.isClosed, self.lastArrival < asked else { return }
+                AppLogger.notice("远控连接：探测 \(String(format: "%.1f", replyLimit)) 秒没回音，判断已断开",
+                                 category: RemoteLog.category)
                 self.fail(RemoteProtocolError.timeout)
             }
         }

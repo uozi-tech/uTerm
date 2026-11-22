@@ -55,6 +55,22 @@ final class RemoteTransportTests: XCTestCase {
         return true
     }
 
+    /// 回前台的探测要真等到回音：App 刚从挂起回来时心跳会把「上次收到」拨到现在（挂起期间收不到东西不算死），
+    /// 以前探测看的也是这只钟，回前台的探测因此永远判活，死连接要等心跳的 20 秒才发现，画面一直卡着。
+    ///
+    /// 顺序做成真机上的样子：先发探测，再让链路队列停一阵（心跳的定时器隔了好几拍才来 = 挂起过），
+    /// 心跳把钟拨回去之后探测的时限才到。对端一直不出声，探测必须判死。
+    func test_foreground_probe_still_fails_when_the_suspension_reset_lands_after_it() async throws {
+        let pair = try await establishedPair()
+        // 心跳 0.1 秒一拍，隔 0.3 秒以上算挂起过；判死要 30 秒，测试里只有探测能判死。
+        pair.client.startHeartbeat(RemoteHeartbeat(pingInterval: 0.3, replyLimit: 30, probeReplyLimit: 0.6))
+        try await Task.sleep(for: .milliseconds(200))
+        pair.client.probe(replyLimit: 0.6)
+        pair.client.queue.async { Thread.sleep(forTimeInterval: 0.35) }
+        let failed = await waitUntil(2) { pair.clientInbox.closed }
+        XCTAssertTrue(failed, "挂起复位不能让回前台的探测失效")
+    }
+
     func test_handshake_and_large_frames_cross_a_non_network_transport() async throws {
         let pair = try await establishedPair()
         let big = Data((0..<1_500_000).map { UInt8($0 % 251) })
