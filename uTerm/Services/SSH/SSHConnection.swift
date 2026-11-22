@@ -534,12 +534,13 @@ nonisolated extension ConnectedClient {
     }
 
     /// 把图片传成这台机器 `/tmp` 下的一个文件。SFTP 开在这条连接上（另开一个通道），不另建连接，也不重新认证。
+    /// 终端也在这条连接上，所以按节奏传（`SFTPUploadPacer`），不然慢网上传的时候按键发不出去。
     func uploadTerminalImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         let path = image.temporaryRemotePath()
         try await uploadPrivateFile(to: path) { file in
             var buffer = ByteBuffer()
             buffer.writeBytes(image.data)
-            try await SFTPPipeline.write(file, data: buffer, at: 0) { written, total in
+            try await SFTPPipeline.write(file, data: buffer, at: 0, paced: true) { written, total in
                 PasteProgressReporter.report(.sending(written, of: total))
             }
         }
@@ -550,7 +551,7 @@ nonisolated extension ConnectedClient {
     func uploadTerminalVideo(_ video: TerminalVideo) async throws -> String {
         let path = video.temporaryRemotePath()
         try await uploadPrivateFile(to: path) { file in
-            try await SFTPPipeline.write(file, contentsOf: video.localURL) { written, total in
+            try await SFTPPipeline.write(file, contentsOf: video.localURL, paced: true) { written, total in
                 PasteProgressReporter.report(PasteProgress(.sending, fraction: total > 0 ? Double(written) / Double(total) : 1))
             }
         }

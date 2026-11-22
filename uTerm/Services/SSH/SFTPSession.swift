@@ -37,9 +37,13 @@ nonisolated struct SFTPWriteStageError: Error, Sendable {
 actor SFTPSession: SFTPProviding {
     private let connected: ConnectedClient
     private let sftp: SFTPClient
+    /// 上传（`upload`）按节奏传（`SFTPUploadPacer`）。连接与同主机的终端共用时必须开：一传大文件，终端的按键要排在
+    /// 几 MB 上传数据后面才发得出去。命令行的传输走自己的连接、上面没有终端，关掉换满速。
+    private let pacesUploads: Bool
 
-    init(connected: ConnectedClient) async throws {
+    init(connected: ConnectedClient, pacesUploads: Bool = true) async throws {
         self.connected = connected
+        self.pacesUploads = pacesUploads
         // openSFTP 失败时，已建立的 SSH 传输（target + 可选 bastion）没人持有、
         // 不会被释放（actor 还没初始化完成、没有 deinit，调用方也拿不到实例去关）。
         // 故失败时先关闭 connected（关 target，再关 bastion），再把错误抛出去。
@@ -222,6 +226,7 @@ actor SFTPSession: SFTPProviding {
         do {
             let pipelined = CitadelPipelineFile(file)
             var offset = 0
+            var pacer = pacesUploads ? SFTPUploadPacer() : nil
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
             func emitProgress(_ bytesDone: Int64) {
                 if progressEmitter.shouldEmit(bytesDone: bytesDone) {
@@ -234,7 +239,7 @@ actor SFTPSession: SFTPProviding {
                 let end = min(offset + Self.segmentBytes, data.count)
                 var buffer = ByteBuffer()
                 buffer.writeBytes(data[(data.startIndex + offset)..<(data.startIndex + end)])
-                try await SFTPPipeline.write(pipelined, data: buffer, at: UInt64(offset))
+                try await SFTPPipeline.write(pipelined, data: buffer, at: UInt64(offset), pacer: &pacer)
                 offset = end
                 emitProgress(Int64(offset))
             }
@@ -257,7 +262,7 @@ actor SFTPSession: SFTPProviding {
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
             // 一次读一段本地文件（内存有界），整段交给流水线并发写出去。写完最后一片时报到总数（emitter 必放行）。
             try await SFTPPipeline.write(CitadelPipelineFile(remoteFile), contentsOf: localURL,
-                                         segmentBytes: Self.segmentBytes) { written, _ in
+                                         segmentBytes: Self.segmentBytes, paced: pacesUploads) { written, _ in
                 if progressEmitter.shouldEmit(bytesDone: written) {
                     onProgress?(TransferProgress(bytesDone: written, bytesTotal: total))
                 }

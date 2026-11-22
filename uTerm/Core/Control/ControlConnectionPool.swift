@@ -640,7 +640,8 @@ extension ControlConnectionPool.Connector {
                 do {
                     let connected = try await ControlConnectionPool.liveConnect(
                         spec, sink: sink, windowBytes: transferWindowBytes)()
-                    return try await SFTPSession(connected: connected)
+                    // 命令行自己的连接，上面没有终端：上传不按节奏，跑满速。
+                    return try await SFTPSession(connected: connected, pacesUploads: false)
                 } catch {
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
                 }
