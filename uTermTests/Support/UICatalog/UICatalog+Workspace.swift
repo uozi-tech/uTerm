@@ -30,6 +30,12 @@ extension UICatalog {
                 try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.claudeCode(cols: 120, rows: 41)],
                                                        inspector: false, terminalWindow: true))
             },
+            // 同一个 Duo 画布，内容换成命令行输出：App Store 的非中文截图用（Claude Code 的录制是中文对话）。
+            UICatalogEntry("终端窗口/手机窗口模式_命令行", source: "uTerm/Features/Terminal/Views/TerminalWindowView.swift",
+                           symbol: "TerminalWindowView", size: CGSize(width: 951, height: 669), live: true) { stage in
+                try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.nginx, UICatalogTerminalScripts.memory],
+                                                       split: .horizontal, inspector: false, terminalWindow: true))
+            },
             // App Store 截图用的 13 英寸 iPad 竖握画布（1032×1376 点）。竖屏放不下 Claude Code 的录制（按录制时的
             // 行列数排版），用写好的 shell 输出。iPhone 竖握没有这一张：440 点比终端窗口的最小宽度还窄，Mac 调不过去。
             UICatalogEntry("终端窗口/iPad 窗口模式", source: "uTerm/Features/Terminal/Views/TerminalWindowView.swift",

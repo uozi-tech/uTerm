@@ -26,6 +26,24 @@ final class AppStoreScreenshotTests: XCTestCase {
     private var dir: URL!
     private var device: Device = .iphone
     private var dark = false
+    /// 界面语言（`-testLanguage` 选的那个）：示例数据里的分组名、命令名跟着它换。
+    private static var language: String { Bundle.main.preferredLocalizations.first ?? "zh-Hans" }
+
+    /// 示例数据的文字，按界面语言取。没列出的语言用英文。
+    private static func text(_ zh: String, en: String, hant: String, ja: String, ko: String) -> String {
+        switch language {
+        case "zh-Hans": zh
+        case "zh-Hant": hant
+        case "ja": ja
+        case "ko": ko
+        default: en
+        }
+    }
+    private static let groupProd = text("生产", en: "Production", hant: "正式", ja: "本番", ko: "운영")
+    private static let groupTest = text("测试", en: "Staging", hant: "測試", ja: "検証", ko: "테스트")
+    private static let groupHome = text("家里", en: "Home", hant: "家裡", ja: "自宅", ko: "집")
+    private static let restartCheck = text("重启服务并检查", en: "Restart and check", hant: "重新啟動服務並檢查",
+                                           ja: "再起動して確認", ko: "재시작 후 확인")
     private static let now = Date()
 
     override func setUp() async throws {
@@ -87,7 +105,9 @@ final class AppStoreScreenshotTests: XCTestCase {
         // 终端：Duo 横握正好是 Claude Code 录制时的 106×35；竖屏放不下全屏界面，用写好的 shell 输出。
         do {
             let workspace = MobileWorkspace()
-            let front = terminal(web, device == .duo ? Self.claudeTranscript : Self.terminalTranscript)
+            // Claude Code 的录制是中文对话，只在简体中文里用。
+            let claude = device == .duo && Self.language == "zh-Hans"
+            let front = terminal(web, claude ? Self.claudeTranscript : Self.terminalTranscript)
             let others = ["staging", "prod-db"].compactMap { hosts[$0] }.map { terminal($0, Self.terminalTranscript) }
             opened += [front] + others
             for tab in others { workspace.open(.terminal(tab)) }
@@ -144,7 +164,9 @@ final class AppStoreScreenshotTests: XCTestCase {
                                          identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
             let session = RemoteDesktopSession(client: client, maxWidth: Int(canvas.width * 3),
                                                maxHeight: Int(canvas.height * 3))
-            let frame = try Self.macFrame(device == .duo ? "终端窗口__手机窗口模式" : "终端窗口__iPad_窗口模式", dark: dark)
+            // Duo 的窗口模式画面：简体中文用跑着 Claude Code 的那张，别的语言用命令行输出的那张（录制是中文对话）。
+            let duoWindow = Self.language == "zh-Hans" ? "终端窗口__手机窗口模式" : "终端窗口__手机窗口模式_命令行"
+            let frame = try Self.macFrame(device == .duo ? duoWindow : "终端窗口__iPad_窗口模式", dark: dark)
             try await present("4-remote-window", settle: .milliseconds(1_400), before: {
                 session.showGalleryWindow(frame, windowID: 1, title: "prod-web-01", pointSize: canvas)
             }) {
@@ -183,10 +205,10 @@ final class AppStoreScreenshotTests: XCTestCase {
             let command = "systemctl restart app && systemctl is-active app && curl -s localhost:8080/healthz"
             let commandID = UUID()
             let controller = ParallelRunController(
-                commandID: commandID, commandName: "重启服务并检查", command: command, intent: "", aiAssisted: false,
+                commandID: commandID, commandName: Self.restartCheck, command: command, intent: "", aiAssisted: false,
                 targets: targets, doctor: nil, store: QuickCommandStore(context: container.mainContext),
                 container: container, executor: ScriptedParallelExecutor())
-            let request = ParallelRunRequest(commandID: commandID, name: "重启服务并检查", command: command,
+            let request = ParallelRunRequest(commandID: commandID, name: Self.restartCheck, command: command,
                                              intent: "", aiAssisted: false, serverIDs: targets.map(\.id))
             controller.start()
             let store = MobileStore()
@@ -298,7 +320,7 @@ final class AppStoreScreenshotTests: XCTestCase {
     private func fixtures() throws -> (ModelContainer, [String: ServerProfile]) {
         let c = try MobileFixtures.emptyContainer()
         let ctx = c.mainContext
-        for (i, (name, color)) in [("生产", "#ef4444"), ("测试", "#3b82f6"), ("家里", "#a855f7")].enumerated() {
+        for (i, (name, color)) in [(Self.groupProd, "#ef4444"), (Self.groupTest, "#3b82f6"), (Self.groupHome, "#a855f7")].enumerated() {
             ctx.insert(ServerGroup(name: name, colorHex: color, isPinned: i == 0, sortOrder: i))
         }
         let key = SSHKey()
@@ -308,14 +330,14 @@ final class AppStoreScreenshotTests: XCTestCase {
         key.fingerprint = "SHA256:Qm4bXo2Lk3T0w8V1sN7cHf9eRZy6aJd5uPq2gKtW4E"
         ctx.insert(key)
         let rows: [(String, String, String, String, Double?)] = [
-            ("bastion", "203.0.113.10", "ops", "生产", -3_600),
-            ("prod-web-01", "10.0.1.11", "deploy", "生产", -180),
-            ("prod-web-02", "10.0.1.12", "deploy", "生产", -7_200),
-            ("prod-db", "10.0.2.21", "postgres", "生产", -86_400),
-            ("staging", "staging.example.com", "deploy", "测试", -1_800),
-            ("k3s-lab", "192.168.10.30", "ubuntu", "测试", -86_400 * 3),
-            ("nas", "192.168.1.5", "admin", "家里", -86_400 * 9),
-            ("raspberry-pi", "192.168.1.42", "pi", "家里", nil),
+            ("bastion", "203.0.113.10", "ops", Self.groupProd, -3_600),
+            ("prod-web-01", "10.0.1.11", "deploy", Self.groupProd, -180),
+            ("prod-web-02", "10.0.1.12", "deploy", Self.groupProd, -7_200),
+            ("prod-db", "10.0.2.21", "postgres", Self.groupProd, -86_400),
+            ("staging", "staging.example.com", "deploy", Self.groupTest, -1_800),
+            ("k3s-lab", "192.168.10.30", "ubuntu", Self.groupTest, -86_400 * 3),
+            ("nas", "192.168.1.5", "admin", Self.groupHome, -86_400 * 9),
+            ("raspberry-pi", "192.168.1.42", "pi", Self.groupHome, nil),
         ]
         var hosts: [String: ServerProfile] = [:]
         for (i, r) in rows.enumerated() {
@@ -331,8 +353,11 @@ final class AppStoreScreenshotTests: XCTestCase {
             ctx.insert(p)
             hosts[r.0] = p
         }
-        for (i, (name, command)) in [("重启服务并看日志", "systemctl restart app && journalctl -u app -n 40"),
-                                     ("磁盘占用", "df -h /"), ("清理 Docker", "docker system prune -f")].enumerated() {
+        for (i, (name, command)) in [(Self.text("重启服务并看日志", en: "Restart and tail logs", hant: "重新啟動服務並看日誌", ja: "再起動してログを確認",
+                                                ko: "재시작 후 로그 보기"), "systemctl restart app && journalctl -u app -n 40"),
+                                     (Self.text("磁盘占用", en: "Disk usage", hant: "磁碟用量", ja: "ディスク使用量", ko: "디스크 사용량"), "df -h /"),
+                                     (Self.text("清理 Docker", en: "Clean up Docker", hant: "清理 Docker", ja: "Docker を掃除", ko: "Docker 정리"),
+                                      "docker system prune -f")].enumerated() {
             let q = QuickCommand()
             q.name = name
             q.command = command
