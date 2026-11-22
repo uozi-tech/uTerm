@@ -301,6 +301,8 @@ final class GhosttyMacScrollBenchTests: XCTestCase {
                 _ = await rig.waitUntil(3) { view.uTermScrollState.isAtRest }
                 let rows = Self.startRow - view.uTermScrollState.row
                 if rows == 0, view.uTermScrollState.isAtRest { return }
+                // 上一次回放留下的余数不能带进来（±0.5 pt 会让整行的位移多走一行）。
+                maker.reset()
                 for e in [Input(t: 0, kind: .precise(phase: Self.began, momentum: 0), travel: 0),
                           Input(t: 0, kind: .precise(phase: Self.changed, momentum: 0), travel: Double(rows) * cellPoints),
                           Input(t: 0, kind: .precise(phase: Self.ended, momentum: 0), travel: 0)] {
