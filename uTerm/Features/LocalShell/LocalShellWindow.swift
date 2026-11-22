@@ -509,6 +509,7 @@ struct LocalShellTerminalArea: View {
     let model: LocalShellWindowModel
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let background = SwiftUI.Color(
@@ -532,6 +533,7 @@ struct LocalShellTerminalArea: View {
                 TerminalTabContextMenu(
                     title: tab.payload.session.shellTitle ?? tab.payload.defaultTitle,
                     directory: tab.payload.workingDirectory,
+                    onOpenClaudeHistory: { openWindow.openClaudeHistory(localPane: tab.payload) },
                     onClose: { model.requestClose(tab.id) })
             })
             .uPaneGroupStyle(.card)

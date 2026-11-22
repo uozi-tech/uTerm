@@ -325,14 +325,24 @@ struct WorkspaceWindowView: View {
     /// 工作区窗口的命令项：主机（连接=当前工作区开新 tab）/ 最近文件 / 命令 / 设置深链。
     @MainActor
     private func workspaceCommandItems(server: ServerProfile) -> [CommandPaletteItem] {
-        WorkspaceCommandPaletteFactory.items(
+        let workspace = self.workspace
+        let openWindow = self.openWindow
+        var openClaudeHistory: (@MainActor () -> Void)?
+        if let pane = workspace.terminalGroups.activeTab?.payload, pane.fileBuffer == nil {
+            let serverID = pane.serverProfileID, session = pane.session
+            openClaudeHistory = {
+                openWindow.openClaudeHistory(serverID: serverID, session: session, workspace: workspace)
+            }
+        }
+        return WorkspaceCommandPaletteFactory.items(
             profiles: profiles,
             workspace: workspace,
             actions: WorkspaceCommandPaletteFactory.Actions(
                 openWelcome: { openWindow(id: "welcome") },
                 openGroups: { openWindow(id: "groups") },
                 openImport: { openWindow(id: "import") },
-                openSettings: { openWindow(id: SettingsWindow.id) }))
+                openSettings: { openWindow(id: SettingsWindow.id) },
+                openClaudeHistory: openClaudeHistory))
     }
 
     /// 注入命令面板的异步文件搜索：query → 远程 find → 命令项（文件→预览、目录→进浏览器）。

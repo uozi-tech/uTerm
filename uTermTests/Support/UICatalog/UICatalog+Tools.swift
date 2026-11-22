@@ -65,6 +65,16 @@ extension UICatalog {
                            symbol: "ParallelAgentView", size: CGSize(width: 1180, height: 760)) { stage in
                 try parallelRender(stage, command: 2)
             },
+            // Claude 历史会话：假的 ~/.claude/projects（MockSFTP），三条命令行会话 + 一条桌面版（不列出）。
+            UICatalogEntry("Claude 历史会话", source: "uTerm/Features/ClaudeHistory/Views/ClaudeHistoryWindow.swift",
+                           symbol: "ClaudeHistoryWindowView", size: CGSize(width: 1100, height: 720)) { stage in
+                let s = try stage.session()
+                let server = s.host("prod-web-01")
+                let history = await UICatalogClaudeHistory.model()
+                let windowID = ClaudeHistoryWindowID(host: .server(server.id), directory: UICatalogClaudeHistory.directory)
+                let window = ClaudeHistoryWindowModel(windowID: windowID, hostName: server.name, history: history)
+                return UICatalogRender(s.wrap(ClaudeHistoryWindowView(windowID: windowID, catalogModel: window)))
+            },
             UICatalogEntry("授权引导", source: "uTerm/Features/PermissionGuide/PermissionGuideView.swift",
                            symbol: "PermissionGuideView", size: CGSize(width: 760, height: 640)) { stage in
                 let s = try stage.session()

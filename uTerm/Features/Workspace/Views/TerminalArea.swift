@@ -23,6 +23,7 @@ struct TerminalArea: View {
     var allowsOtherHosts = false
 
     @Environment(\.colorScheme) private var appColorScheme
+    @Environment(\.openWindow) private var openWindow
     @Query private var profiles: [ServerProfile]
 
     private var terminalAreaBG: Color {
@@ -72,6 +73,7 @@ struct TerminalArea: View {
             tabMenu: { tab in
                 TerminalTabContextMenu(
                     title: Self.copyableTitle(for: tab, profiles: profilesByID),
+                    onOpenClaudeHistory: claudeHistoryAction(tab),
                     onClose: { workspace.requestCloseTerminalTab(tab.id) })
             },
             // 预览标签拖进终端组 —— 组件不认识的载荷转给 app。
@@ -176,6 +178,14 @@ struct TerminalArea: View {
         }
     }
 
+    /// 右键菜单里的「Claude 历史会话…」。文件标签没有。
+    private func claudeHistoryAction(_ tab: TerminalTab) -> (() -> Void)? {
+        let pane = tab.payload
+        guard pane.fileBuffer == nil else { return nil }
+        let workspace = self.workspace, openWindow = self.openWindow
+        return { openWindow.openClaudeHistory(serverID: pane.serverProfileID, session: pane.session, workspace: workspace) }
+    }
+
     /// 「＋」菜单里能开终端的主机：去掉「仅 SFTP」，置顶在前，其余按名称。
     private var hostChoices: [ServerProfile] {
         profiles
@@ -228,6 +238,8 @@ struct TerminalTabContextMenu: View {
     let title: String
     /// shell 当前所在的目录；不知道（SSH 会话）时不出这一项。
     var directory: String? = nil
+    /// 打开这台主机上的 Claude 历史会话；nil = 不出这一项。
+    var onOpenClaudeHistory: (() -> Void)? = nil
     let onClose: () -> Void
 
     var body: some View {
@@ -237,6 +249,12 @@ struct TerminalTabContextMenu: View {
         if let directory {
             Button { Self.copy(directory) } label: {
                 Label("拷贝当前目录", systemImage: "folder")
+            }
+        }
+        if let onOpenClaudeHistory {
+            Divider()
+            Button(action: onOpenClaudeHistory) {
+                Label("Claude 历史会话…", systemImage: "clock.arrow.circlepath")
             }
         }
         Divider()

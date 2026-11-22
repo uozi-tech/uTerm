@@ -1,0 +1,168 @@
+import Foundation
+
+/// 历史会话里要显示的一条：用户提问、回答、思考、工具调用……与具体是哪个 Agent 的记录无关，
+/// 以后接 Codex 的记录也解析成这些。
+nonisolated struct AgentTranscriptItem: Identifiable, Equatable, Sendable {
+    nonisolated enum Kind: Equatable, Sendable {
+        /// 用户输入的文字（已经去掉系统注入的部分）。按 Markdown 显示。
+        case userText(String)
+        /// 用户敲的斜杠命令（`/compact 保留接口`）或 `!` 开头的 shell 命令。
+        case command(String)
+        /// 上面那种命令的输出。
+        case commandOutput(AgentClippedText)
+        /// 系统发给模型的通知（后台任务结束之类），只显示一句摘要。
+        case notice(String)
+        /// Agent 的回答。按 Markdown 显示。
+        case assistantText(String)
+        case thinking(AgentClippedText)
+        case toolCall(AgentToolCall)
+        /// 没找到对应调用的工具结果（调用在更早、还没读到的那一段里）。
+        case toolResult(AgentToolResult)
+        /// 图片只放占位，不解码。
+        case image
+        /// 上下文被压缩了：画一条分隔线，摘要可以展开看。
+        case compactSummary(AgentClippedText)
+        /// 这一行太大，没有读进来。
+        case oversized(bytes: Int)
+    }
+
+    nonisolated enum Role: Equatable, Sendable {
+        case user, assistant, system
+    }
+
+    /// 在一份记录里唯一且稳定：行在文件里的偏移 + 行内序号。
+    let id: String
+    var kind: Kind
+    var timestamp: Date?
+
+    init(id: String, kind: Kind, timestamp: Date? = nil) {
+        self.id = id
+        self.kind = kind
+        self.timestamp = timestamp
+    }
+
+    var role: Role {
+        switch kind {
+        case .userText, .command, .commandOutput, .image, .toolResult: return .user
+        case .assistantText, .thinking, .toolCall: return .assistant
+        case .notice, .compactSummary, .oversized: return .system
+        }
+    }
+
+    /// 拷贝用的纯文字。
+    var plainText: String {
+        switch kind {
+        case .userText(let text), .command(let text), .notice(let text), .assistantText(let text):
+            return text
+        case .commandOutput(let text), .thinking(let text), .compactSummary(let text):
+            return text.text
+        case .toolCall(let call):
+            let head = call.summary.isEmpty ? call.name : "\(call.name) \(call.summary)"
+            guard let result = call.result else { return head }
+            return head + "\n" + result.content.text
+        case .toolResult(let result):
+            return result.content.text
+        case .image, .oversized:
+            return ""
+        }
+    }
+}
+
+/// 截断过的长文字：只留前面一段，记下原来多长。
+nonisolated struct AgentClippedText: Equatable, Sendable {
+    let text: String
+    /// 原文的字符数。
+    let totalCount: Int
+
+    var isClipped: Bool { totalCount > text.count }
+
+    init(_ full: String, limit: Int) {
+        let count = full.count
+        totalCount = count
+        text = count > limit ? String(full.prefix(limit)) : full
+    }
+
+    init(text: String, totalCount: Int) {
+        self.text = text
+        self.totalCount = max(totalCount, text.count)
+    }
+
+    /// 折叠时显示的几行。
+    func preview(lines: Int, characters: Int) -> String {
+        var result = ""
+        var taken = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if taken == lines { break }
+            if !result.isEmpty { result += "\n" }
+            result += line
+            taken += 1
+            if result.count >= characters { break }
+        }
+        return result.count > characters ? String(result.prefix(characters)) : result
+    }
+}
+
+nonisolated struct AgentToolCall: Equatable, Sendable {
+    let toolUseID: String?
+    let name: String
+    /// 参数的一行摘要（命令、文件路径、搜索词……）。
+    let summary: String
+    var result: AgentToolResult?
+}
+
+nonisolated struct AgentToolResult: Equatable, Sendable {
+    let toolUseID: String?
+    let content: AgentClippedText
+    let isError: Bool
+    let imageCount: Int
+}
+
+/// 显示的上限。记录里的字节大头是工具结果，展开也只给前面一段。
+nonisolated enum AgentTranscriptLimits {
+    /// 用户与回答的文字。
+    static let textCharacters = 200_000
+    static let thinkingCharacters = 60_000
+    /// 工具结果、命令输出展开后最多显示多少字。
+    static let toolResultCharacters = 16_000
+    static let compactSummaryCharacters = 60_000
+    /// 工具调用摘要。
+    static let summaryCharacters = 200
+    /// 折叠时的预览。
+    static let previewLines = 6
+    static let previewCharacters = 600
+    /// 一行超过这么大就不解析，显示成「太大」。
+    static let maxLineBytes = 8 * 1024 * 1024
+    /// 每次往前读多大一块。
+    static let chunkBytes = 256 * 1024
+    /// 一页至少攒够多少条，或者读满多少字节就停。
+    static let pageItems = 40
+    static let pageBytes = 2 * 1024 * 1024
+}
+
+/// 把工具结果挂到它的调用下面。结果在下一条 `user` 行里，分页时两者可能落在不同的页，
+/// 所以每次拼页之后整体再挂一遍。
+nonisolated enum AgentTranscriptAssembler {
+    static func attachResults(_ items: [AgentTranscriptItem]) -> [AgentTranscriptItem] {
+        var output: [AgentTranscriptItem] = []
+        output.reserveCapacity(items.count)
+        var openCalls: [String: Int] = [:]
+        for item in items {
+            switch item.kind {
+            case .toolCall(let call):
+                if let id = call.toolUseID, call.result == nil { openCalls[id] = output.count }
+                output.append(item)
+            case .toolResult(let result):
+                if let id = result.toolUseID, let index = openCalls.removeValue(forKey: id),
+                   case .toolCall(var call) = output[index].kind {
+                    call.result = result
+                    output[index].kind = .toolCall(call)
+                } else {
+                    output.append(item)
+                }
+            default:
+                output.append(item)
+            }
+        }
+        return output
+    }
+}

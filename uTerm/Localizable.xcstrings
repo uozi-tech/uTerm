@@ -617,6 +617,62 @@
         }
       }
     },
+    "（无标题）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(Untitled)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（無題）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(제목 없음)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（無標題）"
+          }
+        }
+      }
+    },
+    "（无标题）%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(Untitled) %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（無題）%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(제목 없음) %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（無標題）%@"
+          }
+        }
+      }
+    },
     "（无输出）" : {
       "localizations" : {
         "en" : {
@@ -6485,6 +6541,34 @@
         }
       }
     },
+    "%lld 台 · 成功 %lld%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld hosts · %2$lld succeeded%3$@ · %4$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台 · 成功 %2$lld%3$@ · %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld대 · 성공 %2$lld%3$@ · %4$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台 · 成功 %2$lld%3$@ · %4$@"
+          }
+        }
+      }
+    },
     "%lld 台 Mac 尚未撤销" : {
       "localizations" : {
         "en" : {
@@ -7069,6 +7153,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 異常"
+          }
+        }
+      }
+    },
+    "%lld 张图片（不显示）" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld image (not shown)"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld images (not shown)"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像 %lld 枚（表示しません）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지 %lld개(표시 안 함)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 張圖片（不顯示）"
           }
         }
       }
@@ -9635,6 +9759,90 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 Claude Code 等程式執行或等你處理時顯示"
+          }
+        }
+      }
+    },
+    "Claude 历史会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Session History"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude のセッション履歴"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 세션 기록"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 歷史工作階段"
+          }
+        }
+      }
+    },
+    "Claude 历史会话 · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Session History · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude のセッション履歴 · %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 세션 기록 · %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 歷史工作階段 · %@"
+          }
+        }
+      }
+    },
+    "Claude 历史会话…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Session History…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude のセッション履歴…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 세션 기록…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 歷史工作階段…"
           }
         }
       }
@@ -12796,6 +13004,34 @@
         }
       }
     },
+    "SSH 连接已断开" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH connection lost"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 接続が切断されました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 연결이 끊어졌습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 連線已中斷"
+          }
+        }
+      }
+    },
     "sudo systemctl restart nginx && curl -fsS localhost/healthz" : {
       "localizations" : {
         "en" : {
@@ -14235,6 +14471,34 @@
         }
       }
     },
+    "上下文已压缩" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context compacted"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキストを圧縮しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컨텍스트 압축됨"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文已壓縮"
+          }
+        }
+      }
+    },
     "上传" : {
       "comment" : "操作名，接在「…失败：原因」前",
       "localizations" : {
@@ -15508,6 +15772,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不清除"
+          }
+        }
+      }
+    },
+    "不知道这个会话的工作目录，无法继续" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session’s working directory is unknown, so it can’t be resumed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションの作業ディレクトリが分からないため、再開できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션의 작업 디렉터리를 알 수 없어 이어서 할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不知道這個工作階段的工作目錄，無法繼續"
           }
         }
       }
@@ -18917,6 +19209,34 @@
         }
       }
     },
+    "你" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなた"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "나"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你"
+          }
+        }
+      }
+    },
     "你已在本机忘记这台 Mac" : {
       "localizations" : {
         "en" : {
@@ -21304,6 +21624,34 @@
         }
       }
     },
+    "全部项目" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Projects"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのプロジェクト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 프로젝트"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有專案"
+          }
+        }
+      }
+    },
     "公网" : {
       "localizations" : {
         "en" : {
@@ -22639,6 +22987,34 @@
         }
       }
     },
+    "其他项目" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other Projects"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他のプロジェクト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 프로젝트"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他專案"
+          }
+        }
+      }
+    },
     "其余 %lld 次运行" : {
       "localizations" : {
         "en" : {
@@ -22737,6 +23113,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "記憶體用量"
+          }
+        }
+      }
+    },
+    "内容太长，只显示前 %lld 字（共 %lld 字）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Too long: showing the first %1$lld of %2$lld characters."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長すぎるため、%2$lld 文字のうち最初の %1$lld 文字だけを表示しています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내용이 너무 길어 전체 %2$lld자 중 앞의 %1$lld자만 표시합니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內容太長，只顯示前 %1$lld 字（共 %2$lld 字）。"
           }
         }
       }
@@ -23749,6 +24153,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "切換顯示器"
+          }
+        }
+      }
+    },
+    "切换项目" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch Project"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロジェクトを切り替え"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로젝트 전환"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切換專案"
           }
         }
       }
@@ -24824,6 +25256,34 @@
         }
       }
     },
+    "加载更早的消息" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load Earlier Messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前のメッセージを読み込む"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 메시지 불러오기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "載入更早的訊息"
+          }
+        }
+      }
+    },
     "动作" : {
       "comment" : "侧栏分区标题",
       "localizations" : {
@@ -25561,6 +26021,34 @@
         }
       }
     },
+    "压缩摘要" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compaction Summary"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圧縮の要約"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "압축 요약"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "壓縮摘要"
+          }
+        }
+      }
+    },
     "原始尺寸" : {
       "localizations" : {
         "en" : {
@@ -26177,6 +26665,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "另存一份到本機，之後不再同步"
+          }
+        }
+      }
+    },
+    "另有 %lld 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more session isn’t listed: it wasn’t started from the command line (for example, the desktop app), or it has no conversation."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more sessions aren’t listed: they weren’t started from the command line (for example, the desktop app), or have no conversation."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかに %lld 件のセッションは表示していません：コマンドラインで開始したものではない（デスクトップ版など）か、会話がありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그 밖의 세션 %lld개는 표시하지 않습니다: 명령줄에서 시작하지 않았거나(예: 데스크톱 앱) 대화 내용이 없습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 個工作階段未列出：不是在命令列中開始的（例如桌面版），或沒有對話內容。"
           }
         }
       }
@@ -26852,6 +27380,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "可靠通道"
+          }
+        }
+      }
+    },
+    "各路径的失败原因见下方。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "See below for why each path failed."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各経路の失敗理由は下に表示しています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "각 경로의 실패 원인은 아래를 참고하세요."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各路徑的失敗原因見下方。"
           }
         }
       }
@@ -29214,6 +29770,34 @@
         }
       }
     },
+    "图片（不显示）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Image (not shown)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像（表示しません）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지(표시 안 함)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圖片（不顯示）"
+          }
+        }
+      }
+    },
     "图片像素太多，不支持预览。可以用本机应用打开。" : {
       "localizations" : {
         "en" : {
@@ -31116,6 +31700,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在這台 Mac 上新增終端機"
+          }
+        }
+      }
+    },
+    "在这台主机上新开一个终端标签页，执行 claude --resume" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open a new terminal tab on this host and run claude --resume"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストで新しいターミナルタブを開き、claude --resume を実行します"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트에서 새 터미널 탭을 열고 claude --resume을 실행합니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在這台主機上新開一個終端機分頁，執行 claude --resume"
           }
         }
       }
@@ -35171,6 +35783,34 @@
         }
       }
     },
+    "左边列的是在命令行里用 Claude Code 的会话，内容只读。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The list on the left shows Claude Code sessions started from the command line. Content is read-only."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左側には、コマンドラインで使った Claude Code のセッションが並びます。内容は読み取り専用です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "왼쪽에는 명령줄에서 사용한 Claude Code 세션이 표시됩니다. 내용은 읽기 전용입니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左邊列出的是在命令列中使用 Claude Code 的工作階段，內容唯讀。"
+          }
+        }
+      }
+    },
     "已上传 %@" : {
       "localizations" : {
         "en" : {
@@ -37694,6 +38334,34 @@
         }
       }
     },
+    "已连接 · 正在打开%@…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected · Opening %@…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続済み · %@を開いています…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결됨 · %@ 여는 중…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已連線 · 正在開啟%@…"
+          }
+        }
+      }
+    },
     "已连接 · 正在打开会话…" : {
       "localizations" : {
         "en" : {
@@ -39332,6 +40000,34 @@
         }
       }
     },
+    "当前项目（%@）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current Project (%@)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のプロジェクト（%@）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 프로젝트(%@)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前專案（%@）"
+          }
+        }
+      }
+    },
     "形状" : {
       "comment" : "光标形状",
       "localizations" : {
@@ -40059,6 +40755,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "忽略"
+          }
+        }
+      }
+    },
+    "思考" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "생각"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考"
           }
         }
       }
@@ -42239,6 +42963,34 @@
         }
       }
     },
+    "找不到这台主机，它可能已被删除。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host can’t be found. It may have been deleted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストが見つかりません。削除された可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트를 찾을 수 없습니다. 삭제되었을 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到這台主機，它可能已被刪除。"
+          }
+        }
+      }
+    },
     "技能已安装，可直接在对话里使用" : {
       "localizations" : {
         "en" : {
@@ -42774,6 +43526,34 @@
         }
       }
     },
+    "拷贝会话 ID" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Session ID"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション ID をコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 ID 복사"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷貝工作階段 ID"
+          }
+        }
+      }
+    },
     "拷贝全部" : {
       "localizations" : {
         "en" : {
@@ -42886,6 +43666,34 @@
         }
       }
     },
+    "拷贝已加载的对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Loaded Conversation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込んだ会話をコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "불러온 대화 복사"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷貝已載入的對話"
+          }
+        }
+      }
+    },
     "拷贝当前目录" : {
       "localizations" : {
         "en" : {
@@ -42966,6 +43774,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拷貝檔案名稱"
+          }
+        }
+      }
+    },
+    "拷贝文字" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Text"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "テキストをコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "텍스트 복사"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷貝文字"
           }
         }
       }
@@ -44693,6 +45529,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "操作未能完成（系統錯誤碼 %@）"
+          }
+        }
+      }
+    },
+    "操作未能完成（系统错误码 %d）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The operation couldn’t be completed (system error %d)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作を完了できませんでした（システムエラーコード %d）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "작업을 완료할 수 없습니다(시스템 오류 코드 %d)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作業無法完成（系統錯誤碼 %d）"
           }
         }
       }
@@ -47820,6 +48684,62 @@
         }
       }
     },
+    "无法读取会话列表" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can’t Read the Session List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション一覧を読み込めません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 목록을 읽을 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取工作階段列表"
+          }
+        }
+      }
+    },
+    "无法读取历史会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can’t Read Session History"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション履歴を読み込めません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록을 읽을 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取歷史工作階段"
+          }
+        }
+      }
+    },
     "无法读取文件" : {
       "localizations" : {
         "en" : {
@@ -48772,6 +49692,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示 QR 碼"
+          }
+        }
+      }
+    },
+    "显示全部（%lld 字）" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Show All (%lld character)"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Show All (%lld characters)"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて表示（%lld 文字）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모두 보기(%lld자)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示全部（%lld 字）"
           }
         }
       }
@@ -51379,6 +52339,34 @@
         }
       }
     },
+    "本地端口 %lld 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Binding local port %lld was refused (ports below 1024 need administrator privileges; use a port ≥ 1024)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ローカルポート %lld のバインドが拒否されました（1024 未満のポートには管理者権限が必要です。1024 以上のポートを使ってください）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로컬 포트 %lld 바인딩이 거부되었습니다(1024 미만 포트는 관리자 권한이 필요합니다. 1024 이상 포트를 사용하세요)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機連接埠 %lld 綁定被拒絕（低於 1024 的連接埠需要管理員權限，建議改用 ≥1024 的連接埠）"
+          }
+        }
+      }
+    },
     "本地网络" : {
       "comment" : "系统权限名称",
       "localizations" : {
@@ -52610,6 +53598,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查看這台 Mac 的螢幕；有「輔助使用」授權時還能操作滑鼠和鍵盤"
+          }
+        }
+      }
+    },
+    "查看这台主机上 Claude Code 的历史会话，并可继续其中一个" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Browse Claude Code’s past sessions on this host and resume one"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストにある Claude Code の過去のセッションを表示し、再開できます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 Claude Code 이전 세션을 보고 그중 하나를 이어서 할 수 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看這台主機上 Claude Code 的歷史工作階段，並可繼續其中一個"
           }
         }
       }
@@ -55048,6 +56064,34 @@
         }
       }
     },
+    "正在读取会话列表…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading sessions…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション一覧を読み込んでいます…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 목록을 읽는 중…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在讀取工作階段列表…"
+          }
+        }
+      }
+    },
     "正在读取窗口…" : {
       "localizations" : {
         "en" : {
@@ -56306,6 +57350,34 @@
         }
       }
     },
+    "没有历史会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Session History"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション履歴はありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有歷史工作階段"
+          }
+        }
+      }
+    },
     "没有可执行的目标主机" : {
       "localizations" : {
         "en" : {
@@ -56610,6 +57682,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有名為「%@」的快速指令（執行 `utermctl quick-commands` 看有哪些）"
+          }
+        }
+      }
+    },
+    "没有命令行会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Command-Line Sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドラインのセッションはありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령줄 세션 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有命令列工作階段"
           }
         }
       }
@@ -59405,6 +60505,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "監聽連接埠 %@ 已被占用"
+          }
+        }
+      }
+    },
+    "监听端口 %lld 已被占用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listening port %lld is already in use"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待ち受けポート %lld はすでに使用されています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수신 포트 %lld이(가) 이미 사용 중입니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "監聽連接埠 %lld 已被佔用"
           }
         }
       }
@@ -62992,7 +64120,6 @@
       }
     },
     "粘贴剪贴板里的图片" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -63021,7 +64148,6 @@
       }
     },
     "粘贴剪贴板里的图片或视频" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -63050,7 +64176,6 @@
       }
     },
     "粘贴图片" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -63079,7 +64204,6 @@
       }
     },
     "粘贴图片或视频" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -63905,6 +65029,62 @@
         }
       }
     },
+    "结果" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Result"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "결과"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果"
+          }
+        }
+      }
+    },
+    "结果（出错）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Result (Error)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果（エラー）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "결과(오류)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果（出錯）"
+          }
+        }
+      }
+    },
     "给 Agent 的消息" : {
       "localizations" : {
         "en" : {
@@ -64094,6 +65274,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "繼續渲染（還有 %lld 個區塊）"
+          }
+        }
+      }
+    },
+    "继续这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションを再開"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션 이어서 하기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續這個工作階段"
           }
         }
       }
@@ -68212,6 +69420,34 @@
         }
       }
     },
+    "读取会话记录时文件变短了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The session file got shorter while it was being read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション記録の読み込み中にファイルが短くなりました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록을 읽는 동안 파일이 짧아졌습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取工作階段記錄時檔案變短了"
+          }
+        }
+      }
+    },
     "读取本地文件大小失败" : {
       "localizations" : {
         "en" : {
@@ -69443,6 +70679,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "輸入配對碼"
+          }
+        }
+      }
+    },
+    "输出" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Output"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出力"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "출력"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸出"
           }
         }
       }
@@ -70985,6 +72249,34 @@
         }
       }
     },
+    "这个会话里没有可显示的消息。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session has no messages to show."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションには表示できるメッセージがありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션에는 표시할 메시지가 없습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個工作階段裡沒有可顯示的訊息。"
+          }
+        }
+      }
+    },
     "这个分组还没有主机" : {
       "localizations" : {
         "en" : {
@@ -71330,6 +72622,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這個終端機已經關閉或中斷連線"
+          }
+        }
+      }
+    },
+    "这个项目里还没有会话。可以切到「全部项目」看看。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project has no sessions yet. Try “All Projects”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプロジェクトにはまだセッションがありません。「すべてのプロジェクト」に切り替えてみてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 프로젝트에는 아직 세션이 없습니다. ‘모든 프로젝트’로 전환해 보세요."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個專案裡還沒有工作階段。可以切到「所有專案」看看。"
           }
         }
       }
@@ -72090,6 +73410,34 @@
         }
       }
     },
+    "这台主机上没有找到 Claude Code 的会话记录（~/.claude/projects）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Claude Code session records were found on this host (~/.claude/projects)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストに Claude Code のセッション記録（~/.claude/projects）が見つかりません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트에서 Claude Code 세션 기록(~/.claude/projects)을 찾지 못했습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機上沒有找到 Claude Code 的工作階段記錄（~/.claude/projects）。"
+          }
+        }
+      }
+    },
     "这台主机上的 Agent 只能显示 256 色" : {
       "localizations" : {
         "en" : {
@@ -72510,6 +73858,34 @@
         }
       }
     },
+    "这条记录太大（%@），没有显示" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This entry is too large (%@) and isn’t shown"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この記録は大きすぎるため（%@）、表示していません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기록은 너무 커서(%@) 표시하지 않았습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這條記錄太大（%@），沒有顯示"
+          }
+        }
+      }
+    },
     "这次未测试%@（在「检测设置」中打开）。" : {
       "localizations" : {
         "en" : {
@@ -72534,6 +73910,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這次未測試%@（在「檢測設定」中開啟）。"
+          }
+        }
+      }
+    },
+    "这里的 %lld 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld session here isn’t listed: it wasn’t started from the command line (for example, the desktop app), or it has no conversation."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld sessions here aren’t listed: they weren’t started from the command line (for example, the desktop app), or have no conversation."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここにある %lld 件のセッションは表示していません：コマンドラインで開始したものではない（デスクトップ版など）か、会話がありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여기 있는 세션 %lld개는 표시하지 않습니다: 명령줄에서 시작하지 않았거나(예: 데스크톱 앱) 대화 내용이 없습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這裡的 %lld 個工作階段未列出：不是在命令列中開始的（例如桌面版），或沒有對話內容。"
           }
         }
       }
@@ -73240,7 +74656,6 @@
       }
     },
     "远程控制的 Mac 终端还不能贴视频，只能贴图片" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -74273,6 +75688,34 @@
         }
       }
     },
+    "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，%@。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connection uses the first available path in the order LAN → direct → relay, %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続は LAN → 直接 → リレーの順に、最初に使える経路を選びます。%@。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결은 LAN → 직접 연결 → 릴레이 순서로 처음 사용할 수 있는 경로를 고릅니다. %@."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線依區域網路 → 直連 → 中繼的順序選第一條可用的路徑，%@。"
+          }
+        }
+      }
+    },
     "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，%@。%@%@" : {
       "localizations" : {
         "en" : {
@@ -74847,6 +76290,34 @@
         }
       }
     },
+    "退出码 %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exit code %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了コード %lld"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료 코드 %lld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結束代碼 %lld"
+          }
+        }
+      }
+    },
     "退出码 %lld · %@" : {
       "localizations" : {
         "en" : {
@@ -75101,6 +76572,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇 SSH 私密金鑰檔案"
+          }
+        }
+      }
+    },
+    "选择一个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select a Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションを選択"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 선택"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇一個工作階段"
           }
         }
       }

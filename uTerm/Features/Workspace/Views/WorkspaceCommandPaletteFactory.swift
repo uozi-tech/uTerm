@@ -8,6 +8,8 @@ enum WorkspaceCommandPaletteFactory {
         let openGroups: () -> Void
         let openImport: () -> Void
         let openSettings: () -> Void
+        /// 当前终端标签所在主机的 Claude 历史会话。没有终端标签在前台时为 nil（不出这一项）。
+        var openClaudeHistory: (@MainActor () -> Void)? = nil
     }
 
     /// 工作区窗口的命令项：主机（连接=当前工作区开新 tab）/ 最近文件 / 命令 / 设置深链。
@@ -59,6 +61,13 @@ enum WorkspaceCommandPaletteFactory {
             title: String(localized: "关闭当前终端标签页"), detail: "", hint: "⌘W", group: nil) {
                 workspace.requestCloseActiveTerminalTab()
             })
+        if let openClaudeHistory = actions.openClaudeHistory {
+            items.append(CommandPaletteItem(
+                id: "cmd.claudeHistory", kind: .command,
+                title: String(localized: "Claude 历史会话…"),
+                detail: String(localized: "查看这台主机上 Claude Code 的历史会话，并可继续其中一个"),
+                hint: "↵", group: nil) { openClaudeHistory() })
+        }
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,
             title: String(localized: "新建主机…"), detail: String(localized: "在欢迎窗口中新建"),

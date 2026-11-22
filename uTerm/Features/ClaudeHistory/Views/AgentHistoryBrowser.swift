@@ -1,0 +1,531 @@
+import AppKit
+import SwiftUI
+import UDesignKit
+
+/// 历史会话窗口的内容：左边会话列表，右边选中会话的对话。
+struct AgentHistoryBrowser: View {
+    let history: AgentHistoryModel
+    let onResume: (AgentHistorySessionFile) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            AgentHistorySessionList(history: history)
+                .frame(width: 300)
+            Rectangle().fill(UD.border).frame(width: 1)
+            detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let transcript = history.transcript {
+            AgentTranscriptPane(transcript: transcript,
+                                metadata: history.metadata[transcript.file.path],
+                                canResume: history.resumeCommand(for: transcript.file) != nil,
+                                onResume: { onResume(transcript.file) })
+                .id(transcript.file.path)
+        } else {
+            RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
+                               detail: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
+        }
+    }
+}
+
+// MARK: - 会话列表
+
+struct AgentHistorySessionList: View {
+    let history: AgentHistoryModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(UD.border).frame(height: 1)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Menu {
+                if let current = history.currentProject {
+                    Button(String(localized: "当前项目（\(AgentHistoryText.projectName(current))）")) {
+                        Task { await history.setScope(.project(current)) }
+                    }
+                }
+                Button(String(localized: "全部项目")) { Task { await history.setScope(.all) } }
+                let others = history.projects.filter { $0.id != history.currentProject?.id }.prefix(40)
+                if !others.isEmpty {
+                    Section(String(localized: "其他项目")) {
+                        ForEach(Array(others)) { project in
+                            Button(AgentHistoryText.projectName(project)) {
+                                Task { await history.setScope(.project(project)) }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Text(scopeTitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(String(localized: "切换项目"))
+            Spacer(minLength: 0)
+            Button {
+                Task { await history.reload() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.udPlain)
+            .iconButtonHover(cornerRadius: 6)
+            .help(String(localized: "刷新"))
+            .accessibilityLabel(Text("刷新"))
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 40)
+    }
+
+    private var scopeTitle: String {
+        switch history.scope {
+        case .project(let project): return AgentHistoryText.projectName(project)
+        case .all: return String(localized: "全部项目")
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch history.phase {
+        case .loading:
+            RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
+        case .empty:
+            RemoteMacStateView(systemImage: "tray", title: String(localized: "没有历史会话"),
+                               detail: String(localized: "这台主机上没有找到 Claude Code 的会话记录（~/.claude/projects）。"))
+        case .failed(let message):
+            RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取会话列表"),
+                               detail: message) {
+                UDButton(title: String(localized: "重试")) { Task { await history.reload() } }
+            }
+        case .ready:
+            let files = history.visibleFiles
+            if history.isListing && files.isEmpty {
+                RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
+            } else if files.isEmpty {
+                RemoteMacStateView(systemImage: "tray", title: String(localized: "没有命令行会话"),
+                                   detail: emptyDetail)
+            } else {
+                list(files)
+            }
+        }
+    }
+
+    private var emptyDetail: String {
+        let hidden = history.hiddenCount
+        return hidden > 0
+            ? String(localized: "这里的 \(hidden) 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。")
+            : String(localized: "这个项目里还没有会话。可以切到「全部项目」看看。")
+    }
+
+    private func list(_ files: [AgentHistorySessionFile]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(files) { file in
+                    AgentHistorySessionRow(file: file, metadata: history.metadata[file.path],
+                                           showsProject: history.scope == .all,
+                                           isSelected: history.selectedFile?.path == file.path)
+                        .onTapGesture { history.select(file) }
+                        .onAppear { history.rowAppeared(file) }
+                }
+                if history.hiddenCount > 0 {
+                    Text("另有 \(history.hiddenCount) 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。")
+                        .font(UD.caption)
+                        .foregroundStyle(UD.text4)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                }
+            }
+            .padding(6)
+        }
+    }
+}
+
+private struct AgentHistorySessionRow: View {
+    let file: AgentHistorySessionFile
+    let metadata: AgentHistorySessionMetadata?
+    let showsProject: Bool
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(metadata == nil ? UD.text3 : UD.text)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(subtitle)
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? UD.rowSelected : Color.clear))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var title: String {
+        if let title = metadata?.title { return title }
+        if metadata == nil { return String(localized: "正在读取…") }
+        return String(localized: "（无标题）\(String(file.sessionID.prefix(8)))")
+    }
+
+    private var subtitle: String {
+        var parts = [AgentHistoryText.relative(file.modifiedAt),
+                     file.size.formatted(.byteCount(style: .file))]
+        if let branch = metadata?.gitBranch { parts.append(branch) }
+        if showsProject {
+            parts.append(metadata?.lastDirectory.map { ($0 as NSString).lastPathComponent }
+                         ?? AgentHistoryText.projectName(file.project))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// 列表与标题里的几处文字。
+enum AgentHistoryText {
+    /// 项目的名字：知道工作目录就用目录名，否则用记录目录的名字（`-Users-a-proj`，换不回原路径）。
+    static func projectName(_ project: AgentHistoryProject) -> String {
+        if let directory = project.directory { return (directory as NSString).lastPathComponent }
+        return project.id
+    }
+
+    static func relative(_ date: Date) -> String {
+        date.formatted(.relative(presentation: .named))
+    }
+}
+
+// MARK: - 对话
+
+struct AgentTranscriptPane: View {
+    let transcript: AgentTranscriptModel
+    let metadata: AgentHistorySessionMetadata?
+    let canResume: Bool
+    let onResume: () -> Void
+
+    @State private var expanded: Set<String> = []
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(UD.border).frame(height: 1)
+            messages
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(metadata?.title ?? String(localized: "（无标题）"))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                Text(detailLine)
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 8)
+            Menu {
+                Button(String(localized: "拷贝会话 ID")) { AgentHistoryPasteboard.copy(transcript.file.sessionID) }
+                Button(String(localized: "拷贝已加载的对话")) { AgentHistoryPasteboard.copy(transcript.plainText) }
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 28, height: 26)
+            .help(String(localized: "拷贝"))
+            UDButton(title: String(localized: "继续这个会话"), systemImage: "play.fill", action: onResume)
+                .disabled(!canResume)
+                .help(canResume
+                      ? String(localized: "在这台主机上新开一个终端标签页，执行 claude --resume")
+                      : String(localized: "不知道这个会话的工作目录，无法继续"))
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 52)
+    }
+
+    private var detailLine: String {
+        var parts: [String] = []
+        if let directory = metadata?.resumeDirectory ?? metadata?.lastDirectory { parts.append(directory) }
+        if let branch = metadata?.gitBranch { parts.append(branch) }
+        parts.append(AgentHistoryText.relative(metadata?.lastActivity ?? transcript.file.modifiedAt))
+        return parts.joined(separator: " · ")
+    }
+
+    private var messages: some View {
+        let items = transcript.items
+        let runStarts = AgentTranscriptRuns.starts(items)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    top
+                    ForEach(items) { item in
+                        AgentTranscriptRow(item: item, showsRole: runStarts.contains(item.id), expanded: $expanded)
+                            .id(item.id)
+                    }
+                    if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
+                        Text("这个会话里没有可显示的消息。")
+                            .font(UD.caption)
+                            .foregroundStyle(UD.text3)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+            }
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: transcript.prependGeneration) { old, _ in
+                // 往前加了一页：留在原来最上面那条，不跳到别处。第一页不用（默认停在底部）。
+                guard old > 0, let anchor = pendingAnchor else { return }
+                proxy.scrollTo(anchor, anchor: .top)
+            }
+        }
+    }
+
+    @State private var pendingAnchor: String?
+
+    @ViewBuilder private var top: some View {
+        if let error = transcript.errorMessage {
+            HStack(spacing: 8) {
+                SettingsInlineNote(tone: .warning, text: error)
+                UDButton(title: String(localized: "重试"), style: .secondary) { loadEarlier() }
+            }
+        } else if transcript.isLoading {
+            HStack {
+                Spacer()
+                UDIndeterminateBar().frame(width: 120)
+                Spacer()
+            }
+            .padding(.vertical, 8)
+        } else if !transcript.reachedStart {
+            HStack {
+                Spacer()
+                UDButton(title: String(localized: "加载更早的消息"), style: .secondary, systemImage: "arrow.up") {
+                    loadEarlier()
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private func loadEarlier() {
+        pendingAnchor = transcript.firstItemID
+        Task { await transcript.loadEarlier() }
+    }
+}
+
+/// 哪些条目要带「你」/「Claude」的标签：换了说话的一方才带。
+enum AgentTranscriptRuns {
+    static func starts(_ items: [AgentTranscriptItem]) -> Set<String> {
+        var result: Set<String> = []
+        var last: AgentTranscriptItem.Role?
+        for item in items {
+            if item.role != .system, item.role != last { result.insert(item.id) }
+            last = item.role
+        }
+        return result
+    }
+}
+
+enum AgentHistoryPasteboard {
+    static func copy(_ text: String) {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(text, forType: .string)
+    }
+}
+
+private struct AgentTranscriptRow: View {
+    let item: AgentTranscriptItem
+    let showsRole: Bool
+    @Binding var expanded: Set<String>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if showsRole {
+                Text(item.role == .user ? String(localized: "你") : "Claude")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(UD.text3)
+                    .padding(.top, 6)
+            }
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            let text = item.plainText
+            if !text.isEmpty {
+                Button(String(localized: "拷贝文字")) { AgentHistoryPasteboard.copy(text) }
+            }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch item.kind {
+        case .userText(let text):
+            StreamingMarkdownView(text: text, isStreaming: false)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillSoft))
+        case .assistantText(let text):
+            StreamingMarkdownView(text: text, isStreaming: false)
+                .textSelection(.enabled)
+        case .command(let command):
+            Text(command)
+                .font(UD.mono(12, weight: .medium))
+                .foregroundStyle(UD.text)
+                .textSelection(.enabled)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
+        case .commandOutput(let output):
+            AgentClippedBlock(id: item.id, label: String(localized: "输出"), text: output, isError: false,
+                              expanded: $expanded)
+        case .notice(let text):
+            Label(text, systemImage: "bell")
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.text3)
+                .lineLimit(2)
+        case .thinking(let text):
+            DisclosureGroup(isExpanded: binding("\(item.id).thinking")) {
+                Text(text.text + (text.isClipped ? "\n…" : ""))
+                    .font(.system(size: 12))
+                    .italic()
+                    .foregroundStyle(UD.text3)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            } label: {
+                Label(String(localized: "思考"), systemImage: "brain")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(UD.text3)
+            }
+        case .toolCall(let call):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(UD.text3)
+                    Text(call.name)
+                        .font(UD.mono(11.5, weight: .semibold))
+                        .foregroundStyle(UD.text2)
+                    Text(call.summary)
+                        .font(UD.mono(11.5))
+                        .foregroundStyle(UD.text3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .textSelection(.enabled)
+                }
+                if let result = call.result {
+                    AgentClippedBlock(id: item.id, label: AgentTranscriptRow.resultLabel(result), text: result.content,
+                                      isError: result.isError, expanded: $expanded)
+                        .padding(.leading, 18)
+                }
+            }
+        case .toolResult(let result):
+            AgentClippedBlock(id: item.id, label: AgentTranscriptRow.resultLabel(result), text: result.content,
+                              isError: result.isError, expanded: $expanded)
+        case .image:
+            Label(String(localized: "图片（不显示）"), systemImage: "photo")
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.text3)
+        case .compactSummary(let summary):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Rectangle().fill(UD.border).frame(height: 1)
+                    Text("上下文已压缩")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(UD.text3)
+                        .fixedSize()
+                    Rectangle().fill(UD.border).frame(height: 1)
+                }
+                AgentClippedBlock(id: item.id, label: String(localized: "压缩摘要"), text: summary, isError: false,
+                                  expanded: $expanded)
+            }
+            .padding(.vertical, 6)
+        case .oversized(let bytes):
+            Label(String(localized: "这条记录太大（\(Int64(bytes).formatted(.byteCount(style: .file)))），没有显示"),
+                  systemImage: "exclamationmark.circle")
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.text3)
+        }
+    }
+
+    private static func resultLabel(_ result: AgentToolResult) -> String {
+        var label = result.isError ? String(localized: "结果（出错）") : String(localized: "结果")
+        if result.imageCount > 0 { label += " · " + String(localized: "\(result.imageCount) 张图片（不显示）") }
+        return label
+    }
+
+    private func binding(_ key: String) -> Binding<Bool> {
+        Binding(get: { expanded.contains(key) },
+                set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
+
+/// 折叠的长文字（工具结果、命令输出、压缩摘要）：默认收起；展开先给前几行，再点才给全部（仍有上限）。
+private struct AgentClippedBlock: View {
+    let id: String
+    let label: String
+    let text: AgentClippedText
+    let isError: Bool
+    @Binding var expanded: Set<String>
+
+    private var openKey: String { "\(id).open" }
+    private var fullKey: String { "\(id).full" }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: binding(openKey)) {
+            VStack(alignment: .leading, spacing: 6) {
+                let showsAll = expanded.contains(fullKey)
+                let preview = text.preview(lines: AgentTranscriptLimits.previewLines,
+                                           characters: AgentTranscriptLimits.previewCharacters)
+                Text(showsAll ? text.text : preview)
+                    .font(UD.mono(11))
+                    .foregroundStyle(isError ? UD.danger : UD.text2)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
+                if !showsAll, preview.count < text.text.count {
+                    Button(String(localized: "显示全部（\(text.text.count) 字）")) { expanded.insert(fullKey) }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                }
+                if text.isClipped, showsAll || preview.count >= text.text.count {
+                    Text("内容太长，只显示前 \(text.text.count) 字（共 \(text.totalCount) 字）。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text4)
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Text(label)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(isError ? UD.danger : UD.text3)
+        }
+    }
+
+    private func binding(_ key: String) -> Binding<Bool> {
+        Binding(get: { expanded.contains(key) },
+                set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
