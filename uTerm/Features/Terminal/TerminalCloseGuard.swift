@@ -16,10 +16,11 @@ enum TerminalCloseGuard {
     /// 探测要走一趟网络，连按 ⌘W 不重复发起；确认 sheet 开着时也不叠第二个。
     private static let probe = TerminalCloseProbe()
 
-    /// `session` 为 nil（空组没有会话）时直接关。`close` 里要重新定位标签：探测和确认都要时间。
+    /// `session` 为 nil（空组没有会话）时直接关。`tabName` 是标签上显示的名字，写进确认框。`close` 里要重新定位标签：探测和确认都要时间。
     /// `window` 取发起关闭时的 key window：探测期间用户可能切走，弹框要落在原来的窗口上。
     static func requestClose(
         _ session: TerminalSession?,
+        tabName: String? = nil,
         window: NSWindow? = NSApp.keyWindow,
         close: @escaping @MainActor () -> Void
     ) {
@@ -28,7 +29,7 @@ enum TerminalCloseGuard {
             return
         }
         Task {
-            await probe.probe(ObjectIdentifier(session), activity: session.foregroundActivity) { prompt in
+            await probe.probe(ObjectIdentifier(session), tabName: tabName, activity: session.foregroundActivity) { prompt in
                 if let prompt, await !confirm(prompt, action: String(localized: "关闭标签页"), in: window) { return }
                 close()
             }

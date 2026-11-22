@@ -6,16 +6,38 @@ final class TerminalActivityTests: XCTestCase {
     // MARK: - 关闭确认
 
     func testIdleNeedsNoConfirmation() {
-        XCTAssertNil(TerminalActivity.idle.closePrompt)
+        XCTAssertNil(TerminalActivity.idle.closePrompt())
     }
 
     func testRunningProgramIsNamedInThePrompt() {
-        XCTAssertEqual(TerminalActivity.running("vim").closePrompt?.title, "「vim」还在运行")
-        XCTAssertNotNil(TerminalActivity.running(nil).closePrompt)
+        XCTAssertEqual(TerminalActivity.running("vim").closePrompt()?.title, "「vim」还在运行")
+        XCTAssertNotNil(TerminalActivity.running(nil).closePrompt())
+    }
+
+    func testPromptNamesTheTab() {
+        let running = TerminalActivity.running("claude").closePrompt(tabName: "api-server")
+        XCTAssertEqual(running?.title, "「claude」还在运行")
+        XCTAssertEqual(running?.message, "关闭标签页「api-server」可能会中断它。")
+        XCTAssertEqual(TerminalActivity.running(nil).closePrompt(tabName: "api-server")?.message,
+                       "关闭标签页「api-server」可能会中断它。")
+        XCTAssertTrue(TerminalActivity.unknown.closePrompt(tabName: "api-server")?.message
+            .contains("关闭标签页「api-server」") == true)
+        XCTAssertNil(TerminalActivity.idle.closePrompt(tabName: "api-server"))
+    }
+
+    func testPromptWithoutTabNameFallsBack() {
+        XCTAssertEqual(TerminalActivity.running("vim").closePrompt(tabName: "  ")?.message, "关闭这个标签页可能会中断它。")
+        XCTAssertEqual(TerminalActivity.running("vim").closePrompt()?.message, "关闭这个标签页可能会中断它。")
+    }
+
+    func testLongTabNameIsClippedLikeTheTab() throws {
+        let long = String(repeating: "a", count: 60)
+        let message = try XCTUnwrap(TerminalActivity.running("vim").closePrompt(tabName: long)?.message)
+        XCTAssertTrue(message.contains("「\(TerminalTitle.clippedForTab(long))」"))
     }
 
     func testUnknownStillAsks() {
-        XCTAssertNotNil(TerminalActivity.unknown.closePrompt)
+        XCTAssertNotNil(TerminalActivity.unknown.closePrompt())
     }
 
     func testAlternateScreenOnlyFillsInForUnknown() {

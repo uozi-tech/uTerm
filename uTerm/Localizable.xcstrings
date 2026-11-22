@@ -22246,6 +22246,34 @@
         }
       }
     },
+    "关闭标签页「%@」可能会中断它。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Closing the tab “%@” may interrupt it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ「%@」を閉じると中断される可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 탭을 닫으면 중단될 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉分頁「%@」可能會中斷它。"
+          }
+        }
+      }
+    },
     "关闭窗口" : {
       "localizations" : {
         "en" : {
@@ -47396,6 +47424,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法產生驗證碼：%@"
+          }
+        }
+      }
+    },
+    "无法确认它现在的状态。关闭标签页「%@」会断开这个终端，里面的程序可能被中断。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its current state can't be determined. Closing the tab “%@” will disconnect this terminal, and programs in it may be interrupted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の状態を確認できません。タブ「%@」を閉じるとこのターミナルの接続が解除され、実行中のプログラムが中断される可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 상태를 확인할 수 없습니다. ‘%@’ 탭을 닫으면 이 터미널의 연결이 해제되고 그 안의 프로그램이 중단될 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確認它目前的狀態。關閉分頁「%@」會中斷這個終端機的連線，裡面的程式可能被中斷。"
           }
         }
       }

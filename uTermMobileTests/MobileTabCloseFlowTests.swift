@@ -41,8 +41,9 @@ final class MobileTabCloseFlowTests: XCTestCase {
         flow.request(.terminal(term)) { closed.append($0) }
         try await settle { flow.pending != nil }
 
-        let prompt = try XCTUnwrap(TerminalActivity.running("npm").closePrompt)
+        let prompt = try XCTUnwrap(TerminalActivity.running("npm").closePrompt(tabName: MWorkTab.terminal(term).title))
         XCTAssertEqual(flow.pending, MTabClosePrompt(tabID: term.id, kind: .busy(prompt)))
+        XCTAssertTrue(prompt.message.contains("「\(MWorkTab.terminal(term).title)」"), "确认框要写出关的是哪个标签页")
         XCTAssertTrue(closed.isEmpty, "用户拿主意之前不能关")
         term.controller.close()
     }

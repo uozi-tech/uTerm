@@ -14,17 +14,19 @@ final class TerminalCloseProbe {
     func isProbing(_ id: some Hashable) -> Bool { probing.contains(AnyHashable(id)) }
 
     /// 探测一次，把结果交给 `then`：`nil` = 没有在跑的程序，直接关；否则按这条提示问用户。
+    /// `tabName` 是标签上显示的名字，写进提示里（见 `TerminalActivity.closePrompt(tabName:)`）。
     /// 同一个 `id` 已经在探测时什么都不做，返回 false。`then` 执行期间 `id` 仍算在探测中
     /// （mac 的确认 sheet 开着时再按 ⌘W 不会叠第二个）。
     @discardableResult
     func probe(_ id: some Hashable,
+               tabName: String? = nil,
                activity: () async -> TerminalActivity,
                then decide: (TerminalClosePrompt?) async -> Void) async -> Bool {
         let key = AnyHashable(id)
         guard probing.insert(key).inserted else { return false }
         defer { probing.remove(key) }
         let result = await activity()
-        await decide(result.closePrompt)
+        await decide(result.closePrompt(tabName: tabName))
         return true
     }
 

@@ -36,21 +36,35 @@ nonisolated enum TerminalActivity: Equatable, Sendable {
     }
 
     /// 二次确认的文案。nil = 不用确认，直接关。
-    var closePrompt: TerminalClosePrompt? {
+    /// `tabName` 是标签上显示的名字：同时开着好几个标签时，用户得知道要关的是哪一个。读不到时为 nil。
+    func closePrompt(tabName: String? = nil) -> TerminalClosePrompt? {
+        let tab = tabName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty.map(TerminalTitle.clippedForTab)
         switch self {
         case .idle:
             return nil
         case .running(let name?):
             return TerminalClosePrompt(title: String(localized: "「\(name)」还在运行"),
-                                       message: String(localized: "关闭这个标签页可能会中断它。"))
+                                       message: Self.interruptMessage(tab: tab))
         case .running(nil):
             return TerminalClosePrompt(title: String(localized: "这个标签页里还有程序在运行"),
-                                       message: String(localized: "关闭这个标签页可能会中断它。"))
+                                       message: Self.interruptMessage(tab: tab))
         case .unknown:
-            return TerminalClosePrompt(title: String(localized: "这个标签页里可能还有程序在运行"),
-                                       message: String(localized: "无法确认它现在的状态。关闭标签页会断开这个终端，里面的程序可能被中断。"))
+            let message = tab.map {
+                String(localized: "无法确认它现在的状态。关闭标签页「\($0)」会断开这个终端，里面的程序可能被中断。")
+            } ?? String(localized: "无法确认它现在的状态。关闭标签页会断开这个终端，里面的程序可能被中断。")
+            return TerminalClosePrompt(title: String(localized: "这个标签页里可能还有程序在运行"), message: message)
         }
     }
+
+    private static func interruptMessage(tab: String?) -> String {
+        tab.map { String(localized: "关闭标签页「\($0)」可能会中断它。") }
+            ?? String(localized: "关闭这个标签页可能会中断它。")
+    }
+}
+
+private extension String {
+    nonisolated var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 nonisolated struct TerminalClosePrompt: Equatable, Sendable {

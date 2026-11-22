@@ -588,7 +588,9 @@ final class WorkspaceModel {
             if elsewhere { close() } else { filePreviewModel.closeAfterSaving(buffer, close: close) }
             return
         }
-        TerminalCloseGuard.requestClose(tab.payload.session) { [weak self] in
+        let pane = tab.payload
+        let tabName = pane.session.shellTitle ?? pane.tabTitle ?? pane.connectedServerName
+        TerminalCloseGuard.requestClose(pane.session, tabName: tabName) { [weak self] in
             // 确认期间标签可能被拖到别的组、或已经被关掉，到这时再定位。
             guard let self, let at = terminalGroups.locateTab(tabID) else { return }
             terminalGroups.closeTab(groupID: at.groupID, index: at.index)

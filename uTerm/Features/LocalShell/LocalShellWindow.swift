@@ -222,7 +222,7 @@ final class LocalShellWindowModel {
     /// 用户要关一个标签：前台还有程序在跑时先确认。手机远控关闭走 `close(_:)`，手机上已经确认过。
     func requestClose(_ id: UUID) {
         guard let pane = panes.first(where: { $0.id == id }) else { return }
-        TerminalCloseGuard.requestClose(pane.session) { [weak self] in
+        TerminalCloseGuard.requestClose(pane.session, tabName: pane.session.shellTitle ?? pane.defaultTitle) { [weak self] in
             self?.close(id)
         }
     }

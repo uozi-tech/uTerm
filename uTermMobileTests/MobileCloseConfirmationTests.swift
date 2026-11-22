@@ -27,7 +27,7 @@ final class MobileCloseConfirmationTests: XCTestCase {
         let (controller, transport) = try await connected()
         await transport.setForegroundActivity(.idle)
         let activity = await controller.foregroundActivity()
-        XCTAssertNil(activity.closePrompt)
+        XCTAssertNil(activity.closePrompt())
         controller.close()
     }
 

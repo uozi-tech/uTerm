@@ -35,7 +35,7 @@ final class TerminalCloseProbeTests: XCTestCase {
         let probe = TerminalCloseProbe()
         var decided: TerminalClosePrompt?
         await probe.probe(1, activity: { .unknown }, then: { decided = $0 })
-        XCTAssertEqual(decided, TerminalActivity.unknown.closePrompt)
+        XCTAssertEqual(decided, TerminalActivity.unknown.closePrompt())
         XCTAssertNotNil(decided)
     }
 

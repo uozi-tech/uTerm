@@ -53,8 +53,9 @@ final class MTabCloseFlow {
             }
             return
         }
+        let tabName = tab.title
         Task {
-            await probe.probe(id, activity: term.controller.foregroundActivity) { prompt in
+            await probe.probe(id, tabName: tabName, activity: term.controller.foregroundActivity) { prompt in
                 if let prompt {
                     pending = MTabClosePrompt(tabID: id, kind: .busy(prompt))
                 } else {
