@@ -44,6 +44,9 @@ struct MobileApp: App {
         // 第 5–6 步：应用锁（iOS 缺键视作「关」，由设置开启，见 `AppLockPreference`）→ 拉共享偏好。
         _lock = State(initialValue: AppBootstrap.finishCore(core))
         StartupMaintenance.run(container: modelContainer)
+        #if DEBUG
+            GhosttyScrollDebugSwitch.apply()
+        #endif
         if !TestHostEnvironment.isActive {
             RemoteLegacyRoster.withdrawLocalDevice()
             RemoteLegacyDevices.retireLocalLeftovers()

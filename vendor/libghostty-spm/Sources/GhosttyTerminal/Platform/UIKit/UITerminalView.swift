@@ -239,9 +239,21 @@
                 core.bridge.onScrollbarChange = { [weak self] in
                     self?.systemScrollBarChanged()
                 }
-                // uTerm 本地补丁：系统滚动动着时引擎的 wakeup 不在主线程同步重画（见 `wakeupDefersSyncDraw`）。
+                // uTerm 本地补丁：系统滚动途中引擎的 wakeup 不在主线程同步重画（见 `wakeupDefersSyncDraw`），
+                // 哪一段算「途中」按 `UTermScrollTrace.scrollWakeupSyncDraw`。
                 core.wakeupDefersSyncDraw = { [weak self] in
-                    self?.systemScrollIsBusy ?? false
+                    guard let self, systemScroll.driver != nil else { return false }
+                    switch UTermScrollTrace.scrollWakeupSyncDraw {
+                    case .deferWhileMoving, .deferDrawKeepLink: return systemScrollIsBusy
+                    // `isTracking` / `isDragging` 在 UIKit 松手后的减速里还是 true，只认拖动手势本身。
+                    case .deferWhileTouching: return momentumScroll.panIsActive
+                    case .always: return false
+                    }
+                }
+                core.wakeupDefersDisplayLink = { [weak self] in
+                    guard let self, systemScroll.driver != nil else { return false }
+                    return UTermScrollTrace.scrollWakeupSyncDraw == .deferWhileMoving && systemScrollIsBusy
+                        && Double(systemScroll.speed) < UTermScrollTrace.wakeupDisplayLinkMinimumSpeed
                 }
             #endif
             core.onMouseShape = { [weak self] shape in

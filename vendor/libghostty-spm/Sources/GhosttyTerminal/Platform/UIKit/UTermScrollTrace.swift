@@ -67,6 +67,28 @@ public enum UTermScrollTrace {
     public static let defaultProgramMomentumTravel = 0.25
     nonisolated(unsafe) public static var programMomentumTravel = defaultProgramMomentumTravel
 
+    /// 系统滚动途中，引擎的 wakeup 要不要在主线程同步重画（iOS，补丁 #20 的 A/B）。宿主的 Debug 构建按启动参数改它、
+    /// 测试按场景改它；生产路径上只读它。下一次 wakeup 起生效。
+    public enum ScrollWakeupSyncDraw: String, Sendable, CaseIterable {
+        /// 系统滚动动着（手指按着 / 拖着、减速、回弹、对齐）时都不同步重画，wakeup 也不开 display link（补丁 #20）。
+        case deferWhileMoving = "moving"
+        /// 同上不同步重画，但 wakeup 照旧开 display link（补丁 #20 的第一版：减速慢下来以后屏幕在 60 / 120 Hz 之间跳）。
+        case deferDrawKeepLink = "moving-link"
+        /// 只在手指按着 / 拖着时不同步重画；松手之后的减速、回弹、对齐照旧同步重画。
+        case deferWhileTouching = "touching"
+        /// 一律同步重画（补丁 #20 之前）。
+        case always = "always"
+    }
+
+    public static let defaultScrollWakeupSyncDraw = ScrollWakeupSyncDraw.deferWhileMoving
+
+    /// `.deferWhileMoving` 下，系统滚动快于这个速度（点 / 秒）时引擎的 wakeup 仍然开 display link（屏幕留在 120 Hz，UIKit 每帧都写
+    /// contentOffset），慢于它就不开、已经开着的当场停掉（屏幕跟 UIKit 的减速降到 60 Hz，不被 wakeup 拽回 120 Hz 两拍）。
+    /// 普通 UIScrollView 在 Duo 上约 400 pt/s 以下自己降到 60 Hz。0 = 一律开（同 `.deferDrawKeepLink`），`.infinity` = 一律不开。
+    public static let defaultWakeupDisplayLinkMinimumSpeed: Double = 400
+    nonisolated(unsafe) public static var wakeupDisplayLinkMinimumSpeed = defaultWakeupDisplayLinkMinimumSpeed
+    nonisolated(unsafe) public static var scrollWakeupSyncDraw = defaultScrollWakeupSyncDraw
+
     /// 触摸的阶段（signpost `touch` 的第二个数）：0 按下、1 开始拖、2 抬起 / 取消。
     public enum TouchPhase: Int { case down = 0, dragBegan = 1, up = 2 }
 

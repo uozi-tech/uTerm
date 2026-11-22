@@ -177,7 +177,7 @@ C 接口不动。源码里每一处都标着「uTerm 本地补丁」，升级时
 - 引擎 wakeup 触发的 tick 要不要在主线程同步整帧重画，由 `TerminalSurfaceCoordinator.wakeupDrawsSynchronously` 按平台定死：iOS true（user 在真机上
   说不同步时滚动发糊），Mac false（渲染线程自己会画，主线程每跨一行白画一帧 1.4–2.2 ms，还挡着渲染线程）。尺寸、度量、可见性、选区、
   首帧这些宿主侧的变化两端都照旧同步重画。实现是 `pendingSyncDraw` 和 `requestImmediateTick(syncDraw:)`。
-  例外是第 20 条：iOS 上系统滚动动着时，wakeup 先不同步重画（`wakeupDefersSyncDraw`）。
+  例外是第 20 条：iOS 上系统滚动动着时，wakeup 先不同步重画（`wakeupDefersSyncDraw`），慢下来以后也不开 display link（`wakeupDefersDisplayLink`）。
 - 几处 trace 打点（`tick-app` / `tick-refresh` / `tick-draw` / `wakeup-tick`），trace 关着时零开销。
 
 回归用例：`uTermMobileTests/TerminalHiddenRenderingTests.swift`（surface 放掉 / 重建）、`uTermMobileTests/Probes/GhosttyFrameBudgetTests.swift`、
@@ -508,9 +508,11 @@ iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swif
 测量：`TEST_RUNNER_UTERM_SCROLLBENCH_DIR=<目录> xcodebuild test-without-building … -only-testing:uTermTests/GhosttyMacScrollBenchTests`
 （默认跳过；CSV 写进测试宿主的临时目录，日志里有路径）。真触控板手感未验。
 
-### 20. iOS：系统滚动动着时，引擎的 wakeup 不在主线程同步重画（慢滚每跨一行掉一帧）
+### 20. iOS：系统滚动动着时，引擎的 wakeup 不在主线程同步重画、慢了也不开 display link（慢滚每跨一行掉一帧、减速尾段一顿一顿）
 
-文件：`Surface/TerminalSurfaceCoordinator.swift`（`wakeupDefersSyncDraw`）、`Platform/UIKit/UITerminalView.swift`（接到 `systemScrollIsBusy`）。
+文件：`Surface/TerminalSurfaceCoordinator.swift`（`wakeupDefersSyncDraw`、`wakeupDefersDisplayLink`）、`Platform/UIKit/UITerminalView.swift`
+（接到 `systemScrollIsBusy` 与滚动速度）、`UITerminalView+SystemScroll*.swift`（`SystemScrollState.speed`）、`UTermScrollTrace.swift`
+（`scrollWakeupSyncDraw` / `wakeupDisplayLinkMinimumSpeed`：A/B 与测试用的开关，生产路径只读）。
 
 user 2026-11-22 在 Duo 上说慢慢拖着滚「有点卡」。真触摸（`SyntheticFinger`，每个显示帧一个 moved，发在引擎的 display link 之前）
 匀速拖、逐帧解 IOSurface 条码量出来（`uTermMobileTests/Probes/GhosttySlowDragFrameTests.swift`，读数是维护者的内部测量记录）：
@@ -527,11 +529,30 @@ user 2026-11-22 在 Duo 上说慢慢拖着滚「有点卡」。真触摸（`Synt
 - 改后同一组（4 个速度 × 两个方向 × 两次）：跨行的 wakeup 同步重画 0 次，画面落后 / 跳拍 / 顿住的帧 0，主线程每拍忙时 p95
   从 2.1–8.3 ms 降到 1.7–2.1 ms。
 
+**第二步：减速慢下来以后不开 display link。** user 用上一步的包说慢滚顺了、甩出去减速时有顿。真触摸甩（`GhosttyFlickFrameTests`）、
+xctrace 录换屏表按上玻璃对（上玻璃模式：减速期间测试自己不开 display link，不把屏幕钉在 120 Hz）：
+- 上一步本身没让减速变差：App 侧逐帧、玻璃上都比改之前（每跨一行同步重画）好，前 1.2 s 几乎每拍都换新位置。
+- 顿在减速后段：UIKit 的减速慢到约 400 pt/s 以下自己降到 60 Hz（普通 UIScrollView 一样），而每跨一行的 wakeup 开 display link、按
+  120 Hz 要帧，屏幕被拽回 120 Hz 两拍（`16.7 16.7 8.3 8.3 16.7`），那两拍里 UIKit 只写一次 contentOffset，有一拍画面不动：
+  一帧停 25 ms 夹在 16.7 ms 的帧中间，大约每 150 ms 一次（跨一行的间隔）。改之前（同步重画）也一样有，不是上一步带来的。
+- 改法：`.deferWhileMoving` 下，系统滚动动着且慢于 `wakeupDisplayLinkMinimumSpeed`（400 pt/s）时，wakeup 就地 `refresh`、不开
+  display link，开着的当场停掉（不等 30 个空帧）；app tick 在 `handleWakeup` 里本来就做了。停下之后补一次正常的 tick
+  （`flushDeferredWakeupTick`，50 ms 一查）。快于它照旧开：那时 UIKit 每帧都写，留在 120 Hz 更顺（一律不开的话 2000–4000 pt/s
+  的前段只有 60 Hz，和普通 UIScrollView 一样）。
+- 玻璃上（工作区界面，300 / 800 / 2000 / 4000 pt/s 各两次）：减速后段停 ≥ 1.4 倍的帧 71 → 33（普通 UIScrollView 24），节奏乱
+  （相邻两个换帧间隔不同）21–49% → 9–29%；前段 120 Hz 不变。
+
+A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `moving`（默认，上面两步）、`moving-link`（只有第一步）、
+`touching`（只在手指拖着时不同步重画）、`always`（补丁 #20 之前）；`wakeupDisplayLinkMinimumSpeed` 调门槛。uTerm 的 Debug 构建
+认启动参数 `-GhosttySyncDrawDuringScroll YES|touching|moving-link|moving`（`GhosttyScrollDebugSwitch`）。
+
 另一种发法（120 Hz 定时器、不对齐显示帧）下改前改后都是每秒二三十次「一帧 0 步、下一帧两步」：UIKit 的拖动跟手指 1:1，
 一帧里来 0 个或 2 个触摸就是 0 / 2 步。真手指的触摸在 iOS 上是不是按显示帧对齐派发的，测试量不到；对齐时（上面那组）为 0。
 
-回归用例：`GhosttySlowDragFrameTests.testDragAcrossRowsDoesNotSyncDraw`（拖着跨 5 行以上 `tick-draw` 必须 0 次，停下后的 wakeup 仍同步重画；
-改前每跨一行一次），测量用 `testSlowDragFrames`（`TEST_RUNNER_UTERM_MEASURE=1`，真机）。真手指的手感要 user 在 Duo 上验。
+回归用例：`GhosttySlowDragFrameTests.testDragAcrossRowsDoesNotSyncDraw`（拖着跨 5 行以上 `tick-draw` 必须 0 次、wakeup 不开 display link
+（`wakeup-deferred`），停下后的 wakeup 仍同步重画；改前每跨一行同步重画一次），测量用 `testSlowDragFrames` 与
+`GhosttyFlickFrameTests.testFlickFrames`（`TEST_RUNNER_UTERM_MEASURE=1`，真机；后者 `UTERM_FLICK_GLASS=1` 是上玻璃模式，配 xctrace）。
+真手指的手感要 user 在 Duo 上验。
 
 ## manifest 改动（相对上游的 `Package.swift`）
 

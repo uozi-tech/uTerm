@@ -170,6 +170,9 @@ nonisolated enum DefaultsKey {
     /// iOS 调试（只在 Debug 构建里认）：启动参数 `-UTermSubscriptionOverride active|inactive` 固定订阅状态，
     /// 不碰 StoreKit（`SubscriptionStore.live()`）。
     static let subscriptionOverride = "UTermSubscriptionOverride"
+    /// iOS 调试（只在 Debug 构建里认）：启动参数 `-GhosttySyncDrawDuringScroll YES|touching|moving`，系统滚动途中引擎的
+    /// wakeup 要不要在主线程同步重画（libghostty-spm 补丁 #20 的 A/B，`GhosttyScrollDebugSwitch`）。
+    static let ghosttySyncDrawDuringScroll = "GhosttySyncDrawDuringScroll"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）
 

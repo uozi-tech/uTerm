@@ -203,9 +203,47 @@ final class TerminalSurfaceCoordinator {
     }
 
     func requestImmediateTick(syncDraw: Bool = true) {
+        // uTerm 本地补丁：系统滚动动着时引擎的 wakeup 就地 refresh，不开 display link（见 `wakeupDefersDisplayLink`）。
+        if !syncDraw, wakeupDefersDisplayLink() {
+            deferWakeupTick()
+            return
+        }
         pendingImmediateTick = true
         if syncDraw || (Self.wakeupDrawsSynchronously && !wakeupDefersSyncDraw()) { pendingSyncDraw = true }
         ensureDisplayLink()
+    }
+
+    /// uTerm 本地补丁：这次 wakeup 不开 display link（iOS 的视图在系统滚动动着时返回 true，`UTermScrollTrace.scrollWakeupSyncDraw`
+    /// 为 `.deferWhileMoving` 时）。link 一开就按 120 Hz 要帧：UIKit 的减速慢下来以后自己降到 60 Hz，每跨一行的 wakeup 把屏幕
+    /// 拽回 120 Hz 两拍，那两拍里 UIKit 只写一次 contentOffset，有一拍画面不动——一帧停 25 ms 夹在 16.7 ms 的帧中间
+    ///（Duo 上按换屏表量的，`GhosttyFlickFrameTests` 的上玻璃模式）。wakeup 本身的 app tick 在 `handleWakeup` 里已经做了，
+    /// 这里只差 refresh；滚动的每一步渲染线程自己画。停下之后补一次正常的 tick（`flushDeferredWakeupTick`）。
+    var wakeupDefersDisplayLink: () -> Bool = { false }
+    private var hasDeferredWakeupTick = false
+
+    private func deferWakeupTick() {
+        guard canRenderFrame else { return }
+        UTermScrollTrace.record("wakeup-deferred", 1)
+        surface?.refresh()
+        onPostRender?()
+        // 已经开着、手上没有要画的：当场停掉，不等 30 个空帧（那 250 ms 里屏幕还被它钉在 120 Hz）。
+        if !pendingImmediateTick { releaseDisplayLink() }
+        guard !hasDeferredWakeupTick else { return }
+        hasDeferredWakeupTick = true
+        flushDeferredWakeupTick()
+    }
+
+    /// 滚动还在动就 50 ms 后再看；停了就按平常那样补一次 wakeup 的 tick（该同步重画的照旧同步重画）。
+    private func flushDeferredWakeupTick() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, hasDeferredWakeupTick else { return }
+            if wakeupDefersDisplayLink() {
+                flushDeferredWakeupTick()
+                return
+            }
+            hasDeferredWakeupTick = false
+            requestImmediateTick(syncDraw: false)
+        }
     }
 
     func stopDisplayLink() {

@@ -54,10 +54,13 @@
             func systemScrollDidScroll(_ scrollView: UIScrollView) {
                 guard scrollView === systemScroll.driver, !systemScroll.isSyncing,
                       let (mapping, position) = systemScrollMapping() else { return }
+                let previousDidScroll = systemScroll.lastDidScroll
                 systemScroll.lastDidScroll = CACurrentMediaTime()
-                // uTerm 本地补丁：记下走的方向，给被手指按停之后的那次对齐用（`caughtDirection`）。
+                // uTerm 本地补丁：记下走的方向，给被手指按停之后的那次对齐用（`caughtDirection`）；以及速度（`speed`）。
                 let moved = scrollView.contentOffset.y - systemScroll.lastDidScrollOffset
                 if abs(moved) > 0.01 { systemScroll.motionDirection = moved > 0 ? 1 : -1 }
+                let interval = systemScroll.lastDidScroll - previousDidScroll
+                systemScroll.speed = interval > 0.001 && interval < 0.1 ? abs(moved) / interval : 0
                 systemScroll.lastDidScrollOffset = scrollView.contentOffset.y
                 let offsetPixels = scrollView.contentOffset.y * mapping.scale
                 // uTerm 本地补丁：真手录制的位置 signpost（`UTermScrollTrace.signpostScrollOffset`，没在录时不发）。
