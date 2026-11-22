@@ -176,6 +176,37 @@ final class RemoteHostAgentTests: XCTestCase {
         client.disconnect()
     }
 
+    /// 设备上亲手排过 Mac 的标签：请求经远控进程转给 App，App 的窗口照着排（`TerminalSessionRegistry.arrangeTabs`）。
+    func test_device_arrangement_reaches_the_app_windows_through_the_agent() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        let other = UUID()
+        rig.registry.register(TerminalSessionEntry(id: other, serverID: UUID(), serverName: "测试主机",
+                                                   windowKind: TerminalWindowKind.workspace, title: "zsh",
+                                                   connectedAt: Date()))
+        var arranged: [[UUID]] = []
+        rig.registry.setArranger(forWindow: UUID()) { arranged.append($0) }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(rig.agentServer?.port)
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !rig.appServer.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        rig.appServer.approvePairing(try XCTUnwrap(rig.appServer.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(client.state, .connected)
+        XCTAssertTrue(client.supportsArrangeSessions, "远控进程也声明了这项能力")
+
+        client.arrangeSessionsOnMac([other, rig.sessionID])
+        let delivered = await waitUntil { arranged == [[other, rig.sessionID]] }
+        XCTAssertTrue(delivered, "排序请求经远控进程交到 App 的窗口：\(arranged)")
+        client.disconnect()
+    }
+
     /// 2.1.1 实测（17:17）：`kill -9` 之后被命令行在后台唤起的 App 先连上远控进程，那时它还没把终端接回来
     /// （后台唤起不开窗口、不接回），报了一份空的「已接回」列表，远控进程据此把手机上的终端关掉了。现在后台唤起的 App
     /// 等远控进程来要再接回，接回之前远控进程照旧用上一份列表，接回之后画面续上。

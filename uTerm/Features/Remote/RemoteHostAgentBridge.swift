@@ -467,6 +467,9 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         case .restoreSessions:
             beginRestoration()
             return RemoteHostAppReply()
+        case .arrangeSessions(let order):
+            await sessions.requestArrange(order: order)
+            return RemoteHostAppReply()
         }
     }
 }

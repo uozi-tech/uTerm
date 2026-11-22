@@ -924,6 +924,16 @@ final class RemoteMacClient: Identifiable {
         link.send(RemoteMessage(.closeSession, payload: RemoteJSON.encode(RemoteCloseSessionRequest(sessionID: sessionID))))
     }
 
+    /// 设备上排过的标签顺序能不能让 Mac 跟着排（老 Mac 收到 `arrangeSessions` 会断开整条连接）。
+    var supportsArrangeSessions: Bool { macFeatures.contains(RemoteFeature.arrangeSessions) }
+
+    /// 请 Mac 照设备上的顺序排它的标签（`RemoteArrangeSessionsRequest`）。只发不等：排完 Mac 会推新的会话列表。
+    /// 没连着、Mac 不支持或顺序里不到两个标签时什么也不做。
+    func arrangeSessionsOnMac(_ order: [UUID]) {
+        guard order.count > 1, state == .connected, let link, supportsArrangeSessions else { return }
+        link.send(RemoteMessage(.arrangeSessions, payload: RemoteJSON.encode(RemoteArrangeSessionsRequest(order: order))))
+    }
+
     /// 远控终端里能不能贴图片（老 Mac 收到 `terminalImage` 会断开整条连接）。
     var supportsTerminalImage: Bool { macFeatures.contains(RemoteFeature.terminalImage) }
 

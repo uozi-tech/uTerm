@@ -3,7 +3,8 @@ import Foundation
 /// 接管一台 Mac 之后，本机这一侧的对账状态（两端共用；标签怎么开、怎么摆由各端自己的标签容器做）：
 ///
 /// - `follower`：那台 Mac 的终端列表变了，哪些标签该关、哪些该开（`RemoteSessionFollower`）。
-/// - `arrangedByHand`：用户在本机亲手排过这台 Mac 的标签，之后 Mac 推来的顺序不再覆盖，直到重新接管。
+/// - `arrangedByHand`：用户在本机亲手排过这台 Mac 的标签，之后 Mac 推来的顺序不再覆盖，直到重新接管，
+///   或 Mac 推来的顺序和本机的排法对上了（支持 `arrange-sessions` 的 Mac 会照本机的排，见 `noteMacOrder`）。
 /// - `awaitingFirstList`：接管时那台 Mac 的列表还没到。等第一份列表来了，调用方据 `Update.firstListIsEmpty`
 ///   决定要不要自动新建第一个终端（Mac 窗口这样做；手机从列表里点进来接管，列表一定已经到了）。
 nonisolated struct RemoteTakeoverState: Equatable, Sendable {
@@ -37,6 +38,16 @@ nonisolated struct RemoteTakeoverState: Equatable, Sendable {
     /// 用户在本机亲手排过这台 Mac 的标签。
     mutating func noteArrangedByHand() {
         arrangedByHand = true
+    }
+
+    /// 收到 Mac 推来的顺序。用户亲手排过、而这份顺序和本机此刻的排法一致（多半是 Mac 已照本机排好）时，重新跟着 Mac 排。
+    /// Mac 排不了的（两个标签在它那边分在不同的组或窗口），顺序对不上，本机就继续保持自己的排法。
+    /// `layout` 是本机各组里这台 Mac 的标签（会话 id，按本机的先后）。
+    mutating func noteMacOrder(_ order: [UUID]?, layout: [[UUID]]) {
+        guard arrangedByHand, let order else { return }
+        if layout.allSatisfy({ RemoteTabArrangement.arranged($0, order: order) { $0 } == $0 }) {
+            arrangedByHand = false
+        }
     }
 
     /// 本机标签要跟着排的顺序：Mac 推来了顺序、用户也没亲手排过才排；否则 nil，不动。

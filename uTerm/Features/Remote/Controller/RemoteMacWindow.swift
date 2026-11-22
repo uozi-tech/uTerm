@@ -119,6 +119,8 @@ private struct RemoteMacSessionView: View {
             if state == .connected { model.takeOver() }
         }
         .onChange(of: client.listedSessionIDs) { _, ids in model.follow(ids, order: client.sessions.macTabOrder) }
+        // 用户拖过标签就马上让那台 Mac 跟着排（`UPaneGroups` 没有拖动排序的回调，只能看布局变没变）。
+        .onChange(of: model.layout) { _, _ in model.layoutChanged() }
     }
 
     /// 连着的过程中断了：标签留着（各自在后台重连），顶上一行说一声。

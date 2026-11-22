@@ -18,6 +18,8 @@ protocol RemoteHostSessions: AnyObject {
     func attach(_ request: RemoteHostAttachRequest) async -> Result<any RemoteHostTerminalAttachment, RemoteHostAttachError>
     /// 关掉 Mac 上的一个会话（对端在设备上关了标签）。
     func requestClose(sessionID: UUID) async -> Bool
+    /// 对端在设备上排过这台 Mac 的标签：每个标签组照 `order` 排（`TerminalSessionRegistry.arrangeTabs`）。
+    func requestArrange(order: [UUID]) async
     /// Mac 刚重启、本机终端还没接回来时要等：手机不能看到一份缺了它们的列表，也不能把接入回成「已关闭」。
     func waitUntilRestored() async
 }

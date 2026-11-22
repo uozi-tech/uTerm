@@ -46,6 +46,22 @@ final class RemoteTakeoverStateTests: XCTestCase {
         XCTAssertTrue(state.arrangedByHand, "列表更新不清掉，直到重新接管")
     }
 
+    /// 亲手排过之后，Mac 推来的顺序和本机的排法对上了（Mac 照本机排好了）就重新跟着 Mac；对不上（Mac 排不了）就保持本机的。
+    func test_following_resumes_once_the_mac_order_matches_the_hand_arrangement() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        var state = RemoteTakeoverState(takingOver: [a, b, c])
+        state.noteArrangedByHand()
+
+        state.noteMacOrder([a, b, c], layout: [[b, a, c]])
+        XCTAssertTrue(state.arrangedByHand, "Mac 还没照着排（或排不了）：保持本机的排法")
+        state.noteMacOrder(nil, layout: [[b, a, c]])
+        XCTAssertTrue(state.arrangedByHand, "老 Mac 不发排位：保持")
+
+        state.noteMacOrder([b, a, d, c], layout: [[b, a], [c]])
+        XCTAssertFalse(state.arrangedByHand, "每一格都和 Mac 的顺序一致：重新跟着 Mac")
+        XCTAssertEqual(state.arrangement([b, a, d, c]), [b, a, d, c])
+    }
+
     // MARK: - 手排检测
 
     func test_reordered_by_hand_detects_relative_order_changes_within_a_group() {

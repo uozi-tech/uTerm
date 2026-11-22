@@ -106,6 +106,9 @@ final class TerminalSessionRegistry {
     /// 每个窗口「把这条会话的标签切到前台并带出窗口」的入口（点系统通知时用）。
     @ObservationIgnored private var revealers: [UUID: @MainActor (UUID) -> Bool] = [:]
 
+    /// 每个窗口「照给的先后排它的标签」的入口（手机远控上亲手排过 Mac 的标签时用，见 `arrangeTabs(by:)`）。
+    @ObservationIgnored private var arrangers: [UUID: @MainActor ([UUID]) -> Void] = [:]
+
     /// 每个窗口此刻的标签顺序（会话 id），按窗口第一次登记的先后排。可观察：远控在顺序变了时重推会话列表。
     private var tabOrders: [WindowTabOrder] = []
 
@@ -187,6 +190,18 @@ final class TerminalSessionRegistry {
         }
     }
 
+    /// 窗口登记（或用 nil 撤掉）「照给的先后排标签」的入口。
+    func setArranger(forWindow windowID: UUID, _ arranger: (@MainActor ([UUID]) -> Void)?) {
+        arrangers[windowID] = arranger
+    }
+
+    /// 设备上亲手排过这台 Mac 的标签：每个窗口的每个标签组照 `order` 排，只在组里这些标签原来的位置之间换
+    ///（`UPaneGroupsModel.arrangeTabs`），不跨组、不跨窗口、不换前台。顺序一变，远控照常把新列表推回去。
+    func arrangeTabs(by order: [UUID]) {
+        guard !order.isEmpty else { return }
+        for arranger in arrangers.values { arranger(order) }
+    }
+
     /// 全部会话在 Mac 上的先后（规则见 `TerminalTabOrder`）。在观察里读会跟踪到各窗口的布局。
     func orderedEntries() -> [TerminalSessionEntry] {
         TerminalTabOrder.ordered(entries, id: \.id, windows: tabOrders.map { $0.read() })
@@ -240,6 +255,7 @@ final class TerminalSessionRegistry {
         windows.removeValue(forKey: windowID)
         closers.removeValue(forKey: windowID)
         revealers.removeValue(forKey: windowID)
+        arrangers.removeValue(forKey: windowID)
         setTabOrder(forWindow: windowID, nil)
     }
 

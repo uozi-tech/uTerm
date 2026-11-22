@@ -341,6 +341,10 @@ final class WorkspaceModel {
         registry.setTabOrder(forWindow: windowID) { [weak self] in
             self?.terminalGroups.snapshot(Self.heldSessionID).tabOrder ?? []
         }
+        // 手机远控上亲手排过 Mac 的标签：这个窗口跟着排。
+        registry.setArranger(forWindow: windowID) { [weak self] order in
+            self?.terminalGroups.arrangeTabs(by: order, id: Self.heldSessionID)
+        }
         syncTerminalTitles()
     }
 

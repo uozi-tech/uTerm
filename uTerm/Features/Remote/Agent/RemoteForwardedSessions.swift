@@ -123,6 +123,10 @@ final class RemoteForwardedSessions: RemoteHostSessions {
         return reply?.error == nil && reply != nil
     }
 
+    func requestArrange(order: [UUID]) async {
+        _ = await request(.arrangeSessions(order))
+    }
+
     func attach(_ request: RemoteHostAttachRequest) async -> Result<any RemoteHostTerminalAttachment, RemoteHostAttachError> {
         guard app != nil else { return .failure(.appUnavailable) }
         let attachment = ForwardedAttachment(id: UUID().uuidString, request: request, owner: self)

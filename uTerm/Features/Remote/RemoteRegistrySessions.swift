@@ -39,6 +39,10 @@ final class RemoteRegistrySessions: RemoteHostSessions {
         registry.requestClose(sessionID: sessionID)
     }
 
+    func requestArrange(order: [UUID]) async {
+        registry.arrangeTabs(by: order)
+    }
+
     func attach(_ request: RemoteHostAttachRequest) async -> Result<any RemoteHostTerminalAttachment, RemoteHostAttachError> {
         guard let session = registry.session(for: request.sessionID), session.connectionState == .connected else {
             return .failure(.unavailable)

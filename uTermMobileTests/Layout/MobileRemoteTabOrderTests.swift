@@ -93,6 +93,26 @@ final class MobileRemoteTabOrderTests: XCTestCase {
         XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, a)
     }
 
+    /// 亲手排过之后先保持手机的排法；Mac 照着排好、推来一致的顺序后，重新跟着 Mac（之后 Mac 上再排，手机跟着动）。
+    func testHandArrangementResumesFollowingOnceTheMacAgrees() throws {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let a = UUID(), b = UUID(), c = UUID()
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [a, b, c], focus: a, order: [a, b, c]))
+        ws.reorder(try tabID(ws, client: client, session: c), to: 0)
+        ws.noteArrangedByHand(try tabID(ws, client: client, session: c))
+        XCTAssertTrue(ws.isArrangedByHand(client))
+
+        _ = ws.follow(client, sessionIDs: [a, b, c], order: [a, b, c])
+        XCTAssertEqual(sessions(ws), [c, a, b], "Mac 还没照着排：不弹回去")
+        XCTAssertTrue(ws.isArrangedByHand(client))
+
+        _ = ws.follow(client, sessionIDs: [c, a, b], order: [c, a, b])
+        XCTAssertFalse(ws.isArrangedByHand(client), "Mac 排成了手机上的顺序：重新跟着 Mac")
+        _ = ws.follow(client, sessionIDs: [b, c, a], order: [b, c, a])
+        XCTAssertEqual(sessions(ws), [b, c, a])
+    }
+
     func testStoreTakeOverCarriesTheMacOrder() throws {
         let store = MobileStore()
         let client = macClient()

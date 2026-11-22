@@ -119,12 +119,14 @@ final class RemoteMacWindowModel {
         if update.firstListIsEmpty { openFirstShellIfNone(sessionIDs) }
         for id in update.gone { close(id) }
         for id in update.fresh { open(id, activate: false) }
+        takeover.noteMacOrder(order, layout: layout)
+        self.takeover = takeover
         if let order = takeover.arrangement(order) { arrange(by: order) }
         recordLayout()
     }
 
     /// 各组标签的顺序。
-    private var layout: [[UUID]] {
+    var layout: [[UUID]] {
         groups.groupIDs.map { groups.groups[$0]?.tabs.map(\.id) ?? [] }
     }
 
@@ -136,28 +138,27 @@ final class RemoteMacWindowModel {
     private func noticeHandReorder() {
         guard RemoteTabArrangement.reorderedByHand(from: lastLayout, to: layout) else { return }
         takeover?.noteArrangedByHand()
+        pushOrderToMac(from: lastLayout)
+    }
+
+    /// 用户在这扇窗口里拖过标签：请那台 Mac 照着排。只带相对先后变了的那些组，各组分开发
+    ///（不同组之间的先后 Mac 不动，见 `RemoteArrangeSessionsRequest`）。
+    private func pushOrderToMac(from previous: [[UUID]]) {
+        for group in layout where RemoteTabArrangement.reorderedByHand(from: previous, to: [group]) {
+            client.arrangeSessionsOnMac(group)
+        }
+    }
+
+    /// 标签布局变了（窗口视图观察 `layout` 时调）：用户拖过就马上让那台 Mac 跟着排，不等它下次推列表。
+    func layoutChanged() {
+        noticeHandReorder()
+        recordLayout()
     }
 
     /// 每个组各排各的，只在组里这些标签原来的位置之间换（`RemoteTabArrangement`）。各组的前台标签和活动组不变，
     /// 正看着的那个不会被切走。
     func arrange(by order: [UUID]) {
-        let fronts = groups.groupIDs.compactMap { id in groups.groups[id]?.activeTab.map { (group: id, tab: $0.id) } }
-        let activeGroup = groups.activeGroupID
-        var moved = false
-        for groupID in groups.groupIDs {
-            guard let current = groups.groups[groupID]?.tabs.map(\.id) else { continue }
-            let arranged = RemoteTabArrangement.arranged(current, order: order) { $0 }
-            for (index, id) in arranged.enumerated() {
-                guard let tabs = groups.groups[groupID]?.tabs, tabs[index].id != id else { continue }
-                groups.reorderTab(id, before: tabs[index].id)
-                moved = true
-            }
-        }
-        guard moved else { return }
-        // `reorderTab` 会把挪动的标签切到前台：还回去，活动组最后还，它才是最终的活动组。
-        for front in fronts.filter({ $0.group != activeGroup }) + fronts.filter({ $0.group == activeGroup }) {
-            if let at = groups.locateTab(front.tab) { groups.activateTab(groupID: at.groupID, index: at.index) }
-        }
+        groups.arrangeTabs(by: order) { $0.id }
     }
 
     /// 在那台 Mac 上新开一个本机终端（它那边也会弹出窗口），开成前台标签。

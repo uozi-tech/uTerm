@@ -262,6 +262,9 @@ final class MobileWorkspace {
         let added = openRemoteTabs(client, sessionIDs: fresh, activate: false)
         changes.opened = added.opened
         changes.removed += added.removed
+        if let index = follows.firstIndex(where: { $0.client === client }) {
+            follows[index].state.noteMacOrder(order, layout: remoteLayout(of: client))
+        }
         arrangeRemoteTabs(of: client, order: order)
         return changes
     }
@@ -278,6 +281,16 @@ final class MobileWorkspace {
                 return remote.sessionID
             }
             if arranged != panes[index].tabIDs { panes[index].tabIDs = arranged }
+        }
+    }
+
+    /// 每一格里这台 Mac 的标签（会话 id，按格里的先后）。
+    private func remoteLayout(of client: RemoteMacClient) -> [[UUID]] {
+        panes.map { pane in
+            pane.tabIDs.compactMap { id in
+                guard let remote = tab(id)?.terminal?.remote, remote.client === client else { return nil }
+                return remote.sessionID
+            }
         }
     }
 
@@ -441,11 +454,14 @@ final class MobileWorkspace {
     }
 
     /// 用户亲手把这个标签排到了某个位置：它若是远控标签，这台 Mac 推来的顺序从此不再覆盖手机上的排法，
-    /// 直到重新接管（`takeOver` 换一份新的跟进状态）。
+    /// 直到重新接管（`takeOver` 换一份新的跟进状态）或 Mac 的顺序和手机上的对上（`noteMacOrder`）。
+    /// 同时请 Mac 照它所在那一格的先后排（支持的 Mac 排完推回新顺序，手机随之重新跟着 Mac）。
     func noteArrangedByHand(_ tabID: UUID) {
         guard let client = tab(tabID)?.terminal?.remote?.client,
               let index = follows.firstIndex(where: { $0.client === client }) else { return }
         follows[index].state.noteArrangedByHand()
+        guard let pane = paneIndex(containing: tabID) else { return }
+        client.arrangeSessionsOnMac(remoteLayout(of: client)[pane])
     }
 
     /// 这台 Mac 的标签是否被用户亲手排过。

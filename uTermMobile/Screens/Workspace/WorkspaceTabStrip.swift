@@ -376,6 +376,11 @@ struct WorkspaceTabChip: View {
                     Label("查找", systemImage: "magnifyingglass")
                 }
             }
+            Button {
+                UIPasteboard.general.string = tab.title
+            } label: {
+                Label("拷贝名称", systemImage: "doc.on.clipboard")
+            }
             if canMove {
                 Button(action: onMove) {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")

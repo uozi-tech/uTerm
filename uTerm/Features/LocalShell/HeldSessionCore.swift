@@ -292,6 +292,32 @@ extension UPaneGroupsSnapshot {
 }
 
 extension UPaneGroupsModel {
+    /// 每个组照 `order` 排：只在组里这些标签原来的位置之间换（`RemoteTabArrangement`），不在 `order` 里的、
+    /// `id` 为 nil 的标签留在原处，不跨组。各组的前台标签与活动组不变，正看着的那个不会被切走。返回动没动。
+    @discardableResult
+    func arrangeTabs(by order: [UUID], id: (UPaneTab<Payload>) -> UUID?) -> Bool {
+        let fronts = groupIDs.compactMap { group in groups[group]?.activeTab.map { (group: group, tab: $0.id) } }
+        let activeGroup = activeGroupID
+        var moved = false
+        for groupID in groupIDs {
+            guard let current = groups[groupID]?.tabs else { continue }
+            let arranged = RemoteTabArrangement.arranged(current, order: order, sessionID: id).map(\.id)
+            for (index, tabID) in arranged.enumerated() {
+                guard let tabs = groups[groupID]?.tabs, tabs[index].id != tabID else { continue }
+                reorderTab(tabID, before: tabs[index].id)
+                moved = true
+            }
+        }
+        guard moved else { return false }
+        // `reorderTab` 会把挪动的标签切到前台：还回去，活动组最后还，它才是最终的活动组。
+        for front in fronts.filter({ $0.group != activeGroup }) + fronts.filter({ $0.group == activeGroup }) {
+            if let at = locateTab(front.tab) { activateTab(groupID: at.groupID, index: at.index) }
+        }
+        return true
+    }
+}
+
+extension UPaneGroupsModel {
     /// 接回上次留下的会话：按布局放回原来的组和位置，布局里没有的（旧版写的归属、布局还没来得及写进去的会话）
     /// 按 `ids` 的顺序交给 `append`。只在模型还空着时套用布局，已经有标签的不动它们的位置。
     /// `id` 取标签的会话 id（SSH 终端的标签 id 与会话 id 不是同一个）。

@@ -48,7 +48,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.siblingRevoke, RemoteFeature.desktopWindows,
                                           RemoteFeature.desktopRegion, RemoteFeature.desktopPasteFiles,
                                           RemoteFeature.desktopWindowFront, RemoteFeature.desktopWindowRefit,
-                                          RemoteFeature.desktopWindowInput, RemoteFeature.desktopAuthPrompt]
+                                          RemoteFeature.desktopWindowInput, RemoteFeature.desktopAuthPrompt,
+                                          RemoteFeature.arrangeSessions]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -162,6 +163,9 @@ nonisolated enum RemoteFeature {
     /// 认得 `desktopAuthPrompt`；主控端认得 `authPrompt` 与 `desktopAuthPromptResult`。老 Mac 收到
     /// `desktopAuthPrompt` 会断开整条连接，所以主控端只对声明了的 Mac 发；Mac 只给声明了的主控端报框。
     static let desktopAuthPrompt = "desktop-auth-prompt"
+    /// 设备上亲手排过这台 Mac 的标签，Mac 跟着排：Mac 认得 `arrangeSessions`。老 Mac 收到会断开整条连接，
+    /// 所以主控端只对声明了的 Mac 发；老 Mac 照旧只是设备这边自己排。
+    static let arrangeSessions = "arrange-sessions"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -333,6 +337,10 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopAuthPrompt = 60
         /// Mac → 主控端：回应验证框的结果（桌面通道）。负载 = `RemoteDesktopAuthPromptResult`（JSON）。
         case desktopAuthPromptResult = 61
+        /// 主控端 → Mac：设备上亲手排过这台 Mac 的标签（通道 0）。负载 = `RemoteArrangeSessionsRequest`（JSON）。
+        /// Mac 的每个标签组照它排，只在组里这些标签原来的位置之间换（不跨组、不跨窗口、不换前台），排完照常推新的列表。
+        /// 只发给 `features` 带 `arrange-sessions` 的 Mac。
+        case arrangeSessions = 62
     }
 
     var kind: Kind
@@ -498,6 +506,11 @@ nonisolated struct RemoteAttachRequest: Codable, Equatable, Sendable {
 
 nonisolated struct RemoteCloseSessionRequest: Codable, Equatable, Sendable {
     var sessionID: UUID
+}
+
+nonisolated struct RemoteArrangeSessionsRequest: Codable, Equatable, Sendable {
+    /// 设备上这台 Mac 的标签此刻的先后（会话 id）。只带用户刚排过的那一格里的，别的格里的标签 Mac 不动它们的相对先后。
+    var order: [UUID]
 }
 
 /// 手机 → Mac：`[16 字节请求 id][u8 格式][图片字节]`。整条要放进一帧，图片超了由手机先压。

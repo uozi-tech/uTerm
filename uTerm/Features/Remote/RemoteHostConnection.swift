@@ -399,6 +399,9 @@ final class RemoteHostConnection {
                 AppLogger.info("远控：\(device) 关闭 Mac 上的会话 \(request.sessionID.uuidString.prefix(8))：\(closed ? "已关闭" : "没找到")",
                                category: RemoteLog.category)
             }
+        case .arrangeSessions:
+            guard let request = try? RemoteJSON.decode(RemoteArrangeSessionsRequest.self, from: message.payload) else { return }
+            Task { [server] in await server.sessions.requestArrange(order: request.order) }
         case .terminalImage:
             guard let request = try? RemoteTerminalImageRequest(decoding: message.payload) else { return }
             deliverImage(request, channel: message.channel)

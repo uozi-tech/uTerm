@@ -214,6 +214,30 @@ final class RemoteTabOrderTests: XCTestCase {
         XCTAssertTrue(opened)
     }
 
+    /// 设备上亲手排过：Mac 的每个组照着排，只在组里这些标签的位置之间换；前台标签不变，排完推回新的顺序。
+    func test_device_arrangement_reorders_tabs_on_the_mac() async throws {
+        let a = UUID(), b = UUID(), c = UUID()
+        let window = groups([a, b, c])
+        let rig = try await makeRig(sessionIDs: [a, b, c], window: window)
+        defer { rig.client.disconnect() }
+        rig.registry.setArranger(forWindow: UUID()) { window.arrangeTabs(by: $0) { $0.id } }
+        XCTAssertTrue(rig.client.supportsArrangeSessions)
+        let first = window.groupIDs[0]
+        window.activateTab(groupID: first, index: 1)
+
+        rig.client.arrangeSessionsOnMac([c, a])
+        let swapped = await waitUntil { rig.client.sessions.macTabOrder == [c, b, a] }
+        XCTAssertTrue(swapped, "只换 c 与 a，b 留在原位")
+        XCTAssertEqual(window.activeTab?.id, b, "Mac 上正看着的标签不被切走")
+
+        // a 拆到右边一组：设备想把 a 排在最前，Mac 不跨组挪，只排左边那组里的 b、c。
+        window.moveTab(a, toGroup: first, zone: .trailing)
+        rig.client.arrangeSessionsOnMac([a, b, c])
+        let arranged = await waitUntil { rig.client.sessions.macTabOrder == [b, c, a] }
+        XCTAssertTrue(arranged)
+        XCTAssertEqual(window.groups[first]?.tabs.map(\.id), [b, c])
+    }
+
     func test_mac_without_window_layouts_keeps_registration_order() async throws {
         let a = UUID(), b = UUID()
         let rig = try await makeRig(sessionIDs: [a, b], window: nil)

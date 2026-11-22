@@ -268,6 +268,8 @@ nonisolated enum RemoteHostAppRequest: Codable, Sendable {
     /// 有设备要用终端了（要会话列表、要接入、或 App 回来时还有暂停着的接入）：请 App 把上次留下的终端接回来，
     /// 接完再报 `restored`。后台唤起的 App 平时不接回（接回要开窗口），等这条请求。
     case restoreSessions
+    /// 对端在设备上排过这台 Mac 的标签：App 的各窗口照这个顺序排（`TerminalSessionRegistry.arrangeTabs`）。
+    case arrangeSessions([UUID])
 }
 
 nonisolated struct RemoteHostAppReply: Codable, Sendable {
