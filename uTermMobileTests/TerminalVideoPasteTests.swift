@@ -6,8 +6,8 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import uTermMobile
 
-/// 终端键盘条贴视频：剪贴板 / 相册来的视频拷成本机私有文件、按段流式传成远端 `/tmp` 下的文件、把路径粘进终端；
-/// 远控 Mac 的终端（只收图片）对视频直说不支持。
+/// 终端键盘条粘贴：剪贴板 / 相册 / 「文件」来的视频与文件拷成本机私有文件、按段流式传成远端 `/tmp` 下的文件、
+/// 把路径粘进终端；剪贴板里的文字按系统粘贴送；远控 Mac 的终端（只收图片）对视频、文件直说不支持。
 @MainActor
 final class TerminalVideoPasteTests: XCTestCase {
 
@@ -104,6 +104,86 @@ final class TerminalVideoPasteTests: XCTestCase {
         XCTAssertNil(TerminalPasteSource.videoType(in: [UTType.png.identifier, UTType.utf8PlainText.identifier]))
     }
 
+    // MARK: - 文件
+
+    /// 别的文件和视频走同一条路，远端文件名换成 `uterm-file-…`，认不出扩展名时是 `bin`（不冒充视频）。
+    func testFileRemotePathIsShellSafe() {
+        let url = URL(fileURLWithPath: "/tmp/x")
+        XCTAssertEqual(TerminalVideo(localURL: url, fileExtension: "PDF", size: 1, kind: .file).fileExtension, "pdf")
+        XCTAssertEqual(TerminalVideo(localURL: url, fileExtension: "", size: 1, kind: .file).fileExtension, "bin")
+        let path = TerminalVideo(localURL: url, fileExtension: "zip", size: 1, kind: .file).temporaryRemotePath()
+        XCTAssertNotNil(path.range(of: #"^/tmp/uterm-file-\d{8}-\d{6}-[0-9a-f]{4}\.zip$"#, options: .regularExpression),
+                        path)
+    }
+
+    /// 复制文字、链接时剪贴板里的类型不算文件；PDF 这类数据才算。
+    func testClipboardFileTypeSkipsTextAndLinks() {
+        XCTAssertNil(TerminalPasteSource.fileType(in: [UTType.utf8PlainText.identifier, UTType.url.identifier,
+                                                       UTType.rtf.identifier, UTType.html.identifier]))
+        XCTAssertEqual(TerminalPasteSource.fileType(in: [UTType.utf8PlainText.identifier, UTType.pdf.identifier]),
+                       UTType.pdf.identifier)
+    }
+
+    /// 在「文件」里拷贝的 PDF：读成本机私有拷贝、按文件传；只收图片的终端直说不支持。
+    func testClipboardFileBecomesAPrivateCopy() async throws {
+        let pdf = Data("%PDF-1.4 test".utf8)
+        let board = try XCTUnwrap(UIPasteboard(name: .init("uterm-test-\(UUID().uuidString)"), create: true))
+        addTeardownBlock { UIPasteboard.remove(withName: board.name) }
+        board.setItems([[UTType.pdf.identifier: pdf]])
+        XCTAssertTrue(TerminalPasteSource.hasFile(board))
+
+        let item = try await TerminalPasteSource.clipboardFile(allowsFiles: true, board: board)
+        guard case .video(let file) = item else { return XCTFail("应当按文件读：\(item)") }
+        addTeardownBlock { file.discardLocalCopy() }
+        XCTAssertEqual(file.kind, .file)
+        XCTAssertEqual(file.fileExtension, "pdf")
+        XCTAssertEqual(try Data(contentsOf: file.localURL), pdf)
+
+        do {
+            _ = try await TerminalPasteSource.clipboardFile(allowsFiles: false, board: board)
+            XCTFail("应当报不支持")
+        } catch TerminalPasteSource.Failure.fileUnsupported {
+        }
+    }
+
+    /// 「文件」里选的：图片按图片贴，视频按视频、别的按文件传；只收图片的终端只接图片；文件夹不收。
+    func testImportedFilesFollowTheirType() async throws {
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        let image = try await TerminalPasteSource.imported(try temporaryFile(png, ext: "png"), allowsFiles: false)
+        guard case .image = image else { return XCTFail("应当按图片贴：\(image)") }
+
+        let notes = Data("hello".utf8)
+        let text = try await TerminalPasteSource.imported(try temporaryFile(notes, ext: "txt"), allowsFiles: true)
+        guard case .video(let file) = text else { return XCTFail("应当按文件传：\(text)") }
+        addTeardownBlock { file.discardLocalCopy() }
+        XCTAssertEqual(file.kind, .file)
+        XCTAssertEqual(file.fileExtension, "txt")
+        XCTAssertEqual(try Data(contentsOf: file.localURL), notes)
+
+        let movie = try await TerminalPasteSource.imported(try temporaryFile(Data([1, 2]), ext: "mov"), allowsFiles: true)
+        guard case .video(let video) = movie else { return XCTFail("应当按视频传：\(movie)") }
+        addTeardownBlock { video.discardLocalCopy() }
+        XCTAssertEqual(video.kind, .video)
+
+        do {
+            _ = try await TerminalPasteSource.imported(try temporaryFile(notes, ext: "txt"), allowsFiles: false)
+            XCTFail("应当报不支持")
+        } catch TerminalPasteSource.Failure.fileUnsupported {
+        }
+
+        let folder = FileManager.default.temporaryDirectory.appending(path: "paste-folder-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        do {
+            _ = try await TerminalPasteSource.imported(folder, allowsFiles: true)
+            XCTFail("文件夹应当不收")
+        } catch TerminalPasteSource.Failure.unreadableFile {
+        }
+    }
+
     // MARK: - 控制器
 
     /// 直连主机：视频交给后端，路径（带一个空格）粘进终端，提示说传到了哪；本机拷贝送完删掉。
@@ -142,6 +222,46 @@ final class TerminalVideoPasteTests: XCTestCase {
         XCTAssertTrue(shown, "提示：\(String(describing: controller.imageNote))")
         XCTAssertTrue(recorder.typedText.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: video.localURL.path))
+        controller.close()
+    }
+
+    /// 直连主机按文件传：提示说「文件」而不是「视频」。只收图片的终端收到文件直说不支持。
+    func testControllerUploadsAFileAndNamesItAFile() async throws {
+        let recorder = MediaRecorder()
+        let controller = try await connectedController(MediaBackend(recorder))
+        var file = try localVideo(Data("pdf".utf8))
+        file.kind = .file
+        let expected = String(localized: "文件已上传到 \(MediaRecorder.uploadedPath)")
+        controller.sendPaste { .video(file) }
+        let done = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { controller.imageNote?.text == expected }
+        XCTAssertTrue(done, "提示：\(String(describing: controller.imageNote))")
+        controller.close()
+
+        let imageOnly = try await connectedController(ImageOnlyBackend(MediaRecorder()))
+        var other = try localVideo(Data([1]))
+        other.kind = .file
+        imageOnly.sendPaste { .video(other) }
+        let refused = TerminalPasteSource.Failure.fileUnsupported.errorDescription
+        let shown = await MobileFakeTerminal.waitUntil { imageOnly.imageNote?.text == refused }
+        XCTAssertTrue(shown, "提示：\(String(describing: imageOnly.imageNote))")
+        imageOnly.close()
+    }
+
+    /// 「从剪贴板粘贴」：剪贴板里只有文字就按系统粘贴送进终端；什么都没有就提示。
+    func testClipboardButtonPastesTextOrSaysItIsEmpty() async throws {
+        let recorder = MediaRecorder()
+        let controller = try await connectedController(MediaBackend(recorder))
+        let board = try XCTUnwrap(UIPasteboard(name: .init("uterm-test-\(UUID().uuidString)"), create: true))
+        addTeardownBlock { UIPasteboard.remove(withName: board.name) }
+
+        board.items = []
+        controller.pasteClipboard(board)
+        XCTAssertEqual(controller.imageNote?.text, TerminalPasteSource.Failure.empty.errorDescription)
+
+        board.string = "echo hello"
+        controller.pasteClipboard(board)
+        let typed = await MobileFakeTerminal.waitUntil { recorder.typedText.contains("echo hello") }
+        XCTAssertTrue(typed, "终端收到：\(recorder.typedText)")
         controller.close()
     }
 

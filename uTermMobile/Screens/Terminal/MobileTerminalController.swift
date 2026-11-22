@@ -399,6 +399,8 @@ final class MobileTerminalController {
         }
         state = .connected
         hadConnected = true
+        // 远控终端接上之后才知道是不是 Mac 的本机 shell（只有它收文件）。
+        refreshMediaCapabilities()
         // 回前台 / 换网络 / 每 30s 探一次活：后台挂久了的半死 TCP 不会自己报错，
         // 标签一直显示「已连接」、输入只进内核缓冲。判死后走 exitStream → `.disconnected`。
         ConnectionWatchdog.shared.register(self)
@@ -423,8 +425,7 @@ final class MobileTerminalController {
             remote.client.setProgramStatusLooker(remote.sessionID) { [weak self] in self?.isLooking ?? false }
         }
         syncRemoteWatch()
-        acceptsImages = conn is any TerminalImageReceiving
-        acceptsVideos = conn is any TerminalVideoReceiving
+        refreshMediaCapabilities()
         if let backend = conn as? any CheckpointingTerminalBackend {
             let pump = terminal.outputPump, events = terminal.events
             backend.setCheckpointHooks(TerminalCheckpointHooks(
@@ -455,11 +456,16 @@ final class MobileTerminalController {
 
     // MARK: - 图片
 
+    private func refreshMediaCapabilities() {
+        acceptsImages = connection is any TerminalImageReceiving
+        acceptsVideos = (connection as? any TerminalVideoReceiving)?.receivesFiles ?? false
+    }
+
     /// 后端能不能收图片：直连 SSH 传成服务器上的文件；远控 Mac 终端交给 Mac（本机 shell 走剪贴板 +
     /// Ctrl+V，SSH 会话由 Mac 传文件）。测试的假传输不能。
     private(set) var acceptsImages = false
-    /// 后端能不能收视频：只有直连 SSH（传成服务器上的文件）。远控 Mac 的终端不能（见 `TerminalVideoReceiving`），
-    /// 键盘条对它只给贴图片。
+    /// 后端能不能收视频和别的文件：直连 SSH（传成服务器上的文件）与远控 Mac 的本机 shell（传到 Mac 的 `/private/tmp`）。
+    /// Mac 上的 SSH 终端不能（见 `TerminalVideoReceiving`），键盘条对它只给贴图片。
     private(set) var acceptsVideos = false
     /// 贴图的进度 / 结果（键盘条上方的提示）。进行中带进度条；出了结果几秒后自己消失。
     private(set) var imageNote: PasteNote?
@@ -467,7 +473,24 @@ final class MobileTerminalController {
     /// 一次贴一样：上一个还在路上时再点不另起一次（两条进度会互相盖掉）。
     @ObservationIgnored private var sendingImage = false
 
-    /// 读一张图或一段视频（剪贴板 / 相册）交给终端里的程序。传成文件时把路径粘进终端，后面带一个空格。
+    /// 键盘条「从剪贴板粘贴」：有图片 / 视频就传给终端里的程序（同 `onPasteMedia`）；没有就按系统粘贴送文字；
+    /// 再没有、是在「文件」里拷贝的文件，就按文件传。后端收不了图片（测试的假传输）时只贴文字。
+    /// 只看类型决定走哪条（不读内容），读文字时系统照常问「允许粘贴」。
+    func pasteClipboard(_ board: UIPasteboard = .general) {
+        if acceptsImages, board.hasImages || TerminalPasteSource.hasVideo(board) {
+            let allowsVideo = acceptsVideos
+            sendPaste { try await TerminalPasteSource.clipboard(allowsVideo: allowsVideo, board: board) }
+        } else if board.hasStrings {
+            if let text = board.string, !text.isEmpty { paste(text) }
+        } else if acceptsImages, TerminalPasteSource.hasFile(board) {
+            let allowsFiles = acceptsVideos
+            sendPaste { try await TerminalPasteSource.clipboardFile(allowsFiles: allowsFiles, board: board) }
+        } else {
+            showImageNote(TerminalPasteSource.Failure.empty.localizedDescription)
+        }
+    }
+
+    /// 读一张图、一段视频或一个文件（剪贴板 / 相册 / 「文件」）交给终端里的程序。传成文件时把路径粘进终端，后面带一个空格。
     /// 读取、压缩、上传都不在主线程上做，各段的进度经 `PasteProgressReporter` 画到提示里的进度条上。
     /// 视频的本机拷贝送完（成败都算）就删掉。
     func sendPaste(_ load: @escaping @MainActor () async throws -> TerminalPasteItem) {
@@ -501,10 +524,14 @@ final class MobileTerminalController {
         case .video(let video):
             defer { video.discardLocalCopy() }
             guard let receiver = backend as? any TerminalVideoReceiving else {
-                throw TerminalPasteSource.Failure.videoUnsupported
+                throw video.kind == .video ? TerminalPasteSource.Failure.videoUnsupported
+                    : TerminalPasteSource.Failure.fileUnsupported
             }
             let path = try await TerminalPaste.deliver(video: video, to: receiver, paste: paste)
-            return String(localized: "视频已上传到 \(path)")
+            switch video.kind {
+            case .video: return String(localized: "视频已上传到 \(path)")
+            case .file: return String(localized: "文件已上传到 \(path)")
+            }
         }
     }
 

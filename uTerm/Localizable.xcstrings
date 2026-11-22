@@ -10486,6 +10486,90 @@
         }
       }
     },
+    "Mac 上的 SSH 终端还不能贴文件，只能贴图片" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH terminals on the Mac can't receive files yet, only images"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上の SSH ターミナルにはまだファイルを貼り付けられません。画像のみ貼り付けられます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 SSH 터미널에는 아직 파일을 붙여넣을 수 없고 이미지만 붙여넣을 수 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 SSH 終端機還不能貼上檔案，只能貼上圖片"
+          }
+        }
+      }
+    },
+    "Mac 上的 SSH 终端还不能贴视频，只能贴图片" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH terminals on the Mac can't receive videos yet, only images"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上の SSH ターミナルにはまだビデオを貼り付けられません。画像のみ貼り付けられます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 SSH 터미널에는 아직 비디오를 붙여넣을 수 없고 이미지만 붙여넣을 수 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 SSH 終端機還不能貼上影片，只能貼上圖片"
+          }
+        }
+      }
+    },
+    "Mac 上的 SSH 终端还不能贴视频和文件，只能贴图片" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH terminals on the Mac can't receive videos or files yet, only images"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上の SSH ターミナルにはまだビデオやファイルを貼り付けられません。画像のみ貼り付けられます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 SSH 터미널에는 아직 비디오와 파일을 붙여넣을 수 없고 이미지만 붙여넣을 수 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 SSH 終端機還不能貼上影片和檔案，只能貼上圖片"
+          }
+        }
+      }
+    },
     "Mac 上的 uTerm 正在重启，请稍后再试" : {
       "localizations" : {
         "en" : {
@@ -18047,6 +18131,34 @@
         }
       }
     },
+    "从剪贴板粘贴" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paste from Clipboard"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クリップボードからペースト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "클립보드에서 붙여넣기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從剪貼簿貼上"
+          }
+        }
+      }
+    },
     "从左侧选择一个分组" : {
       "localizations" : {
         "en" : {
@@ -18211,6 +18323,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "從檔案讀取…"
+          }
+        }
+      }
+    },
+    "从文件选择…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose from Files…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルから選択…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일에서 선택…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從檔案選擇…"
           }
         }
       }
@@ -24229,6 +24369,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "前進"
+          }
+        }
+      }
+    },
+    "剪贴板里没有可以粘贴的内容" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There's nothing on the clipboard to paste"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クリップボードにペーストできる内容がありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "클립보드에 붙여넣을 내용이 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪貼簿裡沒有可以貼上的內容"
           }
         }
       }
@@ -45316,6 +45484,34 @@
         }
       }
     },
+    "文件已上传到 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File uploaded to %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルを %@ にアップロードしました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일을 %@에 업로드했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔案已上傳到 %@"
+          }
+        }
+      }
+    },
     "文件或路径不存在" : {
       "localizations" : {
         "en" : {
@@ -47424,6 +47620,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法讀取符號連結目標"
+          }
+        }
+      }
+    },
+    "无法读取这个文件" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read this file"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルを読み込めません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 파일을 읽을 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取這個檔案"
           }
         }
       }
@@ -62380,6 +62604,7 @@
       }
     },
     "粘贴剪贴板里的图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -62408,6 +62633,7 @@
       }
     },
     "粘贴剪贴板里的图片或视频" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -62436,6 +62662,7 @@
       }
     },
     "粘贴图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -62464,6 +62691,7 @@
       }
     },
     "粘贴图片或视频" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -72584,6 +72812,7 @@
       }
     },
     "远程控制的 Mac 终端还不能贴视频，只能贴图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

@@ -92,6 +92,7 @@ struct TerminalKeyBar: View {
     @State private var softKeyboardUp = false
     @State private var pickingPhoto = false
     @State private var pickedPhoto: PhotosPickerItem?
+    @State private var pickingFile = false
     @State private var editingPhrases = false
     @AppStorage(DefaultsKey.terminalKeyBarPhrases) private var phrasesRaw = ""
 
@@ -133,6 +134,13 @@ struct TerminalKeyBar: View {
             pickedPhoto = nil
             controller.sendPaste { try await TerminalPasteSource.picked(item) }
         }
+        // 收得了任意文件（直连 SSH、远控 Mac 的本机 shell）就什么都能选；Mac 上的 SSH 终端只收图片。
+        .fileImporter(isPresented: $pickingFile,
+                      allowedContentTypes: controller.acceptsVideos ? [.item] : [.image]) { result in
+            guard case .success(let url) = result else { return }
+            let allowsFiles = controller.acceptsVideos
+            controller.sendPaste { try await TerminalPasteSource.imported(url, allowsFiles: allowsFiles) }
+        }
         .onChange(of: panel) { _, panel in panels.remember(panel) }
         .sheet(isPresented: $editingPhrases) {
             TerminalPhrasesScreen(showsDone: true)
@@ -151,10 +159,8 @@ struct TerminalKeyBar: View {
 
     @ViewBuilder private var keyRow: some View {
         keyButtons(TerminalKeyCatalog.leading)
-        // 贴图常用（给 AI 命令行看截图）、查找也是，都紧跟 esc / tab，不用滚就点得到；固定键不再加（分屏后一格太窄）。
-        if controller.acceptsImages {
-            imageMenu
-        }
+        // 粘贴常用（给 AI 命令行看截图、贴文件）、查找也是，都紧跟 esc / tab，不用滚就点得到；固定键不再加（分屏后一格太窄）。
+        pasteKey
         searchKey
         MKeyBarGap()
         ForEach(TerminalKeyCatalog.arrows) { key in
@@ -194,25 +200,28 @@ struct TerminalKeyBar: View {
         }
     }
 
-    /// 贴图片 / 视频：剪贴板里的，或相册里选一项。直连服务器传成 `/tmp` 下的文件并粘上路径（视频按文件流式传）；
-    /// Mac 本机终端放进 Mac 剪贴板再按 Ctrl+V（Claude Code 等从剪贴板读图）。远控 Mac 的终端只收图片，文案也只说图片。
-    private var imageMenu: some View {
-        let videos = controller.acceptsVideos
-        return MMenu {
-            Button {
-                controller.sendPaste { try await TerminalPasteSource.clipboard(allowsVideo: videos) }
-            } label: {
-                if videos {
-                    Label("粘贴剪贴板里的图片或视频", systemImage: "doc.on.clipboard")
-                } else {
-                    Label("粘贴剪贴板里的图片", systemImage: "doc.on.clipboard")
+    /// 粘贴：剪贴板里的（图片 / 视频传成文件，文字照系统粘贴，「文件」里拷贝的文件也传），或从相册、「文件」里选一项。
+    /// 直连服务器传成 `/tmp` 下的文件并粘上路径（视频与文件按文件流式传）。远控 Mac 的本机 shell：图片放进 Mac 剪贴板再按
+    /// Ctrl+V（Claude Code 等从剪贴板读图），视频与文件传到那台 Mac 的 `/private/tmp` 再粘上路径，Agent 自己去读。
+    /// Mac 上的 SSH 终端只收图片，相册与「文件」里也只给选图片。
+    /// 后端收不了图片（测试的假传输）时只有剪贴板里的文字，不弹菜单。
+    @ViewBuilder private var pasteKey: some View {
+        if controller.acceptsImages {
+            MMenu {
+                Button { controller.pasteClipboard() } label: {
+                    Label("从剪贴板粘贴", systemImage: "doc.on.clipboard")
                 }
+                Button { pickingPhoto = true } label: { Label("从相册选择…", systemImage: "photo.on.rectangle") }
+                Button { pickingFile = true } label: { Label("从文件选择…", systemImage: "folder") }
+            } label: {
+                MKeyIconCap(symbol: "doc.on.clipboard")
             }
-            Button { pickingPhoto = true } label: { Label("从相册选择…", systemImage: "photo.on.rectangle") }
-        } label: {
-            MKeyIconCap(symbol: "photo")
+            .accessibilityLabel("粘贴")
+        } else {
+            Button { controller.pasteClipboard() } label: { MKeyIconCap(symbol: "doc.on.clipboard") }
+                .buttonStyle(MPressStyle())
+                .accessibilityLabel("从剪贴板粘贴")
         }
-        .accessibilityLabel(videos ? Text("粘贴图片或视频") : Text("粘贴图片"))
     }
 
     /// 发送一个键。上膛的 Ctrl / Alt 作用在这个键上（Ctrl 上膛后点 ← 发 Ctrl+←），用完自己复位。

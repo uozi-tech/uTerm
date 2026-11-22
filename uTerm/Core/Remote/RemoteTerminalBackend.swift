@@ -9,7 +9,7 @@ import Foundation
 ///   每次变化 Mac 都会调整 PTY 并重发一份快照。
 /// - 断线：在后端内部按退避重连并重新接入，快照到了屏幕自然对齐。控制器看到的是一条不断的流；
 ///   只有 Mac 明确结束了这个终端（关闭、被别的设备接管）才当作会话结束。
-actor RemoteTerminalBackend: TerminalImageReceiving {
+actor RemoteTerminalBackend: TerminalImageReceiving, TerminalVideoReceiving {
     nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated var mirrorsRemoteGrid: Bool { true }
     nonisolated let exitStream: AsyncStream<Void>
@@ -34,10 +34,17 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     /// 默认 true：不告诉它的调用方（Mac 端、测试）保持以前的退避。
     private nonisolated let watchLock = NSLock()
     private nonisolated(unsafe) var watchedStorage = true
+    /// 接入的是不是 Mac 的本机 shell（会话列表里的 `serverID`）。只有它收文件：传到 Mac 上的路径 shell 里的程序读得到，
+    /// Mac 上开着的 SSH 终端读不到。每次接上从会话列表刷新；同 `watchedStorage`，放在锁里给 `receivesFiles` 同步读。
+    private nonisolated(unsafe) var localShellStorage = false
 
-    init(client: RemoteMacClient, sessionID: UUID) {
+    /// 视频和文件传到 Mac 上的哪个目录。测试宿主带沙盒，换成自己的临时目录。
+    nonisolated let uploadDirectory: String
+
+    init(client: RemoteMacClient, sessionID: UUID, uploadDirectory: String = "/private/tmp") {
         self.client = client
         self.sessionID = sessionID
+        self.uploadDirectory = uploadDirectory
         (outputItems, outputContinuation) = AsyncStream<TerminalOutputItem>.makeStream()
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -79,6 +86,9 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         // 标签从此挂在死连接上，输出不来、按键发不出去。抛出去让重连循环再试。
         guard channelCloses == closesBefore else { throw RemoteProtocolError.closed }
         attachment = attached
+        let sessionID = sessionID
+        let local = await client.sessions.first { $0.id == sessionID }?.serverID == RemoteConstants.localShellServerID
+        watchLock.withLock { localShellStorage = local }
         reconnectingContinuation.yield(false)
         // 接入请求在路上时视图可能刚布局完、报来了真实尺寸（那时还没有通道，发不出去）：补发一次。
         if size != requested {
@@ -91,13 +101,36 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         attachment.link.send(RemoteMessage(.input, channel: attachment.channel, payload: data))
     }
 
-    /// 交给 Mac 处理（它知道这个终端是本机 shell 还是 SSH）。
+    /// 图片交给 Mac 处理（它知道这个终端是本机 shell 还是 SSH）。
     /// 手机上的程序读不到 Mac 剪贴板；这个后端只在手机端用，本来也不走 Mac 的粘贴判断。
     nonisolated var programsCanReadMacClipboard: Bool { false }
 
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard let attachment else { throw TerminalImageError.notConnected }
         return try await client.sendTerminalImage(image, over: attachment)
+    }
+
+    /// Mac 的本机 shell 收视频和文件；Mac 上的 SSH 终端只收图片（见 `TerminalVideoReceiving`）。
+    nonisolated var receivesFiles: Bool { watchLock.withLock { localShellStorage } }
+
+    /// 视频和文件经文件通道传成 Mac 上 `/private/tmp` 下一个只有自己能读写的文件，返回路径（调用方粘进终端，
+    /// 终端里的 Agent 自己去读）。按段从本机文件读着传，不整份进内存；老版本 Mac 不认文件请求时直说。
+    func deliverVideo(_ video: TerminalVideo) async throws -> String {
+        guard attachment != nil else { throw TerminalImageError.notConnected }
+        guard receivesFiles else {
+            throw TerminalImageError.unsupported(String(localized: "Mac 上的 SSH 终端还不能贴视频和文件，只能贴图片"))
+        }
+        let path = video.temporaryRemotePath(in: uploadDirectory)
+        let files = RemoteMacFileProvider(client: client)
+        // 进度回调在传输的子任务上：接收方在这里先取出来。
+        let sink = PasteProgressReporter.sink
+        sink?(PasteProgress(.sending, fraction: 0))
+        try await files.upload(localURL: video.localURL, toRemotePath: path) { progress in
+            let fraction = progress.bytesTotal > 0 ? Double(progress.bytesDone) / Double(progress.bytesTotal) : 1
+            sink?(PasteProgress(.sending, fraction: fraction))
+        }
+        try? await files.setPermissions(path: path, mode: 0o600)
+        return path
     }
 
     func resize(cols: UInt16, rows: UInt16) {
