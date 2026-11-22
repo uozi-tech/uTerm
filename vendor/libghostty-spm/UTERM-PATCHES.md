@@ -449,11 +449,21 @@ UIKit 自己的拖动、松手速度、减速都在）量出来的原因和改�
 - **甩出去的落点不取到起点身后。** UIKit 会把松手速度带进改写过的落点（往前往后挪 25 pt，减速头一帧的速度和不改时一样），
   可落点在起点身后时它一帧就把内容拽回去。上游按最近的一行取整，不看方向；现在只在甩的方向上取整。UIKit 给出速度的甩动
   投影距离至少一百多点，实际碰不到，这条是兜底。
+- **按停之后往回退。** 甩出去、滑行途中手指按停、不动、抬起，0.12 s 后的对齐原来取最近的一行：滚动基准（下面）8 次里一半逆着刚才滑行的方向
+  退回去，最多半行。现在按停时记下它往哪走（`SystemScrollState.caughtDirection`，由 `scrollViewDidScroll` 记的 `motionDirection`），
+  之后那次动画对齐朝这个方向取前方的一行（动画仍从静止起步）；同 Mac 的 settler「惯性被触碰掐断时顺着方向补」。立即对齐
+  （选区、菜单要按整行命中）不用它，仍走最近的一行。代价是按停后要往前补最多一行。
+- 拖着停住再抬（松手速度 0、按停之前没有滑行）仍取最近的一行，可能逆着拖动方向退最多半行；这时没有速度，动画从静止起步。
+
+滚动基准：`uTermMobileTests/Probes/GhosttyScrollBenchTests.swift`（默认跳过，`TEST_RUNNER_UTERM_SCROLLBENCH_DIR` 打开），六种手势
+（慢松手、停住再抬、中速甩、快甩、按停、甩到尽头回弹）各 8 次，逐帧记画面位置写成 CSV，和同样手势下普通 `UIScrollView` 的轨迹比。
+模拟器 60 Hz 上的读数：甩动、回弹与原生一致（松手后 50 ms 的速度 0.91 倍对原生 0.92–0.93 倍，回弹距离相同）；慢松手往回 5 pt → 0；
+按停往回 6.3 pt → 0。
 
 和上游 [#122](https://github.com/Lakr233/libghostty-spm/pull/122)（`TerminalSurfaceOptions.scrollBehavior`，吸附可关）兼容：改的都在吸附整行那条路径里。
 
 回归用例：`uTermMobileTests/Probes/GhosttySystemScrollVelocityTests.swift`（真触摸：`testReleaseKeepsDirectionAndSpeed`、
-`testAlignmentStartsFromRest`，以及核 UIKit 前提的 `testUIKitReleasePremises`）、`uTermMobileTests/GhosttyScrollAlignmentMathTests.swift`
+`testAlignmentStartsFromRest`、`testCatchAlignsAheadNotBack`，以及核 UIKit 前提的 `testUIKitReleasePremises`）、`uTermMobileTests/GhosttyScrollAlignmentMathTests.swift`
 （落点、停靠行、曲线的纯算术），以及第 4 条那几条系统滚动探针。真机手感只在 iPhone Duo 上验。
 
 ## manifest 改动（相对上游的 `Package.swift`）

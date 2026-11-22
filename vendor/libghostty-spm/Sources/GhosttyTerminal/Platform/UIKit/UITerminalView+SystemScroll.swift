@@ -58,6 +58,13 @@
             /// uTerm 本地补丁：UIKit 当成停住的那次松手，手指其实还在动的速度（点 / 秒，正 = 内容偏移变大）：
             /// 由 `willEndDragging` 记下，`didEndDragging(willDecelerate: false)` 的对齐带着它起步。
             var releaseVelocity: CGFloat = 0
+            /// uTerm 本地补丁：内容偏移最近一次变动的方向（±1），和上一次的位置。由 `scrollViewDidScroll` 记。
+            var motionDirection: CGFloat = 0
+            var lastDidScrollOffset: CGFloat = 0
+            /// uTerm 本地补丁：手指按停一段还在走的滚动（减速、回弹、对齐）时它的方向。之后那次对齐朝这个方向
+            /// 取整（前方的一行），不往回：基准测量里「甩出去、按住、松开」原来会对齐到最近的一行，
+            /// 一半的时候是逆着刚才的方向退回去（最多半行）。和 Mac 的 settler「惯性被触碰掐断时顺着方向补」同一条规则。
+            var caughtDirection: CGFloat = 0
             /// Pixels the engine's position is ahead of the scroll view's:
             /// engine position = content offset (in pixels) + shift.
             ///

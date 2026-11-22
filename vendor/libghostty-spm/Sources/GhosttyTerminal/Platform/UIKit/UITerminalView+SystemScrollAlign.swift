@@ -23,6 +23,8 @@
             @discardableResult
             func systemScrollStop() -> Bool {
                 guard let driver = systemScroll.driver, systemScrollInMotion else { return false }
+                // uTerm 本地补丁：按停时它往哪走，之后的对齐就往哪取整（`caughtDirection`）。
+                systemScroll.caughtDirection = systemScroll.motionDirection
                 systemScrollCancelAlign()
                 if driver.isDecelerating || systemScroll.isUIKitMoving {
                     // Setting the offset, unanimated, ends UIKit's deceleration.
@@ -56,7 +58,12 @@
                 // aligns again.
                 guard lifted || (!driver.isTracking && !driver.isDragging), !momentumScroll.panIsActive else { return }
                 let travel = abs(velocity) < Self.systemScrollAlignMinimumVelocity ? 0 : velocity
-                let aligned = mapping.restingRow(enginePixels: position.pixels, travel: Double(travel))
+                // uTerm 本地补丁：被手指按停的滚动，对齐顺着它原来的方向走到前方的一行（动画仍从静止起步）。
+                // 立即对齐（选区、菜单要按整行命中）不用它：那时走最近的一行，挪得最少。
+                let caught = systemScroll.caughtDirection
+                systemScroll.caughtDirection = 0
+                let direction = travel != 0 ? travel : (animated ? caught : 0)
+                let aligned = mapping.restingRow(enginePixels: position.pixels, travel: Double(direction))
                 let targetPixels = mapping.offsetPixels(enginePixels: aligned)
                 let offsetPixels = driver.contentOffset.y * mapping.scale
                 guard Double(aligned) != position.pixels || abs(offsetPixels - targetPixels) > 0.5 else { return }

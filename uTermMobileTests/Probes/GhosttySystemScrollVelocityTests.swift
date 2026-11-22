@@ -308,6 +308,38 @@ final class GhosttySystemScrollVelocityTests: XCTestCase {
         }
     }
 
+    /// 甩出去、滑行途中手指按停、不动、抬起：之后的对齐顺着刚才滑行的方向走到前方的一行，不往回。
+    /// 原来对齐到最近的一行，滚动基准（scrollbench 的 catch 场景）8 次里一半往回退，最多半行（6.3 pt）。
+    func testCatchAlignsAheadNotBack() async throws {
+        let (host, scrollView, cellPt) = try await terminalRig()
+        defer { host.close() }
+        let finger = try SyntheticFinger(window: host.window)
+        let log = OffsetLog(scrollView)
+        defer { log.stop() }
+        var problems: [String] = []
+        for (index, speed) in [1500.0, -1500.0, 1200.0, -1200.0, 1500.0, -1500.0].enumerated() {
+            try await park(host, row: 300, plus: CGFloat(index) * cellPt / 6)
+            log.clear()
+            try await Self.drag(finger, log: log, from: CGPoint(x: 220, y: 300), speed: speed, frames: 6)
+            try await Task.sleep(for: .milliseconds(250))
+            log.tag = "caught"
+            try finger.down(at: CGPoint(x: 220, y: 300))
+            try await Task.sleep(for: .milliseconds(100))
+            try finger.up()
+            let caughtAt = scrollView.contentOffset.y
+            try await Task.sleep(for: .milliseconds(800))
+            let final = scrollView.contentOffset.y
+            let direction: CGFloat = speed > 0 ? 1 : -1
+            let moved = (final - caughtAt) * direction
+            let rows = final / cellPt
+            print("VELO 按停 v=\(Int(speed)) 按停处 \(String(format: "%.2f", caughtAt)) 停在 \(String(format: "%.2f", final)) 顺向挪了 \(String(format: "%.2f", moved)) pt")
+            if moved < -0.34 { problems.append("v=\(Int(speed)) 往回退了 \(String(format: "%.2f", -moved)) pt") }
+            if moved > cellPt + 0.34 { problems.append("v=\(Int(speed)) 往前挪了超过一行（\(String(format: "%.2f", moved)) pt）") }
+            if abs(rows - rows.rounded()) * cellPt > 0.34 { problems.append("v=\(Int(speed)) 没停在整行上（\(rows)）") }
+        }
+        XCTAssertTrue(problems.isEmpty, problems.joined(separator: "；"))
+    }
+
     /// 拖着松手：慢的（UIKit 当成停住）、快的（UIKit 减速），往两个方向、松手落在行内不同的位置。
     /// - 松手之后内容一帧都不往拖动的反方向走（原来慢松手一半的时候往回弹到最近的一行）；
     /// - 慢松手：松手后头一帧的速度接着手指的速度（0.4–1.6 倍；原来手指一离开内容就停、再由 UIKit 从静止往最近的一行动，常常还是反方向）；

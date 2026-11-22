@@ -55,6 +55,10 @@
                 guard scrollView === systemScroll.driver, !systemScroll.isSyncing,
                       let (mapping, position) = systemScrollMapping() else { return }
                 systemScroll.lastDidScroll = CACurrentMediaTime()
+                // uTerm 本地补丁：记下走的方向，给被手指按停之后的那次对齐用（`caughtDirection`）。
+                let moved = scrollView.contentOffset.y - systemScroll.lastDidScrollOffset
+                if abs(moved) > 0.01 { systemScroll.motionDirection = moved > 0 ? 1 : -1 }
+                systemScroll.lastDidScrollOffset = scrollView.contentOffset.y
                 let offsetPixels = scrollView.contentOffset.y * mapping.scale
                 // uTerm 本地补丁：真手录制的位置 signpost（`UTermScrollTrace.signpostScrollOffset`，没在录时不发）。
                 UTermScrollTrace.signpostScrollOffset(px: Double(offsetPixels), decelerating: scrollView.isDecelerating,
@@ -88,6 +92,8 @@
                 core.scrollSettler.cancel()
                 systemScrollCancelAlign()
                 systemScroll.isUIKitMoving = false
+                // uTerm 本地补丁：接着拖了，按停时的方向不再算数，松手时按这次拖动来。
+                systemScroll.caughtDirection = 0
                 momentumScroll.panIsActive = true
                 momentumScroll.settleToken += 1
                 softwareKeyboard.tapCandidateArmed = false
