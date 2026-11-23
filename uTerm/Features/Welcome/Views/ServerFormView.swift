@@ -21,6 +21,8 @@ struct ServerFormView: View {
     let editing: ServerProfile?
     /// 非 nil = 「复制」：用该 profile 预填字段，但保存为**新**服务器（`editing` 须为 nil）。
     var duplicating: ServerProfile? = nil
+    /// 界面画廊用：表单一出来就停在最底下（跳板机那一节在第一屏之外）。App 里走默认值。
+    var catalogStartsAtBottom = false
 
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query(sort: \SSHKey.createdAt, order: .reverse) private var allKeys: [SSHKey]
@@ -109,6 +111,7 @@ struct ServerFormView: View {
             }
             .padding(.horizontal, 22).padding(.vertical, 20)
         }
+        .defaultScrollAnchor(catalogStartsAtBottom ? .bottom : .top)
     }
 
     private var targetSection: some View {

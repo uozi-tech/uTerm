@@ -377,7 +377,8 @@ to-one 关系镜像成一个 `STRING` 引用字段，to-many 靠子表反向键�
   偏移方向反），拍的那一下按比例改回去再还原（`UI_GALLERY_SHADOW_RADIUS` / `_OFFSET` 可调，默认 0.6 / -1.6，对着主按钮量的）。
   和装好的 App 对不上时，先拿 App 的真窗口截图比一遍。
 - 产品侧只加了画廊用的注入口：`WelcomeView(initialPane:initialSelection:)`、`WorkspaceWindowView(catalogModel:)`、
-  `TerminalWindowView(catalogModel:)`、`SFTPWindowView(catalogTabs:)`、`ParallelRunWindowView(catalogModel:)`，App 里都走默认值；
+  `TerminalWindowView(catalogModel:)`、`SFTPWindowView(catalogTabs:)`、`ParallelRunWindowView(catalogModel:)`、
+  `ServerFormView(catalogStartsAtBottom:)`（表单停在最底下，拍跳板机那一节），App 里都走默认值；
   iOS 侧 `RemoteDesktopSession.showGalleryWindow`（不连 Mac，把一张图当窗口模式的画面送进画布，官网截图用）；`TelemetryModel.tick()` 由 private 放宽成 internal。
 - iOS 对应的是 `uTermMobileTests/Probes/StyleGalleryTests`（压力夹具，核排版，见 `uTermMobileTests/README.md`）；宣传用的干净几屏是
   同目录的 `PromoGalleryTests`（文件名 `promo-*`，同一个开关 `UTERM_STYLE_SHOTS_DIR`）。其中 `testPromoScreensOnDevice` 在

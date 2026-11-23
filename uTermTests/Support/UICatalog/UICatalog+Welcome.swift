@@ -41,6 +41,11 @@ extension UICatalog {
                 let s = try stage.session()
                 return UICatalogRender(s.wrap(ServerFormView(editing: s.host("prod-db"))))
             },
+            UICatalogEntry("主机表单/编辑 · 跳板机 · 滚到底", .sheet, source: "uTerm/Features/Welcome/Views/ServerFormView.swift",
+                           symbol: "ServerFormView", size: CGSize(width: 620, height: 760)) { stage in
+                let s = try stage.session()
+                return UICatalogRender(s.wrap(ServerFormView(editing: s.host("prod-db"), catalogStartsAtBottom: true)))
+            },
         ]
     }
 }
