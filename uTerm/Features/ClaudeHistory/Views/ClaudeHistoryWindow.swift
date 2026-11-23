@@ -170,6 +170,8 @@ final class ClaudeHistoryWindowModel {
     let windowID: ClaudeHistoryWindowID
     private(set) var hostName: String
     private(set) var connection: AgentHistoryConnection?
+    /// 那台 SSH 主机标成了只许 SFTP（不能跑命令，搜不了）。
+    @ObservationIgnored private var sftpOnly = false
     /// 向 `RemoteMacDirectory` 借的那台 Mac 的连接（关窗口时还回去）。
     @ObservationIgnored private var borrowedMac: (id: String, directory: RemoteMacDirectory)?
 
@@ -190,6 +192,7 @@ final class ClaudeHistoryWindowModel {
     func open(container: ModelContainer, macs: RemoteMacDirectory) async {
         if connection == nil {
             connection = AgentHistoryConnection(preferredDirectory: windowID.directory,
+                                                allowsCommands: { [weak self] in self?.sftpOnly != true },
                                                 connect: makeConnect(container: container, macs: macs))
         }
         await connection?.open()
@@ -202,6 +205,7 @@ final class ClaudeHistoryWindowModel {
         case .server(let id):
             return AgentHistoryAccess.server(id: id, container: container) { [weak self] profile in
                 self?.hostName = profile.name
+                self?.sftpOnly = profile.sftpOnly
             }
         case .pairedMac(let macID):
             return { [weak self] gate in

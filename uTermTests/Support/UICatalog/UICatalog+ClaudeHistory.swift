@@ -10,8 +10,9 @@ enum UICatalogClaudeHistory {
 
     /// 打开哪一份：默认是最新的那段对话；`subagents` 是派了子代理的那份，`subagentTranscript` 再点进其中一个子代理；
     /// `live` 是最新那段对话还开着：往上翻着时末尾又写进了一问一答（标题旁「正在更新」、底部「有新消息」）。
+    /// `search` 是列表顶上搜了「订单」（结果按会话分组）；`searchHit` 再点开其中一条命中（停在那一条上、整条高亮）。
     enum Opening {
-        case conversation, subagents, subagentTranscript, live
+        case conversation, subagents, subagentTranscript, live, search, searchHit
     }
 
     /// `live` 那一份记录在哪（`appendLiveTurn` 往它末尾写）。
@@ -61,10 +62,25 @@ enum UICatalogClaudeHistory {
             await sftp.setFile("\(subagentsDir)/agent-\(agent.id).jsonl", data: agent.data, mtime: agentTime)
             await sftp.setFile("\(subagentsDir)/agent-\(agent.id).meta.json", data: agent.meta, mtime: agentTime)
         }
+        await sftp.answersClaudeSearch()
         let history = AgentHistoryModel(source: ClaudeHistorySource(provider: sftp), preferredDirectory: directory)
         await history.start()
         for _ in 0..<100 where history.hasMore {
             try? await Task.sleep(for: .milliseconds(10))
+        }
+        if opening == .search || opening == .searchHit {
+            history.searchText = "订单"
+            history.submitSearch()
+            for _ in 0..<200 where history.search?.phase != .finished {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            guard opening == .searchHit, let session = history.search?.sessions.first,
+                  let hit = session.hits.dropFirst().first ?? session.hits.first else { return history }
+            history.openHit(hit, in: session)
+            for _ in 0..<100 where history.transcript?.items.isEmpty != false {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return history
         }
         let pick = opening == .conversation || opening == .live ? history.visibleFiles.first
             : history.visibleFiles.first { $0.sessionID == agentsSessionID }

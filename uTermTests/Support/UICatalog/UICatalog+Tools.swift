@@ -92,6 +92,16 @@ extension UICatalog {
                            symbol: "AgentTranscriptPane", size: CGSize(width: 1100, height: 720)) { stage in
                 try await claudeHistoryRender(stage, opening: .subagentTranscript)
             },
+            // 搜索：列表顶上搜「订单」，结果按会话分组（谁说的 + 前后文，命中的字加粗着色）。
+            UICatalogEntry("Claude 历史会话/搜索结果", source: "uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift",
+                           symbol: "AgentHistorySearchResults", size: CGSize(width: 1100, height: 720)) { stage in
+                try await claudeHistoryRender(stage, opening: .search)
+            },
+            // 点开一条命中：对话停在那一条上（整条底色 + 左边一道线），顶上「跳到最新」，底下「加载更晚的消息」。
+            UICatalogEntry("Claude 历史会话/从命中处打开", source: "uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift",
+                           symbol: "AgentTranscriptPane", size: CGSize(width: 1100, height: 720)) { stage in
+                try await claudeHistoryRender(stage, opening: .searchHit)
+            },
             UICatalogEntry("授权引导", source: "uTerm/Features/PermissionGuide/PermissionGuideView.swift",
                            symbol: "PermissionGuideView", size: CGSize(width: 760, height: 640)) { stage in
                 let s = try stage.session()

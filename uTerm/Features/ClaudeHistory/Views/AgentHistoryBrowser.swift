@@ -36,13 +36,15 @@ struct AgentHistoryBrowser: View {
                                         canResume: history.resumeCommand(for: level.file) != nil,
                                         onResume: { onResume(level.file) },
                                         onBack: level.subagent == nil ? nil : { history.closeSubagent() },
-                                        onOpenSubagent: { history.openSubagent($0) })
+                                        onOpenSubagent: { history.openSubagent($0) },
+                                        onJumpToLatest: { history.jumpToLatest() })
                         .opacity(isTop ? 1 : 0)
                         .allowsHitTesting(isTop)
                         .accessibilityHidden(!isTop)
                 }
             }
-            .id(transcript.file.path)
+            // 换了一份对话（含「跳到最新」把从命中处打开的换成从末尾打开的）就是新的视图：滚动位置、展开的块重来。
+            .id(ObjectIdentifier(transcript))
         } else {
             RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
                                detail: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
@@ -58,10 +60,37 @@ struct AgentHistorySessionList: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            searchBar
             Rectangle().fill(UD.border).frame(height: 1)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
+            ZStack {
+                content
+                    .opacity(history.search == nil ? 1 : 0)
+                    .allowsHitTesting(history.search == nil)
+                    .accessibilityHidden(history.search != nil)
+                if let search = history.search {
+                    AgentHistorySearchResults(history: history, search: search)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var searchBar: some View {
+        @Bindable var history = history
+        return VStack(alignment: .leading, spacing: 4) {
+            UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
+                          showsHotkeyChip: false)
+                .onSubmit { history.submitSearch() }
+                .help(AgentHistoryText.searchHelp)
+            if let problem = history.searchProblem {
+                Text(AgentHistoryText.searchProblem(problem))
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.warning)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
     private var header: some View {
@@ -172,6 +201,141 @@ struct AgentHistorySessionList: View {
     }
 }
 
+// MARK: - 搜索结果
+
+/// 列表区的搜索结果：按会话分组（最近的在前），每组下面是命中的摘要行，点一条打开那份对话并停在那里。
+struct AgentHistorySearchResults: View {
+    let history: AgentHistoryModel
+    let search: AgentHistoryModel.Search
+
+    var body: some View {
+        if search.sessions.isEmpty, !search.isRunning {
+            emptyState
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    status
+                    ForEach(search.sessions) { session in
+                        group(session)
+                    }
+                    footer
+                }
+                .padding(6)
+            }
+        }
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        switch search.phase {
+        case .failed(let message):
+            RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法搜索"), detail: message) {
+                UDButton(title: String(localized: "重试")) { history.submitSearch() }
+            }
+        case .stopped:
+            RemoteMacStateView(systemImage: "magnifyingglass", title: AgentHistoryText.searchStopped(search),
+                               detail: AgentHistoryText.searchNoResultsDetail) {
+                UDButton(title: String(localized: "重试")) { history.submitSearch() }
+            }
+        default:
+            RemoteMacStateView(systemImage: "magnifyingglass", title: AgentHistoryText.searchNoResults(search.query),
+                               detail: AgentHistoryText.searchNoResultsDetail)
+        }
+    }
+
+    /// 顶上：正在搜（进度 + 停止）。
+    @ViewBuilder private var status: some View {
+        if search.isRunning {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(AgentHistoryText.searchProgress(search))
+                    .font(UD.caption)
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button(AgentHistoryText.stopSearch) { history.stopSearch() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+        }
+    }
+
+    /// 末尾：到了上限 / 停了 / 出错。
+    @ViewBuilder private var footer: some View {
+        if search.truncated {
+            note(AgentHistoryText.searchTruncated(search.hitCount))
+        } else if search.phase == .stopped {
+            note(AgentHistoryText.searchStopped(search))
+        } else if case .failed(let message) = search.phase {
+            SettingsInlineNote(tone: .warning, text: message)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(UD.caption)
+            .foregroundStyle(UD.text4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+    }
+
+    private func group(_ session: AgentHistorySearchSession) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                Text(AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all))
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 2)
+            .padding(.bottom, 2)
+            ForEach(session.hits) { hit in
+                AgentHistorySearchHitRow(hit: hit, isSelected: isOpen(hit, in: session))
+                    .onTapGesture { history.openHit(hit, in: session) }
+            }
+            if session.hasMoreHits {
+                note(AgentHistoryText.sessionMoreHits(session.hits.count))
+            }
+        }
+    }
+
+    private func isOpen(_ hit: AgentHistorySearchHit, in session: AgentHistorySearchSession) -> Bool {
+        history.selectedFile?.path == session.file.path && history.transcript?.highlightedItemID == hit.itemID
+    }
+}
+
+/// 一条命中：谁说的 + 前后文，命中的字加粗着色。
+private struct AgentHistorySearchHitRow: View {
+    let hit: AgentHistorySearchHit
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(AgentHistoryText.roleLabel(hit.role))
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(UD.text4)
+            Text(AgentHistorySnippetText.attributed(hit.snippet, match: UD.accent))
+                .font(.system(size: 12))
+                .foregroundStyle(UD.text2)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? UD.rowSelected : Color.clear))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
 private struct AgentHistorySessionRow: View {
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
@@ -215,6 +379,8 @@ struct AgentTranscriptPane: View {
     /// 子代理的记录：回到上一层。主对话为 nil。
     var onBack: (() -> Void)? = nil
     var onOpenSubagent: (AgentSubagentLink) -> Void = { _ in }
+    /// 从搜索命中处打开的：换回从末尾打开。
+    var onJumpToLatest: () -> Void = {}
 
     @State private var expanded: Set<String> = []
 
@@ -222,8 +388,31 @@ struct AgentTranscriptPane: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(UD.border).frame(height: 1)
+            if transcript.opensAtHit, !transcript.reachedEnd {
+                hitBanner
+                Rectangle().fill(UD.border).frame(height: 1)
+            }
             messages
         }
+    }
+
+    /// 从命中处打开、后面还没读到末尾：顶上说一句，给「跳到最新」。
+    private var hitBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+            Text(AgentHistoryText.openedAtHit)
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.text2)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            UDButton(title: AgentHistoryText.jumpToLatest, style: .secondary, systemImage: "arrow.down.to.line",
+                     action: onJumpToLatest)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(UD.fillSoft)
     }
 
     private var header: some View {
@@ -300,9 +489,11 @@ struct AgentTranscriptPane: View {
                     ForEach(items) { item in
                         AgentTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
                                            subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
+                                           isHighlighted: item.id == transcript.highlightedItemID,
                                            expanded: $expanded)
                             .id(item.id)
                     }
+                    bottom
                     if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
                         Text("这个会话里没有可显示的消息。")
                             .font(UD.caption)
@@ -318,12 +509,19 @@ struct AgentTranscriptPane: View {
                 .padding(.top, 14)
             }
             // 打开时停在最后一条；内容不满一屏时从顶上排起——只写 `.bottom` 的话短对话会贴着底、上面空一大片。
-            .defaultScrollAnchor(.bottom)
+            // 从命中处打开、后面还没读到末尾时，往后加页不把视口拽到底（不然会一页接一页读下去）。
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(transcript.reachedEnd ? .bottom : .top, for: .sizeChanges)
             .defaultScrollAnchor(.top, for: .alignment)
             .onChange(of: transcript.prependGeneration) { old, _ in
                 // 往前加了一页：留在原来最上面那条，不跳到别处。第一页不用（默认停在底部）。
                 guard old > 0, let anchor = pendingAnchor else { return }
                 proxy.scrollTo(anchor, anchor: .top)
+            }
+            .onChange(of: transcript.focusGeneration) { _, _ in
+                // 搜索命中的那一条：滚到中间（等这一轮布局完）。
+                guard let id = transcript.highlightedItemID else { return }
+                Task { @MainActor in proxy.scrollTo(id, anchor: .center) }
             }
             .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
             .overlay(alignment: .bottom) {
@@ -366,6 +564,26 @@ struct AgentTranscriptPane: View {
                 Spacer()
                 UDButton(title: String(localized: "加载更早的消息"), style: .secondary, systemImage: "arrow.up") {
                     loadEarlier()
+                }
+                Spacer()
+            }
+        }
+    }
+
+    /// 从命中处打开的：后面还有，「加载更晚的消息」（滚到底也会读，见 `AgentTranscriptTailFollow`）。
+    @ViewBuilder private var bottom: some View {
+        if !transcript.reachedEnd {
+            HStack(spacing: 8) {
+                Spacer()
+                if let error = transcript.laterErrorMessage {
+                    SettingsInlineNote(tone: .warning, text: error)
+                }
+                if transcript.isLoadingLater {
+                    UDIndeterminateBar().frame(width: 120).padding(.vertical, 8)
+                } else {
+                    UDButton(title: AgentHistoryText.loadLater, style: .secondary, systemImage: "arrow.down") {
+                        Task { await transcript.loadLater() }
+                    }
                 }
                 Spacer()
             }
@@ -436,6 +654,8 @@ private struct AgentTranscriptRow: View {
     /// 这次调用派出的子代理（找得到记录的才有）。
     let subagent: AgentSubagentLink?
     let onOpenSubagent: (AgentSubagentLink) -> Void
+    /// 搜索命中的那一条：整条带底色和左边一道线（画在边界外，不挤动排版）。
+    var isHighlighted = false
     @Binding var expanded: Set<String>
 
     var body: some View {
@@ -449,6 +669,17 @@ private struct AgentTranscriptRow: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(UD.accentSoft)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(UD.accent).frame(width: 3)
+                    }
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, -5)
+            }
+        }
         .contextMenu {
             let text = item.plainText
             if !text.isEmpty {
