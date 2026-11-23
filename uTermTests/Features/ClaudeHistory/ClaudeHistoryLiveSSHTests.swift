@@ -1,0 +1,330 @@
+import Foundation
+import SwiftData
+import XCTest
+@testable import uTerm
+
+/// 「Claude 历史会话」对着**真 sshd** 端到端跑：假记录写到主机的 `~/.claude/projects` 下，经真的 SFTP 列出来、
+/// 读标题与来源、一页一页往前翻；再在真的登录 shell 里执行「继续这个会话」那条命令，看它落在哪个目录、带什么参数。
+///
+/// 需要外部 sshd，所以**默认跳过**。跑法（和 `PersistentSSHConnectionLiveTests` 用同一个镜像、同一组开关）：
+///
+/// ```
+/// docker run -d --name uterm-claude-history-live -p 127.0.0.1:2297:22 uterm-holder-e2e-sshd
+/// TEST_RUNNER_UTERM_LIVE_SSH_PORT=2297 TEST_RUNNER_UTERM_LIVE_SSH_USER=dev TEST_RUNNER_UTERM_LIVE_SSH_PASSWORD=dev \
+///   xcodebuild test-without-building … -only-testing:uTermTests/ClaudeHistoryLiveSSHTests
+/// ```
+///
+/// 记录内容全是编的。只动自己建的东西：每次在主目录下建一个带随机后缀的工作目录，对应的项目目录名因此也是
+/// 独一份，结束时只删这两处——指到一台真用着 Claude Code 的主机上也不会碰它原有的记录。
+/// 主机上不需要装 Claude Code：`claude` 是用例放进 `PATH` 最前面的一个假脚本，只把目录和参数记下来。
+@MainActor
+final class ClaudeHistoryLiveSSHTests: XCTestCase {
+    private var profile: SSHConnection.ProfileSnapshot!
+    private var auth: ResolvedAuth!
+    private var container: ModelContainer!
+    private var files: SFTPSession!
+    private var home = ""
+    /// 工作目录：带空格、单引号、中文，「继续这个会话」的引号要扛得住。
+    private var workdir = ""
+    private var scratch = ""
+    private var projectPath = ""
+
+    private enum Session {
+        static let cli = "11111111-aaaa-4bbb-8ccc-000000000001"
+        static let desktop = "11111111-aaaa-4bbb-8ccc-000000000002"
+        static let mixed = "11111111-aaaa-4bbb-8ccc-000000000003"
+        static let empty = "11111111-aaaa-4bbb-8ccc-000000000004"
+        static let moved = "11111111-aaaa-4bbb-8ccc-000000000005"
+    }
+
+    /// 大的那份记录有几轮对话；每轮一问、一答带一次工具调用、一条工具结果。
+    private static let turns = 600
+
+    override func setUp() async throws {
+        try await super.setUp()
+        let env = ProcessInfo.processInfo.environment
+        guard let raw = env["UTERM_LIVE_SSH_PORT"], let port = Int(raw) else {
+            throw XCTSkip("没设 UTERM_LIVE_SSH_PORT，跳过真 sshd 集成测试")
+        }
+        profile = SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: port, jumpHost: nil)
+        auth = .password(username: env["UTERM_LIVE_SSH_USER"] ?? "root",
+                         password: env["UTERM_LIVE_SSH_PASSWORD"] ?? "PASS")
+        container = try ModelContainer(
+            for: ServerProfile.self, KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
+        // 和窗口同一条路：共享连接上开 SFTP（`SFTPSession.make` 解出凭据之后做的就是这两步）。
+        let connected = try await SSHClientFactory.connectShared(
+            profile: profile, auth: auth, jumpHostAuth: nil,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in true })
+        files = try await SFTPSession(connected: connected)
+        home = try await files.realPath(".")
+        scratch = home + "/uterm-claude-history-e2e-" + UUID().uuidString.prefix(8).lowercased()
+        workdir = scratch + "/it's a 项目"
+        projectPath = ClaudeProjectPath.projectsRoot(home: home) + "/" + ClaudeProjectPath.encode(workdir)
+        _ = try await files.exec("mkdir -p \(Self.quoted(workdir + "/sub dir")) \(Self.quoted(projectPath)) \(Self.quoted(scratch + "/bin"))")
+        try await seed()
+    }
+
+    override func tearDown() async throws {
+        if let files {
+            if !scratch.isEmpty {
+                _ = try? await files.exec("rm -rf \(Self.quoted(scratch)) \(Self.quoted(projectPath))")
+            }
+            await files.close()
+        }
+        files = nil
+        try await super.tearDown()
+    }
+
+    // MARK: - 夹具
+
+    private static func quoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func sessionPath(_ id: String) -> String { projectPath + "/" + id + ".jsonl" }
+
+    private func seed() async throws {
+        // 命令行起的大会话：约 3 MB，翻完要十几页。
+        var lines: [String] = []
+        let padding = String(repeating: "填充文字。", count: 800)
+        for turn in 0..<Self.turns {
+            let toolID = "toolu_\(turn)"
+            lines.append(ClaudeFixture.userText("问题 \(turn)", uuid: "u-\(turn)", cwd: workdir))
+            lines.append(ClaudeFixture.noise(turn))
+            lines.append(ClaudeFixture.assistant(
+                ClaudeFixture.textBlock("回答 \(turn)\n\n" + padding) + ","
+                    + ClaudeFixture.toolUse(id: toolID, name: "Bash", input: #"{"command":"echo \#(turn)"}"#),
+                uuid: "a-\(turn)", cwd: workdir))
+            lines.append(ClaudeFixture.user(
+                content: #"[{"tool_use_id":"\#(toolID)","type":"tool_result","content":"结果 \#(turn)","is_error":false}]"#,
+                uuid: "r-\(turn)", cwd: workdir))
+        }
+        lines.append(ClaudeFixture.aiTitle("大会话的标题"))
+        lines.append(ClaudeFixture.lastPrompt("问题 \(Self.turns - 1)"))
+        try await files.write(sessionPath(Session.cli), data: ClaudeFixture.file(lines))
+
+        try await files.write(sessionPath(Session.desktop), data: ClaudeFixture.file([
+            ClaudeFixture.userText("桌面版里问的", entrypoint: "claude-desktop", cwd: workdir),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("桌面版里答的"), entrypoint: "claude-desktop", cwd: workdir),
+            ClaudeFixture.customTitle("桌面版的会话"),
+        ]))
+        try await files.write(sessionPath(Session.mixed), data: ClaudeFixture.file([
+            ClaudeFixture.userText("桌面版里开的头", entrypoint: "claude-desktop", cwd: workdir),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("好的"), entrypoint: "claude-desktop", cwd: workdir),
+            ClaudeFixture.userText("回到命令行接着聊", uuid: "u-2", cwd: workdir),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("接着聊"), uuid: "a-2", cwd: workdir),
+        ]))
+        // 只打过斜杠命令、没有对话。
+        try await files.write(sessionPath(Session.empty), data: ClaudeFixture.file([
+            ClaudeFixture.noise(1),
+            ClaudeFixture.userText("<command-name>/exit</command-name>\n<command-message>exit</command-message>\n<command-args></command-args>",
+                                   cwd: workdir),
+            ClaudeFixture.userText("<local-command-stdout>Goodbye!</local-command-stdout>", uuid: "u-2", cwd: workdir),
+        ]))
+        // 在项目目录里起的，后来 `cd` 进了子目录：继续时仍然回项目目录（按子目录找不到这份记录）。
+        try await files.write(sessionPath(Session.moved), data: ClaudeFixture.file([
+            ClaudeFixture.userText("在项目目录里起的", cwd: workdir),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("好"), cwd: workdir),
+            ClaudeFixture.userText("后来进了子目录", uuid: "u-2", cwd: workdir + "/sub dir"),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("好"), uuid: "a-2", cwd: workdir + "/sub dir"),
+            ClaudeFixture.aiTitle("挪过目录的会话"),
+        ]))
+    }
+
+    private func file(_ id: String, among files: [AgentHistorySessionFile],
+                      file: StaticString = #filePath, line: UInt = #line) throws -> AgentHistorySessionFile {
+        try XCTUnwrap(files.first { $0.sessionID == id }, "列表里没有 \(id)", file: file, line: line)
+    }
+
+    private func waitUntil(_ what: String, timeout: Duration = .seconds(30), _ condition: () -> Bool,
+                           file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                XCTFail("等「\(what)」超时", file: file, line: line)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    // MARK: - 列表、来源、标题
+
+    func testListsOnlyCLISessionsOfTheTerminalsProject() async throws {
+        let source = ClaudeHistorySource(provider: files)
+        // 终端在子目录里：对上的是上一级那个项目。
+        let model = AgentHistoryModel(source: source, preferredDirectory: workdir + "/sub dir")
+        await model.start()
+
+        XCTAssertEqual(model.phase, .ready)
+        guard case .project(let project) = model.scope else { return XCTFail("没有落在当前项目上：\(model.scope)") }
+        XCTAssertEqual(project.path, projectPath)
+        XCTAssertEqual(project.directory, workdir)
+        XCTAssertEqual(Set(model.files.map(\.sessionID)),
+                       [Session.cli, Session.desktop, Session.mixed, Session.empty, Session.moved])
+
+        for row in model.files { model.rowAppeared(row) }
+        await waitUntil("五份记录的信息都读到") { model.metadata.count == 5 }
+
+        XCTAssertEqual(Set(model.visibleFiles.map(\.sessionID)), [Session.cli, Session.mixed, Session.moved])
+        XCTAssertEqual(model.hiddenCount, 2)
+
+        let big = try file(Session.cli, among: model.files)
+        XCTAssertGreaterThan(big.size, 2 * 1024 * 1024, "大会话要大到翻好几页")
+        XCTAssertEqual(model.metadata[big.path]?.title, "大会话的标题")
+        XCTAssertEqual(model.metadata[big.path]?.gitBranch, "main")
+        XCTAssertEqual(model.metadata[try file(Session.mixed, among: model.files).path]?.title, "回到命令行接着聊")
+        XCTAssertEqual(model.metadata[try file(Session.desktop, among: model.files).path]?.isListed, false)
+        XCTAssertEqual(model.metadata[try file(Session.empty, among: model.files).path]?.isListed, false)
+
+        let moved = try file(Session.moved, among: model.files)
+        XCTAssertEqual(model.metadata[moved.path]?.lastDirectory, workdir + "/sub dir")
+        XCTAssertEqual(model.metadata[moved.path]?.resumeDirectory, workdir)
+
+        // 「全部项目」里也有它们（主机上别的项目照样列着，不去数）。
+        await model.setScope(.all)
+        XCTAssertTrue(Set(model.files.map(\.sessionID)).isSuperset(of: [Session.cli, Session.mixed, Session.moved]))
+    }
+
+    /// 标题与来源只读末尾一小块：3 MB 的记录读信息不该比读一页对话慢多少。
+    func testMetadataOfALargeSessionReadsQuickly() async throws {
+        let source = ClaudeHistorySource(provider: files)
+        let projects = try await source.projects()
+        let project = try XCTUnwrap(projects.first { $0.path == projectPath })
+        let big = try file(Session.cli, among: try await source.sessions(in: project))
+
+        let started = ContinuousClock.now
+        let info = try await source.metadata(for: big)
+        let elapsed = ContinuousClock.now - started
+        XCTAssertTrue(info.isListed)
+        XCTAssertLessThan(elapsed, .seconds(2), "读一份记录的标题用了 \(elapsed)")
+        print("[claude-history-live] metadata of \(big.size) bytes: \(elapsed)")
+    }
+
+    // MARK: - 对话
+
+    func testPagesBackwardsThroughALargeTranscript() async throws {
+        let source = ClaudeHistorySource(provider: files)
+        let model = AgentHistoryModel(source: source, preferredDirectory: workdir)
+        await model.start()
+        let big = try file(Session.cli, among: model.files)
+
+        let started = ContinuousClock.now
+        model.select(big)
+        let transcript = try XCTUnwrap(model.transcript)
+        await waitUntil("第一页") { !transcript.items.isEmpty }
+        let firstPage = ContinuousClock.now - started
+        XCTAssertFalse(transcript.reachedStart, "3 MB 的记录不该一页读完")
+        // 第一页是最后那几轮。
+        XCTAssertEqual(transcript.items.last?.role, .assistant)
+        XCTAssertTrue(transcript.items.contains { $0.kind == .userText("问题 \(Self.turns - 1)") })
+
+        var pages = 1
+        while !transcript.reachedStart {
+            XCTAssertNil(transcript.errorMessage)
+            await transcript.loadEarlier()
+            pages += 1
+            guard pages < 400 else { return XCTFail("翻了 400 页还没到头") }
+        }
+        let total = ContinuousClock.now - started
+        print("[claude-history-live] first page \(firstPage), \(pages) pages in \(total)")
+
+        // 一条不少、顺序不乱。
+        let questions = transcript.items.compactMap { item -> String? in
+            if case .userText(let text) = item.kind { return text }
+            return nil
+        }
+        XCTAssertEqual(questions, (0..<Self.turns).map { "问题 \($0)" })
+        // 工具结果都挂回了自己的调用上，包括调用和结果落在两页里的。
+        var calls = 0
+        for item in transcript.items {
+            switch item.kind {
+            case .toolCall(let call):
+                XCTAssertEqual(call.result?.content.text, "结果 \(calls)", "第 \(calls) 次调用的结果")
+                calls += 1
+            case .toolResult:
+                XCTFail("有工具结果没挂到调用上：\(item.id)")
+            default:
+                break
+            }
+        }
+        XCTAssertEqual(calls, Self.turns)
+        XCTAssertEqual(Set(transcript.items.map(\.id)).count, transcript.items.count, "条目的 ID 有重复")
+        XCTAssertGreaterThan(pages, 3)
+        XCTAssertLessThan(firstPage, .seconds(3), "第一页用了 \(firstPage)")
+    }
+
+    // MARK: - 继续这个会话
+
+    /// 真的登录 shell 里执行那条命令：落在项目目录里（路径带空格、单引号、中文），参数是 `--resume <ID>`。
+    func testResumeCommandRunsClaudeInTheProjectDirectory() async throws {
+        let source = ClaudeHistorySource(provider: files)
+        let model = AgentHistoryModel(source: source, preferredDirectory: workdir + "/sub dir")
+        await model.start()
+        for row in model.files { model.rowAppeared(row) }
+        await waitUntil("记录的信息") { model.metadata.count == 5 }
+        let moved = try file(Session.moved, among: model.files)
+        let plan = try XCTUnwrap(model.resumeCommand(for: moved))
+        XCTAssertEqual(plan.directory, workdir)
+
+        // 假的 `claude`：把所在目录和参数一行一个记下来。
+        let record = scratch + "/bin/record.txt"
+        try await files.write(scratch + "/bin/claude", data: Data("""
+            #!/bin/sh
+            { pwd; printf '%s\\n' "$@"; } > \(Self.quoted(record))
+
+            """.utf8))
+        try await files.setPermissions(path: scratch + "/bin/claude", mode: 0o755)
+
+        let connection = SSHConnection(
+            profile: profile, auth: auth, jumpHostAuth: nil,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in true })
+        let session = TerminalSession()
+        await session.connect(using: connection)
+        XCTAssertEqual(session.connectionState, .connected)
+        session.sendHostBytes(Data("PATH=\(Self.quoted(scratch + "/bin")):$PATH\n".utf8))
+
+        let run = session.startTrackedRun(plan.command)
+        await waitUntil("命令跑完") {
+            if case .finished = session.trackedRun?.phase { return true }
+            return false
+        }
+        XCTAssertEqual(session.trackedRun?.id, run.id)
+        XCTAssertEqual(session.trackedRun?.phase, .finished(0),
+                       "屏幕：\n\(session.snapshotScreen(lines: 40, maxBytes: 8192).lines.joined(separator: "\n"))")
+
+        let recorded = String(decoding: try await files.download(remotePath: record), as: UTF8.self)
+        XCTAssertEqual(recorded.split(separator: "\n").map(String.init), [workdir, "--resume", Session.moved])
+
+        await connection.close()
+        session.dispose()
+    }
+
+    // MARK: - 主机密钥
+
+    /// 历史窗口不弹主机密钥的确认：指纹没确认过就连不上，确认过（终端连过）就直接通。
+    func testUnknownHostKeyIsRejectedWithoutPrompting() async throws {
+        let fresh = try ModelContainer(
+            for: ServerProfile.self, KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
+        // 不走共享连接：池里已经有 `setUp` 开的那条，拿到它就不会再核指纹。
+        do {
+            let client = try await SSHClientFactory.connect(
+                profile: profile, auth: auth, jumpHostAuth: nil,
+                hostKeyVerifier: HostKeyVerifier(modelContainer: fresh), hostKeyApprover: { _ in false })
+            await client.close()
+            XCTFail("没确认过的指纹不该连上")
+        } catch {
+            let message = FriendlyError.describe(error)
+            XCTAssertFalse(message.isEmpty)
+            print("[claude-history-live] unknown host key → \(message)")
+        }
+
+        // 同一个库里指纹已经确认过（`setUp` 那次）：不问也能连上。
+        let client = try await SSHClientFactory.connect(
+            profile: profile, auth: auth, jumpHostAuth: nil,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in false })
+        await client.close()
+    }
+}
