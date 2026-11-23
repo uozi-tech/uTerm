@@ -10151,34 +10151,6 @@
         }
       }
     },
-    "ed25519（推荐）" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ed25519 (Recommended)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ed25519（推奨）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ed25519(권장)"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ed25519（推薦）"
-          }
-        }
-      }
-    },
     "Ed25519（推荐）" : {
       "localizations" : {
         "en" : {
@@ -10203,6 +10175,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ed25519（建議）"
+          }
+        }
+      }
+    },
+    "ed25519（推荐）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ed25519 (Recommended)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ed25519（推奨）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ed25519(권장)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ed25519（推薦）"
           }
         }
       }
@@ -11391,7 +11391,40 @@
       }
     },
     "Mac 上的辅助程序没有响应" : {
-
+      "comment" : "只在远控进程（uTermRemoteHost）里用到，make sync-strings 编的两个 App 抽不到它，所以标成 manual",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The helper on the Mac isn’t responding"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上のヘルパーが応答しません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 도우미가 응답하지 않습니다"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的辅助程序没有响应"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的輔助程式沒有回應"
+          }
+        }
+      }
     },
     "Mac 上的辅助程序没有响应：%@" : {
       "localizations" : {
@@ -13524,7 +13557,6 @@
       }
     },
     "Tweaks" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13553,7 +13585,6 @@
       }
     },
     "Tweaks…" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -31804,7 +31835,6 @@
       }
     },
     "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
