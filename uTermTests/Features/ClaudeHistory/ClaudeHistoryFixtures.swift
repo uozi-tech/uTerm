@@ -6,9 +6,9 @@ enum ClaudeFixture {
     static let sessionID = "0b0e5f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
     static let cwd = "/home/user/projects/demo"
 
-    /// 任意字符串编成 JSON 字符串字面量（带引号）。
+    /// 任意字符串编成 JSON 字符串字面量（带引号）。同 Claude Code（JavaScript 的 `JSON.stringify`）：`/` 不转义。
     static func json(_ value: String) -> String {
-        let data = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+        let data = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes])
         return String(data: data, encoding: .utf8)!
     }
 

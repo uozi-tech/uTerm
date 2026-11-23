@@ -10,14 +10,19 @@ struct AgentTranscriptTailFollow: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onScrollPhaseChange { _, phase, context in
+            .onScrollPhaseChange { old, phase, context in
                 if phase == .tracking || phase == .interacting {
                     transcript.setFollowsTail(false)
                     tailScroll.cancel()
                 } else if phase == .idle {
-                    transcript.setFollowsTail(AgentScrollPolicy.isNearBottom(
+                    let nearBottom = AgentScrollPolicy.isNearBottom(
                         visibleMaxY: context.geometry.visibleRect.maxY,
-                        contentHeight: context.geometry.contentSize.height))
+                        contentHeight: context.geometry.contentSize.height)
+                    transcript.setFollowsTail(nearBottom)
+                    // 从搜索命中处打开的：用户自己滚到了底，再往后读一页（不自动一口气读到末尾）。
+                    if nearBottom, !transcript.reachedEnd, old != .idle {
+                        Task { await transcript.loadLater() }
+                    }
                 }
             }
             .onScrollGeometryChange(for: AgentScrollPolicy.TailGeometry.self) { geometry in

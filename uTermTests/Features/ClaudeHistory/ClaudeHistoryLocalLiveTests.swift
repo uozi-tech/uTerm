@@ -321,6 +321,61 @@ final class ClaudeHistoryLocalLiveTests: XCTestCase {
         }
     }
 
+    // MARK: - 搜索
+
+    /// 对真实的 `~/.claude/projects` 搜一个常见英文词：单个项目和全部项目各量一次。**只打印数字**：候选文件数、
+    /// 确认后的命中数、第一批结果多久出来、全部搜完多久（标准上限下，和不设上限一路搜到底）。
+    /// 搜索词默认 `test`，可用 `UTERM_CLAUDE_HISTORY_SEARCH` 换。
+    func testSearchesRealRecords() async throws {
+        let term = ProcessInfo.processInfo.environment["UTERM_CLAUDE_HISTORY_SEARCH"] ?? "test"
+        let query = try AgentHistorySearchQuery.validate(term).get()
+        let source = ClaudeHistorySource(provider: provider)
+        let projects = try await loadedProjects(source)
+        let all = await source.allSessions(in: projects)
+        let root = try await source.projectsRoot()
+
+        var scopes: [(name: String, files: [AgentHistorySessionFile])] = []
+        if let directory = ProcessInfo.processInfo.environment["UTERM_CLAUDE_HISTORY_DIR"],
+           let project = await source.project(containing: directory, among: projects) {
+            scopes.append(("project", try await source.sessions(in: project)))
+        } else if let biggest = Dictionary(grouping: all, by: \.project.id).values.max(by: { $0.count < $1.count }) {
+            scopes.append(("project", biggest))
+        }
+        scopes.append(("all", all))
+
+        for scope in scopes {
+            // 第一段单独跑一遍，数候选文件。
+            var started = ContinuousClock.now
+            var candidates = 0
+            let needle = ClaudeSearchCommand.jsonEscaped(query.text)
+            let batches = ClaudeSearchBatching.standard.batches(scope.files, name: { "./" + $0.path.dropFirst(root.count + 1) },
+                                                                size: \.size)
+            for batch in batches {
+                let output = try await provider.exec(ClaudeSearchCommand.filesContaining(
+                    needle, root: root, names: batch.map { "./" + $0.path.dropFirst(root.count + 1) }))
+                candidates += try ClaudeSearchCommand.payload(of: output).lines.count
+            }
+            let stageOne = ContinuousClock.now - started
+            let bytes = scope.files.reduce(UInt64(0)) { $0 + $1.size }
+
+            for (label, limits) in [("standard", AgentHistorySearchLimits.standard),
+                                    ("unlimited", AgentHistorySearchLimits(totalHits: 1_000_000, hitsPerSession: 5,
+                                                                           candidateLinesPerSession: 30, maxLineBytes: 1 << 20))] {
+                let recorder = LiveSearchRecorder()
+                started = ContinuousClock.now
+                try await source.search(query, in: scope.files, limits: limits) { event in recorder.record(event) }
+                let total = ContinuousClock.now - started
+                print("""
+                    [claude-history-search] scope=\(scope.name) limits=\(label) files=\(scope.files.count) bytes=\(bytes) \
+                    batches=\(batches.count) candidates=\(candidates) stage1=\(stageOne) sessionsWithHits=\(recorder.sessions) \
+                    hits=\(recorder.hits) firstResult=\(recorder.firstResult.map { "\($0 - started)" } ?? "none") total=\(total) \
+                    truncated=\(recorder.truncated)
+                    """)
+                XCTAssertTrue(recorder.finished)
+            }
+        }
+    }
+
     // MARK: - 继续这个会话
 
     /// 真的登录 shell（你的 zsh 配置都在）里执行那条命令：先进项目目录，再带 `--resume <ID>` 调 `claude`。
@@ -362,4 +417,32 @@ final class ClaudeHistoryLocalLiveTests: XCTestCase {
                        project.resolvingSymlinksInPath().path)
         await backend.close()
     }
+}
+
+/// 只记数字：几份有命中、几条、第一批什么时候到、到没到上限。
+private final class LiveSearchRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var state = (sessions: 0, hits: 0, first: ContinuousClock.Instant?.none, finished: false, truncated: false)
+
+    func record(_ event: AgentHistorySearchEvent) {
+        lock.withLock {
+            switch event {
+            case .session(let session):
+                state.sessions += 1
+                state.hits += session.hits.count
+                if state.first == nil { state.first = .now }
+            case .finished(let truncated):
+                state.finished = true
+                state.truncated = truncated
+            case .progress:
+                break
+            }
+        }
+    }
+
+    var sessions: Int { lock.withLock { state.sessions } }
+    var hits: Int { lock.withLock { state.hits } }
+    var firstResult: ContinuousClock.Instant? { lock.withLock { state.first } }
+    var finished: Bool { lock.withLock { state.finished } }
+    var truncated: Bool { lock.withLock { state.truncated } }
 }

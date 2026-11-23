@@ -64,11 +64,23 @@ final class AgentHistoryModel {
     /// 平台说对话现在看不看得见（`setTranscriptVisible`）。
     @ObservationIgnored private var transcriptVisible = false
 
+    /// 搜索的上限（测试换成小的）。
+    @ObservationIgnored let searchLimits: AgentHistorySearchLimits
+    /// 这台主机能不能跑命令（标成只许 SFTP 的主机不能）：不能就不搜，直接说明。
+    let allowsSearch: Bool
+
+    isolated deinit {
+        searchTask?.cancel()
+    }
+
     init(source: any AgentHistorySource, preferredDirectory: String?,
-         followTiming: AgentTranscriptFollowTiming = .standard) {
+         followTiming: AgentTranscriptFollowTiming = .standard,
+         searchLimits: AgentHistorySearchLimits = .standard, allowsSearch: Bool = true) {
         self.source = source
         self.preferredDirectory = preferredDirectory
         self.followTiming = followTiming
+        self.searchLimits = searchLimits
+        self.allowsSearch = allowsSearch
     }
 
     /// 列表里显示的：已经读过的那一段里要列出来的。
@@ -95,6 +107,7 @@ final class AgentHistoryModel {
             guard !found.isEmpty else {
                 phase = .empty
                 files = []
+                if let query = search?.query { startSearch(query) }
                 return
             }
             if let preferredDirectory {
@@ -115,7 +128,13 @@ final class AgentHistoryModel {
             await setScope(nextScope)
         } catch {
             phase = .failed(error.localizedDescription)
+            failWaitingSearch()
         }
+    }
+
+    /// 等着列表列完的搜索：列不出来就跟着失败。
+    private func failWaitingSearch() {
+        if search?.phase == .waiting { search?.phase = .failed(AgentHistoryText.searchListFailed) }
     }
 
     /// 切到某个项目或全部项目。
@@ -134,6 +153,7 @@ final class AgentHistoryModel {
             } catch {
                 guard generation == listGeneration else { return }
                 phase = .failed(error.localizedDescription)
+                failWaitingSearch()
                 return
             }
         case .all:
@@ -154,6 +174,9 @@ final class AgentHistoryModel {
         if let selectedFile, !listed.contains(where: { $0.path == selectedFile.path }) {
             select(nil)
         }
+        // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
+        isListing = false
+        if let query = search?.query { startSearch(query) }
     }
 
     /// 后面还有没读的记录（列表底下画「正在读取」）。
@@ -227,6 +250,11 @@ final class AgentHistoryModel {
 
     func select(_ file: AgentHistorySessionFile?) {
         guard file?.path != selectedFile?.path else { return }
+        open(file, at: nil)
+    }
+
+    /// 打开一份对话：`hit` 为 nil 从末尾打开，否则从命中那一行打开并高亮它。
+    private func open(_ file: AgentHistorySessionFile?, at hit: AgentHistorySearchHit?) {
         selectedFile = file
         stopFollowingAll()
         subagentStack = []
@@ -234,11 +262,164 @@ final class AgentHistoryModel {
             transcript = nil
             return
         }
-        let model = AgentTranscriptModel(file: file, pager: source.transcript(for: file), source: source,
-                                         target: .session(file), followTiming: followTiming)
+        let pager = hit.map { source.transcript(for: file, around: $0.anchor) } ?? source.transcript(for: file)
+        let model = AgentTranscriptModel(file: file, pager: pager, source: source, target: .session(file),
+                                         followTiming: followTiming, opensAt: hit?.itemID)
         transcript = model
         updateFollowing()
         Task { await model.loadEarlier() }
+    }
+
+    /// 点了一条命中：打开那份对话并停在那一条上。已经开着、那一条也已经读进来了就只是滚过去。
+    func openHit(_ hit: AgentHistorySearchHit, in session: AgentHistorySearchSession) {
+        if metadata[session.file.path] == nil {
+            metadata[session.file.path] = session.metadata
+            metadataKeys[session.file.path] = session.file.cacheKey
+        }
+        if selectedFile?.path == session.file.path, let transcript, transcript.items.contains(where: { $0.id == hit.itemID }) {
+            if !subagentStack.isEmpty {
+                for level in subagentStack { level.setFollowing(false) }
+                subagentStack = []
+                updateFollowing()
+            }
+            transcript.focus(on: hit.itemID)
+            return
+        }
+        open(session.file, at: hit)
+    }
+
+    /// 从命中处打开的对话换回普通的从末尾打开（「跳到最新」）。
+    func jumpToLatest() {
+        guard let file = selectedFile else { return }
+        open(file, at: nil)
+    }
+
+    // MARK: - 搜索
+
+    /// 一次搜索的状态。有它时列表区显示搜索结果。
+    struct Search: Equatable {
+        enum Phase: Equatable {
+            /// 范围里的会话还在列，列完马上搜。
+            case waiting
+            case searching
+            case finished
+            /// 用户点了取消。
+            case stopped
+            case failed(String)
+        }
+
+        let query: AgentHistorySearchQuery
+        var phase: Phase
+        var sessions: [AgentHistorySearchSession] = []
+        var searched = 0
+        var total = 0
+        /// 命中到了上限，后面没再找。
+        var truncated = false
+
+        var hitCount: Int { sessions.reduce(0) { $0 + $1.hits.count } }
+        var isRunning: Bool { phase == .waiting || phase == .searching }
+    }
+
+    /// 搜索框里的字（界面绑定）。改了（和搜着的不一样了）或者清空，就丢掉在途的搜索与结果，回到列表。
+    /// 只在内存里：不存「最近搜索」。
+    var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            searchProblem = nil
+            if let search, searchText.trimmingCharacters(in: .whitespacesAndNewlines) != search.query.text {
+                cancelSearch()
+                self.search = nil
+            }
+        }
+    }
+    private(set) var search: Search?
+    /// 按回车时搜索词不合规矩（太短、太长、有控制字符）。
+    private(set) var searchProblem: AgentHistorySearchQuery.Problem?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var searchGeneration = 0
+
+    /// 按回车：搜。每次搜索都是主机上的命令，所以不随着打字搜。
+    func submitSearch() {
+        switch AgentHistorySearchQuery.validate(searchText) {
+        case .failure(let problem):
+            cancelSearch()
+            search = nil
+            searchProblem = problem
+        case .success(let query):
+            searchProblem = nil
+            startSearch(query)
+        }
+    }
+
+    /// 停下在途的搜索，已经出来的结果留着。
+    func stopSearch() {
+        guard let current = search, current.isRunning else { return }
+        cancelSearch()
+        search?.phase = .stopped
+    }
+
+    /// 清空搜索框：回到原来的列表（选中的会话、滚动位置都还在）。
+    func clearSearch() {
+        searchText = ""
+        cancelSearch()
+        search = nil
+        searchProblem = nil
+    }
+
+    private func cancelSearch() {
+        searchGeneration += 1
+        searchTask?.cancel()
+        searchTask = nil
+    }
+
+    private func startSearch(_ query: AgentHistorySearchQuery) {
+        cancelSearch()
+        guard allowsSearch else {
+            search = Search(query: query, phase: .failed(AgentHistoryText.searchCannotExecute))
+            return
+        }
+        // 范围里的会话还没列完：等 `setScope` 列完再来。
+        guard !isListing, phase != .loading else {
+            search = Search(query: query, phase: .waiting)
+            return
+        }
+        search = Search(query: query, phase: .searching, total: files.count)
+        let generation = searchGeneration
+        let files = self.files
+        let source = self.source
+        let limits = searchLimits
+        searchTask = Task { [weak self] in
+            do {
+                try await source.search(query, in: files, limits: limits) { [weak self] event in
+                    await self?.apply(event, generation: generation)
+                }
+            } catch {
+                self?.searchFailed(error, generation: generation)
+            }
+        }
+    }
+
+    private func apply(_ event: AgentHistorySearchEvent, generation: Int) {
+        guard generation == searchGeneration, var current = search else { return }
+        switch event {
+        case .progress(let searched, let total):
+            current.searched = searched
+            current.total = total
+        case .session(let session):
+            current.sessions.append(session)
+        case .finished(let truncated):
+            current.truncated = truncated
+            current.phase = .finished
+            searchTask = nil
+        }
+        search = current
+    }
+
+    private func searchFailed(_ error: any Error, generation: Int) {
+        guard generation == searchGeneration, search != nil else { return }
+        searchTask = nil
+        if error is CancellationError { return }
+        search?.phase = .failed(AgentHistoryText.searchFailure(error))
     }
 
     // MARK: - 实时跟随
@@ -333,6 +514,19 @@ final class AgentTranscriptModel {
     private(set) var isUpdating = false
     /// 末尾来了新条目，而用户正往上翻着、没跟到底：底部的「有新消息」。
     private(set) var hasNewBelow = false
+    /// 后面已经读到文件末尾了。从末尾打开的一开始就是；从搜索命中处打开的，往后一页页读（`loadLater`）到末尾才是，
+    /// 这之后才接上实时跟随。
+    private(set) var reachedEnd: Bool
+    /// 是不是从搜索命中处打开的（「跳到最新」只对它有意义）。
+    let opensAtHit: Bool
+    private(set) var isLoadingLater = false
+    private(set) var laterErrorMessage: String?
+    /// 每次往后加了一页就 +1。
+    private(set) var laterGeneration = 0
+    /// 高亮的那一条（搜索命中的）。
+    private(set) var highlightedItemID: String?
+    /// 要界面滚到高亮那一条时 +1。
+    private(set) var focusGeneration = 0
 
     /// 同时读几份子代理的信息文件。
     nonisolated static let infoConcurrency = 4
@@ -363,15 +557,21 @@ final class AgentTranscriptModel {
     /// 界面报的：用户是不是停在底部（跟着新内容走）。
     @ObservationIgnored private(set) var followsTail = true
 
+    /// `opensAt`：从这一条（搜索命中）所在的行打开，`pager` 也要是从那一行读的（`transcript(for:around:)`）。
     init(file: AgentHistorySessionFile, pager: any AgentTranscriptPaging, source: (any AgentHistorySource)? = nil,
          target: AgentTranscriptTarget? = nil, subagent: AgentSubagentLink? = nil,
-         followTiming: AgentTranscriptFollowTiming = .standard) {
+         followTiming: AgentTranscriptFollowTiming = .standard, opensAt itemID: String? = nil) {
         self.file = file
         self.pager = pager
         self.source = source
         self.target = target ?? .session(file)
         self.subagent = subagent
         self.followTiming = followTiming
+        opensAtHit = itemID != nil
+        reachedEnd = itemID == nil
+        highlightedItemID = itemID
+        // 停在命中那里，不跟着末尾走。
+        followsTail = itemID == nil
     }
 
     isolated deinit {
@@ -398,14 +598,59 @@ final class AgentTranscriptModel {
                 return
             }
             seenIDs.formUnion(page.items.map(\.id))
+            let isFirstPage = items.isEmpty
             items = AgentTranscriptAssembler.attachResults(page.items + items)
             reachedStart = page.reachedStart
             prependGeneration += 1
+            // 从命中处打开的第一页回来了：滚到那一条。
+            if isFirstPage, let highlightedItemID, items.contains(where: { $0.id == highlightedItemID }) {
+                focusGeneration += 1
+            }
             resolveSubagents()
         } catch {
             if epoch == contentEpoch { errorMessage = error.localizedDescription }
         }
         isLoading = false
+    }
+
+    /// 从命中处打开的：再往后读一页（滚到底或点「加载更晚的消息」）。读到文件末尾之后实时跟随接上。
+    func loadLater() async {
+        guard !reachedEnd, !isLoadingLater, !isLoading else { return }
+        isLoadingLater = true
+        laterErrorMessage = nil
+        defer { isLoadingLater = false }
+        let epoch = contentEpoch
+        do {
+            let growth = try await pager.loadNext()
+            guard epoch == contentEpoch else { return }
+            switch growth {
+            case .unchanged:
+                reachedEnd = true
+            case .appended(let new, let hasMore):
+                let fresh = new.filter { !seenIDs.contains($0.id) }
+                seenIDs.formUnion(fresh.map(\.id))
+                if !fresh.isEmpty { items = AgentTranscriptAssembler.attachResults(items + fresh) }
+                reachedEnd = !hasMore
+                laterGeneration += 1
+                if fresh.contains(where: { if case .toolCall(let call) = $0.kind { return call.spawn != nil } else { return false } }) {
+                    subagentIndexStale = true
+                }
+                resolveSubagents()
+            case .replaced:
+                reachedEnd = true
+                highlightedItemID = nil
+                isLoadingLater = false
+                await reloadFromEnd()
+            }
+        } catch {
+            if epoch == contentEpoch { laterErrorMessage = error.localizedDescription }
+        }
+    }
+
+    /// 高亮这一条并让界面滚过去（它已经读进来了）。
+    func focus(on itemID: String) {
+        highlightedItemID = itemID
+        focusGeneration += 1
     }
 
     // MARK: - 实时跟随
@@ -432,7 +677,8 @@ final class AgentTranscriptModel {
     /// 看一次文件末尾，返回隔多久再看。末尾还没读过（第一页没回来）时什么都不做。测试与画廊直接调。
     @discardableResult
     func followOnce() async -> Duration {
-        guard !isFollowReading else { return followTiming.interval }
+        // 从命中处打开、后面还没读到末尾：不跟（后面的由用户一页页往后读，不自动一口气读到末尾）。
+        guard !isFollowReading, reachedEnd else { return followTiming.interval }
         isFollowReading = true
         defer { isFollowReading = false }
         let epoch = contentEpoch
@@ -494,6 +740,9 @@ final class AgentTranscriptModel {
         contentEpoch += 1
         items = []
         reachedStart = false
+        // 文件换掉了：命中处的位置不再作数，从末尾重读。
+        reachedEnd = true
+        highlightedItemID = nil
         errorMessage = nil
         seenIDs = []
         subagentLinks = [:]

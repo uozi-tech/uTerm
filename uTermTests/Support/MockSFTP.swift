@@ -141,6 +141,7 @@ actor MockSFTP: SFTPProviding {
     private(set) var rangeWrites: [(path: String, offset: UInt64, bytes: Int, mode: SFTPWriteMode)] = []
     /// 每次 `readRange` 的记录。
     private(set) var rangeReads: [(path: String, offset: UInt64, length: Int)] = []
+    func clearRangeReads() { rangeReads.removeAll() }
 
     /// 让 `writeRange` 在**写阶段**失败（磁盘满 / 配额 / 断线）：文件已经被建出来
     /// （`stat` 查得到），只是内容没落盘。用来验证 handler 不会把这种失败误报成
@@ -256,6 +257,9 @@ actor MockSFTP: SFTPProviding {
 
     /// 遥测 exec 的可控返回值（默认空串 = 无遥测）。
     var execOutput: String = ""
+    /// 有它时 `exec` 交给它答（假主机：照命令的意思现算输出，见 `ClaudeSearchHostEmulator`）。
+    private var execHandler: (@Sendable (String) async throws -> String)?
+    func setExecHandler(_ handler: (@Sendable (String) async throws -> String)?) { execHandler = handler }
     func exec(_ command: String) async throws -> String {
         execCommands.append(command)
         execStarted = true
@@ -263,8 +267,12 @@ actor MockSFTP: SFTPProviding {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(2))
         }
+        if let execHandler { return try await execHandler(command) }
         return execOutput
     }
+
+    /// 内存里某个文件的内容（假主机照它答搜索命令）。
+    func fileData(_ path: String) -> Data? { blobStore[path]?.0 }
     func setExecOutput(_ s: String) { execOutput = s }
     func setBlockExec(_ value: Bool) {
         blockExec = value

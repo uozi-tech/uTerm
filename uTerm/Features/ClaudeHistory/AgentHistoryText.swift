@@ -92,6 +92,82 @@ enum AgentHistoryText {
     /// 往上翻着时末尾来了新内容，底部的提示。
     static var newMessages: String { String(localized: "有新消息") }
 
+    // MARK: 搜索
+
+    static var searchPlaceholder: String {
+        String(localized: "搜索对话内容", comment: "Claude 历史会话：会话列表顶上的搜索框")
+    }
+
+    static var searchHelp: String {
+        String(localized: "按回车在主机上搜索：你说的话、Claude 的回答和工具调用。英文不分大小写。")
+    }
+
+    static var stopSearch: String { String(localized: "停止", comment: "Claude 历史会话：停止正在进行的搜索") }
+
+    static func searchProgress(_ search: AgentHistoryModel.Search) -> String {
+        String(localized: "正在搜索…（已搜 \(search.searched) / 共 \(search.total) 个会话）")
+    }
+
+    static func searchStopped(_ search: AgentHistoryModel.Search) -> String {
+        String(localized: "已停止搜索（已搜 \(search.searched) / 共 \(search.total) 个会话）")
+    }
+
+    static func searchNoResults(_ query: AgentHistorySearchQuery) -> String {
+        String(localized: "没有找到「\(query.text)」")
+    }
+
+    static var searchNoResultsDetail: String {
+        String(localized: "只搜命令行会话里你说的话、Claude 的回答和工具调用的摘要，不搜思考和工具结果。")
+    }
+
+    /// 结果末尾：命中到了上限。
+    static func searchTruncated(_ count: Int) -> String {
+        String(localized: "只显示前 \(count) 条")
+    }
+
+    /// 一个会话的命中下面：这个会话里还有更多。
+    static func sessionMoreHits(_ count: Int) -> String {
+        String(localized: "这个会话里还有更多，只显示前 \(count) 条")
+    }
+
+    static var searchCannotExecute: String { String(localized: "这台主机不能执行命令，无法搜索") }
+
+    static var searchListFailed: String { String(localized: "会话列表读不出来，无法搜索") }
+
+    static func searchFailure(_ error: any Error) -> String {
+        switch error as? AgentHistorySearchError {
+        case .cannotExecute: return searchCannotExecute
+        case .missingTools: return String(localized: "这台主机上缺少搜索要用的命令（sh、grep 或 awk），无法搜索")
+        case .incompleteOutput: return String(localized: "搜索命令的输出不完整，请重试")
+        case nil: return String(localized: "搜索失败：\(FriendlyError.describe(error))")
+        }
+    }
+
+    static func searchProblem(_ problem: AgentHistorySearchQuery.Problem) -> String {
+        switch problem {
+        case .tooShort: return String(localized: "至少输入 \(AgentHistorySearchQuery.minCharacters) 个字")
+        case .tooLong: return String(localized: "搜索词最多 \(AgentHistorySearchQuery.maxCharacters) 个字")
+        case .controlCharacters: return String(localized: "搜索词里不能有换行或控制字符")
+        }
+    }
+
+    /// 结果里一个会话那一组的第二行：多久以前 ·（全部项目时）项目。
+    static func searchSessionDetail(_ session: AgentHistorySearchSession, showsProject: Bool) -> String {
+        var parts = [relative(session.metadata.lastActivity ?? session.file.modifiedAt)]
+        if showsProject {
+            parts.append(session.metadata.lastDirectory.map { ($0 as NSString).lastPathComponent }
+                         ?? projectName(session.file.project))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 从搜索命中处打开的对话：顶上那一条。
+    static var openedAtHit: String { String(localized: "从搜索结果打开，后面还有更晚的消息") }
+
+    static var jumpToLatest: String { String(localized: "跳到最新") }
+
+    static var loadLater: String { String(localized: "加载更晚的消息") }
+
     /// 范围里一行都没列出来时的说明。
     static func emptyListDetail(hidden: Int) -> String {
         hidden > 0

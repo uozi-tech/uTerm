@@ -465,4 +465,77 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         struct Other: LocalizedError { var errorDescription: String? { "别的错" } }
         XCTAssertEqual(known.failureMessage(for: Other()), FriendlyError.describe(Other()))
     }
+    // MARK: - 搜索
+
+    /// 在主机上搜（真的 sshd、真的登录 shell 与 grep / awk），点命中定位、往后翻页。
+    func testSearchesOnTheHostAndOpensAtTheHit() async throws {
+        // 这台主机上的 grep / awk 是哪一家（只记名字，不打印别的）。
+        let tools = try await files.exec("readlink -f \"$(command -v grep)\" \"$(command -v awk)\" 2>&1; grep --version 2>&1 | head -n 1; exit 0")
+        let kind = tools.contains("busybox") ? "busybox" : (tools.contains("GNU") ? "GNU" : "other")
+        print("[claude-history-live] host tools: \(kind)")
+
+        let searchWorkdir = scratch + "/search"
+        let searchProject = ClaudeProjectPath.projectsRoot(home: home) + "/" + ClaudeProjectPath.encode(searchWorkdir)
+        _ = try await files.exec("mkdir -p \(Self.quoted(searchWorkdir)) \(Self.quoted(searchProject))")
+        let files = self.files!
+        addTeardownBlock { _ = try? await files.exec("rm -rf \(Self.quoted(searchProject))") }
+        var lines: [String] = []
+        for (index, term) in ClaudeSearchFixture.nastyTerms.enumerated() {
+            lines.append(ClaudeFixture.userText("第 \(index) 句：\(term) 结束", uuid: "n-\(index)", cwd: searchWorkdir))
+        }
+        lines.append(ClaudeFixture.toolResult(id: "t1", text: "只在工具结果里的 hiddenword"))
+        for turn in 0..<300 {
+            lines.append(ClaudeFixture.userText("轮次 \(turn) 的问题", uuid: "u-\(turn)", cwd: searchWorkdir))
+            lines.append(ClaudeFixture.assistant(ClaudeFixture.textBlock("轮次 \(turn) 的回答" + String(repeating: "。", count: 2000)),
+                                                 uuid: "a-\(turn)", cwd: searchWorkdir))
+        }
+        lines.append(ClaudeFixture.aiTitle("搜索用的会话"))
+        let sessionID = "11111111-aaaa-4bbb-8ccc-000000000009"
+        try await files.write(searchProject + "/" + sessionID + ".jsonl", data: ClaudeFixture.file(lines))
+
+        let model = AgentHistoryModel(source: ClaudeHistorySource(provider: files), preferredDirectory: searchWorkdir)
+        await model.start()
+        guard case .project(let project) = model.scope else { return XCTFail("没有落在搜索用的项目上") }
+        XCTAssertEqual(project.path, searchProject)
+
+        func search(_ text: String) async -> AgentHistoryModel.Search? {
+            model.searchText = text
+            model.submitSearch()
+            await waitUntil("搜「\(text)」") { model.search?.isRunning == false }
+            return model.search
+        }
+        let started = ContinuousClock.now
+        for term in ClaudeSearchFixture.nastyTerms {
+            let result = await search(term)
+            XCTAssertEqual(result?.phase, .finished, term)
+            XCTAssertEqual(result?.sessions.map(\.file.sessionID), [sessionID], term)
+            XCTAssertEqual(result?.sessions.first?.hits.map(\.snippet.match), [term], term)
+        }
+        print("[claude-history-live] \(ClaudeSearchFixture.nastyTerms.count) searches in \(ContinuousClock.now - started)")
+        let hidden = await search("hiddenword")
+        XCTAssertEqual(hidden?.sessions.count, 0, "只在工具结果里的不算")
+
+        // 点命中：停在那一条上，后面一页页往后读，读到末尾后跟上。
+        let found = await search("轮次 150 的问题")
+        let result = try XCTUnwrap(found)
+        let session = try XCTUnwrap(result.sessions.first)
+        let hit = try XCTUnwrap(session.hits.first)
+        model.openHit(hit, in: session)
+        let transcript = try XCTUnwrap(model.transcript)
+        await waitUntil("命中处的第一页") { !transcript.items.isEmpty }
+        XCTAssertEqual(transcript.items.last?.id, hit.itemID)
+        XCTAssertEqual(transcript.highlightedItemID, hit.itemID)
+        XCTAssertFalse(transcript.reachedEnd)
+        XCTAssertFalse(transcript.reachedStart)
+        await transcript.loadLater()
+        XCTAssertTrue(transcript.items.contains { $0.kind == .userText("轮次 151 的问题") })
+        var pages = 1
+        while !transcript.reachedEnd {
+            await transcript.loadLater()
+            pages += 1
+            guard pages < 100 else { return XCTFail("往后翻了 100 页还没到末尾") }
+        }
+        XCTAssertTrue(transcript.items.contains { $0.kind == .userText("轮次 299 的问题") })
+        print("[claude-history-live] paged forward \(pages) pages to the end")
+    }
 }

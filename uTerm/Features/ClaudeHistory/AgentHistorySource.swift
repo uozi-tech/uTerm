@@ -97,6 +97,13 @@ protocol AgentHistorySource: Actor {
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata
     /// 一页一页往前读对话。
     nonisolated func transcript(for file: AgentHistorySessionFile) -> any AgentTranscriptPaging
+    /// 从某一行打开（搜索命中处）：先读那一行和它前面一页，后面的按需往后一页一页读（`loadNext`），读到文件末尾之后
+    /// 才接上实时跟随。条目 ID 与 `transcript(for:)` 读出来的一致。
+    nonisolated func transcript(for file: AgentHistorySessionFile, around anchor: AgentTranscriptAnchor) -> any AgentTranscriptPaging
+    /// 在这些会话里搜（只搜主对话；只出列表里会列出来的），最近的会话先报，一批一批交给 `onEvent`。在主机上跑命令找，
+    /// 不把记录下载回来。任务被取消后不再发新的命令。跑不了命令的主机抛 `AgentHistorySearchError.cannotExecute`。
+    func search(_ query: AgentHistorySearchQuery, in files: [AgentHistorySessionFile], limits: AgentHistorySearchLimits,
+                onEvent: @escaping @Sendable (AgentHistorySearchEvent) async -> Void) async throws
     /// 子代理的记录，和主对话同一套读法与显示。
     nonisolated func subagentTranscript(for subagent: AgentSubagentFile) -> any AgentTranscriptPaging
     /// 这份记录（主对话或子代理的）派出的子代理留下了哪些记录。**懒**：打开对话、读到派子代理的调用时才调，
@@ -112,8 +119,16 @@ protocol AgentHistorySource: Actor {
 protocol AgentTranscriptPaging: Actor {
     /// 再往前读一页，返回按时间先后排的条目。`reachedStart` 为 true 时前面没有了。
     func loadPrevious() async throws -> (items: [AgentTranscriptItem], reachedStart: Bool)
-    /// 看一次文件末尾，读新写进来的部分。第一次 `loadPrevious` 读过末尾之前什么都不做（`.unchanged`）。
+    /// 看一次文件末尾，读新写进来的部分。第一次 `loadPrevious` 读过末尾之前什么都不做（`.unchanged`）；
+    /// 从某一行打开的，往后一页页读到文件末尾之前也什么都不做。
     func loadNewer() async throws -> AgentTranscriptGrowth
+    /// 从某一行打开的：再往后读一页。`.appended(_, hasMore: false)` = 读到了文件末尾（之后交给 `loadNewer`）；
+    /// 从末尾打开的一律 `.unchanged`。
+    func loadNext() async throws -> AgentTranscriptGrowth
+}
+
+extension AgentTranscriptPaging {
+    func loadNext() async throws -> AgentTranscriptGrowth { .unchanged }
 }
 
 /// 看一次文件末尾的结果。

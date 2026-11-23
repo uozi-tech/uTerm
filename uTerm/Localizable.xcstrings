@@ -18591,6 +18591,34 @@
         }
       }
     },
+    "从搜索结果打开，后面还有更晚的消息" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opened from search results. There are later messages below."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索結果から開きました。この後にも新しいメッセージがあります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색 결과에서 열었습니다. 뒤에 이후 메시지가 더 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從搜尋結果開啟，後面還有較晚的訊息"
+          }
+        }
+      }
+    },
     "从文件导入" : {
       "localizations" : {
         "en" : {
@@ -19065,6 +19093,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作階段「%@」裡沒有用 `terminal open -H <主機> -- <指令>` 執行過指令，沒有可等的結果。看螢幕請用 terminal read。"
+          }
+        }
+      }
+    },
+    "会话列表读不出来，无法搜索" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the session list, so search isn't available"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション一覧を読み込めないため、検索できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 목록을 읽을 수 없어 검색할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀不到工作階段列表，無法搜尋"
           }
         }
       }
@@ -25313,6 +25369,34 @@
         }
       }
     },
+    "加载更晚的消息" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load Later Messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいメッセージを読み込む"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이후 메시지 불러오기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "載入較晚的訊息"
+          }
+        }
+      }
+    },
     "动作" : {
       "comment" : "侧栏分区标题",
       "localizations" : {
@@ -26850,6 +26934,34 @@
         }
       }
     },
+    "只搜命令行会话里你说的话、Claude 的回答和工具调用的摘要，不搜思考和工具结果。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search covers what you said, Claude's replies, and tool call summaries in command-line sessions. Thinking and tool results aren't searched."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドラインのセッションで、あなたの発言、Claude の回答、ツール呼び出しの概要だけを検索します。思考とツールの結果は検索しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령줄 세션에서 내가 한 말, Claude의 답변, 도구 호출 요약만 검색합니다. 생각과 도구 결과는 검색하지 않습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只搜尋命令列工作階段裡你說的話、Claude 的回答和工具呼叫的摘要，不搜尋思考和工具結果。"
+          }
+        }
+      }
+    },
     "只改这台 Mac 上显示的名称；留空则恢复为设备上报的名称。" : {
       "localizations" : {
         "en" : {
@@ -26874,6 +26986,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "只改這台 Mac 上顯示的名稱；留空則恢復為裝置回報的名稱。"
+          }
+        }
+      }
+    },
+    "只显示前 %lld 条" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Showing only the first %lld result"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Showing only the first %lld results"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最初の %lld 件のみ表示しています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "처음 %lld개만 표시합니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只顯示前 %lld 筆"
           }
         }
       }
@@ -36367,6 +36519,34 @@
         }
       }
     },
+    "已停止搜索（已搜 %lld / 共 %lld 个会话）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search stopped (%lld of %lld sessions searched)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索を停止しました（%lld / %lld セッションを検索済み）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색을 중지했습니다(세션 %lld / %lld개 검색함)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止搜尋（已搜尋 %lld / 共 %lld 個工作階段）"
+          }
+        }
+      }
+    },
     "已允许" : {
       "comment" : "权限状态",
       "localizations" : {
@@ -44231,6 +44411,34 @@
         }
       }
     },
+    "按回车在主机上搜索：你说的话、Claude 的回答和工具调用。英文不分大小写。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press Return to search on the host: what you said, Claude's replies, and tool calls. English is case-insensitive."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Return キーでホスト上を検索します：あなたの発言、Claude の回答、ツール呼び出し。英字の大文字と小文字は区別しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Return 키를 누르면 호스트에서 검색합니다: 내가 한 말, Claude의 답변, 도구 호출. 영문은 대소문자를 구분하지 않습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Return 在主機上搜尋：你說的話、Claude 的回答和工具呼叫。英文不分大小寫。"
+          }
+        }
+      }
+    },
     "按地址或指纹搜索" : {
       "localizations" : {
         "en" : {
@@ -45327,6 +45535,91 @@
         }
       }
     },
+    "搜索命令的输出不完整，请重试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The search command's output was incomplete. Try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索コマンドの出力が不完全です。もう一度お試しください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색 명령의 출력이 불완전합니다. 다시 시도하세요"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋指令的輸出不完整，請重試"
+          }
+        }
+      }
+    },
+    "搜索失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search failed: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索に失敗しました：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색 실패: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋失敗：%@"
+          }
+        }
+      }
+    },
+    "搜索对话内容" : {
+      "comment" : "Claude 历史会话：会话列表顶上的搜索框",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search Conversations"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会話を検索"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대화 내용 검색"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋對話內容"
+          }
+        }
+      }
+    },
     "搜索模型" : {
       "localizations" : {
         "en" : {
@@ -45351,6 +45644,74 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜尋模型"
+          }
+        }
+      }
+    },
+    "搜索词最多 %lld 个字" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Search terms can be at most %lld character"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Search terms can be at most %lld characters"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索語は %lld 文字以内にしてください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색어는 최대 %lld자입니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋字詞最多 %lld 個字"
+          }
+        }
+      }
+    },
+    "搜索词里不能有换行或控制字符" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search terms can't contain line breaks or control characters"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索語に改行や制御文字は使えません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색어에 줄바꿈이나 제어 문자를 넣을 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋字詞裡不能有換行或控制字元"
           }
         }
       }
@@ -48486,6 +48847,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法接入這個終端機"
+          }
+        }
+      }
+    },
+    "无法搜索" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't Search"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法搜尋"
           }
         }
       }
@@ -55506,6 +55895,34 @@
         }
       }
     },
+    "正在搜索…（已搜 %lld / 共 %lld 个会话）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Searching… (%lld of %lld sessions)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索中…（%lld / %lld セッション）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색 중…(세션 %lld / %lld개)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋…（已搜尋 %lld / 共 %lld 個工作階段）"
+          }
+        }
+      }
+    },
     "正在更新" : {
       "comment" : "Claude 历史会话：打开着的对话最近还在写入新内容",
       "localizations" : {
@@ -57937,6 +58354,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有打開的終端機分頁"
+          }
+        }
+      }
+    },
+    "没有找到「%@」" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No results for “%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」は見つかりませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’을(를) 찾지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有找到「%@」"
           }
         }
       }
@@ -66799,6 +67244,46 @@
         }
       }
     },
+    "至少输入 %lld 个字" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Enter at least %lld character"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Enter at least %lld characters"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 文字以上入力してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld자 이상 입력하세요"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "至少輸入 %lld 個字"
+          }
+        }
+      }
+    },
     "获取失败：%@" : {
       "localizations" : {
         "en" : {
@@ -70376,6 +70861,34 @@
         }
       }
     },
+    "跳到最新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jump to Latest"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新へ移動"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최신으로 이동"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳到最新"
+          }
+        }
+      }
+    },
     "跳板机" : {
       "localizations" : {
         "en" : {
@@ -72504,6 +73017,46 @@
         }
       }
     },
+    "这个会话里还有更多，只显示前 %lld 条" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "More in this session; showing only the first %lld"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "More in this session; showing only the first %lld"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションにはさらにあります。最初の %lld 件のみ表示しています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션에 더 있습니다. 처음 %lld개만 표시합니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個工作階段裡還有更多，只顯示前 %lld 筆"
+          }
+        }
+      }
+    },
     "这个分组还没有主机" : {
       "localizations" : {
         "en" : {
@@ -73689,6 +74242,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這台主機上的 Agent 只能顯示 256 色"
+          }
+        }
+      }
+    },
+    "这台主机上缺少搜索要用的命令（sh、grep 或 awk），无法搜索" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host is missing commands that search needs (sh, grep, or awk), so search isn't available"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストには検索に必要なコマンド（sh、grep、awk）がないため、検索できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트에 검색에 필요한 명령(sh, grep 또는 awk)이 없어 검색할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機上缺少搜尋要用的指令（sh、grep 或 awk），無法搜尋"
+          }
+        }
+      }
+    },
+    "这台主机不能执行命令，无法搜索" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host can't run commands, so search isn't available"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストではコマンドを実行できないため、検索できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트에서는 명령을 실행할 수 없어 검색할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機不能執行指令，無法搜尋"
           }
         }
       }

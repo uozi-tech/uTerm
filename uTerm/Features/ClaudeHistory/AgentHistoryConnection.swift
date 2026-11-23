@@ -100,10 +100,15 @@ final class AgentHistoryConnection {
     @ObservationIgnored private var isOpening = false
     @ObservationIgnored private var isClosed = false
 
+    /// 这台主机能不能跑命令（搜索要用）：连上之后问一次。标成只许 SFTP 的主机不能。
+    @ObservationIgnored private let allowsCommands: @MainActor () -> Bool
+
     /// `home`：主目录，不给就问那台主机（见 `ClaudeHistorySource.init`）。
-    init(preferredDirectory: String?, home: String? = nil, connect: @escaping AgentHistoryAccess.Connect) {
+    init(preferredDirectory: String?, home: String? = nil, allowsCommands: @escaping @MainActor () -> Bool = { true },
+         connect: @escaping AgentHistoryAccess.Connect) {
         self.preferredDirectory = preferredDirectory
         self.home = home
+        self.allowsCommands = allowsCommands
         self.connect = connect
     }
 
@@ -111,6 +116,7 @@ final class AgentHistoryConnection {
     init(history: AgentHistoryModel) {
         preferredDirectory = history.preferredDirectory
         home = nil
+        allowsCommands = { true }
         connect = nil
         phase = .ready(history)
     }
@@ -140,7 +146,7 @@ final class AgentHistoryConnection {
             }
             self.provider = provider
             let history = AgentHistoryModel(source: ClaudeHistorySource(provider: provider, home: home),
-                                            preferredDirectory: preferredDirectory)
+                                            preferredDirectory: preferredDirectory, allowsSearch: allowsCommands())
             phase = .ready(history)
             await history.start()
         } catch {
@@ -152,6 +158,8 @@ final class AgentHistoryConnection {
     /// 关窗口 / 关标签：放掉文件通道（SFTP 会话还给连接池，远控的通道本来就和终端共用）。
     func close() {
         isClosed = true
+        // 在途的搜索不再往主机上发命令。
+        history?.stopSearch()
         let provider = self.provider
         self.provider = nil
         if let provider { Task { await provider.close() } }
