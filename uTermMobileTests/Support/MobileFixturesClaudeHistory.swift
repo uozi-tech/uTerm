@@ -68,6 +68,24 @@ enum MobileClaudeFixture {
         file([user("桌面版的会话", entrypoint: "claude-desktop"), title("桌面版")])
     }
 
+    /// 比一屏长得多的对话：打开时该停在最后一条。
+    static func long(turns: Int = 30) -> Data {
+        var lines: [String] = []
+        for turn in 1...turns {
+            lines.append(user("第 \(turn) 个问题：这一步该怎么做？", uuid: "u-\(turn)"))
+            lines.append(assistant(text("第 \(turn) 个回答：先看日志，再看配置，最后重启服务确认。"), uuid: "a-\(turn)"))
+        }
+        lines.append(title("一段很长的对话"))
+        return file(lines)
+    }
+
+    /// 只有一条很长的会话。
+    static func longOnly(now: Date = Date()) -> MobileFakeClaudeTree {
+        MobileFakeClaudeTree(home: home, files: [
+            (projectPath + "/" + sessionID(9) + ".jsonl", long(), now.addingTimeInterval(-60)),
+        ])
+    }
+
     /// 截图与用例共用的一份：三条命令行会话 + 一条桌面版（不列出）。
     static func standard(now: Date = Date()) -> MobileFakeClaudeTree {
         MobileFakeClaudeTree(home: home, files: [

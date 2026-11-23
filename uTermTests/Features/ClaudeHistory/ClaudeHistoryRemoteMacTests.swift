@@ -86,13 +86,13 @@ final class ClaudeHistoryRemoteMacTests: XCTestCase {
     // MARK: - 用例
 
     func testListsTitlesAndPagesOverTheRemoteLink() async throws {
-        // 30 份命令行会话 + 2 份桌面版（不列）：一批 24 行，读到底要两批。
-        for index in 0..<30 {
+        // 60 份命令行会话 + 2 份桌面版（不列）：一批 24 行，连提前读的那十几份算上，第一批也读不到底。
+        for index in 0..<60 {
             try writeSession(index, lines: [ClaudeFixture.userText("问题 \(index)", cwd: directory),
                                             ClaudeFixture.assistant(ClaudeFixture.textBlock("回答 \(index)"), cwd: directory),
                                             ClaudeFixture.aiTitle("会话 \(index)")])
         }
-        for index in 30..<32 {
+        for index in 60..<62 {
             try writeSession(index, lines: [ClaudeFixture.userText("桌面", entrypoint: "claude-desktop", cwd: directory),
                                             ClaudeFixture.aiTitle("桌面版 \(index)")])
         }
@@ -106,17 +106,23 @@ final class ClaudeHistoryRemoteMacTests: XCTestCase {
 
         XCTAssertEqual(history.phase, .ready)
         XCTAssertEqual(history.scope, .all, "配对的 Mac 不知道终端当前目录，列全部项目")
-        XCTAssertEqual(history.files.count, 32)
+        XCTAssertEqual(history.files.count, 62)
         let firstPage = history.visibleFiles
         XCTAssertGreaterThanOrEqual(firstPage.count, 24)
-        XCTAssertLessThan(firstPage.count, 30, "第一批不读到底")
-        XCTAssertEqual(history.metadata[firstPage[0].path]?.title, "会话 29", "新的在前，桌面版的不列")
-        XCTAssertEqual(AgentHistoryText.sessionTitle(firstPage[0], metadata: history.metadata[firstPage[0].path]), "会话 29")
+        XCTAssertLessThan(firstPage.count, 60, "第一批不读到底")
+        XCTAssertTrue(history.hasMore)
+        XCTAssertEqual(history.metadata[firstPage[0].path]?.title, "会话 59", "新的在前，桌面版的不列")
+        XCTAssertEqual(AgentHistoryText.sessionTitle(firstPage[0], metadata: history.metadata[firstPage[0].path]), "会话 59")
 
-        history.loadMore()
-        _ = await waitUntil(10) { !history.hasMore }
+        // 滚到底几次，读完为止（上一批没读完时催它不起作用，所以每次等它停下来再催）。
+        for _ in 0..<5 where history.hasMore {
+            let before = history.visibleFiles.count
+            history.loadMore()
+            _ = await waitUntil(10) { !history.hasMore || history.visibleFiles.count >= before + 24 }
+        }
+        XCTAssertFalse(history.hasMore)
         XCTAssertEqual(history.visibleFiles.map { history.metadata[$0.path]?.title },
-                       (0..<30).reversed().map { "会话 \($0)" })
+                       (0..<60).reversed().map { "会话 \($0)" })
         XCTAssertEqual(history.hiddenCount, 2)
         XCTAssertEqual(history.resumeCommand(for: history.visibleFiles[0])?.directory, directory)
 
@@ -124,7 +130,7 @@ final class ClaudeHistoryRemoteMacTests: XCTestCase {
         history.select(history.visibleFiles[0])
         let transcript = try XCTUnwrap(history.transcript)
         _ = await waitUntil(10) { transcript.reachedStart }
-        XCTAssertEqual(transcript.items.map(\.plainText), ["问题 29", "回答 29"])
+        XCTAssertEqual(transcript.items.map(\.plainText), ["问题 59", "回答 59"])
         XCTAssertEqual(client.state, .connected)
     }
 

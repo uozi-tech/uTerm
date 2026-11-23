@@ -377,6 +377,16 @@ final class StyleGalleryTests: XCTestCase {
             _ = await MobileFakeTerminal.waitUntil { model.transcript?.reachedStart == true }
             try await shoot("claude-history-transcript", on: device, settle: .milliseconds(900)) { mount(workspace) }
 
+            // 比一屏长的对话：打开时停在最后一条（短的从顶上排起，见上一张）。
+            let longWorkspace = MobileWorkspace()
+            let long = longWorkspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: MobileClaudeFixture.longOnly()))
+            let longSettled = await MobileFakeClaudeHistory.settle(long)
+            XCTAssertTrue(longSettled)
+            let longModel = try XCTUnwrap(long.connection.history)
+            longModel.select(try XCTUnwrap(longModel.visibleFiles.first))
+            _ = await MobileFakeTerminal.waitUntil { longModel.transcript?.reachedStart == true }
+            try await shoot("claude-history-long", on: device, settle: .milliseconds(900)) { mount(longWorkspace) }
+
             // 这台主机上没用过 Claude Code：没有 ~/.claude/projects。
             let empty = MobileWorkspace()
             let none = empty.openHistory(MobileFakeClaudeHistory.tab(

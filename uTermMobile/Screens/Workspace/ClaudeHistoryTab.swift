@@ -384,7 +384,9 @@ private struct ClaudeTranscriptView: View {
                 .padding(.vertical, 14)
             }
             .mKeepsScrollContentInSafeArea()
-            .defaultScrollAnchor(.bottom)
+            // 打开时停在最后一条（从末尾读起）；内容不满一屏时从顶上排起——只写 `.bottom` 的话短对话会贴着底、上面空一大片。
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.top, for: .alignment)
             .onChange(of: transcript.prependGeneration) { old, _ in
                 // 往前加了一页：留在原来最上面那条，不跳到别处。第一页不用（默认停在底部）。
                 guard old > 0, let anchor = pendingAnchor else { return }
