@@ -62,18 +62,21 @@ struct TerminalScrollOffsetMapping: Equatable {
 
     /// The landing place UIKit proposes for a fling (in points), moved to
     /// the nearest whole row of the engine — but not to one behind
-    /// `current`, the offset (in points) the fling starts from.
+    /// `current`, the offset (in points) the fling sets off from.
     ///
-    /// uTerm 本地补丁：UIKit 把松手的速度带进改写过的落点（往前往后挪几十点，减速头一帧的速度和不改时一样），
-    /// 可落点要是在起点身后，它一帧就把内容拽回去（合成真触摸实测：身后 10 pt，下一帧就是 −10 pt）。
-    /// 所以取整只在甩的方向上取：最近的那一行在起点身后时，取起点前方的第一行。
+    /// UIKit carries the release's speed into a rewritten landing place, so
+    /// moving it a few points either way leaves the glide's first frame as
+    /// it was; a landing place behind the start, though, pulls the content
+    /// back within a frame. The rounding only goes the way of the fling:
+    /// with the nearest row behind the start, the first row ahead of it.
     func landingOffset(proposed points: CGFloat, current: CGFloat) -> CGFloat {
         let cell = CGFloat(cellHeight)
         let engine = clampedEngine(points)
         let from = clampedEngine(current)
         var aligned = (engine / cell).rounded() * cell
+        // Half a pixel of slack: an offset UIKit rounded onto a row is that
+        // row.
         if engine > from {
-            // Half a pixel of slack: an offset UIKit rounded onto a row is that row.
             aligned = max(aligned, ((from - 0.5) / cell).rounded(.up) * cell)
         } else if engine < from {
             aligned = min(aligned, ((from + 0.5) / cell).rounded(.down) * cell)
@@ -82,29 +85,27 @@ struct TerminalScrollOffsetMapping: Equatable {
         return min(max(0, aligned - CGFloat(shift)), viewMax) / scale
     }
 
+    /// The whole row a scroll that stopped between rows is brought to: the
+    /// nearest, or — while it still moves (`travel`, positive toward the
+    /// bottom) — the first one the way it goes, so the alignment carries
+    /// on rather than turning back. Not past the bottom.
+    func restingRow(enginePixels position: Double, travel: Double) -> Int {
+        let cell = Double(cellHeight)
+        let row: Double
+        if travel > 0 {
+            row = ((position - 0.5) / cell).rounded(.up)
+        } else if travel < 0 {
+            row = ((position + 0.5) / cell).rounded(.down)
+        } else {
+            return nearestRow(enginePixels: Int(position.rounded()))
+        }
+        return min(engineMax, max(0, Int(row) * cellHeight))
+    }
+
     /// An offset in points as an engine position in pixels, within the
     /// engine's range.
     private func clampedEngine(_ points: CGFloat) -> CGFloat {
         min(max(0, points * scale + CGFloat(shift)), CGFloat(engineMax))
-    }
-
-    /// The whole row a scroll that stopped between rows is brought to: the
-    /// nearer one, or — while it still moves (`travel`, positive toward the
-    /// bottom) — the first one the way it goes, so the alignment carries on
-    /// instead of turning back. Not past the bottom.
-    ///
-    /// uTerm 本地补丁：慢慢拖着松手（UIKit 的松手速度是 0，见 `systemScrollWillEndDragging`）时，
-    /// 手指其实还在动，对齐到最近的一行一半的时候是往回走。
-    func restingRow(enginePixels position: Double, travel: Double) -> Int {
-        let cell = Double(cellHeight)
-        let row: Double = if travel > 0 {
-            ((position - 0.5) / cell).rounded(.up)
-        } else if travel < 0 {
-            ((position + 0.5) / cell).rounded(.down)
-        } else {
-            (position / cell).rounded()
-        }
-        return min(engineMax, max(0, Int(row) * cellHeight))
     }
 
     /// Whether an offset is out of range by more than UIKit's rounding:

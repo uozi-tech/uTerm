@@ -52,18 +52,22 @@
         /// pixel, and its landing place is a whole row.
         extension UITerminalView {
             func systemScrollDidScroll(_ scrollView: UIScrollView) {
-                guard scrollView === systemScroll.driver, !systemScroll.isSyncing,
-                      let (mapping, position) = systemScrollMapping() else { return }
-                // uTerm 本地补丁：滚动动着时把 display link 续上，屏幕留在 120 Hz（见 `ScrollWakeupSyncDraw.holdLink`）。
-                if UTermScrollTrace.scrollWakeupSyncDraw == .holdLink { core.holdDisplayLinkForMotion() }
+                guard scrollView === systemScroll.driver else { return }
+                let moved = scrollView.contentOffset.y - systemScroll.lastOffset
+                systemScroll.lastOffset = scrollView.contentOffset.y
+                guard !systemScroll.isSyncing, let (mapping, position) = systemScrollMapping() else { return }
                 let previousDidScroll = systemScroll.lastDidScroll
                 systemScroll.lastDidScroll = CACurrentMediaTime()
-                // uTerm 本地补丁：记下走的方向，给被手指按停之后的那次对齐用（`caughtDirection`）；以及速度（`speed`）。
-                let moved = scrollView.contentOffset.y - systemScroll.lastDidScrollOffset
-                if abs(moved) > 0.01 { systemScroll.motionDirection = moved > 0 ? 1 : -1 }
+                // One display rate for as long as the scroll moves.
+                // uTerm 本地补丁：上游无条件续 display link；这里只在默认做法（`ScrollWakeupSyncDraw.holdLink`）下续，
+                // 其余几种是留着做对照测量的。
+                if UTermScrollTrace.scrollWakeupSyncDraw == .holdLink { core.holdDisplayLinkForScroll() }
+                if abs(moved) > 0.01 {
+                    systemScroll.motionDirection = moved > 0 ? 1 : -1
+                }
+                // uTerm 本地补丁：速度只给对照用的做法看（见 `SystemScrollState.speed`）。
                 let interval = systemScroll.lastDidScroll - previousDidScroll
                 systemScroll.speed = interval > 0.001 && interval < 0.1 ? abs(moved) / interval : 0
-                systemScroll.lastDidScrollOffset = scrollView.contentOffset.y
                 let offsetPixels = scrollView.contentOffset.y * mapping.scale
                 // uTerm 本地补丁：真手录制的位置 signpost（`UTermScrollTrace.signpostScrollOffset`，没在录时不发）。
                 UTermScrollTrace.signpostScrollOffset(px: Double(offsetPixels), decelerating: scrollView.isDecelerating,
@@ -127,7 +131,8 @@
                 core.scrollSettler.cancel()
                 systemScrollCancelAlign()
                 systemScroll.isUIKitMoving = false
-                // uTerm 本地补丁：接着拖了，按停时的方向不再算数，松手时按这次拖动来。
+                // Dragged on: the lift goes by this drag, not by what a
+                // touch stopped.
                 systemScroll.caughtDirection = 0
                 momentumScroll.panIsActive = true
                 momentumScroll.settleToken += 1
@@ -140,37 +145,41 @@
             /// The landing place becomes a whole row, and UIKit decelerates
             /// to it.
             ///
-            /// uTerm 本地补丁：UIKit 把慢的松手（合成真触摸实测慢于约 250 pt/s）当成停住：速度给 0、提议的落点就是
-            /// 现在的位置，不改的话它不减速。原来照样把落点改到最近的一行，UIKit 就自己从静止动过去：头一帧就是
-            /// 全程最快（半行 6 pt，头一帧 60 pt/s 起步），而最近的那一行一半的时候在手指身后——手指往前拖、
-            /// 一松手内容往回弹。现在这种松手落点留在原处（UIKit 不动它），记下手指的速度，
-            /// 由 `didEndDragging(willDecelerate: false)` 的对齐顺着手指的方向、按它的速度接着走到下一行。
-            /// 甩出去的落点只在甩的方向上取整（`landingOffset(proposed:current:)`）。
+            /// UIKit takes a lift slower than about 250 pt/s for a stop: no
+            /// velocity, and the current offset as the landing place, where
+            /// it does not move. Rewritten to the nearest row, UIKit slid
+            /// there from rest, at its fastest in the first frame, and half
+            /// the time the nearest row was behind the finger: dragged on, the
+            /// content went back at the lift. Such a lift keeps its landing
+            /// place and leaves the finger's speed to the alignment in
+            /// `didEndDragging`, which carries on to the row ahead.
             func systemScrollWillEndDragging(
                 _ scrollView: UIScrollView,
                 velocity: CGPoint,
                 targetContentOffset: UnsafeMutablePointer<CGPoint>,
             ) {
-                guard scrollView === systemScroll.driver, let (mapping, _) = systemScrollMapping() else { return }
+                guard scrollView === systemScroll.driver else { return }
                 systemScroll.releaseVelocity = 0
+                guard !scrollRestsAnywhere, let (mapping, _) = systemScrollMapping() else { return }
                 let current = scrollView.contentOffset.y
-                if velocity.y == 0, !TerminalScrollOffsetMapping.isOutOfRange(
-                    offset: current,
-                    maxOffset: max(0, scrollView.contentSize.height - scrollView.bounds.height),
-                    unit: contentOffsetUnit,
-                ) {
+                if velocity.y == 0, !systemScrollIsOutOfRange {
                     targetContentOffset.pointee.y = current
-                    systemScroll.releaseVelocity = -scrollView.panGestureRecognizer.velocity(in: scrollView).y
+                    // The pan is attached to this view, which does not
+                    // scroll; positive is the finger going down, toward a
+                    // smaller offset.
+                    systemScroll.releaseVelocity = -scrollView.panGestureRecognizer.velocity(in: self).y
                     return
                 }
                 // Rounded in the engine's rows (offset + shift), then back.
-                targetContentOffset.pointee.y = mapping.landingOffset(proposed: targetContentOffset.pointee.y, current: current)
+                targetContentOffset.pointee.y = mapping.landingOffset(
+                    proposed: targetContentOffset.pointee.y,
+                    current: current,
+                )
             }
 
             func systemScrollDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
                 guard scrollView === systemScroll.driver else { return }
                 momentumScroll.panIsActive = false
-                // uTerm 本地补丁：UIKit 当成停住的那次松手，手指的速度（`systemScrollWillEndDragging` 记的）。
                 let releaseVelocity = systemScroll.releaseVelocity
                 systemScroll.releaseVelocity = 0
                 if decelerate {
@@ -180,7 +189,9 @@
                 } else {
                     // No deceleration — hardly moved, or already at the
                     // landing place: the alignment is ours.
-                    systemScrollAlign(animated: true, velocity: releaseVelocity, lifted: true)
+                    if !scrollRestsAnywhere {
+                        systemScrollAlign(animated: true, velocity: releaseVelocity, lifted: true)
+                    }
                     systemScrollResyncSoon()
                 }
             }

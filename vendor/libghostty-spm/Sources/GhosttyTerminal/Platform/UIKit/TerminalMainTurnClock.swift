@@ -1,18 +1,26 @@
 //
 //  TerminalMainTurnClock.swift
-//  uTerm 本地补丁（不在上游）：主线程这一轮 run loop 是什么时候醒的。
+//  libghostty-spm
 //
 
 #if canImport(UIKit)
     import Foundation
     import QuartzCore
 
-    /// 系统滚动每帧在 `scrollViewDidScroll` 里等引擎把这一步画完（`systemScrollWaitForFrame`），等到什么时候为止得从
-    /// 「这一轮从哪一刻开始」算：按下手指那一轮 UIKit 分发触摸就花掉好几毫秒，再整等一个预算这一帧就过了提交的时限。
-    /// 一个 run loop 观察者记下每次醒来的时刻；一直没睡（一轮接一轮）时这个时刻偏早，预算只会更紧，不会更松。
+    /// When the main run loop last woke.
+    ///
+    /// The system scroll waits in `scrollViewDidScroll` for the engine to
+    /// hand over the frame that holds the step (`systemScrollWaitForFrame`),
+    /// and how long it may wait has to be counted from where the turn
+    /// began, not from where the wait did: the turn a finger comes down in
+    /// spends several milliseconds delivering the touch first, and a whole
+    /// budget on top of that misses the frame's commit. One run loop
+    /// observer keeps the time of each wake. While the loop never sleeps
+    /// between turns the time kept is an earlier one, which only makes the
+    /// budget tighter.
     @MainActor
     enum TerminalMainTurnClock {
-        nonisolated(unsafe) private static var wokeAt: CFTimeInterval = 0
+        private nonisolated(unsafe) static var wokeAt: CFTimeInterval = 0
         private static var installed = false
 
         static func install() {
@@ -25,7 +33,9 @@
             CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
         }
 
-        /// 这一轮 run loop 醒来的时刻（`CACurrentMediaTime()`）。
-        static var turnStart: CFTimeInterval { wokeAt }
+        /// When this turn of the run loop began (`CACurrentMediaTime()`).
+        static var turnStart: CFTimeInterval {
+            wokeAt
+        }
     }
 #endif

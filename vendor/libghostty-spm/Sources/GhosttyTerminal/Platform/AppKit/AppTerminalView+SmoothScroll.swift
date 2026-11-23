@@ -14,18 +14,18 @@
     /// engine decides whether it moves by the pixel.
     ///
     /// While fingers are down or momentum runs, the settler is held. When
-    /// momentum ends the viewport goes on to the row ahead at the speed the
-    /// momentum ended at. When the fingers lift while the viewport still
-    /// moves it goes on to the row ahead the same way, at once: momentum
-    /// that follows takes over where the snap got to, in the same direction.
+    /// momentum ends the viewport goes on to the row ahead, at the speed the
+    /// momentum ended at. When the fingers lift with the viewport still
+    /// moving it does the same at once: momentum that follows holds the
+    /// settler and carries on from wherever the snap got to, the same way.
     /// When they lift from a viewport dragged to a stop it waits
     /// `smoothScrollLiftDelay` for momentum, then goes to the nearer row. A
-    /// precise event with no phase at all (a synthesized pixel scroll, a
-    /// smooth-scrolling utility) is left to the settler's own idle delay.
-    ///
-    /// uTerm 本地补丁 #19：抬手时还在走的不再停 0.08 s 再动；「还在走」按最近 50 ms 的速度判，
-    /// 不按最后一个事件的位移（120 Hz 的触控板上 150 pt/s 每个事件只有 2–3 px，原来当成停住、往回吸；
-    /// 手指停住不动再抬起时最后一个事件是 150 ms 前的，原来当成还在走、往前吸最多一整行）。
+    /// touch that lifts without moving resumes what it stopped: after
+    /// momentum, or a snap on the way it went, on to the row ahead that
+    /// way; after a snap from a stop, on to the nearer row it was heading
+    /// for. A precise event with no phase at all (a
+    /// synthesized pixel scroll, a smooth-scrolling utility) is left to the
+    /// settler's own idle delay.
     extension AppTerminalView {
         /// AppKit sends the first momentum event right after the gesture's
         /// last one; a lift waits this long for it.
@@ -34,11 +34,19 @@
         /// `velocityWindow`) from which the viewport counts as still moving
         /// when the fingers lift. A finger resting on a Magic Mouse that
         /// drifts a point in one event comes to 20 pt/s and does not.
+        ///
+        /// Not the last event's size: a trackpad at 120 Hz moving 150 pt/s
+        /// sends a point or two an event, which read as a stop half the
+        /// time, and fingers held still send nothing, so the last event
+        /// was the one from before they stopped.
         static let smoothScrollMovingSpeed: Double = 30
 
         /// Before the event's scroll goes to the surface.
         func smoothScrollWillScroll(_ event: NSEvent) {
             guard event.hasPreciseScrollingDeltas else { return }
+            if !event.phase.isDisjoint(with: [.mayBegin, .began]) {
+                core.scrollSettler.touchDown(moving: smoothScrollIsMoving)
+            }
             let gesture: NSEvent.Phase = [.mayBegin, .began, .changed, .stationary]
             if !event.phase.isDisjoint(with: gesture) || !event.momentumPhase.isDisjoint(with: [.began, .changed]) {
                 core.scrollSettler.hold()
@@ -61,15 +69,23 @@
                 // one sets off at once rather than pausing for momentum: the
                 // momentum that follows holds the settler and carries on the
                 // same way from wherever the snap got to.
-                let pixelsPerPoint = Double(currentScaleFactor())
-                let moving = abs(settler.velocity()) >= Self.smoothScrollMovingSpeed * pixelsPerPoint
+                let moving = smoothScrollIsMoving
                 settler.release(after: moving ? 0 : Self.smoothScrollLiftDelay, followingTravel: moving)
             } else if event.phase.contains(.cancelled) {
-                // Fingers rested on a moving scroll and lifted.
-                // uTerm 本地补丁（#19）：顺着刚才的方向补到前方的一行（从静止起步），不往回。原来取近的那一行，滚动基准里
-                // 一半逆着惯性的方向退回去（最多 5 pt）；iOS 的系统滚动按停后也是这条规则（补丁 #18）。
-                settler.release(followingTravel: true)
+                // Fingers rested on the viewport and lifted: on with what
+                // they stopped (`touchDown`). Momentum, or the snap after
+                // it, goes on the way it went: to the nearer row, half the
+                // time that went back against it. A snap from a stop goes
+                // on to the nearer row it was heading for: sent the way of
+                // the drag, it turned round.
+                settler.release(followingTravel: settler.touchFollowsTravel || smoothScrollIsMoving)
             }
+        }
+
+        /// The viewport moves at `smoothScrollMovingSpeed` or more.
+        private var smoothScrollIsMoving: Bool {
+            let pixelsPerPoint = Double(currentScaleFactor())
+            return abs(core.scrollSettler.velocity()) >= Self.smoothScrollMovingSpeed * pixelsPerPoint
         }
     }
 #endif

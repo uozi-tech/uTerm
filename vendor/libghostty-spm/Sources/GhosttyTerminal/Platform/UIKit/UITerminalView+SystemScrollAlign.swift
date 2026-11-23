@@ -11,6 +11,8 @@
         /// Stopping the scroll view, and bringing it to a whole row with the
         /// view's own display-link animation (see `SystemScrollState.alignLink`).
         extension UITerminalView {
+            /// An alignment from rest; one that keeps a finger's speed is
+            /// shorter (`TerminalScrollAlignmentCurve`).
             static let systemScrollAlignDuration: TimeInterval = 0.25
             static let systemScrollAlignFrameRateRange = CAFrameRateRange(
                 minimum: 80,
@@ -23,7 +25,6 @@
             @discardableResult
             func systemScrollStop() -> Bool {
                 guard let driver = systemScroll.driver, systemScrollInMotion else { return false }
-                // uTerm 本地补丁：按停时它往哪走，之后的对齐就往哪取整（`caughtDirection`）。
                 systemScroll.caughtDirection = systemScroll.motionDirection
                 systemScrollCancelAlign()
                 if driver.isDecelerating || systemScroll.isUIKitMoving {
@@ -40,17 +41,23 @@
                 systemScroll.alignLink = nil
             }
 
-            /// uTerm 本地补丁：比这慢的松手速度（点 / 秒）当成停住，对齐取最近的一行；快一点就取前方的一行。
+            /// A lift slower than this (points per second) counts as a stop:
+            /// its alignment goes to the nearest row.
             static let systemScrollAlignMinimumVelocity: CGFloat = 20
 
-            /// Brings the content offset to the nearest whole row; the engine
-            /// follows through `scrollViewDidScroll`. Nothing to do on a row.
+            /// Brings the content offset to a whole row; the engine follows
+            /// through `scrollViewDidScroll`. Nothing to do on a row.
             ///
-            /// uTerm 本地补丁：`velocity`（点 / 秒，正 = 内容偏移变大）是松手那一刻手指还在动的速度：
-            /// 有的话对齐到前方的一行、动画按这个速度起步（`TerminalScrollAlignmentCurve`），从静止起的对齐也从 0 加速，
-            /// 不再是三次缓出一上来就是平均速度的 3 倍。
-            /// `lifted`：由 `didEndDragging` 调，手指已经抬起，可 UIKit 这时 `isDragging` 还是 true（真触摸实测），
-            /// 不看它；原来这一处的对齐因此从没跑过，拖着停住松手要靠改写的落点让 UIKit 自己动过去。
+            /// To the nearest row, or ahead: `velocity` (points per second
+            /// toward a larger offset) is how fast the finger still moved at a
+            /// lift UIKit took for a stop, and the alignment goes on to the
+            /// row ahead of it, setting off at that speed. An animated
+            /// alignment after a touch stopped a moving scroll goes on the
+            /// way that scroll went, from rest. An immediate one, for what
+            /// hit-tests in whole rows next, moves least: the nearest row.
+            ///
+            /// `lifted`: called from `didEndDragging`, where the finger is up
+            /// but UIKit still reports `isDragging`.
             func systemScrollAlign(animated: Bool, velocity: CGFloat = 0, lifted: Bool = false) {
                 guard let driver = systemScroll.driver, let (mapping, position) = systemScrollMapping(),
                       position.isAvailable else { return }
@@ -58,8 +65,6 @@
                 // aligns again.
                 guard lifted || (!driver.isTracking && !driver.isDragging), !momentumScroll.panIsActive else { return }
                 let travel = abs(velocity) < Self.systemScrollAlignMinimumVelocity ? 0 : velocity
-                // uTerm 本地补丁：被手指按停的滚动，对齐顺着它原来的方向走到前方的一行（动画仍从静止起步）。
-                // 立即对齐（选区、菜单要按整行命中）不用它：那时走最近的一行，挪得最少。
                 let caught = systemScroll.caughtDirection
                 systemScroll.caughtDirection = 0
                 let direction = travel != 0 ? travel : (animated ? caught : 0)
@@ -94,8 +99,9 @@
                 systemScroll.alignLink = link
             }
 
-            /// One frame of the alignment along its curve; `scrollViewDidScroll`
-            /// sends each step to the engine like any other.
+            /// One frame of the alignment along its curve;
+            /// `scrollViewDidScroll` sends each step to the engine like any
+            /// other.
             @objc func systemScrollAlignFrame(_ link: CADisplayLink) {
                 guard let driver = systemScroll.driver, systemScroll.alignLink === link else {
                     link.invalidate()

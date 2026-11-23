@@ -30,6 +30,9 @@ final class TerminalSurfaceCoordinator {
 
     var configuration: TerminalSurfaceOptions = .init() {
         didSet {
+            if configuration.scrollBehavior != oldValue.scrollBehavior {
+                applyScrollBehavior()
+            }
             guard !configuration.isEquivalent(to: oldValue) else { return }
             rebuildIfReady()
         }
@@ -272,9 +275,14 @@ final class TerminalSurfaceCoordinator {
         }
     }
 
-    /// uTerm 本地补丁：滚动动着，display link 续上（没在跑就起来，空转计数清零）。link 自己不画东西，只是把屏幕留在
-    /// 120 Hz；最后一次调用之后空转 `idleFramesBeforeRelease` 帧照常停。
-    func holdDisplayLinkForMotion() {
+    /// The system scroll moved: keeps the display link running, at its
+    /// 120 Hz, until `idleFramesBeforeRelease` frames after the last call.
+    /// The link draws nothing by itself. It holds the display at one
+    /// rate: left alone, UIKit's deceleration steps down through 80 Hz
+    /// (frames 8 and 17 ms apart in turn) and 40 Hz on its way to rest,
+    /// and a picture that is a fixed number of frames behind the scroll
+    /// view then moves too little in one frame and too much in the next.
+    func holdDisplayLinkForScroll() {
         ensureDisplayLink()
     }
 
@@ -374,9 +382,10 @@ final class TerminalSurfaceCoordinator {
         )
         TerminalDebugLog.log(.lifecycle, "surface rebuild succeeded")
         startFontSizeTracking(on: newSurface, controller: controller)
-        // The views settle every precision scroll on a row, so the surfaces
-        // they build may move by the pixel; nothing else turns it on.
-        newSurface.setSmoothScrolling(true)
+        // The views settle every precision scroll on a row, or offset what
+        // they hit-test, so the surfaces they build may move by the pixel;
+        // nothing else turns it on.
+        applyScrollBehavior()
         newSurface.onPrecisionScroll = { [weak self] y in
             self?.scrollSettler.didScroll(up: y)
         }
@@ -385,6 +394,35 @@ final class TerminalSurfaceCoordinator {
         onSurfaceAttached?()
         synchronizeMetrics()
         requestImmediateTick()
+    }
+
+    // MARK: - Scroll behavior
+
+    /// The engine clears the fraction when smooth scrolling goes off, and a
+    /// viewport left between rows is brought to one when settling comes on.
+    private func applyScrollBehavior() {
+        let behavior = configuration.scrollBehavior
+        surface?.setSmoothScrolling(behavior != .rowAtATime)
+        scrollSettler.settlesAutomatically = behavior == .settlesOnRow
+        if behavior == .settlesOnRow, !scrollSettler.isHeld {
+            scrollSettler.release(followingTravel: false)
+        }
+    }
+
+    /// What a view adds to a position before it goes to the engine, in
+    /// pixels: the engine counts rows from the viewport's first, and a
+    /// viewport resting between rows is drawn that much higher.
+    var pointerRowOffsetPixels: Double {
+        guard configuration.scrollBehavior == .restsAnywhere,
+              let position = surface?.smoothScrollPosition(), position.isAvailable else { return 0 }
+        return position.fraction
+    }
+
+    /// Before a pointer press. A viewport that settles is brought to a row;
+    /// one that rests anywhere stays, its positions carrying the offset.
+    func settleScrollForPointer() {
+        guard configuration.scrollBehavior != .restsAnywhere else { return }
+        scrollSettler.settleNow()
     }
 
     // MARK: - Metrics
@@ -733,6 +771,10 @@ final class TerminalSurfaceCoordinator {
         var testHooks_canRenderFrame: Bool {
             canRenderFrame
         }
+
+        var testHooks_displayLinkIsRunning: Bool {
+            displayLink.map { !$0.isPaused } ?? false
+        }
     #endif
 
     // MARK: - Cleanup
@@ -795,6 +837,9 @@ final class TerminalSurfaceCoordinator {
         resizeThrottleArmed = false
         resizeThrottleTrailing = false
         pendingImmediateTick = true
+        // uTerm 本地补丁：上游这里是 `pendingDraw = true`（新 surface 的第一帧由主线程画）；我们的 tick 把它拆成了两项。
+        pendingRefresh = true
+        pendingSyncDraw = true
         controller?.remove(bridge)
         if hadSurface {
             // A message the IO thread queued for this surface names it by

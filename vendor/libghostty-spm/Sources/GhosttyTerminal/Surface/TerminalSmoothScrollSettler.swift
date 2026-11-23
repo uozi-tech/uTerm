@@ -17,10 +17,10 @@ import QuartzCore
 ///
 /// The snap carries on at the speed the scrolling had when it stopped (the
 /// precision scrolls of the last `velocityWindow`) and slows down evenly to
-/// the row, within `snapLongestDuration`; from rest it eases in and out
-/// over `snapDuration` (`TerminalScrollAlignmentCurve`). uTerm 本地补丁 #19：
-/// 原来不管来时多快都是 0.18 s 的三次缓出，头一帧是平均速度的 3 倍——惯性以 60 pt/s 收尾时，
-/// 吸附先加速到 100–180 pt/s 再停。
+/// the row, within `snapLongestDuration`; from rest it eases in and out over
+/// `snapDuration` (`TerminalScrollAlignmentCurve`). Eased out from any speed
+/// over 180 ms, it started at three times its average: momentum ending at
+/// 60 pt/s was pushed on at 91-102 pt/s before it stopped.
 ///
 /// Every precision scroll reaches it (`TerminalSurface.onPrecisionScroll`):
 /// the trackpad, a Magic Mouse, a wheel on iPad or Mac Catalyst, a finger,
@@ -45,15 +45,15 @@ final class TerminalSmoothScrollSettler {
     static let snapDuration: TimeInterval = 0.18
     /// The longest a snap that keeps the scroll's speed may take. Slowing
     /// down evenly from 60 pt/s over a whole 14 pt row would take 0.47 s;
-    /// within this the curve still only slows down for momentum that ends
-    /// at 53 pt/s or more, and speeds up a little below that.
+    /// within this the snap still only slows down after momentum ending at
+    /// 53 pt/s or more, and speeds up a little below that.
     static let snapLongestDuration: TimeInterval = 0.4
-    /// The scrolls this far back from the last one give the speed the
-    /// viewport moved at.
+    /// The precision scrolls this far back from the last one give the speed
+    /// the viewport moved at.
     static let velocityWindow: TimeInterval = 0.05
     /// Past `velocityWindow` without a scroll the speed fades, and it is
     /// gone this long after the last one: fingers held still before they
-    /// lifted brought the viewport to a stop.
+    /// lifted had brought the viewport to a stop.
     static let velocityStaleAfter: TimeInterval = 0.1
     static let snapInterval: TimeInterval = 1.0 / 120
     /// Once less than this is left of the eased curve, the snap takes the
@@ -64,6 +64,14 @@ final class TerminalSmoothScrollSettler {
 
     private let surface: () -> TerminalSurface?
 
+    /// Off, nothing settles by itself once a scroll stops; `settleNow` still
+    /// does (`TerminalScrollBehavior.restsAnywhere`).
+    var settlesAutomatically = true {
+        didSet {
+            if !settlesAutomatically { cancel() }
+        }
+    }
+
     /// A gesture or a glide is moving the viewport.
     private(set) var isHeld = false
     /// The last precision scroll, positive toward the scrollback: which way
@@ -72,6 +80,11 @@ final class TerminalSmoothScrollSettler {
     /// The precision scrolls of the last `velocityWindow`.
     private var recentScrolls: [(time: CFTimeInterval, pixels: Double)] = []
     private var settleToken = 0
+    /// Which way the settle last scheduled was to go: on the way the
+    /// viewport went, or to the nearer row.
+    private var settleFollowsTravel = false
+    /// What a lift that never moved resumes (`touchDown`).
+    private(set) var touchFollowsTravel = false
 
     private(set) var snapTimer: Timer?
     /// The row the snap lands on, and the scroll it set out to make.
@@ -99,8 +112,8 @@ final class TerminalSmoothScrollSettler {
     }
 
     /// Pixels per second toward the scrollback the precision scrolls moved
-    /// the viewport at: the scrolls of the `velocityWindow` up to the last
-    /// one, fading to zero by `velocityStaleAfter` after it.
+    /// the viewport at: those of the `velocityWindow` up to the last one,
+    /// fading to nothing by `velocityStaleAfter` after it.
     func velocity(at now: CFTimeInterval = CACurrentMediaTime()) -> Double {
         guard let last = recentScrolls.last else { return 0 }
         let age = now - last.time
@@ -108,6 +121,17 @@ final class TerminalSmoothScrollSettler {
         let pixels = recentScrolls.reduce(0) { $1.time > last.time - Self.velocityWindow ? $0 + $1.pixels : $0 }
         let fade = min(1, (Self.velocityStaleAfter - age) / (Self.velocityStaleAfter - Self.velocityWindow))
         return pixels / Self.velocityWindow * fade
+    }
+
+    /// Fingers came down on the viewport; call before the `hold` that
+    /// stops whatever moved it. A lift that never moves resumes it: on
+    /// the way the viewport was going while it was still `moving`
+    /// (momentum) or a snap that way was pending or under way, and to the
+    /// nearer row otherwise, the way a snap from a stop was already
+    /// heading. Sent the way of the travel, that snap turned round, by up
+    /// to a whole row.
+    func touchDown(moving: Bool) {
+        touchFollowsTravel = moving || settleFollowsTravel
     }
 
     /// A gesture is moving the viewport: nothing settles until `release`.
@@ -143,6 +167,8 @@ final class TerminalSmoothScrollSettler {
 
     private func schedule(after delay: TimeInterval, followingTravel: Bool) {
         settleToken += 1
+        settleFollowsTravel = followingTravel
+        guard settlesAutomatically else { return }
         let token = settleToken
         guard delay > 0 else {
             startSnap(followingTravel: followingTravel)
@@ -163,14 +189,13 @@ final class TerminalSmoothScrollSettler {
         let total = position.pixelsToRow(following: followingTravel ? lastTravel : 0)
         guard total != 0 else { return }
         snapTotal = total
-        // At the speed it was going, toward the row ahead; from rest to the
+        // At the speed it was going, on to the row ahead; from rest, to the
         // nearer row.
         let startVelocity = followingTravel ? velocity() : 0
-        let keepsSpeed = startVelocity * total > 0
         snapCurve = TerminalScrollAlignmentCurve(
             distance: CGFloat(total),
             velocity: CGFloat(startVelocity),
-            longest: keepsSpeed ? Self.snapLongestDuration : Self.snapDuration,
+            longest: startVelocity * total > 0 ? Self.snapLongestDuration : Self.snapDuration,
             preferredSlope: 2,
         )
         // Back up to the row it is in, or down to the next one.
@@ -193,7 +218,7 @@ final class TerminalSmoothScrollSettler {
         snapTimer = timer
     }
 
-    /// One frame: whatever is still to go beyond the eased remainder. The
+    /// One frame: whatever is still to go beyond the curve's remainder. The
     /// last frame sends exactly what separates the viewport from the row.
     private func snapTick() {
         guard let surface = surface(), let position = surface.smoothScrollPosition(),

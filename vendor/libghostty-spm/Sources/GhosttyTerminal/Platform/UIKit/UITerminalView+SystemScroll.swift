@@ -53,24 +53,29 @@
             var alignFrom: CGFloat = 0
             var alignTo: CGFloat = 0
             var alignStart: CFTimeInterval = 0
-            /// uTerm 本地补丁：这一段对齐的曲线（时长、起步速度），见 `TerminalScrollAlignmentCurve`。
-            var alignCurve = TerminalScrollAlignmentCurve(distance: 0, velocity: 0, longest: 0.25)
-            /// uTerm 本地补丁：UIKit 当成停住的那次松手，手指其实还在动的速度（点 / 秒，正 = 内容偏移变大）：
-            /// 由 `willEndDragging` 记下，`didEndDragging(willDecelerate: false)` 的对齐带着它起步。
+            /// The alignment's duration and starting speed.
+            var alignCurve = TerminalScrollAlignmentCurve(distance: 0, velocity: 0, longest: 0)
+            /// A lift UIKit took for a stop (it reports no velocity under
+            /// about 250 pt/s) while the finger still moved: the finger's
+            /// speed, in points per second toward a larger offset, kept by
+            /// `willEndDragging` for the alignment `didEndDragging` starts.
             var releaseVelocity: CGFloat = 0
-            /// uTerm 本地补丁：内容偏移最近一次变动的方向（±1），和上一次的位置。由 `scrollViewDidScroll` 记。
+            /// The way the content offset last moved (±1), and where it was:
+            /// kept by `scrollViewDidScroll`.
             var motionDirection: CGFloat = 0
-            var lastDidScrollOffset: CGFloat = 0
-            /// uTerm 本地补丁：最近两次 `scrollViewDidScroll` 之间的速度（点 / 秒，绝对值）。引擎的 wakeup 要不要开
-            /// display link 看它（`UTermScrollTrace.wakeupDisplayLinkMinimumSpeed`）。
+            var lastOffset: CGFloat = 0
+            /// uTerm 本地补丁：最近两次 `scrollViewDidScroll` 之间的速度（点 / 秒，绝对值）。只有对照用的做法
+            /// `ScrollWakeupSyncDraw.deferWhileMoving` 看它（`UTermScrollTrace.wakeupDisplayLinkMinimumSpeed`）。
             var speed: CGFloat = 0
-            /// uTerm 本地补丁：手指按停一段还在走的滚动（减速、回弹、对齐）时它的方向。之后那次对齐朝这个方向
-            /// 取整（前方的一行），不往回：基准测量里「甩出去、按住、松开」原来会对齐到最近的一行，
-            /// 一半的时候是逆着刚才的方向退回去（最多半行）。和 Mac 的 settler「惯性被触碰掐断时顺着方向补」同一条规则。
+            /// The way a glide, a bounce or an alignment was going when a
+            /// touch stopped it. The animated alignment that follows goes to
+            /// the row ahead that way: to the nearer row, half the time it
+            /// went back against the glide.
             var caughtDirection: CGFloat = 0
-            /// uTerm 本地补丁：等这一帧超时之后，到这个时刻（`CACurrentMediaTime()`）之前不再等（`systemScrollWaitForFrame`）。
+            /// After the wait for a step's frame timed out
+            /// `scrollSameFrameWaitMissLimit` times in a row
+            /// (`systemScrollWaitForFrame`): no waiting until this time.
             var frameWaitSuspendedUntil: CFTimeInterval = 0
-            /// uTerm 本地补丁：连着几帧没等到。
             var frameWaitMisses = 0
             /// Pixels the engine's position is ahead of the scroll view's:
             /// engine position = content offset (in pixels) + shift.
@@ -122,10 +127,13 @@
                 systemScrollBusy(countingRecentScroll: true)
             }
 
-            /// uTerm 本地补丁：系统滚动这会儿真在动——最近 0.1 s 里有过 `scrollViewDidScroll`（手指拖、减速、回弹、对齐
-            /// 每帧都写 contentOffset）。补丁 #20 的两种推迟只认它，不认 `systemScrollIsBusy`：那个把越界停着、
-            /// 卡住没清的标志也算忙，静止时一旦卡住，每个 wakeup 都不同步重画、推迟的轮询一直跑。宿主同步位置
-            ///（`isSyncing`）不算动。
+            /// The scroll view moved in the last 0.1 s: a finger dragging,
+            /// deceleration, a bounce and the alignment all write the offset
+            /// every frame. What the coordinator's wakeups go by
+            /// (`wakeupDefersSyncDraw`), not `systemScrollIsBusy`: that one also
+            /// holds while an offset rests out of range or a flag is stuck,
+            /// and a surface at rest would then never draw a wakeup. An
+            /// offset the view writes itself (`isSyncing`) does not count.
             var systemScrollMovedRecently: Bool {
                 systemScroll.driver != nil && CACurrentMediaTime() - systemScroll.lastDidScroll < 0.1
             }
@@ -146,6 +154,15 @@
                     return true
                 }
                 guard countingOutOfRange else { return false }
+                return TerminalScrollOffsetMapping.isOutOfRange(
+                    offset: driver.contentOffset.y,
+                    maxOffset: max(0, driver.contentSize.height - driver.bounds.height),
+                    unit: contentOffsetUnit,
+                )
+            }
+
+            var systemScrollIsOutOfRange: Bool {
+                guard let driver = systemScroll.driver else { return false }
                 return TerminalScrollOffsetMapping.isOutOfRange(
                     offset: driver.contentOffset.y,
                     maxOffset: max(0, driver.contentSize.height - driver.bounds.height),
