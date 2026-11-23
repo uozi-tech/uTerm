@@ -29,7 +29,7 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     nonisolated let resumable: Bool
     nonisolated let startsSessions: Bool
 
-    private let sessionList: [Session]
+    private var sessionList: [Session]
     private var projectsError: (any Error)?
     private var searchError: (any Error)?
     /// 搜索时交给它的会话（按调用的先后）。
@@ -51,6 +51,9 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     nonisolated func sessionPath(_ session: Session) -> String { projectPath(session.projectID) + "/\(session.id).jsonl" }
 
     func setProjectsError(_ error: (any Error)?) { projectsError = error }
+
+    /// 后来才出现的记录（Code 标签页里新开的会话写出了记录文件）。
+    func add(_ session: Session) { sessionList.append(session) }
 
     private func makeProject(_ id: String) -> AgentHistoryProject {
         let members = sessionList.filter { $0.projectID == id }

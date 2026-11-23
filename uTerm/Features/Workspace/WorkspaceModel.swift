@@ -86,8 +86,9 @@ final class WorkspaceModel {
     @ObservationIgnored private var layoutWriter: HeldLayoutWriter<PaneModel>?
     /// 终端窗口的位置跟布局一起存；接回时照它还原（工作区窗口由系统恢复，不挂它）。
     @ObservationIgnored let windowTracker = HeldWindowTracker()
-    /// 布局里记的是会话 id（`PaneModel.id`，不是标签 id）；文件标签不是会话，不进布局。
-    private static let heldSessionID: (TerminalTab) -> UUID? = { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
+    /// 布局里记的是会话 id（`PaneModel.id`，不是标签 id）；文件标签、Code 标签页不是会话，不进布局
+    ///（Code 标签页里跑着的会话不在标签树里，重启后以普通终端标签页接回，见 `adoptHeldSessions`）。
+    static let heldSessionID: (TerminalTab) -> UUID? = { $0.payload.isTerminal ? $0.payload.id : nil }
 
     init(windowID: WorkspaceWindowID? = nil,
          fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
@@ -148,6 +149,11 @@ final class WorkspaceModel {
         // 组内唯一标签拖到本组边缘 → 克隆。终端标签克隆 = 同服务器新开一条会话；
         // 文件标签克隆 = 同一个 buffer 再挂一份（对齐旧 `insertPane(copying:)`）。
         terminalGroups.cloneTab = { [weak self] tab in
+            // Code 标签页克隆 = 同一台主机再开一个（空的，各自独立）。
+            if let code = tab.payload.codeTab {
+                return self?.makeCodeTab(serverID: tab.payload.serverProfileID, hostName: code.hostName,
+                                         directory: code.newSessionDirectory)
+            }
             if let buffer = tab.payload.fileBuffer {
                 let pane = PaneModel(serverProfileID: tab.payload.serverProfileID, fileBuffer: buffer)
                 self?.stamp(pane)
@@ -167,7 +173,8 @@ final class WorkspaceModel {
         // 布局写进每条 SSH 会话的 holder 归属：重启后没有工作区快照可用时（纯终端窗口、关了自动恢复）
         // 按它放回标签的顺序与分屏。文件标签不是会话，不进布局。
         let layoutWriter = HeldLayoutWriter(groups: terminalGroups, id: Self.heldSessionID) { [weak self] layout in
-            for tab in self?.terminalGroups.allTabs ?? [] { tab.payload.updateLayout(layout) }
+            // Code 标签页里跑着的会话也带上：重启后它们按这份布局的窗口位置接回，补在标签末尾。
+            for pane in self?.terminalPanes ?? [] { pane.updateLayout(layout) }
         }
         windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
         self.layoutWriter = layoutWriter
@@ -316,7 +323,10 @@ final class WorkspaceModel {
     /// 全窗口唯一，语义反而更准（旧模型里一个标签四个窗格连四台机器时，
     /// 这里只反映聚焦那一个）。
     func focusedTerminalSession() -> TerminalSession? {
-        terminalGroups.activeTab?.payload.session
+        guard let pane = terminalGroups.activeTab?.payload else { return nil }
+        // Code 标签页：右边正显示的那个终端；看着记录时没有。
+        if let code = pane.codeTab { return (code.displayedTerminal as? PaneModel)?.session }
+        return pane.session
     }
 
     // MARK: - 跨窗口会话注册表（CLI 的 terminals / terminal-read / terminal-send）
@@ -340,7 +350,7 @@ final class WorkspaceModel {
             registry: registry, windowID: windowID, windowKind: windowKind,
             customTitle: { [weak self] paneID in self?.tabTitle(paneID: paneID) })
         sessionRegistrar = registrar
-        for tab in terminalGroups.allTabs { tab.payload.adopt(registrar: registrar) }
+        for pane in terminalPanes { pane.adopt(registrar: registrar) }
         // 手机远控关标签时「同时关闭 Mac 上的终端」走这里。
         registry.setCloser(forWindow: windowID) { [weak self] paneID in
             self?.closeTerminal(paneID: paneID) ?? false
@@ -363,6 +373,7 @@ final class WorkspaceModel {
     /// 关掉某个终端窗格所在的标签（`onTabRemoved` 会 dispose 它、断开连接）。返回 false = 没有这个窗格。
     @discardableResult
     func closeTerminal(paneID: UUID) -> Bool {
+        if let (_, code) = codeTab(running: paneID) { return code.end(paneID) }
         guard terminalGroups.allTabs.contains(where: { $0.payload.id == paneID }) else { return false }
         terminalGroups.closeTabs { $0.payload.id == paneID }
         return true
@@ -372,9 +383,16 @@ final class WorkspaceModel {
     /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
     @discardableResult
     func revealTerminal(paneID: UUID) -> Bool {
+        let window = terminalPanes.lazy.compactMap { $0.session.ghostty.view.window }.first
+        // Code 标签页里跑着的会话：切到那个标签页，右边换成它的终端。
+        if let (tab, code) = codeTab(running: paneID), let at = terminalGroups.locateTab(tab.id) {
+            terminalGroups.activateTab(groupID: at.groupID, index: at.index)
+            code.selectRun(paneID)
+            window?.bringToFront()
+            return true
+        }
         guard let tab = terminalGroups.allTabs.first(where: { $0.payload.id == paneID }),
               let at = terminalGroups.locateTab(tab.id) else { return false }
-        let window = terminalGroups.allTabs.lazy.compactMap { $0.payload.session.ghostty.view.window }.first
         terminalGroups.activateTab(groupID: at.groupID, index: at.index)
         window?.bringToFront()
         return true
@@ -383,7 +401,7 @@ final class WorkspaceModel {
     /// 某个窗格所在标签打开时定下的名字（`PaneModel.tabTitle`），没有则 nil。
     /// `TerminalSessionRegistrar` 的 title 钩子就查它。
     func tabTitle(paneID: UUID) -> String? {
-        terminalGroups.allTabs.first { $0.payload.id == paneID }?.payload.tabTitle
+        terminalPanes.first { $0.id == paneID }?.tabTitle
     }
 
     /// 把每条终端标签**当前**的名字推给注册表（`title` = `PaneModel.tabTitle`，没有就服务器名）。
@@ -395,9 +413,9 @@ final class WorkspaceModel {
     /// 注册表里没有的窗格自动 no-op。
     func syncTerminalTitles() {
         guard let registrar = sessionRegistrar else { return }
-        for tab in terminalGroups.allTabs where tab.payload.fileBuffer == nil {
-            guard let title = tab.payload.tabTitle ?? tab.payload.connectedServerName else { continue }
-            registrar.registry.update(id: tab.payload.id, title: title)
+        for pane in terminalPanes {
+            guard let title = pane.tabTitle ?? pane.connectedServerName else { continue }
+            registrar.registry.update(id: pane.id, title: title)
         }
     }
 
@@ -405,11 +423,17 @@ final class WorkspaceModel {
     /// `TerminalRegistryBinding` 用它做 `onChange` 的观察源 —— 那边不想 import
     /// `UPaneGroups` 只为拿一个 `activeTab`。
     var focusedTerminalSessionID: UUID? {
-        terminalGroups.activeTab.flatMap { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
+        guard let pane = terminalGroups.activeTab?.payload else { return nil }
+        if let code = pane.codeTab {
+            guard case .terminal(let id) = code.detail else { return nil }
+            return id
+        }
+        return pane.fileBuffer == nil ? pane.id : nil
     }
 
     /// 当前前台**终端**标签连的服务器（文件窗格不算，返回 nil）。终端窗口的标签可连不同
     /// 主机，标题栏 / 端口转发 / Agent 按它跟随活动标签。
+    /// Code 标签页算它那台主机。
     var focusedTerminalServerID: UUID? {
         terminalGroups.activeTab.flatMap { $0.payload.fileBuffer == nil ? $0.payload.serverProfileID : nil }
     }
@@ -425,10 +449,11 @@ final class WorkspaceModel {
     /// 新建窗格的唯一入口：建出来立刻打上登记凭条。
     /// 组树的三个钩子（clone / 新组 / restore）与所有 `openXxx` 都必须走它，
     /// 否则那条会话对 CLI 永远不可见。
-    private func makePane(id: UUID? = nil, serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil,
+    private func makePane(id: UUID? = nil, serverProfileID: UUID, fileBuffer: FileBuffer? = nil,
+                          codeTab: CodeTabModel? = nil, tabTitle: String? = nil,
                           sessionOrder: Double? = nil) -> PaneModel {
-        let pane = PaneModel(id: id ?? UUID(), serverProfileID: serverProfileID, fileBuffer: fileBuffer, tabTitle: tabTitle,
-                             sessionOrder: sessionOrder ?? Date().timeIntervalSince1970)
+        let pane = PaneModel(id: id ?? UUID(), serverProfileID: serverProfileID, fileBuffer: fileBuffer, codeTab: codeTab,
+                             tabTitle: tabTitle, sessionOrder: sessionOrder ?? Date().timeIntervalSince1970)
         stamp(pane)
         return pane
     }
@@ -482,6 +507,19 @@ final class WorkspaceModel {
                 throw CancellationError()
             }
             return try await SFTPSession.make(profile: profile, container: container, approver: { _ in false })
+        }
+    }
+
+    /// `connectCodeRun` 的正式实现：按主机 id 取已保存的主机去连（同终端标签页的面板）。主机被删了就标成失败。
+    static func liveCodeRunConnector(container: ModelContainer) -> (PaneModel) -> Void {
+        { pane in
+            let serverID = pane.serverProfileID
+            let descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == serverID })
+            guard let profile = try? container.mainContext.fetch(descriptor).first else {
+                pane.markServerMissing()
+                return
+            }
+            Task { await pane.connect(profile: profile, modelContainer: container) }
         }
     }
 
@@ -572,6 +610,14 @@ final class WorkspaceModel {
     /// `closeTerminal(paneID:)`，那边已经由发起方确认过。
     func requestCloseTerminalTab(_ tabID: UUID) {
         guard let tab = terminalGroups.allTabs.first(where: { $0.id == tabID }) else { return }
+        if let code = tab.payload.codeTab {
+            // Code 标签页：里面跑着的会话有前台程序时问一次，确认后一起结束（`onTabRemoved` → `CodeTabModel.close`）。
+            TerminalCloseGuard.requestClose(code.terminals.compactMap { ($0 as? PaneModel)?.session }, tabName: TerminalArea.codeTabBaseTitle) { [weak self] in
+                guard let self, let at = terminalGroups.locateTab(tabID) else { return }
+                terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+            }
+            return
+        }
         if let buffer = tab.payload.fileBuffer {
             // 文件标签：没有程序要问，要问的是改过没存的内容。别处（另一个标签、预览区）还开着同一个文档就直接关。
             let elsewhere = terminalGroups.allTabs.contains { $0.id != tabID && $0.payload.fileBuffer === buffer }
@@ -721,6 +767,96 @@ final class WorkspaceModel {
         }
     }
 
+    // MARK: - Code 标签页
+
+    /// 窗口里所有的终端会话：终端标签页，加上 Code 标签页里跑着的（它们不在标签树里）。
+    var terminalPanes: [PaneModel] {
+        terminalGroups.allTabs.flatMap { tab -> [PaneModel] in
+            if let code = tab.payload.codeTab { return code.runs.compactMap { $0.terminal as? PaneModel } }
+            return tab.payload.isTerminal ? [tab.payload] : []
+        }
+    }
+
+    /// 关窗口前要问的那些终端会话。
+    var terminalSessions: [TerminalSession] { terminalPanes.map(\.session) }
+
+    /// Code 标签页里的会话连主机（窗口视图注入：要 ModelContainer）。没注入（测试、画廊）时由右边的面板显示出来时去连。
+    @ObservationIgnored var connectCodeRun: ((PaneModel) -> Void)?
+
+    /// 在 `groupID`（默认活动组）开一个 `serverID` 的 Code 标签页并设为前台。`directory` 是「＋」新会话默认的目录。
+    @discardableResult
+    func openCodeTab(serverID: UUID, hostName: String, directory: String?, in groupID: UUID? = nil) -> UUID {
+        terminalGroups.openTab({ self.makeCodeTab(serverID: serverID, hostName: hostName, directory: directory) },
+                               in: groupID)
+    }
+
+    /// 标签条上的 Code 按钮 / ⌘K：开那个组（默认活动组）前台标签页所在主机的 Code 标签页；组里一个标签页都没有时开
+    /// `fallbackServerID`（本窗口绑定的那台，同「＋」）。目录取前台终端的当前目录。`hostName` 由主机 id 查名字。
+    @discardableResult
+    func openCodeTab(in groupID: UUID? = nil, fallbackServerID: UUID, hostName: (UUID) -> String) -> UUID {
+        let group = groupID ?? terminalGroups.activeGroupID
+        let front = group.flatMap { terminalGroups.groups[$0]?.activeTab?.payload } ?? terminalGroups.activeTab?.payload
+        let serverID = front?.serverProfileID ?? fallbackServerID
+        return openCodeTab(serverID: serverID, hostName: hostName(serverID),
+                           directory: front.flatMap { Self.codeDirectory(of: $0) }, in: group)
+    }
+
+    /// 终端标签页右键「历史会话…」：这个组里已经有同一台主机的 Code 标签页就切过去，没有就新开一个；列表定位到那个终端所在目录的那一组。
+    func showCodeTab(for pane: PaneModel, hostName: String) {
+        guard let tab = terminalGroups.allTabs.first(where: { $0.payload === pane }),
+              let at = terminalGroups.locateTab(tab.id) else { return }
+        let directory = Self.codeDirectory(of: pane)
+        if let existing = terminalGroups.groups[at.groupID]?.tabs.first(where: {
+            $0.payload.codeTab != nil && $0.payload.serverProfileID == pane.serverProfileID
+        }), let code = existing.payload.codeTab, let target = terminalGroups.locateTab(existing.id) {
+            if let directory { code.newSessionDirectory = directory }
+            code.requestReveal(directory: directory)
+            terminalGroups.activateTab(groupID: target.groupID, index: target.index)
+            return
+        }
+        let id = openCodeTab(serverID: pane.serverProfileID, hostName: hostName, directory: directory, in: at.groupID)
+        terminalGroups.tab(id)?.payload.codeTab?.requestReveal(directory: directory)
+    }
+
+    /// 「挪到新标签页」：把 Code 标签页里跑着的一个会话开成同一组里的普通终端标签页（同一条会话，不重开）。
+    func moveCodeRunToTab(_ runID: UUID, fromCodeTab tabID: UUID) {
+        guard let code = terminalGroups.tab(tabID)?.payload.codeTab, let at = terminalGroups.locateTab(tabID),
+              let pane = code.detach(runID) as? PaneModel else { return }
+        terminalGroups.openTab({ TerminalTab(id: pane.id, payload: pane) }, in: at.groupID)
+        syncTerminalTitles()
+    }
+
+    /// 跑着 `paneID` 这个会话的 Code 标签页。
+    func codeTab(running paneID: UUID) -> (tab: TerminalTab, code: CodeTabModel)? {
+        for tab in terminalGroups.allTabs {
+            if let code = tab.payload.codeTab, code.runs.contains(where: { $0.id == paneID }) { return (tab, code) }
+        }
+        return nil
+    }
+
+    private func makeCodeTab(serverID: UUID, hostName: String, directory: String?) -> TerminalTab {
+        let code = CodeTabModel(hostName: hostName, directory: directory) { [weak self] _ in
+            self?.makeCodeRun(serverID: serverID, hostName: hostName)
+        }
+        return TerminalTab(payload: makePane(serverProfileID: serverID, codeTab: code, tabTitle: hostName))
+    }
+
+    /// Code 标签页里继续 / 新开一个会话的终端：和普通标签页一样登记、写保持进程的归属，只是不进标签树。
+    /// SSH 的新终端从主目录起，命令自己带 `cd`，所以不用目录。
+    private func makeCodeRun(serverID: UUID, hostName: String) -> PaneModel {
+        let pane = makePane(serverProfileID: serverID, tabTitle: hostName)
+        connectCodeRun?(pane)
+        syncTerminalTitles()
+        return pane
+    }
+
+    /// 终端标签页的当前目录（Code 标签页取它记着的）。shell 没报过（没有 OSC 7）为 nil。
+    private static func codeDirectory(of pane: PaneModel) -> String? {
+        if let code = pane.codeTab { return code.newSessionDirectory }
+        guard pane.isTerminal else { return nil }
+        return ClaudeProjectPath.directory(fromOSC7: pane.session.shadow.workingDirectory)
+    }
+
     // MARK: 快照
 
     func snapshot() -> WorkspaceSnapshot {
@@ -751,7 +887,7 @@ final class WorkspaceModel {
     /// 直接丢掉（buffer 由 `openFiles` 单独持久化）。
     private func makeSnapshot(agentState: AgentSnapshot) -> WorkspaceSnapshot {
         let groups = terminalGroups.snapshot { tab -> TerminalTabSnapshot? in
-            guard tab.payload.fileBuffer == nil else { return nil }
+            guard tab.payload.isTerminal else { return nil }
             return TerminalTabSnapshot(serverProfileID: tab.payload.serverProfileID,
                                        title: tab.payload.tabTitle ?? String(localized: "终端", comment: "终端标签页的默认标题"),
                                        sessionID: tab.payload.id)
@@ -761,7 +897,7 @@ final class WorkspaceModel {
         var tabSnaps: [TabSnapshot] = []
         let activeTabID = terminalGroups.activeTab?.id
         for tab in terminalGroups.allTabs {
-            guard tab.payload.fileBuffer == nil else { continue }
+            guard tab.payload.isTerminal else { continue }
             if tab.id == activeTabID {
                 activeIdx = tabSnaps.count
             }

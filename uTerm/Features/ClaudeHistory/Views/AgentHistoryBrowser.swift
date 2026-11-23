@@ -2,7 +2,16 @@ import AppKit
 import SwiftUI
 import UDesignKit
 
-/// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口和终端窗口的 Code 模式都是它。
+/// 侧栏顶上「正在运行」那一组：在 Code 标签页里跑着的会话（`CodeTabModel.runs`）。独立的历史窗口没有。
+struct AgentHistoryRunning {
+    let rows: [CodeTabRunRow]
+    /// 跑着的会话对应的记录文件：列表里这些行标成「运行中」。
+    let paths: Set<String>
+    let onSelect: (UUID) -> Void
+}
+
+/// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口用它；Code 标签页另摆（`CodeTabView`），
+/// 用的是同样的列表与对话。
 struct AgentHistoryBrowser: View {
     let history: AgentHistoryModel
     let onResume: (AgentHistorySessionFile) -> Void
@@ -49,8 +58,35 @@ struct AgentHistoryBrowser: View {
     }
 
     @ViewBuilder private var detail: some View {
+        if history.transcript != nil {
+            AgentHistoryTranscriptStack(history: history, onResume: onResume)
+        } else {
+            AgentHistorySelectPrompt(history: history)
+        }
+    }
+}
+
+/// 还没选会话时右边的空态。
+struct AgentHistorySelectPrompt: View {
+    let history: AgentHistoryModel
+
+    var body: some View {
+        RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
+                           detail: AgentHistoryText.selectSessionDetail(tools: listedTools))
+    }
+
+    private var listedTools: [AgentHistoryTool] {
+        history.availableTools.isEmpty ? history.configuredTools : history.availableTools
+    }
+}
+
+/// 选中会话的只读对话：主对话与点进去的一层层子代理记录都挂着，只露出最里面那层（返回上一层时滚动位置、展开的块都还在）。
+struct AgentHistoryTranscriptStack: View {
+    let history: AgentHistoryModel
+    let onResume: (AgentHistorySessionFile) -> Void
+
+    var body: some View {
         if let transcript = history.transcript {
-            // 主对话与点进去的一层层子代理记录都挂着，只露出最里面那层：返回上一层时滚动位置、展开的块都还在。
             let levels = [transcript] + history.subagentStack
             let top = levels.last?.path
             ZStack {
@@ -70,14 +106,7 @@ struct AgentHistoryBrowser: View {
             }
             // 换了一份对话（含「跳到最新」把从命中处打开的换成从末尾打开的）就是新的视图：滚动位置、展开的块重来。
             .id(ObjectIdentifier(transcript))
-        } else {
-            RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
-                               detail: AgentHistoryText.selectSessionDetail(tools: listedTools))
         }
-    }
-
-    private var listedTools: [AgentHistoryTool] {
-        history.availableTools.isEmpty ? history.configuredTools : history.availableTools
     }
 }
 
@@ -88,6 +117,10 @@ struct AgentHistorySessionList: View {
     let history: AgentHistoryModel
     var newSession: AgentHistoryNewSession? = nil
     var reveal: AgentHistoryReveal? = nil
+    /// Code 标签页里跑着的会话：列在顶上，列表里对应的行标成「运行中」。
+    var running: AgentHistoryRunning? = nil
+    /// 收起侧栏（Code 标签页）；nil = 不出这个按钮。
+    var onCollapse: (() -> Void)? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
@@ -107,6 +140,11 @@ struct AgentHistorySessionList: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(UD.border).frame(height: 1)
+            // 搜索时也露着：一眼看得到有几个在跑。
+            if let running, !running.rows.isEmpty {
+                AgentHistoryRunningGroup(running: running, showsTool: history.isMultiTool)
+                Rectangle().fill(UD.border).frame(height: 1)
+            }
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
                 content
@@ -127,6 +165,17 @@ struct AgentHistorySessionList: View {
         @Bindable var history = history
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 2) {
+                if let onCollapse {
+                    Button(action: onCollapse) {
+                        Image(systemName: "sidebar.left")
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.udPlain)
+                    .iconButtonHover(cornerRadius: 6)
+                    .help(String(localized: "收起侧栏", comment: "Code 标签页：收起左边的会话列表"))
+                    .accessibilityLabel(Text("收起侧栏", comment: "Code 标签页：收起左边的会话列表"))
+                }
                 UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
                               showsHotkeyChip: false)
                     .onSubmit { history.submitSearch() }
@@ -289,7 +338,8 @@ struct AgentHistorySessionList: View {
                             ForEach(group.files) { file in
                                 AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                                        showsProject: grouping != .project, showsTool: showsTool,
-                                                       isSelected: history.selectedFile?.path == file.path)
+                                                       isSelected: history.selectedFile?.path == file.path,
+                                                       isRunning: running?.paths.contains(file.path) == true)
                                     .onTapGesture { history.select(file) }
                             }
                         }
@@ -386,6 +436,82 @@ private struct AgentHistoryGroupHeader: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed)))
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+// MARK: - 正在运行
+
+/// 「运行中」小标记：绿点 + 字。
+struct AgentHistoryRunningTag: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Circle().fill(UD.success).frame(width: 6, height: 6)
+            Text("运行中")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(UD.success)
+        }
+        .fixedSize()
+    }
+}
+
+/// 侧栏顶上「正在运行」一组：标题带个数，下面每个跑着的会话一行。行多了在组里滚，不把列表挤没。
+private struct AgentHistoryRunningGroup: View {
+    let running: AgentHistoryRunning
+    let showsTool: Bool
+
+    /// 超过这么多行就在组里滚。
+    private static let visibleRows = 4
+    private static let rowHeight: CGFloat = 30
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Circle().fill(UD.success).frame(width: 6, height: 6)
+                Text("正在运行", comment: "Code 标签页侧栏顶上：在这个标签页里跑着的会话")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(UD.text2)
+                Spacer(minLength: 4)
+                Text(verbatim: "\(running.rows.count)")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .accessibilityElement(children: .combine)
+            if running.rows.count > Self.visibleRows {
+                ScrollView { rows }
+                    .frame(height: Self.rowHeight * CGFloat(Self.visibleRows) + 8)
+            } else {
+                rows
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(running.rows) { row in
+                HStack(spacing: 7) {
+                    if showsTool { AgentHistoryToolBadge(tool: row.tool, size: 14) }
+                    Text(row.title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(UD.text)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: Self.rowHeight)
+                .background(RoundedRectangle(cornerRadius: 6).fill(row.isSelected ? UD.rowSelected : Color.clear))
+                .contentShape(Rectangle())
+                .onTapGesture { running.onSelect(row.id) }
+                .help(Text(verbatim: row.directory))
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(row.isSelected ? [.isButton, .isSelected] : .isButton)
+            }
+        }
     }
 }
 
@@ -557,6 +683,8 @@ private struct AgentHistorySessionRow: View {
     let showsProject: Bool
     var showsTool = false
     let isSelected: Bool
+    /// 在 Code 标签页里跑着（`AgentHistoryRunning`）。
+    var isRunning = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -570,12 +698,15 @@ private struct AgentHistorySessionRow: View {
                     .foregroundStyle(UD.text)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                AgentSessionTimeText(history: history, file: file) { activity in
-                    AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                HStack(spacing: 5) {
+                    if isRunning { AgentHistoryRunningTag() }
+                    AgentSessionTimeText(history: history, file: file) { activity in
+                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-                .lineLimit(1)
             }
         }
         .padding(.horizontal, 10)

@@ -8,8 +8,8 @@ enum WorkspaceCommandPaletteFactory {
         let openGroups: () -> Void
         let openImport: () -> Void
         let openSettings: () -> Void
-        /// 当前终端标签所在主机的历史会话。没有终端标签在前台时为 nil（不出这一项）。
-        var openClaudeHistory: (@MainActor () -> Void)? = nil
+        /// 开前台标签页所在主机的 Code 标签页（编码工具的历史会话）。nil = 不出这一项。
+        var openCodeTab: (@MainActor () -> Void)? = nil
     }
 
     /// 工作区窗口的命令项：主机（连接=当前工作区开新 tab）/ 最近文件 / 命令 / 设置深链。
@@ -61,12 +61,12 @@ enum WorkspaceCommandPaletteFactory {
             title: String(localized: "关闭当前终端标签页"), detail: "", hint: "⌘W", group: nil) {
                 workspace.requestCloseActiveTerminalTab()
             })
-        if let openClaudeHistory = actions.openClaudeHistory {
+        if let openCodeTab = actions.openCodeTab {
             items.append(CommandPaletteItem(
-                id: "cmd.claudeHistory", kind: .command,
-                title: String(localized: "历史会话…"),
+                id: "cmd.codeTab", kind: .command,
+                title: CodeTabButton.title,
                 detail: String(localized: "查看这台主机上编码工具的历史会话，并可继续其中一个"),
-                hint: "↵", group: nil) { openClaudeHistory() })
+                hint: "↵", group: nil) { openCodeTab() })
         }
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,

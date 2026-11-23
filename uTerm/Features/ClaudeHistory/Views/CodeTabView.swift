@@ -1,0 +1,225 @@
+import SwiftUI
+import UDesignKit
+
+/// Code 标签页的尺寸。
+enum CodeTabLayout {
+    /// 右边至少留这么宽：终端排得下一行像样的命令，对话也不至于一行几个字。
+    static let minimumDetailWidth = 380.0
+    /// 窄过这个宽度侧栏就不和右边并排：收成一条窄轨，点开时占满整个标签页（右边先让开，选了会话再回来）。
+    static let compactWidth = AgentHistoryBrowser.sidebarRange.lowerBound + minimumDetailWidth
+    /// 收起时左边那条窄轨的宽度。
+    static let railWidth: CGFloat = 36
+}
+
+/// 一个 Code 标签页的内容：左边会话侧栏（分组、工具标记、筛选、搜索、顶上「正在运行」），右边看选中那份记录，
+/// 或者那个会话在这个标签页里跑着的终端。SSH 的终端区（`TerminalArea`）和本机终端窗口都用它，各自给终端面板怎么画。
+struct CodeTabView: View {
+    let code: CodeTabModel
+    /// 第一次显示时建文件通道。
+    let makeConnection: () -> AgentHistoryConnection
+    /// 右边那个终端的面板（SSH 是 `PaneView`，本机是本机终端的面板）。
+    let terminal: (any CodeTabTerminal) -> AnyView
+    /// 「挪到新标签页」；nil = 不出这个按钮。
+    var onMoveToTab: ((UUID) -> Void)? = nil
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(UD.card)
+            .task { await code.open(makeConnection) }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let connection = code.connection {
+            switch connection.phase {
+            case .connecting:
+                RemoteMacProgressView(text: String(localized: "正在连接…"))
+            case .failed(let message):
+                RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取历史会话"),
+                                   detail: message) {
+                    UDButton(title: String(localized: "重试")) { Task { await connection.open() } }
+                }
+            case .ready(let history):
+                CodeTabBrowser(code: code, history: history, terminal: terminal, onMoveToTab: onMoveToTab)
+            }
+        } else {
+            RemoteMacProgressView(text: String(localized: "正在连接…"))
+        }
+    }
+}
+
+/// 列表 + 右边。宽的时候并排（侧栏可拖宽、可收起），窄的时候侧栏收成一条窄轨，点开时占满、右边让开。
+///
+/// 窄的时候不让侧栏盖在右边上面：右边可能是终端（引擎自己画的图层），叠在上面的 SwiftUI 内容压不住它；
+/// 也不并排挤窄右边：终端会跟着重排。占满再回来，终端的尺寸不变。
+private struct CodeTabBrowser: View {
+    let code: CodeTabModel
+    let history: AgentHistoryModel
+    let terminal: (any CodeTabTerminal) -> AnyView
+    let onMoveToTab: ((UUID) -> Void)?
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = Double(proxy.size.width)
+            let compact = width < CodeTabLayout.compactWidth
+            let inline = !compact && !code.sidebarHidden
+            let upper = max(AgentHistoryBrowser.sidebarRange.lowerBound,
+                            min(AgentHistoryBrowser.sidebarRange.upperBound, width - CodeTabLayout.minimumDetailWidth))
+            HStack(spacing: 0) {
+                if compact && code.sidebarOverlayShown {
+                    sessionList(onCollapse: { code.sidebarOverlayShown = false })
+                        .frame(maxWidth: .infinity)
+                } else if inline {
+                    sessionList(onCollapse: { code.sidebarHidden = true })
+                        .frame(width: min(max(code.sidebarWidth, AgentHistoryBrowser.sidebarRange.lowerBound), upper))
+                    ColumnResizer(width: Binding(get: { code.sidebarWidth }, set: { code.sidebarWidth = $0 }),
+                                  range: AgentHistoryBrowser.sidebarRange.lowerBound...upper, sign: 1)
+                } else {
+                    CodeTabRail(runningCount: code.runs.count) {
+                        if compact { code.sidebarOverlayShown = true } else { code.sidebarHidden = false }
+                    }
+                    Rectangle().fill(UD.border).frame(width: 1)
+                }
+                if !(compact && code.sidebarOverlayShown) {
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .onChange(of: compact) { _, isCompact in if !isCompact { code.sidebarOverlayShown = false } }
+        }
+        .onAppear { updateTranscriptVisibility() }
+        .onDisappear { history.setTranscriptVisible(false) }
+        .onChange(of: code.detail) { _, _ in updateTranscriptVisibility() }
+        .onChange(of: scenePhase) { _, _ in updateTranscriptVisibility() }
+        .onChange(of: code.sidebarOverlayShown) { _, _ in updateTranscriptVisibility() }
+        // 用户点了列表里的一行：不再看那个没对上记录的新会话；盖着的侧栏收回去。
+        .onChange(of: history.selectedFile?.path) { _, _ in
+            code.historySelectionChanged()
+            code.sidebarOverlayShown = false
+        }
+    }
+
+    /// 实时跟随只在看得见记录时查：右边是终端、侧栏占满了、标签页切走了、App 进了后台都停。
+    private func updateTranscriptVisibility() {
+        history.setTranscriptVisible(code.detail == .transcript && !code.sidebarOverlayShown && scenePhase != .background)
+    }
+
+    private func sessionList(onCollapse: @escaping () -> Void) -> some View {
+        AgentHistorySessionList(
+            history: history,
+            newSession: AgentHistoryNewSession(directory: code.newSessionDirectory) { tool, command, directory in
+                code.startNewSession(tool: tool, command: command, directory: directory)
+                code.sidebarOverlayShown = false
+            },
+            reveal: code.reveal,
+            running: AgentHistoryRunning(rows: code.runningRows(), paths: Set(code.runs.compactMap(\.path))) { id in
+                code.selectRun(id)
+                code.sidebarOverlayShown = false
+            },
+            onCollapse: onCollapse)
+    }
+
+    // MARK: 右边
+
+    @ViewBuilder private var detail: some View {
+        switch code.detail {
+        case .empty:
+            AgentHistorySelectPrompt(history: history)
+        case .transcript:
+            VStack(spacing: 0) {
+                if let run = code.displayedRun { runHeader(run) }
+                AgentHistoryTranscriptStack(history: history) { file in code.resume(file) }
+            }
+        case .terminal(let id):
+            if let run = code.runs.first(where: { $0.id == id }) {
+                VStack(spacing: 0) {
+                    runHeader(run)
+                    terminal(run.terminal)
+                        // 每个会话一个面板：换会话就是换一个终端，不复用同一个视图。
+                        .id(run.id)
+                }
+            }
+        }
+    }
+
+    /// 跑着的会话顶上那一条：工具、标题、「运行中」，右边「终端 / 记录」与「挪到新标签页」。
+    private func runHeader(_ run: CodeTabModel.Run) -> some View {
+        let title = code.runningRows().first { $0.id == run.id }?.title ?? AgentHistoryText.newSession
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                AgentHistoryToolBadge(tool: run.tool, size: 15)
+                Text(title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
+                AgentHistoryRunningTag()
+                Spacer(minLength: 8)
+                if run.path != nil {
+                    UDSegmented(
+                        selection: Binding(get: { run.showsTranscript }, set: { code.setShowsTranscript($0, for: run.id) }),
+                        options: [(false, String(localized: "终端", comment: "终端 / Agent 模式切换")),
+                                  (true, String(localized: "记录", comment: "Code 标签页：看这个会话的对话记录"))],
+                        labelFont: UD.font(11.5, weight: .medium))
+                        .fixedSize()
+                }
+                if let onMoveToTab {
+                    Button { onMoveToTab(run.id) } label: {
+                        Image(systemName: "arrow.up.forward.app")
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.udPlain)
+                    .iconButtonHover(cornerRadius: 6)
+                    .help(String(localized: "挪到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页"))
+                    .accessibilityLabel(Text("挪到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页"))
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: WorkspacePaneHeaderLayout.height)
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
+    }
+}
+
+/// 侧栏收起时左边那条窄轨：展开按钮；有会话在跑时下面一个绿点带个数，一眼看得到。
+private struct CodeTabRail: View {
+    let runningCount: Int
+    let expand: () -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Button(action: expand) {
+                Image(systemName: "sidebar.left")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.udPlain)
+            .iconButtonHover(cornerRadius: 6)
+            .help(String(localized: "展开侧栏", comment: "Code 标签页：展开左边的会话列表"))
+            .accessibilityLabel(Text("展开侧栏", comment: "Code 标签页：展开左边的会话列表"))
+            .frame(height: WorkspacePaneHeaderLayout.height)
+            if runningCount > 0 {
+                Button(action: expand) {
+                    VStack(spacing: 3) {
+                        Circle().fill(UD.success).frame(width: 7, height: 7)
+                        Text(verbatim: "\(runningCount)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(UD.success)
+                    }
+                    .frame(width: 26, height: 34)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.udPlain)
+                .help(String(localized: "\(runningCount) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数"))
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: CodeTabLayout.railWidth)
+        .frame(maxHeight: .infinity)
+    }
+}

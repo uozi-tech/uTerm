@@ -17,7 +17,8 @@ struct StatusBarView: View {
         let t = workspace.telemetryModel.display
         HStack(spacing: 10) {
             // 连接状态点（活动组的前台标签）
-            if let session = workspace.terminalGroups.activeTab?.payload.session {
+            // Code 标签页取右边正显示的那个终端（看着记录时没有点）。
+            if let session = workspace.focusedTerminalSession() {
                 let display = ConnectionStatusDisplay(state: session.connectionState)
                 Circle()
                     .fill(display.tint.color)

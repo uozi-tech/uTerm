@@ -8,6 +8,8 @@ final class PaneModel: Identifiable {
     let id: UUID
     let serverProfileID: UUID
     let fileBuffer: FileBuffer?
+    /// Code 标签页（`CodeTabModel`）：不是终端，`session` 不用；里面跑着的会话各有自己的 `PaneModel`，不在标签树里。
+    let codeTab: CodeTabModel?
     /// 打开时定下的标签名（服务器名），随工作区快照存盘。标签上优先显示 shell 设的标题
     /// （`session.shellTitle`），它只是没有 shell 标题时的回落。
     let tabTitle: String?
@@ -30,12 +32,13 @@ final class PaneModel: Identifiable {
     /// 供「先连上、后注入注册表」的窗口补登记（`adopt(registrar:)`）。
     @ObservationIgnored private(set) var connectedServerName: String?
 
-    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil,
-         sessionOrder: Double = Date().timeIntervalSince1970) {
+    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil, codeTab: CodeTabModel? = nil,
+         tabTitle: String? = nil, sessionOrder: Double = Date().timeIntervalSince1970) {
         self.id = id
         self.sessionOrder = sessionOrder
         self.serverProfileID = serverProfileID
         self.fileBuffer = fileBuffer
+        self.codeTab = codeTab
         self.tabTitle = tabTitle
         // 连接状态是注册表里「这条会话还活着吗」的唯一真值：远端退出（`exitStream`
         // 把状态翻到 `.disconnected`）之后必须注销，否则 `terminals` 一直列着它，
@@ -45,10 +48,13 @@ final class PaneModel: Identifiable {
         }
     }
 
+    /// 是终端标签（不是文件、不是 Code 标签页）。只有它连主机、登记、进保持进程的布局。
+    var isTerminal: Bool { fileBuffer == nil && codeTab == nil }
+
     /// 按连接状态同步跨窗口注册表：`.connected` 登记，其余一律注销。
     /// 重连成功会重新登记（`connectedAt` 也随之更新）。
     private func syncRegistration(for state: TerminalSession.ConnectionState) {
-        guard fileBuffer == nil, let registrar else { return }
+        guard isTerminal, let registrar else { return }
         guard state == .connected else {
             registrar.unregister(paneID: id)
             return
@@ -62,7 +68,7 @@ final class PaneModel: Identifiable {
 
     /// 用给定的服务器配置发起连接。
     func connect(profile: ServerProfile, modelContainer: ModelContainer) async {
-        guard fileBuffer == nil else { return }
+        guard isTerminal else { return }
         guard !isConnecting else { return }
         // 重访标签时窗格会重新进入视图层级触发 connect；已连接/连接中则视为 no-op。
         guard session.connectionState != .connected,
@@ -153,7 +159,7 @@ final class PaneModel: Identifiable {
 
     /// 窗口布局变了。已经交给 holder 的会话立刻改写归属；还没建连的等 `makeHeldBackend` 时一起带上。
     func updateLayout(_ layout: HeldSessionLayout) {
-        guard fileBuffer == nil else { return }
+        guard isTerminal else { return }
         self.layout = layout
         guard let backend = session.backend as? HeldSSHBackend,
               let attributes = sessionAttributes(title: connectedServerName) else { return }
@@ -163,7 +169,7 @@ final class PaneModel: Identifiable {
     /// 窗口把注册表凭条补发下来时调用（窗口视图的 `.task` 可能晚于窗格建连）。
     /// 已经连上的窗格立刻补登记，未连上的等 `connect` 走正常路径。
     func adopt(registrar: TerminalSessionRegistrar) {
-        guard fileBuffer == nil else { return }
+        guard isTerminal else { return }
         self.registrar = registrar
         if let backend = session.backend as? HeldSSHBackend, let attributes = sessionAttributes(title: connectedServerName) {
             Task { await backend.setAttributes(attributes) }
@@ -177,15 +183,25 @@ final class PaneModel: Identifiable {
 
     /// 服务器配置已不存在时调用。
     func markServerMissing() {
-        guard fileBuffer == nil else { return }
+        guard isTerminal else { return }
         session.markFailed(String(localized: "主机已被删除"))
     }
 
     /// 窗格被关闭/移除时调用。
     func dispose() {
-        guard fileBuffer == nil else { return }
+        if let codeTab {
+            codeTab.close()
+            return
+        }
+        guard isTerminal else { return }
         registrar?.unregister(paneID: id)
         session.closeForDisposal()
         hostKeyRelay.abandon()
     }
+}
+
+/// Code 标签页里跑着会话的终端就是一个不在标签树里的 `PaneModel`（见 `WorkspaceModel.makeCodeRun`）。
+extension PaneModel: CodeTabTerminal {
+    func runCodeCommand(_ command: String) { session.startCodeCommand(command) }
+    var codeCommandHasEnded: Bool { session.codeCommandHasEnded }
 }

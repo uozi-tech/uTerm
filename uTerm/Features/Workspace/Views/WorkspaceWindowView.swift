@@ -194,6 +194,7 @@ struct WorkspaceWindowView: View {
             }
             // 连别的主机的终端里 ⌘ 点的路径开在终端区，按那个终端的主机读（侧栏那台的进预览区）。
             workspace.makeFileProvider = WorkspaceModel.liveFileProvider(container: modelContext.container)
+            workspace.connectCodeRun = WorkspaceModel.liveCodeRunConnector(container: modelContext.container)
             await workspace.connectSharedSFTP(profile: server, modelContainer: modelContext.container)
             if workspace.fileBrowserModel.state == .browsing {
                 await workspace.filePreviewModel.loadRestoredBuffersIfNeeded()
@@ -303,9 +304,7 @@ struct WorkspaceWindowView: View {
             }))
         // 关窗前先存编辑器里改了没存的文件（自动保存还没到点的那一秒也算）。
         .background(EditorWindowCloseGuardInstaller(models: { [workspace.filePreviewModel] }))
-        .background(TerminalWindowCloseGuardInstaller(sessions: {
-            workspace.terminalGroups.allTabs.map(\.payload.session)
-        }))
+        .background(TerminalWindowCloseGuardInstaller(sessions: { workspace.terminalSessions }))
         // 「打开 / 下载…」命令接收 + toast 浮层 + 关窗前检查没上传的外部编辑改动。
         .modifier(ExternalOpenWindowBinding(
             coordinator: workspace.externalOpen,
@@ -327,13 +326,7 @@ struct WorkspaceWindowView: View {
     private func workspaceCommandItems(server: ServerProfile) -> [CommandPaletteItem] {
         let workspace = self.workspace
         let openWindow = self.openWindow
-        var openClaudeHistory: (@MainActor () -> Void)?
-        if let pane = workspace.terminalGroups.activeTab?.payload, pane.fileBuffer == nil {
-            let serverID = pane.serverProfileID, session = pane.session
-            openClaudeHistory = {
-                openWindow.openClaudeHistory(serverID: serverID, session: session, workspace: workspace)
-            }
-        }
+        let names = Dictionary(profiles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         return WorkspaceCommandPaletteFactory.items(
             profiles: profiles,
             workspace: workspace,
@@ -342,7 +335,9 @@ struct WorkspaceWindowView: View {
                 openGroups: { openWindow(id: "groups") },
                 openImport: { openWindow(id: "import") },
                 openSettings: { openWindow(id: SettingsWindow.id) },
-                openClaudeHistory: openClaudeHistory))
+                openCodeTab: {
+                    workspace.openCodeTab(fallbackServerID: server.id) { names[$0] ?? server.name }
+                }))
     }
 
     /// 注入命令面板的异步文件搜索：query → 远程 find → 命令项（文件→预览、目录→进浏览器）。

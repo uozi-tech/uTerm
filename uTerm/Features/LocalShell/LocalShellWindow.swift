@@ -64,16 +64,25 @@ final class LocalShellPane: Identifiable {
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
     @ObservationIgnored private var directoryTracking: Task<Void, Never>?
     @ObservationIgnored private(set) var isDisposed = false
+    /// Code 标签页（`CodeTabModel`）：不是 shell，不起、不登记；里面跑着的会话各有自己的 `LocalShellPane`，不在标签树里。
+    let codeTab: CodeTabModel?
 
     /// `cd` 没有事件可等，只能隔一阵问一次。只是一次系统调用，开销可以忽略；短暂路过的目录也不会被记进最近列表。
     private static let directoryPollInterval: Duration = .seconds(3)
 
     /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
-    var defaultTitle: String { ordinal > 1 ? "\(shellName) \(ordinal)" : shellName }
+    var defaultTitle: String {
+        if codeTab != nil { return TerminalArea.codeTabBaseTitle }
+        return ordinal > 1 ? "\(shellName) \(ordinal)" : shellName
+    }
 
-    init(id: UUID = UUID(), ordinal: Int = 1, directory: String? = nil) {
+    /// 是 shell 标签（不是 Code 标签页）。
+    var isTerminal: Bool { codeTab == nil }
+
+    init(id: UUID = UUID(), ordinal: Int = 1, directory: String? = nil, codeTab: CodeTabModel? = nil) {
         self.id = id
         self.ordinal = ordinal
+        self.codeTab = codeTab
         workingDirectory = directory
         session.onConnectionStateChange = { [weak self] state in
             self?.syncRegistration(state)
@@ -81,12 +90,13 @@ final class LocalShellPane: Identifiable {
     }
 
     func attach(_ registrar: TerminalSessionRegistrar) {
+        guard isTerminal else { return }
         self.registrar = registrar
         syncRegistration(session.connectionState)
     }
 
     func start() async {
-        guard session.connectionState != .connected, session.connectionState != .connecting else { return }
+        guard isTerminal, session.connectionState != .connected, session.connectionState != .connecting else { return }
         await session.close()
         let size = session.currentProcessSize
         let backend = LocalShellBackend(client: LocalShellService.shared.client, sessionID: id,
@@ -111,6 +121,7 @@ final class LocalShellPane: Identifiable {
 
     /// 窗口布局变了。已经连着的会话立刻改写 holder 里的归属；还没连上的等 `start()` 连上时一起写。
     func updateLayout(_ layout: HeldSessionLayout) {
+        guard isTerminal else { return }
         self.layout = layout
         guard !isDisposed, session.connectionState == .connected,
               let backend = session.backend as? LocalShellBackend, let attributes = encodedAttributes() else { return }
@@ -135,6 +146,10 @@ final class LocalShellPane: Identifiable {
     func dispose() {
         guard !isDisposed else { return }
         isDisposed = true
+        if let codeTab {
+            codeTab.close()
+            return
+        }
         directoryTracking?.cancel()
         registrar?.unregister(paneID: id)
         session.closeForDisposal()
@@ -160,6 +175,12 @@ final class LocalShellPane: Identifiable {
     }
 }
 
+/// Code 标签页里跑着会话的终端就是一个不在标签树里的本机 shell（见 `LocalShellWindowModel.makeCodeRun`）。
+extension LocalShellPane: CodeTabTerminal {
+    func runCodeCommand(_ command: String) { session.startCodeCommand(command) }
+    var codeCommandHasEnded: Bool { session.codeCommandHasEnded }
+}
+
 /// 一个本机终端窗口的布局：VSCode 编辑组模型，与 SSH 终端窗口同一套（`UPaneGroupsModel`）。
 /// 标签 id 就是 `LocalShellPane.id`，也就是注册表里的会话 id。
 @MainActor
@@ -177,20 +198,36 @@ final class LocalShellWindowModel {
     @ObservationIgnored let windowTracker = HeldWindowTracker()
     private let startShell: @MainActor (LocalShellPane) -> Void
 
-    var panes: [LocalShellPane] { groups.allTabs.map(\.payload) }
+    /// 窗口里所有的 shell：shell 标签，加上 Code 标签页里跑着的（它们不在标签树里）。
+    var panes: [LocalShellPane] {
+        groups.allTabs.flatMap { tab -> [LocalShellPane] in
+            if let code = tab.payload.codeTab { return code.runs.compactMap { $0.terminal as? LocalShellPane } }
+            return [tab.payload]
+        }
+    }
+    /// 活动组的前台标签（可能是 Code 标签页）。
     var active: LocalShellPane? { groups.activeTab?.payload }
+
+    /// 进保持进程布局的是 shell 的会话 id；Code 标签页不进（重启后不恢复，里面跑着的会话以普通标签接回）。
+    static let heldSessionID: (UPaneTab<LocalShellPane>) -> UUID? = { $0.payload.isTerminal ? $0.payload.id : nil }
+
+    /// 按会话 id 找 shell（含 Code 标签页里跑着的）。
+    func pane(_ id: UUID) -> LocalShellPane? { panes.first { $0.id == id } }
 
     init(startShell: @escaping @MainActor (LocalShellPane) -> Void = { pane in
         Task { await pane.start() }
     }) {
         self.startShell = startShell
         groups.onTabRemoved = { removed, _ in removed.payload.dispose() }
-        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个。
-        groups.cloneTab = { [weak self] _ in self?.makeTab() }
+        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个；Code 标签页再开一个空的。
+        groups.cloneTab = { [weak self] tab in
+            if let code = tab.payload.codeTab { return self?.makeCodeTab(directory: code.newSessionDirectory) }
+            return self?.makeTab()
+        }
         // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
         groups.makeTabForNewGroup = { [weak self] in self?.makeTab() }
         // 重启后按它放回标签的顺序和分屏（`LocalShellRestorer`）。
-        let layoutWriter = HeldLayoutWriter(groups: groups, id: \.id) { [weak self] layout in
+        let layoutWriter = HeldLayoutWriter(groups: groups, id: Self.heldSessionID) { [weak self] layout in
             for pane in self?.panes ?? [] { pane.updateLayout(layout) }
         }
         windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
@@ -214,6 +251,7 @@ final class LocalShellWindowModel {
     /// 关掉一个标签（连同它的 shell）。返回 false = 没有这个标签。
     @discardableResult
     func close(_ id: UUID) -> Bool {
+        if let (_, code) = codeTab(running: id) { return code.end(id) }
         guard let at = groups.locateTab(id) else { return false }
         groups.closeTab(groupID: at.groupID, index: at.index)
         return true
@@ -221,7 +259,14 @@ final class LocalShellWindowModel {
 
     /// 用户要关一个标签：前台还有程序在跑时先确认。手机远控关闭走 `close(_:)`，手机上已经确认过。
     func requestClose(_ id: UUID) {
-        guard let pane = panes.first(where: { $0.id == id }) else { return }
+        if let code = groups.tab(id)?.payload.codeTab {
+            // Code 标签页：里面跑着的会话有前台程序时问一次，确认后一起结束（`onTabRemoved` → `dispose`）。
+            TerminalCloseGuard.requestClose(code.terminals.compactMap { ($0 as? LocalShellPane)?.session }, tabName: TerminalArea.codeTabBaseTitle) { [weak self] in
+                self?.close(id)
+            }
+            return
+        }
+        guard let pane = groups.tab(id)?.payload else { return }
         TerminalCloseGuard.requestClose(pane.session, tabName: pane.session.shellTitle ?? pane.defaultTitle) { [weak self] in
             self?.close(id)
         }
@@ -229,7 +274,7 @@ final class LocalShellWindowModel {
 
     /// ⌘W：只剩一个标签时关窗口，否则只关活动标签（同 SSH 终端窗口）。
     func handleCloseShortcut(closeWindow: () -> Void) {
-        guard panes.count > 1 else {
+        guard groups.allTabs.count > 1 else {
             closeWindow()
             return
         }
@@ -244,8 +289,15 @@ final class LocalShellWindowModel {
     /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
     @discardableResult
     func reveal(_ id: UUID) -> Bool {
+        let window = panes.lazy.compactMap { $0.session.ghostty.view.window }.first
+        // Code 标签页里跑着的会话：切到那个标签页，右边换成它的终端。
+        if let (tab, code) = codeTab(running: id), let at = groups.locateTab(tab.id) {
+            groups.activateTab(groupID: at.groupID, index: at.index)
+            code.selectRun(id)
+            window?.bringToFront()
+            return true
+        }
         guard let at = groups.locateTab(id) else { return false }
-        let window = groups.allTabs.lazy.compactMap { $0.payload.session.ghostty.view.window }.first
         groups.activateTab(groupID: at.groupID, index: at.index)
         window?.bringToFront()
         return true
@@ -258,14 +310,15 @@ final class LocalShellWindowModel {
 
     func disposeAll() {
         layoutWriter?.stop(flushingPending: TerminalQuitPolicy.shared.isQuitting)
-        for pane in panes { pane.dispose() }
+        // Code 标签页的 `dispose` 连带结束它里面跑着的 shell。
+        for tab in groups.allTabs { tab.payload.dispose() }
         groups.reset()
     }
 
     /// 接回上次留下的会话（`LocalShellRestorer`）：窗口还空着时按布局放回原位，其余按序号接在活动组末尾。
     func adopt(_ restored: [(id: UUID, ordinal: Int)], layout: HeldSessionLayout?) {
         let ordinals = Dictionary(restored.map { ($0.id, $0.ordinal) }, uniquingKeysWith: { first, _ in first })
-        let applied = groups.adoptHeldSessions(restored.map(\.id), layout: layout, id: \.id,
+        let applied = groups.adoptHeldSessions(restored.map(\.id), layout: layout, id: Self.heldSessionID,
                                                make: { makeTab(id: $0, ordinal: ordinals[$0]) },
                                                append: { addTab(id: $0, ordinal: ordinals[$0]) })
         if applied { windowTracker.restore(layout?.window) }
@@ -273,7 +326,82 @@ final class LocalShellWindowModel {
 
     func syncFocus() {
         guard let registrar else { return }
-        registrar.registry.setFocusedSession(active?.id, inWindow: registrar.windowID)
+        registrar.registry.setFocusedSession(focusedSessionID, inWindow: registrar.windowID)
+    }
+
+    /// 前台的 shell 会话：Code 标签页取右边正显示的那个终端，看着记录时没有。
+    var focusedSessionID: UUID? {
+        guard let active else { return nil }
+        guard let code = active.codeTab else { return active.id }
+        guard case .terminal(let id) = code.detail else { return nil }
+        return id
+    }
+
+    // MARK: Code 标签页
+
+    /// 在 `groupID`（默认活动组）开一个这台 Mac 的 Code 标签页并设为前台。`directory` 是「＋」新会话默认的目录。
+    @discardableResult
+    func openCodeTab(directory: String?, in groupID: UUID? = nil) -> UUID {
+        groups.openTab({ makeCodeTab(directory: directory) }, in: groupID)
+    }
+
+    /// 标签条上的 Code 按钮：目录取那个组前台 shell 的当前目录。
+    @discardableResult
+    func openCodeTab(in groupID: UUID?) -> UUID {
+        let front = groupID.flatMap { groups.groups[$0]?.activeTab?.payload } ?? active
+        return openCodeTab(directory: front.flatMap(Self.codeDirectory), in: groupID)
+    }
+
+    /// 标签页右键「历史会话…」：这个组里已经有 Code 标签页就切过去，没有就新开；列表定位到这个 shell 所在目录的那一组。
+    func showCodeTab(for pane: LocalShellPane) {
+        guard let at = groups.locateTab(pane.id) else { return }
+        let directory = Self.codeDirectory(pane)
+        if let existing = groups.groups[at.groupID]?.tabs.first(where: { $0.payload.codeTab != nil }),
+           let code = existing.payload.codeTab, let target = groups.locateTab(existing.id) {
+            if let directory { code.newSessionDirectory = directory }
+            code.requestReveal(directory: directory)
+            groups.activateTab(groupID: target.groupID, index: target.index)
+            return
+        }
+        let id = openCodeTab(directory: directory, in: at.groupID)
+        groups.tab(id)?.payload.codeTab?.requestReveal(directory: directory)
+    }
+
+    /// 「挪到新标签页」：把 Code 标签页里跑着的一个 shell 开成同一组里的普通标签（同一个 shell，不重开）。
+    func moveCodeRunToTab(_ runID: UUID, fromCodeTab tabID: UUID) {
+        guard let code = groups.tab(tabID)?.payload.codeTab, let at = groups.locateTab(tabID),
+              let pane = code.detach(runID) as? LocalShellPane else { return }
+        groups.openTab({ UPaneTab(id: pane.id, payload: pane) }, in: at.groupID)
+    }
+
+    /// 跑着 `id` 这个 shell 的 Code 标签页。
+    func codeTab(running id: UUID) -> (tab: UPaneTab<LocalShellPane>, code: CodeTabModel)? {
+        for tab in groups.allTabs {
+            if let code = tab.payload.codeTab, code.runs.contains(where: { $0.id == id }) { return (tab, code) }
+        }
+        return nil
+    }
+
+    private func makeCodeTab(directory: String?) -> UPaneTab<LocalShellPane> {
+        let code = CodeTabModel(hostName: LocalShellIdentity.serverName, directory: directory) { [weak self] directory in
+            self?.makeCodeRun(directory: directory)
+        }
+        let pane = LocalShellPane(ordinal: 0, codeTab: code)
+        return UPaneTab(id: pane.id, payload: pane)
+    }
+
+    /// Code 标签页里继续 / 新开一个会话的 shell：开在会话的目录里，和普通标签一样登记、写保持进程的归属，只是不进标签树。
+    private func makeCodeRun(directory: String) -> LocalShellPane {
+        let pane = LocalShellPane(ordinal: nextOrdinal(), directory: directory)
+        if let registrar { pane.attach(registrar) }
+        startShell(pane)
+        return pane
+    }
+
+    /// shell 的当前目录（Code 标签页取它记着的）。还没问到时为 nil。
+    private static func codeDirectory(_ pane: LocalShellPane) -> String? {
+        if let code = pane.codeTab { return code.newSessionDirectory }
+        return pane.workingDirectory.flatMap(ClaudeProjectPath.normalized)
     }
 
     private func makeTab(id: UUID = UUID(), ordinal: Int? = nil, directory: String? = nil) -> UPaneTab<LocalShellPane> {
@@ -398,6 +526,7 @@ struct LocalShellWindowTitleBinding: View {
 
     private var activeTabTitle: String? {
         guard let pane = model.active else { return nil }
+        if pane.codeTab != nil { return pane.defaultTitle }
         return pane.session.shellTitle.map(TerminalArea.clippedTabTitle) ?? pane.defaultTitle
     }
 }
@@ -409,6 +538,14 @@ struct LocalShellWindowView: View {
     @Environment(TerminalSessionRegistry.self) private var registry
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.dismiss) private var dismiss
+    /// 界面画廊注入的现成模型（标签、假后端都已接好）：不登记、不接回会话、不开新标签、关时不释放。
+    private let isCatalog: Bool
+
+    init(windowID: LocalShellWindowID?, catalogModel: LocalShellWindowModel? = nil) {
+        self.windowID = windowID
+        isCatalog = catalogModel != nil
+        if let catalogModel { _model = State(initialValue: catalogModel) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -437,12 +574,13 @@ struct LocalShellWindowView: View {
                 dismiss()
                 return
             }
+            guard !isCatalog else { return }
             // 凭条与关闭入口都存进别处（model 自己 / 注册表），只弱引用 model，免得互相持有。
             let windowModel = model
             model.attach(TerminalSessionRegistrar(
                 registry: registry, windowID: windowID.id, windowKind: TerminalWindowKind.terminal,
                 customTitle: { [weak windowModel] paneID in
-                    windowModel?.groups.tab(paneID)?.payload.defaultTitle
+                    windowModel?.pane(paneID)?.defaultTitle
                 }))
             // 手机远控「同时关闭 Mac 上的终端」走这里。
             registry.setCloser(forWindow: windowID.id) { [weak windowModel] paneID in
@@ -454,11 +592,11 @@ struct LocalShellWindowView: View {
             }
             // 手机远控按 Mac 上的标签顺序排标签：取写进 holder 的同一份布局。
             registry.setTabOrder(forWindow: windowID.id) { [weak windowModel] in
-                windowModel?.groups.snapshot(\.id).tabOrder ?? []
+                windowModel?.groups.snapshot(LocalShellWindowModel.heldSessionID).tabOrder ?? []
             }
             // 手机远控上亲手排过 Mac 的标签：这个窗口跟着排。
             registry.setArranger(forWindow: windowID.id) { [weak windowModel] order in
-                windowModel?.groups.arrangeTabs(by: order) { $0.id }
+                windowModel?.groups.arrangeTabs(by: order, id: LocalShellWindowModel.heldSessionID)
             }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
@@ -471,9 +609,9 @@ struct LocalShellWindowView: View {
         }
         // 最后一个标签关掉（Mac 上点 ×，或手机远控连 Mac 上的一起关）就关窗口。
         .onChange(of: model.groups.isEmpty) { _, empty in
-            if empty { dismiss() }
+            if empty, !isCatalog { dismiss() }
         }
-        .onChange(of: model.active?.id) { _, _ in model.syncFocus() }
+        .onChange(of: model.focusedSessionID) { _, _ in model.syncFocus() }
         // 全局 CommandGroup 的通知广播到所有窗口，只让前台窗口响应。
         .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
             if controlActiveState == .key { model.addTab() }
@@ -485,6 +623,7 @@ struct LocalShellWindowView: View {
             if controlActiveState == .key { model.splitActiveGroup(direction: .vertical) }
         }
         .onDisappear {
+            guard !isCatalog else { return }
             model.disposeAll()
             if let windowID { registry.forgetWindow(windowID.id) }
         }
@@ -509,7 +648,6 @@ struct LocalShellTerminalArea: View {
     let model: LocalShellWindowModel
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let background = SwiftUI.Color(
@@ -524,24 +662,59 @@ struct LocalShellTerminalArea: View {
             splitButtonIcon: .system("rectangle.split.2x1"),
             descriptor: { tab in Self.descriptor(for: tab.payload) },
             content: { tab, _ in
-                LocalShellPaneView(pane: tab.payload, background: background) { model.close(tab.id) }
+                if let code = tab.payload.codeTab {
+                    codeTab(code, tabID: tab.id, background: background)
+                } else {
+                    LocalShellPaneView(pane: tab.payload, background: background) { model.close(tab.id) }
+                }
             },
             emptyGroup: { _ in background },
             onRequestClose: { tab in model.requestClose(tab.id) },
-            stripAccessory: { groupID in LocalShellNewTabButton(model: model, groupID: groupID) },
+            stripAccessory: { groupID in
+                HStack(spacing: 2) {
+                    LocalShellNewTabButton(model: model, groupID: groupID)
+                    CodeTabButton { model.openCodeTab(in: groupID) }
+                }
+            },
             tabMenu: { tab in
+                let pane = tab.payload
                 TerminalTabContextMenu(
-                    title: tab.payload.session.shellTitle ?? tab.payload.defaultTitle,
-                    directory: tab.payload.workingDirectory,
-                    onOpenClaudeHistory: { openWindow.openClaudeHistory(localPane: tab.payload) },
+                    title: pane.isTerminal ? pane.session.shellTitle ?? pane.defaultTitle : pane.defaultTitle,
+                    directory: pane.isTerminal ? pane.workingDirectory : nil,
+                    onOpenClaudeHistory: pane.isTerminal ? { model.showCodeTab(for: pane) } : nil,
                     onClose: { model.requestClose(tab.id) })
             })
             .uPaneGroupStyle(.card)
             .uPaneGroupWells()
     }
 
+    /// Code 标签页：读这台 Mac 上的记录（App 带沙盒，经包内的辅助程序读，同独立历史窗口），右边的终端是本机 shell 的面板。
+    private func codeTab(_ code: CodeTabModel, tabID: UUID, background: SwiftUI.Color) -> some View {
+        CodeTabView(
+            code: code,
+            makeConnection: {
+                AgentHistoryConnection(preferredDirectory: code.newSessionDirectory, tools: AgentHistoryTool.allCases,
+                                       followsCurrentProject: false,
+                                       connect: { _ in RemoteMacFileProvider.localShellAgent() })
+            },
+            terminal: { terminal in
+                guard let pane = terminal as? LocalShellPane else { return AnyView(EmptyView()) }
+                return AnyView(LocalShellPaneView(pane: pane, background: background) { _ = code.end(pane.id) })
+            },
+            onMoveToTab: { runID in model.moveCodeRunToTab(runID, fromCodeTab: tabID) })
+    }
+
     /// 在每个 chip 自己的 body 里求值：`shellTitle` 可能高频变化，只让这一枚标签跟着重算。
     static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
+        if let code = pane.codeTab {
+            let running = code.runs.count
+            return UPaneTabDescriptor(
+                title: TerminalArea.codeTabBaseTitle, icon: .system(CodeTabButton.icon),
+                leadingDot: running > 0 ? UD.success : nil,
+                help: running > 0
+                    ? String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")
+                    : TerminalArea.codeTabBaseTitle)
+        }
         let session = pane.session
         let controlled = session.remoteController != nil
         let shellTitle = session.shellTitle
@@ -576,6 +749,9 @@ private struct LocalShellNewTabButton: View {
         } else {
             Menu {
                 Button("主目录") { model.addTab(in: groupID) }
+                Button { model.openCodeTab(in: groupID) } label: {
+                    Label(CodeTabButton.title, systemImage: CodeTabButton.icon)
+                }
                 Section("最近的工作区") {
                     ForEach(directories, id: \.self) { directory in
                         Button(RemoteLocalWorkspaces.displayPath(directory, home: LocalShellWorkspaces.home)) {

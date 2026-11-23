@@ -36,6 +36,27 @@ enum TerminalCloseGuard {
         }
     }
 
+    /// 一个标签页里有好几个终端（Code 标签页里跑着的会话）：逐个探测，有前台程序在跑才问一次，确认后 `close`。
+    /// 只有一个时同 `requestClose(_:tabName:)`；一个都没有时直接关。
+    static func requestClose(
+        _ sessions: [TerminalSession],
+        tabName: String? = nil,
+        window: NSWindow? = NSApp.keyWindow,
+        close: @escaping @MainActor () -> Void
+    ) {
+        guard sessions.count > 1 else {
+            requestClose(sessions.first, tabName: tabName, window: window, close: close)
+            return
+        }
+        Task {
+            var activities: [TerminalActivity] = []
+            for session in sessions { activities.append(await session.foregroundActivity()) }
+            if let prompt = TerminalClosePrompt.forTab(activities, tabName: tabName),
+               await !confirm(prompt, action: String(localized: "关闭标签页"), in: window) { return }
+            close()
+        }
+    }
+
     /// 关窗前问一遍窗口里的所有终端。逐个探测：一条连接上最多 6 个 shell，同时再各开一个 exec
     /// 通道会撞上 sshd 默认的 `MaxSessions 10`，开不了的就成了「判断不了」。
     static func confirmClosingWindow(_ window: NSWindow, sessions: [TerminalSession]) async -> Bool {
@@ -53,6 +74,20 @@ enum TerminalCloseGuard {
         alert.addButton(withTitle: String(localized: "取消"))
         guard let window, window.isVisible else { return alert.runModal() == .alertFirstButtonReturn }
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn
+    }
+}
+
+extension TerminalClosePrompt {
+    /// 关一个装着好几个终端的标签页（Code 标签页）时的确认。nil = 都停在提示符上，不用问。
+    /// 只有一个在跑时和普通标签页说的一样；好几个时说个数。
+    static func forTab(_ activities: [TerminalActivity], tabName: String?) -> TerminalClosePrompt? {
+        let busy = activities.filter { $0 != .idle }
+        guard busy.count > 1 else { return busy.first?.closePrompt(tabName: tabName) }
+        return TerminalClosePrompt(
+            title: String(localized: "这个标签页里有 \(busy.count) 个会话可能还在运行",
+                          comment: "关 Code 标签页前的确认：里面有几个终端还有程序在跑"),
+            message: String(localized: "关闭标签页会结束这些会话，里面的程序可能被中断。",
+                            comment: "关 Code 标签页前的确认"))
     }
 }
 

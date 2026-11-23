@@ -180,8 +180,9 @@ final class AgentHistoryModel {
     }
 
     /// 重新列项目与会话。读过的信息按缓存键复用（文件没变就不再读）。
-    func reload() async {
-        phase = .loading
+    /// `showsLoading: false`：列表照旧显示着、列完再换（Mac 的 Code 标签页在后台对新会话的记录时用，不让列表闪一下「正在读取」）。
+    func reload(showsLoading: Bool = true) async {
+        if showsLoading || phase != .ready { phase = .loading }
         do {
             let found = try await source.projects()
             projects = found

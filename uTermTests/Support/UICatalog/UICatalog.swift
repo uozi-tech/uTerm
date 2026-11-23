@@ -63,7 +63,7 @@ struct UICatalogRender {
 @MainActor
 enum UICatalog {
     static var all: [UICatalogEntry] {
-        welcome + workspace + codeMode + tools + settings
+        welcome + workspace + codeTab + tools + settings
     }
 }
 

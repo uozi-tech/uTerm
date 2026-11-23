@@ -280,3 +280,16 @@ extension TerminalSession {
         )
     }
 }
+
+extension TerminalSession {
+    /// Code 标签页里继续 / 新开会话：连上、行编辑器起来之后打进命令。不包子 shell（`cd` 进项目目录后起编码工具）。
+    func startCodeCommand(_ command: String) {
+        startTrackedRun(command, inSubshell: false)
+    }
+
+    /// 那条命令跑完了（编码工具退出），或者 shell 自己退出了。
+    var codeCommandHasEnded: Bool {
+        if case .finished = trackedRun?.phase { return true }
+        return connectionState == .disconnected
+    }
+}

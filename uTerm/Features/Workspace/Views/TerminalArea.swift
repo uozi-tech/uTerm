@@ -21,11 +21,9 @@ struct TerminalArea: View {
     /// 标签条的「＋」是否能挑**别的**主机开新标签。终端窗口的标签可连不同主机；工作区窗口
     /// 的 SFTP 侧栏 / 预览 / Agent 都绑在一台服务器上，保持只开同一台。
     var allowsOtherHosts = false
-    /// 右键「历史会话…」做什么。nil = 开独立的历史会话窗口（工作区窗口）；终端窗口给的是切到自己的 Code 模式。
-    var onOpenHistory: ((PaneModel) -> Void)? = nil
 
     @Environment(\.colorScheme) private var appColorScheme
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.modelContext) private var modelContext
     @Query private var profiles: [ServerProfile]
 
     private var terminalAreaBG: Color {
@@ -54,16 +52,16 @@ struct TerminalArea: View {
             // 旧 pane header 的分屏按钮按窗格长宽比自动选方向（`autoSplitDirection`）。
             splitButtonDirection: .automatic,
             splitButtonIcon: .system("rectangle.split.2x1"),
-            descriptor: { tab in Self.descriptor(for: tab, profiles: profilesByID) },
+            descriptor: { tab in
+                Self.descriptor(for: tab, profiles: profilesByID, showsHost: allowsOtherHosts)
+            },
             content: { tab, _ in
-                PaneView(pane: tab.payload,
-                         profile: profilesByID[tab.payload.serverProfileID],
-                         profileCount: profileCount,
-                         background: background,
-                         onLoadMarkdownImage: { source, buffer in
-                             try await workspace.filePreviewModel.loadMarkdownImage(
-                                 source: source, referencedBy: buffer)
-                         })
+                if let code = tab.payload.codeTab {
+                    codeTab(code, tabID: tab.id, serverID: tab.payload.serverProfileID,
+                            profiles: profilesByID, profileCount: profileCount, background: background)
+                } else {
+                    paneView(tab.payload, profiles: profilesByID, profileCount: profileCount, background: background)
+                }
             },
             emptyGroup: { _ in emptyState },
             onRequestClose: { tab in
@@ -71,11 +69,16 @@ struct TerminalArea: View {
                 // 会话的释放走模型的 `onTabRemoved`。
                 workspace.requestCloseTerminalTab(tab.id)
             },
-            stripAccessory: { groupID in newTabButton(groupID) },
+            stripAccessory: { groupID in
+                HStack(spacing: 2) {
+                    newTabButton(groupID)
+                    codeTabButton(groupID)
+                }
+            },
             tabMenu: { tab in
                 TerminalTabContextMenu(
                     title: Self.copyableTitle(for: tab, profiles: profilesByID),
-                    onOpenClaudeHistory: claudeHistoryAction(tab),
+                    onOpenClaudeHistory: claudeHistoryAction(tab, profiles: profilesByID),
                     onClose: { workspace.requestCloseTerminalTab(tab.id) })
             },
             // 预览标签拖进终端组 —— 组件不认识的载荷转给 app。
@@ -92,6 +95,45 @@ struct TerminalArea: View {
         .task(id: server.id) { workspace.bindDefaultServer(id: server.id, title: server.name) }
     }
 
+    private func paneView(_ pane: PaneModel, profiles: [UUID: ServerProfile], profileCount: Int,
+                          background: Color) -> some View {
+        PaneView(pane: pane,
+                 profile: profiles[pane.serverProfileID],
+                 profileCount: profileCount,
+                 background: background,
+                 onLoadMarkdownImage: { source, buffer in
+                     try await workspace.filePreviewModel.loadMarkdownImage(source: source, referencedBy: buffer)
+                 })
+    }
+
+    /// Code 标签页：右边的终端就是普通的终端面板（连接中 / 失败 / 主机密钥确认都照旧）。
+    private func codeTab(_ code: CodeTabModel, tabID: UUID, serverID: UUID, profiles: [UUID: ServerProfile],
+                         profileCount: Int, background: Color) -> some View {
+        let container = modelContext.container
+        let sftpOnly = profiles[serverID]?.sftpOnly == true
+        return CodeTabView(
+            code: code,
+            makeConnection: {
+                // 列表按项目分组、一直列全部项目；几种编码工具的记录都读。主机密钥不弹确认（终端已经连过）。
+                AgentHistoryConnection(preferredDirectory: code.newSessionDirectory, allowsCommands: { !sftpOnly },
+                                       tools: AgentHistoryTool.allCases, followsCurrentProject: false,
+                                       connect: AgentHistoryAccess.server(id: serverID, container: container) { _ in })
+            },
+            terminal: { terminal in
+                guard let pane = terminal as? PaneModel else { return AnyView(EmptyView()) }
+                return AnyView(paneView(pane, profiles: profiles, profileCount: profileCount, background: background))
+            },
+            onMoveToTab: { runID in workspace.moveCodeRunToTab(runID, fromCodeTab: tabID) })
+    }
+
+    /// Code 标签页的标题。一个窗口里可能有几台主机时（终端窗口）带上主机名。「Code」是名字，五种语言都不翻译。
+    static let codeTabBaseTitle = "Code"
+
+    static func codeTabTitle(hostName: String?, showsHost: Bool) -> String {
+        guard showsHost, let hostName, !hostName.isEmpty else { return codeTabBaseTitle }
+        return "\(codeTabBaseTitle) · \(hostName)"
+    }
+
     /// 一枚 chip 怎么画。**在每个 chip 自己的 body 里求值**（组件保证），所以
     /// `session.connectionState` 这个 `@Observable` 属性只让它自己那一枚 chip 失效，
     /// 不牵动整条标签条。
@@ -104,9 +146,21 @@ struct TerminalArea: View {
     ///
     /// 标题读 `session.shellTitle`，同样只让这一枚失效。不能走 `UPaneTab.customTitle`：
     /// 那是组树里的状态，写一次整个区域都跟着失效，而程序可能每秒改很多次标题。
-    static func descriptor(for tab: TerminalTab,
-                           profiles: [UUID: ServerProfile]) -> UPaneTabDescriptor {
+    static func descriptor(for tab: TerminalTab, profiles: [UUID: ServerProfile],
+                           showsHost: Bool = false) -> UPaneTabDescriptor {
         let pane = tab.payload
+        if let code = pane.codeTab {
+            let hostName = profiles[pane.serverProfileID]?.name ?? code.hostName
+            let running = code.runs.count
+            let help = running > 0
+                ? "\(codeTabTitle(hostName: hostName, showsHost: true))\n"
+                    + String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")
+                : codeTabTitle(hostName: hostName, showsHost: true)
+            return UPaneTabDescriptor(title: codeTabTitle(hostName: hostName, showsHost: showsHost),
+                                      icon: .system(CodeTabButton.icon),
+                                      leadingDot: running > 0 ? UD.success : nil,
+                                      help: help)
+        }
         if let buffer = pane.fileBuffer {
             return UPaneTabDescriptor(title: buffer.displayName,
                                       icon: .system("doc.text"),
@@ -129,6 +183,9 @@ struct TerminalArea: View {
     static func copyableTitle(for tab: TerminalTab, profiles: [UUID: ServerProfile]) -> String {
         let pane = tab.payload
         if let buffer = pane.fileBuffer { return buffer.displayName }
+        if let code = pane.codeTab {
+            return codeTabTitle(hostName: profiles[pane.serverProfileID]?.name ?? code.hostName, showsHost: true)
+        }
         return pane.session.shellTitle ?? pane.tabTitle ?? profiles[pane.serverProfileID]?.name ?? String(localized: "终端")
     }
 
@@ -144,6 +201,9 @@ struct TerminalArea: View {
     private func newTabButton(_ groupID: UUID) -> some View {
         if allowsOtherHosts {
             Menu {
+                Button { openCodeTab(in: groupID) } label: {
+                    Label(CodeTabButton.title, systemImage: CodeTabButton.icon)
+                }
                 Section("在新标签页中打开") {
                     ForEach(hostChoices) { profile in
                         Button(profile.name) {
@@ -180,13 +240,26 @@ struct TerminalArea: View {
         }
     }
 
-    /// 右键菜单里的「历史会话…」。文件标签没有。
-    private func claudeHistoryAction(_ tab: TerminalTab) -> (() -> Void)? {
+    /// 右键菜单里的「历史会话…」：切到（没有就新开）这台主机的 Code 标签页，定位到这个终端所在的目录。
+    /// 文件标签、Code 标签页没有。
+    private func claudeHistoryAction(_ tab: TerminalTab, profiles: [UUID: ServerProfile]) -> (() -> Void)? {
         let pane = tab.payload
-        guard pane.fileBuffer == nil else { return nil }
-        if let onOpenHistory { return { onOpenHistory(pane) } }
-        let workspace = self.workspace, openWindow = self.openWindow
-        return { openWindow.openClaudeHistory(serverID: pane.serverProfileID, session: pane.session, workspace: workspace) }
+        guard pane.isTerminal else { return nil }
+        let workspace = self.workspace
+        let hostName = profiles[pane.serverProfileID]?.name ?? pane.tabTitle ?? ""
+        return { workspace.showCodeTab(for: pane, hostName: hostName) }
+    }
+
+    /// 开那个组前台标签页所在主机的 Code 标签页（组里空着就是本窗口绑定的那台）。
+    private func openCodeTab(in groupID: UUID) {
+        let names = Dictionary(profiles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let fallback = server.name
+        workspace.openCodeTab(in: groupID, fallbackServerID: server.id) { id in names[id] ?? fallback }
+    }
+
+    /// 标签条上「＋」旁边的「新建 Code 标签页」。
+    private func codeTabButton(_ groupID: UUID) -> some View {
+        CodeTabButton { openCodeTab(in: groupID) }
     }
 
     /// 「＋」菜单里能开终端的主机：去掉「仅 SFTP」，置顶在前，其余按名称。
@@ -269,5 +342,26 @@ struct TerminalTabContextMenu: View {
     private static func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// 标签条上「＋」旁边的「新建 Code 标签页」按钮，SSH 终端区与本机终端窗口共用。
+struct CodeTabButton: View {
+    static let icon = "chevron.left.forwardslash.chevron.right"
+    static var title: String { String(localized: "新建 Code 标签页") }
+
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: Self.icon)
+                .font(.system(size: 11.5, weight: .medium))
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.udPlain)
+        .iconButtonHover(cornerRadius: 6)
+        .help(Self.title)
+        .accessibilityLabel(Text(Self.title))
     }
 }
