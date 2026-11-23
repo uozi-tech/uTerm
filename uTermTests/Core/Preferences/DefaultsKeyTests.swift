@@ -42,6 +42,8 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.permissionGuidePresentedRevision, "permissionGuide.presentedRevision"),
         (DefaultsKey.localShellKeepsLANConnections, "localShellKeepsLANConnections"),
         (DefaultsKey.localShellRecentDirectories, "localShell.recentDirectories"),
+        (DefaultsKey.agentHistoryGrouping, "agentHistory.grouping"),
+        (DefaultsKey.agentHistoryShownTools, "agentHistory.shownTools"),
         (DefaultsKey.terminalKeyBarPhrases, "terminalKeyBar.phrases"),
         (DefaultsKey.controlEnabled, "control.enabled"),
         (DefaultsKey.controlAllowMutations, "control.allowMutations"),

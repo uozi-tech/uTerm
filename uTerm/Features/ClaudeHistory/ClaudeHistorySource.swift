@@ -222,6 +222,10 @@ actor ClaudeHistorySource: AgentHistorySource {
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {
         ClaudeResumeCommand.make(sessionID: sessionID, directory: directory)
     }
+
+    nonisolated func newSessionCommand(directory: String) -> String? {
+        ClaudeResumeCommand.makeNew(directory: directory)
+    }
 }
 
 /// 从文件末尾往前一页一页读对话。文件在看的时候可能还在长（会话正开着）：往前翻只翻第一次打开时那么长，
@@ -411,6 +415,12 @@ nonisolated enum ClaudeResumeCommand {
     static func make(sessionID: String, directory: String) -> String? {
         guard isSessionID(sessionID), let quoted = quotedDirectory(directory) else { return nil }
         return "cd -- \(quoted) && claude --resume \(sessionID.lowercased())"
+    }
+
+    /// 在这个目录里新开一个会话：`cd -- '<目录>' && claude`。目录的规矩同上。
+    static func makeNew(directory: String) -> String? {
+        guard let quoted = quotedDirectory(directory) else { return nil }
+        return "cd -- \(quoted) && claude"
     }
 
     /// 8-4-4-4-12 的十六进制。

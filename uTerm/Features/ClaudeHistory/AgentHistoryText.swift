@@ -198,9 +198,102 @@ enum AgentHistoryText {
         String(localized: "这台主机上没有找到 Claude Code 的会话记录（~/.claude/projects）。")
     }
 
-    /// 说话的一方。子代理的记录里「用户」那一侧是派它的主代理交给它的任务，不是你。
-    static func roleLabel(_ role: AgentTranscriptItem.Role, inSubagent: Bool = false) -> String {
-        guard role == .user else { return "Claude" }
+    /// 读了几种工具的记录、一种都没找到时的说明。只读 Claude Code 时同 `noHistoryDetail`。
+    static func noHistoryDetail(tools: [AgentHistoryTool]) -> String {
+        guard tools != [.claude], !tools.isEmpty else { return noHistoryDetail }
+        return String(localized: "这台主机上没有找到 \(toolList(tools)) 的会话记录。")
+    }
+
+    /// 没选会话时右边的说明。
+    static func selectSessionDetail(tools: [AgentHistoryTool]) -> String {
+        guard tools.count > 1 else {
+            return String(localized: "左边列的是在命令行里用 \((tools.first ?? .claude).displayName) 的会话，内容只读。")
+        }
+        return String(localized: "左边列的是在命令行里用 \(toolList(tools)) 的会话，内容只读。")
+    }
+
+    /// 几种工具的名字连成一串（产品名不翻译）。
+    static func toolList(_ tools: [AgentHistoryTool]) -> String {
+        tools.map(\.displayName).joined(separator: String(localized: "、", comment: "并列项之间的分隔符"))
+    }
+
+    // MARK: 几种工具
+
+    /// 搜索结果上方：这几种工具的会话没参与搜索。
+    static func searchUnsupported(_ tools: [AgentHistoryTool]) -> String {
+        String(localized: "\(toolList(tools)) 的会话不参与搜索")
+    }
+
+    /// 列表底下：某种工具的记录读不出来（别的照常列着）。
+    static func toolFailure(_ tool: AgentHistoryTool, message: String) -> String {
+        String(localized: "\(tool.displayName) 的记录读不出来：\(message)")
+    }
+
+    static func groupingName(_ grouping: AgentHistoryGrouping) -> String {
+        switch grouping {
+        case .project: return String(localized: "项目", comment: "历史会话按项目（工作目录）分组")
+        case .date: return String(localized: "日期", comment: "历史会话按日期分组")
+        case .tool: return String(localized: "工具", comment: "历史会话按编码工具（Claude Code、Codex…）分组")
+        case .none: return String(localized: "不分组", comment: "历史会话不分组")
+        }
+    }
+
+    static func dateBucket(_ bucket: AgentHistoryDateBucket) -> String {
+        switch bucket {
+        case .today: return String(localized: "今天")
+        case .yesterday: return String(localized: "昨天")
+        case .pastWeek: return String(localized: "过去 7 天")
+        case .pastMonth: return String(localized: "过去 30 天")
+        case .older: return String(localized: "更早")
+        }
+    }
+
+    /// 组标题。项目组是目录名（不翻译）。
+    static func groupTitle(_ group: AgentHistoryGroup) -> String {
+        switch group.kind {
+        case .project(_, let name): return name
+        case .date(let bucket): return dateBucket(bucket)
+        case .tool(let tool): return tool.displayName
+        case .all: return String(localized: "全部会话")
+        }
+    }
+
+    /// 组标题的悬停：项目组是完整路径，对不上路径的说明一句。
+    static func groupHelp(_ group: AgentHistoryGroup) -> String? {
+        guard case .project(let directory, let name) = group.kind else { return nil }
+        return directory ?? String(localized: "记录目录 \(name)（对不上工作目录）")
+    }
+
+    /// 组标题的读屏文字：标题 + 几个会话 + 折没折。
+    static func groupAccessibility(_ group: AgentHistoryGroup, collapsed: Bool) -> String {
+        let title = groupTitle(group)
+        return collapsed
+            ? String(localized: "\(title)，\(group.files.count) 个会话，已收起")
+            : String(localized: "\(title)，\(group.files.count) 个会话")
+    }
+
+    /// 「＋」新会话菜单的标题：在哪个目录里新开。
+    static func newSessionTitle(directory: String) -> String {
+        String(localized: "在「\((directory as NSString).lastPathComponent)」里新开")
+    }
+
+    static var newSession: String { String(localized: "新会话", comment: "历史会话列表顶上：新开一个编码会话") }
+
+    static func newSessionHelp(directory: String?) -> String {
+        guard let directory else { return String(localized: "不知道终端当前在哪个目录，无法新开会话") }
+        return String(localized: "在 \(directory) 里新开一个会话")
+    }
+
+    /// 「继续这个会话」的悬停。
+    static func resumeHelp(_ tool: AgentHistoryTool, canResume: Bool) -> String {
+        guard canResume else { return String(localized: "不知道这个会话的工作目录，无法继续") }
+        if tool == .claude { return String(localized: "在这台主机上新开一个终端标签页，执行 claude --resume") }
+        return String(localized: "在这台主机上新开一个终端标签页，在里面继续这个会话")
+    }
+
+    /// 说话的一方。子代理的记录里「用户」那一侧是派它的主代理交给它的任务，不是你。回答的一方是那种工具（Claude Code 照旧叫「Claude」）。
+    static func roleLabel(_ role: AgentTranscriptItem.Role, inSubagent: Bool = false, tool: AgentHistoryTool = .claude) -> String {
+        guard role == .user else { return tool == .claude ? "Claude" : tool.displayName }
         return inSubagent ? String(localized: "任务", comment: "子代理记录里，派它的那一方交给它的话") : String(localized: "你")
     }
 

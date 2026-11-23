@@ -102,13 +102,24 @@ final class AgentHistoryConnection {
 
     /// 这台主机能不能跑命令（搜索要用）：连上之后问一次。标成只许 SFTP 的主机不能。
     @ObservationIgnored private let allowsCommands: @MainActor () -> Bool
+    /// 读哪几种工具的记录。iOS 只要 Claude Code；Mac 的列表能装下几种。
+    let tools: [AgentHistoryTool]
+    /// 见 `AgentHistoryModel.followsCurrentProject`。
+    @ObservationIgnored private let followsCurrentProject: Bool
+    /// 文件通道建好之后怎么建数据源（测试换成假的）。
+    @ObservationIgnored private let makeSource: (any SFTPProviding, String?) -> any AgentHistorySource
 
     /// `home`：主目录，不给就问那台主机（见 `ClaudeHistorySource.init`）。
     init(preferredDirectory: String?, home: String? = nil, allowsCommands: @escaping @MainActor () -> Bool = { true },
+         tools: [AgentHistoryTool] = [.claude], followsCurrentProject: Bool = true,
+         makeSource: ((any SFTPProviding, String?) -> any AgentHistorySource)? = nil,
          connect: @escaping AgentHistoryAccess.Connect) {
         self.preferredDirectory = preferredDirectory
         self.home = home
         self.allowsCommands = allowsCommands
+        self.tools = tools
+        self.followsCurrentProject = followsCurrentProject
+        self.makeSource = makeSource ?? { provider, home in AgentHistorySources.make(tools: tools, provider: provider, home: home) }
         self.connect = connect
     }
 
@@ -117,6 +128,9 @@ final class AgentHistoryConnection {
         preferredDirectory = history.preferredDirectory
         home = nil
         allowsCommands = { true }
+        tools = history.configuredTools
+        followsCurrentProject = history.followsCurrentProject
+        makeSource = { _, _ in history.source }
         connect = nil
         phase = .ready(history)
     }
@@ -145,8 +159,8 @@ final class AgentHistoryConnection {
                 return
             }
             self.provider = provider
-            let history = AgentHistoryModel(source: ClaudeHistorySource(provider: provider, home: home),
-                                            preferredDirectory: preferredDirectory, allowsSearch: allowsCommands())
+            let history = AgentHistoryModel(source: makeSource(provider, home), preferredDirectory: preferredDirectory,
+                                            allowsSearch: allowsCommands(), followsCurrentProject: followsCurrentProject)
             phase = .ready(history)
             await history.start()
         } catch {

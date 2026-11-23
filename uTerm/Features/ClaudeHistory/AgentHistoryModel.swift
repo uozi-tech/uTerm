@@ -27,6 +27,8 @@ final class AgentHistoryModel {
     let source: any AgentHistorySource
     /// 打开时终端所在的目录；拿不到为 nil（退到全部项目）。
     let preferredDirectory: String?
+    /// 一开始落在终端当前目录对上的项目里（iOS 的历史标签）；false 一直列全部项目（Mac 的列表按项目分组，用不着先挑一个）。
+    let followsCurrentProject: Bool
 
     private(set) var phase: Phase = .loading
     private(set) var projects: [AgentHistoryProject] = []
@@ -34,8 +36,18 @@ final class AgentHistoryModel {
     private(set) var currentProject: AgentHistoryProject?
     private(set) var scope: Scope = .all
     private(set) var isListing = false
-    /// 范围里的全部记录文件，新的在前（还没读过信息的也在里面）。
+    /// 范围里的记录文件，新的在前（还没读过信息的也在里面），已经按「只看哪几种工具」筛过。
     private(set) var files: [AgentHistorySessionFile] = []
+    /// 范围里的全部记录文件（没筛过）。
+    @ObservationIgnored private var listedFiles: [AgentHistorySessionFile] = []
+    /// 这台主机上有记录的工具，按 `AgentHistoryTool.allCases` 的先后。只有一种时界面不出工具标记、「工具」分组和「显示」。
+    private(set) var availableTools: [AgentHistoryTool] = []
+    /// 「显示」里勾的工具；nil = 全部。实际生效的见 `effectiveTools`。
+    private(set) var shownTools: Set<AgentHistoryTool>?
+    /// 上一次列项目时读不出来的工具 → 原因（几种工具合在一起时，一种失败不拖累别的）。
+    private(set) var toolFailures: [AgentHistoryTool: String] = [:]
+    /// 折起来的组（`AgentHistoryGroup.id`）。只在内存里。
+    var collapsedGroups: Set<String> = []
     private(set) var metadata: [String: AgentHistorySessionMetadata] = [:]
     /// `files` 从头数起，信息已经读到的有几份。列表只显示这一段。
     private(set) var resolvedCount = 0
@@ -77,9 +89,11 @@ final class AgentHistoryModel {
 
     init(source: any AgentHistorySource, preferredDirectory: String?,
          followTiming: AgentTranscriptFollowTiming = .standard,
-         searchLimits: AgentHistorySearchLimits = .standard, allowsSearch: Bool = true) {
+         searchLimits: AgentHistorySearchLimits = .standard, allowsSearch: Bool = true,
+         followsCurrentProject: Bool = true) {
         self.source = source
         self.preferredDirectory = preferredDirectory
+        self.followsCurrentProject = followsCurrentProject
         self.followTiming = followTiming
         self.searchLimits = searchLimits
         self.allowsSearch = allowsSearch
@@ -95,6 +109,71 @@ final class AgentHistoryModel {
         files.reduce(0) { $0 + ((metadata[$1.path]?.isListed == false) ? 1 : 0) }
     }
 
+    // MARK: - 几种工具
+
+    /// 合在一起的数据源拆开（不是合成的就是它自己）。
+    var parts: [any AgentHistorySource] {
+        (source as? AgentHistoryCompositeSource)?.sources ?? [source]
+    }
+
+    /// 建了数据源的工具（不管这台主机上有没有记录）。
+    var configuredTools: [AgentHistoryTool] { parts.map(\.tool) }
+
+    /// 某种工具的数据源；没有为 nil。
+    func source(for tool: AgentHistoryTool) -> (any AgentHistorySource)? {
+        parts.first { $0.tool == tool }
+    }
+
+    var isMultiTool: Bool { availableTools.count > 1 }
+
+    /// 实际生效的「只看哪几种」（见 `AgentHistoryListing.effectiveTools`）。
+    var effectiveTools: Set<AgentHistoryTool> {
+        AgentHistoryListing.effectiveTools(shown: shownTools, available: availableTools)
+    }
+
+    /// 改「显示」里勾的工具：列表就地重筛（读过的信息都在，不重读），选中的会话被筛掉了就取消选中，有搜索就重搜。
+    func setShownTools(_ tools: Set<AgentHistoryTool>?) {
+        guard tools != shownTools else { return }
+        shownTools = tools
+        applyToolFilter()
+        if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) { select(nil) }
+        if let query = search?.query, !isListing, phase == .ready { startSearch(query) }
+    }
+
+    private func passesToolFilter(_ file: AgentHistorySessionFile) -> Bool {
+        !isMultiTool || effectiveTools.contains(file.tool)
+    }
+
+    private func applyToolFilter() {
+        let filtered = listedFiles.filter(passesToolFilter)
+        guard filtered.map(\.path) != files.map(\.path) else { return }
+        files = filtered
+        queued.removeAll()
+        resolvedCount = 0
+        advanceResolved()
+        targetRows = max(targetRows, pageRows)
+        fill()
+    }
+
+    /// 搜索时不参与的工具：范围里有它的会话，但它的记录没法在主机上搜。
+    var searchExcludedTools: [AgentHistoryTool] {
+        let present = Set(files.map(\.tool))
+        return AgentHistoryTool.allCases.filter { tool in
+            present.contains(tool) && !(source(for: tool)?.supportsSearch ?? false)
+        }
+    }
+
+    /// 终端当前目录落在哪个项目里：几种工具各问各的数据源（Claude Code 要按目录名换算），取离得最近的那个。
+    private func findProject(containing directory: String, among found: [AgentHistoryProject]) async -> AgentHistoryProject? {
+        var best: AgentHistoryProject?
+        for part in parts {
+            let mine = found.filter { $0.tool == part.tool }
+            guard !mine.isEmpty, let hit = await part.project(containing: directory, among: mine) else { continue }
+            if (hit.directory?.count ?? 0) > (best?.directory?.count ?? -1) { best = hit }
+        }
+        return best
+    }
+
     func start() async {
         guard phase == .loading, projects.isEmpty else { return }
         await reload()
@@ -106,25 +185,29 @@ final class AgentHistoryModel {
         do {
             let found = try await source.projects()
             projects = found
+            toolFailures = await (source as? AgentHistoryCompositeSource)?.failures ?? [:]
+            let present = Set(found.map(\.tool))
+            availableTools = AgentHistoryTool.allCases.filter(present.contains)
             guard !found.isEmpty else {
                 phase = .empty
                 files = []
+                listedFiles = []
                 if let query = search?.query { startSearch(query) }
                 return
             }
             if let preferredDirectory {
-                currentProject = await source.project(containing: preferredDirectory, among: found)
+                currentProject = await findProject(containing: preferredDirectory, among: found)
             }
             let nextScope: Scope
             switch scope {
             case .project(let old):
-                nextScope = found.first(where: { $0.id == old.id }).map { project in
+                nextScope = found.first(where: { $0.id == old.id && $0.tool == old.tool }).map { project in
                     var project = project
                     project.directory = old.directory
                     return .project(project)
                 } ?? currentProject.map(Scope.project) ?? .all
             case .all:
-                nextScope = (files.isEmpty ? currentProject.map(Scope.project) : nil) ?? .all
+                nextScope = (files.isEmpty && followsCurrentProject ? currentProject.map(Scope.project) : nil) ?? .all
             }
             phase = .ready
             await setScope(nextScope)
@@ -162,7 +245,8 @@ final class AgentHistoryModel {
             listed = await source.allSessions(in: projects)
         }
         guard generation == listGeneration else { return }
-        files = listed
+        listedFiles = listed
+        files = listed.filter(passesToolFilter)
         // 列表里的修改时间是刚列的了，之前记的不再需要（正开着的那份照样从对话里取）。
         seenActivity.removeAll()
         failed.removeAll()
@@ -175,7 +259,7 @@ final class AgentHistoryModel {
         advanceResolved()
         targetRows = pageRows
         fill()
-        if let selectedFile, !listed.contains(where: { $0.path == selectedFile.path }) {
+        if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) {
             select(nil)
         }
         // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
@@ -406,6 +490,12 @@ final class AgentHistoryModel {
             search = Search(query: query, phase: .waiting)
             return
         }
+        // 范围里的会话全是不能搜的工具的：不发命令，直接说明。
+        let excluded = searchExcludedTools
+        if !files.isEmpty, Set(files.map(\.tool)).isSubset(of: excluded) {
+            search = Search(query: query, phase: .failed(AgentHistoryText.searchUnsupported(excluded)))
+            return
+        }
         search = Search(query: query, phase: .searching, total: files.count)
         let generation = searchGeneration
         let files = self.files
@@ -429,7 +519,9 @@ final class AgentHistoryModel {
             current.searched = searched
             current.total = total
         case .session(let session):
-            current.sessions.append(session)
+            // 几种工具同时搜，各路报来的先后穿插：按会话的新旧插进去（同一种工具本来就是新的先报，顺序不变）。
+            let index = current.sessions.firstIndex { $0.file.modifiedAt < session.file.modifiedAt }
+            current.sessions.insert(session, at: index ?? current.sessions.endIndex)
         case .finished(let truncated):
             current.truncated = truncated
             current.phase = .finished
@@ -492,11 +584,24 @@ final class AgentHistoryModel {
     func resumeCommand(for file: AgentHistorySessionFile) -> (command: String, directory: String)? {
         let info = metadata[file.path]
         let directory = info?.resumeDirectory ?? file.project.directory
-            ?? (currentProject?.id == file.project.id ? currentProject?.directory : nil)
-        guard let directory, let command = source.resumeCommand(sessionID: file.sessionID, directory: directory) else {
+            ?? (currentProject?.id == file.project.id && currentProject?.tool == file.tool ? currentProject?.directory : nil)
+        guard let directory, let source = source(for: file.tool),
+              let command = source.resumeCommand(sessionID: file.sessionID, directory: directory) else {
             return nil
         }
         return (command, directory)
+    }
+
+    /// 在 `directory` 里新开一个某种工具的会话要敲的命令；那种工具不在终端里用、或者目录不合法为 nil。
+    func newSessionCommand(tool: AgentHistoryTool, directory: String) -> String? {
+        source(for: tool)?.newSessionCommand(directory: directory)
+    }
+
+    /// 「＋」新会话能选的工具：这台主机上有记录的（一种都没有就是建了数据源的那几种），能在终端里新开的。
+    func newSessionTools(directory: String?) -> [AgentHistoryTool] {
+        guard let directory else { return [] }
+        let candidates = availableTools.isEmpty ? configuredTools : availableTools
+        return candidates.filter { newSessionCommand(tool: $0, directory: directory) != nil }
     }
 }
 

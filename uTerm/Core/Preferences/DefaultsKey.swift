@@ -57,6 +57,10 @@ nonisolated enum DefaultsKey {
 
     static let localShellKeepsLANConnections = "localShellKeepsLANConnections"
     static let localShellRecentDirectories = "localShell.recentDirectories"
+    /// 历史会话列表的分组方式（`AgentHistoryGrouping` 的原始值）。只存本机。
+    static let agentHistoryGrouping = "agentHistory.grouping"
+    /// 历史会话列表「显示」里勾的工具（`AgentHistoryTool` 的原始值，逗号分隔；空串 = 全部）。只存本机。
+    static let agentHistoryShownTools = "agentHistory.shownTools"
     /// iOS 键盘条面板里的启动命令 / 提示词 / 斜杠命令（`TerminalPhrases` 的 JSON，空串 = 默认值）。
     static let terminalKeyBarPhrases = "terminalKeyBar.phrases"
 
