@@ -9,6 +9,8 @@ import XCTest
 @MainActor
 final class TerminalActivityCenterTests: XCTestCase {
     private var tab: TermTab?
+    /// 交给 `TerminalActivityCenter` 的后台剩余时间。测试会话里系统不倒计时（真读只会读到「无限」），由用例来定。
+    private var backgroundTime: TimeInterval = .greatestFiniteMagnitude
 
     override func tearDown() async throws {
         tab?.controller.close()
@@ -47,7 +49,9 @@ final class TerminalActivityCenterTests: XCTestCase {
 
         let workspace = MobileWorkspace()
         workspace.open(.terminal(tab))
-        let center = TerminalActivityCenter()
+        let center = TerminalActivityCenter(backgroundTimeRemaining: { [weak self] in
+            self?.backgroundTime ?? .greatestFiniteMagnitude
+        })
         center.start(workspace: workspace)
 
         osc("state=working:app=claude-code")
@@ -61,9 +65,15 @@ final class TerminalActivityCenterTests: XCTestCase {
         let blocked = await waitFor { $0?.rows.first?.tone == .attention }
         XCTAssertTrue(blocked, "卡住等确认：跟着变")
 
-        // 进后台：先实时，系统给的时间快用完时定格。这里在前台发通知模拟，系统给的时间是「无限」，按马上要挂起处理。
+        // 进后台（在前台发通知模拟）。刚切出去系统还没开始倒计时，读到的是「无限」：不急着暂停，内容照常实时。
         NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        let paused = await waitFor { $0?.paused == true }
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(currentState()?.paused, false, "后台时间读到「无限」：照常实时，不定格")
+        XCTAssertEqual(currentState()?.rows.first?.tone, .attention)
+
+        // 系统开始倒计时，剩下的时间只比提前量多一点：下一次再看（隔 `unboundedRecheck`）时发现，随即定格。
+        backgroundTime = TerminalActivityCenter.pauseLead + 0.5
+        let paused = await waitFor(.seconds(TerminalActivityCenter.unboundedRecheck + 10)) { $0?.paused == true }
         XCTAssertTrue(paused, "快被挂起了：定格为已暂停")
         XCTAssertEqual(currentState()?.footer, TerminalActivityContent.pausedText)
 

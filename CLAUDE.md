@@ -264,7 +264,8 @@ App 更新、崩溃、被强制结束时已建立的远控连接不断。方案�
 - **没有推送**（要团队的 APNs 钥匙放服务器上，中继是用户自建的，不可能）。App 挂起后内容停在最后一次：挂起前推一次「已暂停」，
   每次更新带 `staleDate` 兜底，扩展把过期内容按已暂停画。ActivityKit 只允许在前台发起，所以条件一满足就在前台建。
 - iOS 上 `UNUserNotificationCenter` 的 delegate 只有 `TerminalNotificationRouter` 一个（前台不弹横幅，同没有 delegate 时）。
-- 测试：纯逻辑 `TerminalActivityTests`；接真控制器的 `TerminalActivityCenterTests`（真机上真的建实时活动）；
+- 测试：纯逻辑 `TerminalActivityTests`；接真控制器的 `TerminalActivityCenterTests`（真机上真的建实时活动；系统给的后台
+  时间由用例经 `TerminalActivityCenter(backgroundTimeRemaining:)` 给，先「无限」再有限，不然走不到「已暂停」）；
   真机看灵动岛用 `TerminalActivityDeviceTests`，默认跳过，`TEST_RUNNER_UTERM_LIVE_ACTIVITY_DEVICE=plain|keep` 打开，
   外面切后台（`devicectl device process launch … com.apple.Preferences`）再截屏。**测试会话里系统不挂起宿主、后台时间读到「无限」**，
   量不了「多久暂停」：那要用 Debug 构建的启动参数 `devicectl device process launch --console … com.uozi.uTerm -- -LiveActivityDebugDemo YES`

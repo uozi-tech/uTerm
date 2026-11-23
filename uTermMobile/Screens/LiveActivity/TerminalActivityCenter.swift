@@ -40,9 +40,18 @@ final class TerminalActivityCenter {
     @ObservationIgnored private var started = false
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private let notificationRouter = TerminalNotificationRouter()
+    /// 系统给的后台时间还剩多少。App 里读 `UIApplication.shared.backgroundTimeRemaining`；
+    /// 测试会话里系统不倒计时（一直读到「无限」），用例换成自己的数才走得到「快被挂起」那一段。
+    @ObservationIgnored private let backgroundTimeRemaining: @MainActor () -> TimeInterval
 
     /// 提前多久推「已暂停」（系统给的后台时间用完前）。
     nonisolated static let pauseLead: TimeInterval = 5
+
+    init(backgroundTimeRemaining: @escaping @MainActor () -> TimeInterval = {
+        UIApplication.shared.backgroundTimeRemaining
+    }) {
+        self.backgroundTimeRemaining = backgroundTimeRemaining
+    }
 
     func start(workspace: MobileWorkspace) {
         guard !started else { return }
@@ -215,7 +224,7 @@ final class TerminalActivityCenter {
     private var staleDate: Date? {
         guard inBackground else { return nil }
         if let until = keepAlive.until { return until.addingTimeInterval(30) }
-        let remaining = UIApplication.shared.backgroundTimeRemaining
+        let remaining = backgroundTimeRemaining()
         return Date().addingTimeInterval(remaining < Self.unboundedBackgroundTime ? remaining
                                          : Self.unboundedRecheck * 2)
     }
@@ -245,7 +254,7 @@ final class TerminalActivityCenter {
             // 读到「无限」（测试会话、刚切出去还没算好）时不急着暂停：内容照常实时，staleDate 每次只往后推一小段，
             // 隔几秒再看；万一就这样被挂起了，过期由扩展按已暂停画。
             while let self, !Task.isCancelled {
-                let remaining = UIApplication.shared.backgroundTimeRemaining
+                let remaining = self.backgroundTimeRemaining()
                 if remaining < Self.unboundedBackgroundTime {
                     Self.log("background time \(Int(remaining)) s; pausing in \(Int(max(0, remaining - Self.pauseLead))) s")
                     try? await Task.sleep(for: .seconds(max(0, remaining - Self.pauseLead)))
