@@ -263,7 +263,9 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
          pageItems: Int = AgentTranscriptLimits.pageItems,
          pageBytes: Int = AgentTranscriptLimits.pageBytes,
          maxLineBytes: Int = AgentTranscriptLimits.maxLineBytes,
-         followBytes: Int = AgentTranscriptFollowLimits.bytesPerPoll) {
+         followBytes: Int = AgentTranscriptFollowLimits.bytesPerPoll,
+         lineParser: (@Sendable (ClaudeReverseLineScanner.Line) -> [AgentTranscriptItem])? = nil) {
+        self.lineParser = lineParser
         self.anchor = anchor
         caughtUp = anchor == nil
         self.followBytes = max(1, followBytes)
@@ -277,6 +279,14 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
     }
 
     private let maxLineBytes: Int
+    /// 一行 → 条目。不给就按 Claude Code 的记录解。别的工具的记录也是按行写的 JSONL 时（Antigravity）传它自己的解析，
+    /// 分页、跟随、从命中处打开都照用这一份。
+    private let lineParser: (@Sendable (ClaudeReverseLineScanner.Line) -> [AgentTranscriptItem])?
+
+    private func items(from line: ClaudeReverseLineScanner.Line) -> [AgentTranscriptItem] {
+        if let lineParser { return lineParser(line) }
+        return ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain)
+    }
 
     func loadPrevious() async throws -> (items: [AgentTranscriptItem], reachedStart: Bool) {
         if scanner == nil {
@@ -309,14 +319,14 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
                 forward = Self.followStart(lastChunk: chunk, at: range.offset, fileEnd: fileEnd, maxLineBytes: maxLineBytes)
             }
             for line in scanner.feed(chunk) {
-                let items = ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain)
+                let items = self.items(from: line)
                 if !items.isEmpty {
                     newestFirst.append(items)
                     count += items.count
                 }
             }
             if scanner.nextRange(chunkSize: chunkBytes) == nil, let first = scanner.finish() {
-                let items = ClaudeTranscriptParser.items(from: first, includesSidechain: includesSidechain)
+                let items = self.items(from: first)
                 if !items.isEmpty { newestFirst.append(items) }
             }
         }
@@ -363,7 +373,7 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
             guard !chunk.isEmpty else { break }
             bytesRead += chunk.count
             for line in forward.feed(chunk) {
-                items.append(contentsOf: ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain))
+                items.append(contentsOf: self.items(from: line))
             }
         }
         self.forward = forward
@@ -399,7 +409,7 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
             // 读的时候又变短了：先把读到的交出去，下一次 stat 会发现。
             guard !chunk.isEmpty else { break }
             for line in forward.feed(chunk) {
-                items.append(contentsOf: ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain))
+                items.append(contentsOf: self.items(from: line))
             }
         }
         self.forward = forward
