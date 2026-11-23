@@ -633,9 +633,11 @@ nonisolated enum RemoteTerminalSnapshotPiece {
 nonisolated enum RemoteTerminalEngine {
     static var mismatchMessage: String { String(localized: "两端的终端引擎版本不同，没法镜像终端。把两端的 uTerm 更新到同一版本") }
 
-    /// 对端握手里报的引擎版本和本机一样才行；老版本不报，同样不行。远控进程里 `local` 是 App 报来的版本。
+    /// 对端握手里报的引擎版本和本机的快照互认才行（同一个版本，或者只差渲染补丁，见
+    /// `TerminalEngineVersion.sameSnapshotFormat`）；老版本不报，同样不行。远控进程里 `local` 是 App 报来的版本。
     static func matches(_ remote: String?, local: String = TerminalEngineVersion.current) -> Bool {
-        remote == local
+        guard let remote else { return false }
+        return TerminalEngineVersion.snapshotsCompatible(remote, local)
     }
 }
 

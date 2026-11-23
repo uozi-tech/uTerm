@@ -142,6 +142,52 @@ final class HolderProtocolTests: XCTestCase {
         XCTAssertEqual(restored.recentLines(5).lines, ["history", "$"])
     }
 
+    /// 只差渲染补丁的版本（`TerminalEngineVersion.sameSnapshotFormat`）存的快照照认：更新 App 之后旧终端照常接回。
+    func test_checkpoint_blob_from_a_render_only_engine_change_is_accepted() throws {
+        let terminal = ShadowTerminal(cols: 40, rows: 6, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        terminal.feed(Data("history\r\n$ ".utf8))
+        let snapshot = try terminal.snapshot()
+        for (old, new) in TerminalEngineVersion.sameSnapshotFormat {
+            XCTAssertEqual(TerminalCheckpointBlob.decode(TerminalCheckpointBlob.encode(snapshot: snapshot, engine: old)), snapshot,
+                           "\(old) 存的检查点")
+            XCTAssertEqual(TerminalCheckpointBlob.decode(TerminalCheckpointBlob.encode(snapshot: snapshot), engine: new), snapshot,
+                           "反过来：\(new) 存的给旧引擎读")
+        }
+    }
+
+    /// 不带回放流时仍是第 2 版、逐字节和以前一样（同引擎的旧版本 App 照样读得懂）；带了是第 3 版，三段都能取回，
+    /// 回放流不核引擎版本。
+    func test_checkpoint_blob_carries_an_engine_independent_replay_stream() throws {
+        let snapshot = Data("binary snapshot".utf8)
+        let status = Data(#"{"records":[]}"#.utf8)
+        let replay = Data("\u{1b}[2Jreplay".utf8)
+
+        let plain = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: status)
+        let engine = Array(TerminalEngineVersion.current.utf8)
+        XCTAssertEqual(plain, Array("uTermCP\u{2}".utf8) + [UInt8(engine.count)] + engine + [0, 0, 0, UInt8(status.count)]
+                       + Array(status) + Array(snapshot), "不带回放流的格式不能变")
+        XCTAssertNil(TerminalCheckpointBlob.decodeReplay(plain))
+
+        let foreign = "ghostty-ffffffff+p0000/snapshot-9"
+        let withReplay = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: status, replay: replay, engine: foreign)
+        XCTAssertEqual(Array(withReplay.prefix(8)), Array("uTermCP\u{3}".utf8))
+        XCTAssertNil(TerminalCheckpointBlob.decode(withReplay), "快照仍然只认格式相同的引擎")
+        XCTAssertEqual(TerminalCheckpointBlob.decode(withReplay, engine: foreign), snapshot)
+        XCTAssertEqual(TerminalCheckpointBlob.decodeReplay(withReplay), replay)
+        XCTAssertEqual(TerminalCheckpointBlob.decodeProgramStatus(withReplay), status)
+
+        // 没有程序状态时两段长度前缀照样对齐。
+        let noStatus = TerminalCheckpointBlob.encode(snapshot: snapshot, replay: replay)
+        XCTAssertEqual(TerminalCheckpointBlob.decode(noStatus), snapshot)
+        XCTAssertEqual(TerminalCheckpointBlob.decodeReplay(noStatus), replay)
+        XCTAssertNil(TerminalCheckpointBlob.decodeProgramStatus(noStatus))
+
+        // 截断在回放流里：整张不认，不拿半截当快照。
+        let cut = Array(withReplay.prefix(withReplay.count - snapshot.count - 3))
+        XCTAssertNil(TerminalCheckpointBlob.decode(cut, engine: foreign))
+        XCTAssertNil(TerminalCheckpointBlob.decodeReplay(cut))
+    }
+
     /// `localNetworkUnreachable` 是后加的可选字段：旧 `uterm-ssh` 发的失败没有它，新 App 照样解；反过来旧 App 忽略它。
     func test_bridge_failure_decodes_with_and_without_local_network_flag() throws {
         let old = Data(#"{"kind":"connect","message":"x"}"#.utf8)

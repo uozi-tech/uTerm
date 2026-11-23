@@ -6,8 +6,9 @@ import Foundation
 ///（检查点）连同它对应的字节位置交给 holder。接回时：把检查点还原进影子终端，再喂那个位置之后的字节，影子就回到了
 /// 最新画面；画面（surface）等标签第一次露出时再建，建好后由输出泵把影子的状态回放进去（M7）。
 ///
-/// 检查点的快照只认同一个引擎版本存的（`TerminalCheckpointBlob`）：版本变了就丢弃，holder 里的 shell 不受影响，只是回滚
-/// 历史从 holder 还留着的那段字节开始。和快照存在一起的程序状态不认版本，照用。
+/// 检查点的二进制快照只认快照格式相同的引擎存的（`TerminalCheckpointBlob`）。换了引擎（App 更新）时改用退出时一起存的
+/// 回放流重画那一屏（带最近一段回滚）；连回放流都没有（崩溃前的旧检查点）才只剩 holder 还留着的那段字节。
+/// 和快照存在一起的程序状态不认版本，照用。
 ///
 /// 回放的字节全是历史。里面的终端查询、命令跟踪标记、状态上报、通知，当时要么已经处理过，要么过时了，
 /// 所以按历史喂给影子（`ShadowTerminal.feed(_:asHistory:)`）：不应答、不写剪贴板、不发通知、不认标记，否则历史查询的
@@ -24,7 +25,8 @@ extension TerminalSession {
 
         let checkpoint = replay.checkpoint
         var restored = false
-        if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
+        // 换了引擎、快照格式变了的话，用退出时一起存的回放流重画出一张（见 `restorableSnapshot`）。
+        if let snapshot = TerminalCheckpointBlob.restorableSnapshot(checkpoint.blob, cols: checkpoint.cols, rows: checkpoint.rows) {
             restored = (try? shadow.restore(snapshot: snapshot)) != nil
         }
         // 程序状态跟检查点存在一起：一直在 working 的程序接回后不会再报一次，标签上的圆点只能从这里来。
@@ -105,9 +107,9 @@ extension TerminalSession {
         }
     }
 
-    /// 退出流程里最后存一次。
+    /// 退出流程里最后存一次（带上换引擎时用的回放流）。
     func saveHeldCheckpointNow() {
-        heldCheckpoints?.captureNow()
+        heldCheckpoints?.captureForQuit()
     }
 
     /// 窗格被关掉时调（代替 `dispose()` + `close()`）：平时结束会话；退出 App 途中只断开，会话留着下次接回。
@@ -213,9 +215,23 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
     }
 
     func captureNow() {
+        capture(force: false, withReplay: false)
+    }
+
+    /// 退出流程里的最后一张：没有新输出也存（上一张不带回放流），并带上回放流——下次启动的可能是换了引擎的新版本，
+    /// 解不开这次的二进制快照，就靠它接回画面（`TerminalCheckpointBlob`）。
+    func captureForQuit() {
+        capture(force: true, withReplay: true)
+    }
+
+    /// 回放流只带最近这么多行回滚：拍它要把快照解开再重画一遍（整段 1 万行约百毫秒，退出时每个终端都要拍），
+    /// 换引擎这种一次性的事丢掉更早的历史可以接受。
+    static let replayScrollbackLines = 2000
+
+    private func capture(force: Bool, withReplay: Bool) {
         pump.performWhileFeedingPaused {
             lock.lock()
-            guard isDirty else {
+            guard isDirty || force else {
                 lock.unlock()
                 return
             }
@@ -223,7 +239,11 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
             lock.unlock()
             guard let snapshot = try? pump.shadow.snapshot() else { return }
             let size = pump.shadow.size
-            let blob = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: programStatus())
+            // 回放流拍不出来不影响二进制快照照存。
+            let replay = withReplay
+                ? try? ShadowTerminal.replayStream(fromSnapshot: pump.shadow.snapshot(scrollbackLines: Self.replayScrollbackLines))
+                : nil
+            let blob = TerminalCheckpointBlob.encode(snapshot: snapshot, programStatus: programStatus(), replay: replay)
             lock.lock()
             isDirty = false
             bytesSinceCapture = 0

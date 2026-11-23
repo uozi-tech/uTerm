@@ -89,7 +89,15 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
 两处必须一字不差，两端各有一条单测拦着：`uTermTests/Features/Terminal/TerminalEngineLockTests.swift`、
 `uTermMobileTests/TerminalEngineLockTests.swift`（读 `ENGINE.lock`，和常量比）。
 
-**换二进制算协议变更**：新旧版本之间远控接不上终端（会提示两端更新到同一版本），重启后旧版本存的 holder 检查点作废（只回放 holder 里那段字节）。
+**换二进制算协议变更**，除非只改了渲染：
+- 快照格式没变（补丁只动 GhosttyKit 的 `src/renderer`、`Surface.zig`、`apprt`，没动 `src/terminal`，Ghostty 提交没换）：把旧串记进
+  `TerminalEngineVersion.sameSnapshotFormat`（旧 → 新；表里原有的条目值也改成新串，或者留着让它一路走到新串）。之后新旧两版
+  远控照常镜像，旧版本存的 holder 检查点照常接回。`TerminalEngineLockTests.testSnapshotCompatibilityTableOnlyBridgesPatchLevels`
+  核每一条只差补丁编号、走得到 `current`。0024 就是这样记的（2026-11-23，p0023 → p0024）。
+- 快照格式可能变了（换 Ghostty 提交、动了 `src/terminal`、快照修订号加一）：不记表，表清空。新旧版本之间远控接不上终端
+  （会提示两端更新到同一版本）；Mac 本机终端重启后二进制快照解不开，改用检查点里退出时另存的回放流（`TerminalCheckpointBlob`
+  第 3 版，VT 字节、最近 2000 行回滚）重画那一屏；iOS 经主机上的保持进程接回同理（那边每张检查点都带回放流）。
+  只有回放流本身也没有的（这个机制上线之前存的、Mac 上退出前就崩溃了的）才只剩 holder 里那段字节。
 
 ## 引擎补丁（`Patches/ghostty/`）
 
@@ -656,7 +664,8 @@ binaryTarget 要换回 `url:` + `checksum:`（按 tag 消费的远程包不能�
 4. `--pack` 打印的两个 sha256 填进 `ENGINE.lock`，zip 留在 artifacts 目录（换二进制 = 换文件名）。
 5. 三处一起改：`ENGINE.lock` 的 zip 文件名与 sha256、`ENGINE.lock` 的 `engine_version`、
    `uTerm/Features/Terminal/Shadow/TerminalEngineVersion.swift` 的 `TerminalEngineVersion.current`。快照的二进制格式变了就把串尾的
-   `snapshot-N` 加一。漏改常量会被两端的 `TerminalEngineLockTests` 拦住。
+   `snapshot-N` 加一。漏改常量会被两端的 `TerminalEngineLockTests` 拦住。只改渲染的补丁把旧串记进 `sameSnapshotFormat`，
+   换 Ghostty 提交时把那张表清空（见上面「引擎版本串」）。
 6. `make engine`，删掉 DerivedData 里的 `SourcePackages/artifacts`，两端重编。
 7. vt 的 C API 还没到 1.0，换 Ghostty 提交就可能变，`ShadowTerminal.swift` 要对着新头文件改（`git diff <旧> <新> -- include/`）。
    编译器只拦得住签名变化，拦不住语义变化，两类都碰到过（`042b16b6` → `cf5519b2`）：

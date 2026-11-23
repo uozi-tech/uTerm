@@ -83,6 +83,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     private let checkpoints = CheckpointState()
     /// 拍好了但当时没接着会话、还没发出去的检查点：接回后补发。
     private var pendingCheckpoint: HolderFrame?
+    /// 发出去（或排着补发）的最新一张检查点的位置。回放流在锁外各拍各的，先拍的可能后到，旧的不能盖掉新的。
+    private var latestCheckpointOffset: UInt64?
 
     /// 检查点那几样要在 actor 外面（收帧的线程、建连之前）读写的东西。
     private final class CheckpointState: Sendable {
@@ -290,7 +292,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
                                             state: CheckpointState) {
         position.set(checkpoint.offset)
         guard !checkpoint.blob.isEmpty else { return }
-        if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
+        // 换了引擎（App Store 更新）、快照格式变了的话，用检查点里的回放流重画出一张。
+        if let snapshot = TerminalCheckpointBlob.restorableSnapshot(checkpoint.blob, cols: checkpoint.cols, rows: checkpoint.rows) {
             position.deliverAside(.snapshot(snapshot))
         } else {
             state.restoredUnusable.withLock { $0 = true }
@@ -342,16 +345,21 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
               let hooks = checkpoints.hooks.withLock({ $0 }) else { return }
         // 同步点排在已经交出去的输出后面：影子解析到那里时拍，位置正好是这里读到的。
         position.mark { [weak self] offset in
-            guard let checkpoint = hooks.capture() else { return }
-            let frame = HolderFrame(.checkpoint, payload: HolderCheckpoint(
-                offset: offset, cols: checkpoint.cols, rows: checkpoint.rows, hasGap: false,
-                blob: checkpoint.blob).encoded())
-            Task { await self?.send(checkpoint: frame) }
+            guard let captured = hooks.capture() else { return }
+            // 拍快照要在泵的锁里（和位置对齐），回放流从拍好的快照出，挪到锁外。
+            Task {
+                let checkpoint = captured.addingReplay()
+                let frame = HolderFrame(.checkpoint, payload: HolderCheckpoint(
+                    offset: offset, cols: checkpoint.cols, rows: checkpoint.rows, hasGap: false,
+                    blob: checkpoint.blob).encoded())
+                await self?.send(checkpoint: frame, offset: offset)
+            }
         }
     }
 
-    private func send(checkpoint frame: HolderFrame) {
-        guard !isClosed else { return }
+    private func send(checkpoint frame: HolderFrame, offset: UInt64) {
+        guard !isClosed, latestCheckpointOffset.map({ offset >= $0 }) ?? true else { return }
+        latestCheckpointOffset = offset
         if phase == .attached, let link {
             link.send(frame)
         } else {

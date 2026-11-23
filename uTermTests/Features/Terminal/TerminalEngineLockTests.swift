@@ -41,6 +41,30 @@ final class TerminalEngineLockTests: XCTestCase {
         XCTAssertTrue(zip.contains("-\(parts.2)."), "版本串里的补丁编号 p\(parts.2) 和 GhosttyKit 的 zip（\(zip)）对不上")
     }
 
+    /// 快照互认表（`TerminalEngineVersion.sameSnapshotFormat`）：每一条都只差补丁编号（同一个 Ghostty 提交、同一个快照
+    /// 修订号），并且一路走得到现在的版本。换了 Ghostty 提交或快照修订号的不能记进去：那是真的换了格式，要靠回放流。
+    func testSnapshotCompatibilityTableOnlyBridgesPatchLevels() throws {
+        let shape = /ghostty-([0-9a-f]{8})\+p(\d{4})\/snapshot-(\d+)/
+        let current = try XCTUnwrap(TerminalEngineVersion.current.wholeMatch(of: shape))
+        for (old, new) in TerminalEngineVersion.sameSnapshotFormat {
+            let from = try XCTUnwrap(old.wholeMatch(of: shape), "形状不对：\(old)")
+            let to = try XCTUnwrap(new.wholeMatch(of: shape), "形状不对：\(new)")
+            XCTAssertEqual(from.1, to.1, "\(old) → \(new) 换了 Ghostty 提交")
+            XCTAssertEqual(from.3, to.3, "\(old) → \(new) 换了快照修订号")
+            XCTAssertLessThan(Int(from.2)!, Int(to.2)!, "\(old) → \(new) 补丁编号没往后走")
+            XCTAssertEqual(from.1, current.1, "\(old) 不是现在这个 Ghostty 提交的：换提交时把表清空")
+            XCTAssertTrue(TerminalEngineVersion.snapshotsCompatible(old, TerminalEngineVersion.current), "\(old) 走不到现在的版本")
+            XCTAssertTrue(TerminalEngineVersion.snapshotsCompatible(TerminalEngineVersion.current, old), "要对称")
+        }
+        XCTAssertFalse(TerminalEngineVersion.snapshotsCompatible("ghostty-ffffffff+p0000/snapshot-9", TerminalEngineVersion.current))
+        XCTAssertTrue(RemoteTerminalEngine.matches(TerminalEngineVersion.current))
+        XCTAssertFalse(RemoteTerminalEngine.matches(nil), "老版本不报引擎：不接")
+        for old in TerminalEngineVersion.sameSnapshotFormat.keys {
+            XCTAssertTrue(RemoteTerminalEngine.matches(old), "只差渲染补丁的对端照常镜像：\(old)")
+            XCTAssertTrue(RemoteTerminalEngine.matches(TerminalEngineVersion.current, local: old), "远控进程比 App 旧时也认")
+        }
+    }
+
     // MARK: - 读清单
 
     private static func lock() throws -> [String: String] {

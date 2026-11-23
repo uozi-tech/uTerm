@@ -211,6 +211,34 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         await secondBackend.close()
     }
 
+    /// 退出时存的最后一张检查点带着回放流（下次启动的可能是换了引擎的新版本），而且没有新输出也存。
+    /// 回放流灌进一个新终端就是那一屏。
+    func test_quit_checkpoint_carries_a_replay_stream() async throws {
+        let id = makeSession()
+        let (first, firstBackend) = try await connected(id)
+        await firstBackend.write(Data("echo QUIT_$((40+6))\n".utf8))
+        let printed = await wait { self.screen(first).contains("QUIT_46") }
+        XCTAssertTrue(printed, screen(first))
+        // 平时那种检查点先存一张（不带回放流），之后没有新输出：退出时那张也不能因此跳过。
+        first.heldCheckpoints?.captureNow()
+        first.saveHeldCheckpointNow()
+        first.dispose()
+        await firstBackend.detach()
+        try await Task.sleep(for: .milliseconds(300))
+
+        let raw = backend(id)
+        try await raw.connect()
+        let taken = await raw.takeReplay()
+        let replay = try XCTUnwrap(taken)
+        await raw.detach()
+        let stream = try XCTUnwrap(TerminalCheckpointBlob.decodeReplay(replay.checkpoint.blob), "退出时的检查点要带回放流")
+        XCTAssertNotNil(TerminalCheckpointBlob.decode(replay.checkpoint.blob), "二进制快照照存")
+        let fresh = ShadowTerminal(cols: replay.checkpoint.cols, rows: replay.checkpoint.rows,
+                                   options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        fresh.feed(stream, asHistory: true)
+        XCTAssertTrue(fresh.recentLines(50).lines.contains("QUIT_46"), fresh.recentLines(50).lines.joined(separator: "\n"))
+    }
+
     /// 历史里的终端查询不能被再回答一遍，否则回答会打进正在跑的程序。
     func test_replay_does_not_answer_terminal_queries_from_history() async throws {
         let id = makeSession()
@@ -609,6 +637,69 @@ final class TerminalHeldReplayTests: XCTestCase {
             XCTAssertEqual(restored.shadow.recentLines(10).lines, ["tail only"])
             restored.dispose()
         }
+    }
+
+    /// 换了引擎（App 更新、快照格式变了）：二进制快照解不开，改用退出时一起存的回放流重画那一屏，再接上之后的字节。
+    /// 回放流从备用屏上拍的（全屏程序开着时退出），接回来仍在备用屏上、主屏的内容在底下。
+    func test_checkpoint_from_another_engine_restores_from_its_replay_stream() async throws {
+        let original = TerminalSession()
+        original.shadow.resize(cols: 83, rows: 25)
+        original.feedOutput(text: head)
+        let snapshot = try original.shadow.snapshot()
+        let stream = try ShadowTerminal.replayStream(fromSnapshot: snapshot)
+        let blob = TerminalCheckpointBlob.encode(snapshot: snapshot, replay: stream, engine: "ghostty-ffffffff+p0000/snapshot-9")
+        XCTAssertNil(TerminalCheckpointBlob.decode(blob), "前提：这张的二进制快照现在的引擎不认")
+        original.feedOutput(text: tail)
+
+        let restored = TerminalSession()
+        let backend = MockHeldBackend(replay: replay(blob: blob, cols: 83, rows: 25, output: Array(tail.utf8)))
+        await restored.connect(using: backend)
+        XCTAssertEqual(restored.connectionState, .connected)
+        XCTAssertEqual(restored.shadow.size.cols, 83)
+        XCTAssertEqual(restored.shadow.size.rows, 25)
+        XCTAssertEqual(restored.shadow.recentLines(10).lines, original.shadow.recentLines(10).lines)
+        XCTAssertEqual(restored.shadow.mirrorDifferences(from: original.shadow), [:])
+        XCTAssertFalse(restored.shadow.isOnAlternateScreen)
+        let written = await backend.written
+        XCTAssertTrue(written.isEmpty, "回放流按历史喂，不该往 shell 里写东西：\(written)")
+        restored.dispose()
+        original.dispose()
+    }
+
+    /// 主机上的保持进程那条路（iOS）：存的检查点经 `addingReplay` 带上回放流；换了引擎时 `restorableSnapshot`
+    /// 用现在的引擎把回放流重画成一张快照，还原出来和原来的终端一致（含备用屏和底下的主屏）。
+    func test_host_checkpoint_replay_is_redrawn_into_a_snapshot_when_the_engine_changed() throws {
+        let options = TerminalScrollbackLimits(lines: 1_000).shadowOptions
+        let original = ShadowTerminal(cols: 83, rows: 25, options: options)
+        original.feed(Data(head.utf8))
+        XCTAssertTrue(original.isOnAlternateScreen)
+        let status = Data("status-v1".utf8)
+        let plain = TerminalCheckpoint(blob: TerminalCheckpointBlob.encode(snapshot: try original.snapshot(), programStatus: status),
+                                       cols: 83, rows: 25)
+        let checkpoint = plain.addingReplay()
+        XCTAssertEqual(checkpoint.cols, 83)
+        let replay = try XCTUnwrap(TerminalCheckpointBlob.decodeReplay(checkpoint.blob), "要带上回放流")
+        XCTAssertEqual(TerminalCheckpointBlob.decode(checkpoint.blob), TerminalCheckpointBlob.decode(plain.blob), "二进制快照不变")
+        XCTAssertEqual(TerminalCheckpointBlob.decodeProgramStatus(checkpoint.blob), status)
+        XCTAssertEqual(TerminalCheckpointBlob.restorableSnapshot(checkpoint.blob, cols: 83, rows: 25),
+                       TerminalCheckpointBlob.decode(checkpoint.blob), "同一个引擎：直接用二进制快照")
+
+        let foreign = TerminalCheckpointBlob.encode(snapshot: Data("unreadable".utf8), programStatus: status, replay: replay,
+                                                    engine: "ghostty-ffffffff+p0000/snapshot-9")
+        let redrawn = try XCTUnwrap(TerminalCheckpointBlob.restorableSnapshot(foreign, cols: 83, rows: 25))
+        let restored = ShadowTerminal(cols: 40, rows: 10, options: options)
+        try restored.restore(snapshot: redrawn)
+        XCTAssertEqual(restored.size.cols, 83, "尺寸跟着快照回到存的时候")
+        XCTAssertEqual(restored.size.rows, 25)
+        XCTAssertTrue(restored.isOnAlternateScreen)
+        XCTAssertEqual(restored.mirrorDifferences(from: original), [:])
+        restored.feed(Data("\u{1b}[?1049l".utf8))
+        original.feed(Data("\u{1b}[?1049l".utf8))
+        XCTAssertEqual(restored.mirrorDifferences(from: original), [:], "主屏也在")
+
+        XCTAssertNil(TerminalCheckpointBlob.restorableSnapshot(
+            TerminalCheckpointBlob.encode(snapshot: Data("unreadable".utf8), engine: "ghostty-ffffffff+p0000/snapshot-9"),
+            cols: 83, rows: 25), "别的引擎存的、又没有回放流：用不了")
     }
 
     /// 接回之后镜像订阅者（手机一直连着等）拿到的是还原后的画面：影子是绕过输出泵改的，要重发快照。
