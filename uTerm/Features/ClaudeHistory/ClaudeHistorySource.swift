@@ -3,6 +3,8 @@ import Foundation
 /// 一台主机上 Claude Code 的历史会话（`~/.claude/projects`），经任意 `SFTPProviding` 只读地访问：
 /// SSH 主机是 `SFTPSession`，本机是经辅助程序的那个（沙盒里的 App 读不到 `~/.claude`）。
 actor ClaudeHistorySource: AgentHistorySource {
+    nonisolated var tool: AgentHistoryTool { .claude }
+
     let provider: any SFTPProviding
     /// 列表一行先读末尾这么多。实测本机 1600 多份记录，64 KB 里有 `entrypoint` 的占 99%、有标题的也是 99%。
     static let tailBytes = 64 * 1024

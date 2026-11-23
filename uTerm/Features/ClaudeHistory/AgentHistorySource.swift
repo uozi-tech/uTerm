@@ -9,6 +9,8 @@ nonisolated struct AgentHistoryProject: Hashable, Sendable, Identifiable {
     let modifiedAt: Date?
     /// 能确定的工作目录（由终端的当前目录对上的）；对不上为 nil。
     var directory: String?
+    /// 哪种工具的记录。数据源建项目时填自己的；不同工具的项目 `id` 可能相同，比较与去重要连它一起看。
+    var tool: AgentHistoryTool = .claude
 }
 
 /// 一个会话的记录文件。
@@ -21,6 +23,9 @@ nonisolated struct AgentHistorySessionFile: Hashable, Sendable, Identifiable {
     let modifiedAt: Date
 
     var id: String { path }
+
+    /// 哪种工具的记录（跟着所在的项目走）。
+    var tool: AgentHistoryTool { project.tool }
 
     /// 内存缓存的键：路径、大小、修改时间都没变才算同一份。
     var cacheKey: CacheKey { CacheKey(path: path, size: size, modifiedAt: modifiedAt) }
@@ -56,6 +61,8 @@ nonisolated struct AgentSubagentFile: Hashable, Sendable, Identifiable {
     let modifiedAt: Date?
     /// 有没有一份附带的小文件写着它是哪次调用派出的（Claude：`agent-<ID>.meta.json`）。没有就只能靠调用的结果对上。
     let hasInfo: Bool
+    /// 哪种工具的记录。
+    var tool: AgentHistoryTool = .claude
 
     var id: String { path }
 }
@@ -80,11 +87,20 @@ nonisolated enum AgentTranscriptTarget: Hashable, Sendable {
     }
 }
 
-/// 某个 Agent 的历史记录在一台主机上怎么找、怎么读。现在只有 Claude Code（`ClaudeHistorySource`）；
-/// 以后加 Codex 再写一份实现，界面与模型（`AgentHistoryModel`）不用动。
+/// 某一种编码工具（`AgentHistoryTool`）的历史记录在一台主机上怎么找、怎么读。每种工具一份实现
+/// （Claude Code 是 `ClaudeHistorySource`），界面与模型（`AgentHistoryModel`）只认这个协议。
 ///
-/// 只读：实现不能往主机上写任何东西。
+/// 只读：实现不能往主机上写任何东西（包括临时文件）。读到的对话内容只放内存。
+///
+/// 记录不是「一个会话一个按行写的文件」的工具（SQLite、压缩过的文件）照样套这几个类型：
+/// `AgentHistorySessionFile.path` 是那份记录的文件，`AgentTranscriptAnchor.lineOffset` 是数据源自己定的位置
+/// （按行写的文件是行的偏移，别的可以是第几条），条目 ID 在一份记录里唯一且稳定即可。
 protocol AgentHistorySource: Actor {
+    /// 这份实现读的是哪种工具的记录。它建出来的项目、子代理记录都要带上（`AgentHistoryProject.tool` /
+    /// `AgentSubagentFile.tool`），几种工具合在一起列的时候靠它分给对应的数据源。
+    nonisolated var tool: AgentHistoryTool { get }
+    /// 能不能跨会话搜索。不能的（记录的格式没法在主机上找）界面会说明这种工具的会话不参与搜索，也不会调 `search`。
+    nonisolated var supportsSearch: Bool { get }
     /// 这台主机上有没有这个 Agent 的记录。没有时 `projects()` 也返回空，界面据此显示空态。
     func projects() async throws -> [AgentHistoryProject]
     /// 终端当前目录落在哪个项目里（自己或最近的上级目录）。
@@ -111,8 +127,15 @@ protocol AgentHistorySource: Actor {
     func subagents(of target: AgentTranscriptTarget) async throws -> [AgentSubagentFile]
     /// 子代理附带的信息（`hasInfo` 为 true 的才有）。实现自己缓存；读不了为 nil。
     func info(of subagent: AgentSubagentFile) async -> AgentSubagentInfo?
-    /// 在终端里继续这个会话要敲的命令；ID 或目录不合法时为 nil。
+    /// 在终端里继续这个会话要敲的命令；ID 或目录不合法时为 nil。这种工具没法在终端里继续的一律 nil（界面不出按钮）。
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String?
+    /// 在这个目录里新开一个会话要敲的命令；目录不合法、或者这种工具不是在终端里用的为 nil。
+    nonisolated func newSessionCommand(directory: String) -> String?
+}
+
+extension AgentHistorySource {
+    nonisolated var supportsSearch: Bool { true }
+    nonisolated func newSessionCommand(directory: String) -> String? { nil }
 }
 
 /// 一页一页往前读一份对话；读到末尾之后还能接着读文件新长出来的部分（会话还开着）。
