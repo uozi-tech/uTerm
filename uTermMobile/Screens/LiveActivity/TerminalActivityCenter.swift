@@ -23,6 +23,8 @@ final class TerminalActivityCenter {
     @ObservationIgnored private var activity: Activity<TerminalActivityAttributes>?
     /// 最后一次推出去的内容。
     @ObservationIgnored private var pushed: TerminalActivityAttributes.ContentState?
+    /// 最后一次推出去的过期时间。内容没变、只有它变了也要推（进后台带上、回前台清掉、「无限」时往后挪）。
+    @ObservationIgnored private var pushedStaleDate: Date?
     /// 用户把实时活动划掉了：这一轮不再建，等它自然该结束（没有值得看的了）以后再说。
     @ObservationIgnored private var dismissedByUser = false
     @ObservationIgnored private var sinceBook = TerminalActivitySinceBook()
@@ -157,6 +159,7 @@ final class TerminalActivityCenter {
             // 用户在锁屏上划掉了。
             self.activity = nil
             pushed = nil
+            pushedStaleDate = nil
             dismissedByUser = activity.activityState == .dismissed
         }
         guard let content else {
@@ -173,10 +176,12 @@ final class TerminalActivityCenter {
             // 只能在前台发起；用户划掉的这一轮不再发起。
             guard !inBackground, !dismissedByUser, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
             do {
+                let stale = staleDate
                 activity = try Activity.request(attributes: TerminalActivityAttributes(),
-                                                content: ActivityContent(state: content, staleDate: staleDate),
+                                                content: ActivityContent(state: content, staleDate: stale),
                                                 pushType: nil)
                 pushed = content
+                pushedStaleDate = stale
                 Self.log("started (\(content.rows.count) rows)")
             } catch {
                 activity = nil
@@ -189,9 +194,13 @@ final class TerminalActivityCenter {
 
     private func push(_ content: TerminalActivityAttributes.ContentState, completion: (@MainActor () -> Void)? = nil) {
         guard let activity else { completion?(); return }
-        guard content != pushed || completion != nil else { return }
+        // 已暂停的内容不会过期（已经按暂停画了）。
+        let stale = content.paused ? nil : staleDate
+        guard content != pushed || completion != nil
+            || Self.staleDateChanged(from: pushedStaleDate, to: stale) else { return }
         pushed = content
-        let update = ActivityContent(state: content, staleDate: content.paused ? nil : staleDate)
+        pushedStaleDate = stale
+        let update = ActivityContent(state: content, staleDate: stale)
         Self.log("update: paused=\(content.paused) top=\(content.rows.first?.tone.rawValue ?? "-") "
                  + "keep=\(content.keepUntil != nil) stale=\(update.staleDate.map { Int($0.timeIntervalSinceNow) } ?? -1)s")
         let handle = UncheckedSendable(activity)
@@ -205,9 +214,23 @@ final class TerminalActivityCenter {
         guard let activity else { return }
         self.activity = nil
         pushed = nil
+        pushedStaleDate = nil
         let handle = UncheckedSendable(activity)
         Task { await Self.end(handle) }
     }
+
+    /// 过期时间变了没有（内容没变时，只为它值不值得再推一次）。从无到有、从有到无都算；
+    /// 都有时要差出 `staleDateSlack`：系统在倒计时的时候「现在 + 剩余」每次算出来只差几毫秒，不该为这个重推。
+    nonisolated static func staleDateChanged(from old: Date?, to new: Date?) -> Bool {
+        switch (old, new) {
+        case (nil, nil): false
+        case let (old?, new?): abs(new.timeIntervalSince(old)) >= staleDateSlack
+        default: true
+        }
+    }
+
+    /// 过期时间差出这么多才算变了。要比 `unboundedRecheck` 小：「无限」时每次复查都得往后挪一次。
+    nonisolated static let staleDateSlack: TimeInterval = 2
 
     // `Activity` 不是 Sendable：从主线程交出去要包一层，在 nonisolated 的地方调它的异步方法。之后主线程不再碰这一次的句柄。
     private nonisolated static func send(_ content: ActivityContent<TerminalActivityAttributes.ContentState>,
@@ -254,6 +277,9 @@ final class TerminalActivityCenter {
             // 读到「无限」（测试会话、刚切出去还没算好）时不急着暂停：内容照常实时，staleDate 每次只往后推一小段，
             // 隔几秒再看；万一就这样被挂起了，过期由扩展按已暂停画。
             while let self, !Task.isCancelled {
+                // 每看一次都把过期时间对上：「无限」时往后挪一小段；系统开始倒计时了就改成它给的时间用完那一刻
+                //（否则停在上一次挪到的地方，App 还在跑内容就先过期了）。内容和过期时间都没变时这一下不推。
+                self.refresh()
                 let remaining = self.backgroundTimeRemaining()
                 if remaining < Self.unboundedBackgroundTime {
                     Self.log("background time \(Int(remaining)) s; pausing in \(Int(max(0, remaining - Self.pauseLead))) s")
@@ -262,7 +288,6 @@ final class TerminalActivityCenter {
                     self.pauseNow()
                     return
                 }
-                self.refresh()
                 try? await Task.sleep(for: .seconds(Self.unboundedRecheck))
             }
         }
