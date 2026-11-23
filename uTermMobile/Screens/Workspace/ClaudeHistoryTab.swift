@@ -30,7 +30,8 @@ final class ClaudeHistoryTab: Identifiable {
     /// 已保存的主机（经 SFTP，与同主机的终端共用一条 SSH 连接）。`directory` 是终端当前目录，先列它所在的项目。
     convenience init(server host: ServerProfile, directory: String?, container: ModelContainer) {
         self.init(host: host, connection: AgentHistoryConnection(
-            preferredDirectory: directory, connect: AgentHistoryAccess.server(host, container: container)))
+            preferredDirectory: directory, allowsCommands: { !host.sftpOnly },
+            connect: AgentHistoryAccess.server(host, container: container)))
     }
 
     /// 配对过的 Mac：读它上面的 `~/.claude`。远控协议里没有终端的当前目录，列全部项目。
@@ -134,13 +135,15 @@ struct ClaudeHistoryBrowser: View {
                                          canResume: canResume && history.resumeCommand(for: level.file) != nil,
                                          onBack: back(for: level, showsBack: showsBack),
                                          onResume: { onResume(level.file) },
-                                         onOpenSubagent: { history.openSubagent($0) })
+                                         onOpenSubagent: { history.openSubagent($0) },
+                                         onJumpToLatest: { history.jumpToLatest() })
                         .opacity(isTop ? 1 : 0)
                         .allowsHitTesting(isTop)
                         .accessibilityHidden(!isTop)
                 }
             }
-            .id(transcript.file.path)
+            // 换了一份对话（含「跳到最新」）就是新的视图。
+            .id(ObjectIdentifier(transcript))
         } else {
             ClaudeHistoryState(icon: "clock", title: String(localized: "选择一个会话"),
                                message: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
@@ -162,10 +165,35 @@ private struct ClaudeHistoryList: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            searchBar
             Rectangle().fill(M.divider).frame(height: 1)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
+            ZStack {
+                content
+                    .opacity(history.search == nil ? 1 : 0)
+                    .allowsHitTesting(history.search == nil)
+                    .accessibilityHidden(history.search != nil)
+                if let search = history.search {
+                    ClaudeHistorySearchResults(history: history, search: search)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var searchBar: some View {
+        @Bindable var history = history
+        return VStack(alignment: .leading, spacing: 4) {
+            MSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder)
+                .submitLabel(.search)
+                .onSubmit { history.submitSearch() }
+            if let problem = history.searchProblem {
+                Text(AgentHistoryText.searchProblem(problem))
+                    .font(M.sans(12.5)).foregroundStyle(M.warning)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
     private var header: some View {
@@ -269,6 +297,133 @@ private struct ClaudeHistoryList: View {
     }
 }
 
+// MARK: - 搜索结果
+
+/// 同 Mac：按会话分组（最近的在前），每组下面是命中的摘要行；点一条打开那份对话并停在那里（窄屏进到对话，返回回到结果）。
+private struct ClaudeHistorySearchResults: View {
+    let history: AgentHistoryModel
+    let search: AgentHistoryModel.Search
+
+    var body: some View {
+        if search.sessions.isEmpty, !search.isRunning {
+            emptyState
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    status
+                    ForEach(search.sessions) { session in
+                        group(session)
+                    }
+                    footer
+                }
+                .padding(8)
+            }
+            .mKeepsScrollContentInSafeArea()
+        }
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        switch search.phase {
+        case .failed(let message):
+            ClaudeHistoryState(icon: "warn", title: String(localized: "无法搜索"), message: message,
+                               actionTitle: String(localized: "重试")) { history.submitSearch() }
+        case .stopped:
+            ClaudeHistoryState(icon: "search", title: AgentHistoryText.searchStopped(search),
+                               message: AgentHistoryText.searchNoResultsDetail,
+                               actionTitle: String(localized: "重试")) { history.submitSearch() }
+        default:
+            ClaudeHistoryState(icon: "search", title: AgentHistoryText.searchNoResults(search.query),
+                               message: AgentHistoryText.searchNoResultsDetail)
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        if search.isRunning {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(AgentHistoryText.searchProgress(search))
+                    .font(M.sans(12.5)).foregroundStyle(M.text3)
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                Button(AgentHistoryText.stopSearch) { history.stopSearch() }
+                    .font(M.sans(13.5, weight: .medium))
+                    .frame(minHeight: M.minTarget)
+            }
+            .padding(.horizontal, 6)
+        }
+    }
+
+    @ViewBuilder private var footer: some View {
+        if search.truncated {
+            note(AgentHistoryText.searchTruncated(search.hitCount))
+        } else if search.phase == .stopped {
+            note(AgentHistoryText.searchStopped(search))
+        } else if case .failed(let message) = search.phase {
+            Text(verbatim: message).font(M.sans(12.5)).foregroundStyle(M.warning)
+                .padding(.horizontal, 12)
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text).font(M.sans(12.5)).foregroundStyle(M.text4)
+            .padding(.horizontal, 12).padding(.vertical, 4)
+    }
+
+    private func group(_ session: AgentHistorySearchSession) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
+                    .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
+                    .lineLimit(1)
+                Text(AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all))
+                    .font(M.sans(12.5)).foregroundStyle(M.text3)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12).padding(.bottom, 2)
+            ForEach(session.hits) { hit in
+                Button { history.openHit(hit, in: session) } label: {
+                    ClaudeHistorySearchHitRow(hit: hit, isSelected: isOpen(hit, in: session))
+                }
+                .buttonStyle(MPressStyle())
+            }
+            if session.hasMoreHits {
+                note(AgentHistoryText.sessionMoreHits(session.hits.count))
+            }
+        }
+    }
+
+    private func isOpen(_ hit: AgentHistorySearchHit, in session: AgentHistorySearchSession) -> Bool {
+        history.selectedFile?.path == session.file.path && history.transcript?.highlightedItemID == hit.itemID
+    }
+}
+
+private struct ClaudeHistorySearchHitRow: View {
+    let hit: AgentHistorySearchHit
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(AgentHistoryText.roleLabel(hit.role))
+                    .font(M.sans(11.5, weight: .semibold)).foregroundStyle(M.text4)
+                Text(AgentHistorySnippetText.attributed(hit.snippet, match: M.accent))
+                    .font(M.sans(14)).foregroundStyle(M.text2)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(minHeight: M.minTarget)
+        .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
+            .fill(isSelected ? M.rowSelected : Color.clear))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
 private struct ClaudeHistoryRow: View {
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
@@ -308,6 +463,8 @@ private struct ClaudeTranscriptView: View {
     let onBack: (() -> Void)?
     let onResume: () -> Void
     let onOpenSubagent: (AgentSubagentLink) -> Void
+    /// 从搜索命中处打开的：换回从末尾打开。
+    var onJumpToLatest: () -> Void = {}
 
     @State private var expanded: Set<String> = []
     @State private var pendingAnchor: String?
@@ -316,8 +473,27 @@ private struct ClaudeTranscriptView: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(M.divider).frame(height: 1)
+            if transcript.opensAtHit, !transcript.reachedEnd {
+                hitBanner
+                Rectangle().fill(M.divider).frame(height: 1)
+            }
             messages
         }
+    }
+
+    /// 从命中处打开、后面还没读到末尾：顶上说一句，给「跳到最新」。同 Mac。
+    private var hitBanner: some View {
+        HStack(spacing: 8) {
+            Text(AgentHistoryText.openedAtHit)
+                .font(M.sans(12.5)).foregroundStyle(M.text2)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            MBtn(title: AgentHistoryText.jumpToLatest, icon: "download", kind: .secondary, height: 32,
+                 action: onJumpToLatest)
+                .fixedSize()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .background(M.fillFaint)
     }
 
     /// 放得下就一行（返回 · 标题 · 拷贝 · 继续）；窄的格子（Duo 分屏 330pt、iPhone 竖屏）标题一行、按钮另起一行，
@@ -415,9 +591,11 @@ private struct ClaudeTranscriptView: View {
                     ForEach(items) { item in
                         ClaudeTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
                                             subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
+                                            isHighlighted: item.id == transcript.highlightedItemID,
                                             expanded: $expanded)
                             .id(item.id)
                     }
+                    bottom
                     if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
                         Text("这个会话里没有可显示的消息。")
                             .font(M.sans(13)).foregroundStyle(M.text3)
@@ -438,6 +616,11 @@ private struct ClaudeTranscriptView: View {
                 // 往前加了一页：留在原来最上面那条，不跳到别处。第一页不用（默认停在底部）。
                 guard old > 0, let anchor = pendingAnchor else { return }
                 proxy.scrollTo(anchor, anchor: .top)
+            }
+            .onChange(of: transcript.focusGeneration) { _, _ in
+                // 搜索命中的那一条：滚到中间（等这一轮布局完）。
+                guard let id = transcript.highlightedItemID else { return }
+                Task { @MainActor in proxy.scrollTo(id, anchor: .center) }
             }
             .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
             .overlay(alignment: .bottom) {
@@ -473,6 +656,27 @@ private struct ClaudeTranscriptView: View {
         }
     }
 
+    /// 从命中处打开的：后面还有，「加载更晚的消息」（滚到底也会读，见 `AgentTranscriptTailFollow`）。
+    @ViewBuilder private var bottom: some View {
+        if !transcript.reachedEnd {
+            VStack(spacing: 8) {
+                if let error = transcript.laterErrorMessage {
+                    Text(verbatim: error).font(M.sans(13)).foregroundStyle(M.warning)
+                        .multilineTextAlignment(.center)
+                }
+                if transcript.isLoadingLater {
+                    ProgressView().padding(.vertical, 8)
+                } else {
+                    MBtn(title: AgentHistoryText.loadLater, icon: "download", kind: .secondary, height: 34) {
+                        Task { await transcript.loadLater() }
+                    }
+                    .fixedSize()
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
     private func loadEarlier() {
         pendingAnchor = transcript.firstItemID
         // 要往前看：不再跟着末尾走。
@@ -494,6 +698,8 @@ private struct ClaudeTranscriptRow: View {
     /// 这次调用派出的子代理（找得到记录的才有）。
     let subagent: AgentSubagentLink?
     let onOpenSubagent: (AgentSubagentLink) -> Void
+    /// 搜索命中的那一条：整条带底色和左边一道线（画在边界外，不挤动排版）。同 Mac。
+    var isHighlighted = false
     @Binding var expanded: Set<String>
 
     var body: some View {
@@ -506,6 +712,18 @@ private struct ClaudeTranscriptRow: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
+                    .fill(M.accent.opacity(0.12))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(M.accent).frame(width: 3)
+                    }
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, -5)
+            }
+        }
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 
     @ViewBuilder private var content: some View {

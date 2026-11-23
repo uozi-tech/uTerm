@@ -122,6 +122,68 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertNil(model.displayedTranscript, "窄屏回到列表")
     }
 
+    // MARK: - 搜索
+
+    /// 列表顶上的搜索：按回车才搜，结果按会话分组；点一条命中进到对话、停在那一条上，后面按需往后读；
+    /// 窄屏返回回到结果。主机是会答搜索命令的假树（`ClaudeSearchHostEmulator`）。
+    func testSearchOpensTheHitAndBackReturnsToTheResults() async throws {
+        let ws = MobileWorkspace()
+        let history = ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: MobileClaudeFixture.standard()))
+        let settled = await MobileFakeClaudeHistory.settle(history)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(history.connection.history)
+        defer { MobileProbeWindow.closeAll() }
+        _ = MobileProbeWindow.make(size: CGSize(width: 390, height: 700),
+                                   rootView: ClaudeHistoryBrowser(history: model, canResume: false, onResume: { _ in }))
+
+        model.searchText = "连接池"
+        XCTAssertNil(model.search, "打字时不搜")
+        model.submitSearch()
+        let finished = await MobileFakeTerminal.waitUntil { model.search?.phase == .finished }
+        XCTAssertTrue(finished)
+        let session = try XCTUnwrap(model.search?.sessions.first)
+        XCTAssertEqual(model.search?.sessions.map(\.metadata.title), ["登录接口偶发 500"])
+        XCTAssertEqual(session.hits.map(\.role), [.assistant], "思考里的那次不算")
+        let hit = try XCTUnwrap(session.hits.first)
+        XCTAssertEqual(hit.snippet.match, "连接池")
+
+        model.openHit(hit, in: session)
+        let transcript = try XCTUnwrap(model.transcript)
+        let loaded = await MobileFakeTerminal.waitUntil { !transcript.items.isEmpty }
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(transcript.items.last?.id, hit.itemID, "第一页到命中那一条为止")
+        XCTAssertEqual(transcript.highlightedItemID, hit.itemID)
+        XCTAssertFalse(transcript.reachedEnd)
+        await transcript.loadLater()
+        XCTAssertTrue(transcript.reachedEnd)
+        XCTAssertEqual(transcript.items.last?.kind, .assistantText("改好了，`TestLoginTimeout` 现在能过。"))
+
+        // 窄屏左上角返回：回到搜索结果，不是原来的列表。
+        model.select(nil)
+        XCTAssertEqual(model.search?.sessions.count, 1)
+        model.clearSearch()
+        XCTAssertNil(model.search)
+        XCTAssertEqual(model.visibleFiles.count, 3, "清空后回到原来的列表")
+    }
+
+    /// 标成只许 SFTP 的主机：搜索给一句说明，不往主机上发命令；别的照常。
+    func testSFTPOnlyHostExplainsWhySearchIsUnavailable() async throws {
+        let server = host()
+        server.sftpOnly = true
+        let tree = MobileClaudeFixture.standard()
+        let tab = ClaudeHistoryTab(host: server, connection: AgentHistoryConnection(
+            preferredDirectory: MobileClaudeFixture.directory, allowsCommands: { !server.sftpOnly }) { _ in tree })
+        let ws = MobileWorkspace()
+        let history = ws.openHistory(tab)
+        let settled = await MobileFakeClaudeHistory.settle(history)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(history.connection.history)
+        model.searchText = "连接池"
+        model.submitSearch()
+        XCTAssertEqual(model.search?.phase, .failed(AgentHistoryText.searchCannotExecute))
+        XCTAssertEqual(model.visibleFiles.count, 3)
+    }
+
     // MARK: - 实时跟随
 
     /// 标签在前台时盯着文件末尾，接上新写的；标签退到后面（`isActive` 为 false）就停。

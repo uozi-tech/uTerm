@@ -244,7 +244,12 @@ actor MobileFakeClaudeTree: SFTPProviding {
     // 历史会话只读：下面这些一律不支持。
     func upload(data: Data, toRemotePath: String) async throws { throw Unsupported() }
     func write(_ path: String, data: Data) async throws { throw Unsupported() }
-    func exec(_ command: String) async throws -> String { throw Unsupported() }
+    /// 只答「Claude 历史会话」搜索的命令（照命令的意思在内存里现算，见 `ClaudeSearchHostEmulator`），别的命令一律报错。
+    func exec(_ command: String) async throws -> String {
+        guard ClaudeSearchCommand.decode(command) != nil else { throw Unsupported() }
+        let snapshot = files.mapValues(\.data)
+        return await ClaudeSearchHostEmulator.respond(to: command) { path in snapshot[path] }
+    }
     func rename(_ path: String, to newPath: String) async throws { throw Unsupported() }
     func removeFile(_ path: String) async throws { throw Unsupported() }
     func removeDirectory(_ path: String) async throws { throw Unsupported() }

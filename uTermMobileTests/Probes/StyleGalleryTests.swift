@@ -393,6 +393,20 @@ final class StyleGalleryTests: XCTestCase {
             await liveTranscript.followOnce()
             try await shoot("claude-history-live", on: device, settle: .milliseconds(900)) { mount(liveWorkspace) }
 
+            // 搜索：列表顶上的搜索框，结果按会话分组、命中的字加粗；点一条进到对话，停在那一条上（整条高亮）。
+            let searchWorkspace = MobileWorkspace()
+            let searching = searchWorkspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: MobileClaudeFixture.standard()))
+            _ = await MobileFakeClaudeHistory.settle(searching)
+            let searchModel = try XCTUnwrap(searching.connection.history)
+            searchModel.searchText = "接口"
+            searchModel.submitSearch()
+            _ = await MobileFakeTerminal.waitUntil { searchModel.search?.phase == .finished }
+            try await shoot("claude-history-search", on: device, settle: .milliseconds(600)) { mount(searchWorkspace) }
+            let hitSession = try XCTUnwrap(searchModel.search?.sessions.first)
+            searchModel.openHit(try XCTUnwrap(hitSession.hits.first), in: hitSession)
+            _ = await MobileFakeTerminal.waitUntil { searchModel.transcript?.items.isEmpty == false }
+            try await shoot("claude-history-search-hit", on: device, settle: .milliseconds(900)) { mount(searchWorkspace) }
+
             // 比一屏长的对话：打开时停在最后一条（短的从顶上排起，见上一张）。
             let longWorkspace = MobileWorkspace()
             let long = longWorkspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: MobileClaudeFixture.longOnly()))
