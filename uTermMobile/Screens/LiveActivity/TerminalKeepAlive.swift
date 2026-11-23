@@ -176,7 +176,8 @@ struct TerminalKeepAliveMenu: View {
                 }
             }
         } else {
-            Menu {
+            // 子菜单也走 `MMenu`（`MMenuTintLintTests` 拦直接写的系统菜单）。
+            MMenu {
                 ForEach(TerminalKeepAlive.durations, id: \.self) { minutes in
                     Button(Self.label(minutes: minutes)) { keepAlive.start(minutes: minutes) }
                 }
