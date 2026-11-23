@@ -54,11 +54,14 @@ enum TerminalActivityDemo {
             var text = ""
             for line in 1 ... 3000 {
                 let number = String(format: "%04d", line)
+                // 每行开头 7 格是行号的二进制条码（第 j 格 = 第 j 位，█ = 1）：真手录制时从出的每一帧画面里读回滚到了哪
+                //（`GhosttyScrollPresentProbe`，和测试里的 `GhosttyOnScreenScrollTests.BarcodeDecoder` 同一套编码）。
+                let code = (0 ..< 7).map { (line >> $0) & 1 == 1 ? "█" : " " }.joined()
                 if line % 10 == 0 {
-                    text += "\u{1b}[1;30;43m \(number) ──────────── row \(number) ──────────── \u{1b}[0m\r\n"
+                    text += "\(code)  \u{1b}[1;30;43m \(number) ──────────── row \(number) ──────────── \u{1b}[0m\r\n"
                 } else {
                     let color = line % 2 == 0 ? 36 : 37
-                    text += "\u{1b}[\(color)m\(number)\u{1b}[0m  the quick brown fox jumps over the lazy dog \(number)\r\n"
+                    text += "\(code)  \u{1b}[\(color)m\(number)\u{1b}[0m  the quick brown fox jumps over the lazy dog \(number)\r\n"
                 }
             }
             text += "\u{1b}[32m-- end of scrollback test (3000 lines) --\u{1b}[0m\r\n"
