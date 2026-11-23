@@ -225,7 +225,11 @@ actor MockSFTP: SFTPProviding {
 
     func setStatError(_ error: Error?) { statError = error }
 
+    /// 每次 `stat` 的路径（数「看了几次文件末尾」）。
+    private(set) var statCalls: [String] = []
+
     func stat(_ path: String) async throws -> RemoteStat {
+        statCalls.append(path)
         if let statError { throw statError }
         guard let entry = blobStore[path] else {
             throw NSError(domain: "MockSFTP", code: 2, userInfo: [

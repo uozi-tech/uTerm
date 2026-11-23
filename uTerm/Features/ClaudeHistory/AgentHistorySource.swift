@@ -108,8 +108,21 @@ protocol AgentHistorySource: Actor {
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String?
 }
 
-/// 一页一页往前读一份对话。
+/// 一页一页往前读一份对话；读到末尾之后还能接着读文件新长出来的部分（会话还开着）。
 protocol AgentTranscriptPaging: Actor {
     /// 再往前读一页，返回按时间先后排的条目。`reachedStart` 为 true 时前面没有了。
     func loadPrevious() async throws -> (items: [AgentTranscriptItem], reachedStart: Bool)
+    /// 看一次文件末尾，读新写进来的部分。第一次 `loadPrevious` 读过末尾之前什么都不做（`.unchanged`）。
+    func loadNewer() async throws -> AgentTranscriptGrowth
+}
+
+/// 看一次文件末尾的结果。
+nonisolated enum AgentTranscriptGrowth: Equatable, Sendable {
+    /// 没变长。
+    case unchanged
+    /// 变长了：新读到的条目（可能为空——新写的只是不显示的行，或者最后一行还没写完）。
+    /// `hasMore`：一下子长了很多、这次只读了一部分，接着读，不用等下一拍。
+    case appended([AgentTranscriptItem], hasMore: Bool)
+    /// 比已经读到的位置还短：文件被截断或换掉了，整份要从末尾重读。
+    case replaced
 }

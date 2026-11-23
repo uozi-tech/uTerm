@@ -377,6 +377,22 @@ final class StyleGalleryTests: XCTestCase {
             _ = await MobileFakeTerminal.waitUntil { model.transcript?.reachedStart == true }
             try await shoot("claude-history-transcript", on: device, settle: .milliseconds(900)) { mount(workspace) }
 
+            // 会话还开着：往上翻着时末尾又写进了一问一答——标题旁「正在更新」、底部「有新消息」。
+            let liveTree = MobileClaudeFixture.standard()
+            let liveWorkspace = MobileWorkspace()
+            let live = liveWorkspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: liveTree))
+            _ = await MobileFakeClaudeHistory.settle(live)
+            let liveModel = try XCTUnwrap(live.connection.history)
+            let liveFile = try XCTUnwrap(liveModel.visibleFiles.first)
+            liveModel.select(liveFile)
+            _ = await MobileFakeTerminal.waitUntil { liveModel.transcript?.reachedStart == true }
+            await liveTree.append(liveFile.path, MobileClaudeFixture.user("顺便把慢查询日志也打开吧。", uuid: "u-live") + "\n"
+                + MobileClaudeFixture.assistant(MobileClaudeFixture.text("好，已经在 `postgresql.conf` 里打开了。"), uuid: "a-live") + "\n")
+            let liveTranscript = try XCTUnwrap(liveModel.transcript)
+            liveTranscript.setFollowsTail(false)
+            await liveTranscript.followOnce()
+            try await shoot("claude-history-live", on: device, settle: .milliseconds(900)) { mount(liveWorkspace) }
+
             // 比一屏长的对话：打开时停在最后一条（短的从顶上排起，见上一张）。
             let longWorkspace = MobileWorkspace()
             let long = longWorkspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: MobileClaudeFixture.longOnly()))

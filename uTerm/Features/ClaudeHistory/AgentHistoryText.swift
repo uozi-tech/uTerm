@@ -82,6 +82,16 @@ enum AgentHistoryText {
 
     static var backToParent: String { String(localized: "返回上一层") }
 
+    // MARK: 实时跟随
+
+    /// 标题旁：这份对话最近还在变（会话开着）。
+    static var updating: String {
+        String(localized: "正在更新", comment: "Claude 历史会话：打开着的对话最近还在写入新内容")
+    }
+
+    /// 往上翻着时末尾来了新内容，底部的提示。
+    static var newMessages: String { String(localized: "有新消息") }
+
     /// 范围里一行都没列出来时的说明。
     static func emptyListDetail(hidden: Int) -> String {
         hidden > 0

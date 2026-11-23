@@ -7,6 +7,8 @@ struct AgentHistoryBrowser: View {
     let history: AgentHistoryModel
     let onResume: (AgentHistorySessionFile) -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         HStack(spacing: 0) {
             AgentHistorySessionList(history: history)
@@ -15,6 +17,10 @@ struct AgentHistoryBrowser: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // 实时跟随只在看得见时查：窗口关了、缩进程序坞 / App 隐藏（场景进了后台）就停，回来马上查一次。
+        .onAppear { history.setTranscriptVisible(scenePhase != .background) }
+        .onDisappear { history.setTranscriptVisible(false) }
+        .onChange(of: scenePhase) { _, phase in history.setTranscriptVisible(phase != .background) }
     }
 
     @ViewBuilder private var detail: some View {
@@ -235,10 +241,13 @@ struct AgentTranscriptPane: View {
                 .accessibilityLabel(Text(AgentHistoryText.backToParent))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(titleLine)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(titleLine)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(UD.text)
+                        .lineLimit(1)
+                    if transcript.isUpdating { AgentUpdatingBadge() }
+                }
                 Text(detailLine)
                     .font(.system(size: 11))
                     .foregroundStyle(UD.text3)
@@ -301,9 +310,12 @@ struct AgentTranscriptPane: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 24)
                     }
+                    // 跟到底时滚到这里。底部留白由它和上面的间距承担（同原来的 14pt）：锚点下面再垫 padding，
+                    // `scrollTo(_, anchor: .bottom)` 就永远差这一截（见 `TerminalAgentView`）。
+                    Color.clear.frame(height: 4).id(Self.bottomID)
                 }
                 .padding(.horizontal, 18)
-                .padding(.vertical, 14)
+                .padding(.top, 14)
             }
             .defaultScrollAnchor(.bottom)
             .onChange(of: transcript.prependGeneration) { old, _ in
@@ -311,8 +323,21 @@ struct AgentTranscriptPane: View {
                 guard old > 0, let anchor = pendingAnchor else { return }
                 proxy.scrollTo(anchor, anchor: .top)
             }
+            .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
+            .overlay(alignment: .bottom) {
+                if transcript.hasNewBelow {
+                    AgentNewMessagesPill {
+                        transcript.setFollowsTail(true)
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                }
+            }
         }
     }
+
+    private static let bottomID = "agent-transcript-bottom"
 
     @State private var pendingAnchor: String?
 
@@ -347,7 +372,49 @@ struct AgentTranscriptPane: View {
 
     private func loadEarlier() {
         pendingAnchor = transcript.firstItemID
+        // 要往前看：不再跟着末尾走（内容不满一屏时点「加载更早」也不会被拽回底部）。
+        transcript.setFollowsTail(false)
         Task { await transcript.loadEarlier() }
+    }
+}
+
+/// 标题旁的「正在更新」：这份对话最近还在变（会话开着）。
+private struct AgentUpdatingBadge: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().fill(UD.success).frame(width: 6, height: 6)
+            Text(AgentHistoryText.updating)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(UD.success)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(UD.success.opacity(0.12)))
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 往上翻着时末尾来了新内容：底部的「有新消息」，点了跳到底。
+private struct AgentNewMessagesPill: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(AgentHistoryText.newMessages)
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(UD.accent))
+            .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.udPlain)
     }
 }
 

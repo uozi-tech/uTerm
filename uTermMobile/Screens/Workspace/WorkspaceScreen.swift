@@ -667,7 +667,7 @@ struct WorkspaceScreen: View {
         case .preview(let preview):
             FilePreviewSessionBody(tab: preview, onClose: { closeTab(preview.id) })
         case .history(let history):
-            ClaudeHistorySessionBody(tab: history) { command, directory in
+            ClaudeHistorySessionBody(tab: history, isActive: front && visible) { command, directory in
                 resume(history, command: command, directory: directory)
             }
         }

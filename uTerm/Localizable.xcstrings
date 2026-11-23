@@ -50900,6 +50900,34 @@
         }
       }
     },
+    "有新消息" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいメッセージ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 메시지"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有新訊息"
+          }
+        }
+      }
+    },
     "有新版本 %@" : {
       "localizations" : {
         "en" : {
@@ -55474,6 +55502,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在控制"
+          }
+        }
+      }
+    },
+    "正在更新" : {
+      "comment" : "Claude 历史会话：打开着的对话最近还在写入新内容",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updating"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "업데이트 중"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新"
           }
         }
       }

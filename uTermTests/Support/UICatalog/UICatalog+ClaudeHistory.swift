@@ -8,9 +8,24 @@ enum UICatalogClaudeHistory {
     private static let root = "/home/user/.claude/projects"
     private static let project = ClaudeProjectPath.encode(directory)
 
-    /// 打开哪一份：默认是最新的那段对话；`subagents` 是派了子代理的那份，`subagentTranscript` 再点进其中一个子代理。
+    /// 打开哪一份：默认是最新的那段对话；`subagents` 是派了子代理的那份，`subagentTranscript` 再点进其中一个子代理；
+    /// `live` 是最新那段对话还开着：往上翻着时末尾又写进了一问一答（标题旁「正在更新」、底部「有新消息」）。
     enum Opening {
-        case conversation, subagents, subagentTranscript
+        case conversation, subagents, subagentTranscript, live
+    }
+
+    /// `live` 那一份记录在哪（`appendLiveTurn` 往它末尾写）。
+    private static var liveFile: (sftp: MockSFTP, path: String)?
+
+    /// 还开着的会话又写进了一问一答，跟随看一次文件末尾。
+    static func appendLiveTurn(_ history: AgentHistoryModel) async {
+        guard let liveFile, let transcript = history.transcript else { return }
+        var data = (try? await liveFile.sftp.readRange(liveFile.path, offset: 0, length: Int.max / 2)) ?? Data()
+        data.append(Data((ClaudeFixture.userText("顺便把慢查询日志也打开吧。", uuid: "u-live", cwd: directory) + "\n"
+            + ClaudeFixture.assistant(ClaudeFixture.textBlock("好，已经在 `postgresql.conf` 里打开了。"),
+                                      uuid: "a-live", cwd: directory) + "\n").utf8))
+        await liveFile.sftp.setFile(liveFile.path, data: data, mtime: UICatalogFixtures.now)
+        await transcript.followOnce()
     }
 
     static let agentsSessionID = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
@@ -18,7 +33,7 @@ enum UICatalogClaudeHistory {
     static func model(opening: Opening = .conversation) async -> AgentHistoryModel {
         let now = UICatalogFixtures.now
         let sessions: [(id: String, data: Data, age: TimeInterval)] = [
-            ("6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8", conversation(), 60 * 12),
+            ("6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8", conversation(followUps: opening == .live ? 6 : 0), 60 * 12),
             (agentsSessionID, withSubagents(), 60 * 40),
             ("1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", simple(title: "给订单接口加分页", ask: "订单列表接口加上分页参数"), 3600 * 5),
             ("9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b", simple(title: "排查 502", ask: "nginx 偶尔回 502，帮我看看"), 86_400 * 2),
@@ -51,11 +66,16 @@ enum UICatalogClaudeHistory {
         for _ in 0..<100 where history.hasMore {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        let pick = opening == .conversation ? history.visibleFiles.first
+        let pick = opening == .conversation || opening == .live ? history.visibleFiles.first
             : history.visibleFiles.first { $0.sessionID == agentsSessionID }
         if let pick { history.select(pick) }
         for _ in 0..<100 where history.transcript?.reachedStart != true {
             try? await Task.sleep(for: .milliseconds(10))
+        }
+        if opening == .live {
+            // 新内容等画面挂上、往上翻过之后再写（`appendLiveTurn`）。
+            liveFile = history.selectedFile.map { (sftp, $0.path) }
+            return history
         }
         guard opening != .conversation, let transcript = history.transcript else { return history }
         for _ in 0..<100 where transcript.subagentLinks.count < 2 {
@@ -120,8 +140,15 @@ enum UICatalogClaudeHistory {
         ]
     }
 
-    private static func conversation() -> Data {
+    /// `followUps`：后面再追问几轮（「实时跟随」那张要比一屏长，才翻得上去）。
+    private static func conversation(followUps: Int = 0) -> Data {
         let cwd = directory
+        var extra: [String] = []
+        for turn in 0..<followUps {
+            extra.append(ClaudeFixture.userText("压测第 \(turn + 1) 轮还有超时吗？", uuid: "u-f\(turn)", cwd: cwd))
+            extra.append(ClaudeFixture.assistant(ClaudeFixture.textBlock("第 \(turn + 1) 轮没有超时，p99 在 120ms 以内。"),
+                                                 uuid: "a-f\(turn)", cwd: cwd))
+        }
         return ClaudeFixture.file([
             ClaudeFixture.noise(0),
             ClaudeFixture.userText("登录接口偶尔返回 500，日志里是 `context deadline exceeded`。帮我找找原因。", cwd: cwd),
@@ -150,6 +177,7 @@ enum UICatalogClaudeHistory {
             ClaudeFixture.userText("<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args></command-args>", cwd: cwd),
             ClaudeFixture.userText("按第一条改吧，顺便补个测试。", cwd: cwd),
             ClaudeFixture.assistant(ClaudeFixture.textBlock("改好了，`TestLoginTimeout` 现在能过。"), cwd: cwd),
+        ] + extra + [
             ClaudeFixture.aiTitle("登录接口偶发 500"),
         ])
     }

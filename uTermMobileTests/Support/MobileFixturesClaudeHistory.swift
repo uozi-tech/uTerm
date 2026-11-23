@@ -210,6 +210,14 @@ actor MobileFakeClaudeTree: SFTPProviding {
 
     func realPath(_ path: String) async throws -> String { path == "." ? home : path }
 
+    /// 往一份记录末尾追加（模拟还开着的会话在写）。只给用例造数据用，历史会话自己从不写。
+    func append(_ path: String, _ text: String, mtime: Date = Date()) {
+        guard var file = files[path] else { return }
+        file.data.append(Data(text.utf8))
+        file.mtime = mtime
+        files[path] = file
+    }
+
     func stat(_ path: String) async throws -> RemoteStat {
         if let file = files[path] { return RemoteStat(size: Int64(file.data.count), mtime: file.mtime, permissions: 0o100644) }
         if let mtime = directories[path] { return RemoteStat(size: 4096, mtime: mtime, permissions: 0o040755) }

@@ -80,6 +80,13 @@ extension UICatalog {
                            symbol: "AgentSubagentEntry", size: CGSize(width: 1100, height: 720)) { stage in
                 try await claudeHistoryRender(stage, opening: .subagents)
             },
+            // 会话还开着：标题旁「正在更新」，往上翻着时末尾来了新内容，底部「有新消息」。
+            // 往上翻用的是真的滚轮事件，窗口要在屏上（`live`）才收得到。
+            UICatalogEntry("Claude 历史会话/实时跟随", source: "uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift",
+                           symbol: "AgentNewMessagesPill", size: CGSize(width: 1100, height: 720),
+                           live: true) { stage in
+                try await claudeHistoryRender(stage, opening: .live)
+            },
             // 点进一个子代理：标题处是它的描述与类型，左上角返回上一层；它又派了一个子代理，同样有入口。
             UICatalogEntry("Claude 历史会话/子代理的记录", source: "uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift",
                            symbol: "AgentTranscriptPane", size: CGSize(width: 1100, height: 720)) { stage in
@@ -119,7 +126,17 @@ extension UICatalog {
         let history = await UICatalogClaudeHistory.model(opening: opening)
         let windowID = ClaudeHistoryWindowID(host: .server(server.id), directory: UICatalogClaudeHistory.directory)
         let window = ClaudeHistoryWindowModel(windowID: windowID, hostName: server.name, history: history)
-        return UICatalogRender(s.wrap(ClaudeHistoryWindowView(windowID: windowID, catalogModel: window)))
+        let view = s.wrap(ClaudeHistoryWindowView(windowID: windowID, catalogModel: window))
+        guard opening == .live else { return UICatalogRender(view) }
+        // 用户往上翻着（真的滚轮事件），末尾来了新内容：位置不动，底部亮「有新消息」。
+        return UICatalogRender(view, after: { root in
+            guard let scroll = root.firstScrollView() else { return }
+            try? await scroll.simulateTrackpadScroll(up: 360)
+            try? await Task.sleep(for: .milliseconds(400))
+            await UICatalogClaudeHistory.appendLiveTurn(history)
+            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: .milliseconds(400))
+        })
     }
 
     private static func parallelRender(_ stage: UICatalogStage, command index: Int) throws -> UICatalogRender {

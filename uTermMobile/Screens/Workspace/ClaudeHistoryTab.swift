@@ -58,6 +58,8 @@ final class ClaudeHistoryTab: Identifiable {
 /// 历史标签的主体：连接中 / 失败 / 会话列表与对话。
 struct ClaudeHistorySessionBody: View {
     let tab: ClaudeHistoryTab
+    /// 标签在前台、工作区没收起：打开着的对话才盯着文件末尾（实时跟随）。
+    var isActive = true
     /// 在终端里继续选中的会话（命令由共享的 `ClaudeResumeCommand` 生成）。
     var onResume: (_ command: String, _ directory: String) -> Void
 
@@ -72,7 +74,7 @@ struct ClaudeHistorySessionBody: View {
                     Task { await tab.connection.open() }
                 }
             case .ready(let history):
-                ClaudeHistoryBrowser(history: history, canResume: tab.canResume) { file in
+                ClaudeHistoryBrowser(history: history, canResume: tab.canResume, isActive: isActive) { file in
                     guard let plan = history.resumeCommand(for: file) else { return }
                     onResume(plan.command, plan.directory)
                 }
@@ -88,7 +90,10 @@ struct ClaudeHistorySessionBody: View {
 struct ClaudeHistoryBrowser: View {
     let history: AgentHistoryModel
     let canResume: Bool
+    var isActive = true
     let onResume: (AgentHistorySessionFile) -> Void
+
+    @Environment(\.scenePhase) private var scenePhase
 
     /// 宽过这么多才左右并排：列表 300pt，对话至少还要 400pt 才读得下去。
     nonisolated static let sideBySideMinWidth: CGFloat = 700
@@ -109,6 +114,11 @@ struct ClaudeHistoryBrowser: View {
                 ClaudeHistoryList(history: history)
             }
         }
+        // 实时跟随只在看得见时查：标签不在前台、工作区收起、App 进了后台就停（省电），回来马上查一次。
+        .onChange(of: isActive && scenePhase != .background, initial: true) { _, visible in
+            history.setTranscriptVisible(visible)
+        }
+        .onDisappear { history.setTranscriptVisible(false) }
     }
 
     @ViewBuilder private func detail(showsBack: Bool) -> some View {
@@ -319,7 +329,8 @@ private struct ClaudeTranscriptView: View {
                 titleBlock
                 actions
             }
-            .frame(minWidth: 460, minHeight: 52)
+            // 子代理的记录只有拷贝一个按钮，窄的格子里也放得下一行。
+            .frame(minWidth: transcript.subagent == nil ? 460 : 0, minHeight: 52)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     backButton
@@ -350,9 +361,12 @@ private struct ClaudeTranscriptView: View {
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata))
-                .font(M.sans(14.5, weight: .semibold)).foregroundStyle(M.text)
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata))
+                    .font(M.sans(14.5, weight: .semibold)).foregroundStyle(M.text)
+                    .lineLimit(1)
+                if transcript.isUpdating { ClaudeUpdatingBadge() }
+            }
             Text(transcript.subagent.map(AgentHistoryText.subagentDetail)
                  ?? AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata))
                 .font(M.sans(11.5)).foregroundStyle(M.text3)
@@ -386,7 +400,7 @@ private struct ClaudeTranscriptView: View {
                     .fixedSize()
                     .padding(.trailing, 10)
             } else {
-                Color.clear.frame(width: 4, height: 1)
+                Spacer().frame(width: 4)
             }
         }
     }
@@ -410,9 +424,11 @@ private struct ClaudeTranscriptView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 24)
                     }
+                    // 跟到底时滚到这里。底部留白由它和上面的间距承担（同原来的 14pt），锚点下面不再垫 padding。
+                    Color.clear.frame(height: 2).id(Self.bottomID)
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 14)
+                .padding(.top, 14)
             }
             .mKeepsScrollContentInSafeArea()
             // 打开时停在最后一条（从末尾读起）；内容不满一屏时从顶上排起——只写 `.bottom` 的话短对话会贴着底、上面空一大片。
@@ -423,8 +439,21 @@ private struct ClaudeTranscriptView: View {
                 guard old > 0, let anchor = pendingAnchor else { return }
                 proxy.scrollTo(anchor, anchor: .top)
             }
+            .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
+            .overlay(alignment: .bottom) {
+                if transcript.hasNewBelow {
+                    ClaudeNewMessagesPill {
+                        transcript.setFollowsTail(true)
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                }
+            }
         }
     }
+
+    private static let bottomID = "claude-transcript-bottom"
 
     @ViewBuilder private var top: some View {
         if let error = transcript.errorMessage {
@@ -446,6 +475,8 @@ private struct ClaudeTranscriptView: View {
 
     private func loadEarlier() {
         pendingAnchor = transcript.firstItemID
+        // 要往前看：不再跟着末尾走。
+        transcript.setFollowsTail(false)
         Task { await transcript.loadEarlier() }
     }
 
@@ -596,6 +627,42 @@ private struct ClaudeSubagentEntry: View {
         .buttonStyle(MPressStyle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// 标题旁的「正在更新」：这份对话最近还在变（会话开着）。同 Mac。
+private struct ClaudeUpdatingBadge: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().fill(M.success).frame(width: 6, height: 6)
+            Text(AgentHistoryText.updating)
+                .font(M.sans(11, weight: .medium)).foregroundStyle(M.success)
+        }
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Capsule().fill(M.success.opacity(0.12)))
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 往上翻着时末尾来了新内容：底部的「有新消息」，点了跳到底。同 Mac。
+private struct ClaudeNewMessagesPill: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down").font(.system(size: 12, weight: .semibold))
+                Text(AgentHistoryText.newMessages).font(M.sans(13.5, weight: .medium))
+            }
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 36)
+            .background(Capsule().fill(M.accent))
+            .shadow(color: .black.opacity(0.18), radius: 5, y: 1)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(MPressStyle())
     }
 }
 

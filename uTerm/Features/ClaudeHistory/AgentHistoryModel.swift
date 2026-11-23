@@ -59,10 +59,16 @@ final class AgentHistoryModel {
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var failed: Set<String> = []
     @ObservationIgnored private var listGeneration = 0
+    /// 打开着的对话多久看一次文件末尾（测试换成不真睡的）。
+    @ObservationIgnored let followTiming: AgentTranscriptFollowTiming
+    /// 平台说对话现在看不看得见（`setTranscriptVisible`）。
+    @ObservationIgnored private var transcriptVisible = false
 
-    init(source: any AgentHistorySource, preferredDirectory: String?) {
+    init(source: any AgentHistorySource, preferredDirectory: String?,
+         followTiming: AgentTranscriptFollowTiming = .standard) {
         self.source = source
         self.preferredDirectory = preferredDirectory
+        self.followTiming = followTiming
     }
 
     /// 列表里显示的：已经读过的那一段里要列出来的。
@@ -222,15 +228,39 @@ final class AgentHistoryModel {
     func select(_ file: AgentHistorySessionFile?) {
         guard file?.path != selectedFile?.path else { return }
         selectedFile = file
+        stopFollowingAll()
         subagentStack = []
         guard let file else {
             transcript = nil
             return
         }
         let model = AgentTranscriptModel(file: file, pager: source.transcript(for: file), source: source,
-                                         target: .session(file))
+                                         target: .session(file), followTiming: followTiming)
         transcript = model
+        updateFollowing()
         Task { await model.loadEarlier() }
+    }
+
+    // MARK: - 实时跟随
+
+    /// 平台告诉它对话现在看不看得见：Mac 是窗口开着且没缩到程序坞，iOS 是标签在前台且 App 不在后台。
+    /// 看得见时只有正在显示的那一层（`displayedTranscript`）盯着文件末尾，别的层都停。
+    func setTranscriptVisible(_ visible: Bool) {
+        guard visible != transcriptVisible else { return }
+        transcriptVisible = visible
+        updateFollowing()
+    }
+
+    private func updateFollowing() {
+        let top = displayedTranscript
+        for level in [transcript].compactMap({ $0 }) + subagentStack {
+            level.setFollowing(transcriptVisible && level === top)
+        }
+    }
+
+    private func stopFollowingAll() {
+        transcript?.setFollowing(false)
+        for level in subagentStack { level.setFollowing(false) }
     }
 
     /// 正在显示的那一层：点进了子代理就是最里面那份，否则是主对话。
@@ -240,15 +270,18 @@ final class AgentHistoryModel {
     func openSubagent(_ link: AgentSubagentLink) {
         guard let parent = displayedTranscript else { return }
         let model = AgentTranscriptModel(file: parent.file, pager: source.subagentTranscript(for: link.file),
-                                         source: source, target: .subagent(link.file), subagent: link)
+                                         source: source, target: .subagent(link.file), subagent: link,
+                                         followTiming: followTiming)
         subagentStack.append(model)
+        updateFollowing()
         Task { await model.loadEarlier() }
     }
 
     /// 返回上一层（最里面那份子代理记录关掉，内容随之丢掉）。
     func closeSubagent() {
         guard !subagentStack.isEmpty else { return }
-        subagentStack.removeLast()
+        subagentStack.removeLast().setFollowing(false)
+        updateFollowing()
     }
 
     /// 在终端里继续选中的会话要敲的命令。目录用记录里对得上项目的那个，对不上用终端当前目录对上的项目目录。
@@ -272,6 +305,9 @@ nonisolated struct AgentSubagentLink: Equatable, Sendable {
 
 /// 一份对话：从末尾开始，往上翻一页读一页。主对话与子代理的记录都是它（`subagent` 不为 nil 的是后者）。
 ///
+/// 实时跟随：看得见（`setFollowing(true)`）且末尾已经读过时，每 `followTiming.interval` 看一次文件末尾，新写进来的条目
+/// 接在后面（按 ID 去重，新来的工具结果挂回前面的调用）；文件变短就整份从末尾重读。读失败不报错，安静地退避。
+///
 /// 派子代理的调用要对上它的记录（`subagentLinks`）：读到了派子代理的调用才去列 `subagents(of:)`（懒，列表阶段不碰）；
 /// 先按调用结果里报的子代理 ID 对，对不上的（结果还没读到、太大没解析、老版本没报）再读子代理附带的信息文件，
 /// 一次最多读 `infoConcurrency` 份、对上了就停，不会一口气把几百份都读了。对不上的不给入口，不报错。
@@ -291,6 +327,12 @@ final class AgentTranscriptModel {
     private(set) var prependGeneration = 0
     /// 派子代理的调用（按 `toolUseID`）→ 它的记录。对不上的没有。
     private(set) var subagentLinks: [String: AgentSubagentLink] = [:]
+    /// 每次在末尾接上了新条目就 +1，界面据此决定跟着滚到底，还是提示「有新消息」。
+    private(set) var appendGeneration = 0
+    /// 最近一段时间里文件在变（`followTiming.activeWindow` 内读到过新内容）：标题处的「正在更新」。
+    private(set) var isUpdating = false
+    /// 末尾来了新条目，而用户正往上翻着、没跟到底：底部的「有新消息」。
+    private(set) var hasNewBelow = false
 
     /// 同时读几份子代理的信息文件。
     nonisolated static let infoConcurrency = 4
@@ -304,14 +346,36 @@ final class AgentTranscriptModel {
     @ObservationIgnored private var fileByToolUse: [String: (file: AgentSubagentFile, info: AgentSubagentInfo)] = [:]
     @ObservationIgnored private var isResolving = false
     @ObservationIgnored private var resolvesAgain = false
+    /// 会话还开着时，调用来了、子代理的记录可能晚一点才写出来：标记要重新列 `subagents/`（有间隔）。
+    @ObservationIgnored private var subagentIndexStale = false
+    @ObservationIgnored private var lastSubagentListing: ContinuousClock.Instant?
+
+    // 实时跟随
+    @ObservationIgnored let followTiming: AgentTranscriptFollowTiming
+    @ObservationIgnored private var followTask: Task<Void, Never>?
+    @ObservationIgnored private var isFollowReading = false
+    @ObservationIgnored private var followFailures = 0
+    @ObservationIgnored private var lastGrowth: ContinuousClock.Instant?
+    /// 出现过的全部条目 ID（含挂到调用上的工具结果）：往后读到的和已有的重了就不再加。
+    @ObservationIgnored private var seenIDs: Set<String> = []
+    /// 文件被换掉、整份重读时 +1：在途的读拿到的是旧文件的东西，丢掉。
+    @ObservationIgnored private var contentEpoch = 0
+    /// 界面报的：用户是不是停在底部（跟着新内容走）。
+    @ObservationIgnored private(set) var followsTail = true
 
     init(file: AgentHistorySessionFile, pager: any AgentTranscriptPaging, source: (any AgentHistorySource)? = nil,
-         target: AgentTranscriptTarget? = nil, subagent: AgentSubagentLink? = nil) {
+         target: AgentTranscriptTarget? = nil, subagent: AgentSubagentLink? = nil,
+         followTiming: AgentTranscriptFollowTiming = .standard) {
         self.file = file
         self.pager = pager
         self.source = source
         self.target = target ?? .session(file)
         self.subagent = subagent
+        self.followTiming = followTiming
+    }
+
+    isolated deinit {
+        followTask?.cancel()
     }
 
     /// 在一份历史里唯一：界面拿它当视图身份（主对话与子代理一层一层的不能混）。
@@ -324,16 +388,128 @@ final class AgentTranscriptModel {
         guard !isLoading, !reachedStart else { return }
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        let epoch = contentEpoch
         do {
             let page = try await pager.loadPrevious()
+            guard epoch == contentEpoch else {
+                // 读的时候文件被换掉了：这一页是旧的，丢掉，按新文件重新从末尾读。
+                isLoading = false
+                await loadEarlier()
+                return
+            }
+            seenIDs.formUnion(page.items.map(\.id))
             items = AgentTranscriptAssembler.attachResults(page.items + items)
             reachedStart = page.reachedStart
             prependGeneration += 1
             resolveSubagents()
         } catch {
-            errorMessage = error.localizedDescription
+            if epoch == contentEpoch { errorMessage = error.localizedDescription }
         }
+        isLoading = false
+    }
+
+    // MARK: - 实时跟随
+
+    /// 看得见就开始盯着文件末尾（马上看一次，之后按节奏），看不见就停。
+    func setFollowing(_ active: Bool) {
+        if active {
+            guard followTask == nil else { return }
+            let timing = followTiming
+            followTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let delay = await self?.followOnce() else { return }
+                    do { try await timing.sleep(delay) } catch { return }
+                }
+            }
+        } else {
+            followTask?.cancel()
+            followTask = nil
+        }
+    }
+
+    var isFollowing: Bool { followTask != nil }
+
+    /// 看一次文件末尾，返回隔多久再看。末尾还没读过（第一页没回来）时什么都不做。测试与画廊直接调。
+    @discardableResult
+    func followOnce() async -> Duration {
+        guard !isFollowReading else { return followTiming.interval }
+        isFollowReading = true
+        defer { isFollowReading = false }
+        let epoch = contentEpoch
+        var next = followTiming.interval
+        do {
+            let growth = try await pager.loadNewer()
+            followFailures = 0
+            if epoch == contentEpoch {
+                switch growth {
+                case .unchanged:
+                    break
+                case .appended(let new, let hasMore):
+                    lastGrowth = followTiming.now()
+                    append(new)
+                    if hasMore { next = .zero }
+                case .replaced:
+                    lastGrowth = followTiming.now()
+                    await reloadFromEnd()
+                }
+            }
+        } catch {
+            // 断线之类：不弹错，拉长间隔，恢复后接着跟。
+            followFailures += 1
+            next = followTiming.delay(afterFailures: followFailures)
+        }
+        refreshUpdating()
+        if subagentIndexStale, isUpdating, !pendingSpawns.isEmpty { resolveSubagents() }
+        return next
+    }
+
+    /// 连续读失败了几次（测试看退避）。
+    var consecutiveFollowFailures: Int { followFailures }
+
+    private func refreshUpdating() {
+        let updating = lastGrowth.map { followTiming.now() - $0 < followTiming.activeWindow } ?? false
+        if updating != isUpdating { isUpdating = updating }
+    }
+
+    private func append(_ new: [AgentTranscriptItem]) {
+        let fresh = new.filter { !seenIDs.contains($0.id) }
+        guard !fresh.isEmpty else { return }
+        seenIDs.formUnion(fresh.map(\.id))
+        items = AgentTranscriptAssembler.attachResults(items + fresh)
+        appendGeneration += 1
+        if !followsTail { hasNewBelow = true }
+        let spawnsChanged = fresh.contains { item in
+            switch item.kind {
+            case .toolCall(let call): return call.spawn != nil
+            case .toolResult(let result): return result.spawnedAgentID != nil
+            default: return false
+            }
+        }
+        if spawnsChanged { subagentIndexStale = true }
+        resolveSubagents()
+    }
+
+    /// 文件变短了 / 换掉了：清空，整份从末尾重读。
+    private func reloadFromEnd() async {
+        contentEpoch += 1
+        items = []
+        reachedStart = false
+        errorMessage = nil
+        seenIDs = []
+        subagentLinks = [:]
+        subagentIndex = nil
+        subagentIndexStale = false
+        infoRead = []
+        fileByToolUse = [:]
+        hasNewBelow = false
+        await loadEarlier()
+        appendGeneration += 1
+    }
+
+    /// 界面报：用户停在底部（跟着走），还是往上翻了。回到底部时「有新消息」消掉。
+    func setFollowsTail(_ follows: Bool) {
+        followsTail = follows
+        if follows, hasNewBelow { hasNewBelow = false }
     }
 
     /// 已加载部分的纯文字（拷贝对话用）。
@@ -378,11 +554,21 @@ final class AgentTranscriptModel {
 
     private func resolveOnce() async {
         guard let source, !pendingSpawns.isEmpty else { return }
-        if subagentIndex == nil {
-            guard let listed = try? await source.subagents(of: target) else { return }
+        let epoch = contentEpoch
+        let now = followTiming.now()
+        let relists = subagentIndexStale
+            && lastSubagentListing.map { now - $0 >= followTiming.subagentRelist } ?? true
+        if subagentIndex == nil || relists {
+            guard let listed = try? await source.subagents(of: target), epoch == contentEpoch else { return }
             subagentIndex = listed
+            lastSubagentListing = now
+            subagentIndexStale = false
         }
-        guard let index = subagentIndex, !index.isEmpty else { return }
+        guard let index = subagentIndex, !index.isEmpty else {
+            // 还没有记录（会话开着时可能马上就有）：之后有间隔地再列。
+            subagentIndexStale = true
+            return
+        }
         let byAgentID = Dictionary(index.map { ($0.agentID, $0) }, uniquingKeysWith: { first, _ in first })
         var unresolved: [(toolUseID: String, request: AgentSpawnRequest)] = []
         for spawn in pendingSpawns {
@@ -395,7 +581,6 @@ final class AgentTranscriptModel {
             }
         }
         guard !unresolved.isEmpty else { return }
-
         // 靠信息文件对：新的先读（还开着的会话里，没报结果的多半是刚派出去的那几个），一批一批读，对上了就停。
         let linked = Set(subagentLinks.values.map(\.file.path))
         var candidates = index.filter { $0.hasInfo && !infoRead.contains($0.path) && !linked.contains($0.path) }
@@ -409,6 +594,7 @@ final class AgentTranscriptModel {
                 for await result in group { results.append(result) }
                 return results
             }
+            guard epoch == contentEpoch else { return }
             for (file, info) in infos {
                 infoRead.insert(file.path)
                 guard let info, let toolUseID = info.toolUseID else { continue }
@@ -418,6 +604,8 @@ final class AgentTranscriptModel {
                 }
             }
         }
+        // 还有对不上的：记录也许还没写出来，之后有间隔地再列。
+        if !waiting.isEmpty { subagentIndexStale = true }
     }
 
     private func link(_ toolUseID: String, file: AgentSubagentFile, request: AgentSpawnRequest, info: AgentSubagentInfo?) {

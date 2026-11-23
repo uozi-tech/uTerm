@@ -327,6 +327,54 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         XCTAssertTrue(model.displayedTranscript === main)
     }
 
+    // MARK: - 实时跟随
+
+    /// 打开着的记录在主机上被追加（`printf … >>`，和 Claude Code 写记录一样是追加）：一两个轮询周期（每 2 秒）内接上来；
+    /// 先写半行、再补完，半行不显示；新来的工具结果挂回前面的调用。
+    func testFollowsAppendsOnTheHost() async throws {
+        let path = agentsProjectPath + "/" + Session.agents + ".jsonl"
+        let model = AgentHistoryModel(source: ClaudeHistorySource(provider: files), preferredDirectory: agentsWorkdir)
+        await model.start()
+        await waitUntil("记录的信息") { !model.hasMore }
+        model.select(try file(Session.agents, among: model.files))
+        let transcript = try XCTUnwrap(model.transcript)
+        await waitUntil("第一页") { transcript.reachedStart }
+        let before = transcript.items.count
+        model.setTranscriptVisible(true)
+        defer { model.setTranscriptVisible(false) }
+
+        func append(_ text: String) async throws {
+            _ = try await files.exec("printf '%s' \(Self.quoted(text)) >> \(Self.quoted(path))")
+        }
+        let call = ClaudeFixture.assistant(
+            ClaudeFixture.toolUse(id: "toolu_follow", name: "Bash", input: #"{"command":"uptime"}"#), uuid: "f-1",
+            cwd: agentsWorkdir)
+        var started = ContinuousClock.now
+        try await append(call + "\n")
+        await waitUntil("追加的调用接上来", timeout: .seconds(6)) { transcript.items.count == before + 1 }
+        let first = ContinuousClock.now - started
+        XCTAssertTrue(transcript.isUpdating)
+
+        let result = ClaudeFixture.toolResult(id: "toolu_follow", text: "up 3 days")
+        let answer = ClaudeFixture.assistant(ClaudeFixture.textBlock("主机已经跑了 3 天"), uuid: "f-2", cwd: agentsWorkdir)
+        let half = answer.index(answer.startIndex, offsetBy: answer.count / 2)
+        try await append(result + "\n" + String(answer[..<half]))
+        await waitUntil("结果挂回调用", timeout: .seconds(6)) {
+            guard case .toolCall(let done) = transcript.items.last?.kind else { return false }
+            return done.result?.content.text == "up 3 days"
+        }
+        try await Task.sleep(for: .seconds(2.5))
+        XCTAssertEqual(transcript.items.count, before + 1, "半行不该显示")
+
+        started = ContinuousClock.now
+        try await append(String(answer[half...]) + "\n")
+        await waitUntil("补完的那一行", timeout: .seconds(6)) { transcript.items.count == before + 2 }
+        let second = ContinuousClock.now - started
+        XCTAssertEqual(transcript.items.last?.kind, .assistantText("主机已经跑了 3 天"))
+        XCTAssertEqual(Set(transcript.items.map(\.id)).count, transcript.items.count, "条目的 ID 有重复")
+        print("[claude-history-live] follow: appended line shown in \(first), finished half line in \(second)")
+    }
+
     // MARK: - 继续这个会话
 
     /// 真的登录 shell 里执行那条命令：落在项目目录里（路径带空格、单引号、中文），参数是 `--resume <ID>`。

@@ -1,5 +1,6 @@
 import Network
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import uTermMobile
 
@@ -119,6 +120,49 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertTrue(model.displayedTranscript === main)
         model.select(nil)
         XCTAssertNil(model.displayedTranscript, "窄屏回到列表")
+    }
+
+    // MARK: - 实时跟随
+
+    /// 标签在前台时盯着文件末尾，接上新写的；标签退到后面（`isActive` 为 false）就停。
+    func testFollowsOnlyWhileTheTabIsInFront() async throws {
+        let ws = MobileWorkspace()
+        let tree = MobileClaudeFixture.standard()
+        let history = ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: tree))
+        let settled = await MobileFakeClaudeHistory.settle(history)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(history.connection.history)
+        let file = try XCTUnwrap(model.visibleFiles.first)
+        model.select(file)
+        let transcript = try XCTUnwrap(model.transcript)
+        _ = await MobileFakeTerminal.waitUntil { transcript.reachedStart }
+        let count = transcript.items.count
+
+        // 挂上真的视图：前台 → 开始跟；退到后面、App 进后台 → 停。探针窗口不在 SwiftUI 的场景里，场景阶段由用例给。
+        defer { MobileProbeWindow.closeAll() }
+        func browser(active: Bool, phase: ScenePhase = .active) -> some View {
+            ClaudeHistoryBrowser(history: model, canResume: false, isActive: active, onResume: { _ in })
+                .environment(\.scenePhase, phase)
+        }
+        let (_, host) = MobileProbeWindow.make(size: CGSize(width: 390, height: 700), rootView: browser(active: true))
+        let following = await MobileFakeTerminal.waitUntil { transcript.isFollowing }
+        XCTAssertTrue(following)
+        await tree.append(file.path, MobileClaudeFixture.assistant(MobileClaudeFixture.text("新写的一句"), uuid: "a-new") + "\n")
+        // 跟随的循环自己会查到（每 2 秒一次）。
+        let appended = await MobileFakeTerminal.waitUntil(timeout: .seconds(6)) { transcript.items.count == count + 1 }
+        XCTAssertTrue(appended)
+        XCTAssertEqual(transcript.items.last?.kind, .assistantText("新写的一句"))
+
+        host.rootView = browser(active: false)
+        let stopped = await MobileFakeTerminal.waitUntil { !transcript.isFollowing }
+        XCTAssertTrue(stopped, "标签退到后面还在查")
+
+        host.rootView = browser(active: true)
+        let resumed = await MobileFakeTerminal.waitUntil { transcript.isFollowing }
+        XCTAssertTrue(resumed, "回到前台没接着跟")
+        host.rootView = browser(active: true, phase: .background)
+        let backgrounded = await MobileFakeTerminal.waitUntil { !transcript.isFollowing }
+        XCTAssertTrue(backgrounded, "App 进后台还在查")
     }
 
     // MARK: - 配对的 Mac

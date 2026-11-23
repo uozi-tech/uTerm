@@ -214,7 +214,11 @@ actor ClaudeHistorySource: AgentHistorySource {
     }
 }
 
-/// 从文件末尾往前一页一页读对话。文件在看的时候可能还在长（会话正开着），只读第一次打开时那么长。
+/// 从文件末尾往前一页一页读对话。文件在看的时候可能还在长（会话正开着）：往前翻只翻第一次打开时那么长，
+/// 之后新长出来的由 `loadNewer` 从末尾往后接着读（`ClaudeForwardLineScanner`）。
+///
+/// 往后读从哪开始：第一次读到的那块文件末尾是换行就从文件末尾；不是（最后一行正写到一半）就从那一行的开头，
+/// 写完之后整行再读一遍——倒着读时它要么解析不出来，要么解析出同样 ID 的条目（模型按 ID 去重）。
 actor ClaudeTranscriptPager: AgentTranscriptPaging {
     private let provider: any SFTPProviding
     private let path: String
@@ -224,12 +228,19 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
     /// 子代理自己的记录每行都是 `isSidechain`，要照常显示。
     private let includesSidechain: Bool
     private var scanner: ClaudeReverseLineScanner?
+    /// 往后读到哪了；读过文件末尾那一块之后才有。
+    private var forward: ClaudeForwardLineScanner?
+    /// 文件变短、整份重来时 +1：在途的读拿到的是旧文件的东西，丢掉。
+    private var epoch = 0
+    private let followBytes: Int
 
     init(provider: any SFTPProviding, path: String, includesSidechain: Bool = false,
          chunkBytes: Int = AgentTranscriptLimits.chunkBytes,
          pageItems: Int = AgentTranscriptLimits.pageItems,
          pageBytes: Int = AgentTranscriptLimits.pageBytes,
-         maxLineBytes: Int = AgentTranscriptLimits.maxLineBytes) {
+         maxLineBytes: Int = AgentTranscriptLimits.maxLineBytes,
+         followBytes: Int = AgentTranscriptFollowLimits.bytesPerPoll) {
+        self.followBytes = max(1, followBytes)
         self.provider = provider
         self.path = path
         self.chunkBytes = chunkBytes
@@ -243,11 +254,14 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
 
     func loadPrevious() async throws -> (items: [AgentTranscriptItem], reachedStart: Bool) {
         if scanner == nil {
-            let size = try await provider.stat(path).size
-            scanner = ClaudeReverseLineScanner(fileSize: UInt64(max(0, size)), maxLineBytes: maxLineBytes)
+            let size = UInt64(max(0, try await provider.stat(path).size))
+            scanner = ClaudeReverseLineScanner(fileSize: size, maxLineBytes: maxLineBytes)
+            if size == 0, forward == nil { forward = ClaudeForwardLineScanner(position: 0, maxLineBytes: maxLineBytes) }
         }
         // 在副本上读，整页读完才写回：中途出错（断线）下次从同一个位置重读，不会漏行。
         guard var scanner else { return ([], true) }
+        let epoch = self.epoch
+        let fileEnd = scanner.cursor
         // 新的在前攒，最后整体翻过来。
         var newestFirst: [[AgentTranscriptItem]] = []
         var count = 0
@@ -258,6 +272,9 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
                 throw RemoteFileError(.failed, String(localized: "读取会话记录时文件变短了"))
             }
             bytesRead += chunk.count
+            if forward == nil, range.offset + UInt64(range.length) == fileEnd, epoch == self.epoch {
+                forward = Self.followStart(lastChunk: chunk, at: range.offset, fileEnd: fileEnd, maxLineBytes: maxLineBytes)
+            }
             for line in scanner.feed(chunk) {
                 let items = ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain)
                 if !items.isEmpty {
@@ -273,8 +290,55 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
         if scanner.nextRange(chunkSize: chunkBytes) == nil, !scanner.isAtStart {
             _ = scanner.finish()   // 空文件
         }
+        // 读的时候发现文件变短、整份重来了：这一页是旧文件的。
+        guard epoch == self.epoch else { return ([], false) }
         self.scanner = scanner
         return (newestFirst.reversed().flatMap { $0 }, scanner.isAtStart)
+    }
+
+    /// 文件末尾那一块 `[offset, fileEnd)` 读回来之后，定下往后读从哪开始。
+    nonisolated static func followStart(lastChunk: Data, at offset: UInt64, fileEnd: UInt64,
+                                        maxLineBytes: Int) -> ClaudeForwardLineScanner {
+        if lastChunk.last == 0x0A {
+            return ClaudeForwardLineScanner(position: fileEnd, maxLineBytes: maxLineBytes)
+        }
+        if let newline = lastChunk.lastIndex(of: 0x0A) {
+            let lineStart = offset + UInt64(newline - lastChunk.startIndex + 1)
+            return ClaudeForwardLineScanner(position: lineStart, maxLineBytes: maxLineBytes)
+        }
+        // 整份只有写到一半的一行：从头读。
+        if offset == 0 { return ClaudeForwardLineScanner(position: 0, maxLineBytes: maxLineBytes) }
+        // 写到一半的那一行比一块还长（极少见）：它的开头不在这块里，只能从末尾接着读、丢掉这一行剩下的部分。
+        return ClaudeForwardLineScanner(position: fileEnd, startsMidLine: true, maxLineBytes: maxLineBytes)
+    }
+
+    func loadNewer() async throws -> AgentTranscriptGrowth {
+        guard forward != nil else { return .unchanged }
+        let epoch = self.epoch
+        let size = UInt64(max(0, try await provider.stat(path).size))
+        guard epoch == self.epoch, var forward else { return .unchanged }
+        if size < forward.position {
+            // 变短了：被截断或换掉了。往前翻与往后读都从头来，由模型清空后重新从末尾读。
+            self.epoch += 1
+            scanner = nil
+            self.forward = nil
+            return .replaced
+        }
+        guard size > forward.position else { return .unchanged }
+        let end = min(size, forward.position + UInt64(followBytes))
+        var items: [AgentTranscriptItem] = []
+        while forward.position < end {
+            let length = Int(min(UInt64(chunkBytes), end - forward.position))
+            let chunk = try await provider.readRange(path, offset: forward.position, length: length)
+            guard epoch == self.epoch else { return .unchanged }
+            // 读的时候又变短了：先把读到的交出去，下一次 stat 会发现。
+            guard !chunk.isEmpty else { break }
+            for line in forward.feed(chunk) {
+                items.append(contentsOf: ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain))
+            }
+        }
+        self.forward = forward
+        return .appended(items, hasMore: forward.position < size)
     }
 }
 
