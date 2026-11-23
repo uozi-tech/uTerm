@@ -283,7 +283,7 @@ struct ClaudeHistoryBrowser: View {
                                          onResume: { onResume(level.file) },
                                          onOpenSubagent: { history.openSubagent($0) },
                                          onJumpToLatest: { history.jumpToLatest() },
-                                         runSwitch: level.subagent == nil ? runSwitch(for: level.file) : nil)
+                                         onBackToTerminal: level.subagent == nil ? backToTerminal(for: level.file) : nil)
                         .opacity(isTop ? 1 : 0)
                         .allowsHitTesting(isTop)
                         .accessibilityHidden(!isTop)
@@ -297,10 +297,10 @@ struct ClaudeHistoryBrowser: View {
         }
     }
 
-    /// 这份记录正跑着（在 Code 标签页里继续着）：记录顶上「继续这个会话」换成「终端 / 记录」切换。
-    private func runSwitch(for file: AgentHistorySessionFile) -> CodeRunModeSwitch? {
+    /// 这份记录正跑着（在 Code 标签页里继续着）：记录顶上「继续这个会话」换成「回到终端」，一键回去。
+    private func backToTerminal(for file: AgentHistorySessionFile) -> (() -> Void)? {
         guard let code, let run = code.board.run(forSession: file.path), run.isRunning else { return nil }
-        return CodeRunModeSwitch(showsTerminal: false) { code.tab.setShowsTerminal(run.id, $0) }
+        return { code.tab.setShowsTerminal(run.id, true) }
     }
 
     /// 说明里点名的工具：这台主机上有记录的；一种都没有时是读了的那几种。同 Mac。
@@ -381,27 +381,24 @@ private struct ClaudeHistoryList: View {
         .padding(.bottom, 8)
     }
 
-    /// 左边是「分组与显示」菜单（字是当前的分组方式，一眼看得出按什么分的），右边「＋」与刷新。
+    /// 左边是「分组与显示」菜单（字是当前的分组方式，一眼看得出按什么分的），右边「＋」。刷新不单占一个按钮：
+    /// 列表下拉刷新，菜单里也有一项（同 Mac 把刷新并进了菜单）。
     /// 放在搜索框上面一行而不是和它挤一行：窄的格子（Duo 分屏 330pt）里搜索框还要留得下提示字。
     private var header: some View {
         HStack(spacing: 2) {
             optionsMenu
             Spacer(minLength: 0)
             if let newSession { newSessionButton(newSession) }
-            Button { Task { await history.reload() } } label: {
-                MIcon(name: "refresh", size: 15, color: M.text2)
-                    .frame(width: M.minTarget, height: M.minTarget)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(MPressStyle())
-            .accessibilityLabel(Text("刷新"))
         }
         .padding(.trailing, 4)
     }
 
-    /// 分组方式、只看哪几种工具（不止一种工具时才有）、恢复默认。同 Mac。
+    /// 刷新、分组方式、只看哪几种工具（不止一种工具时才有）、恢复默认。同 Mac。
     private var optionsMenu: some View {
         MMenu {
+            Button { Task { await history.reload() } } label: {
+                Label(String(localized: "刷新"), systemImage: "arrow.clockwise")
+            }
             Section {
                 Picker(selection: Binding(get: { grouping }, set: { groupingRaw = $0.rawValue })) {
                     ForEach(AgentHistoryListPreferences.groupingChoices(isMultiTool: history.isMultiTool)) { choice in
@@ -544,6 +541,8 @@ private struct ClaudeHistoryList: View {
                 .padding(8)
             }
             .mKeepsScrollContentInSafeArea()
+            // 下拉刷新：重新列项目与会话（读过的信息按缓存复用）。
+            .refreshable { await history.reload() }
             .onChange(of: reveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
             .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
         }
@@ -856,8 +855,8 @@ private struct ClaudeTranscriptView: View {
     let onOpenSubagent: (AgentSubagentLink) -> Void
     /// 从搜索命中处打开的：换回从末尾打开。
     var onJumpToLatest: () -> Void = {}
-    /// 这份记录正在 Code 标签页里继续着：「继续这个会话」换成「终端 / 记录」切换。
-    var runSwitch: CodeRunModeSwitch? = nil
+    /// 这份记录正在 Code 标签页里继续着：「继续这个会话」换成「回到终端」。
+    var onBackToTerminal: (() -> Void)? = nil
 
     @State private var expanded: Set<String> = []
     @State private var pendingAnchor: String?
@@ -962,8 +961,10 @@ private struct ClaudeTranscriptView: View {
             }
             .accessibilityLabel(Text("拷贝"))
             // 子代理的记录只读：不能单独继续。
-            if let runSwitch {
-                runSwitch.padding(.trailing, 10)
+            if let onBackToTerminal {
+                MBtn(title: String(localized: "回到终端"), icon: "term", kind: .tinted, height: 34, action: onBackToTerminal)
+                    .fixedSize()
+                    .padding(.trailing, 10)
             } else if transcript.subagent == nil {
                 MBtn(title: String(localized: "继续这个会话"), icon: "run", kind: .tinted, height: 34,
                      disabled: !canResume, action: onResume)

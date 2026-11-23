@@ -46,7 +46,8 @@ struct CodeRunPane: View {
     }
 }
 
-/// 跑着的会话的标题行：返回（窄屏）· 工具标记 · 标题与状态 ·「终端 / 记录」切换（对上了记录才有）· 更多。
+/// 跑着的会话的标题行，一行：返回（窄屏）· 工具标记 · 标题与状态（各一行）…… 更多（⋯）。
+/// 「查看记录」「移到新标签页」「结束会话」都收在「更多」里，窄的格子（iPhone、Duo 分屏 330pt）也不折行。
 /// 程序已经退出（很快就退出、留着给人看输出的那种）时右边换成「回到记录」或「关闭」。
 struct CodeRunHeader: View {
     let code: CodeTabRuns
@@ -54,26 +55,6 @@ struct CodeRunHeader: View {
     let showsBack: Bool
 
     var body: some View {
-        // 放得下就一行；窄的格子（Duo 分屏 330pt、iPhone 竖屏）标题一行、按钮另起一行，不然标题只剩几个字。
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                leading
-                trailing
-            }
-            .frame(minWidth: 440, minHeight: 52)
-            VStack(alignment: .leading, spacing: 2) {
-                leading.frame(minHeight: 48)
-                HStack(spacing: 6) {
-                    Spacer(minLength: 0)
-                    trailing
-                }
-                .padding(.bottom, 6)
-            }
-        }
-        .padding(.trailing, 8)
-    }
-
-    private var leading: some View {
         HStack(spacing: 8) {
             if showsBack {
                 Button { code.tab.backToList() } label: {
@@ -95,71 +76,44 @@ struct CodeRunHeader: View {
                     .lineLimit(1).truncationMode(.middle)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            trailing
         }
+        .padding(.trailing, 6)
+        .frame(minHeight: 52)
     }
 
     @ViewBuilder private var trailing: some View {
         if run.isRunning {
-            HStack(spacing: 4) {
+            MMenu {
+                // 详情露着终端时才有这条标题行，所以这里是「查看记录」；看记录时回终端的按钮在记录的标题行上。
                 if run.sessionPath != nil {
-                    CodeRunModeSwitch(showsTerminal: true) { code.tab.setShowsTerminal(run.id, $0) }
-                }
-                MMenu {
-                    if let move = code.onMoveToTab {
-                        Button { move(run.id) } label: {
-                            Label("移到新标签页", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
+                    Button { code.tab.setShowsTerminal(run.id, !run.showsTerminal) } label: {
+                        Label(run.showsTerminal ? String(localized: "查看记录") : String(localized: "回到终端"),
+                              systemImage: run.showsTerminal ? "clock" : "terminal")
                     }
-                    Button(role: .destructive) { code.tab.endRun(run.id) } label: {
-                        Label("结束会话", systemImage: "xmark.circle")
-                    }
-                } label: {
-                    MIcon(name: "ellipsis", size: 16, color: M.text2, weight: .semibold)
-                        .frame(width: 40, height: M.minTarget)
-                        .contentShape(Rectangle())
                 }
-                .accessibilityLabel(Text("更多"))
+                if let move = code.onMoveToTab {
+                    Button { move(run.id) } label: {
+                        Label("移到新标签页", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                }
+                Button(role: .destructive) { code.tab.endRun(run.id) } label: {
+                    Label("结束会话", systemImage: "xmark.circle")
+                }
+            } label: {
+                MIcon(name: "ellipsis", size: 16, color: M.text2, weight: .semibold)
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel(Text("更多"))
         } else {
             MBtn(title: run.sessionPath == nil ? String(localized: "关闭") : String(localized: "回到记录"),
                  icon: run.sessionPath == nil ? "x" : "clock", kind: .tinted, height: 34) {
                 code.tab.endRun(run.id)
             }
             .fixedSize()
+            .padding(.trailing, 4)
         }
-    }
-}
-
-/// 「终端 / 记录」两段切换：跑着的会话在这两面之间换（窄屏同一层里换，不另开一层）。
-struct CodeRunModeSwitch: View {
-    let showsTerminal: Bool
-    let onChange: (Bool) -> Void
-
-    var body: some View {
-        HStack(spacing: 2) {
-            segment(String(localized: "终端", comment: "Code 标签页：看正在跑的会话的终端"), icon: "term", value: true)
-            segment(String(localized: "记录", comment: "Code 标签页：看这个会话的对话记录（只读）"), icon: "clock",
-                    value: false)
-        }
-        .padding(2)
-        .background(Capsule().fill(M.fillFaint))
-        .fixedSize()
-    }
-
-    private func segment(_ title: String, icon: String, value: Bool) -> some View {
-        let selected = showsTerminal == value
-        return Button { if !selected { onChange(value) } } label: {
-            HStack(spacing: 4) {
-                MIcon(name: icon, size: 11.5, color: selected ? M.text : M.text3, weight: .semibold)
-                Text(title).font(M.sans(13, weight: .medium)).foregroundStyle(selected ? M.text : M.text3)
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(Capsule().fill(selected ? M.panelHi : Color.clear))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(MPressStyle())
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

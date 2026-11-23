@@ -30408,6 +30408,34 @@
         }
       }
     },
+    "回到终端" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to Terminal"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルに戻る"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "터미널로 돌아가기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到終端機"
+          }
+        }
+      }
+    },
     "回到记录" : {
       "localizations" : {
         "en" : {
@@ -55099,6 +55127,34 @@
         }
       }
     },
+    "查看记录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View Transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録を見る"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록 보기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看記錄"
+          }
+        }
+      }
+    },
     "查看这台 Mac 的屏幕；有「辅助功能」授权时还能操作鼠标和键盘" : {
       "localizations" : {
         "en" : {
@@ -70203,6 +70259,7 @@
     },
     "记录" : {
       "comment" : "Code 标签页：看这个会话的对话记录（只读）",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
