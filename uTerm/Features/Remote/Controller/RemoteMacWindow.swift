@@ -37,7 +37,10 @@ struct RemoteMacWindowView: View {
         .task { await start() }
         .onDisappear {
             model?.disposeAll()
-            if model != nil, let windowID { directory.releaseClient(macID: windowID.macID) }
+            if model != nil, let windowID {
+                directory.releaseClient(macID: windowID.macID)
+                ClaudeHistoryResumeRouter.shared.unregisterRemote(windowID.macID)
+            }
         }
     }
 
@@ -78,6 +81,11 @@ struct RemoteMacWindowView: View {
         }
         let model = RemoteMacWindowModel(client: directory.acquireClient(for: mac))
         self.model = model
+        // Claude 历史会话里的「继续这个会话」：在这扇窗口里新开终端。
+        ClaudeHistoryResumeRouter.shared.registerRemote(windowID.macID) { [weak model] directory, command in
+            guard let model else { return }   // 窗口关的时候已经注销，这里只是兜底
+            try await model.resumeAgentSession(directory: directory, command: command)
+        }
         await model.client.connectInteractively()
     }
 }
@@ -116,7 +124,14 @@ private struct RemoteMacSessionView: View {
             }
         }
         .onChange(of: client.state, initial: true) { _, state in
-            if state == .connected { model.takeOver() }
+            guard state == .connected else { return }
+            model.takeOver()
+            // 窗口是为「继续这个会话」打开的：连上之后开那个终端。
+            if let pending = ClaudeHistoryResumeRouter.shared.takePendingRemote(macID) {
+                Task {
+                    try? await model.resumeAgentSession(directory: pending.directory, command: pending.command)
+                }
+            }
         }
         .onChange(of: client.listedSessionIDs) { _, ids in model.follow(ids, order: client.sessions.macTabOrder) }
         // 用户拖过标签就马上让那台 Mac 跟着排（`UPaneGroups` 没有拖动排序的回调，只能看布局变没变）。
@@ -203,6 +218,14 @@ private struct RemoteMacTerminalArea: View {
                             if model.client.supportsDesktop { desktopButton }
                             newShellButton
                         }
+                    },
+                    tabMenu: { tab in
+                        // 历史会话经文件通道读那台 Mac 的 `~/.claude`：老版本 Mac 不认文件请求（收到会断开整条连接），不给入口。
+                        TerminalTabContextMenu(
+                            title: tab.payload.title(in: model.client.sessions),
+                            onOpenClaudeHistory: model.client.supportsFiles
+                                ? { openWindow.openClaudeHistory(pairedMac: macID) } : nil,
+                            onClose: { model.close(tab.id) })
                     })
                     .uPaneGroupStyle(.card)
                     .uPaneGroupWells()

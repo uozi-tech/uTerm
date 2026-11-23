@@ -161,12 +161,21 @@ final class RemoteMacWindowModel {
         groups.arrangeTabs(by: order) { $0.id }
     }
 
-    /// 在那台 Mac 上新开一个本机终端（它那边也会弹出窗口），开成前台标签。
-    func openNewShell(directory: String? = nil) async throws {
+    /// 在那台 Mac 上新开一个本机终端（它那边也会弹出窗口），开成前台标签。返回那台 Mac 上的会话 id。
+    @discardableResult
+    func openNewShell(directory: String? = nil) async throws -> UUID {
         let id = try await client.openLocalShell(directory: directory)
         noticeHandReorder()
         open(id, activate: true)
         recordLayout()
+        return id
+    }
+
+    /// 「继续这个会话」（Claude 历史会话）：在那台 Mac 上新开本机终端，开在项目目录里，接上、行编辑器起来之后打进命令。
+    /// 命令照样带 `cd`：那台 Mac 开不进这个目录（被删了、没权限）时退回主目录，不能在别的目录里起 Claude Code。
+    func resumeAgentSession(directory: String, command: String) async throws {
+        let id = try await openNewShell(directory: directory)
+        groups.tab(id)?.payload.session.typeWhenLineEditorReady(command)
     }
 
     /// 打开（或带到前台）一个终端的标签。已有标签且还接着就不重开；接入已结束的换一个新的。

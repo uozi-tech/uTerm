@@ -2,7 +2,6 @@ import AppKit
 import Observation
 import SwiftData
 import SwiftUI
-import Synchronization
 import UDesignKit
 import UPaneGroups
 
@@ -13,6 +12,8 @@ nonisolated struct ClaudeHistoryWindowID: Codable, Hashable, Sendable {
         case local
         /// 一台已保存的 SSH 主机（`ServerProfile.id`）。
         case server(UUID)
+        /// 一台配对过的 Mac（`RemoteMacDirectory.Mac.id`），经远控链路读它的文件，不走 SSH。
+        case pairedMac(String)
     }
 
     let host: Host
@@ -54,6 +55,36 @@ final class ClaudeHistoryResumeRouter {
     func handler(for origin: UUID?) -> Handler? {
         origin.flatMap { handlers[$0] }
     }
+
+    // MARK: 配对的 Mac
+
+    /// 在那台 Mac 上新开本机终端（开在 `directory`），接上之后打进 `command`。
+    typealias RemoteHandler = @MainActor (_ directory: String, _ command: String) async throws -> Void
+
+    /// 一台 Mac 一扇远程 Mac 窗口（`RemoteMacWindowID`），所以按 Mac 登记，不按打开历史的那一次。
+    private var remoteHandlers: [String: RemoteHandler] = [:]
+    /// 那扇窗口已经关了：先记下，窗口重新打开、连上之后由它取走（`takePendingRemote`）。
+    private var pendingRemote: [String: (directory: String, command: String)] = [:]
+
+    func registerRemote(_ macID: String, handler: @escaping RemoteHandler) {
+        remoteHandlers[macID] = handler
+    }
+
+    func unregisterRemote(_ macID: String) {
+        remoteHandlers[macID] = nil
+    }
+
+    func remoteHandler(for macID: String) -> RemoteHandler? {
+        remoteHandlers[macID]
+    }
+
+    func queueRemote(_ macID: String, directory: String, command: String) {
+        pendingRemote[macID] = (directory, command)
+    }
+
+    func takePendingRemote(_ macID: String) -> (directory: String, command: String)? {
+        pendingRemote.removeValue(forKey: macID)
+    }
 }
 
 /// 「继续这个会话」：在同一台主机上开新终端标签，执行 `cd -- '<目录>' && claude --resume <ID>`。
@@ -76,6 +107,16 @@ enum ClaudeHistoryResume {
                   let session = registry.session(for: paneID) else { return }
             session.startTrackedRun(command, inSubshell: false)
         }
+    }
+
+    /// 配对的 Mac：那台 Mac 的远程窗口开着就在它里面新开终端；关了就先打开它，连上之后再开（`takePendingRemote`）。
+    static func pairedMac(macID: String, directory: String, command: String, openWindow: OpenWindowAction) async throws {
+        if let handler = ClaudeHistoryResumeRouter.shared.remoteHandler(for: macID) {
+            try await handler(directory, command)
+            return
+        }
+        ClaudeHistoryResumeRouter.shared.queueRemote(macID, directory: directory, command: command)
+        openWindow(value: RemoteMacWindowID(macID: macID))
     }
 
     static func ssh(serverID: UUID, title: String, command: String, origin: UUID?, registry: TerminalSessionRegistry) {
@@ -108,6 +149,12 @@ extension OpenWindowAction {
         self(value: ClaudeHistoryWindowID(host: .server(serverID), directory: directory, origin: origin))
     }
 
+    /// 从远程 Mac 窗口里的终端标签打开：读那台 Mac 上的 `~/.claude`。远控协议里没有终端的当前目录，所以列全部项目。
+    @MainActor
+    func openClaudeHistory(pairedMac macID: String) {
+        self(value: ClaudeHistoryWindowID(host: .pairedMac(macID), directory: nil))
+    }
+
     /// 从本机终端标签打开。本机 shell 不发 OSC 7，目录取辅助程序问到的。
     @MainActor
     func openClaudeHistory(localPane pane: LocalShellPane) {
@@ -115,45 +162,16 @@ extension OpenWindowAction {
     }
 }
 
-/// 历史窗口连主机时怎么对待主机密钥：**不弹确认**，只记下「被问过」。
-///
-/// 能从终端标签打开这个窗口，说明终端已经连过这台主机、密钥早已信任，正常不会被问。被问了（密钥没信任过，或者和已信任的
-/// 不一致）就连不上，这时提示用户回终端里去信任——底层的报错写的是「用户拒绝了未知主机密钥」，但这里没人问过用户。
-nonisolated final class ClaudeHistoryHostKeyGate: Sendable {
-    private let challenged = Mutex(false)
-
-    var wasChallenged: Bool { challenged.withLock { $0 } }
-
-    var approver: @Sendable (HostKeyChallenge) async -> Bool {
-        { [self] _ in
-            challenged.withLock { $0 = true }
-            return false
-        }
-    }
-
-    /// 连不上时给用户看的话。
-    func failureMessage(for error: any Error) -> String {
-        wasChallenged
-            ? String(localized: "这台主机的密钥还没有被信任，或者和已信任的不一致。请先在终端里连接这台主机并信任它的密钥，再回来打开历史会话。")
-            : FriendlyError.describe(error)
-    }
-}
-
-/// 窗口的连接状态：先建文件通道（SSH 主机走 SFTP、本机走辅助程序），建好之后交给共享的 `AgentHistoryModel`。
+/// 窗口的连接：按窗口身份建文件通道（SSH 主机走 SFTP、本机走辅助程序、配对的 Mac 走远控链路），
+/// 之后的状态都在共享的 `AgentHistoryConnection` 里。
 @MainActor
 @Observable
 final class ClaudeHistoryWindowModel {
-    enum Phase {
-        case connecting
-        case failed(String)
-        case ready(AgentHistoryModel)
-    }
-
     let windowID: ClaudeHistoryWindowID
-    private(set) var phase: Phase = .connecting
     private(set) var hostName: String
-    @ObservationIgnored private var provider: (any SFTPProviding)?
-    @ObservationIgnored private var isOpening = false
+    private(set) var connection: AgentHistoryConnection?
+    /// 向 `RemoteMacDirectory` 借的那台 Mac 的连接（关窗口时还回去）。
+    @ObservationIgnored private var borrowedMac: (id: String, directory: RemoteMacDirectory)?
 
     init(windowID: ClaudeHistoryWindowID) {
         self.windowID = windowID
@@ -164,49 +182,47 @@ final class ClaudeHistoryWindowModel {
     init(windowID: ClaudeHistoryWindowID, hostName: String, history: AgentHistoryModel) {
         self.windowID = windowID
         self.hostName = hostName
-        phase = .ready(history)
+        connection = AgentHistoryConnection(history: history)
     }
 
-    var history: AgentHistoryModel? {
-        if case .ready(let model) = phase { return model }
-        return nil
+    var history: AgentHistoryModel? { connection?.history }
+
+    func open(container: ModelContainer, macs: RemoteMacDirectory) async {
+        if connection == nil {
+            connection = AgentHistoryConnection(preferredDirectory: windowID.directory,
+                                                connect: makeConnect(container: container, macs: macs))
+        }
+        await connection?.open()
     }
 
-    func open(container: ModelContainer) async {
-        guard !isOpening, history == nil else { return }
-        isOpening = true
-        defer { isOpening = false }
-        phase = .connecting
-        let hostKeys = ClaudeHistoryHostKeyGate()
-        do {
-            let provider: any SFTPProviding
-            switch windowID.host {
-            case .local:
-                provider = RemoteMacFileProvider.localShellAgent()
-            case .server(let id):
-                var descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == id })
-                descriptor.fetchLimit = 1
-                guard let profile = try container.mainContext.fetch(descriptor).first else {
-                    phase = .failed(String(localized: "找不到这台主机，它可能已被删除。"))
-                    return
-                }
-                hostName = profile.name
-                provider = try await SFTPSession.make(profile: profile, container: container, approver: hostKeys.approver)
+    private func makeConnect(container: ModelContainer, macs: RemoteMacDirectory) -> AgentHistoryAccess.Connect {
+        switch windowID.host {
+        case .local:
+            return { _ in RemoteMacFileProvider.localShellAgent() }
+        case .server(let id):
+            return AgentHistoryAccess.server(id: id, container: container) { [weak self] profile in
+                self?.hostName = profile.name
             }
-            self.provider = provider
-            let history = AgentHistoryModel(source: ClaudeHistorySource(provider: provider),
-                                            preferredDirectory: windowID.directory)
-            phase = .ready(history)
-            await history.start()
-        } catch {
-            phase = .failed(hostKeys.failureMessage(for: error))
+        case .pairedMac(let macID):
+            return { [weak self] gate in
+                if !macs.isActivated { macs.activate() }
+                guard let mac = macs.mac(id: macID) else {
+                    throw AgentHistoryAccess.Failure(message: String(localized: "找不到这台 Mac"))
+                }
+                let client = macs.acquireClient(for: mac)
+                if let self {
+                    if self.borrowedMac == nil { self.borrowedMac = (macID, macs) } else { macs.releaseClient(macID: macID) }
+                    self.hostName = client.macName
+                }
+                return try await AgentHistoryAccess.pairedMac(client)(gate)
+            }
         }
     }
 
     func close() {
-        let provider = self.provider
-        self.provider = nil
-        if let provider { Task { await provider.close() } }
+        connection?.close()
+        if let borrowedMac { borrowedMac.directory.releaseClient(macID: borrowedMac.id) }
+        borrowedMac = nil
     }
 }
 
@@ -216,8 +232,11 @@ struct ClaudeHistoryWindowView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(TerminalSessionRegistry.self) private var registry
+    @Environment(RemoteMacDirectory.self) private var macs
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     @State private var model: ClaudeHistoryWindowModel?
+    @State private var resumeError: String?
     private let isCatalog: Bool
 
     init(windowID: ClaudeHistoryWindowID?, catalogModel: ClaudeHistoryWindowModel? = nil) {
@@ -242,6 +261,11 @@ struct ClaudeHistoryWindowView: View {
         .frame(minWidth: 820, minHeight: 480)
         .disablesInitialAutoFocus()
         .task { await start() }
+        .alert("无法继续这个会话", isPresented: Binding(get: { resumeError != nil }, set: { if !$0 { resumeError = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(resumeError ?? "")
+        }
         .onDisappear {
             guard !isCatalog else { return }
             model?.close()
@@ -265,20 +289,22 @@ struct ClaudeHistoryWindowView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let model {
-            switch model.phase {
+        if let model, let connection = model.connection {
+            switch connection.phase {
             case .connecting:
                 RemoteMacProgressView(text: String(localized: "正在连接…"))
             case .failed(let message):
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取历史会话"),
                                    detail: message) {
                     UDButton(title: String(localized: "重试")) {
-                        Task { await model.open(container: modelContext.container) }
+                        Task { await model.open(container: modelContext.container, macs: macs) }
                     }
                 }
             case .ready(let history):
                 AgentHistoryBrowser(history: history, onResume: { file in resume(file, history: history) })
             }
+        } else if model != nil {
+            RemoteMacProgressView(text: String(localized: "正在连接…"))
         } else {
             Color.clear
         }
@@ -292,7 +318,7 @@ struct ClaudeHistoryWindowView: View {
         guard model == nil else { return }
         let model = ClaudeHistoryWindowModel(windowID: windowID)
         self.model = model
-        await model.open(container: modelContext.container)
+        await model.open(container: modelContext.container, macs: macs)
     }
 
     private func resume(_ file: AgentHistorySessionFile, history: AgentHistoryModel) {
@@ -303,6 +329,16 @@ struct ClaudeHistoryWindowView: View {
         case .server(let id):
             ClaudeHistoryResume.ssh(serverID: id, title: model.hostName, command: plan.command,
                                     origin: windowID.origin, registry: registry)
+        case .pairedMac(let macID):
+            let openWindow = openWindow
+            Task {
+                do {
+                    try await ClaudeHistoryResume.pairedMac(macID: macID, directory: plan.directory,
+                                                            command: plan.command, openWindow: openWindow)
+                } catch {
+                    resumeError = error.localizedDescription
+                }
+            }
         }
     }
 }

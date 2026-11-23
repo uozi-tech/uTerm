@@ -88,24 +88,6 @@ nonisolated final class TrackedRunStartBox: @unchecked Sendable {
     }
 }
 
-/// 什么时候往远端 shell 里打命令。
-nonisolated enum TrackedRunInjectionGate {
-    /// 行编辑器一直没有信号（sh、bash 5.0 及以前不开括号粘贴，也没有 OSC 133）时，输出停这么久就当它在等输入。
-    static let quietSeconds = 1.5
-    /// 最多等这么久，到了照打。
-    static let maxWaitSeconds = 6.0
-    static let pollInterval: Duration = .milliseconds(50)
-
-    /// - Parameters:
-    ///   - lineEditorReady: 括号粘贴开着（zsh、bash 5.1+、fish 开始读一行时打开、跑命令前关掉），或者光标在 OSC 133 标的提示符里。
-    ///   - sawOutput: 连上之后来过输出。
-    ///   - quietFor: 离最后一次输出过了多久。
-    ///   - waited: 一共等了多久。
-    static func isReady(lineEditorReady: Bool, sawOutput: Bool, quietFor: Double, waited: Double) -> Bool {
-        lineEditorReady || (sawOutput && quietFor >= quietSeconds) || waited >= maxWaitSeconds
-    }
-}
-
 /// 把屏幕上回显的「包装 + 命令 + 包装」改写成只剩命令。
 ///
 /// 开始标记到达时行编辑器已经交出了那几行，之后没人再回头画它们。做法：清掉包装占的那几行（从包装第一格起），
@@ -199,27 +181,22 @@ extension TerminalSession {
     }
 
     private func waitForLineEditor(generation: Int) async {
-        let started = ContinuousClock.now
-        var lastBytes = shadow.totalFedBytes, lastChange = started
-        let initialBytes = lastBytes
-        while !Task.isCancelled, feedGeneration == generation, connectionState == .connected {
-            let now = ContinuousClock.now
-            let bytes = shadow.totalFedBytes
-            if bytes != lastBytes {
-                lastBytes = bytes
-                lastChange = now
-            }
-            if TrackedRunInjectionGate.isReady(
-                lineEditorReady: shadow.bracketedPasteMode || shadow.isCursorAtPrompt,
-                sawOutput: bytes != initialBytes,
-                quietFor: Self.seconds(now - lastChange),
-                waited: Self.seconds(now - started)) { return }
-            try? await Task.sleep(for: TrackedRunInjectionGate.pollInterval)
+        _ = await TrackedRunInjectionGate.waitForLineEditor(shadow: shadow) {
+            self.feedGeneration == generation && self.connectionState == .connected
         }
     }
 
-    private static func seconds(_ duration: Duration) -> Double {
-        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+    /// 连上、行编辑器起来之后打进一行命令，不加标记、不跟踪（`TerminalCommandTyping`）。远控镜像上的
+    /// 「继续这个会话」用：镜像的画面归被控的 Mac 管，不能像 `startTrackedRun` 那样在本端改写回显。
+    func typeWhenLineEditorReady(_ command: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            await TerminalCommandTyping.type(
+                command, shadow: shadow,
+                generation: { [weak self] in self?.feedGeneration ?? -1 },
+                isConnected: { [weak self] in self?.connectionState == .connected },
+                send: { [weak self] line in try? await self?.injectInput(line) })
+        }
     }
 
     /// 开始标记一进影子就改写回显（在泵的线程上、标记之后的字节之前）。

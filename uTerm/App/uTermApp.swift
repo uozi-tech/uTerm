@@ -598,7 +598,7 @@ struct uTermApp: App {
         .restorationBehavior(.disabled)
         .routesNewWindowToWelcome()
 
-        // Claude 历史会话：从终端标签页的右键菜单或命令面板打开，一台主机一个目录一个窗口。内容只读、只在内存里。
+        // Claude 历史会话：从终端标签页的右键菜单或命令面板打开，一台主机一个目录一个窗口（配对的 Mac 也算一台主机）。内容只读、只在内存里。
         WindowGroup(for: ClaudeHistoryWindowID.self) { $historyID in
             ClaudeHistoryWindowView(windowID: historyID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
@@ -606,6 +606,7 @@ struct uTermApp: App {
                 .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(terminalRegistry)
+                .environment(remoteMacs)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)

@@ -15,8 +15,11 @@ actor ClaudeHistorySource: AgentHistorySource {
     private var home: String?
     private var cache: [AgentHistorySessionFile.CacheKey: AgentHistorySessionMetadata] = [:]
 
-    init(provider: any SFTPProviding) {
+    /// `home`：主目录。不给就问 `provider`（`realPath(".")`：SFTP 与远控文件服务都把它解析成登录用户的主目录）；
+    /// 测试给一个临时目录。
+    init(provider: any SFTPProviding, home: String? = nil) {
         self.provider = provider
+        self.home = home
     }
 
     private func projectsRoot() async throws -> String {

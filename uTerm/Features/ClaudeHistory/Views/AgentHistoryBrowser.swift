@@ -49,7 +49,7 @@ struct AgentHistorySessionList: View {
         HStack(spacing: 6) {
             Menu {
                 if let current = history.currentProject {
-                    Button(String(localized: "当前项目（\(AgentHistoryText.projectName(current))）")) {
+                    Button(AgentHistoryText.currentProjectItem(current)) {
                         Task { await history.setScope(.project(current)) }
                     }
                 }
@@ -89,12 +89,7 @@ struct AgentHistorySessionList: View {
         .frame(height: 40)
     }
 
-    private var scopeTitle: String {
-        switch history.scope {
-        case .project(let project): return AgentHistoryText.projectName(project)
-        case .all: return String(localized: "全部项目")
-        }
-    }
+    private var scopeTitle: String { AgentHistoryText.scopeTitle(history.scope) }
 
     @ViewBuilder private var content: some View {
         switch history.phase {
@@ -102,7 +97,7 @@ struct AgentHistorySessionList: View {
             RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
         case .empty:
             RemoteMacStateView(systemImage: "tray", title: String(localized: "没有历史会话"),
-                               detail: String(localized: "这台主机上没有找到 Claude Code 的会话记录（~/.claude/projects）。"))
+                               detail: AgentHistoryText.noHistoryDetail)
         case .failed(let message):
             RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取会话列表"),
                                detail: message) {
@@ -122,12 +117,7 @@ struct AgentHistorySessionList: View {
         }
     }
 
-    private var emptyDetail: String {
-        let hidden = history.hiddenCount
-        return hidden > 0
-            ? String(localized: "这里的 \(hidden) 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。")
-            : String(localized: "这个项目里还没有会话。可以切到「全部项目」看看。")
-    }
+    private var emptyDetail: String { AgentHistoryText.emptyListDetail(hidden: history.hiddenCount) }
 
     private func list(_ files: [AgentHistorySessionFile]) -> some View {
         ScrollView {
@@ -151,7 +141,7 @@ struct AgentHistorySessionList: View {
                     .id(files.count)
                     .onAppear { history.loadMore() }
                 } else if history.hiddenCount > 0 {
-                    Text("另有 \(history.hiddenCount) 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。")
+                    Text(AgentHistoryText.hiddenNote(history.hiddenCount))
                         .font(UD.caption)
                         .foregroundStyle(UD.text4)
                         .padding(.horizontal, 10)
@@ -189,33 +179,10 @@ private struct AgentHistorySessionRow: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
-    private var title: String {
-        if let title = metadata?.title { return title }
-        return String(localized: "（无标题）\(String(file.sessionID.prefix(8)))")
-    }
+    private var title: String { AgentHistoryText.sessionTitle(file, metadata: metadata) }
 
     private var subtitle: String {
-        var parts = [AgentHistoryText.relative(file.modifiedAt),
-                     file.size.formatted(.byteCount(style: .file))]
-        if let branch = metadata?.gitBranch { parts.append(branch) }
-        if showsProject {
-            parts.append(metadata?.lastDirectory.map { ($0 as NSString).lastPathComponent }
-                         ?? AgentHistoryText.projectName(file.project))
-        }
-        return parts.joined(separator: " · ")
-    }
-}
-
-/// 列表与标题里的几处文字。
-enum AgentHistoryText {
-    /// 项目的名字：知道工作目录就用目录名，否则用记录目录的名字（`-Users-a-proj`，换不回原路径）。
-    static func projectName(_ project: AgentHistoryProject) -> String {
-        if let directory = project.directory { return (directory as NSString).lastPathComponent }
-        return project.id
-    }
-
-    static func relative(_ date: Date) -> String {
-        date.formatted(.relative(presentation: .named))
+        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject)
     }
 }
 
@@ -240,7 +207,7 @@ struct AgentTranscriptPane: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(metadata?.title ?? String(localized: "（无标题）"))
+                Text(AgentHistoryText.transcriptTitle(metadata))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
@@ -272,13 +239,7 @@ struct AgentTranscriptPane: View {
         .frame(height: 52)
     }
 
-    private var detailLine: String {
-        var parts: [String] = []
-        if let directory = metadata?.resumeDirectory ?? metadata?.lastDirectory { parts.append(directory) }
-        if let branch = metadata?.gitBranch { parts.append(branch) }
-        parts.append(AgentHistoryText.relative(metadata?.lastActivity ?? transcript.file.modifiedAt))
-        return parts.joined(separator: " · ")
-    }
+    private var detailLine: String { AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata) }
 
     private var messages: some View {
         let items = transcript.items
@@ -343,19 +304,6 @@ struct AgentTranscriptPane: View {
     }
 }
 
-/// 哪些条目要带「你」/「Claude」的标签：换了说话的一方才带。
-enum AgentTranscriptRuns {
-    static func starts(_ items: [AgentTranscriptItem]) -> Set<String> {
-        var result: Set<String> = []
-        var last: AgentTranscriptItem.Role?
-        for item in items {
-            if item.role != .system, item.role != last { result.insert(item.id) }
-            last = item.role
-        }
-        return result
-    }
-}
-
 enum AgentHistoryPasteboard {
     static func copy(_ text: String) {
         let board = NSPasteboard.general
@@ -372,7 +320,7 @@ private struct AgentTranscriptRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if showsRole {
-                Text(item.role == .user ? String(localized: "你") : "Claude")
+                Text(AgentHistoryText.roleLabel(item.role))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(UD.text3)
                     .padding(.top, 6)
@@ -446,13 +394,13 @@ private struct AgentTranscriptRow: View {
                         .textSelection(.enabled)
                 }
                 if let result = call.result {
-                    AgentClippedBlock(id: item.id, label: AgentTranscriptRow.resultLabel(result), text: result.content,
+                    AgentClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
                                       isError: result.isError, expanded: $expanded)
                         .padding(.leading, 18)
                 }
             }
         case .toolResult(let result):
-            AgentClippedBlock(id: item.id, label: AgentTranscriptRow.resultLabel(result), text: result.content,
+            AgentClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
                               isError: result.isError, expanded: $expanded)
         case .image:
             Label(String(localized: "图片（不显示）"), systemImage: "photo")
@@ -473,17 +421,11 @@ private struct AgentTranscriptRow: View {
             }
             .padding(.vertical, 6)
         case .oversized(let bytes):
-            Label(String(localized: "这条记录太大（\(Int64(bytes).formatted(.byteCount(style: .file)))），没有显示"),
+            Label(AgentHistoryText.oversized(bytes),
                   systemImage: "exclamationmark.circle")
                 .font(.system(size: 11.5))
                 .foregroundStyle(UD.text3)
         }
-    }
-
-    private static func resultLabel(_ result: AgentToolResult) -> String {
-        var label = result.isError ? String(localized: "结果（出错）") : String(localized: "结果")
-        if result.imageCount > 0 { label += " · " + String(localized: "\(result.imageCount) 张图片（不显示）") }
-        return label
     }
 
     private func binding(_ key: String) -> Binding<Bool> {
@@ -517,12 +459,12 @@ private struct AgentClippedBlock: View {
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
                 if !showsAll, preview.count < text.text.count {
-                    Button(String(localized: "显示全部（\(text.text.count) 字）")) { expanded.insert(fullKey) }
+                    Button(AgentHistoryText.showAll(text.text.count)) { expanded.insert(fullKey) }
                         .buttonStyle(.link)
                         .font(.system(size: 11))
                 }
                 if text.isClipped, showsAll || preview.count >= text.text.count {
-                    Text("内容太长，只显示前 \(text.text.count) 字（共 \(text.totalCount) 字）。")
+                    Text(AgentHistoryText.clippedNote(text))
                         .font(.system(size: 11))
                         .foregroundStyle(UD.text4)
                 }
