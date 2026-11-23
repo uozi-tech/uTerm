@@ -26,6 +26,7 @@ uTerm 是**原生多语言**项目：源语言简体中文，同时完整支持 
 
 - `vendor/libjuice`：上游 `paullouisageneau/libjuice` v1.7.4，纯 C 的 ICE（打洞），MPL-2.0，带一处本地补丁（触发检查立即发，`src/agent.c` 里标着 `uTerm patch #1`）。vendor 的原因：上游只有 CMake，这里手写 `Package.swift` 接进两个 App。升级步骤与合规说明见 `vendor/libjuice/UTERM-PATCHES.md`。
 - `vendor/kcp`：上游 `skywind3000/kcp` 2.1.1，纯 C 的可靠重传（公网直连上跑控制消息和终端，视频不走它），MIT，代码未改。vendor 的原因同上。两端版本不同可能不兼容，升级算协议变更，见 `vendor/kcp/UTERM-PATCHES.md`。
+- `vendor/zstd`：上游 `facebook/zstd` v1.5.7，**只有解压部分**（`lib/common` + `lib/decompress` 里解压用的 9 个 `.c` 与头文件，arm64 代码段约 63 KB），BSD，代码未改（`MANIFEST.sha256` 逐个核对）。vendor 的原因：Codex CLI 把 7 天没动过的会话记录压成 `.jsonl.zst`，「历史会话」要在 App 里解开，Apple 的 Compression 框架没有 zstd，依赖闭包里也没有。手写 `Package.swift`（product `CZstd`）接进两个 App。升级见 `vendor/zstd/UTERM-PATCHES.md`。
 
 ### SSH 栈（USSHKit / Citadel / swift-nio-ssh）在 uAppKit 里
 
