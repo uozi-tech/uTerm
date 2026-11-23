@@ -91,6 +91,10 @@ struct TerminalSessionBody: View {
     /// 用户点了这片终端（分屏时据此把焦点切到它所在的格）。
     var onInteract: (() -> Void)? = nil
     var onClose: () -> Void
+    /// 断开后给不给「重新连接」。Code 标签页里的会话不给：断开就是程序退出了，重新连只会开一个空 shell。
+    var offersReconnect = true
+    /// 失败页上的「重试」；nil = 同一个控制器重连。Code 标签页里的会话还要重新打一遍命令。
+    var onRetry: (() -> Void)? = nil
     @Environment(MobileStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
     /// 终端区域的底色（头部 / 键盘条之外的留白随终端底色）。日间白底、暗夜卡面色 #141414（即 `M.surface`）：
@@ -179,7 +183,7 @@ struct TerminalSessionBody: View {
         let controller = tab.controller
         if controller.isReconnecting {
             MTerminalReconnectBanner(notice: controller.reconnectNotice)
-        } else if tab.remote == nil, controller.canReconnect {
+        } else if tab.remote == nil, offersReconnect, controller.canReconnect {
             MTerminalDisconnectedBanner { controller.restart() }
         } else if controller.state == .connecting, store.connecting?.tabID != tab.id {
             MTerminalReconnectBanner(notice: "正在连接…")
@@ -223,7 +227,9 @@ struct TerminalSessionBody: View {
                     }.fixedSize()
                     if tab.controller.canReconnect {
                         MBtn(title: String(localized: "关闭"), kind: .secondary, height: 44, action: onClose).fixedSize()
-                        MBtn(title: String(localized: "重试"), kind: .tinted, height: 44) { tab.controller.restart() }.fixedSize()
+                        MBtn(title: String(localized: "重试"), kind: .tinted, height: 44) {
+                            if let onRetry { onRetry() } else { tab.controller.restart() }
+                        }.fixedSize()
                     } else {
                         MBtn(title: String(localized: "关闭"), kind: .tinted, height: 44, action: onClose).fixedSize()
                     }

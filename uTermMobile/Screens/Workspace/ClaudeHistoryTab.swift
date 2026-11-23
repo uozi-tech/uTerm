@@ -4,12 +4,15 @@ import SwiftData
 import Observation
 import UIKit
 
-/// 「历史会话」标签：一台主机（或一台配对过的 Mac）上编码工具（Claude Code、Codex、Cursor、Antigravity）在命令行里的
-/// 会话，只读。连接、列表、分组、翻页都在两端共用的 `AgentHistoryConnection` / `AgentHistoryModel` / `AgentHistoryListing`
-/// 里，这里只是标签与画面。
+/// 「Code」标签页：左边一台主机（或一台配对过的 Mac）上编码工具（Claude Code、Codex、Cursor、Antigravity）在命令行里的
+/// 会话列表，右边看记录（只读）或继续聊天。连接、列表、分组、翻页都在两端共用的 `AgentHistoryConnection` /
+/// `AgentHistoryModel` / `AgentHistoryListing` 里，这里只是标签与画面。
 ///
-/// 内容只在内存里：不落盘、不进 iCloud、不进标签归档（`MobileTerminalTabArchive` 只管终端），重启不恢复。
-/// 一台主机（一台 Mac）至多一个，再开就带到前台。
+/// 直连的主机上「继续这个会话」「＋新会话」就在这个标签页里起一个活终端（`runs`，见 `ClaudeHistoryTab+Runs`）；
+/// 配对的 Mac 照旧经接管开终端标签页（接管会把那台 Mac 的终端都镜像成标签页，放进这里会重复）。
+///
+/// 列表与记录只在内存里：不落盘、不进 iCloud。标签页本身重启不恢复；里面跑着的直连会话按终端标签页记进归档
+/// （`MobileTerminalTabArchive`），App 被系统结束后以普通终端标签页接回。一台主机（一台 Mac）至多一个，再开就带到前台。
 @MainActor
 @Observable
 final class ClaudeHistoryTab: Identifiable {
@@ -27,6 +30,24 @@ final class ClaudeHistoryTab: Identifiable {
     /// Plus / Max 横竖屏切换会换外壳、重建视图，请求不能跟着丢。
     var pendingReveal: AgentHistoryReveal?
     @ObservationIgnored private var revealGeneration = 0
+
+    // 在标签页里跑着的会话（`ClaudeHistoryTab+Runs`）。扩展里存不了属性，放在这里。
+    /// 哪些会话正跑着活终端、详情看哪个（状态机，不沾界面）。
+    let runs = CodeRunBoard<TermTab>()
+    /// 各个 run 的连接中页：连上（或失败后用户取消）就拿掉。详情里只盖这一块，不盖列表。
+    var runCovers: [UUID: MConnectRequest] = [:]
+    /// 新会话对上记录之后读到的标题（继续的会话标题在 `history.metadata` 里）。
+    var runTitles: [UUID: String] = [:]
+    /// 建 run 的终端（测试换成接假传输的）。
+    @ObservationIgnored var runTerminalFactory: @MainActor (ServerProfile) -> TermTab = { TermTab(host: $0) }
+    /// 每个 run 要打进去的命令与在途的打字任务（重试时作废旧的，免得打两遍）。
+    @ObservationIgnored var runCommands: [UUID: String] = [:]
+    @ObservationIgnored var runTyping: [UUID: Task<Void, Never>] = [:]
+    /// 新会话还没对上记录时，隔一会儿去主机上看一眼。
+    @ObservationIgnored var newSessionPoll: Task<Void, Never>?
+    /// 建 run 连接用的容器与主机密钥裁决（第一次起 run 时由界面交进来，重试沿用）。
+    @ObservationIgnored var runContainer: ModelContainer?
+    @ObservationIgnored var runRelay: HostKeyChallengeRelay?
 
     init(host: ServerProfile, connection: AgentHistoryConnection, remoteMac: RemoteMacClient? = nil) {
         self.host = host
@@ -85,6 +106,7 @@ final class ClaudeHistoryTab: Identifiable {
     }
 
     func close() {
+        closeAllRuns()
         connection.close()
     }
 }
@@ -92,10 +114,19 @@ final class ClaudeHistoryTab: Identifiable {
 /// 历史标签的主体：连接中 / 失败 / 会话列表与对话。
 struct ClaudeHistorySessionBody: View {
     let tab: ClaudeHistoryTab
-    /// 标签在前台、工作区没收起：打开着的对话才盯着文件末尾（实时跟随）。
+    /// 标签在前台、工作区没收起：打开着的对话才盯着文件末尾（实时跟随），露着的终端才算前台。
     var isActive = true
-    /// 在这台主机上新开一个终端标签页跑这条命令：「继续这个会话」（命令由各工具的数据源给）和「＋」新会话。
+    /// 是聚焦格的前台（分屏时两格都在屏上，只有这一格的终端弹键盘）。
+    var isFocused = true
+    /// 用户点了这片终端（分屏时据此把焦点切到它所在的格）。
+    var onInteract: (() -> Void)? = nil
+    /// 配对的 Mac 上「继续这个会话」「＋」新会话：在那台 Mac 上开终端标签页跑这条命令（直连的主机就在这个标签页里跑）。
     var onRun: (_ command: String, _ directory: String) -> Void
+
+    @Environment(\.modelContext) private var context
+    /// 可选：只挂列表的用例里没有注入。没有就退回 `onRun`。
+    @Environment(HostKeyChallengeRelay.self) private var relay: HostKeyChallengeRelay?
+    @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
 
     var body: some View {
         Group {
@@ -111,23 +142,63 @@ struct ClaudeHistorySessionBody: View {
                 ClaudeHistoryBrowser(
                     history: history, canResume: tab.canResume, isActive: isActive,
                     newSession: tab.canResume
-                        ? AgentHistoryNewSession(directory: tab.directory) { _, command, directory in onRun(command, directory) }
+                        ? AgentHistoryNewSession(directory: tab.directory) { tool, command, directory in
+                            startNew(tool, command: command, directory: directory)
+                        }
                         : nil,
-                    reveal: Binding(get: { tab.pendingReveal }, set: { tab.pendingReveal = $0 })) { file in
-                    guard let plan = history.resumeCommand(for: file) else { return }
-                    onRun(plan.command, plan.directory)
+                    reveal: Binding(get: { tab.pendingReveal }, set: { tab.pendingReveal = $0 }),
+                    code: CodeTabRuns(tab: tab, isFocused: isFocused, onInteract: onInteract,
+                                      onMoveToTab: workspace.map { workspace in { id in
+                                          _ = tab.moveRunToTab(id, in: workspace)
+                                      } })) { file in
+                    resume(file, in: history)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
     }
+
+    /// 直连主机：就在这个标签页里起终端；配对的 Mac（或者没注入主机密钥裁决的用例）：交给 `onRun` 开终端标签页。
+    private func resume(_ file: AgentHistorySessionFile, in history: AgentHistoryModel) {
+        guard let plan = history.resumeCommand(for: file) else { return }
+        if tab.runsInPlace, let relay {
+            tab.resumeInPlace(file, command: plan.command, directory: plan.directory,
+                              container: context.container, relay: relay)
+        } else {
+            onRun(plan.command, plan.directory)
+        }
+    }
+
+    private func startNew(_ tool: AgentHistoryTool, command: String, directory: String) {
+        if tab.runsInPlace, let relay {
+            tab.startNewInPlace(tool: tool, command: command, directory: directory,
+                                container: context.container, relay: relay)
+        } else {
+            onRun(command, directory)
+        }
+    }
 }
 
-/// 列表与对话。宽的格子（iPad、展开的 Duo 横屏）左边列表一直在、右边对话；窄的先是列表，点一条进到对话，左上角返回列表。
+/// Code 标签页交给列表与详情的东西：在标签页里跑着的会话，和它们的终端怎么挂。只挂列表与记录（不在 Code 标签页里）时为 nil。
+struct CodeTabRuns {
+    let tab: ClaudeHistoryTab
+    var isFocused = true
+    var onInteract: (() -> Void)? = nil
+    /// 「移到新标签页」；nil = 不出这一项（没有工作区可放）。
+    var onMoveToTab: ((UUID) -> Void)? = nil
+
+    var board: CodeRunBoard<TermTab> { tab.runs }
+}
+
+/// 列表与详情。宽的格子（iPad、展开的 Duo 横屏）左边列表一直在、右边是详情；窄的先是列表，点一条进到详情，左上角返回列表。
+/// 详情是一份记录（只读），或者在 Code 标签页里继续着的会话的活终端（「终端 / 记录」切换）。
 /// 对话里点进子代理的记录再一层层往里进，左上角一层层返回。
 ///
-/// 只认 `AgentHistoryModel` 与几个回调，不管自己被放在哪里（单独的标签页，或者以后别的容器）。
+/// 列表与详情一直挂着、只按格子宽窄摆位置（看不见的移到屏外）：终端是 `UIViewRepresentable`，换一个父视图重建的话
+/// SwiftUI 之后不再更新它的尺寸（分屏那次踩过），所以宽窄之间不能用 `if` 换两套视图树。
+///
+/// 只认 `AgentHistoryModel` 与几个回调（`code` 可以不给），不管自己被放在哪里。
 struct ClaudeHistoryBrowser: View {
     let history: AgentHistoryModel
     let canResume: Bool
@@ -136,27 +207,41 @@ struct ClaudeHistoryBrowser: View {
     var newSession: AgentHistoryNewSession? = nil
     /// 要列表定位到的目录（定位成功后由列表清掉）。
     var reveal: Binding<AgentHistoryReveal?> = .constant(nil)
+    /// 在 Code 标签页里跑着的会话。
+    var code: CodeTabRuns? = nil
     let onResume: (AgentHistorySessionFile) -> Void
 
     @Environment(\.scenePhase) private var scenePhase
 
-    /// 宽过这么多才左右并排：列表 300pt，对话至少还要 400pt 才读得下去。
+    /// 宽过这么多才左右并排：列表 300pt，详情至少还要 400pt 才读得下去。
     nonisolated static let sideBySideMinWidth: CGFloat = 700
+    private static let listWidth: CGFloat = 300
+
+    /// 窄屏上详情这一层露着：看着一份记录，或者看着一个跑着的会话。
+    private var detailActive: Bool { history.transcript != nil || code?.board.focused != nil }
+    /// 详情露着的是终端（而不是记录）。
+    private var terminalShown: Bool { code?.board.focused?.showsTerminal ?? false }
 
     var body: some View {
         GeometryReader { geo in
-            if geo.size.width >= Self.sideBySideMinWidth {
-                HStack(spacing: 0) {
-                    list
-                        .frame(width: 300)
-                    Rectangle().fill(M.divider).frame(width: 1)
-                    detail(showsBack: false)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else if history.transcript != nil {
-                detail(showsBack: true)
-            } else {
-                list
+            let wide = geo.size.width >= Self.sideBySideMinWidth
+            let showsList = wide || !detailActive
+            let showsDetail = wide || detailActive
+            let detailX: CGFloat = wide ? Self.listWidth + 1 : 0
+            ZStack(alignment: .topLeading) {
+                ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal, code: code)
+                    .frame(width: wide ? Self.listWidth : geo.size.width, height: geo.size.height)
+                    .offset(x: showsList ? 0 : -100_000)
+                    .allowsHitTesting(showsList)
+                    .accessibilityHidden(!showsList)
+                Rectangle().fill(M.divider)
+                    .frame(width: 1, height: geo.size.height)
+                    .offset(x: wide ? Self.listWidth : -100_000)
+                detail(showsBack: !wide, visible: showsDetail)
+                    .frame(width: max(geo.size.width - detailX, 0), height: geo.size.height)
+                    .offset(x: showsDetail ? detailX : -100_000)
+                    .allowsHitTesting(showsDetail)
+                    .accessibilityHidden(!showsDetail)
             }
         }
         // 实时跟随只在看得见时查：标签不在前台、工作区收起、App 进了后台就停（省电），回来马上查一次。
@@ -166,11 +251,24 @@ struct ClaudeHistoryBrowser: View {
         .onDisappear { history.setTranscriptVisible(false) }
     }
 
-    private var list: some View {
-        ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal)
+    /// 详情：记录（或「选择一个会话」）在下面，跑着的会话的终端各自一层盖在上面，只露出看着的那一个。
+    private func detail(showsBack: Bool, visible: Bool) -> some View {
+        ZStack {
+            record(showsBack: showsBack)
+                .opacity(terminalShown ? 0 : 1)
+                .allowsHitTesting(!terminalShown)
+                .accessibilityHidden(terminalShown)
+            if let code {
+                ForEach(code.board.runs) { run in
+                    let shown = visible && code.board.focusedID == run.id && run.showsTerminal
+                    CodeRunPane(code: code, run: run, shown: shown, isActive: isActive && shown,
+                                showsBack: showsBack)
+                }
+            }
+        }
     }
 
-    @ViewBuilder private func detail(showsBack: Bool) -> some View {
+    @ViewBuilder private func record(showsBack: Bool) -> some View {
         if let transcript = history.transcript {
             // 主对话与点进去的一层层子代理记录都挂着，只露出最里面那层：返回时滚动位置、展开的块都还在。
             let levels = [transcript] + history.subagentStack
@@ -184,7 +282,8 @@ struct ClaudeHistoryBrowser: View {
                                          onBack: back(for: level, showsBack: showsBack),
                                          onResume: { onResume(level.file) },
                                          onOpenSubagent: { history.openSubagent($0) },
-                                         onJumpToLatest: { history.jumpToLatest() })
+                                         onJumpToLatest: { history.jumpToLatest() },
+                                         runSwitch: level.subagent == nil ? runSwitch(for: level.file) : nil)
                         .opacity(isTop ? 1 : 0)
                         .allowsHitTesting(isTop)
                         .accessibilityHidden(!isTop)
@@ -198,6 +297,12 @@ struct ClaudeHistoryBrowser: View {
         }
     }
 
+    /// 这份记录正跑着（在 Code 标签页里继续着）：记录顶上「继续这个会话」换成「终端 / 记录」切换。
+    private func runSwitch(for file: AgentHistorySessionFile) -> CodeRunModeSwitch? {
+        guard let code, let run = code.board.run(forSession: file.path), run.isRunning else { return nil }
+        return CodeRunModeSwitch(showsTerminal: false) { code.tab.setShowsTerminal(run.id, $0) }
+    }
+
     /// 说明里点名的工具：这台主机上有记录的；一种都没有时是读了的那几种。同 Mac。
     private var listedTools: [AgentHistoryTool] {
         history.availableTools.isEmpty ? history.configuredTools : history.availableTools
@@ -206,7 +311,9 @@ struct ClaudeHistoryBrowser: View {
     /// 子代理的记录回上一层；主对话在窄屏回列表，宽屏没有返回。
     private func back(for level: AgentTranscriptModel, showsBack: Bool) -> (() -> Void)? {
         if level.subagent != nil { return { history.closeSubagent() } }
-        return showsBack ? { history.select(nil) } : nil
+        guard showsBack else { return nil }
+        if let code { return { code.tab.backToList() } }
+        return { history.select(nil) }
     }
 }
 
@@ -218,6 +325,8 @@ private struct ClaudeHistoryList: View {
     let history: AgentHistoryModel
     let newSession: AgentHistoryNewSession?
     @Binding var reveal: AgentHistoryReveal?
+    /// Code 标签页里跑着的会话：列表顶上「正在运行」，行上标「运行中」，点一行按它走（见 `ClaudeHistoryTab.select`）。
+    var code: CodeTabRuns? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
@@ -231,6 +340,11 @@ private struct ClaudeHistoryList: View {
             header
             searchBar
             Rectangle().fill(M.divider).frame(height: 1)
+            // 一眼看到有几个在跑：列表顶上一组「正在运行」（新会话还没有记录，也在这里）。搜索时也留着。
+            if let code, !code.board.runs.isEmpty {
+                CodeRunningSection(code: code)
+                Rectangle().fill(M.divider).frame(height: 1)
+            }
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
                 content
@@ -238,7 +352,12 @@ private struct ClaudeHistoryList: View {
                     .allowsHitTesting(history.search == nil)
                     .accessibilityHidden(history.search != nil)
                 if let search = history.search {
-                    ClaudeHistorySearchResults(history: history, search: search)
+                    ClaudeHistorySearchResults(history: history, search: search) { file in
+                        // 点开的那份正跑着：看它的记录（停在命中那里），终端还在，切回去就是。
+                        guard let code, let run = code.board.run(forSession: file.path) else { return }
+                        code.board.focus(run.id)
+                        code.board.setShowsTerminal(run.id, false)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -408,9 +527,12 @@ private struct ClaudeHistoryList: View {
                         }
                         if !collapsed {
                             ForEach(group.files) { file in
-                                Button { history.select(file) } label: {
+                                Button {
+                                    if let code { code.tab.select(file) } else { history.select(file) }
+                                } label: {
                                     ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
                                                      showsProject: grouping != .project, showsTool: showsTool,
+                                                     isRunning: code?.tab.isRunning(file) ?? false,
                                                      isSelected: history.selectedFile?.path == file.path)
                                 }
                                 .buttonStyle(MPressStyle())
@@ -526,6 +648,8 @@ private struct ClaudeHistoryWarningNote: View {
 private struct ClaudeHistorySearchResults: View {
     let history: AgentHistoryModel
     let search: AgentHistoryModel.Search
+    /// 点开了一条命中（那份记录已经选上）。
+    var onOpened: (AgentHistorySessionFile) -> Void = { _ in }
 
     var body: some View {
         if search.sessions.isEmpty, !search.isRunning {
@@ -629,7 +753,10 @@ private struct ClaudeHistorySearchResults: View {
             }
             .padding(.horizontal, 12).padding(.bottom, 2)
             ForEach(session.hits) { hit in
-                Button { history.openHit(hit, in: session) } label: {
+                Button {
+                    history.openHit(hit, in: session)
+                    onOpened(session.file)
+                } label: {
                     ClaudeHistorySearchHitRow(hit: hit, tool: session.file.tool, isSelected: isOpen(hit, in: session))
                 }
                 .buttonStyle(MPressStyle())
@@ -681,6 +808,8 @@ private struct ClaudeHistoryRow: View {
     let showsProject: Bool
     /// 不止一种工具时行首带工具标记（共享的 `AgentHistoryToolMark`）。
     var showsTool = false
+    /// 在 Code 标签页里继续着：第二行前面一个绿点「运行中」。
+    var isRunning = false
     let isSelected: Bool
 
     var body: some View {
@@ -694,11 +823,14 @@ private struct ClaudeHistoryRow: View {
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                AgentSessionTimeText(history: history, file: file) { activity in
-                    AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                HStack(spacing: 6) {
+                    if isRunning { CodeRunningMark() }
+                    AgentSessionTimeText(history: history, file: file) { activity in
+                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                    }
+                    .font(M.sans(12.5)).foregroundStyle(M.text3)
+                    .lineLimit(1)
                 }
-                .font(M.sans(12.5)).foregroundStyle(M.text3)
-                .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)
@@ -724,6 +856,8 @@ private struct ClaudeTranscriptView: View {
     let onOpenSubagent: (AgentSubagentLink) -> Void
     /// 从搜索命中处打开的：换回从末尾打开。
     var onJumpToLatest: () -> Void = {}
+    /// 这份记录正在 Code 标签页里继续着：「继续这个会话」换成「终端 / 记录」切换。
+    var runSwitch: CodeRunModeSwitch? = nil
 
     @State private var expanded: Set<String> = []
     @State private var pendingAnchor: String?
@@ -828,7 +962,9 @@ private struct ClaudeTranscriptView: View {
             }
             .accessibilityLabel(Text("拷贝"))
             // 子代理的记录只读：不能单独继续。
-            if transcript.subagent == nil {
+            if let runSwitch {
+                runSwitch.padding(.trailing, 10)
+            } else if transcript.subagent == nil {
                 MBtn(title: String(localized: "继续这个会话"), icon: "run", kind: .tinted, height: 34,
                      disabled: !canResume, action: onResume)
                     .fixedSize()

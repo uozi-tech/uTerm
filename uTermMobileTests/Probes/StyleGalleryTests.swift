@@ -516,6 +516,83 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
+    /// Code 标签页里继续聊天：右边（窄屏是详情那一层）是活终端（假传输喂一段写好的输出），列表顶上「正在运行」两个
+    /// （一个继续的 Codex 会话、一个还没有记录的新会话）；同一个会话切到「记录」；连接中的样子。
+    func testCodeTabRuns() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+        let relay = HostKeyChallengeRelay()
+        let suite = "StyleGalleryTests.codeTab"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+        let output = [
+            "\u{1B}[2m% codex resume x-tests\u{1B}[0m",
+            "",
+            "\u{1B}[1m>_ Codex\u{1B}[0m  \u{1B}[2m(resumed · ~/projects/shop-api)\u{1B}[0m",
+            "",
+            "\u{1B}[36m›\u{1B}[0m 给订单服务补上集成测试：下单、取消、退款各两条。",
+            "",
+            "\u{1B}[32m•\u{1B}[0m Ran \u{1B}[1mgo test ./internal/order/...\u{1B}[0m",
+            "  \u{1B}[2m└ ok   shop-api/internal/order  1.42s\u{1B}[0m",
+            "",
+            "\u{1B}[32m•\u{1B}[0m 补了 6 个用例，全部通过。",
+            "",
+            "\u{1B}[36m›\u{1B}[0m 再看看退款的边界情况",
+            "",
+            "\u{1B}[33m•\u{1B}[0m Working (12s • esc to interrupt)",
+        ].joined(separator: "\r\n")
+
+        func mount(_ workspace: MobileWorkspace) -> some View {
+            WorkspaceScreen()
+                .environment(workspaceStore())
+                .environment(relay)
+                .environment(workspace)
+                .modelContainer(c)
+                .defaultAppStorage(defaults)
+        }
+
+        /// 一个 Code 标签页，继续了 Codex 那个会话、又开了一个新会话；`connectsSlowly` 时继续的那个停在连接中。
+        func codeTab(connectsSlowly: Bool = false) async throws -> (MobileWorkspace, ClaudeHistoryTab, UUID) {
+            let workspace = MobileWorkspace()
+            let tab = workspace.openHistory(MobileAgentHistoryFixture.tab(host: host, source: MobileAgentHistoryFixture.source()))
+            var script = MobileFakeTerminalScript.transcript(output)
+            if connectsSlowly { script.connectLatency = .seconds(60) }
+            tab.runTerminalFactory = { MobileFakeTerminal.tab(host: $0, script).0 }
+            _ = await MobileFakeClaudeHistory.settle(tab)
+            let model = try XCTUnwrap(tab.connection.history)
+            tab.startNewInPlace(tool: .claude, command: "cd -- '\(MobileAgentHistoryFixture.shop)' && claude",
+                                directory: MobileAgentHistoryFixture.shop, container: c, relay: relay)
+            let file = try XCTUnwrap(model.visibleFiles.first { $0.tool == .codex })
+            tab.select(file)
+            let plan = try XCTUnwrap(model.resumeCommand(for: file))
+            tab.resumeInPlace(file, command: plan.command, directory: plan.directory, container: c, relay: relay)
+            let run = try XCTUnwrap(tab.runs.focused)
+            for each in tab.runs.runs where !(connectsSlowly && each.id == run.id) {
+                _ = await MobileFakeTerminal.waitUntilConnected(each.terminal.controller)
+                tab.finishCover(each.id)
+            }
+            return (workspace, tab, run.id)
+        }
+
+        let shots = Self.devices.filter { ["iphone", "ipad", "duo-split", "duo-unfolded"].contains($0.name) }
+        for device in shots {
+            let (live, liveTab, runID) = try await codeTab()
+            try await shoot("code-run-terminal", on: device, settle: .milliseconds(1200)) { mount(live) }
+            liveTab.setShowsTerminal(runID, false)
+            _ = await MobileFakeTerminal.waitUntil { liveTab.connection.history?.transcript?.reachedStart == true }
+            try await shoot("code-run-record", on: device, settle: .milliseconds(900)) { mount(live) }
+            // 窄屏回到列表：顶上「正在运行」。
+            liveTab.backToList()
+            try await shoot("code-run-list", on: device, settle: .milliseconds(600)) { mount(live) }
+            liveTab.close()
+
+            let (slow, slowTab, _) = try await codeTab(connectsSlowly: true)
+            try await shoot("code-run-connecting", on: device, settle: .milliseconds(900)) { mount(slow) }
+            slowTab.close()
+        }
+    }
+
     // MARK: - 分屏：终端 + 文件（多态标签）
 
     /// 左格两个终端标签、右格一个文件标签，聚焦右格：看前台胶囊与活动图标的配色（不画焦点框）。

@@ -33,7 +33,7 @@ struct WorkspaceScreen: View {
     @State private var closeFlow = MTabCloseFlow()
     /// 正在 stat、还没开预览标签的主机（`showPreview`）。
     @State private var previewsBeingChecked: Set<PersistentIdentifier> = []
-    /// 「+」菜单选了「历史会话」：先选主机。
+    /// 「+」菜单选了「Code」：先选主机。
     @State private var pickingHistoryHost = false
     /// 「继续这个会话」没开成（那台 Mac 不能新建终端等）。
     @State private var resumeError: String?
@@ -111,6 +111,7 @@ struct WorkspaceScreen: View {
         }
         .sheet(item: $newKind) { kind in newTabSheet(kind).mSheetContentMargins() }
         .modifier(ClaudeHistoryOverlays(picking: $pickingHistoryHost, resumeError: $resumeError,
+                                        codeKeyboardTerminal: workspace.activeTab?.history?.keyboardTerminal?.id,
                                         onPickingChanged: syncKeyboard) {
             historyHostSheet.mSheetContentMargins()
         })
@@ -286,28 +287,19 @@ struct WorkspaceScreen: View {
         }
     }
 
-    // MARK: - 历史会话
+    // MARK: - Code 标签页
 
-    /// 终端标签长按「历史会话」：直连主机读它上面几种编码工具的记录（按项目分组，定位到终端当前目录那一组），
+    /// 终端标签长按「历史会话」：切到 / 新开这台主机的 Code 标签页（按项目分组，定位到终端当前目录那一组），
     /// 远控标签读那台 Mac 的。已经开着就带到前台、再定位一次。
     private func openHistory(for tabID: UUID) {
-        guard let term = workspace.tab(tabID)?.terminal, term.offersClaudeHistory else { return }
+        guard let term = workspace.tab(tabID)?.terminal else { return }
         workspace.focus(pane: workspace.panes[workspace.paneIndex(containing: tabID) ?? 0].id)
-        if let remote = term.remote {
-            workspace.openHistory(ClaudeHistoryTab(pairedMac: remote.client))
-        } else {
-            let directory = term.claudeHistoryDirectory
-            let fresh = ClaudeHistoryTab(server: term.host, directory: directory, container: context.container)
-            // 新开的在建的时候已经要了定位；带到前台的那个按终端现在的目录再要一次（可能已经滚走、折起来了）。
-            let opened = workspace.openHistory(fresh)
-            if opened !== fresh { opened.reveal(directory: directory) }
-        }
+        workspace.showCode(for: term, container: context.container)
         syncKeyboard()
     }
 
-    /// 「继续这个会话」「＋新会话」：在同一台主机上新开终端标签，连上、行编辑器起来之后打进命令。
-    /// 直连主机走连接中页（同「新建终端」，主机密钥要确认也在那里）；配对的 Mac 先请它开一个本机终端（开在项目目录里），
-    /// 再整台接管、把那个终端放到前台。
+    /// 配对的 Mac 上「继续这个会话」「＋新会话」：请它开一个本机终端（开在项目目录里），再整台接管、把那个终端放到前台。
+    /// 直连的主机不走这里，就在 Code 标签页里起终端（`ClaudeHistoryTab.resumeInPlace`）。
     private func runInNewTerminal(_ history: ClaudeHistoryTab, command: String, directory: String) {
         Task {
             do {
@@ -318,7 +310,7 @@ struct WorkspaceScreen: View {
         }
     }
 
-    /// 「+」菜单的「历史会话」：选一台主机（或一台配对过的 Mac）。没有终端，不知道目录：不定位，「＋」新会话说明原因。
+    /// 「+」菜单的「Code」：选一台主机（或一台配对过的 Mac）。没有终端，不知道目录：不定位，「＋」新会话说明原因。
     private var historyHostSheet: some View {
         let candidates = hosts.filter { !DemoHostProfile.isDemo($0) }
         return NavigationStack {
@@ -346,7 +338,7 @@ struct WorkspaceScreen: View {
                 .padding(16)
             }
             .background(M.canvas)
-            .navigationTitle("历史会话")
+            .navigationTitle(Text(verbatim: "Code"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { pickingHistoryHost = false } } }
         }
@@ -438,9 +430,14 @@ struct WorkspaceScreen: View {
     /// 此刻该拿键盘的终端标签：聚焦格的前台标签、终端模式，且上面没有连接中页 / 新建抽屉。
     /// 连接中页期间一个都没有——键盘窗口恒在最上，会盖住中转页的取消按钮。
     private var keyboardOwner: TermTab? {
-        guard store.connecting == nil, store.showWorkspace, newKind == nil, !awaitingConnect, !pickingHistoryHost,
-              let term = workspace.activeTab?.terminal, term.mode == .terminal else { return nil }
-        return term
+        guard store.connecting == nil, store.showWorkspace, newKind == nil, !awaitingConnect, !pickingHistoryHost
+        else { return nil }
+        switch workspace.activeTab {
+        case .terminal(let term): return term.mode == .terminal ? term : nil
+        // Code 标签页：详情露着某个会话的终端（连接中页已撤下）时键盘归它。
+        case .history(let code): return code.keyboardTerminal
+        case .files, .preview, nil: return nil
+        }
     }
 
     /// 键盘只归一个标签：先把归属逐会话下发（立即生效，丢了归属的终端当场收键盘、
@@ -766,10 +763,13 @@ struct WorkspaceScreen: View {
     }
 }
 
-/// 「历史会话」的选主机抽屉与「继续这个会话」失败的提示（单独成一层：工作区屏的修饰链已经长到类型检查超时）。
+/// 「Code」的选主机抽屉、「继续这个会话」失败的提示、Code 标签页里键盘换主（单独成一层：工作区屏的修饰链已经长到类型检查超时）。
 private struct ClaudeHistoryOverlays<Sheet: View>: ViewModifier {
     @Binding var picking: Bool
     @Binding var resumeError: String?
+    /// 前台 Code 标签页此刻露着的终端：换了看的会话、在终端与记录之间切换、连接中页撤下时，键盘跟着换主。
+    var codeKeyboardTerminal: UUID?
+    /// 键盘归属要重新裁决（选主机抽屉开关、Code 标签页露着的终端变了）。
     var onPickingChanged: () -> Void
     @ViewBuilder var sheet: () -> Sheet
 
@@ -777,6 +777,7 @@ private struct ClaudeHistoryOverlays<Sheet: View>: ViewModifier {
         content
             .sheet(isPresented: $picking) { sheet() }
             .onChange(of: picking) { _, _ in onPickingChanged() }
+            .onChange(of: codeKeyboardTerminal) { _, _ in onPickingChanged() }
             .alert("无法继续这个会话", isPresented: Binding(get: { resumeError != nil },
                                                     set: { if !$0 { resumeError = nil } })) {
                 Button("好", role: .cancel) { resumeError = nil }

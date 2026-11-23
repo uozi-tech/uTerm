@@ -1,0 +1,283 @@
+import Foundation
+import Observation
+import SwiftData
+
+/// Code 标签页里跑着的会话：建终端、打命令、看着程序退出、关掉。哪些在跑、看哪个、新会话怎么对上记录由
+/// `CodeRunBoard` 管，这里是它和真终端（`TermTab`）之间的那一层。
+///
+/// 每个 run 的终端就是一个不在标签条上的 `TermTab`：连接（直连主机走 `PersistentSSHConnection`，同普通终端标签页）、
+/// 断线重连、键盘条、实时活动、归档都照终端标签页那样算（工作区把它们算进去，见 `MobileWorkspace.allTerminals`）。
+///
+/// 命令后面接 `; exit`：程序一退出 shell 跟着结束、会话收尾，控制器翻成 `.disconnected`——这就是「程序退出」的信号，
+/// 不用去猜前台是不是还是那个程序。会话留在主机上的（保持进程）断网只是重连，不会被当成退出；
+/// 没有保持进程的主机断网，shell 和程序本来也跟着没了，当成退出是对的。
+extension ClaudeHistoryTab {
+    /// 这台主机能不能在标签页里跑：直连的主机可以；配对的 Mac 照旧开终端标签页（见类型注释）。
+    var runsInPlace: Bool { remoteMac == nil && canResume }
+
+    /// 正在跑的终端（工作区算键盘、实时活动、归档、关前确认时要看）。
+    var runTerminals: [TermTab] { runs.runs.map(\.terminal) }
+
+    /// 详情此刻露出来、可以打字的终端：在看终端、连接中页已经撤下。键盘归它。
+    var keyboardTerminal: TermTab? {
+        guard let run = runs.focused, run.showsTerminal, run.isRunning, runCovers[run.id] == nil else { return nil }
+        return run.terminal
+    }
+
+    /// 列表与详情标题行上这个 run 的名字：对上了记录用记录的标题，新会话叫「新会话」。
+    func title(of run: CodeRunBoard<TermTab>.Run) -> String {
+        if let title = runTitles[run.id] { return title }
+        if let path = run.sessionPath, let history = connection.history,
+           let title = history.metadata[path]?.title { return title }
+        if run.sessionPath == nil { return AgentHistoryText.newSession }
+        return String(localized: "（无标题）\(String((run.sessionID ?? "").prefix(8)))")
+    }
+
+    // MARK: 起
+
+    /// 「继续这个会话」：这份记录已经在跑就回到它的终端，没有就起一个。
+    func resumeInPlace(_ file: AgentHistorySessionFile, command: String, directory: String,
+                       container: ModelContainer, relay: HostKeyChallengeRelay) {
+        let factory = runTerminalFactory
+        let host = self.host
+        guard let run = runs.resume(sessionPath: file.path, sessionID: file.sessionID, tool: file.tool,
+                                    directory: directory, make: { factory(host) }) else { return }
+        launch(run, command: command, container: container, relay: relay)
+    }
+
+    /// 「＋」新会话：在这个标签页里起一个终端跑它。还没有记录，列表顶上「正在运行」里先放一行「新会话」占位。
+    func startNewInPlace(tool: AgentHistoryTool, command: String, directory: String,
+                         container: ModelContainer, relay: HostKeyChallengeRelay) {
+        let run = runs.startNew(tool: tool, directory: directory, terminal: runTerminalFactory(host))
+        launch(run, command: command, container: container, relay: relay)
+        pollNewSessionsIfNeeded()
+    }
+
+    private func launch(_ run: CodeRunBoard<TermTab>.Run, command: String,
+                        container: ModelContainer, relay: HostKeyChallengeRelay) {
+        runContainer = container
+        runRelay = relay
+        let term = run.terminal
+        term.controller.start(profile: host, container: container, relay: relay)
+        let cover = MConnectRequest(host: host, kind: .terminal, origin: .hosts)
+        cover.terminal = term.controller
+        runCovers[run.id] = cover
+        // 程序退出 shell 跟着结束（见类型注释）。
+        runCommands[run.id] = command + "; exit"
+        type(run.id)
+        watch(run.id)
+    }
+
+    /// 连上、行编辑器起来之后打命令。重试时先作废上一次在等的，免得连上之后打两遍。
+    private func type(_ id: UUID) {
+        runTyping[id]?.cancel()
+        guard let term = runs.run(id: id)?.terminal, let command = runCommands[id] else { return }
+        let controller = term.controller
+        let terminal = controller.terminal
+        runTyping[id] = Task { [weak controller] in
+            await TerminalCommandTyping.type(
+                command, shadow: terminal.shadow,
+                generation: { terminal.outputPump.generation },
+                isConnected: { [weak controller] in controller?.state == .connected },
+                send: { [weak controller] line in
+                    guard !Task.isCancelled else { return }
+                    controller?.sendText(line)
+                })
+        }
+    }
+
+    // MARK: 连接中页
+
+    /// 连上了（成功态演完）：撤下连接中页，露出终端。
+    func finishCover(_ id: UUID) {
+        runCovers[id] = nil
+    }
+
+    /// 连接中页（或终端的失败页）上的「重试」：同一个终端重连，重新打命令。
+    func retryRun(_ id: UUID) {
+        guard let term = runs.run(id: id)?.terminal else { return }
+        if let cover = runCovers[id] {
+            cover.restart()
+        } else {
+            term.controller.restart()
+        }
+        type(id)
+    }
+
+    // MARK: 看哪个
+
+    /// 列表里点了一份记录：它在跑就看它的 run（停在它上次看的那一面），否则看它的记录。
+    func select(_ file: AgentHistorySessionFile) {
+        guard let history = connection.history else { return }
+        runs.focus(runs.run(forSession: file.path)?.id)
+        history.select(file)
+    }
+
+    /// 点了「正在运行」里的一行：看它的终端。对上了记录的，记录那边也选上（「记录」切换要用）。
+    func focusRun(_ id: UUID) {
+        guard let run = runs.run(id: id), let history = connection.history else { return }
+        runs.focus(id)
+        runs.setShowsTerminal(id, true)
+        if let path = run.sessionPath, let file = history.files.first(where: { $0.path == path }) {
+            history.select(file)
+        } else {
+            history.select(nil)
+        }
+    }
+
+    /// 窄屏左上角返回列表。
+    func backToList() {
+        runs.focus(nil)
+        connection.history?.select(nil)
+    }
+
+    /// 「终端 / 记录」切换。
+    func setShowsTerminal(_ id: UUID, _ shows: Bool) {
+        runs.focus(id)
+        runs.setShowsTerminal(id, shows)
+        guard !shows, let path = runs.run(id: id)?.sessionPath, let history = connection.history,
+              history.selectedFile?.path != path,
+              let file = history.files.first(where: { $0.path == path }) else { return }
+        history.select(file)
+    }
+
+    /// 记录这份是不是有 run 对着（列表行上的「运行中」）。
+    func isRunning(_ file: AgentHistorySessionFile) -> Bool {
+        runs.run(forSession: file.path)?.isRunning ?? false
+    }
+
+    // MARK: 程序退出
+
+    /// 盯着 run 的连接：曾经连上过、后来收尾了（shell 退出），就是程序退出了。
+    private func watch(_ id: UUID) {
+        guard let run = runs.run(id: id) else { return }
+        let controller = run.terminal.controller
+        let state = withObservationTracking { controller.state } onChange: { [weak self] in
+            Task { @MainActor in self?.watch(id) }
+        }
+        if state == .disconnected, controller.hadConnected, run.isRunning { runEnded(id) }
+    }
+
+    /// 程序退出了：很快就退出的留着给人看（标成已退出）；否则拿掉、关掉终端，记录重新读到最新、详情回到它。
+    func runEnded(_ id: UUID) {
+        guard let term = runs.run(id: id)?.terminal else { return }
+        runCovers[id] = nil
+        switch runs.ended(id) {
+        case .removed(let path, let wasFocused):
+            dispose(id, term)
+            refreshAfterRun(path: path, wasFocused: wasFocused)
+        case .kept, .unknown:
+            break
+        }
+    }
+
+    /// 结束一个 run：已退出的「回到记录」、用户「结束会话」、连接中页上的「返回」。还在跑的连接一并关掉。
+    func endRun(_ id: UUID) {
+        guard let term = runs.run(id: id)?.terminal else { return }
+        guard case .removed(let path, let wasFocused) = runs.remove(id) else { return }
+        dispose(id, term)
+        refreshAfterRun(path: path, wasFocused: wasFocused)
+    }
+
+    /// 把这个 run 的终端挪成工作区里的普通终端标签页（开在这个标签页旁边、到前台）。返回挪出去的终端。
+    /// 命令后面的 `; exit` 还在：程序退出后那个标签页显示「已断开」。
+    @discardableResult
+    func moveRunToTab(_ id: UUID, in workspace: MobileWorkspace) -> TermTab? {
+        guard let term = runs.run(id: id)?.terminal, runCovers[id] == nil else { return nil }
+        let pane = workspace.paneIndex(containing: self.id).map { workspace.panes[$0].id }
+        runs.remove(id)
+        runTyping[id] = nil
+        runCommands[id] = nil
+        runTitles[id] = nil
+        workspace.open(.terminal(term), in: pane)
+        return term
+    }
+
+    private func dispose(_ id: UUID, _ term: TermTab) {
+        runTyping.removeValue(forKey: id)?.cancel()
+        runCommands[id] = nil
+        runCovers[id] = nil
+        runTitles[id] = nil
+        term.controller.resignKeyboard()
+        term.controller.close()
+        term.agent.dispose()
+        term.agentTasks.cancelAll()
+    }
+
+    /// run 拿掉之后：列表重新读（修改时间、大小、新会话的记录都变了）；看着它、或者记录那边正开着它的，重新从末尾读。
+    private func refreshAfterRun(path: String?, wasFocused: Bool) {
+        guard let history = connection.history else { return }
+        let reopen = path.flatMap { path in wasFocused || history.selectedFile?.path == path ? path : nil }
+        Task {
+            await history.reload()
+            guard let reopen, let file = history.files.first(where: { $0.path == reopen }) else { return }
+            history.select(nil)
+            history.select(file)
+        }
+    }
+
+    /// 标签页关了：全部结束。
+    func closeAllRuns() {
+        newSessionPoll?.cancel()
+        newSessionPoll = nil
+        for run in runs.runs { dispose(run.id, run.terminal) }
+        _ = runs.removeAll()
+    }
+
+    /// 关标签页前问：里面还有没有程序在跑。有一个在跑就按它问。
+    func foregroundActivity() async -> TerminalActivity {
+        for term in runTerminals {
+            let activity = await term.controller.foregroundActivity()
+            if activity != .idle { return activity }
+        }
+        return .idle
+    }
+
+    // MARK: 新会话对上记录
+
+    /// 隔多久去主机上看一眼新会话的记录有没有写出来。
+    nonisolated static var newSessionPollInterval: Duration { .seconds(6) }
+
+    func pollNewSessionsIfNeeded() {
+        guard newSessionPoll == nil, runs.hasUnmatchedNewSessions else { return }
+        newSessionPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.newSessionPollInterval)
+                guard let self, !Task.isCancelled else { return }
+                await self.matchNewSessions()
+                guard self.runs.hasUnmatchedNewSessions else { break }
+            }
+            self?.newSessionPoll = nil
+        }
+    }
+
+    /// 去主机上看新会话的记录写出来没有：只看对应工具最近的几个项目里、比 run 起来晚的那些（读它们的末尾拿工作目录），
+    /// 交给 `CodeRunBoard.reconcile` 认领。不碰列表本身（列表重读会闪），认下来后读一下标题给「正在运行」那一行。
+    func matchNewSessions() async {
+        guard let history = connection.history else { return }
+        let waiting = runs.runs.filter { $0.isNewSession && $0.isRunning }
+        guard let earliest = waiting.map(\.startedAt).min() else { return }
+        let since = earliest.addingTimeInterval(-CodeRunBoard<TermTab>.matchSlack)
+        var candidates: [CodeRunBoard<TermTab>.Candidate] = []
+        var found: [String: (file: AgentHistorySessionFile, source: any AgentHistorySource)] = [:]
+        for tool in Set(waiting.map(\.tool)) {
+            guard let source = history.source(for: tool), let projects = try? await source.projects() else { continue }
+            let recent = projects.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }.prefix(4)
+            for file in await source.allSessions(in: Array(recent)) where file.modifiedAt >= since {
+                let directory: String?
+                if let known = file.project.directory {
+                    directory = known
+                } else {
+                    directory = (try? await source.metadata(for: file))?.resumeDirectory
+                }
+                candidates.append(.init(path: file.path, sessionID: file.sessionID, tool: tool, directory: directory,
+                                        modifiedAt: file.modifiedAt))
+                found[file.path] = (file, source)
+            }
+        }
+        for id in runs.reconcile(candidates) {
+            guard let path = runs.run(id: id)?.sessionPath, let hit = found[path] else { continue }
+            if let title = (try? await hit.source.metadata(for: hit.file))?.title { runTitles[id] = title }
+        }
+    }
+}

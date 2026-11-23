@@ -4,6 +4,7 @@ import SwiftUI
 /// 重新打开 App 后要恢复的终端标签。
 ///
 /// 只记直连主机、还没断开的终端标签：主机的 id 加主机上那个会话的 id（远控标签跟着 Mac 走，文件标签重新打开就是了）。
+/// Code 标签页本身不记；它里面跑着的直连会话按终端标签页记（排在 Code 标签页的位置上），重新打开后以普通终端标签页接回。
 /// App 被系统结束、被用户划掉都不走关标签的流程，主机上的会话还在跑；重新打开时凭这张表把标签开回来，
 /// `PersistentSSHConnection` 用原来的会话 id 接回同一个 shell，画面从存在主机上的检查点还原。
 /// 关标签会从表里拿掉（主机上的会话也随之结束）。只存在本机，不同步。
@@ -43,11 +44,24 @@ extension MobileWorkspace {
         let activeID = activeTab?.id
         for pane in panes {
             for tab in tabs(in: pane) {
-                guard case .terminal(let term) = tab, term.remote == nil,
-                      term.controller.state != .disconnected,
-                      !term.host.isDeleted, term.host.modelContext != nil else { continue }
-                if tab.id == activeID { archive.activeIndex = archive.tabs.count }
-                archive.tabs.append(.init(hostID: term.host.id, sessionID: term.controller.hostSessionID))
+                let terms: [TermTab]
+                // Code 标签页在前台时，前台算它此刻看着的那个会话（没有就算它的第一个）。
+                var front: TermTab?
+                switch tab {
+                case .terminal(let term):
+                    terms = [term]
+                    front = term
+                case .history(let code):
+                    terms = code.runTerminals
+                    front = code.runs.focused?.terminal ?? terms.first
+                case .files, .preview:
+                    continue
+                }
+                for term in terms where term.remote == nil && term.controller.state != .disconnected
+                    && !term.host.isDeleted && term.host.modelContext != nil {
+                    if tab.id == activeID, term === front { archive.activeIndex = archive.tabs.count }
+                    archive.tabs.append(.init(hostID: term.host.id, sessionID: term.controller.hostSessionID))
+                }
             }
         }
         archive.showsWorkspace = showsWorkspace && !archive.tabs.isEmpty

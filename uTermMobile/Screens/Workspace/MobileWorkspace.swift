@@ -100,7 +100,8 @@ enum MWorkTab: Identifiable {
     }
 
     /// 关闭后的收尾（连接已关）：收键盘、停 Agent 在途任务。主机被删时整批收标签也要走这一步，
-    /// 否则 Agent 的模型流和工具循环还会对着已删除的主机跑命令。
+    /// 否则 Agent 的模型流和工具循环还会对着已删除的主机跑命令。Code 标签页里的会话在 `shutdown`（`close`）里
+    /// 已经一个个收过了。
     func disposeSession() {
         guard case .terminal(let t) = self else { return }
         t.controller.resignKeyboard()
@@ -114,6 +115,7 @@ enum MWorkTab: Identifiable {
         case .terminal(let t): t.controller.close()
         case .files(let f): f.controller.close()
         case .preview(let p): p.controller.close()
+        // Code 标签页：里面跑着的会话一起结束。
         case .history(let h): h.close()
         }
     }
@@ -182,6 +184,39 @@ final class MobileWorkspace {
     var isEmpty: Bool { tabs.isEmpty }
     var isSplit: Bool { panes.count > 1 }
     var terminalTabs: [TermTab] { tabs.compactMap(\.terminal) }
+
+    /// 全部活终端连同它所在的格：终端标签页，加上 Code 标签页里跑着的会话（`ClaudeHistoryTab.runs`）。
+    /// 键盘归属、实时活动、归档按它算，Code 标签页里的会话照终端标签页那样算。
+    var allTerminals: [(term: TermTab, paneID: UUID)] {
+        var result: [(TermTab, UUID)] = []
+        for pane in panes {
+            for tab in tabs(in: pane) {
+                switch tab {
+                case .terminal(let term): result.append((term, pane.id))
+                case .history(let code): result += code.runTerminals.map { ($0, pane.id) }
+                case .files, .preview: break
+                }
+            }
+        }
+        return result
+    }
+
+    /// 带到前台：终端标签页直接切过去；Code 标签页里的会话切到那个标签页、详情换成它的终端（深链接、通知用）。
+    /// 找不到返回 false。
+    @discardableResult
+    func revealTerminal(_ id: UUID) -> Bool {
+        if tab(id) != nil {
+            activate(id)
+            return true
+        }
+        for code in tabs.compactMap(\.history) {
+            guard let run = code.runs.runs.first(where: { $0.terminal.id == id }) else { continue }
+            activate(code.id)
+            code.focusRun(run.id)
+            return true
+        }
+        return false
+    }
 
     var focusedPane: MPane { panes.first { $0.id == focusedPaneID } ?? panes[0] }
     /// 当前活动标签 = 聚焦格的前台标签（键盘、Agent 自动执行都只认它）。
@@ -259,6 +294,19 @@ final class MobileWorkspace {
         open(.history(history))
         history.start()
         return history
+    }
+
+    /// 终端标签长按「历史会话」：切到 / 新开这台主机（远控标签是那台 Mac）的 Code 标签页，开在聚焦格；直连主机定位到
+    /// 终端当前目录那一组（已经开着的再定位一次，可能已经滚走、折起来了）。不能读历史会话的标签（体验主机、老版本的 Mac）返回 nil。
+    @discardableResult
+    func showCode(for term: TermTab, container: ModelContainer) -> ClaudeHistoryTab? {
+        guard term.offersClaudeHistory else { return nil }
+        if let remote = term.remote { return openHistory(ClaudeHistoryTab(pairedMac: remote.client)) }
+        let directory = term.claudeHistoryDirectory
+        let fresh = ClaudeHistoryTab(server: term.host, directory: directory, container: container)
+        let opened = openHistory(fresh)
+        if opened !== fresh { opened.reveal(directory: directory) }
+        return opened
     }
 
     /// 接管一台 Mac：每个终端一个标签，开在聚焦格末尾，`focus` 放到前台。之后它新开的终端由 `follow` 接上。
@@ -389,10 +437,10 @@ final class MobileWorkspace {
     /// 是收着的、没连上、视图还没进窗口）就和以前一样：别的标签当场收键盘，之后由调用方再聚焦一次。
     @discardableResult
     func handKeyboard(to owner: TermTab?) -> Bool {
-        let terminals = terminalTabs
-        for term in terminals {
-            guard let pane = paneIndex(containing: term.id) else { continue }
-            term.controller.keyboardIntent = keyboardIntent(forPane: panes[pane].id)
+        let placed = allTerminals
+        let terminals = placed.map(\.term)
+        for (term, paneID) in placed {
+            term.controller.keyboardIntent = keyboardIntent(forPane: paneID)
         }
         if let owner, terminals.contains(where: { $0 !== owner && $0.controller.keyboardShown }) {
             owner.controller.ownsKeyboard = true

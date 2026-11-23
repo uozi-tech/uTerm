@@ -30408,6 +30408,34 @@
         }
       }
     },
+    "回到记录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to Transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録に戻る"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록으로 돌아가기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到記錄"
+          }
+        }
+      }
+    },
     "回到这次运行" : {
       "localizations" : {
         "en" : {
@@ -57731,6 +57759,35 @@
         }
       }
     },
+    "正在运行" : {
+      "comment" : "Code 标签页列表顶上：在这个标签页里继续着的会话",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 중"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在執行"
+          }
+        }
+      }
+    },
     "正在运行 %@。会在「%@」上下载、校验后替换并重启，新版本起不来会自动换回。" : {
       "localizations" : {
         "en" : {
@@ -63806,6 +63863,34 @@
         }
       }
     },
+    "移到新标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to New Tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいタブに移動"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 탭으로 이동"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到新分頁"
+          }
+        }
+      }
+    },
     "移动" : {
       "comment" : "操作名，接在「…失败：原因」前",
       "localizations" : {
@@ -64084,6 +64169,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "移除這次執行"
+          }
+        }
+      }
+    },
+    "程序已退出" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Program exited"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プログラムが終了しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로그램이 종료됨"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "程式已結束"
           }
         }
       }
@@ -66720,6 +66833,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "經中繼聯絡 Mac"
+          }
+        }
+      }
+    },
+    "结束会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションを終了"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 종료"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結束工作階段"
           }
         }
       }
@@ -70060,6 +70201,35 @@
         }
       }
     },
+    "记录" : {
+      "comment" : "Code 标签页：看这个会话的对话记录（只读）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記錄"
+          }
+        }
+      }
+    },
     "记录目录 %@（对不上工作目录）" : {
       "localizations" : {
         "en" : {
@@ -72763,6 +72933,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "執行中"
+          }
+        }
+      }
+    },
+    "运行中 · %@" : {
+      "comment" : "Code 标签页：会话正在跑，后面是工作目录的名字",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中 · %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 중 · %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "執行中 · %@"
           }
         }
       }

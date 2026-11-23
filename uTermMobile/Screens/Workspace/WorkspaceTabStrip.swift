@@ -40,6 +40,20 @@ final class MTabCloseFlow {
 
     func request(_ tab: MWorkTab, close: @escaping (UUID) -> Void) {
         let id = tab.id
+        // Code 标签页：里面有会话在跑就照终端标签页问一句（确认后里面的会话一起结束）。
+        if let code = tab.history, !code.runTerminals.isEmpty {
+            let tabName = tab.title
+            Task {
+                await probe.probe(id, tabName: tabName, activity: { await code.foregroundActivity() }) { prompt in
+                    if let prompt {
+                        pending = MTabClosePrompt(tabID: id, kind: .busy(prompt))
+                    } else {
+                        close(id)
+                    }
+                }
+            }
+            return
+        }
         guard let term = tab.terminal else {
             close(id)
             return
@@ -92,7 +106,7 @@ struct WorkspaceTabStrip: View {
     var onSelect: (UUID) -> Void
     var onClose: (UUID) -> Void
     var onNew: (MConnectKind) -> Void
-    /// 「+」菜单里的「历史会话」：选一台主机打开它的历史会话标签。nil = 不出这一项。
+    /// 「+」菜单里的「Code」：选一台主机打开它的 Code 标签页。nil = 不出这一项。
     var onNewHistory: (() -> Void)? = nil
     /// 终端标签长按菜单里的「历史会话」：打开这个标签那台主机（那台 Mac）的历史会话。
     var onOpenHistory: (UUID) -> Void = { _ in }
@@ -197,7 +211,9 @@ struct WorkspaceTabStrip: View {
             Button { onNew(.terminal) } label: { Label("新建终端", systemImage: MGlyph.symbol("term")) }
             Button { onNew(.sftp) } label: { Label("浏览文件", systemImage: MGlyph.symbol("folder")) }
             if let onNewHistory {
-                Button(action: onNewHistory) { Label("历史会话", systemImage: MGlyph.symbol("clock")) }
+                Button(action: onNewHistory) {
+                    Label { Text(verbatim: "Code") } icon: { Image(systemName: MGlyph.symbol("code")) }
+                }
             }
         } label: {
             MIcon(name: "plus", size: inStatusRow ? 16 : 14, color: M.text2, weight: .semibold)
@@ -402,7 +418,9 @@ struct WorkspaceTabChip: View {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")
                 }
             }
-            if case .terminal = tab, let keepAlive = activityCenter?.keepAlive, keepAlive.isSupported {
+            // Code 标签页里有会话在跑时同样可以「离开后继续运行」。
+            if tab.terminal != nil || !(tab.history?.runTerminals.isEmpty ?? true),
+               let keepAlive = activityCenter?.keepAlive, keepAlive.isSupported {
                 TerminalKeepAliveMenu(keepAlive: keepAlive)
             }
             Button(role: .destructive, action: onClose) { Label("关闭", systemImage: "xmark") }
@@ -412,20 +430,25 @@ struct WorkspaceTabChip: View {
         .accessibilityAddTraits(activity == .active ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// 标题前的类型图标：终端是常态不放；文件浏览、预览、历史会话各一个。
+    /// 标题前的类型图标：终端是常态不放；文件浏览、预览、Code 各一个。
     private var kindIcon: String? {
         switch tab {
         case .terminal: return nil
         case .files: return "folder"
         case .preview: return "file"
-        case .history: return "clock"
+        case .history: return "code"
         }
     }
 
-    /// 终端里程序（Claude Code、Codex……）的状态；文件浏览没有。
+    /// 终端里程序（Claude Code、Codex……）的状态；文件浏览没有。Code 标签页取里面跑着的会话里最要人处理的那条。
     private var programStatus: ProgramStatusRecord? {
-        if case .terminal(let t) = tab { return t.programStatus }
-        return nil
+        switch tab {
+        case .terminal(let t): return t.programStatus
+        case .history(let code):
+            let statuses = code.runTerminals.compactMap(\.programStatus)
+            return statuses.first { $0.tone == .needsAttention } ?? statuses.first
+        case .files, .preview: return nil
+        }
     }
 
     /// 状态点：程序有状态时说程序（含义与配色同 mac 的标签），否则说连接——终端看 SSH 会话，文件浏览看 SFTP 会话。

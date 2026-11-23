@@ -114,10 +114,23 @@ final class TerminalActivityCenter {
         }
     }
 
+    /// 终端标签页，加上 Code 标签页里跑着的会话（照终端标签页那样算；深链接带的是那个会话终端的 id，
+    /// 打开时由 `MobileWorkspace.revealTerminal` 找回它所在的 Code 标签页）。
     static func entries(in workspace: MobileWorkspace) -> [TerminalActivityEntry] {
-        workspace.tabs.compactMap { tab in
-            guard let terminal = tab.terminal, let status = terminal.programStatus else { return nil }
-            return TerminalActivityEntry(tabID: terminal.id, title: tab.title, host: tab.hostName, status: status)
+        workspace.tabs.flatMap { tab -> [TerminalActivityEntry] in
+            switch tab {
+            case .terminal(let terminal):
+                guard let status = terminal.programStatus else { return [] }
+                return [TerminalActivityEntry(tabID: terminal.id, title: tab.title, host: tab.hostName, status: status)]
+            case .history(let code):
+                return code.runs.runs.compactMap { run in
+                    guard let status = run.terminal.programStatus else { return nil }
+                    return TerminalActivityEntry(tabID: run.terminal.id, title: code.title(of: run), host: tab.hostName,
+                                                 status: status)
+                }
+            case .files, .preview:
+                return []
+            }
         }
     }
 
@@ -352,7 +365,7 @@ final class TerminalActivityCenter {
         if let top = pushed?.rows.first {
             return (busy, "\(top.program) · \(top.status) — \(top.title)")
         }
-        let count = workspace?.terminalTabs.filter { $0.controller.state == .connected }.count ?? 0
+        let count = workspace?.allTerminals.filter { $0.term.controller.state == .connected }.count ?? 0
         return (busy, String(localized: "\(count) 个终端保持连接"))
     }
 
@@ -428,7 +441,7 @@ struct TerminalActivityLinkHandler: ViewModifier {
             .onChange(of: center.pendingOpen) { _, request in
                 guard let request else { return }
                 center.pendingOpen = nil
-                if let tabID = request.tabID, workspace.tab(tabID) != nil { workspace.activate(tabID) }
+                if let tabID = request.tabID { workspace.revealTerminal(tabID) }
                 if !workspace.isEmpty { store.showWorkspace = true }
             }
     }

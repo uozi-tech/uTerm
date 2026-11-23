@@ -55,6 +55,7 @@ enum MGlyph {
         case "link":       return "link"
         case "globe":      return "globe"
         case "clock":      return "clock"
+        case "code":       return "chevron.left.forwardslash.chevron.right"
         case "person":     return "person"
         case "eye":        return "eye"
         case "eye-off":    return "eye.slash"
