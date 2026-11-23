@@ -99,14 +99,30 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(made.count, 1)
     }
 
-    func testTerminalAndRecordToggle() async throws {
+    /// 终端顶上「⋯」菜单的「查看记录」，与记录标题行上换成的「返回终端」（它走「继续这个会话」同一个动作）。
+    func testViewRecordAndBackToTerminal() async throws {
         let (code, history, _) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 60)])
-        let run = try XCTUnwrap(code.resume(try file(history, "a")))
+        let a = try file(history, "a")
+        let run = try XCTUnwrap(code.resume(a))
         code.setShowsTranscript(true, for: run.id)
-        XCTAssertEqual(code.detail, .transcript, "切到「记录」")
-        XCTAssertEqual(code.displayedRun?.id, run.id, "顶上那条还是这个跑着的会话")
-        code.setShowsTranscript(false, for: run.id)
+        XCTAssertEqual(code.detail, .transcript, "「查看记录」")
+        XCTAssertEqual(code.run(for: a.path)?.id, run.id, "还在跑：记录标题行上是「返回终端」")
+        XCTAssertNil(code.displayedTerminal)
+
+        XCTAssertEqual(code.resume(a)?.id, run.id, "「返回终端」不再起一个")
         XCTAssertEqual(code.detail, .terminal(run.id))
+        XCTAssertEqual(made.count, 1)
+
+        code.setShowsTranscript(true, for: run.id)
+        code.setShowsTranscript(false, for: run.id)
+        XCTAssertEqual(code.detail, .terminal(run.id), "菜单里的「返回终端」")
+    }
+
+    func testNewSessionHasNoRecordToView() async throws {
+        let (code, _, _) = await makeCode(sessions: [])
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
+        code.setShowsTranscript(true, for: run.id)
+        XCTAssertEqual(code.detail, .terminal(run.id), "没对上记录的新会话没有记录可看")
     }
 
     func testRunEndsWhenTheProgramExitsAndTheRecordComesBack() async throws {

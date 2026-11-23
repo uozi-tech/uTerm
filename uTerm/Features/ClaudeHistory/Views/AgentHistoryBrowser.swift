@@ -84,6 +84,8 @@ struct AgentHistorySelectPrompt: View {
 struct AgentHistoryTranscriptStack: View {
     let history: AgentHistoryModel
     let onResume: (AgentHistorySessionFile) -> Void
+    /// 这个会话正在 Code 标签页里跑着：「继续这个会话」的位置换成「返回终端」（`onResume` 回到它的终端）。
+    var isRunning: (AgentHistorySessionFile) -> Bool = { _ in false }
 
     var body: some View {
         if let transcript = history.transcript {
@@ -95,6 +97,7 @@ struct AgentHistoryTranscriptStack: View {
                     AgentTranscriptPane(transcript: level,
                                         metadata: history.metadata[level.file.path],
                                         canResume: history.resumeCommand(for: level.file) != nil,
+                                        isRunning: level.subagent == nil && isRunning(level.file),
                                         onResume: { onResume(level.file) },
                                         onBack: level.subagent == nil ? nil : { history.closeSubagent() },
                                         onOpenSubagent: { history.openSubagent($0) },
@@ -119,7 +122,7 @@ struct AgentHistorySessionList: View {
     var reveal: AgentHistoryReveal? = nil
     /// Code 标签页里跑着的会话：列在顶上，列表里对应的行标成「运行中」。
     var running: AgentHistoryRunning? = nil
-    /// 收起侧栏（Code 标签页）；nil = 不出这个按钮。
+    /// 收起侧栏（Code 标签页，放在菜单里）；nil = 菜单里不出这一项。
     var onCollapse: (() -> Void)? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
@@ -164,18 +167,8 @@ struct AgentHistorySessionList: View {
     private var header: some View {
         @Bindable var history = history
         return VStack(alignment: .leading, spacing: 4) {
+            // 只留三样：搜索框、「＋」、菜单。刷新、收起侧栏不常用，收进菜单，搜索框拿到这些宽度。
             HStack(spacing: 2) {
-                if let onCollapse {
-                    Button(action: onCollapse) {
-                        Image(systemName: "sidebar.left")
-                            .frame(width: 26, height: 26)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.udPlain)
-                    .iconButtonHover(cornerRadius: 6)
-                    .help(String(localized: "收起侧栏", comment: "Code 标签页：收起左边的会话列表"))
-                    .accessibilityLabel(Text("收起侧栏", comment: "Code 标签页：收起左边的会话列表"))
-                }
                 UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
                               showsHotkeyChip: false)
                     .onSubmit { history.submitSearch() }
@@ -183,18 +176,8 @@ struct AgentHistorySessionList: View {
                     .padding(.trailing, 4)
                 if let newSession { newSessionButton(newSession) }
                 optionsMenu
-                Button {
-                    Task { await history.reload() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: 26, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.udPlain)
-                .iconButtonHover(cornerRadius: 6)
-                .help(String(localized: "刷新"))
-                .accessibilityLabel(Text("刷新"))
             }
+            .frame(height: Self.controlRowHeight)
             if let problem = history.searchProblem {
                 Text(AgentHistoryText.searchProblem(problem))
                     .font(.system(size: 11))
@@ -202,9 +185,15 @@ struct AgentHistorySessionList: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(minHeight: WorkspacePaneHeaderLayout.height)
+        .padding(.vertical, Self.headerVerticalPadding)
+        .frame(minHeight: Self.headerHeight)
     }
+
+    /// 顶上那一行控件的高度（搜索框的高度）。
+    static let controlRowHeight: CGFloat = 32
+    static let headerVerticalPadding: CGFloat = 6
+    /// 列表顶部那一行的高度（不算分隔线）。Code 标签页右边跑着的会话顶上那一条与它等高，中间的竖线上下贯通。
+    static let headerHeight: CGFloat = controlRowHeight + headerVerticalPadding * 2
 
     /// 「＋」：能新开的工具不止一种时先选工具，只有一种就直接开。
     @ViewBuilder private func newSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
@@ -280,6 +269,11 @@ struct AgentHistorySessionList: View {
             Button(String(localized: "恢复默认")) {
                 groupingRaw = AgentHistoryGrouping.default.rawValue
                 shownToolsRaw = ""
+            }
+            Divider()
+            Button(String(localized: "刷新")) { Task { await history.reload() } }
+            if let onCollapse {
+                Button(String(localized: "收起侧栏", comment: "Code 标签页：收起左边的会话列表"), action: onCollapse)
             }
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
@@ -726,6 +720,8 @@ struct AgentTranscriptPane: View {
     let transcript: AgentTranscriptModel
     let metadata: AgentHistorySessionMetadata?
     let canResume: Bool
+    /// 这个会话正在 Code 标签页里跑着：按钮是「返回终端」。
+    var isRunning = false
     let onResume: () -> Void
     /// 子代理的记录：回到上一层。主对话为 nil。
     var onBack: (() -> Void)? = nil
@@ -809,7 +805,11 @@ struct AgentTranscriptPane: View {
             .frame(width: 28, height: 26)
             .help(String(localized: "拷贝"))
             // 子代理的记录只读：不能单独继续。
-            if transcript.subagent == nil {
+            if transcript.subagent == nil, isRunning {
+                UDButton(title: String(localized: "返回终端"), systemImage: "terminal", action: onResume)
+                    .help(String(localized: "这个会话正在这个标签页里运行，回到它的终端",
+                                 comment: "Code 标签页：看记录时回到正在跑的那个终端"))
+            } else if transcript.subagent == nil {
                 UDButton(title: String(localized: "继续这个会话"), systemImage: "play.fill", action: onResume)
                     .disabled(!canResume)
                     .help(AgentHistoryText.resumeHelp(transcript.file.tool, canResume: canResume))

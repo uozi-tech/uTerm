@@ -23,6 +23,11 @@ extension UICatalog {
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login"))
             },
+            // 看着一个仍在跑的会话的记录：记录标题行上「继续这个会话」换成「返回终端」。
+            UICatalogEntry("终端窗口/Code 标签页_跑着的会话看记录", source: src, symbol: "AgentHistoryTranscriptStack",
+                           size: size) { stage in
+                try await codeTabRender(stage, .init(running: ["c-login"], showsRun: "c-login", showsRecord: true))
+            },
             // 还没对上记录的新会话：「正在运行」里一行「新会话」，右边是它的终端。
             UICatalogEntry("终端窗口/Code 标签页_新会话", source: src, symbol: "CodeTabModel", size: size,
                            live: true) { stage in
@@ -95,6 +100,8 @@ extension UICatalog {
         var newSession = false
         var sidebarHidden = false
         var overlay = false
+        /// 跑着的那个会话切到「查看记录」。
+        var showsRecord = false
     }
 
     /// SSH 终端窗口：一个终端标签页 + 一个 Code 标签页（前台）。
@@ -166,6 +173,12 @@ extension UICatalog {
         // 继续会把右边换成那个会话：要看的不是它就选回去。
         if let id = setup.showsRun, let file = history.files.first(where: { $0.sessionID == id }) {
             history.select(file)
+            if setup.showsRecord, let run = code.run(for: file.path) {
+                code.setShowsTranscript(true, for: run.id)
+                for _ in 0..<100 where history.transcript?.reachedStart != true {
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+            }
         } else if !setup.newSession {
             history.select(selected)
             for _ in 0..<100 where selected != nil && history.transcript?.reachedStart != true {

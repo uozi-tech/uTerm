@@ -128,10 +128,9 @@ private struct CodeTabBrowser: View {
         case .empty:
             AgentHistorySelectPrompt(history: history)
         case .transcript:
-            VStack(spacing: 0) {
-                if let run = code.displayedRun { runHeader(run) }
-                AgentHistoryTranscriptStack(history: history) { file in code.resume(file) }
-            }
+            // 看着一个仍在跑的会话的记录：不另加一条，记录标题行上「继续这个会话」换成「返回终端」。
+            AgentHistoryTranscriptStack(history: history, onResume: { file in code.resume(file) },
+                                        isRunning: { code.run(for: $0.path) != nil })
         case .terminal(let id):
             if let run = code.runs.first(where: { $0.id == id }) {
                 VStack(spacing: 0) {
@@ -144,7 +143,8 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 跑着的会话顶上那一条：工具、标题、「运行中」，右边「终端 / 记录」与「挪到新标签页」。
+    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、挪到新标签页）。
+    /// 右边显示着终端本身就说明在跑，不再写「运行中」。与侧栏顶部那一行等高，中间的竖线上下贯通。
     private func runHeader(_ run: CodeTabModel.Run) -> some View {
         let title = code.runningRows().first { $0.id == run.id }?.title ?? AgentHistoryText.newSession
         return VStack(spacing: 0) {
@@ -155,33 +155,48 @@ private struct CodeTabBrowser: View {
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .layoutPriority(-1)
-                AgentHistoryRunningTag()
                 Spacer(minLength: 8)
-                if run.path != nil {
-                    UDSegmented(
-                        selection: Binding(get: { run.showsTranscript }, set: { code.setShowsTranscript($0, for: run.id) }),
-                        options: [(false, String(localized: "终端", comment: "终端 / Agent 模式切换")),
-                                  (true, String(localized: "记录", comment: "Code 标签页：看这个会话的对话记录"))],
-                        labelFont: UD.font(11.5, weight: .medium))
-                        .fixedSize()
-                }
-                if let onMoveToTab {
-                    Button { onMoveToTab(run.id) } label: {
-                        Image(systemName: "arrow.up.forward.app")
-                            .frame(width: 26, height: 26)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.udPlain)
-                    .iconButtonHover(cornerRadius: 6)
-                    .help(String(localized: "挪到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页"))
-                    .accessibilityLabel(Text("挪到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页"))
-                }
+                runMenu(run)
             }
-            .padding(.horizontal, 12)
-            .frame(height: WorkspacePaneHeaderLayout.height)
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .frame(height: AgentHistorySessionList.headerHeight)
             Rectangle().fill(UD.border).frame(height: 1)
         }
+    }
+
+    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「挪到新标签页」。没对上记录的新会话没有记录可看。
+    @ViewBuilder private func runMenu(_ run: CodeTabModel.Run) -> some View {
+        let showsRecord = code.detail == .transcript
+        if run.path != nil || onMoveToTab != nil {
+            Menu {
+                if run.path != nil {
+                    Button(showsRecord ? String(localized: "返回终端") : Self.viewRecord) {
+                        code.setShowsTranscript(!showsRecord, for: run.id)
+                    }
+                }
+                if let onMoveToTab {
+                    Button(Self.moveToTab) { onMoveToTab(run.id) }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .iconButtonHover(cornerRadius: 6)
+            .help(String(localized: "更多"))
+            .accessibilityLabel(Text("更多"))
+        }
+    }
+
+    private static var viewRecord: String {
+        String(localized: "查看记录", comment: "Code 标签页：看这个正在跑的会话的对话记录")
+    }
+
+    private static var moveToTab: String {
+        String(localized: "挪到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
     }
 }
 
@@ -201,7 +216,7 @@ private struct CodeTabRail: View {
             .iconButtonHover(cornerRadius: 6)
             .help(String(localized: "展开侧栏", comment: "Code 标签页：展开左边的会话列表"))
             .accessibilityLabel(Text("展开侧栏", comment: "Code 标签页：展开左边的会话列表"))
-            .frame(height: WorkspacePaneHeaderLayout.height)
+            .frame(height: AgentHistorySessionList.headerHeight)
             if runningCount > 0 {
                 Button(action: expand) {
                     VStack(spacing: 3) {
