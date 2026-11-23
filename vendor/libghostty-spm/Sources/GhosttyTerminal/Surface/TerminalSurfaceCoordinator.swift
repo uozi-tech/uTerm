@@ -210,9 +210,18 @@ final class TerminalSurfaceCoordinator {
             return
         }
         pendingImmediateTick = true
-        if syncDraw || (Self.wakeupDrawsSynchronously && !wakeupDefersSyncDraw()) { pendingSyncDraw = true }
+        // uTerm 本地补丁：系统滚动动着时，引擎 wakeup 的 tick 不 refresh——滚动的每一步引擎自己排了重画，这里再 refresh 就是
+        // 同一个位置多画一帧（Duo 实测高速减速时九成的帧出两次），白占渲染线程和 GPU，拖长下一步那一帧画完的时间。
+        // 欠下的一次在滚动停下后补（`tick` 的空转分支）。
+        let moving = !syncDraw && wakeupDefersSyncDraw()
+        if moving { owesRefresh = true } else { pendingRefresh = true }
+        if syncDraw || (Self.wakeupDrawsSynchronously && !moving) { pendingSyncDraw = true }
         ensureDisplayLink()
     }
+
+    /// uTerm 本地补丁：下一次 tick 要不要 refresh；滚动途中欠下的一次 refresh。
+    private var pendingRefresh = true
+    private var owesRefresh = false
 
     /// uTerm 本地补丁：这次 wakeup 不开 display link（iOS 的视图在系统滚动动着时返回 true，`UTermScrollTrace.scrollWakeupSyncDraw`
     /// 为 `.deferWhileMoving` 时）。link 一开就按 120 Hz 要帧：UIKit 的减速慢下来以后自己降到 60 Hz，每跨一行的 wakeup 把屏幕
@@ -261,6 +270,12 @@ final class TerminalSurfaceCoordinator {
             if Self.wakeupDrawsSynchronously, !wakeupDefersSyncDraw() { pendingSyncDraw = true }
             ensureDisplayLink()
         }
+    }
+
+    /// uTerm 本地补丁：滚动动着，display link 续上（没在跑就起来，空转计数清零）。link 自己不画东西，只是把屏幕留在
+    /// 120 Hz；最后一次调用之后空转 `idleFramesBeforeRelease` 帧照常停。
+    func holdDisplayLinkForMotion() {
+        ensureDisplayLink()
     }
 
     func stopDisplayLink() {
@@ -645,6 +660,11 @@ final class TerminalSurfaceCoordinator {
             return
         }
         guard pendingImmediateTick else {
+            // uTerm 本地补丁：滚动途中欠下的 refresh，停下之后补上。
+            if owesRefresh, !wakeupDefersSyncDraw() {
+                owesRefresh = false
+                surface?.refresh()
+            }
             idleFrameCount += 1
             if idleFrameCount >= Self.idleFramesBeforeRelease {
                 releaseDisplayLink()
@@ -658,9 +678,13 @@ final class TerminalSurfaceCoordinator {
         var mark = UTermScrollTrace.mark()
         controller?.tick()
         UTermScrollTrace.span("tick-app", since: mark)
-        mark = UTermScrollTrace.mark()
-        surface?.refresh()
-        UTermScrollTrace.span("tick-refresh", since: mark)
+        if pendingRefresh {
+            pendingRefresh = false
+            owesRefresh = false
+            mark = UTermScrollTrace.mark()
+            surface?.refresh()
+            UTermScrollTrace.span("tick-refresh", since: mark)
+        }
         if pendingSyncDraw {
             pendingSyncDraw = false
             mark = UTermScrollTrace.mark()

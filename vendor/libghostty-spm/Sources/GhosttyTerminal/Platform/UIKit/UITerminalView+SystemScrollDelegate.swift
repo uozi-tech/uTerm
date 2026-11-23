@@ -54,6 +54,8 @@
             func systemScrollDidScroll(_ scrollView: UIScrollView) {
                 guard scrollView === systemScroll.driver, !systemScroll.isSyncing,
                       let (mapping, position) = systemScrollMapping() else { return }
+                // uTerm 本地补丁：滚动动着时把 display link 续上，屏幕留在 120 Hz（见 `ScrollWakeupSyncDraw.holdLink`）。
+                if UTermScrollTrace.scrollWakeupSyncDraw == .holdLink { core.holdDisplayLinkForMotion() }
                 let previousDidScroll = systemScroll.lastDidScroll
                 systemScroll.lastDidScroll = CACurrentMediaTime()
                 // uTerm 本地补丁：记下走的方向，给被手指按停之后的那次对齐用（`caughtDirection`）；以及速度（`speed`）。
@@ -74,12 +76,42 @@
                 // place the offset stands for.
                 let delta = position.pixels(to: mapping.enginePixels(offsetPixels: offsetPixels))
                 guard position.isAvailable, abs(delta) > 0.001 else { return }
-                surface?.smoothScroll(byPixels: delta)
+                // uTerm 本地补丁：带编号地滚（引擎补丁 0024），然后原地等带着这一步的那一帧交到图层，和 UIKit 这一拍一起提交。
+                surface?.smoothScrollTracked(byPixels: delta)
+                systemScrollWaitForFrame()
                 // uTerm 本地补丁：交给引擎的每一步给回归测试逐帧读（`UTermScrollTrace`，关着时不记）：
                 // 松手后的减速 / 回弹 / 对齐记 momentum，手指拖着记 drag，再记引擎此刻的行。
                 if UTermScrollTrace.isEnabled {
                     UTermScrollTrace.record(systemScrollInMotion ? "momentum" : "drag", Double(delta))
                     if let row = surface?.smoothScrollPosition()?.row { UTermScrollTrace.record("row", Double(row)) }
+                }
+            }
+
+            /// uTerm 本地补丁：位置刚交给引擎，原地等带着它的那一帧交到图层（见 `UTermScrollTrace.scrollSameFrameWaitMilliseconds`）。
+            /// 等到了：交帧块已经在主队列里，这一轮 run loop 接着跑它，和 UIKit 这一拍一起提交。没等到：这一帧照旧晚一拍上屏；
+            /// 连着 `scrollSameFrameWaitMissLimit` 帧没等到（渲染跟不上、同步输出挂起、surface 不可见）就歇一会儿不再等。
+            /// 时限从这一轮 run loop 醒来算起（`TerminalMainTurnClock`）：这一轮已经花掉的时间也在预算里。
+            private func systemScrollWaitForFrame() {
+                let budget = UTermScrollTrace.scrollSameFrameWaitMilliseconds
+                guard budget > 0, let surface else { return }
+                let start = CACurrentMediaTime()
+                guard start >= systemScroll.frameWaitSuspendedUntil else { return }
+                let deadline = TerminalMainTurnClock.turnStart + budget / 1000
+                while !surface.smoothScrollPresented() {
+                    if CACurrentMediaTime() >= deadline {
+                        systemScroll.frameWaitMisses += 1
+                        if systemScroll.frameWaitMisses >= UTermScrollTrace.scrollSameFrameWaitMissLimit {
+                            systemScroll.frameWaitMisses = 0
+                            systemScroll.frameWaitSuspendedUntil = CACurrentMediaTime() + UTermScrollTrace.scrollSameFrameWaitBackoff
+                        }
+                        UTermScrollTrace.record("frame-wait-timeout", (CACurrentMediaTime() - start) * 1000)
+                        return
+                    }
+                    usleep(50)
+                }
+                systemScroll.frameWaitMisses = 0
+                if UTermScrollTrace.isEnabled {
+                    UTermScrollTrace.record("frame-wait", (CACurrentMediaTime() - start) * 1000)
                 }
             }
 

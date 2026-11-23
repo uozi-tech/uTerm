@@ -245,7 +245,7 @@
                     guard let self, systemScroll.driver != nil else { return false }
                     // 只认「这会儿真在动」（`systemScrollMovedRecently`），静止时不管哪个标志卡住都照常同步重画。
                     switch UTermScrollTrace.scrollWakeupSyncDraw {
-                    case .deferWhileMoving, .deferDrawKeepLink: return systemScrollMovedRecently
+                    case .deferWhileMoving, .deferDrawKeepLink, .holdLink: return systemScrollMovedRecently
                     // `isTracking` / `isDragging` 在 UIKit 松手后的减速里还是 true，只认拖动手势本身。
                     case .deferWhileTouching: return momentumScroll.panIsActive && systemScrollMovedRecently
                     case .always: return false

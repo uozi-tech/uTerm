@@ -29,15 +29,37 @@ public enum UTermScrollTrace {
     }
 
     static func record(_ kind: String, _ value: Double) {
+        signpostTrace(kind, value, at: CACurrentMediaTime())
         lock.lock(); defer { lock.unlock() }
         guard enabled else { return }
         events.append(Event(time: CACurrentMediaTime(), kind: kind, value: value))
+    }
+
+    /// 宿主自己加的打点（真手录制时每次出帧读到的画面位置等），和库里的打点排在同一条时间线上；关着时不记。
+    public static func note(_ kind: String, _ value: Double) {
+        record(kind, value)
+    }
+
+    /// 宿主自己加的一段耗时（记在开始时刻，值是毫秒）；关着时不记。
+    public static func noteSpan(_ kind: String, start: Double, milliseconds: Double) {
+        lock.lock(); defer { lock.unlock() }
+        guard enabled else { return }
+        events.append(Event(time: start, kind: kind, value: milliseconds))
+    }
+
+    /// 真手录制时（`emitsSignposts`）每条打点也发一条 signpost `trace`（时刻、种类、值），xctrace 里就能把同步重画、
+    /// display link 起停、跨行对到玻璃上的每一帧；没在录时不发。
+    private static func signpostTrace(_ kind: String, _ value: Double, at time: Double) {
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %@ %.3f", time, kind, value)
+        glassSignposter.emitEvent("trace", "\(text, privacy: .public)")
     }
 
     /// 一段耗时：记在开始时刻，值是毫秒。`start` 用 `CACurrentMediaTime()`；关着时调用方传 0、这里直接返回。
     static func span(_ kind: String, since start: Double) {
         guard start > 0 else { return }
         let now = CACurrentMediaTime()
+        signpostTrace(kind, (now - start) * 1000, at: start)
         lock.lock(); defer { lock.unlock() }
         guard enabled else { return }
         events.append(Event(time: start, kind: kind, value: (now - start) * 1000))
@@ -45,6 +67,7 @@ public enum UTermScrollTrace {
 
     /// 打点起点：trace 开着时返回当前时刻，关着时返回 0（span 见 0 就不记）。
     static func mark() -> Double {
+        if isInstrumentsRecording { return CACurrentMediaTime() }
         lock.lock(); defer { lock.unlock() }
         return enabled ? CACurrentMediaTime() : 0
     }
@@ -78,9 +101,13 @@ public enum UTermScrollTrace {
         case deferWhileTouching = "touching"
         /// 一律同步重画（补丁 #20 之前）。
         case always = "always"
+        /// 滚动动着时不同步重画（同 `.deferWhileMoving`），并且每次 didScroll 都把自己的 display link 续上（120 Hz）：
+        /// 屏幕全程钉在 120 Hz，UIKit 的减速就不经过 80 Hz（8 / 17 ms 交替）那一段——画面固定晚一帧，帧间隔一不均匀，
+        /// 屏上的速度就忽快忽慢（Duo 真手实测 150–250 pt/s 那一段有一半的帧偏离 30% 以上）。
+        case holdLink = "hold"
     }
 
-    public static let defaultScrollWakeupSyncDraw = ScrollWakeupSyncDraw.deferWhileMoving
+    public static let defaultScrollWakeupSyncDraw = ScrollWakeupSyncDraw.holdLink
 
     /// `.deferWhileMoving` 下，系统滚动快于这个速度（点 / 秒）时引擎的 wakeup 仍然开 display link（屏幕留在 120 Hz，UIKit 每帧都写
     /// contentOffset），慢于它就不开、已经开着的当场停掉（屏幕跟 UIKit 的减速降到 60 Hz，不被 wakeup 拽回 120 Hz 两拍）。
@@ -89,11 +116,21 @@ public enum UTermScrollTrace {
     nonisolated(unsafe) public static var wakeupDisplayLinkMinimumSpeed = defaultWakeupDisplayLinkMinimumSpeed
     nonisolated(unsafe) public static var scrollWakeupSyncDraw = defaultScrollWakeupSyncDraw
 
+    /// 系统滚动每次把位置交给引擎之后，主线程原地等「带着这一步的那一帧交到图层」，最晚等到这一轮 run loop 醒来之后这么多毫秒（引擎补丁 0024 的
+    /// `smoothScrollPresented`）。渲染线程的交帧这时已经排进主队列，UIKit 这一拍的提交就带上它，画面不再比 UIKit 晚一帧
+    ///（Duo 实测上屏延迟 34.0 → 25.7 ms，和原生 UIKit 内容持平）。0 = 不等。连着 `scrollSameFrameWaitMissLimit` 帧没等到就歇 `scrollSameFrameWaitBackoff` 秒
+    ///（渲染跟不上、同步输出挂起、surface 不可见时别每帧都白等）。
+    public static let defaultScrollSameFrameWaitMilliseconds: Double = 6.5
+    nonisolated(unsafe) public static var scrollSameFrameWaitMilliseconds = defaultScrollSameFrameWaitMilliseconds
+    public static let scrollSameFrameWaitBackoff: Double = 0.25
+    public static let scrollSameFrameWaitMissLimit = 3
+
     /// 触摸的阶段（signpost `touch` 的第二个数）：0 按下、1 开始拖、2 抬起 / 取消。
     public enum TouchPhase: Int { case down = 0, dragBegan = 1, up = 2 }
 
     /// 触摸阶段：按「上玻璃」打分时把冻结归到按下未拖 / 拖动 / 松手后。
     static func signpostTouch(_ phase: TouchPhase) {
+        record("touch", Double(phase.rawValue))
         guard isInstrumentsRecording else { return }
         let text = String(format: "%.6f %d", CACurrentMediaTime(), phase.rawValue)
         glassSignposter.emitEvent("touch", "\(text, privacy: .public)")
@@ -103,6 +140,8 @@ public enum UTermScrollTrace {
     /// contentOffset（物理像素）、在不在减速、手指按没按着、视口归谁（恒为 1 = 系统滚动）、哪条路径动的（恒为 1 = didScroll）、
     /// 终端视图的编号（按对象取的短编号，分清多个标签）。字段顺序和换成上游的系统滚动之前一样，老脚本照读。
     static func signpostScrollOffset(px: Double, decelerating: Bool, tracking: Bool, view: ObjectIdentifier) {
+        // 真手录制（宿主 Debug 构建把打点写成文件）：每次 didScroll 的 contentOffset（物理像素），按阶段分种类。
+        record(tracking ? "offset-touch" : decelerating ? "offset-decel" : "offset-other", px)
         guard isInstrumentsRecording else { return }
         let text = String(format: "%.6f %.1f %d %d 1 1 %d", CACurrentMediaTime(), px, decelerating ? 1 : 0, tracking ? 1 : 0,
                           view.hashValue & 0xFFFF)
@@ -172,6 +211,19 @@ public enum UTermScrollTrace {
             let row = position?.row ?? core.bridge.scrollbar.map { Int($0.offset) } ?? 0
             return UTermScrollState(row: row, fraction: position?.fraction ?? 0,
                                     overscrollPixels: over, isGliding: gliding, isBouncing: bouncing)
+        }
+
+        /// uTerm 测试用（引擎补丁 0024 的端到端）：带编号地把视口挪 `pixels` 像素，原地等带着这一步的那一帧交到图层，
+        /// 返回等了多久（秒）；`timeout` 秒内没等到返回 nil。交帧的记号是渲染那一侧的线程写的，主线程原地等得到。
+        func uTermTrackedScrollPresentDelay(pixels: Double, timeout: Double) -> Double? {
+            guard let surface else { return nil }
+            let start = CACurrentMediaTime()
+            surface.smoothScrollTracked(byPixels: pixels)
+            while !surface.smoothScrollPresented() {
+                if CACurrentMediaTime() - start > timeout { return nil }
+                usleep(200)
+            }
+            return CACurrentMediaTime() - start
         }
 
         #if !targetEnvironment(macCatalyst)

@@ -68,6 +68,10 @@
             /// 取整（前方的一行），不往回：基准测量里「甩出去、按住、松开」原来会对齐到最近的一行，
             /// 一半的时候是逆着刚才的方向退回去（最多半行）。和 Mac 的 settler「惯性被触碰掐断时顺着方向补」同一条规则。
             var caughtDirection: CGFloat = 0
+            /// uTerm 本地补丁：等这一帧超时之后，到这个时刻（`CACurrentMediaTime()`）之前不再等（`systemScrollWaitForFrame`）。
+            var frameWaitSuspendedUntil: CFTimeInterval = 0
+            /// uTerm 本地补丁：连着几帧没等到。
+            var frameWaitMisses = 0
             /// Pixels the engine's position is ahead of the scroll view's:
             /// engine position = content offset (in pixels) + shift.
             ///
@@ -165,6 +169,7 @@
 
             func installSystemScrollDriver() {
                 guard systemScroll.driver == nil else { return }
+                TerminalMainTurnClock.install()
                 let driver = TerminalScrollDriverView(frame: bounds)
                 driver.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 driver.backgroundColor = .clear

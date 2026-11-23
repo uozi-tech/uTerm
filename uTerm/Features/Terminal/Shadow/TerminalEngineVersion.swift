@@ -9,7 +9,7 @@ import Foundation
 /// `engine_version` 一字不差——`TerminalEngineLockTests` 读那份清单来核，忘了改会失败。步骤见 `vendor/libghostty-spm/UTERM-PATCHES.md`。
 nonisolated enum TerminalEngineVersion {
     /// Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。
-    static let current = "ghostty-5ebe501a+p0023/snapshot-1"
+    static let current = "ghostty-5ebe501a+p0024/snapshot-1"
 }
 
 // 单独成文件、不依赖 GhosttyKit：远控进程（`uTermRemoteHost`）不链接终端引擎，也要知道 App 用的是哪个版本。

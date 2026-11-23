@@ -422,9 +422,10 @@ final class GhosttySlowDragFrameTests: XCTestCase {
 
     // MARK: 用例
 
-    /// 回归（不挂测量门，模拟器也跑）：手指拖着跨过好几行，引擎每跨一行的 wakeup 都不在主线程同步重画（`tick-draw` 0 次），
-    /// 慢于 `wakeupDisplayLinkMinimumSpeed` 时也不开 display link（`wakeup-deferred`），画面照样跟着走。
-    /// 补丁 #20：Duo 内屏上那次同步重画要等渲染线程手上那一帧（8.4 ms ≈ 一拍），每跨一行掉一帧。
+    /// 回归（不挂测量门，模拟器也跑）：手指拖着跨过好几行，引擎每跨一行的 wakeup 都不在主线程同步重画（`tick-draw` 0 次）、
+    /// 也不 refresh（`tick-refresh` 0 次：同一个位置不多画一帧），display link 全程续着不反复起停，画面照样跟着走。
+    /// 补丁 #20：Duo 内屏上那次同步重画要等渲染线程手上那一帧（8.4 ms ≈ 一拍），每跨一行掉一帧；link 按速度停的那一版
+    /// 减速尾段帧间隔 8 / 17 ms 交替、屏上速度忽快忽慢。
     func testDragAcrossRowsDoesNotSyncDraw() async throws {
         let ticker = EarlyTicker()
         ticker.start()
@@ -453,12 +454,16 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         let moving = (dragTimes.first ?? 0)...(dragTimes.last ?? 0)
         let draws = trace.filter { $0.kind == "tick-draw" && moving.contains($0.time) }.count
         let deferred = trace.filter { $0.kind == "wakeup-deferred" }.count
+        let refreshes = trace.filter { $0.kind == "tick-refresh" && moving.contains($0.time) }.count
+        let linkStarts = trace.filter { $0.kind == "link-start" && moving.contains($0.time) }.count
         print("SLOWDRAG-REGRESSION crossings=\(crossings) tick-draws=\(draws) (all \(trace.filter { $0.kind == "tick-draw" }.count)) wakeup-deferred=\(deferred) "
-            + "tick-app=\(trace.filter { $0.kind == "tick-app" }.count) drags=\(trace.filter { $0.kind == "drag" }.count)")
+            + "tick-refresh=\(refreshes) link-starts=\(linkStarts) tick-app=\(trace.filter { $0.kind == "tick-app" }.count) drags=\(trace.filter { $0.kind == "drag" }.count)")
         XCTAssertGreaterThanOrEqual(crossings, 5, "拖动没跨过几行，量的不是那条路径")
         XCTAssertEqual(draws, 0, "手指拖着时引擎的 wakeup 在主线程同步重画了")
-        // 150 pt/s 慢于 `wakeupDisplayLinkMinimumSpeed`：跨行的 wakeup 就地 refresh，不开 display link。
-        XCTAssertGreaterThanOrEqual(deferred, crossings / 2, "慢慢拖着时引擎的 wakeup 还在开 display link（会把屏幕拽回 120 Hz）")
+        XCTAssertEqual(refreshes, 0, "手指拖着时引擎的 wakeup 还在 refresh（同一个位置多画一帧）")
+        // 默认做法（hold）：每次 didScroll 把 display link 续上，不按速度停；拖动中途不该反复起停，也不走推迟那条路。
+        XCTAssertLessThanOrEqual(linkStarts, 1, "拖动中途 display link 反复起停")
+        XCTAssertEqual(deferred, 0, "默认做法不该再推迟 wakeup 的 tick")
         XCTAssertGreaterThan(host.view.uTermScrollState.row, rowBefore + 4, "视口没跟着手指走")
         // 停下之后 wakeup 照旧同步重画：喂一行输出（滚动条变了 → wakeup），等着看 tick-draw。
         try await Task.sleep(for: .milliseconds(800))
@@ -472,6 +477,33 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         }
         UTermScrollTrace.isEnabled = false
         XCTAssertGreaterThan(restDraws, 0, "停下之后引擎的 wakeup 不再同步重画了（只该在系统滚动动着时跳过）")
+    }
+
+    /// 回归（不挂测量门，模拟器也跑）：引擎补丁 0024 的端到端——带编号地滚一步，带着这一步的那一帧交到图层的记号要在
+    /// 合理的时间里立起来（真机上一两毫秒，模拟器慢得多，这里只核「等得到」），视口确实挪了这么多。
+    /// 记号立不起来的话，iOS 的系统滚动每一帧都白等到超时。
+    func testTrackedScrollReportsItsFrame() async throws {
+        let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 700))
+        defer { host.close() }
+        host.window.removeGestureRecognizer(host.touchWatch)
+        try await host.waitUntilReady()
+        host.feedAndWait(OnScreen.barcodeHistory(lines: 400, cols: host.grid.cols))
+        try await Task.sleep(for: .milliseconds(400))
+        _ = host.view.surface?.scrollToRow(200)
+        try await Task.sleep(for: .milliseconds(300))
+        let before = host.view.uTermScrollState
+        var delays: [Double] = []
+        for _ in 0..<5 {
+            let delay = try XCTUnwrap(host.view.uTermTrackedScrollPresentDelay(pixels: 3, timeout: 2),
+                                      "带编号的滚动之后，那一帧交到图层的记号 2 s 都没立起来")
+            delays.append(delay)
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let after = host.view.uTermScrollState
+        let cell = try XCTUnwrap(host.view.uTermCellPixels).height
+        let moved = Double(after.row - before.row) * Double(cell) + (after.fraction - before.fraction)
+        print("TRACKED-SCROLL delays-ms=\(delays.map { String(format: "%.2f", $0 * 1000) }) moved=\(moved)")
+        XCTAssertEqual(abs(moved), 15, accuracy: 0.5, "带编号的滚动没把视口挪 5 × 3 像素")
     }
 
     /// 回归（不挂测量门）：静止时，系统滚动「忙」的标志卡住（这里是 contentOffset 越界停着：UIKit 不会自己弹回，

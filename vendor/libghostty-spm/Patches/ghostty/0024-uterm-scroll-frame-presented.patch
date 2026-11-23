@@ -1,0 +1,255 @@
+uTerm: tell the host when the frame holding a smooth scroll reaches the layer
+(libghostty-spm patch 0024)
+
+Drop this file into libghostty-spm's Patches/ghostty/ (after upstream's 0022 and
+our 0023); build.sh applies it with `git apply` on every target. It is cut
+against libghostty-spm 2.2.2026111701 with 0001-0023 applied, Ghostty
+5ebe501a. It only adds text next to upstream's own lines: nothing inside what
+0015 / 0022 insert is touched, so their anchored edits still find themselves
+when the stack runs again over a patched tree.
+
+What it does (UTERM-PATCHES.md, "滚动那一帧交到图层的信号"):
+  - Surface.smoothScrollByTracked: smoothScrollBy, and numbers the scroll
+    (renderer.State.scroll_seq, written in the same critical section as the
+    position).
+  - generic renderer: updateFrame reads the number with the position; the frame
+    carries it to its completion callback (Metal Frame); after presenting, the
+    callback records it (scroll_presented, atomic max).
+  - Surface.smoothScrollPresented: scroll_presented >= the last number.
+    Lock-free.
+  - C API: ghostty_surface_smooth_scroll_by_tracked,
+    ghostty_surface_smooth_scroll_presented.
+
+Why: on iOS the scroll view's per-frame callback moves the viewport on the main
+thread, the render thread draws it and queues the present on the main queue. The
+callback has returned by then, so the frame is committed one refresh after the
+scroll view's own (34.0 ms from the callback to glass on an iPhone at 120 Hz,
+against 25.7 ms for UIKit content). A host that waits for
+smoothScrollPresented before returning gets the present queued behind its
+callback in the same run loop turn, and the same commit: 25.7 ms.
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index cc27035b0..5c1159a87 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1288,6 +1288,11 @@ GHOSTTY_API void ghostty_surface_set_smooth_scroll(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_smooth_scroll(ghostty_surface_t,
+                                                ghostty_surface_smooth_scroll_s*);
+ GHOSTTY_API void ghostty_surface_smooth_scroll_by(ghostty_surface_t, double);
++// uTerm (0024): ghostty_surface_smooth_scroll_by, numbered; and whether a
++// frame holding the last numbered scroll has been handed to the layer
++// (lock-free; call from the thread that scrolls).
++GHOSTTY_API void ghostty_surface_smooth_scroll_by_tracked(ghostty_surface_t, double);
++GHOSTTY_API bool ghostty_surface_smooth_scroll_presented(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_ime_point(ghostty_surface_t, double*, double*, double*, double*);
+ GHOSTTY_API void ghostty_surface_request_close(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_split(ghostty_surface_t, ghostty_action_split_direction_e);
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 492b70878..4be7a3a20 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -172,6 +172,11 @@ selection_scroll_active: bool = false,
+ /// the pixel (`smoothScrollViewport`). Off unless the host opts in.
+ smooth_scroll: bool = false,
+ 
++/// uTerm (0024): the sequence number of the last `smoothScrollByTracked`
++/// that moved the viewport. Only touched on the apprt thread; mirrored into
++/// `renderer_state.scroll_seq` for the renderer.
++smooth_scroll_seq: u64 = 0,
++
+ /// True if the surface is in read-only mode. When read-only, no input
+ /// is sent to the PTY but terminal-level operations like selections,
+ /// (native) scrolling, and copy keybinds still work. Warn before quit is
+@@ -3892,6 +3897,35 @@ fn smoothScrollViewport(self: *Surface, up_px: f64) void {
+     };
+ }
+ 
++/// uTerm (0024): `smoothScrollBy`, and numbers the scroll so the host can
++/// ask whether a frame holding it has reached the layer
++/// (`smoothScrollPresented`). The number is written in the same critical
++/// section as the position, so no frame can hold one without the other.
++pub fn smoothScrollByTracked(self: *Surface, up_px: f64) void {
++    if (up_px == 0) return;
++    {
++        self.renderer_state.mutex.lockUncancelable(global.io());
++        defer self.renderer_state.mutex.unlock(global.io());
++        const bar = self.io.terminal.screens.active.pages.scrollbar();
++        if (!self.smoothScrollAvailable(bar)) return;
++        self.mouse.pending_scroll_y = 0;
++        self.smoothScrollViewport(up_px);
++        self.smooth_scroll_seq +%= 1;
++        self.renderer_state.scroll_seq = self.smooth_scroll_seq;
++    }
++    self.queueRender() catch {};
++}
++
++/// uTerm (0024): true once a frame that holds the last
++/// `smoothScrollByTracked` has been handed to the layer (on the render
++/// thread's path: queued on the main queue). A host that scrolls from a
++/// per-frame callback on the main thread can wait for this before it
++/// returns, so the frame is committed with the rest of that turn instead of
++/// one refresh later. Lock-free; call it from the thread that scrolls.
++pub fn smoothScrollPresented(self: *Surface) bool {
++    return self.renderer.scroll_presented.load(.acquire) >= self.smooth_scroll_seq;
++}
++
+ /// This is called when the content scale of the surface changes. The surface
+ /// can then update any DPI-sensitive state.
+ pub fn contentScaleCallback(self: *Surface, content_scale: apprt.ContentScale) !void {
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 4a61dd4d9..297e18c74 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -2397,6 +2397,19 @@ pub const CAPI = struct {
+         surface.mousePressureCallback(stage, pressure);
+     }
+ 
++    /// uTerm (0024): `ghostty_surface_smooth_scroll_by`, numbered so
++    /// `ghostty_surface_smooth_scroll_presented` can tell when a frame
++    /// holding it has been handed to the layer.
++    export fn ghostty_surface_smooth_scroll_by_tracked(surface: *Surface, up_px: f64) void {
++        surface.core_surface.smoothScrollByTracked(up_px);
++    }
++
++    /// uTerm (0024): whether a frame holding the last
++    /// `ghostty_surface_smooth_scroll_by_tracked` has been handed to the layer.
++    export fn ghostty_surface_smooth_scroll_presented(surface: *Surface) bool {
++        return surface.core_surface.smoothScrollPresented();
++    }
++
+     export fn ghostty_surface_ime_point(
+         surface: *Surface,
+         x: *f64,
+diff --git a/src/renderer/State.zig b/src/renderer/State.zig
+index a53d8ea8c..b9fb441d1 100644
+--- a/src/renderer/State.zig
++++ b/src/renderer/State.zig
+@@ -29,6 +29,12 @@ inspector: ?*Inspector = null,
+ /// a future exercise.
+ preedit: ?Preedit = null,
+ 
++/// uTerm (0024): bumped by every `Surface.smoothScrollByTracked` that moved
++/// the viewport, with the mutex held. `updateFrame` reads it in the same
++/// critical section as the position, so a frame knows the last tracked
++/// scroll it holds; see `Surface.smoothScrollPresented`.
++scroll_seq: u64 = 0,
++
+ /// Mouse state. This only contains state relevant to what renderers
+ /// need about the mouse.
+ mouse: Mouse = .{},
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 25ba3fdc5..e9e305065 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -405,6 +405,16 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+         /// being modified, and also when it's being accessed in `drawFrame`.
+         draw_mutex: std.Io.Mutex = .init,
+ 
++        /// uTerm (0024): `State.scroll_seq` as of the last `updateFrame`, i.e.
++        /// the last tracked smooth scroll the next drawn frame holds. Written
++        /// with the draw mutex held.
++        frame_scroll_seq: u64 = 0,
++
++        /// uTerm (0024): the highest `frame_scroll_seq` of a frame that has
++        /// been handed to the layer. Written from the frame completion
++        /// callback, read by `Surface.smoothScrollPresented`.
++        scroll_presented: std.atomic.Value(u64) = .init(0),
++
+         /// The configuration we need derived from the main config.
+         config: DerivedConfig,
+ 
+@@ -1729,6 +1739,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                 scrollbar: terminal.Scrollbar,
+                 overlay_features: []const Overlay.Feature,
+                 scroll_frac_px: f32,
++                // uTerm (0024)
++                scroll_seq: u64,
+             };
+ 
+             // Update all our data as tightly as possible within the mutex.
+@@ -1912,6 +1924,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                     .scrollbar = scrollbar,
+                     .overlay_features = overlay_features,
+                     .scroll_frac_px = scroll_frac_px,
++                    .scroll_seq = state.scroll_seq,
+                 };
+             };
+ 
+@@ -2033,6 +2046,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                     }
+                 }
+ 
++                // uTerm (0024): frames drawn from here on hold this scroll.
++                self.frame_scroll_seq = critical.scroll_seq;
++
+                 // The scrollbar is only emitted during draws so we also
+                 // check the scrollbar cache here and update if needed.
+                 // This is pretty fast.
+@@ -2276,6 +2292,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             // Get a frame context from the graphics API.
+             var frame_ctx = try self.api.beginFrame(self, &frame.target);
+             defer frame_ctx.complete(sync);
++            // uTerm (0024): the frame carries the scroll it holds to its
++            // completion callback (graphics APIs that present there).
++            if (@hasDecl(@TypeOf(frame_ctx), "setScrollSeq")) {
++                frame_ctx.setScrollSeq(self.frame_scroll_seq);
++            }
+ 
+             {
+                 var pass = frame_ctx.renderPass(&.{.{
+@@ -2411,6 +2432,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             return false;
+         }
+ 
++        /// uTerm (0024): a frame holding tracked smooth scroll `seq` has been
++        /// handed to the layer. Called from the graphics API's completion
++        /// callback, after it presents.
++        pub fn scrollFramePresented(self: *Self, seq: u64) void {
++            _ = self.scroll_presented.fetchMax(seq, .acq_rel);
++        }
++
+         // Callback from the graphics API when a frame is completed.
+         pub fn frameCompleted(
+             self: *Self,
+diff --git a/src/renderer/metal/Frame.zig b/src/renderer/metal/Frame.zig
+index 388b4f9ed..a3b1fa12d 100644
+--- a/src/renderer/metal/Frame.zig
++++ b/src/renderer/metal/Frame.zig
+@@ -48,6 +48,7 @@ pub fn begin(
+             .renderer = renderer,
+             .target = target,
+             .sync = false,
++            .scroll_seq = 0,
+         },
+         &bufferCompleted,
+     );
+@@ -60,6 +61,8 @@ const CompletionBlock = objc.Block(struct {
+     renderer: *Renderer,
+     target: *Target,
+     sync: bool,
++    /// uTerm (0024): the last tracked smooth scroll this frame holds.
++    scroll_seq: u64,
+ }, .{
+     objc.c.id, // MTLCommandBuffer
+ }, void);
+@@ -87,9 +90,20 @@ fn bufferCompleted(
+         };
+     }
+ 
++    // uTerm (0024): after presenting, so a host waiting on it finds the
++    // frame already queued for the layer. An unhealthy frame counts too:
++    // nothing better is coming for that scroll.
++    block.renderer.scrollFramePresented(block.scroll_seq);
++
+     block.renderer.frameCompleted(health);
+ }
+ 
++/// uTerm (0024): the last tracked smooth scroll this frame holds. Call
++/// before `complete`, which copies the block.
++pub fn setScrollSeq(self: *Self, seq: u64) void {
++    self.block.scroll_seq = seq;
++}
++
+ /// Add a render pass to this frame with the provided attachments.
+ /// Returns a RenderPass which allows render steps to be added.
+ pub inline fn renderPass(

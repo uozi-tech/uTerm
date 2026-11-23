@@ -47,4 +47,18 @@ extension TerminalSurface {
         guard let surface = rawValue, pixels != 0 else { return }
         ghostty_surface_smooth_scroll_by(surface, pixels)
     }
+
+    /// uTerm 本地补丁（引擎补丁 0024）：同 `smoothScroll(byPixels:)`，并给这一步编号，之后可以问带着它的那一帧交到图层了没有
+    ///（`smoothScrollPresented`）。iOS 的系统滚动每一帧用它。
+    func smoothScrollTracked(byPixels pixels: Double) {
+        guard let surface = rawValue, pixels != 0 else { return }
+        ghostty_surface_smooth_scroll_by_tracked(surface, pixels)
+    }
+
+    /// uTerm 本地补丁（引擎补丁 0024）：带着最近一次 `smoothScrollTracked(byPixels:)` 的那一帧交到图层了没有（渲染线程画完、
+    /// 交帧已经排进主队列）。无锁，在调 `smoothScrollTracked(byPixels:)` 的那个线程上问。
+    func smoothScrollPresented() -> Bool {
+        guard let surface = rawValue else { return true }
+        return ghostty_surface_smooth_scroll_presented(surface)
+    }
 }

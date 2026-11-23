@@ -44,11 +44,11 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 
 | 路径 | 内容 |
 |---|---|
-| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 20 个文件、加了 7 个文件，见「Swift 层补丁」 |
+| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 21 个文件、加了 8 个文件，见「Swift 层补丁」 |
 | `Package.swift` | 见「manifest 改动」 |
 | `ENGINE.lock` | 两个二进制的清单：引擎版本串、zip 文件名、sha256 |
 | `BinaryTarget/` | `GhosttyKit.xcframework`、`ghostty-vt.xcframework` 解在这里，**不进版本库**（`.gitignore`），由 `make engine` 放进来 |
-| `Patches/ghostty/` | 我们加的引擎补丁 `0023`（接在上游的 `0001`–`0022` 后面） |
+| `Patches/ghostty/` | 我们加的引擎补丁 `0023`、`0024`（接在上游的 `0001`–`0022` 后面） |
 | `Scripts/prelink-vt.sh` | vt 的预链接：每个 slice 并成一个 `.o`、只导出 `ghostty_*` |
 | `BUILD.md` | 怎么从上游 tag 编出这两个二进制 |
 
@@ -60,9 +60,9 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 二进制不进版本库（GhosttyKit 解开 197 MB，vt 14 MB）。`ENGINE.lock` 记着要哪两份：
 
 ```
-engine_version=ghostty-5ebe501a+p0023/snapshot-1
-ghosttykit_zip=GhosttyKit-5ebe501a-0023.xcframework.zip     sha256 a58ceb55…8614
-ghosttyvt_zip=ghostty-vt-5ebe501a-0023.xcframework.zip      sha256 4d418119…c5c8
+engine_version=ghostty-5ebe501a+p0024/snapshot-1
+ghosttykit_zip=GhosttyKit-5ebe501a-0024.xcframework.zip     sha256 fbc4df64…eedb
+ghosttyvt_zip=ghostty-vt-5ebe501a-0024.xcframework.zip      sha256 3e6e4f72…1ada
 ```
 
 `make engine`（`scripts/fetch-ghostty-engine.sh`）按它从本地目录取 zip、校验 sha256、解到 `BinaryTarget/`，旁边各留一个
@@ -93,8 +93,13 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
 
 ## 引擎补丁（`Patches/ghostty/`）
 
-上游 `Patches/ghostty/` 里的 `0001`–`0022` 原样用。我们加的一个接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
-这个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
+上游 `Patches/ghostty/` 里的 `0001`–`0022` 原样用。我们加的两个接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
+这两个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
+
+写我们自己的补丁要注意：上游的 `.sh` 补丁靠「自己加的那段文字原样还在」判断打没打过（`Script/support/anchored_edit.py`），
+`build.sh` 每个平台都把整个补丁栈再跑一遍。我们的补丁只要改到上游某个补丁加的文字里面，它下一遍就认不出自己、把那段再插一次
+（0024 的第一版改了 0022 加的 `smoothScrollBy`，第二个平台起整份 `Surface.zig` 的平滑滚动函数全部重复，编不过）。
+所以只在上游原文旁边加，不动别的补丁加的内容；出包前在打完的树上把 `Script/apply-patches.sh` 再跑两遍，树不变才算数。
 
 ### 上游的 0022 逐像素平滑滚动（原来是我们的 0023）
 
@@ -126,17 +131,35 @@ Swift 侧不再记镜像；小数记着它属于哪个视口（屏、滚动条�
 回归用例：`uTermTests/Features/Terminal/TerminalContrastTests.swift`（读真的 surface 画出来的像素）、
 `uTermMobileTests/Probes/GhosttyColorParityTests.swift`（测量门控，`UTERM_MEASURE=1` 才跑）。
 
-### 0024 不带
+### 0024 滚动那一帧交到图层的信号
 
-0024（交换链不画进还在屏上或等着上屏的 IOSurface）编过、Mac 上的用例也过，但在 iPhone 真机上是负收益：换帧率默认 81 → 71%、
-不同步重画 97 → 90%，晚一拍以上的帧从 4 涨到 10–19（`docs/ghostty-eval/measure-ios.md` 的 M16）。所以没有带进来。
-补丁文件留在评估分支 `worktree-agent-a6bb31349ee21df46` 的 `Spikes/GhosttyPatches/`，说明在
-`docs/ghostty-eval/measure-build-consistency.md` 的「补丁 0024」一节。
+文件：`src/Surface.zig`（`smoothScrollByTracked`、`smoothScrollPresented`）、`src/renderer/State.zig`（`scroll_seq`）、
+`src/renderer/generic.zig`（`frame_scroll_seq`、`scroll_presented`、`scrollFramePresented`）、`src/renderer/metal/Frame.zig`
+（完成回调带序号）、`src/apprt/embedded.zig` 与 `include/ghostty.h`（`ghostty_surface_smooth_scroll_by_tracked`、
+`ghostty_surface_smooth_scroll_presented`）。切在 libghostty-spm `2.2.2026111701` 打完 `0001`–`0023` 的树上（Ghostty `5ebe501a`）。
+
+做什么：`smoothScrollByTracked` 同 0022 的 `smoothScrollBy`，另外给这一步编号（和位置在同一个临界区里写）；渲染线程 `updateFrame`
+在读位置的同一个临界区里读到序号，画出来的那一帧把序号带进 Metal 的完成回调，回调交完帧（iOS 上是把设 contents 的块排进主队列）
+之后把序号记成「已交」（原子取大）。`smoothScrollPresented` = 已交的序号追上了最新一步的序号，无锁。
+
+为什么：iOS 的系统滚动每个显示帧在主线程的 `scrollViewDidScroll` 里把位置交给引擎，渲染线程异步画、画完把交帧排回主队列——
+这时 UIKit 这一拍的提交已经走了，画面只能下一拍上屏。Duo 上按换屏表量：UIKit 写位置到上玻璃 34.0 ms，原生 UIKit 内容约 25.5 ms，
+正好多一帧；手指来回拖时拐弯处画面慢一拍（user 2026-11-23：「好一点了，但感觉还有进步空间」，不足在手指拖着的时候）。
+主线程在 `scrollViewDidScroll` 里等到这一帧交出来再返回，交帧块排在这次回调后面、同一轮 run loop 里跑，和 UIKit 这一拍一起提交
+（Swift 层第 21 条）。这个时刻只有引擎知道：Swift 层拿不到「带着这一步的那一帧画完了」。盲等固定的 4 ms 也能把延迟降到 25.7 ms，
+但 1200 pt/s 以上每帧跨行、渲染更久，47% 的帧停一拍再走两倍，系统记的掉帧从 7 次涨到 57 次。
+
+读数（Duo，App 内合成手指按脚本滚，xctrace 的提交表 + 换屏表 + 出帧探针对上屏内容）：上屏落后 UIKit 34.0 → 25.7 ms（p95 25.9）；
+减速 ≥150 pt/s 屏上速度偏离 30% 以上的帧 ≤ 1%；每帧主线程等 2.4 ms（p99 4.6）；3008 帧里 5 帧没等到，全是手指刚落下的第一帧。
+
+（评估时编过另一个也叫 0024 的补丁——交换链不画进还在屏上或等着上屏的 IOSurface。它在 iPhone 真机上是负收益：换帧率默认 81 → 71%、
+不同步重画 97 → 90%，晚一拍以上的帧从 4 涨到 10–19（`docs/ghostty-eval/measure-ios.md` 的 M16），没有带进来，编号后来给了上面这个。
+补丁文件留在评估分支 `worktree-agent-a6bb31349ee21df46` 的 `Spikes/GhosttyPatches/`。）
 
 ## GhosttyVt（libghostty-vt）
 
-- 和 GhosttyKit 同一棵打过 `0001`–`0023` 的源码树编出来（上游的 0022 给 `src/terminal/PageList.zig` 加了视口移动计数，
-  所以 vt 也必须带上它；0023 只改 shader 和渲染器）。
+- 和 GhosttyKit 同一棵打过 `0001`–`0024` 的源码树编出来（上游的 0022 给 `src/terminal/PageList.zig` 加了视口移动计数，
+  所以 vt 也必须带上它；0023 只改 shader 和渲染器，0024 只改 surface 和渲染器）。
 - 三个 slice：`ios-arm64`、`ios-arm64-simulator`（只有 arm64，Intel Mac 上的模拟器链不了）、`macos-arm64_x86_64`。
 - 每个 slice 预链接成一个 `.o`（`Scripts/prelink-vt.sh`），只导出 209 个 `ghostty_*`，Zig 打包进来的 ubsan、memset、simdutf、
   highway、compiler_rt 都变成私有符号，否则和 GhosttyKit 一起链会重复。
@@ -508,7 +531,7 @@ iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swif
 测量：`TEST_RUNNER_UTERM_SCROLLBENCH_DIR=<目录> xcodebuild test-without-building … -only-testing:uTermTests/GhosttyMacScrollBenchTests`
 （默认跳过；CSV 写进测试宿主的临时目录，日志里有路径）。真触控板手感未验。
 
-### 20. iOS：系统滚动动着时，引擎的 wakeup 不在主线程同步重画、慢了也不开 display link（慢滚每跨一行掉一帧、减速尾段一顿一顿）
+### 20. iOS：系统滚动动着时，引擎的 wakeup 不在主线程同步重画、不 refresh，display link 全程续着（慢滚每跨一行掉一帧、减速尾段发抖）
 
 文件：`Surface/TerminalSurfaceCoordinator.swift`（`wakeupDefersSyncDraw`、`wakeupDefersDisplayLink`）、`Platform/UIKit/UITerminalView.swift`
 （接到 `systemScrollIsBusy` 与滚动速度）、`UITerminalView+SystemScroll*.swift`（`SystemScrollState.speed`）、`UTermScrollTrace.swift`
@@ -549,9 +572,25 @@ contentOffset 越界停着时（改标题这类不改回滚长度的 wakeup 不�
 推迟的轮询最多 1 s（`deferredWakeupLimit`），到点补一次 tick（还在滚就就地 tick、不开 display link，停了走平常那条路）；画不了（surface 放掉、在后台）的时候不推迟，
 照原路记下要 tick。轮询只捕获 weak self，视图没了就停；钩子挂在协调器上，surface 放掉 / 重建之后照旧。
 
-A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `moving`（默认，上面两步）、`moving-link`（只有第一步）、
+**第三步（2026-11-23，现在的默认 `hold`）：全程续着 display link，不再按速度停。** user 用第二步的包说「松手之后的惯性又开始抖了，
+慢滚的时候又有点糊了」。这次让录制版每出一帧就从画面里读出实际滚到的位置（`GhosttyScrollPresentProbe`，滚动测试终端每行开头是
+行号的条码），按「每次换画面走的像素 ÷ 上一幅停留的拍数，比 UIKit 的真实速度」算屏上速度纹波（理想恒为 1）：
+
+- 第二步（`moving`）在 150–400 pt/s 没有自己的 link，UIKit 的减速在这一段是 80 Hz（帧间隔 8 / 17 ms 交替）；画面固定比 UIKit 晚一帧，
+  间隔一不均匀，屏上速度就忽快忽慢。Duo 真手：150–250 pt/s 那一段 51% 的帧偏离 30% 以上（合成手指 44%），每次减速尾段节奏变 19 次
+  （`touching` 4 次）。慢拖「发糊」是同一件事：没人要 120 Hz。
+- 减速时同步重画的两种（`touching` / `always`）在真手长时间滚动下 400–1200 pt/s 有 4–7.5% 的帧停一拍再走两倍，还有旧帧盖掉新帧
+  （往回跳最多 80–157 px：主线程同步画的新帧先设上，渲染线程更早那一帧的交帧块后到）。
+- `hold`：滚动动着时不同步重画（同第一步），每次 `scrollViewDidScroll` 把自己的 link 续上（`holdDisplayLinkForMotion`，最后一次之后
+  空转 30 帧照常停）。屏幕全程 120 Hz，UIKit 的 80 Hz 段变成均匀的 120 Hz、40 Hz 段变成均匀的 60 Hz。合成手指五种做法同一脚本：
+  150–400 pt/s 偏离 30% 以上的帧 44% / 20% → 3.4% / 0%；60 pt/s 以下帧间隔 100% 两拍，偏离等于整像素取整的理论下限。
+- 同时去掉滚动途中的重复重画：wakeup 的 tick 原来每次 `refresh`，滚动的每一步引擎自己已经排了重画，高速减速时九成的帧同一个位置
+  出两次。现在动着时不 `refresh`、欠着，停下后空转的 tick 里补一次。
+- 第二步的门槛（`wakeupDisplayLinkMinimumSpeed`、`deferWakeupTick`）只在 `moving` 下还走，留着做 A/B。
+
+A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `hold`（默认，第一步 + 第三步）、`moving`（前两步）、`moving-link`（只有第一步）、
 `touching`（只在手指拖着时不同步重画）、`always`（补丁 #20 之前）；`wakeupDisplayLinkMinimumSpeed` 调门槛。uTerm 的 Debug 构建
-认启动参数 `-GhosttySyncDrawDuringScroll YES|touching|moving-link|moving`（`GhosttyScrollDebugSwitch`）。
+认启动参数 `-GhosttySyncDrawDuringScroll YES|touching|moving-link|moving|hold`（`GhosttyScrollDebugSwitch`；写了它就开录制，见第 21 条末尾）。
 
 另一种发法（120 Hz 定时器、不对齐显示帧）下改前改后都是每秒二三十次「一帧 0 步、下一帧两步」：UIKit 的拖动跟手指 1:1，
 一帧里来 0 个或 2 个触摸就是 0 / 2 步。真手指的触摸在 iOS 上是不是按显示帧对齐派发的，测试量不到；对齐时（上面那组）为 0。
@@ -562,6 +601,27 @@ A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `mo
 退后台 70 s 前后各量一轮）与
 `GhosttyFlickFrameTests.testFlickFrames`（`TEST_RUNNER_UTERM_MEASURE=1`，真机；后者 `UTERM_FLICK_GLASS=1` 是上玻璃模式，配 xctrace）。
 真手指的手感要 user 在 Duo 上验。
+
+### 21. iOS：系统滚动每一步等引擎把这一帧交到图层，和 UIKit 同一拍提交（画面不再比手指多晚一帧）
+
+文件：`Surface/TerminalSurface+SmoothScroll.swift`（`smoothScrollTracked(byPixels:)`、`smoothScrollPresented()`）、
+`Platform/UIKit/UITerminalView+SystemScrollDelegate.swift`（`systemScrollWaitForFrame`）、`UITerminalView+SystemScroll.swift`
+（`frameWaitSuspendedUntil`、`frameWaitMisses`）、`Platform/UIKit/TerminalMainTurnClock.swift`（新）、`UTermScrollTrace.swift`
+（`scrollSameFrameWaitMilliseconds` 等）。要引擎补丁 0024。
+
+- `systemScrollDidScroll` 改用带编号的 `smoothScrollTracked(byPixels:)`，随后原地等 `smoothScrollPresented()`（50 µs 一查），
+  最晚等到这一轮 run loop 醒来之后 6.5 ms（`TerminalMainTurnClock`：一个 `afterWaiting` 观察者记下每轮醒来的时刻）。等到了，交帧块
+  已经在主队列里，这一轮接着跑它，和 UIKit 这一拍一起提交。
+- 时限从「这一轮醒来」算而不是从开始等算：手指按下那一轮 UIKit / SwiftUI 分发触摸要 12–17 ms（Duo，Debug 构建），这一轮早就过了
+  时限，不等。Duo 上主线程一轮跑到 6–7 ms 不掉帧，9 ms 以上开始掉。
+- 没等到：这一帧照旧晚一拍上屏。连着 3 帧没等到（渲染跟不上、程序挂着同步输出、surface 不可见）歇 0.25 s 不等。
+- 读数见引擎补丁 0024 一节。
+
+排查工具（uTerm 的 Debug 构建，`uTermMobile/Screens/Terminal/Ghostty/GhosttyScrollDebugSwitch.swift` 与 `GhosttyScrollAutoPilot.swift`）：
+启动参数 `-GhosttySyncDrawDuringScroll <做法>` 打开录制，滚动打点每秒写进 `Documents/scroll-trace-<做法>.txt`（`devicectl device copy from` 取）：
+每次 didScroll 的位置、每次出帧时从画面读回的位置（条码，配 `-LiveActivityDebugDemo scroll`）、主线程每轮 ≥ 2 ms 的耗时与长耗时里的调用栈
+（进程内采样）、等这一帧的耗时与超时。`auto:做法,做法…` 让 App 自己用合成手指按脚本滚（装不了 XCTest 的 vphone、无人值守的真机都能跑）；
+做法后面加 `+wait<毫秒>` 改等待时限（`+wait0` 关）。真正上屏的账要再配 xctrace 的 Animation Hitches（提交表 + 换屏表）。
 
 ## manifest 改动（相对上游的 `Package.swift`）
 
@@ -591,7 +651,7 @@ binaryTarget 要换回 `url:` + `checksum:`（按 tag 消费的远程包不能�
    `Package.swift` 按「manifest 改动」重做。
 3. 引擎：先改 `ENGINE.lock` 的来源几行（tag、提交、Ghostty 提交、Zig 版本与 sha256）和两个 zip 的文件名，再
    `make engine-build ENGINE_BUILD_ARGS='--platforms macos,ios,maccatalyst,visionos --pack <artifacts 目录> --no-install'`
-   出包（原理见 `BUILD.md`）。`0023` 打不上时在新树上重切（`--keep-source` 留下源码树），文件头里写清是切在哪个提交上的。
+   出包（原理见 `BUILD.md`）。`0023` / `0024` 打不上时在新树上重切（`--keep-source` 留下源码树），文件头里写清是切在哪个提交上的。
    上游新增的补丁和我们的编号撞了，脚本会停下，先给我们的改号。vt 由脚本在打完全部补丁的**同一棵树**上编。
 4. `--pack` 打印的两个 sha256 填进 `ENGINE.lock`，zip 留在 artifacts 目录（换二进制 = 换文件名）。
 5. 三处一起改：`ENGINE.lock` 的 zip 文件名与 sha256、`ENGINE.lock` 的 `engine_version`、

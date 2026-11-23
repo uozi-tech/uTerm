@@ -40,7 +40,8 @@ cd libghostty-spm
 
 # 我们的引擎补丁接在上游 0001–0022 后面，build.sh 每个 target 都会自动打上。
 # 补丁脚本按仓库里的相对路径找辅助脚本（Script/support），必须放进这个检出的 Patches/ghostty/，不能另指目录。
-cp <uTerm>/vendor/libghostty-spm/Patches/ghostty/0023-uterm-minimum-contrast.patch Patches/ghostty/
+cp <uTerm>/vendor/libghostty-spm/Patches/ghostty/0023-uterm-minimum-contrast.patch \
+   <uTerm>/vendor/libghostty-spm/Patches/ghostty/0024-uterm-scroll-frame-presented.patch Patches/ghostty/
 
 # PATH 里要有 Zig 0.17.1；Homebrew 的 rsync 排在前面时组装 xcframework 那步可能出错，干脆用系统的
 PATH=<zig 目录>:/usr/bin:/bin:/usr/sbin:/sbin ./build.sh --platforms macos,ios,maccatalyst,visionos --skip-tests
@@ -60,15 +61,15 @@ PATH=<zig 目录>:/usr/bin:/bin:/usr/sbin:/sbin ./build.sh --platforms macos,ios
 打 zip（文件名带上 Ghostty 短哈希和补丁的最大编号，和 `ENGINE.lock` 对应；对象传上去不再覆盖，换二进制 = 换文件名）：
 
 ```sh
-ditto -c -k --keepParent BinaryTarget/GhosttyKit.xcframework GhosttyKit-5ebe501a-0023.xcframework.zip
-shasum -a 256 GhosttyKit-5ebe501a-0023.xcframework.zip
+ditto -c -k --keepParent BinaryTarget/GhosttyKit.xcframework GhosttyKit-5ebe501a-0024.xcframework.zip
+shasum -a 256 GhosttyKit-5ebe501a-0024.xcframework.zip
 ```
 
 ## 2. ghostty-vt.xcframework
 
 vt 必须在**打完全部补丁的同一棵树**上编：上游的 0014（resize 不结束 DEC 2026 同步输出）和 0015（resize 擦掉提示符后的
 `prompt_redraw` 标记）改的是终端核心，0022 给 `src/terminal/PageList.zig` 加了视口移动计数，官方发布的 libghostty-vt 不带它们，
-影子终端和画面在 resize 上会分叉。第 1 步跑完之后，`References/ghostty-upstream` 就是那棵树（现在这份 vt 就是在打完 0001–0023 的树上编的）。
+影子终端和画面在 resize 上会分叉。第 1 步跑完之后，`References/ghostty-upstream` 就是那棵树（现在这份 vt 就是在打完 0001–0024 的树上编的）。
 
 ```sh
 cd References/ghostty-upstream
@@ -77,8 +78,8 @@ zig build --prefix /tmp/vt -Demit-lib-vt -Demit-xcframework=true -Doptimize=Rele
 <uTerm>/vendor/libghostty-spm/Scripts/prelink-vt.sh /tmp/vt/lib/ghostty-vt.xcframework <输出目录>/ghostty-vt.xcframework
 
 cd <输出目录>
-ditto -c -k --keepParent ghostty-vt.xcframework ghostty-vt-5ebe501a-0023.xcframework.zip
-shasum -a 256 ghostty-vt-5ebe501a-0023.xcframework.zip
+ditto -c -k --keepParent ghostty-vt.xcframework ghostty-vt-5ebe501a-0024.xcframework.zip
+shasum -a 256 ghostty-vt-5ebe501a-0024.xcframework.zip
 ```
 
 - git 检出的树没有 `LIB_VERSION`，必须带 `-Demit-lib-vt`。
