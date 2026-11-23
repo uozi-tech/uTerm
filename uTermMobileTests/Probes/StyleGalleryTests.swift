@@ -348,6 +348,45 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
+    // MARK: - Claude 历史会话（假的 ~/.claude/projects）
+
+    /// 列表、对话、空态。宽屏（展开的 Duo、iPad）列表与对话左右并排，窄屏点进对话、左上角返回。
+    func testClaudeHistoryTab() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+        let relay = HostKeyChallengeRelay()
+
+        func mount(_ workspace: MobileWorkspace) -> some View {
+            WorkspaceScreen()
+                .environment(workspaceStore())
+                .environment(relay)
+                .environment(workspace)
+                .modelContainer(c)
+        }
+
+        for device in Self.devices {
+            let workspace = MobileWorkspace()
+            let history = workspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: MobileClaudeFixture.standard()))
+            let settled = await MobileFakeClaudeHistory.settle(history)
+            XCTAssertTrue(settled)
+            try await shoot("claude-history-list", on: device, settle: .milliseconds(600)) { mount(workspace) }
+
+            let model = try XCTUnwrap(history.connection.history)
+            model.select(try XCTUnwrap(model.visibleFiles.first))
+            _ = await MobileFakeTerminal.waitUntil { model.transcript?.reachedStart == true }
+            try await shoot("claude-history-transcript", on: device, settle: .milliseconds(900)) { mount(workspace) }
+
+            // 这台主机上没用过 Claude Code：没有 ~/.claude/projects。
+            let empty = MobileWorkspace()
+            let none = empty.openHistory(MobileFakeClaudeHistory.tab(
+                host: host, tree: MobileFakeClaudeTree(home: MobileClaudeFixture.home, files: [])))
+            let emptySettled = await MobileFakeClaudeHistory.settle(none)
+            XCTAssertTrue(emptySettled)
+            try await shoot("claude-history-empty", on: device, settle: .milliseconds(500)) { mount(empty) }
+        }
+    }
+
     // MARK: - 分屏：终端 + 文件（多态标签）
 
     /// 左格两个终端标签、右格一个文件标签，聚焦右格：看前台胶囊与活动图标的配色（不画焦点框）。

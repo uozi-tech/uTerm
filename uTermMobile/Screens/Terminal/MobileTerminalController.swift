@@ -575,6 +575,20 @@ final class MobileTerminalController {
         write(Data(text.utf8))
     }
 
+    /// 连上、远端的行编辑器起来之后打进一行命令和回车（「继续这个会话」）。没连上就先等着（最多
+    /// `TerminalCommandTyping.connectTimeout`），等的规则和 Mac 的 `startTrackedRun` 是同一份；等的中途断了就不打。
+    /// 手机上不做命令跟踪（OSC 6973 是 Mac 的命令行用的），用户看到的就是这一行命令。
+    func typeWhenLineEditorReady(_ command: String) {
+        let terminal = terminal
+        Task { [weak self] in
+            await TerminalCommandTyping.type(
+                command, shadow: terminal.shadow,
+                generation: { terminal.outputPump.generation },
+                isConnected: { [weak self] in self?.state == .connected },
+                send: { [weak self] line in self?.sendText(line) })
+        }
+    }
+
     /// 把提示词交给终端里的程序，不提交。程序开了括号粘贴就按粘贴发，一次到达不会被拆开解读。
     func insertPrompt(_ text: String) {
         paste(text)

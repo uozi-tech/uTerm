@@ -92,6 +92,10 @@ struct WorkspaceTabStrip: View {
     var onSelect: (UUID) -> Void
     var onClose: (UUID) -> Void
     var onNew: (MConnectKind) -> Void
+    /// 「+」菜单里的「Claude 历史会话」：选一台主机打开它的历史会话标签。nil = 不出这一项。
+    var onNewHistory: (() -> Void)? = nil
+    /// 终端标签长按菜单里的「Claude 历史会话」：打开这个标签那台主机（那台 Mac）的历史会话。
+    var onOpenHistory: (UUID) -> Void = { _ in }
     var onBack: () -> Void
     /// 切换当前终端标签的「终端 ⇄ Agent」模式。
     var onAgent: () -> Void
@@ -131,6 +135,7 @@ struct WorkspaceTabStrip: View {
                                              onSelect: { onSelect(tab.id) },
                                              onClose: { onClose(tab.id) },
                                              onMove: { onMoveToOtherPane(tab.id) },
+                                             onOpenHistory: { onOpenHistory(tab.id) },
                                              onDragStart: { onDragTab(tab.id) },
                                              closePrompt: closePrompt,
                                              onConfirmClose: { onConfirmClose(tab.id, $0) },
@@ -191,6 +196,9 @@ struct WorkspaceTabStrip: View {
         MMenu {
             Button { onNew(.terminal) } label: { Label("新建终端", systemImage: MGlyph.symbol("term")) }
             Button { onNew(.sftp) } label: { Label("浏览文件", systemImage: MGlyph.symbol("folder")) }
+            if let onNewHistory {
+                Button(action: onNewHistory) { Label("Claude 历史会话", systemImage: MGlyph.symbol("clock")) }
+            }
         } label: {
             MIcon(name: "plus", size: inStatusRow ? 16 : 14, color: M.text2, weight: .semibold)
                 .frame(width: inStatusRow ? 36 : 30, height: inStatusRow ? 36 : 30)
@@ -289,6 +297,8 @@ struct WorkspaceTabChip: View {
     var onSelect: () -> Void
     var onClose: () -> Void
     var onMove: () -> Void = {}
+    /// 长按菜单「Claude 历史会话」（只有能开的终端标签有，见 `TermTab.offersClaudeHistory`）。
+    var onOpenHistory: () -> Void = {}
     var onDragStart: () -> Void = {}
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
     var onConfirmClose: (_ alsoOnMac: Bool) -> Void = { _ in }
@@ -327,8 +337,8 @@ struct WorkspaceTabChip: View {
     var body: some View {
         HStack(spacing: 6) {
             MDot(color: stateDot.color, pulse: stateDot.pulse, size: 6)
-            if tab.kind == .sftp {
-                MIcon(name: tab.preview == nil ? "folder" : "file", size: 12, color: iconColor,
+            if let kindIcon {
+                MIcon(name: kindIcon, size: 12, color: iconColor,
                       weight: activity == .active ? .semibold : .regular)
             }
             Text(tab.title)
@@ -382,6 +392,11 @@ struct WorkspaceTabChip: View {
             } label: {
                 Label("拷贝名称", systemImage: "doc.on.clipboard")
             }
+            if case .terminal(let terminal) = tab, terminal.offersClaudeHistory {
+                Button(action: onOpenHistory) {
+                    Label("Claude 历史会话", systemImage: "clock.arrow.circlepath")
+                }
+            }
             if canMove {
                 Button(action: onMove) {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")
@@ -395,6 +410,16 @@ struct WorkspaceTabChip: View {
         .accessibilityElement(children: .combine)
         .accessibilityValue(Text(verbatim: programStatus.map { "\($0.appName) \($0.statusLabel)" } ?? ""))
         .accessibilityAddTraits(activity == .active ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// 标题前的类型图标：终端是常态不放；文件浏览、预览、历史会话各一个。
+    private var kindIcon: String? {
+        switch tab {
+        case .terminal: return nil
+        case .files: return "folder"
+        case .preview: return "file"
+        case .history: return "clock"
+        }
     }
 
     /// 终端里程序（Claude Code、Codex……）的状态；文件浏览没有。
@@ -424,6 +449,12 @@ struct WorkspaceTabChip: View {
             switch p.controller.phase {
             case .loaded: return (M.success, false)
             case .loading: return (M.warning, true)
+            case .failed: return (M.danger, false)
+            }
+        case .history(let h):
+            switch h.connection.phase {
+            case .ready: return (M.success, false)
+            case .connecting: return (M.warning, true)
             case .failed: return (M.danger, false)
             }
         }

@@ -27,12 +27,15 @@ enum MWorkTab: Identifiable {
     case files(FileTab)
     /// 终端里的程序请求预览的文件（只读，见 `FilePreviewTab`）。
     case preview(FilePreviewTab)
+    /// 一台主机上 Claude Code 的历史会话（只读，见 `ClaudeHistoryTab`）。
+    case history(ClaudeHistoryTab)
 
     var id: UUID {
         switch self {
         case .terminal(let t): return t.id
         case .files(let f): return f.id
         case .preview(let p): return p.id
+        case .history(let h): return h.id
         }
     }
 
@@ -41,14 +44,15 @@ enum MWorkTab: Identifiable {
         case .terminal(let t): return t.host
         case .files(let f): return f.host
         case .preview(let p): return p.host
+        case .history(let h): return h.host
         }
     }
 
-    /// 预览标签也算文件一类（标签条上画文件夹图标）；「打开主机」复用已有标签时不认它（`existing(host:kind:)`）。
+    /// 预览、历史标签也算文件一类（读的是文件）；「打开主机」复用已有标签时不认它们（`existing(host:kind:)`）。
     var kind: MConnectKind {
         switch self {
         case .terminal: return .terminal
-        case .files, .preview: return .sftp
+        case .files, .preview, .history: return .sftp
         }
     }
 
@@ -62,6 +66,11 @@ enum MWorkTab: Identifiable {
         return nil
     }
 
+    var history: ClaudeHistoryTab? {
+        if case .history(let h) = self { return h }
+        return nil
+    }
+
     /// 标签标题：远控终端以 Mac 上那枚标签的名字为准（`RemoteSessionInfo.remoteTabTitle`，Mac 控 Mac 同一规则），
     /// 其他终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
     var title: String {
@@ -72,7 +81,7 @@ enum MWorkTab: Identifiable {
                                                         fallback: hostName)
             }
             return t.controller.shellTitle ?? hostName
-        case .files: return hostName
+        case .files, .history: return hostName
         case .preview(let p): return p.title
         }
     }
@@ -85,6 +94,7 @@ enum MWorkTab: Identifiable {
         case .terminal(let t): snapshot = t.hostName
         case .files(let f): snapshot = f.hostName
         case .preview(let p): snapshot = p.hostName
+        case .history(let h): snapshot = h.hostName
         }
         return host.isDeleted || host.modelContext == nil ? snapshot : host.name
     }
@@ -104,6 +114,7 @@ enum MWorkTab: Identifiable {
         case .terminal(let t): t.controller.close()
         case .files(let f): f.controller.close()
         case .preview(let p): p.controller.close()
+        case .history(let h): h.close()
         }
     }
 }
@@ -201,6 +212,7 @@ final class MobileWorkspace {
     func existing(host: PersistentIdentifier, kind: MConnectKind) -> MWorkTab? {
         tabs.first {
             $0.kind == kind && $0.host.persistentModelID == host && $0.terminal?.remote == nil && $0.preview == nil
+                && $0.history == nil
         }
     }
 
@@ -217,11 +229,36 @@ final class MobileWorkspace {
         }
     }
 
-    /// 接着这台 Mac 的全部标签：它上面的终端，加上它的文件标签。
+    /// 接着这台 Mac 的全部标签：它上面的终端，加上它的文件标签与历史会话标签。
     func remoteTabIDs(of client: RemoteMacClient) -> Set<UUID> {
         var ids = Set(terminalTabs.filter { $0.remote?.client === client }.map(\.id))
         if let files = existing(remoteFiles: client) { ids.insert(files.id) }
+        if let history = existingHistory(remoteMac: client) { ids.insert(history.id) }
         return ids
+    }
+
+    /// 直连这台主机的历史会话标签（一台主机至多一个）。
+    func existingHistory(host: PersistentIdentifier) -> ClaudeHistoryTab? {
+        tabs.lazy.compactMap(\.history).first { $0.remoteMac == nil && $0.host.persistentModelID == host }
+    }
+
+    /// 这台 Mac 的历史会话标签（一台 Mac 至多一个）。
+    func existingHistory(remoteMac client: RemoteMacClient) -> ClaudeHistoryTab? {
+        tabs.lazy.compactMap(\.history).first { $0.remoteMac === client }
+    }
+
+    /// 打开历史会话标签：同一台主机（同一台 Mac）已经有了就带到前台、返回已有的那个，没有就开在聚焦格并开始读。
+    @discardableResult
+    func openHistory(_ history: ClaudeHistoryTab) -> ClaudeHistoryTab {
+        let existing = history.remoteMac.map { existingHistory(remoteMac: $0) }
+            ?? existingHistory(host: history.host.persistentModelID)
+        if let existing {
+            activate(existing.id)
+            return existing
+        }
+        open(.history(history))
+        history.start()
+        return history
     }
 
     /// 接管一台 Mac：每个终端一个标签，开在聚焦格末尾，`focus` 放到前台。之后它新开的终端由 `follow` 接上。
@@ -234,6 +271,8 @@ final class MobileWorkspace {
         arrangeRemoteTabs(of: takeover.client, order: takeover.order)
         if let front = existing(remote: MRemoteSource(client: takeover.client, sessionID: takeover.focus)) {
             activate(front.id)
+            // 「继续这个会话」：新开的那个终端接上之后打进命令。
+            if let command = takeover.focusCommand { front.terminal?.controller.typeWhenLineEditorReady(command) }
         }
         return changes
     }
@@ -388,8 +427,9 @@ final class MobileWorkspace {
     // MARK: - 操作
 
     /// 把新标签放进 `paneID`（缺省聚焦格）末尾，设为前台并聚焦该格。`activate` 为 false 时留在后台，
-    /// 除非那一格还没有前台标签。
-    func open(_ tab: MWorkTab, in paneID: UUID? = nil, activate: Bool = true) {
+    /// 除非那一格还没有前台标签。`typing`：终端连上、行编辑器起来之后打进这行命令（「继续这个会话」）。
+    func open(_ tab: MWorkTab, in paneID: UUID? = nil, activate: Bool = true, typing command: String? = nil) {
+        if let command { tab.terminal?.controller.typeWhenLineEditorReady(command) }
         if let term = tab.terminal, term.remote == nil {
             term.controller.onFilePreviewRequest = { [weak self, weak term] path in
                 guard let self, let term else { return }

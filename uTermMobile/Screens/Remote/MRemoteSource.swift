@@ -26,6 +26,8 @@ struct MRemoteTakeover: Equatable {
     let focus: UUID
     /// Mac 上的标签顺序；老版本 Mac 不发，为 nil。
     var order: [UUID]? = nil
+    /// `focus` 接上、行编辑器起来之后打进去的命令（「继续这个会话」）。
+    var focusCommand: String? = nil
     /// 让同样内容的连续请求也能被 `onChange` 看到。
     let token = UUID()
 

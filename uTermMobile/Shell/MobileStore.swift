@@ -27,6 +27,8 @@ enum MTab: String, CaseIterable, Identifiable {
 struct MOpenTarget: Equatable {
     let hostID: PersistentIdentifier
     let kind: MConnectKind
+    /// 终端连上、行编辑器起来之后打进去的命令（「继续这个会话」）。
+    var command: String? = nil
     let token = UUID()
 }
 
@@ -149,16 +151,21 @@ final class MobileStore {
 
     /// 所有「连接主机」入口都走这里：切到目标标签、记录来源、呈现连接中页。
     /// 连接本体随之跑在目标屏（终端 / 文件）里，连接中页观察其真实状态推进阶段。
-    func requestConnect(_ host: ServerProfile, kind: MConnectKind, allowDuplicate: Bool = false) {
+    /// `typing`：新开的终端连上、行编辑器起来之后打进这行命令（「继续这个会话」，配 `allowDuplicate`）。
+    func requestConnect(_ host: ServerProfile, kind: MConnectKind, allowDuplicate: Bool = false,
+                        typing command: String? = nil) {
         guard connecting == nil else { return }   // 中转页已盖住下层，不应再有并发请求
-        guard admits({ [weak self] in self?.requestConnect(host, kind: kind, allowDuplicate: allowDuplicate) }) else { return }
+        guard admits({ [weak self] in
+            self?.requestConnect(host, kind: kind, allowDuplicate: allowDuplicate, typing: command)
+        }) else { return }
         // 仅 SFTP 主机无法开终端：自动改走文件浏览（否则连接中页会卡在无法绑定的连接态）。
         let resolved: MConnectKind = (kind == .terminal && host.sftpOnly) ? .sftp : kind
         let req = MConnectRequest(host: host, kind: resolved, origin: tab)
         req.allowDuplicate = allowDuplicate
         req.originInWorkspace = showWorkspace
         connecting = req
-        openTarget = MOpenTarget(hostID: host.persistentModelID, kind: resolved)
+        openTarget = MOpenTarget(hostID: host.persistentModelID, kind: resolved,
+                                 command: resolved == .terminal ? command : nil)
         showWorkspace = true
     }
 
@@ -166,9 +173,10 @@ final class MobileStore {
 
     /// 接管一台 Mac：它上面的全部终端各开一个标签，`focus` 放到前台。`focus` 可以是列表还没推到的
     /// 新终端（刚在 Mac 上开的本机 shell）。
-    func takeOver(_ client: RemoteMacClient, focus: UUID) {
+    /// `typing`：`focus` 接上、行编辑器起来之后打进这行命令（「继续这个会话」）。
+    func takeOver(_ client: RemoteMacClient, focus: UUID, typing command: String? = nil) {
         guard connecting == nil else { return }
-        guard admits({ [weak self] in self?.takeOver(client, focus: focus) }) else { return }
+        guard admits({ [weak self] in self?.takeOver(client, focus: focus, typing: command) }) else { return }
         var sessionIDs = client.sessions.map(\.id)
         if !sessionIDs.contains(focus) { sessionIDs.append(focus) }
         let req = MConnectRequest(host: client.tabHost(for: focus), kind: .terminal, origin: tab)
@@ -176,7 +184,7 @@ final class MobileStore {
         req.originInWorkspace = showWorkspace
         connecting = req
         remoteTakeover = MRemoteTakeover(client: client, sessionIDs: sessionIDs, focus: focus,
-                                         order: client.sessions.macTabOrder)
+                                         order: client.sessions.macTabOrder, focusCommand: command)
         showWorkspace = true
     }
     func openSFTP(_ host: ServerProfile) { requestConnect(host, kind: .sftp) }

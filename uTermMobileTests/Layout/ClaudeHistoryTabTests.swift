@@ -1,0 +1,158 @@
+import Network
+import SwiftData
+import XCTest
+@testable import uTermMobile
+
+/// 「Claude 历史会话」标签：放进工作区、一台主机一个、关掉放掉通道、远控 Mac 没有 `files` 能力时不给入口，
+/// 以及「继续这个会话」新开的终端标签在行编辑器起来之后才打进命令。文件读的是手写的假树（`MobileFakeClaudeTree`），
+/// 终端接假传输，不建任何真实连接。
+@MainActor
+final class ClaudeHistoryTabTests: XCTestCase {
+
+    private func host(_ name: String = "prod-web-01") -> ServerProfile {
+        let host = ServerProfile()
+        host.name = name
+        return host
+    }
+
+    private func unreachableMac() -> RemoteMacClient {
+        RemoteMacClient(macName: "老 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
+                        identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+    }
+
+    // MARK: - 打开 / 关闭
+
+    func testOpensInFocusedPaneAndListsCommandLineSessions() async throws {
+        let ws = MobileWorkspace()
+        let server = host()
+        let (shell, _) = MobileFakeTerminal.tab(host: server, .idle)
+        ws.open(.terminal(shell))
+        let tree = MobileClaudeFixture.standard()
+
+        let history = ws.openHistory(MobileFakeClaudeHistory.tab(host: server, tree: tree))
+
+        XCTAssertEqual(ws.activeTab?.id, history.id, "开在聚焦格的前台")
+        XCTAssertEqual(ws.panes.count, 1)
+        XCTAssertEqual(ws.activeTab?.kind, .sftp)
+        XCTAssertEqual(ws.activeTab?.title, "prod-web-01")
+        let settled = await MobileFakeClaudeHistory.settle(history)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(history.connection.history)
+        XCTAssertEqual(model.scope, .project(try XCTUnwrap(model.currentProject)), "先列终端当前目录所在的项目")
+        XCTAssertEqual(model.visibleFiles.map { model.metadata[$0.path]?.title },
+                       ["登录接口偶发 500", "给订单接口加分页", "排查 502"], "新的在前，桌面版的不列")
+        XCTAssertEqual(model.hiddenCount, 1)
+        XCTAssertEqual(model.resumeCommand(for: model.visibleFiles[0])?.command,
+                       "cd -- '\(MobileClaudeFixture.directory)' && claude --resume \(MobileClaudeFixture.sessionID(1))")
+    }
+
+    func testSameHostReusesItsHistoryTab() {
+        let ws = MobileWorkspace()
+        let server = host()
+        let first = ws.openHistory(MobileFakeClaudeHistory.tab(host: server, tree: MobileClaudeFixture.standard()))
+        let files = FileTab(host: server)
+        ws.open(.files(files))
+        XCTAssertEqual(ws.activeTab?.id, files.id)
+
+        let again = ws.openHistory(MobileFakeClaudeHistory.tab(host: server, tree: MobileClaudeFixture.standard()))
+
+        XCTAssertTrue(again === first, "一台主机至多一个")
+        XCTAssertEqual(ws.tabs.count, 2)
+        XCTAssertEqual(ws.activeTab?.id, first.id, "带到前台")
+        // 打开主机（终端 / 文件）不会复用历史标签。
+        XCTAssertEqual(ws.existing(host: server.persistentModelID, kind: .sftp)?.id, files.id)
+        let other = ws.openHistory(MobileFakeClaudeHistory.tab(host: host("db-01"), tree: MobileClaudeFixture.standard()))
+        XCTAssertFalse(other === first)
+        XCTAssertEqual(ws.tabs.count, 3)
+    }
+
+    func testClosingReleasesTheFileChannel() async throws {
+        let ws = MobileWorkspace()
+        let tree = MobileClaudeFixture.standard()
+        let history = ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: tree))
+        let settled = await MobileFakeClaudeHistory.settle(history)
+        XCTAssertTrue(settled)
+
+        let removed = try XCTUnwrap(ws.close(history.id))
+        removed.shutdown()
+        removed.disposeSession()
+
+        XCTAssertTrue(ws.isEmpty)
+        try await Task.sleep(for: .milliseconds(100))   // 关通道是丢给任务做的
+        let closed = await tree.didClose
+        XCTAssertTrue(closed, "关标签放掉文件通道")
+    }
+
+    func testHistoryTabsAreNotArchived() async throws {
+        let ws = MobileWorkspace()
+        ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: MobileClaudeFixture.standard()))
+        XCTAssertTrue(ws.terminalTabs.isEmpty, "标签归档只看终端标签，历史标签重启不恢复")
+    }
+
+    // MARK: - 配对的 Mac
+
+    /// 远控标签：Mac 没报 `files` 能力（老版本，或还没连上不知道）时长按菜单里不出「Claude 历史会话」——
+    /// 老版本 Mac 收到不认识的消息会断开整条连接。
+    func testRemoteTerminalOfMacWithoutFilesDoesNotOfferHistory() {
+        let client = unreachableMac()
+        XCTAssertFalse(client.supportsFiles)
+        let sessionID = UUID()
+        let remote = TermTab(host: client.tabHost(for: sessionID), remote: MRemoteSource(client: client, sessionID: sessionID))
+        XCTAssertFalse(remote.offersClaudeHistory)
+        XCTAssertNil(remote.claudeHistoryDirectory, "远控协议里没有 Mac 终端的当前目录")
+
+        let (direct, _) = MobileFakeTerminal.tab(host: host(), .idle)
+        XCTAssertTrue(direct.offersClaudeHistory)
+        let (demo, _) = MobileFakeTerminal.tab(host: DemoHostProfile.shared, .idle)
+        XCTAssertFalse(demo.offersClaudeHistory, "体验主机没有真文件系统")
+    }
+
+    /// 硬开（「+」菜单选了一台连不上的 Mac）：标签里说清楚连不上，不会发出文件请求。
+    func testPairedMacThatCannotBeReachedFailsInsideTheTab() async throws {
+        let ws = MobileWorkspace()
+        let client = unreachableMac()
+        let history = ws.openHistory(ClaudeHistoryTab(pairedMac: client))
+        XCTAssertTrue(history.remoteMac === client)
+        XCTAssertEqual(ws.remoteTabIDs(of: client), [history.id], "断开整台 Mac 时一起收掉")
+
+        let failed = await MobileFakeTerminal.waitUntil(timeout: .seconds(30)) { history.connection.failureMessage != nil }
+        XCTAssertTrue(failed)
+        XCTAssertNil(history.connection.history)
+        XCTAssertFalse(history.connection.failureMessage?.isEmpty ?? true)
+        XCTAssertTrue(ws.openHistory(ClaudeHistoryTab(pairedMac: client)) === history, "一台 Mac 一个")
+        XCTAssertEqual(ws.endTakeover(of: client), [history.id])
+    }
+
+    // MARK: - 继续这个会话
+
+    /// 新开的终端标签：连上了、行编辑器还没起来时不打；zsh 打开括号粘贴之后打进命令和回车。
+    func testResumeTypesCommandOnceLineEditorIsReady() async throws {
+        let container = try MobileFixtures.modelContainer(seed: .smoke)
+        let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
+        let ws = MobileWorkspace()
+        ws.openHistory(MobileFakeClaudeHistory.tab(host: server, tree: MobileClaudeFixture.standard()))
+        let command = "cd -- '/home/user/projects/shop-api' && claude --resume \(MobileClaudeFixture.sessionID(1))"
+        // 连上之后 0.7 秒才出提示符（rc 跑得慢），提示符出来时打开括号粘贴。
+        let (term, handles) = MobileFakeTerminal.tab(host: server, .transcript("Last login: today\r\n% \u{1B}[?2004h"))
+        term.controller.start(profile: server, container: container, relay: HostKeyChallengeRelay())
+
+        ws.open(.terminal(term), typing: command)
+
+        XCTAssertEqual(ws.activeTab?.id, term.id, "开到前台")
+        let settled = await MobileFakeTerminal.waitUntilConnected(term.controller)
+        XCTAssertTrue(settled)
+        try await Task.sleep(for: .milliseconds(300))
+        let early = await handles.latest?.writtenText ?? ""
+        XCTAssertFalse(early.contains("claude --resume"), "行编辑器还没起来，不打")
+        let deadline = ContinuousClock.now + .seconds(5)
+        var written = ""
+        while ContinuousClock.now < deadline {
+            written = await handles.latest?.writtenText ?? ""
+            if written.contains(command) { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(written.hasSuffix(command + "\r"), "打进命令和回车：\(written.debugDescription)")
+        XCTAssertEqual(written.components(separatedBy: "claude --resume").count, 2, "只打一次")
+        term.controller.close()
+    }
+}

@@ -33,6 +33,10 @@ struct WorkspaceScreen: View {
     @State private var closeFlow = MTabCloseFlow()
     /// 正在 stat、还没开预览标签的主机（`showPreview`）。
     @State private var previewsBeingChecked: Set<PersistentIdentifier> = []
+    /// 「+」菜单选了「Claude 历史会话」：先选主机。
+    @State private var pickingHistoryHost = false
+    /// 「继续这个会话」没开成（那台 Mac 不能新建终端等）。
+    @State private var resumeError: String?
 
     private var visible: Bool { store.showWorkspace }
 
@@ -94,12 +98,7 @@ struct WorkspaceScreen: View {
         // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
         // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
         .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
-            // 跳过远控标签与体验主机：它们挂的是不入库的临时主机，本来就不在列表里，不是被删了。
-            // 不能按 modelContext 判：被同步删掉的主机 modelContext 也会变 nil，那正是要收掉的。
-            let orphaned = Set(workspace.tabs
-                .filter { $0.terminal?.remote == nil && !DemoHostProfile.isDemo($0.host) }
-                .map { $0.host.persistentModelID })
-                .subtracting(live)
+            let orphaned = orphanedHosts(live: live)
             guard !orphaned.isEmpty else { return }
             for host in orphaned {
                 let closed = workspace.closeSessions(ofHost: host)
@@ -111,6 +110,19 @@ struct WorkspaceScreen: View {
             if workspace.isEmpty { store.showWorkspace = false }
         }
         .sheet(item: $newKind) { kind in newTabSheet(kind).mSheetContentMargins() }
+        .modifier(ClaudeHistoryOverlays(picking: $pickingHistoryHost, resumeError: $resumeError,
+                                        onPickingChanged: syncKeyboard) {
+            historyHostSheet.mSheetContentMargins()
+        })
+    }
+
+    /// 标签挂着、库里却没有了的主机。跳过远控标签（含配对 Mac 的历史会话标签）与体验主机：它们挂的是不入库的临时主机，
+    /// 本来就不在列表里，不是被删了。不能按 modelContext 判：被同步删掉的主机 modelContext 也会变 nil，那正是要收掉的。
+    private func orphanedHosts(live: Set<PersistentIdentifier>) -> Set<PersistentIdentifier> {
+        let saved = workspace.tabs.filter { tab in
+            tab.terminal?.remote == nil && tab.history?.remoteMac == nil && !DemoHostProfile.isDemo(tab.host)
+        }
+        return Set(saved.map { $0.host.persistentModelID }).subtracting(live)
     }
 
     // MARK: - 打开 / 关闭
@@ -145,7 +157,7 @@ struct WorkspaceScreen: View {
             files.controller.start(profile: host, container: context.container, relay: relay)
             tab = .files(files)
         }
-        workspace.open(tab)
+        workspace.open(tab, typing: target.command)
         bindConnecting(tab)
     }
 
@@ -240,7 +252,7 @@ struct WorkspaceScreen: View {
         switch tab {
         case .terminal(let t): req.terminal = t.controller
         case .files(let f): req.sftp = f.controller
-        case .preview: break
+        case .preview, .history: break
         }
     }
 
@@ -272,6 +284,98 @@ struct WorkspaceScreen: View {
             controller.reload()
             workspace.placePreview(FilePreviewTab(host: host, controller: controller), beside: term)
         }
+    }
+
+    // MARK: - Claude 历史会话
+
+    /// 终端标签长按「Claude 历史会话」：直连主机读它的 `~/.claude`（先列终端当前目录所在的项目），
+    /// 远控标签读那台 Mac 的。已经开着就带到前台。
+    private func openHistory(for tabID: UUID) {
+        guard let term = workspace.tab(tabID)?.terminal, term.offersClaudeHistory else { return }
+        workspace.focus(pane: workspace.panes[workspace.paneIndex(containing: tabID) ?? 0].id)
+        if let remote = term.remote {
+            workspace.openHistory(ClaudeHistoryTab(pairedMac: remote.client))
+        } else {
+            workspace.openHistory(ClaudeHistoryTab(server: term.host, directory: term.claudeHistoryDirectory,
+                                                   container: context.container))
+        }
+        syncKeyboard()
+    }
+
+    /// 「继续这个会话」：在同一台主机上新开终端标签，连上、行编辑器起来之后打进命令。
+    /// 直连主机走连接中页（同「新建终端」，主机密钥要确认也在那里）；配对的 Mac 先请它开一个本机终端（开在项目目录里），
+    /// 再整台接管、把那个终端放到前台。
+    private func resume(_ history: ClaudeHistoryTab, command: String, directory: String) {
+        guard history.canResume else { return }
+        if let client = history.remoteMac {
+            Task {
+                do {
+                    let sessionID = try await client.openLocalShell(directory: directory)
+                    store.takeOver(client, focus: sessionID, typing: command)
+                } catch {
+                    resumeError = error.localizedDescription
+                }
+            }
+        } else {
+            store.requestConnect(history.host, kind: .terminal, allowDuplicate: true, typing: command)
+        }
+    }
+
+    /// 「+」菜单的「Claude 历史会话」：选一台主机（或一台配对过的 Mac）。
+    private var historyHostSheet: some View {
+        let candidates = hosts.filter { !DemoHostProfile.isDemo($0) }
+        return NavigationStack {
+            ScrollView {
+                MCardList {
+                    if let macs = remoteMacs {
+                        ForEach(macs.pairedMacs) { mac in
+                            historyRow(icon: "mac", title: mac.name, subtitle: String(localized: "本机")) {
+                                pickingHistoryHost = false
+                                workspace.openHistory(ClaudeHistoryTab(pairedMac: macs.client(for: mac)))
+                            }
+                        }
+                    }
+                    ForEach(candidates) { host in
+                        historyRow(icon: "server", title: host.name, subtitle: host.displayEndpoint) {
+                            pickingHistoryHost = false
+                            workspace.openHistory(ClaudeHistoryTab(server: host, directory: nil, container: context.container))
+                        }
+                    }
+                    if candidates.isEmpty && (remoteMacs?.pairedMacs.isEmpty ?? true) {
+                        Text("没有可连接的主机").font(M.sans(14)).foregroundStyle(M.text3)
+                            .frame(maxWidth: .infinity).padding(.top, 40)
+                    }
+                }
+                .padding(16)
+            }
+            .background(M.canvas)
+            .navigationTitle("Claude 历史会话")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { pickingHistoryHost = false } } }
+        }
+        .task { await remoteMacs?.keepLiveStatusFresh() }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func historyRow(icon: String, title: String, subtitle: String, open: @escaping () -> Void) -> some View {
+        Button(action: open) {
+            HStack(spacing: 12) {
+                MIcon(name: icon, size: 18, color: accent)
+                    .frame(width: 38, height: 38)
+                    .background(accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: title).font(M.sans(15.5, weight: .semibold)).foregroundStyle(M.text)
+                    Text(verbatim: subtitle).font(M.mono(12)).foregroundStyle(M.text3)
+                }
+                Spacer()
+                MIcon(name: "clock", size: 14, color: M.text4, weight: .semibold)
+            }
+            .padding(14)
+            .background(M.card)
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
+        }
+        .buttonStyle(MPressStyle())
     }
 
     /// 用户要关一个标签：要不要先问由 `MTabCloseFlow` 裁决。
@@ -337,7 +441,7 @@ struct WorkspaceScreen: View {
     /// 此刻该拿键盘的终端标签：聚焦格的前台标签、终端模式，且上面没有连接中页 / 新建抽屉。
     /// 连接中页期间一个都没有——键盘窗口恒在最上，会盖住中转页的取消按钮。
     private var keyboardOwner: TermTab? {
-        guard store.connecting == nil, store.showWorkspace, newKind == nil, !awaitingConnect,
+        guard store.connecting == nil, store.showWorkspace, newKind == nil, !awaitingConnect, !pickingHistoryHost,
               let term = workspace.activeTab?.terminal, term.mode == .terminal else { return nil }
         return term
     }
@@ -467,6 +571,11 @@ struct WorkspaceScreen: View {
                 onSelect: { workspace.activate($0) },
                 onClose: requestClose,
                 onNew: { requestNew($0, in: pane) },
+                onNewHistory: {
+                    workspace.focus(pane: pane.id)
+                    pickingHistoryHost = true
+                },
+                onOpenHistory: openHistory(for:),
                 onBack: { store.showWorkspace = false },
                 onAgent: { toggleAgent(in: pane) },
                 onToggleSplit: toggleSplit,
@@ -557,6 +666,10 @@ struct WorkspaceScreen: View {
             FilesSessionBody(tab: files, onClose: { closeTab(files.id) })
         case .preview(let preview):
             FilePreviewSessionBody(tab: preview, onClose: { closeTab(preview.id) })
+        case .history(let history):
+            ClaudeHistorySessionBody(tab: history) { command, directory in
+                resume(history, command: command, directory: directory)
+            }
         }
     }
 
@@ -653,6 +766,26 @@ struct WorkspaceScreen: View {
             .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         }
         .buttonStyle(MPressStyle())
+    }
+}
+
+/// 「Claude 历史会话」的选主机抽屉与「继续这个会话」失败的提示（单独成一层：工作区屏的修饰链已经长到类型检查超时）。
+private struct ClaudeHistoryOverlays<Sheet: View>: ViewModifier {
+    @Binding var picking: Bool
+    @Binding var resumeError: String?
+    var onPickingChanged: () -> Void
+    @ViewBuilder var sheet: () -> Sheet
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $picking) { sheet() }
+            .onChange(of: picking) { _, _ in onPickingChanged() }
+            .alert("无法继续这个会话", isPresented: Binding(get: { resumeError != nil },
+                                                    set: { if !$0 { resumeError = nil } })) {
+                Button("好", role: .cancel) { resumeError = nil }
+            } message: {
+                Text(resumeError ?? "")
+            }
     }
 }
 

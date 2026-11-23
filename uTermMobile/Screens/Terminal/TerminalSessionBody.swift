@@ -41,6 +41,19 @@ final class TermTab: Identifiable {
     /// 能切到 Agent：远控标签没有（Agent 跑在 Mac 那边），体验主机也没有（`run_command` 要真 SSH）。
     var offersAgent: Bool { remote == nil && !isDemo }
 
+    /// 能开「Claude 历史会话」：直连的主机经 SFTP 读；远控标签经那台 Mac 的文件通道读，要它认得文件请求
+    /// （老版本 Mac 收到不认识的消息会断开整条连接，所以不给入口）。体验主机没有真文件系统。
+    var offersClaudeHistory: Bool {
+        if let remote { return remote.client.supportsFiles }
+        return !isDemo
+    }
+
+    /// 历史会话先列哪个项目：直连主机按 shell 报的当前目录（OSC 7）；远控协议里没有 Mac 终端的当前目录，列全部项目。
+    var claudeHistoryDirectory: String? {
+        guard remote == nil else { return nil }
+        return ClaudeProjectPath.directory(fromOSC7: controller.terminal.shadow.workingDirectory)
+    }
+
     /// 远控标签：经 Mac 接入它上面的终端。`transportFactory` 只给截图换成写好的输出，App 里一律走默认的远控通道。
     init(host: ServerProfile, remote: MRemoteSource, transportFactory: MobileTerminalTransportFactory? = nil) {
         self.host = host
