@@ -21,6 +21,8 @@ struct TerminalArea: View {
     /// 标签条的「＋」是否能挑**别的**主机开新标签。终端窗口的标签可连不同主机；工作区窗口
     /// 的 SFTP 侧栏 / 预览 / Agent 都绑在一台服务器上，保持只开同一台。
     var allowsOtherHosts = false
+    /// 右键「历史会话…」做什么。nil = 开独立的历史会话窗口（工作区窗口）；终端窗口给的是切到自己的 Code 模式。
+    var onOpenHistory: ((PaneModel) -> Void)? = nil
 
     @Environment(\.colorScheme) private var appColorScheme
     @Environment(\.openWindow) private var openWindow
@@ -178,10 +180,11 @@ struct TerminalArea: View {
         }
     }
 
-    /// 右键菜单里的「Claude 历史会话…」。文件标签没有。
+    /// 右键菜单里的「历史会话…」。文件标签没有。
     private func claudeHistoryAction(_ tab: TerminalTab) -> (() -> Void)? {
         let pane = tab.payload
         guard pane.fileBuffer == nil else { return nil }
+        if let onOpenHistory { return { onOpenHistory(pane) } }
         let workspace = self.workspace, openWindow = self.openWindow
         return { openWindow.openClaudeHistory(serverID: pane.serverProfileID, session: pane.session, workspace: workspace) }
     }
@@ -238,7 +241,7 @@ struct TerminalTabContextMenu: View {
     let title: String
     /// shell 当前所在的目录；不知道（SSH 会话）时不出这一项。
     var directory: String? = nil
-    /// 打开这台主机上的 Claude 历史会话；nil = 不出这一项。
+    /// 打开这台主机上的历史会话（Claude Code、Codex 等编码工具）；nil = 不出这一项。
     var onOpenClaudeHistory: (() -> Void)? = nil
     let onClose: () -> Void
 
@@ -254,7 +257,7 @@ struct TerminalTabContextMenu: View {
         if let onOpenClaudeHistory {
             Divider()
             Button(action: onOpenClaudeHistory) {
-                Label("Claude 历史会话…", systemImage: "clock.arrow.circlepath")
+                Label("历史会话…", systemImage: "clock.arrow.circlepath")
             }
         }
         Divider()

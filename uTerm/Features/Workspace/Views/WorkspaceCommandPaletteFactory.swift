@@ -8,7 +8,7 @@ enum WorkspaceCommandPaletteFactory {
         let openGroups: () -> Void
         let openImport: () -> Void
         let openSettings: () -> Void
-        /// 当前终端标签所在主机的 Claude 历史会话。没有终端标签在前台时为 nil（不出这一项）。
+        /// 当前终端标签所在主机的历史会话。没有终端标签在前台时为 nil（不出这一项）。
         var openClaudeHistory: (@MainActor () -> Void)? = nil
     }
 
@@ -64,8 +64,8 @@ enum WorkspaceCommandPaletteFactory {
         if let openClaudeHistory = actions.openClaudeHistory {
             items.append(CommandPaletteItem(
                 id: "cmd.claudeHistory", kind: .command,
-                title: String(localized: "Claude 历史会话…"),
-                detail: String(localized: "查看这台主机上 Claude Code 的历史会话，并可继续其中一个"),
+                title: String(localized: "历史会话…"),
+                detail: String(localized: "查看这台主机上编码工具的历史会话，并可继续其中一个"),
                 hint: "↵", group: nil) { openClaudeHistory() })
         }
         items.append(CommandPaletteItem(

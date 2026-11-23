@@ -212,6 +212,7 @@
 				Features/ClaudeHistory/Views/AgentHistoryBrowser.swift,
 				Features/ClaudeHistory/Views/AgentHistoryLocalFiles.swift,
 				Features/ClaudeHistory/Views/ClaudeHistoryWindow.swift,
+				Features/ClaudeHistory/Views/CodeModeView.swift,
 				Features/CommandPalette/CommandPaletteHost.swift,
 				Features/CommandPalette/CommandPaletteItem.swift,
 				Features/CommandPalette/CommandPaletteModel.swift,

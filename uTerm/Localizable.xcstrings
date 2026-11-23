@@ -3095,6 +3095,34 @@
         }
       }
     },
+    "%@ 的会话不参与搜索" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ sessions aren't included in search"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のセッションは検索の対象外です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 세션은 검색에 포함되지 않습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的工作階段不參與搜尋"
+          }
+        }
+      }
+    },
     "%@ 的屏幕" : {
       "localizations" : {
         "en" : {
@@ -3175,6 +3203,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 的解鎖密碼"
+          }
+        }
+      }
+    },
+    "%@ 的记录读不出来：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read %1$@ records: %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ の記録を読み込めません：%2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 기록을 읽을 수 없습니다: %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取 %1$@ 的記錄：%2$@"
           }
         }
       }
@@ -3692,6 +3748,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@，%2$@，%3$lld 台主機"
+          }
+        }
+      }
+    },
+    "%@，%lld 个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, sessions: %2$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@、%2$lld 件のセッション"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, 세션 %2$lld개"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，%2$lld 個工作階段"
+          }
+        }
+      }
+    },
+    "%@，%lld 个会话，已收起" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, sessions: %2$lld, collapsed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@、%2$lld 件のセッション、折りたたみ済み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, 세션 %2$lld개, 접힘"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，%2$lld 個工作階段，已收合"
           }
         }
       }
@@ -9787,6 +9899,7 @@
       }
     },
     "Claude 历史会话 · %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -9815,6 +9928,7 @@
       }
     },
     "Claude 历史会话…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -9838,6 +9952,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude 歷史工作階段…"
+          }
+        }
+      }
+    },
+    "Code 模式列出当前终端标签页所在主机上的编码会话。先新建一个终端标签页。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code mode lists the coding sessions on the host of the current terminal tab. Open a terminal tab first."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code モードには、現在のターミナルタブのホストにあるコーディングセッションが表示されます。まずターミナルタブを開いてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code 모드는 현재 터미널 탭이 연결된 호스트의 코딩 세션을 보여 줍니다. 먼저 터미널 탭을 여세요."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code 模式會列出目前終端機分頁所在主機上的程式碼工作階段。請先新增一個終端機分頁。"
           }
         }
       }
@@ -15484,6 +15626,35 @@
         }
       }
     },
+    "不分组" : {
+      "comment" : "历史会话不分组",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "なし"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그룹 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不分組"
+          }
+        }
+      }
+    },
     "不在列表中" : {
       "localizations" : {
         "en" : {
@@ -15773,6 +15944,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不清除"
+          }
+        }
+      }
+    },
+    "不知道终端当前在哪个目录，无法新开会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The terminal's current directory is unknown, so a new session can't be started"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルの現在のディレクトリがわからないため、新しいセッションを開始できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "터미널의 현재 디렉터리를 알 수 없어 새 세션을 시작할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不知道終端機目前所在的目錄，無法新開工作階段"
           }
         }
       }
@@ -18307,6 +18506,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "僅限區域網路"
+          }
+        }
+      }
+    },
+    "今天" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오늘"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天"
           }
         }
       }
@@ -21598,6 +21825,34 @@
         }
       }
     },
+    "全部会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのセッション"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 세션"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部工作階段"
+          }
+        }
+      }
+    },
     "全部取消" : {
       "localizations" : {
         "en" : {
@@ -24019,6 +24274,34 @@
         }
       }
     },
+    "分组与显示" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grouping and Display"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "グループと表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그룹 및 표시"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分組與顯示"
+          }
+        }
+      }
+    },
     "分组名" : {
       "localizations" : {
         "en" : {
@@ -24071,6 +24354,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "群組名稱"
+          }
+        }
+      }
+    },
+    "分组方式" : {
+      "comment" : "历史会话列表菜单：按什么分组",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Group By"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "グループ分け"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그룹 기준"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分組方式"
           }
         }
       }
@@ -24211,6 +24523,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "切換到 Agent 模式"
+          }
+        }
+      }
+    },
+    "切换到 Code 模式" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to Code Mode"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code モードに切り替え"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code 모드로 전환"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切換到 Code 模式"
           }
         }
       }
@@ -26074,6 +26414,118 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "歷史記錄"
+          }
+        }
+      }
+    },
+    "历史会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session History"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション履歴"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歷史工作階段"
+          }
+        }
+      }
+    },
+    "历史会话 · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session History · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション履歴 · %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록 · %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歷史工作階段 · %@"
+          }
+        }
+      }
+    },
+    "历史会话：这台主机上 Claude Code、Codex 等编码工具的会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session history: sessions from coding tools such as Claude Code and Codex on this host"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション履歴：このホストにある Claude Code、Codex などのコーディングツールのセッション"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록: 이 호스트에 있는 Claude Code, Codex 등 코딩 도구의 세션"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歷史工作階段：這台主機上 Claude Code、Codex 等程式碼工具的工作階段"
+          }
+        }
+      }
+    },
+    "历史会话…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session History…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション履歴…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歷史工作階段…"
           }
         }
       }
@@ -30401,6 +30853,34 @@
         }
       }
     },
+    "在 %@ 里新开一个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start a new session in %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ で新しいセッションを開始"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에서 새 세션 시작"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %@ 中新開一個工作階段"
+          }
+        }
+      }
+    },
     "在 Agent 输入区的模型菜单里切换模型 —— 那里列出所有服务的全部可用模型（取自各自的 /v1/models）。" : {
       "localizations" : {
         "en" : {
@@ -30818,6 +31298,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在「%@」上輸入這 6 位數"
+          }
+        }
+      }
+    },
+    "在「%@」里新开" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start in “%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」で開始"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”에서 시작"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在「%@」中新開"
           }
         }
       }
@@ -31884,6 +32392,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在這台 Mac 上新增終端機"
+          }
+        }
+      }
+    },
+    "在这台主机上新开一个终端标签页，在里面继续这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open a new terminal tab on this host and continue this session there"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストで新しいターミナルタブを開き、そこでこのセッションを続けます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트에서 새 터미널 탭을 열고 그곳에서 이 세션을 계속합니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在這台主機上新開一個終端機分頁，在其中繼續這個工作階段"
           }
         }
       }
@@ -35912,6 +36448,35 @@
         }
       }
     },
+    "工具" : {
+      "comment" : "历史会话按编码工具（Claude Code、Codex…）分组",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tool"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "도구"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        }
+      }
+    },
     "工具 · %@" : {
       "localizations" : {
         "en" : {
@@ -35992,6 +36557,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工具輸出"
+          }
+        }
+      }
+    },
+    "左边列的是在命令行里用 %@ 的会话，内容只读。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The list on the left shows %@ sessions started from the command line. Content is read-only."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左側には、コマンドラインで使った %@ のセッションが並びます。内容は読み取り専用です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "왼쪽에는 명령줄에서 사용한 %@ 세션이 표시됩니다. 내용은 읽기 전용입니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左邊列出的是在命令列中使用 %@ 的工作階段，內容唯讀。"
           }
         }
       }
@@ -45957,6 +46550,7 @@
       }
     },
     "操作未能完成（系统错误码 %d）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -47356,6 +47950,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "中斷連線期間輸出過多，較早的內容已捨棄"
+          }
+        }
+      }
+    },
+    "新会话" : {
+      "comment" : "历史会话列表顶上：新开一个编码会话",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッション"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 세션"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新工作階段"
           }
         }
       }
@@ -49949,6 +50572,63 @@
         }
       }
     },
+    "日期" : {
+      "comment" : "历史会话按日期分组",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日付"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "날짜"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日期"
+          }
+        }
+      }
+    },
+    "昨天" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yesterday"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "昨日"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "어제"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "昨天"
+          }
+        }
+      }
+    },
     "昨天 %@" : {
       "comment" : "日志时间戳，hm 为「13:05」",
       "localizations" : {
@@ -50031,6 +50711,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "要儲存對「%@」的變更嗎？"
+          }
+        }
+      }
+    },
+    "显示" : {
+      "comment" : "历史会话列表菜单：只看哪几种编码工具",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "표시"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示"
           }
         }
       }
@@ -50965,6 +51674,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更新完用 utermctl relay check 確認版本和連通性。"
+          }
+        }
+      }
+    },
+    "更早" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Older"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "それ以前"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更早"
           }
         }
       }
@@ -52847,6 +53584,7 @@
       }
     },
     "本地端口 %lld 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -54138,6 +54876,7 @@
       }
     },
     "查看这台主机上 Claude Code 的历史会话，并可继续其中一个" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -54161,6 +54900,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查看這台主機上 Claude Code 的歷史工作階段，並可繼續其中一個"
+          }
+        }
+      }
+    },
+    "查看这台主机上编码工具的历史会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View coding tool session history on this host"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストにあるコーディングツールのセッション履歴を表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 코딩 도구 세션 기록 보기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看這台主機上程式碼工具的歷史工作階段"
+          }
+        }
+      }
+    },
+    "查看这台主机上编码工具的历史会话，并可继续其中一个" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View coding tool session history on this host and continue one of them"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストにあるコーディングツールのセッション履歴を表示し、その一つを続けられます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 코딩 도구 세션 기록을 보고 그중 하나를 계속할 수 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看這台主機上程式碼工具的歷史工作階段，並可繼續其中一個"
           }
         }
       }
@@ -58502,6 +59297,34 @@
         }
       }
     },
+    "没有终端标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Terminal Tabs"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルタブがありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "터미널 탭 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有終端機分頁"
+          }
+        }
+      }
+    },
     "没有连上 Mac" : {
       "localizations" : {
         "en" : {
@@ -61130,6 +61953,7 @@
       }
     },
     "监听端口 %lld 已被占用" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -68989,6 +69813,34 @@
         }
       }
     },
+    "记录目录 %@（对不上工作目录）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Record folder %@ (no matching working directory)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録フォルダ %@（作業ディレクトリと対応付けできません）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록 폴더 %@(작업 디렉터리와 일치하지 않음)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記錄目錄 %@（對不上工作目錄）"
+          }
+        }
+      }
+    },
     "记进每条结果，如「公司 Wi-Fi ↔ 家里电信」。" : {
       "localizations" : {
         "en" : {
@@ -69887,6 +70739,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "讀取上下文"
+          }
+        }
+      }
+    },
+    "读不了 %@ 的记录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't read %@ records"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ の記録を読み込めません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 기록을 읽을 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取 %@ 的記錄"
           }
         }
       }
@@ -71427,6 +72307,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "輸完密碼 Mac 仍是鎖著的：密碼可能不對，也可能沒輸進鎖定畫面，請重試。"
+          }
+        }
+      }
+    },
+    "过去 30 天" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous 30 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "過去 30 日間"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지난 30일"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "過去 30 天"
+          }
+        }
+      }
+    },
+    "过去 7 天" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous 7 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "過去 7 日間"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지난 7일"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "過去 7 天"
           }
         }
       }
@@ -74198,6 +75134,34 @@
         }
       }
     },
+    "这台主机上没有找到 %@ 的会话记录。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No %@ session records were found on this host."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストに %@ のセッション記録が見つかりません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트에서 %@ 세션 기록을 찾을 수 없습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在這台主機上找不到 %@ 的工作階段記錄。"
+          }
+        }
+      }
+    },
     "这台主机上没有找到 Claude Code 的会话记录（~/.claude/projects）。" : {
       "localizations" : {
         "en" : {
@@ -74250,6 +75214,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這台主機上的 Agent 只能顯示 256 色"
+          }
+        }
+      }
+    },
+    "这台主机上的编码工具都不能在终端里新开会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None of the coding tools on this host can start a session in the terminal"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストのコーディングツールはどれもターミナルで新しいセッションを開始できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 코딩 도구는 모두 터미널에서 새 세션을 시작할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機上的程式碼工具都無法在終端機中新開工作階段"
           }
         }
       }
@@ -77165,6 +78157,7 @@
       }
     },
     "退出码 %lld" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -80554,6 +81547,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Face ID"
+          }
+        }
+      }
+    },
+    "项目" : {
+      "comment" : "历史会话按项目（工作目录）分组",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロジェクト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로젝트"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "專案"
           }
         }
       }

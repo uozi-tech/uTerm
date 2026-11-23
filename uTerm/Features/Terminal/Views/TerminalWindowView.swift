@@ -5,8 +5,8 @@ import SwiftUI
 import SwiftData
 import AppKit
 
-/// 终端窗口内容区两态：纯终端窗格 ⇄ Agent 自然语言。
-enum TerminalWindowContentMode: Hashable { case terminal, agent }
+/// 终端窗口内容区三态：纯终端窗格 ⇄ Agent 自然语言 ⇄ Code（这台主机上编码工具的历史会话）。
+enum TerminalWindowContentMode: Hashable { case terminal, agent, code }
 
 /// 一个独立「纯终端」窗口。**不绑定单台服务器**：每个标签各连各的主机，「在终端中打开」
 /// 把主机作为新标签送进最近活跃的终端窗口（`TerminalWindowRouter`），不再一台主机一个窗口。
@@ -27,6 +27,8 @@ struct TerminalWindowView: View {
 
     @State private var workspace = WorkspaceModel()
     @State private var mode: TerminalWindowContentMode = .terminal
+    /// Code 模式：每台主机一份历史会话的连接（只在内存里，关窗口就没了）。
+    @State private var code = CodeModeModel()
     @State private var didOpen = false
     @State private var palette = CommandPaletteModel()
     /// 最近一次活动终端标签连的主机。标签全关掉（或前台不是终端）时标题栏 / ⌘T 回落到它。
@@ -34,13 +36,16 @@ struct TerminalWindowView: View {
     /// 界面画廊注入的现成模型（标签、假后端都已接好）：不恢复会话、不开新标签、不接真执行器、关时不释放。
     private let isCatalog: Bool
 
-    init(windowID: TerminalWindowID?, catalogModel: WorkspaceModel? = nil) {
+    init(windowID: TerminalWindowID?, catalogModel: WorkspaceModel? = nil,
+         catalogMode: TerminalWindowContentMode = .terminal, catalogCode: CodeModeModel? = nil) {
         self.windowID = windowID
         self.isCatalog = catalogModel != nil
         if let catalogModel {
             _workspace = State(initialValue: catalogModel)
             _didOpen = State(initialValue: true)
+            _mode = State(initialValue: catalogMode)
         }
+        if let catalogCode { _code = State(initialValue: catalogCode) }
     }
 
     @Environment(\.modelContext) private var modelContext
@@ -92,7 +97,10 @@ struct TerminalWindowView: View {
             Group {
                 switch mode {
                 case .terminal:
-                    TerminalArea(workspace: workspace, server: server, allowsOtherHosts: true)
+                    TerminalArea(workspace: workspace, server: server, allowsOtherHosts: true,
+                                 onOpenHistory: { openHistory(from: $0) })
+                case .code:
+                    codeMode
                 case .agent:
                     TerminalAgentView(
                         model: workspace.assistantModel,
@@ -162,7 +170,11 @@ struct TerminalWindowView: View {
             workspace.assistantModel.executor = (try? WorkspaceCommandExecutorFactory.make(
                 server: server, container: modelContext.container))?.executor
         }
-        .onDisappear { if !isCatalog { workspace.dispose() } }
+        .onDisappear {
+            guard !isCatalog else { return }
+            code.close()
+            workspace.dispose()
+        }
         // 全局 CommandGroup 通知广播到所有窗口；controlActiveState == .key 守卫，只让
         // 前台窗口响应。分屏命令仅终端模式生效。
         // ⌘S：终端区里的文件标签（⌘ 点的路径、程序请求预览的文件）。编辑器聚焦时通知里带着正在编辑的文档。
@@ -190,6 +202,30 @@ struct TerminalWindowView: View {
             assistant: workspace.assistantModel,
             providers: providers,
             activeProviderIDString: activeProviderIDString))
+    }
+
+    /// Code 模式：列活动终端标签页那台主机的历史会话。
+    private var codeMode: some View {
+        let serverID = CodeModeRouting.serverID(in: workspace, lastServerID: lastServerID)
+        let server = serverID.flatMap { id in profiles.first { $0.id == id } }
+        return CodeModeView(
+            code: code, server: server,
+            directory: serverID.flatMap { CodeModeRouting.directory(in: workspace, serverID: $0) },
+            run: { server, command in
+                CodeModeRouting.run(command, serverID: server.id, title: server.name, in: workspace)
+                mode = .terminal
+            },
+            onNewTerminal: {
+                if let server = currentServer { openTab(serverID: server.id) }
+            })
+    }
+
+    /// 终端标签页右键「历史会话…」：切到 Code 模式，列那个标签页的主机，定位到它的当前目录。
+    private func openHistory(from pane: PaneModel) {
+        workspace.revealTerminal(paneID: pane.id)
+        code.requestReveal(serverID: pane.serverProfileID,
+                           directory: ClaudeProjectPath.directory(fromOSC7: pane.session.shadow.workingDirectory))
+        mode = .code
     }
 
     /// 在活动组里开一个连 `serverID` 的新标签并切回终端模式。主机已被删除则忽略。
@@ -249,6 +285,12 @@ struct TerminalWindowView: View {
                                title: String(localized: "切换到 Agent 模式"), detail: String(localized: "用自然语言操作"),
                                hint: "", group: nil) {
                 mode = .agent
+            },
+            CommandPaletteItem(id: "term.code", kind: .command,
+                               title: String(localized: "切换到 Code 模式"),
+                               detail: String(localized: "查看这台主机上编码工具的历史会话"),
+                               hint: "", group: nil) {
+                mode = .code
             },
         ] + hostCommandItems()
     }
@@ -322,7 +364,7 @@ private struct TerminalWindowRouterBinding: NSViewRepresentable {
 
 // MARK: - 标题栏
 
-/// 终端窗口自绘标题栏：左让位红绿灯 + 「终端 ⇄ Agent」分段开关；居中主机 · 已连接；
+/// 终端窗口自绘标题栏：左让位红绿灯 + 「终端 | Agent | Code」分段开关；居中主机 · 已连接；
 /// 右端口转发。38px，分区方案 v3：画在窗口画布上，无底色、无分隔线。
 struct TerminalWindowTitleBar: View {
     let host: String
@@ -330,6 +372,9 @@ struct TerminalWindowTitleBar: View {
     @Binding var mode: TerminalWindowContentMode
     let activeForwardCount: Int
     let onOpenForwarding: () -> Void
+
+    /// 左边那一簇（红绿灯让位 + 模式开关）有多宽：居中的主机名两侧都让出这么多，窗口窄时截短主机名，不压到开关上。
+    @State private var leadingWidth: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -342,15 +387,20 @@ struct TerminalWindowTitleBar: View {
                     .truncationMode(.middle)
                 if let session {
                     WSStatusPill(state: session.connectionState)
+                        .fixedSize()
                 }
             }
+            .padding(.horizontal, leadingWidth + 16)
             // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
             .allowsHitTesting(false)
 
             // 两侧簇
             HStack(spacing: 8) {
-                Color.clear.frame(width: 68)   // 让位窗口红绿灯
-                TerminalModeToggle(mode: $mode)
+                HStack(spacing: 8) {
+                    Color.clear.frame(width: 68)   // 让位窗口红绿灯
+                    TerminalModeToggle(mode: $mode)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { leadingWidth = $0 }
                 Spacer()
                 ZStack(alignment: .topTrailing) {
                     WSIconButton(systemName: "arrow.left.arrow.right",
@@ -371,7 +421,8 @@ struct TerminalWindowTitleBar: View {
     }
 }
 
-/// 「终端 | Agent」分段开关（对齐设计稿 terminal.jsx 的 ModeTab）：激活段 accent 底 + 白字。
+/// 「终端 | Agent | Code」分段开关（对齐设计稿 terminal.jsx 的 ModeTab）：激活段 accent 底 + 白字。
+/// 「Agent」「Code」是名字，五种语言都不翻译。
 struct TerminalModeToggle: View {
     @Binding var mode: TerminalWindowContentMode
 
@@ -379,6 +430,8 @@ struct TerminalModeToggle: View {
         HStack(spacing: 2) {
             segment(.terminal, label: String(localized: "终端", comment: "终端 / Agent 模式切换"), systemImage: "terminal")
             segment(.agent, label: "Agent", systemImage: "sparkles")
+            segment(.code, label: "Code", systemImage: "chevron.left.forwardslash.chevron.right")
+                .help(String(localized: "历史会话：这台主机上 Claude Code、Codex 等编码工具的会话"))
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))

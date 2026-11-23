@@ -2,22 +2,60 @@ import AppKit
 import SwiftUI
 import UDesignKit
 
-/// 历史会话窗口的内容：左边会话列表，右边选中会话的对话。
+/// 「＋」新会话：默认开在哪个目录、选好工具之后怎么开（新开一个终端标签页跑 `command`）。
+struct AgentHistoryNewSession {
+    /// 终端当前目录；不知道为 nil（按钮不可用）。
+    let directory: String?
+    let start: (_ tool: AgentHistoryTool, _ command: String, _ directory: String) -> Void
+}
+
+/// 要列表定位到哪个目录（展开那一组并滚过去）。每次请求换一个 `generation`，同一个目录再要一次也会再滚。
+struct AgentHistoryReveal: Equatable {
+    let directory: String
+    let generation: Int
+}
+
+/// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口和终端窗口的 Code 模式都是它。
 struct AgentHistoryBrowser: View {
     let history: AgentHistoryModel
     let onResume: (AgentHistorySessionFile) -> Void
+    var newSession: AgentHistoryNewSession? = nil
+    var reveal: AgentHistoryReveal? = nil
 
     @Environment(\.scenePhase) private var scenePhase
+    /// 列表的宽度：外面给了就记在外面（Code 模式换主机时不变），没给记在这里。
+    @State private var ownWidth: Double
+    private let externalWidth: Binding<Double>?
+    private var sidebarWidth: Binding<Double> { externalWidth ?? $ownWidth }
+
+    /// 列表的宽度范围；窗口窄时上限再收，给对话留出 `minimumDetailWidth`。
+    static let sidebarRange = 220.0...420.0
+    static let minimumDetailWidth = 420.0
+
+    init(history: AgentHistoryModel, onResume: @escaping (AgentHistorySessionFile) -> Void,
+         newSession: AgentHistoryNewSession? = nil, reveal: AgentHistoryReveal? = nil,
+         sidebarWidth: Binding<Double>? = nil) {
+        self.history = history
+        self.onResume = onResume
+        self.newSession = newSession
+        self.reveal = reveal
+        externalWidth = sidebarWidth
+        _ownWidth = State(initialValue: 300)
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            AgentHistorySessionList(history: history)
-                .frame(width: 300)
-            Rectangle().fill(UD.border).frame(width: 1)
-            detail
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            let upper = max(Self.sidebarRange.lowerBound,
+                            min(Self.sidebarRange.upperBound, Double(proxy.size.width) - Self.minimumDetailWidth))
+            HStack(spacing: 0) {
+                AgentHistorySessionList(history: history, newSession: newSession, reveal: reveal)
+                    .frame(width: min(max(sidebarWidth.wrappedValue, Self.sidebarRange.lowerBound), upper))
+                ColumnResizer(width: sidebarWidth, range: Self.sidebarRange.lowerBound...upper, sign: 1)
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        // 实时跟随只在看得见时查：窗口关了、缩进程序坞 / App 隐藏（场景进了后台）就停，回来马上查一次。
+        // 实时跟随只在看得见时查：窗口关了、缩进程序坞 / App 隐藏（场景进了后台）、切走了模式就停，回来马上查一次。
         .onAppear { history.setTranscriptVisible(scenePhase != .background) }
         .onDisappear { history.setTranscriptVisible(false) }
         .onChange(of: scenePhase) { _, phase in history.setTranscriptVisible(phase != .background) }
@@ -47,20 +85,41 @@ struct AgentHistoryBrowser: View {
             .id(ObjectIdentifier(transcript))
         } else {
             RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
-                               detail: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
+                               detail: AgentHistoryText.selectSessionDetail(tools: listedTools))
         }
+    }
+
+    private var listedTools: [AgentHistoryTool] {
+        history.availableTools.isEmpty ? history.configuredTools : history.availableTools
     }
 }
 
 // MARK: - 会话列表
 
+/// 会话列表：顶上搜索框、「＋」新会话、分组菜单、刷新；下面按分组列（组可以折起来），搜索时换成搜索结果。
 struct AgentHistorySessionList: View {
     let history: AgentHistoryModel
+    var newSession: AgentHistoryNewSession? = nil
+    var reveal: AgentHistoryReveal? = nil
+
+    @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
+    @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
+    /// 还没定位成功的那一次请求（组还没列出来）：列表有了变化再试。
+    @State private var pendingReveal: AgentHistoryReveal?
+
+    /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
+    private var grouping: AgentHistoryGrouping {
+        let stored = AgentHistoryListPreferences.decodeGrouping(groupingRaw)
+        return stored == .tool && !history.isMultiTool ? .default : stored
+    }
+
+    private var groupingChoices: [AgentHistoryGrouping] {
+        AgentHistoryGrouping.allCases.filter { $0 != .tool || history.isMultiTool }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            searchBar
             Rectangle().fill(UD.border).frame(height: 1)
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
@@ -74,15 +133,33 @@ struct AgentHistorySessionList: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .onAppear { history.setShownTools(AgentHistoryListPreferences.decodeTools(shownToolsRaw)) }
+        .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
     }
 
-    private var searchBar: some View {
+    private var header: some View {
         @Bindable var history = history
         return VStack(alignment: .leading, spacing: 4) {
-            UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
-                          showsHotkeyChip: false)
-                .onSubmit { history.submitSearch() }
-                .help(AgentHistoryText.searchHelp)
+            HStack(spacing: 2) {
+                UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
+                              showsHotkeyChip: false)
+                    .onSubmit { history.submitSearch() }
+                    .help(AgentHistoryText.searchHelp)
+                    .padding(.trailing, 4)
+                if let newSession { newSessionButton(newSession) }
+                optionsMenu
+                Button {
+                    Task { await history.reload() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.udPlain)
+                .iconButtonHover(cornerRadius: 6)
+                .help(String(localized: "刷新"))
+                .accessibilityLabel(Text("刷新"))
+            }
             if let problem = history.searchProblem {
                 Text(AgentHistoryText.searchProblem(problem))
                     .font(.system(size: 11))
@@ -90,54 +167,96 @@ struct AgentHistorySessionList: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.bottom, 8)
+        .padding(.vertical, 6)
+        .frame(minHeight: WorkspacePaneHeaderLayout.height)
     }
 
-    private var header: some View {
-        HStack(spacing: 6) {
+    /// 「＋」：能新开的工具不止一种时先选工具，只有一种就直接开。
+    @ViewBuilder private func newSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
+        let tools = history.newSessionTools(directory: newSession.directory)
+        let help = tools.isEmpty && newSession.directory != nil
+            ? String(localized: "这台主机上的编码工具都不能在终端里新开会话")
+            : AgentHistoryText.newSessionHelp(directory: newSession.directory)
+        if tools.count > 1, let directory = newSession.directory {
             Menu {
-                if let current = history.currentProject {
-                    Button(AgentHistoryText.currentProjectItem(current)) {
-                        Task { await history.setScope(.project(current)) }
-                    }
-                }
-                Button(String(localized: "全部项目")) { Task { await history.setScope(.all) } }
-                let others = history.projects.filter { $0.id != history.currentProject?.id }.prefix(40)
-                if !others.isEmpty {
-                    Section(String(localized: "其他项目")) {
-                        ForEach(Array(others)) { project in
-                            Button(AgentHistoryText.projectName(project)) {
-                                Task { await history.setScope(.project(project)) }
-                            }
-                        }
+                Section(AgentHistoryText.newSessionTitle(directory: directory)) {
+                    ForEach(tools) { tool in
+                        Button(tool.displayName) { start(tool, in: directory, newSession) }
                     }
                 }
             } label: {
-                Text(scopeTitle)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
+                Image(systemName: "plus")
             }
             .menuStyle(.borderlessButton)
-            .fixedSize(horizontal: false, vertical: true)
-            .help(String(localized: "切换项目"))
-            Spacer(minLength: 0)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .iconButtonHover(cornerRadius: 6)
+            .help(help)
+            .accessibilityLabel(Text(AgentHistoryText.newSession))
+        } else {
             Button {
-                Task { await history.reload() }
+                if let tool = tools.first, let directory = newSession.directory { start(tool, in: directory, newSession) }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Image(systemName: "plus")
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.udPlain)
             .iconButtonHover(cornerRadius: 6)
-            .help(String(localized: "刷新"))
-            .accessibilityLabel(Text("刷新"))
+            .disabled(tools.isEmpty)
+            .help(help)
+            .accessibilityLabel(Text(AgentHistoryText.newSession))
         }
-        .padding(.horizontal, 10)
-        .frame(height: 40)
     }
 
-    private var scopeTitle: String { AgentHistoryText.scopeTitle(history.scope) }
+    private func start(_ tool: AgentHistoryTool, in directory: String, _ newSession: AgentHistoryNewSession) {
+        guard let command = history.newSessionCommand(tool: tool, directory: directory) else { return }
+        newSession.start(tool, command, directory)
+    }
+
+    /// 分组方式、只看哪几种工具、恢复默认。排序这一轮只有「最近更新」一种，不出。
+    private var optionsMenu: some View {
+        Menu {
+            Picker(selection: Binding(get: { grouping }, set: { groupingRaw = $0.rawValue })) {
+                ForEach(groupingChoices) { choice in
+                    Text(AgentHistoryText.groupingName(choice)).tag(choice)
+                }
+            } label: {
+                Text("分组方式", comment: "历史会话列表菜单：按什么分组")
+            }
+            .pickerStyle(.inline)
+            if history.isMultiTool {
+                Section(String(localized: "显示", comment: "历史会话列表菜单：只看哪几种编码工具")) {
+                    let effective = history.effectiveTools
+                    ForEach(history.availableTools) { tool in
+                        Toggle(tool.displayName, isOn: Binding(
+                            get: { effective.contains(tool) },
+                            set: { _ in
+                                let next = AgentHistoryListing.toggling(tool, shown: history.shownTools,
+                                                                        available: history.availableTools)
+                                shownToolsRaw = AgentHistoryListPreferences.encodeTools(next)
+                            }))
+                        .disabled(effective == [tool])
+                    }
+                }
+            }
+            Divider()
+            Button(String(localized: "恢复默认")) {
+                groupingRaw = AgentHistoryGrouping.default.rawValue
+                shownToolsRaw = ""
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 26, height: 26)
+        .contentShape(Rectangle())
+        .iconButtonHover(cornerRadius: 6)
+        .help(String(localized: "分组与显示"))
+        .accessibilityLabel(Text("分组与显示"))
+    }
 
     @ViewBuilder private var content: some View {
         switch history.phase {
@@ -145,7 +264,7 @@ struct AgentHistorySessionList: View {
             RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
         case .empty:
             RemoteMacStateView(systemImage: "tray", title: String(localized: "没有历史会话"),
-                               detail: AgentHistoryText.noHistoryDetail)
+                               detail: AgentHistoryText.noHistoryDetail(tools: history.configuredTools))
         case .failed(let message):
             RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取会话列表"),
                                detail: message) {
@@ -168,36 +287,119 @@ struct AgentHistorySessionList: View {
     private var emptyDetail: String { AgentHistoryText.emptyListDetail(hidden: history.hiddenCount) }
 
     private func list(_ files: [AgentHistorySessionFile]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(files) { file in
-                    AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                                           showsProject: history.scope == .all,
-                                           isSelected: history.selectedFile?.path == file.path)
-                        .onTapGesture { history.select(file) }
-                }
-                if history.hasMore {
-                    // 滚到底露出来就再读一批。行数变了它就是一个新视图：窗口高、读完一批它还露着时也会接着读。
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("正在读取…")
-                            .font(UD.caption)
-                            .foregroundStyle(UD.text4)
+        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata,
+                                                date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
+        let showsTool = history.isMultiTool
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(groups) { group in
+                        let collapsed = history.collapsedGroups.contains(group.id)
+                        if group.kind != .all {
+                            AgentHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
+                                .id(group.id)
+                        }
+                        if !collapsed {
+                            ForEach(group.files) { file in
+                                AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
+                                                       showsProject: grouping != .project, showsTool: showsTool,
+                                                       isSelected: history.selectedFile?.path == file.path)
+                                    .onTapGesture { history.select(file) }
+                            }
+                        }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .id(files.count)
-                    .onAppear { history.loadMore() }
-                } else if history.hiddenCount > 0 {
-                    Text(AgentHistoryText.hiddenNote(history.hiddenCount))
-                        .font(UD.caption)
-                        .foregroundStyle(UD.text4)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
+                    footer(files)
                 }
+                .padding(6)
             }
-            .padding(6)
+            .onAppear { pendingReveal = reveal }
+            .onChange(of: reveal) { _, request in pendingReveal = request }
+            .onChange(of: pendingReveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
+            .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
         }
+    }
+
+    /// 定位到终端当前目录那一组：展开它并滚过去。还没列到它就等列表变了再试。
+    private func tryReveal(_ groups: [AgentHistoryGroup], proxy: ScrollViewProxy) {
+        guard let request = pendingReveal, grouping == .project,
+              let id = AgentHistoryListing.groupID(containing: request.directory, in: groups) else { return }
+        pendingReveal = nil
+        history.collapsedGroups.remove(id)
+        Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
+    }
+
+    private func toggle(_ id: String) {
+        if history.collapsedGroups.contains(id) {
+            history.collapsedGroups.remove(id)
+        } else {
+            history.collapsedGroups.insert(id)
+        }
+    }
+
+    @ViewBuilder private func footer(_ files: [AgentHistorySessionFile]) -> some View {
+        if history.hasMore {
+            // 滚到底露出来就再读一批。行数变了它就是一个新视图：窗口高、读完一批它还露着时也会接着读。
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("正在读取…")
+                    .font(UD.caption)
+                    .foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .id(files.count)
+            .onAppear { history.loadMore() }
+        } else if history.hiddenCount > 0 {
+            Text(AgentHistoryText.hiddenNote(history.hiddenCount))
+                .font(UD.caption)
+                .foregroundStyle(UD.text4)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+        }
+        ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
+            SettingsInlineNote(tone: .warning,
+                               text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
+        }
+    }
+}
+
+/// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。
+private struct AgentHistoryGroupHeader: View {
+    let group: AgentHistoryGroup
+    let collapsed: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(UD.text4)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .frame(width: 10)
+                Text(AgentHistoryText.groupTitle(group))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(UD.text2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(verbatim: "\(group.files.count)")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.udPlain)
+        .padding(.top, 4)
+        .help(AgentHistoryText.groupHelp(group).map { Text(verbatim: $0) } ?? Text(verbatim: ""))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed)))
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -210,11 +412,15 @@ struct AgentHistorySearchResults: View {
 
     var body: some View {
         if search.sessions.isEmpty, !search.isRunning {
-            emptyState
+            VStack(spacing: 0) {
+                excludedNote
+                emptyState
+            }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     status
+                    excludedNote
                     ForEach(search.sessions) { session in
                         group(session)
                     }
@@ -222,6 +428,14 @@ struct AgentHistorySearchResults: View {
                 }
                 .padding(6)
             }
+        }
+    }
+
+    /// 有的工具的会话没参与搜索（记录的格式没法在主机上搜）：结果上方说一句。
+    @ViewBuilder private var excludedNote: some View {
+        let excluded = history.searchExcludedTools
+        if !excluded.isEmpty, search.phase != .failed(AgentHistoryText.searchUnsupported(excluded)) {
+            note(AgentHistoryText.searchUnsupported(excluded))
         }
     }
 
@@ -284,10 +498,13 @@ struct AgentHistorySearchResults: View {
     private func group(_ session: AgentHistorySearchSession) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if history.isMultiTool { AgentHistoryToolBadge(tool: session.file.tool, size: 14) }
+                    Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(UD.text)
+                        .lineLimit(1)
+                }
                 AgentSessionTimeText(history: history, file: session.file) { activity in
                     AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all, activity: activity)
                 }
@@ -299,7 +516,7 @@ struct AgentHistorySearchResults: View {
             .padding(.top, 2)
             .padding(.bottom, 2)
             ForEach(session.hits) { hit in
-                AgentHistorySearchHitRow(hit: hit, isSelected: isOpen(hit, in: session))
+                AgentHistorySearchHitRow(hit: hit, tool: session.file.tool, isSelected: isOpen(hit, in: session))
                     .onTapGesture { history.openHit(hit, in: session) }
             }
             if session.hasMoreHits {
@@ -316,11 +533,12 @@ struct AgentHistorySearchResults: View {
 /// 一条命中：谁说的 + 前后文，命中的字加粗着色。
 private struct AgentHistorySearchHitRow: View {
     let hit: AgentHistorySearchHit
+    let tool: AgentHistoryTool
     let isSelected: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(AgentHistoryText.roleLabel(hit.role))
+            Text(AgentHistoryText.roleLabel(hit.role, tool: tool))
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(UD.text4)
             Text(AgentHistorySnippetText.attributed(hit.snippet, match: UD.accent))
@@ -338,26 +556,34 @@ private struct AgentHistorySearchHitRow: View {
     }
 }
 
+/// 会话一行：（几种工具时）工具标记 + 标题，第二行 时间 · 大小 · 分支 ·（不按项目分组时）项目。
 private struct AgentHistorySessionRow: View {
     let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     let showsProject: Bool
+    var showsTool = false
     let isSelected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(UD.text)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            AgentSessionTimeText(history: history, file: file) { activity in
-                AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            if showsTool {
+                AgentHistoryToolBadge(tool: file.tool, size: 15)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             }
-            .font(.system(size: 11))
-            .foregroundStyle(UD.text3)
-            .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                AgentSessionTimeText(history: history, file: file) { activity in
+                    AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -462,9 +688,7 @@ struct AgentTranscriptPane: View {
             if transcript.subagent == nil {
                 UDButton(title: String(localized: "继续这个会话"), systemImage: "play.fill", action: onResume)
                     .disabled(!canResume)
-                    .help(canResume
-                          ? String(localized: "在这台主机上新开一个终端标签页，执行 claude --resume")
-                          : String(localized: "不知道这个会话的工作目录，无法继续"))
+                    .help(AgentHistoryText.resumeHelp(transcript.file.tool, canResume: canResume))
             }
         }
         .padding(.horizontal, 14)
@@ -484,6 +708,7 @@ struct AgentTranscriptPane: View {
                     top
                     ForEach(items) { item in
                         AgentTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
+                                           tool: transcript.file.tool,
                                            subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
                                            isHighlighted: item.id == transcript.highlightedItemID,
                                            expanded: $expanded)
@@ -649,6 +874,8 @@ private struct AgentTranscriptRow: View {
     let showsRole: Bool
     /// 子代理的记录：「用户」那一侧标成「任务」。
     var inSubagent = false
+    /// 回答的一方叫什么。
+    var tool: AgentHistoryTool = .claude
     /// 这次调用派出的子代理（找得到记录的才有）。
     let subagent: AgentSubagentLink?
     let onOpenSubagent: (AgentSubagentLink) -> Void
@@ -659,7 +886,7 @@ private struct AgentTranscriptRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if showsRole {
-                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent))
+                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent, tool: tool))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(UD.text3)
                     .padding(.top, 6)

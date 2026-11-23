@@ -5,7 +5,7 @@ import SwiftUI
 import UDesignKit
 import UPaneGroups
 
-/// 「Claude 历史会话」窗口的身份：哪台主机、打开时终端在哪个目录。同一台主机同一个目录再开带出已有的那个。
+/// 「历史会话」窗口的身份：哪台主机、打开时终端在哪个目录。同一台主机同一个目录再开带出已有的那个。
 nonisolated struct ClaudeHistoryWindowID: Codable, Hashable, Sendable {
     nonisolated enum Host: Codable, Hashable, Sendable {
         /// 这台 Mac（经辅助程序读文件）。
@@ -87,7 +87,7 @@ final class ClaudeHistoryResumeRouter {
     }
 }
 
-/// 「继续这个会话」：在同一台主机上开新终端标签，执行 `cd -- '<目录>' && claude --resume <ID>`。
+/// 「继续这个会话」「＋新会话」：在同一台主机上开新终端标签，执行数据源给的命令（如 `cd -- '<目录>' && claude --resume <ID>`）。
 /// 命令经 `startTrackedRun` 打进去：连上、等行编辑器起来之后才打，用户看到的就是这一行命令。
 /// 不包子 shell：退出 Claude Code 之后 shell 留在项目目录里（SSH 的新标签是从主目录起的）。
 @MainActor
@@ -191,8 +191,10 @@ final class ClaudeHistoryWindowModel {
 
     func open(container: ModelContainer, macs: RemoteMacDirectory) async {
         if connection == nil {
+            // 列表按项目分组、一直列全部项目（打开时终端所在的那一组由列表定位过去）；几种编码工具的记录都读。
             connection = AgentHistoryConnection(preferredDirectory: windowID.directory,
                                                 allowsCommands: { [weak self] in self?.sftpOnly != true },
+                                                tools: AgentHistoryTool.allCases, followsCurrentProject: false,
                                                 connect: makeConnect(container: container, macs: macs))
         }
         await connection?.open()
@@ -230,7 +232,8 @@ final class ClaudeHistoryWindowModel {
     }
 }
 
-/// 「Claude 历史会话」窗口：左边会话列表，右边只读的对话内容。
+/// 「历史会话」窗口：左边会话列表（可分组），右边只读的对话内容。
+/// 工作区窗口、本机终端窗口、配对的 Mac 的窗口从标签页右键打开它；终端窗口用自己的 Code 模式（同一个列表组件）。
 struct ClaudeHistoryWindowView: View {
     let windowID: ClaudeHistoryWindowID?
 
@@ -278,8 +281,8 @@ struct ClaudeHistoryWindowView: View {
     }
 
     private var title: String {
-        guard let name = model?.hostName, !name.isEmpty else { return String(localized: "Claude 历史会话") }
-        return String(localized: "Claude 历史会话 · \(name)")
+        guard let name = model?.hostName, !name.isEmpty else { return String(localized: "历史会话") }
+        return String(localized: "历史会话 · \(name)")
     }
 
     private var titleBar: some View {
@@ -305,7 +308,15 @@ struct ClaudeHistoryWindowView: View {
                     }
                 }
             case .ready(let history):
-                AgentHistoryBrowser(history: history, onResume: { file in resume(file, history: history) })
+                AgentHistoryBrowser(history: history,
+                                    onResume: { file in
+                                        guard let plan = history.resumeCommand(for: file) else { return }
+                                        run(plan.command, directory: plan.directory)
+                                    },
+                                    newSession: AgentHistoryNewSession(directory: windowID?.directory) { _, command, directory in
+                                        run(command, directory: directory)
+                                    },
+                                    reveal: windowID?.directory.map { AgentHistoryReveal(directory: $0, generation: 0) })
             }
         } else if model != nil {
             RemoteMacProgressView(text: String(localized: "正在连接…"))
@@ -325,20 +336,21 @@ struct ClaudeHistoryWindowView: View {
         await model.open(container: modelContext.container, macs: macs)
     }
 
-    private func resume(_ file: AgentHistorySessionFile, history: AgentHistoryModel) {
-        guard let windowID, let model, let plan = history.resumeCommand(for: file) else { return }
+    /// 在那台主机上新开终端跑 `command`（继续一个会话，或者新开一个）。
+    private func run(_ command: String, directory: String) {
+        guard let windowID, let model else { return }
         switch windowID.host {
         case .local:
-            ClaudeHistoryResume.local(command: plan.command, directory: plan.directory, registry: registry)
+            ClaudeHistoryResume.local(command: command, directory: directory, registry: registry)
         case .server(let id):
-            ClaudeHistoryResume.ssh(serverID: id, title: model.hostName, command: plan.command,
+            ClaudeHistoryResume.ssh(serverID: id, title: model.hostName, command: command,
                                     origin: windowID.origin, registry: registry)
         case .pairedMac(let macID):
             let openWindow = openWindow
             Task {
                 do {
-                    try await ClaudeHistoryResume.pairedMac(macID: macID, directory: plan.directory,
-                                                            command: plan.command, openWindow: openWindow)
+                    try await ClaudeHistoryResume.pairedMac(macID: macID, directory: directory,
+                                                            command: command, openWindow: openWindow)
                 } catch {
                     resumeError = error.localizedDescription
                 }
