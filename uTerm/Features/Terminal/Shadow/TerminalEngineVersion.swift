@@ -18,7 +18,8 @@ nonisolated enum TerminalEngineVersion {
     /// 提交、快照修订号加了一，都不能记**（宁可走回放流也别拿另一种格式去解）。每一条都要能一路走到 `current`，
     /// 键和值的 Ghostty 提交、快照修订号必须相同（`TerminalEngineLockTests` 核这两条）。
     static let sameSnapshotFormat: [String: String] = [
-        // 0024 只加了渲染线程上报「这一帧交到图层」（include/ghostty.h、Surface.zig、apprt/embedded.zig、renderer/）。
+        // p0024 相对 p0023 只加了渲染线程上报「这一帧交到图层」（include/ghostty.h、Surface.zig、apprt/embedded.zig、renderer/）。
+        // 那时它是我们的 0024；2026-11-23 起它是上游的 0023、最低对比度改号成 0024，补丁集没变，版本串也没变。
         "ghostty-5ebe501a+p0023/snapshot-1": "ghostty-5ebe501a+p0024/snapshot-1",
     ]
 

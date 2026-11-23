@@ -1,7 +1,7 @@
 // swift-tools-version: 6.2
-// uTerm 的 fork：上游 Lakr233/libghostty-spm，基线 tag 2.2.2026110702（1d84cf66），Ghostty 042b16b6。
+// uTerm 的 fork：上游 Lakr233/libghostty-spm，基线 tag 2.2.2026112301（1f378020），Ghostty 5ebe501a。
 // 带 GhosttyKit / GhosttyTerminal 两个 Swift target（GhosttyTerminal 有 uTerm 的本地补丁）和两个二进制：
-//   - libghostty（GhosttyKit.xcframework）：上游 21 个补丁 + uTerm 的 0022 保色相最低对比度、0023 逐像素平滑滚动；
+//   - libghostty（GhosttyKit.xcframework）：上游的 0001–0023 + uTerm 的 0024 保色相最低对比度；
 //   - GhosttyVt（ghostty-vt.xcframework）：libghostty-vt，影子终端用，和 GhosttyKit 同一棵打过补丁的源码树编的预链接静态库。
 // 二进制不进版本库：`make engine` 按 ENGINE.lock 取 zip、校验 sha256、解到 BinaryTarget/。
 // 相对上游 manifest 的改动、补丁清单、升级步骤见 UTERM-PATCHES.md，出包见 BUILD.md。

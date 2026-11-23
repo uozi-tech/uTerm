@@ -80,7 +80,7 @@
                 // place the offset stands for.
                 let delta = position.pixels(to: mapping.enginePixels(offsetPixels: offsetPixels))
                 guard position.isAvailable, abs(delta) > 0.001 else { return }
-                // uTerm 本地补丁：带编号地滚（引擎补丁 0024），然后原地等带着这一步的那一帧交到图层，和 UIKit 这一拍一起提交。
+                // 带编号地滚（上游的引擎补丁 0023），然后原地等带着这一步的那一帧交到图层，和 UIKit 这一拍一起提交（上游同）。
                 surface?.smoothScrollTracked(byPixels: delta)
                 systemScrollWaitForFrame()
                 // uTerm 本地补丁：交给引擎的每一步给回归测试逐帧读（`UTermScrollTrace`，关着时不记）：

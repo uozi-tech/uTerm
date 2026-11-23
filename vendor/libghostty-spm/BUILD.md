@@ -1,6 +1,6 @@
 # 出包：从上游 tag 编出 GhosttyKit 和 ghostty-vt
 
-`ENGINE.lock` 记的两个 zip 是照这里的步骤编出来的（最近一次 2026-11-17，换到上游 `2.2.2026111701`；第一次是 2026-11-09 的 M17 出包演练）。平时不用重编：`make engine` 从现成的 zip 取。
+`ENGINE.lock` 记的两个 zip 是照这里的步骤编出来的（最近一次 2026-11-23，换到上游 `2.2.2026112301`；第一次是 2026-11-09 的 M17 出包演练）。平时不用重编：`make engine` 从现成的 zip 取。
 换 Ghostty 提交、换上游 tag、加减引擎补丁时才走一遍，完了按 `UTERM-PATCHES.md` 的「升级步骤」改清单和版本串。
 
 **下面第 1、2 步和第 3 步的核对已经写成脚本**：`scripts/build-ghostty-engine.sh`（`make engine-build`，自测
@@ -22,7 +22,7 @@ sha256、绕开全局 gitconfig 的 `url.*` 改写、接上我们的补丁（编
 | 东西 | 版本 | 说明 |
 |---|---|---|
 | Zig | **0.17.1**，`zig-aarch64-macos-0.17.1.tar.xz`（54,001,240 字节，sha256 `75f1bc7a…dd8d`，与 `ziglang.org/download/index.json` 对一下） | Ghostty `5ebe501a` 要求 0.17.1（`build.zig.zon` 的 `minimum_zig_version`）；0.17.1 编 iOS / visionOS 不再需要上游的 Zig std 补丁 |
-| libghostty-spm | tag `2.2.2026111701`（`b9694b50`） | 带 `build.sh`、`Script/`、上游的 `Patches/ghostty/0001`–`0022`、`Patches/zig/`、`Ghostty.ref` |
+| libghostty-spm | tag `2.2.2026112301`（`1f378020`） | 带 `build.sh`、`Script/`、上游的 `Patches/ghostty/0001`–`0023`、`Patches/zig/`、`Ghostty.ref` |
 | Ghostty | `5ebe501a63425b13d9952e8c54682c046386e5af` | `build.sh` 自己按 `Ghostty.ref` 完整克隆（`.git` 约 100 MB）；完整克隆才能得到 9 位短哈希的版本串 `1.4.1-HEAD+5ebe501a6` |
 | Xcode | 当前发版用的那一版 | `xcodebuild -create-xcframework`、`ld -r`、`lipo` |
 | 磁盘 | 预留 5 GB | `build/cache` 编完 4.0 GB，Zig 全局缓存 249 MB，源码树 774 MB |
@@ -35,13 +35,12 @@ sha256、绕开全局 gitconfig 的 `url.*` 改写、接上我们的补丁（编
 ## 1. GhosttyKit.xcframework
 
 ```sh
-git clone --depth 1 --branch 2.2.2026111701 https://github.com/Lakr233/libghostty-spm
+git clone --depth 1 --branch 2.2.2026112301 https://github.com/Lakr233/libghostty-spm
 cd libghostty-spm
 
-# 我们的引擎补丁接在上游 0001–0022 后面，build.sh 每个 target 都会自动打上。
+# 我们的引擎补丁接在上游 0001–0023 后面，build.sh 每个 target 都会自动打上。
 # 补丁脚本按仓库里的相对路径找辅助脚本（Script/support），必须放进这个检出的 Patches/ghostty/，不能另指目录。
-cp <uTerm>/vendor/libghostty-spm/Patches/ghostty/0023-uterm-minimum-contrast.patch \
-   <uTerm>/vendor/libghostty-spm/Patches/ghostty/0024-uterm-scroll-frame-presented.patch Patches/ghostty/
+cp <uTerm>/vendor/libghostty-spm/Patches/ghostty/0024-uterm-minimum-contrast.patch Patches/ghostty/
 
 # PATH 里要有 Zig 0.17.1；Homebrew 的 rsync 排在前面时组装 xcframework 那步可能出错，干脆用系统的
 PATH=<zig 目录>:/usr/bin:/bin:/usr/sbin:/sbin ./build.sh --platforms macos,ios,maccatalyst,visionos --skip-tests
@@ -51,18 +50,22 @@ PATH=<zig 目录>:/usr/bin:/bin:/usr/sbin:/sbin ./build.sh --platforms macos,ios
   `macos-arm64_x86_64`、`xros-arm64`、`xros-arm64_x86_64-simulator`。uTerm 只用 macOS 和 iOS 的三个，其余是上游脚本默认带的。
 - 耗时：不带我们的补丁 **973 s（16.2 分钟）**，其中 10 个 Zig target 的编译约 15 分钟（每个 68–121 s），克隆 10 s，打补丁 6 s，
   补丁 0017 拉 37 个 Zig 包 44 s，组装和 zip 8 s。带 0022 时 924–1,097 s，带到 0023、0024 的那一版 809 s。机器上同时有别的编译在跑，
-  单独跑会快一些。2026-11-15 换到 `2.2.2026111501`（上游 0001–0022 + 我们的 0023）那一次约 17 分钟；2026-11-17 换到 `2.2.2026111701`（Ghostty `5ebe501a`）用 `make engine-build` 编四组平台约 22 分钟。
+  单独跑会快一些。2026-11-15 换到 `2.2.2026111501`（上游 0001–0022 + 我们的 0023）那一次约 17 分钟；2026-11-17 换到 `2.2.2026111701`（Ghostty `5ebe501a`）用 `make engine-build` 编四组平台约 22 分钟；
+  2026-11-23 换到 `2.2.2026112301`（上游 0001–0023 + 我们的 0024）同样四组，连 vt 一共 15 分钟。
 - 补丁集一变，脚本按戳记清缓存、全量重编，只改一行 shader 也一样，没有增量的捷径。
 - 改过的补丁要在**没打过旧版**的树上重跑，否则 `git apply` 的三种尝试都对不上、构建停住；先 `git apply -R` 退掉旧版再放新版。
 - `--skip-tests`：上游自己的 `Script/test.sh` 和 `swift test` 没跑过。
 - 头文件 `Headers/libghostty/ghostty.h`（模块名 `libghostty`）。带 0011 的 `ghostty_surface_write_buffer_replay` 和
-  0022 的 `ghostty_surface_set_smooth_scroll` / `ghostty_surface_smooth_scroll` / `ghostty_surface_smooth_scroll_by`。
+  0022 的 `ghostty_surface_set_smooth_scroll` / `ghostty_surface_smooth_scroll` / `ghostty_surface_smooth_scroll_by`、
+  0023 的 `ghostty_surface_smooth_scroll_by_tracked` / `ghostty_surface_smooth_scroll_presented`。
 
-打 zip（文件名带上 Ghostty 短哈希和补丁的最大编号，和 `ENGINE.lock` 对应；对象传上去不再覆盖，换二进制 = 换文件名）：
+打 zip（文件名带上 Ghostty 短哈希和补丁的最大编号，和 `ENGINE.lock` 对应；对象传上去不再覆盖，换二进制 = 换文件名。
+同一个 Ghostty 提交、同一个最大编号下重编时在编号前面加上游 tag 的日期，如现在这份的 `-2026112301-0024`；
+编号要留在最后：`TerminalEngineLockTests` 核文件名里有 `-<补丁编号>.`）：
 
 ```sh
-ditto -c -k --keepParent BinaryTarget/GhosttyKit.xcframework GhosttyKit-5ebe501a-0024.xcframework.zip
-shasum -a 256 GhosttyKit-5ebe501a-0024.xcframework.zip
+ditto -c -k --keepParent BinaryTarget/GhosttyKit.xcframework GhosttyKit-5ebe501a-2026112301-0024.xcframework.zip
+shasum -a 256 GhosttyKit-5ebe501a-2026112301-0024.xcframework.zip
 ```
 
 ## 2. ghostty-vt.xcframework
@@ -78,8 +81,8 @@ zig build --prefix /tmp/vt -Demit-lib-vt -Demit-xcframework=true -Doptimize=Rele
 <uTerm>/vendor/libghostty-spm/Scripts/prelink-vt.sh /tmp/vt/lib/ghostty-vt.xcframework <输出目录>/ghostty-vt.xcframework
 
 cd <输出目录>
-ditto -c -k --keepParent ghostty-vt.xcframework ghostty-vt-5ebe501a-0024.xcframework.zip
-shasum -a 256 ghostty-vt-5ebe501a-0024.xcframework.zip
+ditto -c -k --keepParent ghostty-vt.xcframework ghostty-vt-5ebe501a-2026112301-0024.xcframework.zip
+shasum -a 256 ghostty-vt-5ebe501a-2026112301-0024.xcframework.zip
 ```
 
 - git 检出的树没有 `LIB_VERSION`，必须带 `-Demit-lib-vt`。

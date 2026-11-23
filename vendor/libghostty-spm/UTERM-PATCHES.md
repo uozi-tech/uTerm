@@ -1,9 +1,26 @@
 # uTerm 对 libghostty-spm 的 fork
 
-上游：`https://github.com/Lakr233/libghostty-spm`，基线 tag `2.2.2026111701`（revision `b9694b50`）。
+上游：`https://github.com/Lakr233/libghostty-spm`，基线 tag `2.2.2026112301`（revision `1f378020`）。
 它钉的 Ghostty 提交（`Ghostty.ref`）是 `5ebe501a63425b13d9952e8c54682c046386e5af`（2026-11-16，版本串 `+5ebe501a6`），Zig 0.17.1。
 
-上一个基线是 `2.2.2026111501`（Ghostty `cf5519b2`，Zig 0.17.0）。2026-11-17 换到现在这个，上游这两个 tag 之间的变化：
+上一个基线是 `2.2.2026111701`（`b9694b50`，同一个 Ghostty 提交）。2026-11-23 换到现在这个，上游这两个 tag 之间的变化：
+- [#123](https://github.com/Lakr233/libghostty-spm/pull/123)：我们提的滚动修复。Swift 层第 18、19 条整条进了上游，第 20、21 条进了一部分（见各条）；
+  原来我们的引擎补丁 0024（滚动那一帧交到图层的信号）成了上游的 `0023-smooth-scroll-presented.sh`，我们的最低对比度从 0023 改号成 0024（文件内容没改）。
+  维护者合并前加了两处修正，一起带进来了：按住一段从静止起步的吸附再抬手，接着它原来的方向走、不掉头
+  （`TerminalSmoothScrollSettler.touchFollowsTravel`）；iOS 慢松手的速度按视图自己的坐标取（`velocity(in: self)`，滚动视图不滚，两者数值相同）。
+- [#122](https://github.com/Lakr233/libghostty-spm/pull/122)：`TerminalSurfaceOptions.scrollBehavior`（`.settlesOnRow` 默认 / `.restsAnywhere` / `.rowAtATime`），uTerm 用默认值。
+- [#121](https://github.com/Lakr233/libghostty-spm/pull/121)：`TerminalSurface` 的只读格子区间读取（公开 API，uTerm 没用）。
+- [#124](https://github.com/Lakr233/libghostty-spm/pull/124) 只改上游自己的测试（没带进来）。
+- Ghostty 提交、Zig 都没换，补丁只多了 0023。引擎是同一个 Ghostty 提交、同一组补丁，**版本串不变，这次升级不算协议变更**；
+  只是换了二进制（zip 文件名带上游 tag 的日期 `-2026112301-`）。
+- 协调器（`TerminalSurfaceCoordinator`）和 `systemScrollDidScroll` 没有改用上游的版本：上游的 tick 是「wakeup 的 tick 整个跳过 refresh 和 draw、欠一帧」，
+  我们的第 2 条把 Mac 定成「wakeup 永不同步重画、refresh 照做」，两个模型对不上；对照测量用的几种做法和打点（第 8、20 条）也在这里。
+  续 display link 的入口用了上游的名字 `holdDisplayLinkForScroll`。
+- 验证（新二进制）：`make test-fast` 4349 条、`make test-mobile-fast` 751 条，串行复核后全过；iPhone Duo 真机滚动相关 45 条里
+  `testUIKitReleasePremises`（量普通 `UIScrollView` 自己的减速，不经过终端）有一次 1.2548 对上限 1.25 擦线没过，单独重跑 3 遍都过，其余全过。
+  没重跑 `zig build test-lib-vt`（Ghostty 提交没换，补丁只多了动渲染的 0023）。
+
+再上一个基线是 `2.2.2026111501`（Ghostty `cf5519b2`，Zig 0.17.0）。2026-11-17 换到 `2.2.2026111701`，上游这两个 tag 之间的变化：
 - Swift 层只动了 `UITerminalView+Keyboard.swift`（我们没改过这个文件，原样取上游）：硬件键盘交给输入法的按键各自等
   0.25 s 的认领窗口，窗口没过不会被别的键的 flush 当成没人认领而原样重放（原来会打两遍）；校准时转交按键带上它的
   `UIPressesEvent`（不带的话 iOS 27 的拼音不认进程的第一个延后按键）。代价：转交模式下没有输入法认领的键要等满 0.25 s 才原样补发。
@@ -33,8 +50,8 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 三件事都改不到包外：
 
 1. **引擎要带我们的补丁。** 最低对比度要保色相（官方是直接换成黑或白），改 Ghostty 的 shader，只能自己编
-   `GhosttyKit.xcframework`。上游的包用 `binaryTarget(url:)` 指向它自己发布的那份。（逐像素平滑滚动原来也是我们的补丁，
-   现在是上游的 0022。）
+   `GhosttyKit.xcframework`。上游的包用 `binaryTarget(url:)` 指向它自己发布的那份。（逐像素平滑滚动、滚动那一帧交到图层的信号原来也是我们的补丁，
+   现在是上游的 0022、0023。）
 2. **Swift 层要改 internal 的东西。** surface 生灭的回调、`TerminalSurfaceCoordinator` 的 tick、惯性的参数、按键过滤，
    都是 internal 或者写在不可覆写的扩展里，子类和包外扩展够不着。
 3. **vt 要和 GhosttyKit 同一棵树编。** 影子终端和画面吃同一份字节，必须逐格一致。上游的补丁里有几个改终端核心
@@ -44,16 +61,16 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 
 | 路径 | 内容 |
 |---|---|
-| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 21 个文件、加了 8 个文件，见「Swift 层补丁」 |
+| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 25 个文件、加了 7 个文件，见「Swift 层补丁」 |
 | `Package.swift` | 见「manifest 改动」 |
 | `ENGINE.lock` | 两个二进制的清单：引擎版本串、zip 文件名、sha256 |
 | `BinaryTarget/` | `GhosttyKit.xcframework`、`ghostty-vt.xcframework` 解在这里，**不进版本库**（`.gitignore`），由 `make engine` 放进来 |
-| `Patches/ghostty/` | 我们加的引擎补丁 `0023`、`0024`（接在上游的 `0001`–`0022` 后面） |
+| `Patches/ghostty/` | 我们加的引擎补丁 `0024`（接在上游的 `0001`–`0023` 后面） |
 | `Scripts/prelink-vt.sh` | vt 的预链接：每个 slice 并成一个 `.o`、只导出 `ghostty_*` |
 | `BUILD.md` | 怎么从上游 tag 编出这两个二进制 |
 
 没带进来的上游内容：`Sources/GhosttyTheme`、`Sources/ShellCraftKit`、`Tests/`、`Example/`、`build.sh` 与 `Script/`、
-上游自己的 `Patches/ghostty/0001`–`0022` 和 `Patches/zig/`。出包时从上游 tag 取（`BUILD.md`）。
+上游自己的 `Patches/ghostty/0001`–`0023` 和 `Patches/zig/`。出包时从上游 tag 取（`BUILD.md`）。
 
 ## 二进制：`ENGINE.lock` 与 `make engine`
 
@@ -61,8 +78,8 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 
 ```
 engine_version=ghostty-5ebe501a+p0024/snapshot-1
-ghosttykit_zip=GhosttyKit-5ebe501a-0024.xcframework.zip     sha256 fbc4df64…eedb
-ghosttyvt_zip=ghostty-vt-5ebe501a-0024.xcframework.zip      sha256 3e6e4f72…1ada
+ghosttykit_zip=GhosttyKit-5ebe501a-2026112301-0024.xcframework.zip     sha256 001bf8fe…8342
+ghosttyvt_zip=ghostty-vt-5ebe501a-2026112301-0024.xcframework.zip      sha256 ef6f8c0b…7fbe
 ```
 
 `make engine`（`scripts/fetch-ghostty-engine.sh`）按它从本地目录取 zip、校验 sha256、解到 `BinaryTarget/`，旁边各留一个
@@ -78,7 +95,7 @@ ghosttyvt_zip=ghostty-vt-5ebe501a-0024.xcframework.zip      sha256 3e6e4f72…1a
   约 15 分钟。手动跑是 `make engine-build`，`UTERM_GHOSTTY_NO_BUILD=1` 关掉自动退路。**发版用测过的 zip，不用现编的。**
 - 新克隆的仓库在跑 `make engine` 之前，Xcode 会报 binaryTarget 的路径不存在。
 - 脚本自测：`bash scripts/fetch-ghostty-engine.test.sh`、`bash scripts/build-ghostty-engine.test.sh`（都全离线）。
-- 换了二进制之后 DerivedData 里可能留着旧的展开副本（`SourcePackages/artifacts/`），行为对不上时删掉 DerivedData 重编。
+- 换了二进制之后行为对不上时，删掉整个 DerivedData 重编（别只删 `SourcePackages/artifacts/`，见「升级步骤」第 6 步）。
 
 ## 引擎版本串
 
@@ -94,6 +111,7 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
   `TerminalEngineVersion.sameSnapshotFormat`（旧 → 新；表里原有的条目值也改成新串，或者留着让它一路走到新串）。之后新旧两版
   远控照常镜像，旧版本存的 holder 检查点照常接回。`TerminalEngineLockTests.testSnapshotCompatibilityTableOnlyBridgesPatchLevels`
   核每一条只差补丁编号、走得到 `current`。0024 就是这样记的（2026-11-23，p0023 → p0024）。
+  同一天换到上游 `2.2.2026112301` 时补丁只是换了编号和出处（上游的 0023 + 我们的 0024，内容就是原来的 0024 + 0023），版本串没动，表也不用加。
 - 快照格式可能变了（换 Ghostty 提交、动了 `src/terminal`、快照修订号加一）：不记表，表清空。新旧版本之间远控接不上终端
   （会提示两端更新到同一版本）；Mac 本机终端重启后二进制快照解不开，改用检查点里退出时另存的回放流（`TerminalCheckpointBlob`
   第 3 版，VT 字节、最近 2000 行回滚）重画那一屏；iOS 经主机上的保持进程接回同理（那边每张检查点都带回放流）。
@@ -101,12 +119,12 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
 
 ## 引擎补丁（`Patches/ghostty/`）
 
-上游 `Patches/ghostty/` 里的 `0001`–`0022` 原样用。我们加的两个接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
-这两个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
+上游 `Patches/ghostty/` 里的 `0001`–`0023` 原样用。我们加的一个接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
+这个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
 
 写我们自己的补丁要注意：上游的 `.sh` 补丁靠「自己加的那段文字原样还在」判断打没打过（`Script/support/anchored_edit.py`），
 `build.sh` 每个平台都把整个补丁栈再跑一遍。我们的补丁只要改到上游某个补丁加的文字里面，它下一遍就认不出自己、把那段再插一次
-（0024 的第一版改了 0022 加的 `smoothScrollBy`，第二个平台起整份 `Surface.zig` 的平滑滚动函数全部重复，编不过）。
+（滚动信号那个补丁的第一版改了 0022 加的 `smoothScrollBy`，第二个平台起整份 `Surface.zig` 的平滑滚动函数全部重复，编不过）。
 所以只在上游原文旁边加，不动别的补丁加的内容；出包前在打完的树上把 `Script/apply-patches.sh` 再跑两遍，树不变才算数。
 
 ### 上游的 0022 逐像素平滑滚动（原来是我们的 0023）
@@ -122,29 +140,13 @@ Swift 侧不再记镜像；小数记着它属于哪个视口（屏、滚动条�
 回归用例：`uTermTests/Features/Terminal/GhosttyMacScrollTests.swift`、`GhosttyMagicMouseScrollTests.swift`、
 `uTermMobileTests/Probes/GhosttySmoothScrollPixelTests.swift`、`GhosttyScrollEdgeTests.swift`、`GhosttySystemScrollJitterTests.swift`。
 
-### 0023 保色相的最低对比度
+### 上游的 0023 滚动那一帧交到图层的信号（原来是我们的 0024）
 
-文件：`src/renderer/shaders/shaders.metal`（`contrasted_color`、`cell_text_vertex`）、`src/renderer/generic.zig`。
-切在 libghostty-spm `2.2.2026111501` 打完 `0001`–`0022` 的树上（Ghostty `cf5519b2`）；在那之前它是 0022，切在 `042b16b6` 上，
-换基线时代码一行没改，只改了编号和注释里那句已经删掉的 SwiftTerm 出处。2026-11-17 换到 `2.2.2026111701`（Ghostty `5ebe501a`）时
-文件原样打得上（两版之间 Ghostty 没动 `src/renderer/`），文件头里写的切点仍是 `2.2.2026111501`。
-
-官方的 `minimum-contrast` 达不到目标比就把前景色换成纯黑或纯白，彩色的 prompt 段被洗成黑白；盒线、块字符、Powerline 字形还被豁免。
-补丁改成：在 OKLCH 里只调明度、朝背景的反方向走到 WCAG 目标比，色相不动，饱和度只按原值和 sRGB 色域收；装饰字形不再豁免；
-`minimum-contrast > 1` 时整格块字符（U+2588）不再把自己的前景色当底色。配置里用 `minimum-contrast = 3`。
-
-为什么：远端按深色背景写死的 256 色 / 真彩色在浅色配色下读不出来（p10k、oh-my-posh 的 prompt 最明显），这是换引擎之前就有的要求。
-读数：188 个样本最大逐通道差 2/255；整屏 3 万个字形都要调时每帧多 0.09–0.25 ms（`docs/ghostty-eval/measure-build-consistency.md` 的 M13）。
-
-回归用例：`uTermTests/Features/Terminal/TerminalContrastTests.swift`（读真的 surface 画出来的像素）、
-`uTermMobileTests/Probes/GhosttyColorParityTests.swift`（测量门控，`UTERM_MEASURE=1` 才跑）。
-
-### 0024 滚动那一帧交到图层的信号
-
-文件：`src/Surface.zig`（`smoothScrollByTracked`、`smoothScrollPresented`）、`src/renderer/State.zig`（`scroll_seq`）、
-`src/renderer/generic.zig`（`frame_scroll_seq`、`scroll_presented`、`scrollFramePresented`）、`src/renderer/metal/Frame.zig`
-（完成回调带序号）、`src/apprt/embedded.zig` 与 `include/ghostty.h`（`ghostty_surface_smooth_scroll_by_tracked`、
-`ghostty_surface_smooth_scroll_presented`）。切在 libghostty-spm `2.2.2026111701` 打完 `0001`–`0023` 的树上（Ghostty `5ebe501a`）。
+`0023-smooth-scroll-presented.sh`，[#123](https://github.com/Lakr233/libghostty-spm/pull/123) 合进上游的版本：同一组改动改写成上游的锚点脚本
+（只贴在上游原文和 0022 加的行旁边，连跑几遍源码树不变），C 接口同名：`ghostty_surface_smooth_scroll_by_tracked`、
+`ghostty_surface_smooth_scroll_presented`。动的文件：`src/Surface.zig`（`smoothScrollByTracked`、`smoothScrollPresented`）、
+`src/renderer/State.zig`（`scroll_seq`）、`src/renderer/generic.zig`（`frame_scroll_seq`、`scroll_presented`、`scrollFramePresented`）、
+`src/renderer/metal/Frame.zig`（完成回调带序号）、`src/apprt/embedded.zig` 与 `include/ghostty.h`。只动渲染，快照格式不变。
 
 做什么：`smoothScrollByTracked` 同 0022 的 `smoothScrollBy`，另外给这一步编号（和位置在同一个临界区里写）；渲染线程 `updateFrame`
 在读位置的同一个临界区里读到序号，画出来的那一帧把序号带进 Metal 的完成回调，回调交完帧（iOS 上是把设 contents 的块排进主队列）
@@ -161,8 +163,28 @@ Swift 侧不再记镜像；小数记着它属于哪个视口（屏、滚动条�
 减速 ≥150 pt/s 屏上速度偏离 30% 以上的帧 ≤ 1%；每帧主线程等 2.4 ms（p99 4.6）；3008 帧里 5 帧没等到，全是手指刚落下的第一帧。
 
 （评估时编过另一个也叫 0024 的补丁——交换链不画进还在屏上或等着上屏的 IOSurface。它在 iPhone 真机上是负收益：换帧率默认 81 → 71%、
-不同步重画 97 → 90%，晚一拍以上的帧从 4 涨到 10–19（`docs/ghostty-eval/measure-ios.md` 的 M16），没有带进来，编号后来给了上面这个。
+不同步重画 97 → 90%，晚一拍以上的帧从 4 涨到 10–19（`docs/ghostty-eval/measure-ios.md` 的 M16），没有带进来，编号后来给过上面这个（现在是最低对比度的）。
 补丁文件留在评估分支 `worktree-agent-a6bb31349ee21df46` 的 `Spikes/GhosttyPatches/`。）
+
+### 0024 保色相的最低对比度（2026-11-23 之前是 0023）
+
+`0024-uterm-minimum-contrast.patch`。2026-11-23 上游占了 0023，文件改名成 0024，内容逐字节没变（文件头里还写着 0023 和原来的切点）；
+叠在上游的 0023 之后 `git apply` 只是行号偏移 29 行。
+
+文件：`src/renderer/shaders/shaders.metal`（`contrasted_color`、`cell_text_vertex`）、`src/renderer/generic.zig`。
+切在 libghostty-spm `2.2.2026111501` 打完 `0001`–`0022` 的树上（Ghostty `cf5519b2`）；在那之前它是 0022，切在 `042b16b6` 上，
+换基线时代码一行没改，只改了编号和注释里那句已经删掉的 SwiftTerm 出处。2026-11-17 换到 `2.2.2026111701`（Ghostty `5ebe501a`）时
+文件原样打得上（两版之间 Ghostty 没动 `src/renderer/`），文件头里写的切点仍是 `2.2.2026111501`。
+
+官方的 `minimum-contrast` 达不到目标比就把前景色换成纯黑或纯白，彩色的 prompt 段被洗成黑白；盒线、块字符、Powerline 字形还被豁免。
+补丁改成：在 OKLCH 里只调明度、朝背景的反方向走到 WCAG 目标比，色相不动，饱和度只按原值和 sRGB 色域收；装饰字形不再豁免；
+`minimum-contrast > 1` 时整格块字符（U+2588）不再把自己的前景色当底色。配置里用 `minimum-contrast = 3`。
+
+为什么：远端按深色背景写死的 256 色 / 真彩色在浅色配色下读不出来（p10k、oh-my-posh 的 prompt 最明显），这是换引擎之前就有的要求。
+读数：188 个样本最大逐通道差 2/255；整屏 3 万个字形都要调时每帧多 0.09–0.25 ms（`docs/ghostty-eval/measure-build-consistency.md` 的 M13）。
+
+回归用例：`uTermTests/Features/Terminal/TerminalContrastTests.swift`（读真的 surface 画出来的像素）、
+`uTermMobileTests/Probes/GhosttyColorParityTests.swift`（测量门控，`UTERM_MEASURE=1` 才跑）。
 
 ## GhosttyVt（libghostty-vt）
 
@@ -459,78 +481,26 @@ Ghostty 的 surface 焦点（`ghostty_surface_set_focus`）同时管两件事：
 回归用例：`uTermMobileTests/GhosttyDictationTests.swift`（真 surface，`DictationSimulator` 照 UIKit 的做法驱动：先发通知，空范围走 `insertText`）、
 `uTermMobileTests/TerminalCommittedTailTests.swift`、`uTermMobileTests/RemoteKeyDictationTests.swift`。真听写只能在真机上试。
 
-### 18. iOS：系统滚动松手那一刻速度连续（慢松手不往回弹、对齐从静止起步）
+### 18. （已进上游）iOS：系统滚动松手那一刻速度连续（慢松手不往回弹、对齐从静止起步）
 
-文件：`Metrics/TerminalScrollOffsetMapping.swift`（`landingOffset(proposed:current:)`、`restingRow(enginePixels:travel:)`）、
-`Metrics/TerminalScrollAlignmentCurve.swift`（新）、`Platform/UIKit/UITerminalView+SystemScroll.swift`（`alignCurve`、`releaseVelocity`）、
-`UITerminalView+SystemScrollAlign.swift`（`systemScrollAlign(animated:velocity:)`）、`UITerminalView+SystemScrollDelegate.swift`
-（`willEndDragging` 带上速度）。
+[#123](https://github.com/Lakr233/libghostty-spm/pull/123) 合进去的就是这条：`TerminalScrollOffsetMapping`（`landingOffset(proposed:current:)`、
+`restingRow(enginePixels:travel:)`）、`TerminalScrollAlignmentCurve`、`UITerminalView+SystemScrollAlign.swift`、`systemScrollWillEndDragging` /
+`DidEndDragging` 里的松手速度。这几个文件现在和上游逐字节一致。和原来我们那份的区别：`.restsAnywhere` 时不对齐（#122 的滚动行为选项）；
+松手速度按视图自己的坐标取；`SystemScrollState.lastOffset` 在宿主同步位置（`isSyncing`）时也更新，同步写的偏移不算手指的位移。
 
-上游 2026-11-22 在手机上报「自然滚动有点回归，感觉速度向量不连续」。用合成的真触摸（`uTermMobileTests/Support/SyntheticFinger.swift`，
-UIKit 自己的拖动、松手速度、减速都在）量出来的原因和改法（读数与经过是维护者的内部测量记录 `ios-scroll-velocity-continuity.md`，不在公开仓库）：
-
-- **慢松手往回弹。** UIKit 把慢于约 250 pt/s 的松手当成停住（200 pt/s 恒为 0，250 pt/s 时有时无）：`willEndDragging` 的速度是 0、提议的落点就是原处，不改的话它当场停。
-  上游照样把落点改到最近的一行，UIKit 就自己从静止动过去（头一帧就是全程最快），而最近的那一行一半的时候在手指身后：
-  往前拖、一松手内容往回走半行。现在这种松手落点留在原处、记下拖动手势的速度，`didEndDragging(willDecelerate: false)`
-  的对齐顺着手指的方向走到前方的一行（`restingRow`，慢于 20 pt/s 才取最近的一行），起步速度就是手指的速度。
-  UIKit 调 `didEndDragging` 时 `isDragging` 还是 true，上游这一处的对齐因此在真触摸下从没跑过（被「手指按着不对齐」挡掉），
-  从这里调时传 `lifted: true` 不看它。
-- **对齐一上来就是最快。** `systemScrollAlign` 的动画原来是 0.25 s 的三次缓出 `1 - (1-p)^3`，头一帧是平均速度的 3 倍：
-  减速途中按一下停住、0.12 s 后对齐，画面从静止一下跳起来。现在是三次 Hermite（`TerminalScrollAlignmentCurve`）：
-  从静止起步时是 smoothstep，带着速度起步时按那个速度出发、到行时停住；起步速度要超过平均速度 3 倍（会冲过那一行）时缩短时长，最短 0.1 s。
-- **甩出去的落点不取到起点身后。** UIKit 会把松手速度带进改写过的落点（往前往后挪 25 pt，减速头一帧的速度和不改时一样），
-  可落点在起点身后时它一帧就把内容拽回去。上游按最近的一行取整，不看方向；现在只在甩的方向上取整。UIKit 给出速度的甩动
-  投影距离至少一百多点，实际碰不到，这条是兜底。
-- **按停之后往回退。** 甩出去、滑行途中手指按停、不动、抬起，0.12 s 后的对齐原来取最近的一行：滚动基准（下面）8 次里一半逆着刚才滑行的方向
-  退回去，最多半行。现在按停时记下它往哪走（`SystemScrollState.caughtDirection`，由 `scrollViewDidScroll` 记的 `motionDirection`），
-  之后那次动画对齐朝这个方向取前方的一行（动画仍从静止起步）；同 Mac 的 settler「惯性被触碰掐断时顺着方向补」。立即对齐
-  （选区、菜单要按整行命中）不用它，仍走最近的一行。代价是按停后要往前补最多一行。
-- 拖着停住再抬（松手速度 0、按停之前没有滑行）仍取最近的一行，可能逆着拖动方向退最多半行；这时没有速度，动画从静止起步。
-
-滚动基准：`uTermMobileTests/Probes/GhosttyScrollBenchTests.swift`（默认跳过，`TEST_RUNNER_UTERM_SCROLLBENCH_DIR` 打开），六种手势
-（慢松手、停住再抬、中速甩、快甩、按停、甩到尽头回弹）各 8 次，逐帧记画面位置写成 CSV，和同样手势下普通 `UIScrollView` 的轨迹比。
-模拟器 60 Hz 上的读数：甩动、回弹与原生一致（松手后 50 ms 的速度 0.91 倍对原生 0.92–0.93 倍，回弹距离相同）；慢松手往回 5 pt → 0；
-按停往回 6.3 pt → 0。
-
-和上游 [#122](https://github.com/Lakr233/libghostty-spm/pull/122)（`TerminalSurfaceOptions.scrollBehavior`，吸附可关）兼容：改的都在吸附整行那条路径里。
+UIKit 把慢于约 250 pt/s 的松手当成停住（速度 0、落点 = 现在的位置）；原来把落点改到最近的一行，一半的时候在手指身后，内容往回弹最多 5 pt。
+现在落点留在原处，对齐顺着手指的方向、按手指的速度走到前方的一行；被手指按停的滚动同理。读数在 PR 说明和维护者的内部测量记录里。
 
 回归用例：`uTermMobileTests/Probes/GhosttySystemScrollVelocityTests.swift`（真触摸：`testReleaseKeepsDirectionAndSpeed`、
 `testAlignmentStartsFromRest`、`testCatchAlignsAheadNotBack`，以及核 UIKit 前提的 `testUIKitReleasePremises`）、`uTermMobileTests/GhosttyScrollAlignmentMathTests.swift`
 （落点、停靠行、曲线的纯算术），以及第 4 条那几条系统滚动探针。真机手感只在 iPhone Duo 上验。
 
-### 19. Mac：吸附接着滚动的速度走（惯性收尾不加速、抬手不停顿、停住才取近的一行）
+### 19. （已进上游）Mac：吸附接着滚动的速度走（惯性收尾不加速、抬手不停顿、停住才取近的一行）
 
-文件：`Surface/TerminalSmoothScrollSettler.swift`（`velocity(at:)`、按 `TerminalScrollAlignmentCurve` 走的吸附）、
-`Metrics/TerminalScrollAlignmentCurve.swift`（`preferredSlope`，默认 3 = 第 18 条原样）、`Platform/AppKit/AppTerminalView+SmoothScroll.swift`（抬手）。
-
-接着第 18 条在 Mac 上量的（`uTermTests/Features/Terminal/GhosttyMacScrollBenchTests.swift`：真 surface 上回放 120 Hz 的合成触控板事件，
-惯性每毫秒衰减到 0.998、慢于 60 pt/s 结束，每个显示帧读引擎位置；对照是不吸附的 `NSScrollView`。60 Hz、2 倍屏、行高 14 pt，每种 8 次）。
-默认的 `.settlesOnRow` 有三处毛病，改法：
-
-- **惯性收尾时吸附反而加速。** 吸附原来不管来时多快都是 0.18 s 的三次缓出 `1 - (1-p)^3`，起步是平均速度的 3 倍：
-  惯性以 60 pt/s 收尾，补到前方那一行（平均 7 pt、最多 14 pt）时先冲到 91–102 pt/s（中位数，最高 178–198）再停，
-  看着是「快停了又被推了一下」。现在吸附按最近 50 ms 精确滚动的速度起步（`velocity(at:)`），三次 Hermite、起步斜率取 2——
-  速度从来时的速度直线降到 0（匀减速，和惯性尾巴的减速度同量级），时长 `2 × 距离 / 速度`，夹在 0.1–0.4 s。
-  改后吸附最快 58–74 pt/s（中位数，最高 75–78；以 60 Hz 的帧读、吸附 120 Hz 一步，有一步的混叠）。从静止起（停住后抬手、按住惯性再抬起）
-  是 0.18 s 的 smoothstep，原来头一帧就到 100 pt/s 上下。
-- **抬手时还在走，先停 0.08 s 再动。** 原来抬手一律等 `smoothScrollLiftDelay` 看有没有惯性，没有惯性时画面停 80 ms 再动（stop-then-go）。
-  现在还在走就当场按来时的速度吸附：惯性跟着来的话 `hold` 掐断吸附，从它走到的地方同方向接着走；停住了才照旧等 0.08 s（取近的一行可能往回，
-  不能抢在惯性前面）。
-- **「还在走」判错。** 原来看最后一个事件的位移 ≥ 3 px：120 Hz 的触控板以 150 pt/s 拨，每个事件只有 1–2 pt（2 倍屏上 2–4 px），
-  有一半时候当成停住、往回吸到近的那一行（最多往回 5 pt）；手指停住不动 150 ms 再抬起（停住时系统不发事件），最后一个事件还是拨动时的，
-  当成还在走、往前吸最多一整行（13 pt）。现在按速度判：最近 50 ms 的精确滚动 ≥ 30 pt/s 算还在走，最后一个事件过了 50 ms 速度开始衰减，
-  0.1 s 归零。Magic Mouse 上手指搭着漂一个点（一个 1 pt 的事件 = 20 pt/s）仍算停住。
-- **按停惯性再抬起，往回退。** 惯性途中手指放上触控板（惯性 ended、接着 mayBegin）、不动、抬起（cancelled），原来取近的那一行：
-  基准 8 次里一半逆着惯性的方向退回去，最多 5 pt。现在顺着惯性的方向补到前方的一行（速度已经衰减到 0，从静止起步的 smoothstep），
-  和 iOS 系统滚动按停后的规则（第 18 条）一致。改后往回 0；代价是按停后往前补最多一行（中位 8 pt）。
-
-保证不变：落在整行上；顺着走的吸附不往回（往回只发生在拖着停住之后取近的一行，和原来、和 iOS 第 18 条一样）；下一次触碰 `hold` 掐断吸附。
-代价：顺着走的吸附更长（惯性收尾后 141 → 150–230 ms 停稳），抬手时的吸附会在惯性来之前先走几个像素。
-老式滚轮不经过 settler，和 `NSScrollView` 一样一格 3 行直接跳，没动。
-
-iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swift`）和滚轮 / 触控板（`+ScrollSettle.swift`）的吸附也换成了这条曲线；
-系统滚动（第 4、18 条）不经过它。iOS 侧判「还在走」的地方没改。和上游 [#122](https://github.com/Lakr233/libghostty-spm/pull/122)
-（`scrollBehavior`，吸附可关）兼容：改的都在吸附整行那条路径里。
+[#123](https://github.com/Lakr233/libghostty-spm/pull/123) 合进去的就是这条：`TerminalSmoothScrollSettler`（吸附的曲线换成 `TerminalScrollAlignmentCurve`、
+起步速度取最近 50 ms 的、`snapLongestDuration`）和 `AppTerminalView+SmoothScroll.swift`（「还在走」按速度判，还在走就不等那 0.08 s）。
+两个文件现在和上游逐字节一致。维护者合并前加了一处修正：按住一段从静止起步的吸附再抬手，接着它原来的方向走、不掉头
+（`touchDown(moving:)` / `touchFollowsTravel`）；另外 #122 给 settler 加了 `settlesAutomatically`（`.restsAnywhere` 时不吸附）。
 
 回归用例：`GhosttyMacScrollTests` 新加的 `testSnapAfterMomentumCarriesOnAtItsSpeed`（惯性 ~55 pt/s 收尾、补 12 pt：改前吸附 150 pt/s，
 改后 64）、`testSlowLiftAtHighEventRateCarriesOnAtOnce`（改前往回 3 pt、停 80 ms）、`testHoldThenLiftSettlesOnTheNearerRow`（改前往前多走一行）、
@@ -540,6 +510,12 @@ iOS：settler 两端共用，自写拖动 / 惯性（`UITerminalView+Scroll.swif
 （默认跳过；CSV 写进测试宿主的临时目录，日志里有路径）。真触控板手感未验。
 
 ### 20. iOS：系统滚动动着时，引擎的 wakeup 不在主线程同步重画、不 refresh，display link 全程续着（慢滚每跨一行掉一帧、减速尾段发抖）
+
+**和上游的关系（2026-11-23）**：默认做法（`hold`）已经随 [#123](https://github.com/Lakr233/libghostty-spm/pull/123) 进了上游，但实现不是同一份：
+上游在协调器里用 `wakeupSkipsDraw` / `owesWakeupFrame`（wakeup 的 tick 滚动途中整个跳过 refresh 和 draw，欠的那一帧停下后补），
+我们这份仍是下面写的 `wakeupDefersSyncDraw` + `pendingRefresh` / `owesRefresh`，因为第 2 条把 Mac 定成了另一种规则，另外带着对照测量用的
+几种做法（`moving` / `touching` / `always`，只有 Debug 的开关会切）和打点。升级时协调器这几处冲突取我们的，再把上游在同一文件里的别的改动带进来；
+`systemScrollMovedRecently`、`holdDisplayLinkForScroll` 用上游的定义。
 
 文件：`Surface/TerminalSurfaceCoordinator.swift`（`wakeupDefersSyncDraw`、`wakeupDefersDisplayLink`）、`Platform/UIKit/UITerminalView.swift`
 （接到 `systemScrollIsBusy` 与滚动速度）、`UITerminalView+SystemScroll*.swift`（`SystemScrollState.speed`）、`UTermScrollTrace.swift`
@@ -615,7 +591,11 @@ A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `ho
 文件：`Surface/TerminalSurface+SmoothScroll.swift`（`smoothScrollTracked(byPixels:)`、`smoothScrollPresented()`）、
 `Platform/UIKit/UITerminalView+SystemScrollDelegate.swift`（`systemScrollWaitForFrame`）、`UITerminalView+SystemScroll.swift`
 （`frameWaitSuspendedUntil`、`frameWaitMisses`）、`Platform/UIKit/TerminalMainTurnClock.swift`（新）、`UTermScrollTrace.swift`
-（`scrollSameFrameWaitMilliseconds` 等）。要引擎补丁 0024。
+（`scrollSameFrameWaitMilliseconds` 等）。要引擎补丁（现在是上游的 0023）。
+
+**和上游的关系（2026-11-23）**：整条随 [#123](https://github.com/Lakr233/libghostty-spm/pull/123) 进了上游，`TerminalSurface+SmoothScroll.swift`、
+`TerminalMainTurnClock.swift` 和上游逐字节一致。本地只剩 `systemScrollWaitForFrame` 里的两处：时限和退避读 `UTermScrollTrace` 的设置
+（上游是写死的 `frameWaitBudget` 等常量，数值相同），以及等到 / 超时的打点。
 
 - `systemScrollDidScroll` 改用带编号的 `smoothScrollTracked(byPixels:)`，随后原地等 `smoothScrollPresented()`（50 µs 一查），
   最晚等到这一轮 run loop 醒来之后 6.5 ms（`TerminalMainTurnClock`：一个 `afterWaiting` 观察者记下每轮醒来的时刻）。等到了，交帧块
@@ -623,7 +603,7 @@ A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `ho
 - 时限从「这一轮醒来」算而不是从开始等算：手指按下那一轮 UIKit / SwiftUI 分发触摸要 12–17 ms（Duo，Debug 构建），这一轮早就过了
   时限，不等。Duo 上主线程一轮跑到 6–7 ms 不掉帧，9 ms 以上开始掉。
 - 没等到：这一帧照旧晚一拍上屏。连着 3 帧没等到（渲染跟不上、程序挂着同步输出、surface 不可见）歇 0.25 s 不等。
-- 读数见引擎补丁 0024 一节。
+- 读数见引擎补丁「上游的 0023」一节。
 
 排查工具（uTerm 的 Debug 构建，`uTermMobile/Screens/Terminal/Ghostty/GhosttyScrollDebugSwitch.swift` 与 `GhosttyScrollAutoPilot.swift`）：
 启动参数 `-GhosttySyncDrawDuringScroll <做法>` 打开录制，滚动打点每秒写进 `Documents/scroll-trace-<做法>.txt`（`devicectl device copy from` 取）：
@@ -653,20 +633,22 @@ binaryTarget 要换回 `url:` + `checksum:`（按 tag 消费的远程包不能�
 
 1. 读上游新 tag 的变更，对照本文件看哪些补丁上游已经有了（`gh pr list -R Lakr233/libghostty-spm --author @me` 看我们提的 PR）。
 2. Swift 层：把上游新 tag 的 `Sources/GhosttyKit`、`Sources/GhosttyTerminal` 和基线 tag 做三方合并（我们的改动都标着「uTerm 本地补丁」，
-   5 个新文件直接留着）。做法：临时仓库里提交基线 tag、我们这份、上游新 tag 三个快照，`git merge`（`merge.conflictstyle diff3`）。
+   7 个新文件直接留着）。做法：临时仓库里提交基线 tag、我们这份、上游新 tag 三个快照，`git merge`（`merge.conflictstyle diff3`）。
    上游收了我们 PR 的地方，冲突块一律取上游的版本（审过、改过名、常常还多了修正），再把那条补丁里上游没收的部分接回去；
    这时自动合并成功的文件也要和上游逐个比一遍，PR 的代码和我们原来那份往往放在不同位置，两份会同时留下来。
    `Package.swift` 按「manifest 改动」重做。
 3. 引擎：先改 `ENGINE.lock` 的来源几行（tag、提交、Ghostty 提交、Zig 版本与 sha256）和两个 zip 的文件名，再
    `make engine-build ENGINE_BUILD_ARGS='--platforms macos,ios,maccatalyst,visionos --pack <artifacts 目录> --no-install'`
-   出包（原理见 `BUILD.md`）。`0023` / `0024` 打不上时在新树上重切（`--keep-source` 留下源码树），文件头里写清是切在哪个提交上的。
+   出包（原理见 `BUILD.md`）。我们的 `0024` 打不上时在新树上重切（`--keep-source` 留下源码树），文件头里写清是切在哪个提交上的。
    上游新增的补丁和我们的编号撞了，脚本会停下，先给我们的改号。vt 由脚本在打完全部补丁的**同一棵树**上编。
 4. `--pack` 打印的两个 sha256 填进 `ENGINE.lock`，zip 留在 artifacts 目录（换二进制 = 换文件名）。
 5. 三处一起改：`ENGINE.lock` 的 zip 文件名与 sha256、`ENGINE.lock` 的 `engine_version`、
    `uTerm/Features/Terminal/Shadow/TerminalEngineVersion.swift` 的 `TerminalEngineVersion.current`。快照的二进制格式变了就把串尾的
    `snapshot-N` 加一。漏改常量会被两端的 `TerminalEngineLockTests` 拦住。只改渲染的补丁把旧串记进 `sameSnapshotFormat`，
    换 Ghostty 提交时把那张表清空（见上面「引擎版本串」）。
-6. `make engine`，删掉 DerivedData 里的 `SourcePackages/artifacts`，两端重编。
+6. `make engine`，两端重编。本地 path 包的二进制不在 DerivedData 的 `SourcePackages/artifacts` 里（那里只有 Sparkle 这种远程包的预编译产物），
+   **别删那个目录**：`make test-fast` 带 `-skipPackageUpdates`，删了取不回来，Xcode 还会把「找不到 XCFramework」的报错缓存在构建描述里重放
+   （2026-11-23 踩过：从别的工作树拷回 `artifacts/sparkle`，再删 `Build/Intermediates.noindex/XCBuildData`）。行为对不上时删整个 DerivedData 重编。
 7. vt 的 C API 还没到 1.0，换 Ghostty 提交就可能变，`ShadowTerminal.swift` 要对着新头文件改（`git diff <旧> <新> -- include/`）。
    编译器只拦得住签名变化，拦不住语义变化，两类都碰到过（`042b16b6` → `cf5519b2`）：
    - 签名：formatter 的选项从「创建时整体传结构体」改成逐项 `ghostty_formatter_set`；结构体不再带 `size` 字段；

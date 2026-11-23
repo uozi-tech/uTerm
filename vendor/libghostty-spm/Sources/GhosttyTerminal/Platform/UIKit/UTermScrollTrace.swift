@@ -116,7 +116,7 @@ public enum UTermScrollTrace {
     nonisolated(unsafe) public static var wakeupDisplayLinkMinimumSpeed = defaultWakeupDisplayLinkMinimumSpeed
     nonisolated(unsafe) public static var scrollWakeupSyncDraw = defaultScrollWakeupSyncDraw
 
-    /// 系统滚动每次把位置交给引擎之后，主线程原地等「带着这一步的那一帧交到图层」，最晚等到这一轮 run loop 醒来之后这么多毫秒（引擎补丁 0024 的
+    /// 系统滚动每次把位置交给引擎之后，主线程原地等「带着这一步的那一帧交到图层」，最晚等到这一轮 run loop 醒来之后这么多毫秒（引擎补丁（上游的 0023） 的
     /// `smoothScrollPresented`）。渲染线程的交帧这时已经排进主队列，UIKit 这一拍的提交就带上它，画面不再比 UIKit 晚一帧
     ///（Duo 实测上屏延迟 34.0 → 25.7 ms，和原生 UIKit 内容持平）。0 = 不等。连着 `scrollSameFrameWaitMissLimit` 帧没等到就歇 `scrollSameFrameWaitBackoff` 秒
     ///（渲染跟不上、同步输出挂起、surface 不可见时别每帧都白等）。
@@ -213,7 +213,7 @@ public enum UTermScrollTrace {
                                     overscrollPixels: over, isGliding: gliding, isBouncing: bouncing)
         }
 
-        /// uTerm 测试用（引擎补丁 0024 的端到端）：带编号地把视口挪 `pixels` 像素，原地等带着这一步的那一帧交到图层，
+        /// uTerm 测试用（引擎补丁（上游的 0023） 的端到端）：带编号地把视口挪 `pixels` 像素，原地等带着这一步的那一帧交到图层，
         /// 返回等了多久（秒）；`timeout` 秒内没等到返回 nil。交帧的记号是渲染那一侧的线程写的，主线程原地等得到。
         func uTermTrackedScrollPresentDelay(pixels: Double, timeout: Double) -> Double? {
             guard let surface else { return nil }

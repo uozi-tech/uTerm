@@ -479,7 +479,7 @@ final class GhosttySlowDragFrameTests: XCTestCase {
         XCTAssertGreaterThan(restDraws, 0, "停下之后引擎的 wakeup 不再同步重画了（只该在系统滚动动着时跳过）")
     }
 
-    /// 回归（不挂测量门，模拟器也跑）：引擎补丁 0024 的端到端——带编号地滚一步，带着这一步的那一帧交到图层的记号要在
+    /// 回归（不挂测量门，模拟器也跑）：引擎补丁（上游的 0023） 的端到端——带编号地滚一步，带着这一步的那一帧交到图层的记号要在
     /// 合理的时间里立起来（真机上一两毫秒，模拟器慢得多，这里只核「等得到」），视口确实挪了这么多。
     /// 记号立不起来的话，iOS 的系统滚动每一帧都白等到超时。
     func testTrackedScrollReportsItsFrame() async throws {
