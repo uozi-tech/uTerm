@@ -172,6 +172,71 @@ final class ClaudeHistoryLocalLiveTests: XCTestCase {
         }
     }
 
+    // MARK: - 子代理
+
+    /// 抽若干份真实会话：有 `subagents/` 的那些里，派子代理的调用有多少对得上记录；点开最大的一份子代理记录第一页多久。
+    /// 只打印条数与耗时。
+    func testRealSubagentLinks() async throws {
+        let source = ClaudeHistorySource(provider: provider)
+        let projects = try await loadedProjects(source)
+        let all = await source.allSessions(in: projects)
+        var withSubagents: [(file: AgentHistorySessionFile, count: Int)] = []
+        var listed = 0
+        let listStarted = ContinuousClock.now
+        for file in all.prefix(sampleSize * 3) where withSubagents.count < max(4, sampleSize / 8) {
+            listed += 1
+            let subagents = try await source.subagents(of: .session(file))
+            if !subagents.isEmpty { withSubagents.append((file, subagents.count)) }
+        }
+        let listElapsed = ContinuousClock.now - listStarted
+        guard !withSubagents.isEmpty else { throw XCTSkip("抽的 \(listed) 份会话里没有派过子代理的") }
+
+        var spawns = 0, linked = 0, largest: AgentSubagentLink?
+        let resolveStarted = ContinuousClock.now
+        for entry in withSubagents {
+            let transcript = AgentTranscriptModel(file: entry.file, pager: source.transcript(for: entry.file),
+                                                  source: source, target: .session(entry.file))
+            var pages = 0
+            repeat {
+                await transcript.loadEarlier()
+                pages += 1
+            } while !transcript.reachedStart && pages < 40 && transcript.errorMessage == nil
+            XCTAssertNil(transcript.errorMessage)
+            let calls = transcript.items.compactMap { item -> AgentToolCall? in
+                if case .toolCall(let call) = item.kind, call.spawn != nil { return call }
+                return nil
+            }
+            // 等这一份的对应关系停下来（meta 是一批批读的）。
+            var stable = 0, last = -1
+            while stable < 10 {
+                try await Task.sleep(for: .milliseconds(30))
+                let now = transcript.subagentLinks.count
+                stable = now == last ? stable + 1 : 0
+                last = now
+            }
+            spawns += calls.count
+            linked += calls.filter { transcript.subagentLink(for: $0) != nil }.count
+            for link in transcript.subagentLinks.values where (link.file.size ?? 0) > (largest?.file.size ?? 0) {
+                largest = link
+            }
+        }
+        print("""
+            [claude-history-local] subagents: listed \(listed) sessions in \(listElapsed), \
+            \(withSubagents.count) have subagents/ (\(withSubagents.map(\.count).reduce(0, +)) records); \
+            spawn calls \(spawns), linked \(linked) in \(ContinuousClock.now - resolveStarted)
+            """)
+        XCTAssertGreaterThan(linked, 0, "有子代理记录的会话里一个调用都没对上")
+
+        let biggest = try XCTUnwrap(largest)
+        let pager = source.subagentTranscript(for: biggest.file)
+        let started = ContinuousClock.now
+        let page = try await pager.loadPrevious()
+        let firstPage = ContinuousClock.now - started
+        print("[claude-history-local] largest subagent bytes=\(biggest.file.size ?? 0) first page items=\(page.items.count) in \(firstPage)")
+        XCTAssertFalse(page.items.isEmpty, "最大的那份子代理记录第一页一条都没有")
+        XCTAssertLessThan(firstPage, .seconds(3))
+    }
+
     // MARK: - 界面
 
     /// 真的列表与对话视图挂在窗口里读真数据：行露出来就去读标题、点开最大的一份能画出来，主线程不长时间卡住。

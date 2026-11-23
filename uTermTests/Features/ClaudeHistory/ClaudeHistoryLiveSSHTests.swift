@@ -28,6 +28,10 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
     private var workdir = ""
     private var scratch = ""
     private var projectPath = ""
+    /// 派过子代理的会话放在另一个项目里（不扰动上面那个项目的列表断言）。
+    private var agentsWorkdir = ""
+    private var agentsProjectPath = ""
+    private var agentsSubagentsDir: String { agentsProjectPath + "/" + Session.agents + "/subagents" }
 
     private enum Session {
         static let cli = "11111111-aaaa-4bbb-8ccc-000000000001"
@@ -35,6 +39,7 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         static let mixed = "11111111-aaaa-4bbb-8ccc-000000000003"
         static let empty = "11111111-aaaa-4bbb-8ccc-000000000004"
         static let moved = "11111111-aaaa-4bbb-8ccc-000000000005"
+        static let agents = "11111111-aaaa-4bbb-8ccc-000000000006"
     }
 
     /// 大的那份记录有几轮对话；每轮一问、一答带一次工具调用、一条工具结果。
@@ -61,14 +66,18 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         scratch = home + "/uterm-claude-history-e2e-" + UUID().uuidString.prefix(8).lowercased()
         workdir = scratch + "/it's a 项目"
         projectPath = ClaudeProjectPath.projectsRoot(home: home) + "/" + ClaudeProjectPath.encode(workdir)
-        _ = try await files.exec("mkdir -p \(Self.quoted(workdir + "/sub dir")) \(Self.quoted(projectPath)) \(Self.quoted(scratch + "/bin"))")
+        agentsWorkdir = scratch + "/agents"
+        agentsProjectPath = ClaudeProjectPath.projectsRoot(home: home) + "/" + ClaudeProjectPath.encode(agentsWorkdir)
+        _ = try await files.exec("mkdir -p \(Self.quoted(workdir + "/sub dir")) \(Self.quoted(projectPath)) \(Self.quoted(scratch + "/bin"))"
+                                 + " \(Self.quoted(agentsWorkdir)) \(Self.quoted(agentsSubagentsDir + "/workflows"))")
         try await seed()
+        try await seedSubagents()
     }
 
     override func tearDown() async throws {
         if let files {
             if !scratch.isEmpty {
-                _ = try? await files.exec("rm -rf \(Self.quoted(scratch)) \(Self.quoted(projectPath))")
+                _ = try? await files.exec("rm -rf \(Self.quoted(scratch)) \(Self.quoted(projectPath)) \(Self.quoted(agentsProjectPath))")
             }
             await files.close()
         }
@@ -130,6 +139,38 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
             ClaudeFixture.assistant(ClaudeFixture.textBlock("好"), uuid: "a-2", cwd: workdir + "/sub dir"),
             ClaudeFixture.aiTitle("挪过目录的会话"),
         ]))
+    }
+
+    /// 派了两个子代理的会话：第一个的结果里报了 ID（没有 meta），第二个还在跑（只有 meta）；第二个又派了一个。
+    /// 目录里还有不相干的东西（`*.prefix.json`、`workflows/`）。
+    private func seedSubagents() async throws {
+        let dir = agentsSubagentsDir
+        try await files.write(agentsProjectPath + "/" + Session.agents + ".jsonl", data: ClaudeFixture.file([
+            ClaudeFixture.userText("分两路去查", cwd: agentsWorkdir),
+            ClaudeFixture.assistant(ClaudeFixture.spawn(id: "toolu_live_1", description: "第一路"), cwd: agentsWorkdir),
+            ClaudeFixture.assistant(ClaudeFixture.spawn(id: "toolu_live_2", description: "第二路", type: "Explore"),
+                                    uuid: "a-2", cwd: agentsWorkdir),
+            ClaudeFixture.spawnResult(id: "toolu_live_1", agentID: "live1"),
+            ClaudeFixture.aiTitle("派了子代理的会话"),
+        ]))
+        try await files.write(dir + "/agent-live1.jsonl", data: ClaudeFixture.file([
+            ClaudeFixture.sidechainUser("第一路的任务", agentID: "live1"),
+            ClaudeFixture.sidechainAssistant(ClaudeFixture.textBlock("第一路查完了"), agentID: "live1"),
+        ]))
+        try await files.write(dir + "/agent-live2.jsonl", data: ClaudeFixture.file([
+            ClaudeFixture.sidechainUser("第二路的任务", agentID: "live2"),
+            ClaudeFixture.sidechainAssistant(ClaudeFixture.spawn(id: "toolu_live_3", description: "第二路的第二层"),
+                                             agentID: "live2"),
+        ]))
+        try await files.write(dir + "/agent-live2.meta.json",
+                              data: ClaudeFixture.subagentMeta(toolUseID: "toolu_live_2", type: "Explore", description: "第二路"))
+        try await files.write(dir + "/agent-live3.jsonl", data: ClaudeFixture.file([
+            ClaudeFixture.sidechainUser("第二层的任务", agentID: "live3"),
+            ClaudeFixture.sidechainAssistant(ClaudeFixture.textBlock("第二层查完了"), agentID: "live3"),
+        ]))
+        try await files.write(dir + "/agent-live3.meta.json",
+                              data: ClaudeFixture.subagentMeta(toolUseID: "toolu_live_3", description: "第二路的第二层", depth: 2))
+        try await files.write(dir + "/agent-live2.prefix.json", data: Data("{}".utf8))
     }
 
     private func file(_ id: String, among files: [AgentHistorySessionFile],
@@ -254,6 +295,36 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         XCTAssertEqual(Set(transcript.items.map(\.id)).count, transcript.items.count, "条目的 ID 有重复")
         XCTAssertGreaterThan(pages, 3)
         XCTAssertLessThan(firstPage, .seconds(3), "第一页用了 \(firstPage)")
+    }
+
+    // MARK: - 子代理
+
+    /// 经真的 SFTP 列 `subagents/`、读 meta，点进子代理、再点进它派的子代理，一层层返回。
+    func testOpensSubagentTranscriptsOverSFTP() async throws {
+        let model = AgentHistoryModel(source: ClaudeHistorySource(provider: files), preferredDirectory: agentsWorkdir)
+        await model.start()
+        await waitUntil("记录的信息") { !model.hasMore }
+        model.select(try file(Session.agents, among: model.files))
+        let main = try XCTUnwrap(model.transcript)
+        await waitUntil("两个子代理都对上") { main.reachedStart && main.subagentLinks.count == 2 }
+        XCTAssertEqual(main.subagentLinks["toolu_live_1"]?.file.agentID, "live1", "靠结果里的 agentId")
+        XCTAssertEqual(main.subagentLinks["toolu_live_2"]?.file.agentID, "live2", "靠 meta")
+        XCTAssertEqual(main.subagentLinks["toolu_live_2"]?.agentType, "Explore")
+
+        let started = ContinuousClock.now
+        model.openSubagent(try XCTUnwrap(main.subagentLinks["toolu_live_2"]))
+        let second = try XCTUnwrap(model.displayedTranscript)
+        await waitUntil("第二路的记录与它派的子代理") { second.reachedStart && second.subagentLinks["toolu_live_3"] != nil }
+        print("[claude-history-live] subagent open + nested link in \(ContinuousClock.now - started)")
+        XCTAssertEqual(second.items.first?.kind, .userText("第二路的任务"))
+
+        model.openSubagent(try XCTUnwrap(second.subagentLinks["toolu_live_3"]))
+        let third = try XCTUnwrap(model.displayedTranscript)
+        await waitUntil("第二层的记录") { third.reachedStart }
+        XCTAssertEqual(third.items.map(\.kind), [.userText("第二层的任务"), .assistantText("第二层查完了")])
+        model.closeSubagent()
+        model.closeSubagent()
+        XCTAssertTrue(model.displayedTranscript === main)
     }
 
     // MARK: - 继续这个会话

@@ -12,8 +12,13 @@ actor ClaudeHistorySource: AgentHistorySource {
     /// 「全部项目」时同时列几个目录。
     static let listConcurrency = 6
 
+    /// 子代理的信息文件很小（实测几百字节），读这么多足够。
+    static let subagentInfoBytes = 64 * 1024
+
     private var home: String?
     private var cache: [AgentHistorySessionFile.CacheKey: AgentHistorySessionMetadata] = [:]
+    /// 子代理的信息文件读过就不再读（按路径；它在子代理派出时写好，之后基本不变）。
+    private var infoCache: [String: AgentSubagentInfo] = [:]
 
     /// `home`：主目录。不给就问 `provider`（`realPath(".")`：SFTP 与远控文件服务都把它解析成登录用户的主目录）；
     /// 测试给一个临时目录。
@@ -137,6 +142,73 @@ actor ClaudeHistorySource: AgentHistorySource {
         ClaudeTranscriptPager(provider: provider, path: file.path)
     }
 
+    // MARK: 子代理
+
+    /// 子代理的记录：`<项目目录>/<会话 ID>/subagents/agent-<代理 ID>.jsonl`，格式同主对话，只是每行都是
+    /// `isSidechain`。旁边常有（不是每个都有）`agent-<代理 ID>.meta.json`，写着派它的那次调用（`toolUseId`）。
+    /// 子代理再派的子代理也在同一个目录里。目录里别的东西（`*.prefix.json`、`workflows/`……）不管。
+    nonisolated static func subagentsDirectory(of target: AgentTranscriptTarget) -> String? {
+        switch target {
+        case .session(let file):
+            guard file.path.hasSuffix(".jsonl") else { return nil }
+            return String(file.path.dropLast(".jsonl".count)) + "/subagents"
+        case .subagent(let subagent):
+            return (subagent.path as NSString).deletingLastPathComponent
+        }
+    }
+
+    /// `agent-<ID>.jsonl` → ID；别的名字为 nil。
+    nonisolated static func subagentID(fromFileName name: String) -> String? {
+        guard name.hasPrefix("agent-"), name.hasSuffix(".jsonl") else { return nil }
+        let id = name.dropFirst("agent-".count).dropLast(".jsonl".count)
+        guard !id.isEmpty, !id.contains(".") else { return nil }
+        return String(id)
+    }
+
+    func subagents(of target: AgentTranscriptTarget) async throws -> [AgentSubagentFile] {
+        guard let directory = Self.subagentsDirectory(of: target) else { return [] }
+        let entries: [RemoteEntry]
+        do {
+            entries = try await provider.list(path: directory)
+        } catch {
+            // 没有这个目录 = 没派过子代理，或者记录被清了。
+            if (try? await provider.stat(directory)) == nil { return [] }
+            throw error
+        }
+        let names = Set(entries.map(\.name))
+        return entries.compactMap { entry -> AgentSubagentFile? in
+            guard !entry.isDirectory, let id = Self.subagentID(fromFileName: entry.name) else { return nil }
+            return AgentSubagentFile(agentID: id, path: directory + "/" + entry.name, size: entry.size,
+                                     modifiedAt: entry.modifiedAt, hasInfo: names.contains("agent-\(id).meta.json"))
+        }
+        .sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+    }
+
+    func info(of subagent: AgentSubagentFile) async -> AgentSubagentInfo? {
+        guard subagent.hasInfo else { return nil }
+        if let cached = infoCache[subagent.path] { return cached }
+        let path = String(subagent.path.dropLast(".jsonl".count)) + ".meta.json"
+        guard let data = try? await provider.readRange(path, offset: 0, length: Self.subagentInfoBytes),
+              let info = Self.parseSubagentInfo(data) else { return nil }
+        infoCache[subagent.path] = info
+        return info
+    }
+
+    nonisolated static func parseSubagentInfo(_ data: Data) -> AgentSubagentInfo? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        func string(_ key: String) -> String? {
+            guard let value = object[key] as? String else { return nil }
+            let line = ClaudeSessionScan.singleLine(value, limit: AgentTranscriptLimits.summaryCharacters)
+            return line.isEmpty ? nil : line
+        }
+        return AgentSubagentInfo(toolUseID: string("toolUseId"), agentType: string("agentType"),
+                                 description: string("description"))
+    }
+
+    nonisolated func subagentTranscript(for subagent: AgentSubagentFile) -> any AgentTranscriptPaging {
+        ClaudeTranscriptPager(provider: provider, path: subagent.path, includesSidechain: true)
+    }
+
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {
         ClaudeResumeCommand.make(sessionID: sessionID, directory: directory)
     }
@@ -149,9 +221,11 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
     private let chunkBytes: Int
     private let pageItems: Int
     private let pageBytes: Int
+    /// 子代理自己的记录每行都是 `isSidechain`，要照常显示。
+    private let includesSidechain: Bool
     private var scanner: ClaudeReverseLineScanner?
 
-    init(provider: any SFTPProviding, path: String,
+    init(provider: any SFTPProviding, path: String, includesSidechain: Bool = false,
          chunkBytes: Int = AgentTranscriptLimits.chunkBytes,
          pageItems: Int = AgentTranscriptLimits.pageItems,
          pageBytes: Int = AgentTranscriptLimits.pageBytes,
@@ -161,6 +235,7 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
         self.chunkBytes = chunkBytes
         self.pageItems = pageItems
         self.pageBytes = pageBytes
+        self.includesSidechain = includesSidechain
         self.maxLineBytes = maxLineBytes
     }
 
@@ -184,14 +259,14 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
             }
             bytesRead += chunk.count
             for line in scanner.feed(chunk) {
-                let items = ClaudeTranscriptParser.items(from: line)
+                let items = ClaudeTranscriptParser.items(from: line, includesSidechain: includesSidechain)
                 if !items.isEmpty {
                     newestFirst.append(items)
                     count += items.count
                 }
             }
             if scanner.nextRange(chunkSize: chunkBytes) == nil, let first = scanner.finish() {
-                let items = ClaudeTranscriptParser.items(from: first)
+                let items = ClaudeTranscriptParser.items(from: first, includesSidechain: includesSidechain)
                 if !items.isEmpty { newestFirst.append(items) }
             }
         }

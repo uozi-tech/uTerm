@@ -387,6 +387,25 @@ final class StyleGalleryTests: XCTestCase {
             _ = await MobileFakeTerminal.waitUntil { longModel.transcript?.reachedStart == true }
             try await shoot("claude-history-long", on: device, settle: .milliseconds(900)) { mount(longWorkspace) }
 
+            // 派了子代理的对话：调用下面有入口；点进第二个（它又派了一个，同样有入口），左上角返回上一层。
+            let agentsWorkspace = MobileWorkspace()
+            let agents = agentsWorkspace.openHistory(MobileFakeClaudeHistory.tab(host: host, tree: MobileClaudeFixture.withSubagents()))
+            let agentsSettled = await MobileFakeClaudeHistory.settle(agents)
+            XCTAssertTrue(agentsSettled)
+            let agentsModel = try XCTUnwrap(agents.connection.history)
+            agentsModel.select(try XCTUnwrap(agentsModel.visibleFiles.first))
+            _ = await MobileFakeTerminal.waitUntil {
+                agentsModel.transcript?.reachedStart == true && agentsModel.transcript?.subagentLinks.count == 2
+            }
+            try await shoot("claude-history-subagents", on: device, settle: .milliseconds(900)) { mount(agentsWorkspace) }
+            let second = try XCTUnwrap(agentsModel.transcript?.subagentLinks["toolu_s2"])
+            agentsModel.openSubagent(second)
+            _ = await MobileFakeTerminal.waitUntil {
+                agentsModel.displayedTranscript?.reachedStart == true
+                    && agentsModel.displayedTranscript?.subagentLinks.isEmpty == false
+            }
+            try await shoot("claude-history-subagent", on: device, settle: .milliseconds(900)) { mount(agentsWorkspace) }
+
             // 这台主机上没用过 Claude Code：没有 ~/.claude/projects。
             let empty = MobileWorkspace()
             let none = empty.openHistory(MobileFakeClaudeHistory.tab(

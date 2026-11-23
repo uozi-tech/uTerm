@@ -89,6 +89,38 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertTrue(ws.terminalTabs.isEmpty, "标签归档只看终端标签，历史标签重启不恢复")
     }
 
+    // MARK: - 子代理
+
+    /// 列表 → 对话 → 子代理 → 子代理派的子代理，一层层进去、一层层返回；子代理的记录只读。
+    func testSubagentsOpenAndCloseLevelByLevel() async throws {
+        let ws = MobileWorkspace()
+        let history = ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: MobileClaudeFixture.withSubagents()))
+        let settled = await MobileFakeClaudeHistory.settle(history)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(history.connection.history)
+        model.select(try XCTUnwrap(model.visibleFiles.first))
+        let main = try XCTUnwrap(model.transcript)
+        let linked = await MobileFakeTerminal.waitUntil { main.reachedStart && main.subagentLinks.count == 2 }
+        XCTAssertTrue(linked)
+        XCTAssertEqual(main.subagentLinks["toolu_s2"]?.agentType, "Explore")
+
+        model.openSubagent(try XCTUnwrap(main.subagentLinks["toolu_s2"]))
+        let second = try XCTUnwrap(model.displayedTranscript)
+        XCTAssertEqual(second.subagent?.description, "排查订单列表的慢查询")
+        let nested = await MobileFakeTerminal.waitUntil { second.reachedStart && second.subagentLinks["toolu_s3"] != nil }
+        XCTAssertTrue(nested, "第二层的子代理靠 meta 对上")
+        XCTAssertEqual(second.items.first?.kind, .userText("订单列表接口偶尔要 2 秒，找出慢在哪。"))
+
+        model.openSubagent(try XCTUnwrap(second.subagentLinks["toolu_s3"]))
+        XCTAssertEqual(model.subagentStack.count, 2)
+        model.closeSubagent()
+        XCTAssertTrue(model.displayedTranscript === second)
+        model.closeSubagent()
+        XCTAssertTrue(model.displayedTranscript === main)
+        model.select(nil)
+        XCTAssertNil(model.displayedTranscript, "窄屏回到列表")
+    }
+
     // MARK: - 配对的 Mac
 
     /// 远控标签：Mac 没报 `files` 能力（老版本，或还没连上不知道）时长按菜单里不出「Claude 历史会话」——

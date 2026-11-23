@@ -19,11 +19,24 @@ struct AgentHistoryBrowser: View {
 
     @ViewBuilder private var detail: some View {
         if let transcript = history.transcript {
-            AgentTranscriptPane(transcript: transcript,
-                                metadata: history.metadata[transcript.file.path],
-                                canResume: history.resumeCommand(for: transcript.file) != nil,
-                                onResume: { onResume(transcript.file) })
-                .id(transcript.file.path)
+            // 主对话与点进去的一层层子代理记录都挂着，只露出最里面那层：返回上一层时滚动位置、展开的块都还在。
+            let levels = [transcript] + history.subagentStack
+            let top = levels.last?.path
+            ZStack {
+                ForEach(levels, id: \.path) { level in
+                    let isTop = level.path == top
+                    AgentTranscriptPane(transcript: level,
+                                        metadata: history.metadata[level.file.path],
+                                        canResume: history.resumeCommand(for: level.file) != nil,
+                                        onResume: { onResume(level.file) },
+                                        onBack: level.subagent == nil ? nil : { history.closeSubagent() },
+                                        onOpenSubagent: { history.openSubagent($0) })
+                        .opacity(isTop ? 1 : 0)
+                        .allowsHitTesting(isTop)
+                        .accessibilityHidden(!isTop)
+                }
+            }
+            .id(transcript.file.path)
         } else {
             RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
                                detail: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
@@ -193,6 +206,9 @@ struct AgentTranscriptPane: View {
     let metadata: AgentHistorySessionMetadata?
     let canResume: Bool
     let onResume: () -> Void
+    /// 子代理的记录：回到上一层。主对话为 nil。
+    var onBack: (() -> Void)? = nil
+    var onOpenSubagent: (AgentSubagentLink) -> Void = { _ in }
 
     @State private var expanded: Set<String> = []
 
@@ -206,8 +222,20 @@ struct AgentTranscriptPane: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
+            if let onBack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.udPlain)
+                .iconButtonHover(cornerRadius: 6)
+                .help(AgentHistoryText.backToParent)
+                .accessibilityLabel(Text(AgentHistoryText.backToParent))
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text(AgentHistoryText.transcriptTitle(metadata))
+                Text(titleLine)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
@@ -220,7 +248,9 @@ struct AgentTranscriptPane: View {
             }
             Spacer(minLength: 8)
             Menu {
-                Button(String(localized: "拷贝会话 ID")) { AgentHistoryPasteboard.copy(transcript.file.sessionID) }
+                if transcript.subagent == nil {
+                    Button(String(localized: "拷贝会话 ID")) { AgentHistoryPasteboard.copy(transcript.file.sessionID) }
+                }
                 Button(String(localized: "拷贝已加载的对话")) { AgentHistoryPasteboard.copy(transcript.plainText) }
             } label: {
                 Image(systemName: "doc.on.doc")
@@ -229,17 +259,27 @@ struct AgentTranscriptPane: View {
             .menuIndicator(.hidden)
             .frame(width: 28, height: 26)
             .help(String(localized: "拷贝"))
-            UDButton(title: String(localized: "继续这个会话"), systemImage: "play.fill", action: onResume)
-                .disabled(!canResume)
-                .help(canResume
-                      ? String(localized: "在这台主机上新开一个终端标签页，执行 claude --resume")
-                      : String(localized: "不知道这个会话的工作目录，无法继续"))
+            // 子代理的记录只读：不能单独继续。
+            if transcript.subagent == nil {
+                UDButton(title: String(localized: "继续这个会话"), systemImage: "play.fill", action: onResume)
+                    .disabled(!canResume)
+                    .help(canResume
+                          ? String(localized: "在这台主机上新开一个终端标签页，执行 claude --resume")
+                          : String(localized: "不知道这个会话的工作目录，无法继续"))
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
     }
 
-    private var detailLine: String { AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata) }
+    private var titleLine: String {
+        transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata)
+    }
+
+    private var detailLine: String {
+        transcript.subagent.map(AgentHistoryText.subagentDetail)
+            ?? AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata)
+    }
 
     private var messages: some View {
         let items = transcript.items
@@ -249,7 +289,9 @@ struct AgentTranscriptPane: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     top
                     ForEach(items) { item in
-                        AgentTranscriptRow(item: item, showsRole: runStarts.contains(item.id), expanded: $expanded)
+                        AgentTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
+                                           subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
+                                           expanded: $expanded)
                             .id(item.id)
                     }
                     if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
@@ -273,6 +315,11 @@ struct AgentTranscriptPane: View {
     }
 
     @State private var pendingAnchor: String?
+
+    private func subagentLink(_ item: AgentTranscriptItem) -> AgentSubagentLink? {
+        guard case .toolCall(let call) = item.kind else { return nil }
+        return transcript.subagentLink(for: call)
+    }
 
     @ViewBuilder private var top: some View {
         if let error = transcript.errorMessage {
@@ -315,12 +362,17 @@ enum AgentHistoryPasteboard {
 private struct AgentTranscriptRow: View {
     let item: AgentTranscriptItem
     let showsRole: Bool
+    /// 子代理的记录：「用户」那一侧标成「任务」。
+    var inSubagent = false
+    /// 这次调用派出的子代理（找得到记录的才有）。
+    let subagent: AgentSubagentLink?
+    let onOpenSubagent: (AgentSubagentLink) -> Void
     @Binding var expanded: Set<String>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if showsRole {
-                Text(AgentHistoryText.roleLabel(item.role))
+                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(UD.text3)
                     .padding(.top, 6)
@@ -393,6 +445,10 @@ private struct AgentTranscriptRow: View {
                         .truncationMode(.tail)
                         .textSelection(.enabled)
                 }
+                if let subagent {
+                    AgentSubagentEntry(link: subagent) { onOpenSubagent(subagent) }
+                        .padding(.leading, 18)
+                }
                 if let result = call.result {
                     AgentClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
                                       isError: result.isError, expanded: $expanded)
@@ -431,6 +487,42 @@ private struct AgentTranscriptRow: View {
     private func binding(_ key: String) -> Binding<Bool> {
         Binding(get: { expanded.contains(key) },
                 set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
+
+/// 派子代理的调用下面的入口：点进去看那个子代理自己的记录。
+private struct AgentSubagentEntry: View {
+    let link: AgentSubagentLink
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(UD.accent)
+                Text(AgentHistoryText.subagentEntry)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(UD.accent)
+                let detail = AgentHistoryText.subagentEntryDetail(link)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text4)
+                        .lineLimit(1)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(UD.accentSoft))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.udPlain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }
 

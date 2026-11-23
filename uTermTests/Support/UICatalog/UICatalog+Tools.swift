@@ -75,6 +75,16 @@ extension UICatalog {
                 let window = ClaudeHistoryWindowModel(windowID: windowID, hostName: server.name, history: history)
                 return UICatalogRender(s.wrap(ClaudeHistoryWindowView(windowID: windowID, catalogModel: window)))
             },
+            // 派了子代理的对话：调用下面有「查看子代理的记录」的入口。
+            UICatalogEntry("Claude 历史会话/子代理入口", source: "uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift",
+                           symbol: "AgentSubagentEntry", size: CGSize(width: 1100, height: 720)) { stage in
+                try await claudeHistoryRender(stage, opening: .subagents)
+            },
+            // 点进一个子代理：标题处是它的描述与类型，左上角返回上一层；它又派了一个子代理，同样有入口。
+            UICatalogEntry("Claude 历史会话/子代理的记录", source: "uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift",
+                           symbol: "AgentTranscriptPane", size: CGSize(width: 1100, height: 720)) { stage in
+                try await claudeHistoryRender(stage, opening: .subagentTranscript)
+            },
             UICatalogEntry("授权引导", source: "uTerm/Features/PermissionGuide/PermissionGuideView.swift",
                            symbol: "PermissionGuideView", size: CGSize(width: 760, height: 640)) { stage in
                 let s = try stage.session()
@@ -100,6 +110,16 @@ extension UICatalog {
             s.context.insert(host)
         }
         try? s.context.save()
+    }
+
+    private static func claudeHistoryRender(_ stage: UICatalogStage,
+                                            opening: UICatalogClaudeHistory.Opening) async throws -> UICatalogRender {
+        let s = try stage.session()
+        let server = s.host("prod-web-01")
+        let history = await UICatalogClaudeHistory.model(opening: opening)
+        let windowID = ClaudeHistoryWindowID(host: .server(server.id), directory: UICatalogClaudeHistory.directory)
+        let window = ClaudeHistoryWindowModel(windowID: windowID, hostName: server.name, history: history)
+        return UICatalogRender(s.wrap(ClaudeHistoryWindowView(windowID: windowID, catalogModel: window)))
     }
 
     private static func parallelRender(_ stage: UICatalogStage, command index: Int) throws -> UICatalogRender {

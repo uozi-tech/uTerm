@@ -4,8 +4,11 @@ import Foundation
 ///
 /// 记录格式没有公开规格（按 Claude Code 2.1.x 的实际文件写的）。行的类型有几十种，要显示的只有
 /// `type` 为 `user` / `assistant` 的；其余（`api-request`、`attachment`、`file-history-snapshot`……）以及
-/// 不认识的一律跳过。还要跳过：`isSidechain`（子代理的对话）、`isMeta`（系统注入）。`isCompactSummary`
-/// 是上下文压缩后的摘要。
+/// 不认识的一律跳过。还要跳过：`isSidechain`（子代理的对话，混在主对话里的老版本记录；读子代理自己的记录时
+/// 每行都是，这时 `includesSidechain` 为 true）、`isMeta`（系统注入）。`isCompactSummary` 是上下文压缩后的摘要。
+///
+/// 派子代理的调用（`Agent`，旧版本叫 `Task`）带上 `spawn`；它的结果那一行顶层的 `toolUseResult.agentId`
+/// 记在结果上（`spawnedAgentID`），用来找到子代理的记录。
 ///
 /// 大行（附件、工具结果能到 MB 级）先看行首一小段判断类型，不要的不做 JSON 解析。
 nonisolated enum ClaudeTranscriptParser {
@@ -13,7 +16,7 @@ nonisolated enum ClaudeTranscriptParser {
     static let headBytes = 1024
 
     /// 看行首判断值不值得解析：可能是要显示的消息行就是 true。
-    static func isMessageCandidate(head: Data) -> Bool {
+    static func isMessageCandidate(head: Data, includesSidechain: Bool = false) -> Bool {
         let head = head.prefix(headBytes)
         // 元信息行以 `{"type":"…"` 开头，一眼就能定。
         let typePrefix = Data("{\"type\":\"".utf8)
@@ -21,7 +24,7 @@ nonisolated enum ClaudeTranscriptParser {
             let rest = head.dropFirst(typePrefix.count)
             return rest.starts(with: Data("user\"".utf8)) || rest.starts(with: Data("assistant\"".utf8))
         }
-        if ClaudeJSONLScan.contains("\"isSidechain\":true", in: head) { return false }
+        if !includesSidechain, ClaudeJSONLScan.contains("\"isSidechain\":true", in: head) { return false }
         for marker in ["\"type\":\"user\"", "\"type\":\"assistant\"", "\"role\":\"assistant\"", "\"role\":\"user\""]
         where ClaudeJSONLScan.contains(marker, in: head) {
             return true
@@ -30,20 +33,20 @@ nonisolated enum ClaudeTranscriptParser {
     }
 
     /// 一行 → 条目（可能没有，也可能好几条）。`line` 是 `ClaudeReverseLineScanner` 切出来的。
-    static func items(from line: ClaudeReverseLineScanner.Line) -> [AgentTranscriptItem] {
+    static func items(from line: ClaudeReverseLineScanner.Line, includesSidechain: Bool = false) -> [AgentTranscriptItem] {
         let idPrefix = String(line.offset)
-        guard isMessageCandidate(head: line.bytes) else { return [] }
+        guard isMessageCandidate(head: line.bytes, includesSidechain: includesSidechain) else { return [] }
         if line.isTruncated {
             return [AgentTranscriptItem(id: idPrefix + ".0", kind: .oversized(bytes: line.length))]
         }
-        return items(fromJSON: line.bytes, idPrefix: idPrefix)
+        return items(fromJSON: line.bytes, idPrefix: idPrefix, includesSidechain: includesSidechain)
     }
 
     /// 解析一整行。坏行、不认识的结构返回空，不抛错。
-    static func items(fromJSON data: Data, idPrefix: String) -> [AgentTranscriptItem] {
+    static func items(fromJSON data: Data, idPrefix: String, includesSidechain: Bool = false) -> [AgentTranscriptItem] {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let type = object["type"] as? String, type == "user" || type == "assistant" else { return [] }
-        if object["isSidechain"] as? Bool == true || object["isMeta"] as? Bool == true { return [] }
+        if (!includesSidechain && object["isSidechain"] as? Bool == true) || object["isMeta"] as? Bool == true { return [] }
         let timestamp = (object["timestamp"] as? String).flatMap(ClaudeTimestamp.parse)
         let message = object["message"] as? [String: Any]
         let content = message?["content"]
@@ -59,6 +62,7 @@ nonisolated enum ClaudeTranscriptParser {
                 for case let block as [String: Any] in blocks {
                     kinds.append(contentsOf: userBlock(block))
                 }
+                attachSpawnedAgent(object["toolUseResult"], to: &kinds)
             }
         } else {
             if let string = content as? String {
@@ -75,6 +79,19 @@ nonisolated enum ClaudeTranscriptParser {
             AgentTranscriptItem(id: "\(idPrefix).\(index)", kind: kind, timestamp: timestamp)
         }
     }
+
+    /// 派子代理那次调用的结果：行顶层的 `toolUseResult.agentId` 是子代理的 ID。一行只有一个工具结果时才认
+    /// （几个结果挤在一行时分不清是谁的）。
+    private static func attachSpawnedAgent(_ toolUseResult: Any?, to kinds: inout [AgentTranscriptItem.Kind]) {
+        guard let agentID = (toolUseResult as? [String: Any])?["agentId"] as? String, !agentID.isEmpty else { return }
+        let indices = kinds.indices.filter { if case .toolResult = kinds[$0] { return true } else { return false } }
+        guard indices.count == 1, case .toolResult(var result) = kinds[indices[0]] else { return }
+        result.spawnedAgentID = agentID
+        kinds[indices[0]] = .toolResult(result)
+    }
+
+    /// 派子代理的工具名：现在叫 `Agent`，旧版本叫 `Task`。
+    static let spawnToolNames: Set<String> = ["Agent", "Task"]
 
     private static func userBlock(_ block: [String: Any]) -> [AgentTranscriptItem.Kind] {
         switch block["type"] as? String {
@@ -124,12 +141,23 @@ nonisolated enum ClaudeTranscriptParser {
         case "tool_use":
             let name = block["name"] as? String ?? "?"
             let input = block["input"] as? [String: Any] ?? [:]
+            var spawn: AgentSpawnRequest?
+            if spawnToolNames.contains(name) {
+                spawn = AgentSpawnRequest(description: nonEmpty(input["description"]),
+                                          agentType: nonEmpty(input["subagent_type"]))
+            }
             return .toolCall(AgentToolCall(toolUseID: block["id"] as? String, name: name,
                                            summary: ClaudeToolSummary.summary(name: name, input: input),
-                                           result: nil))
+                                           result: nil, spawn: spawn))
         default:
             return nil
         }
+    }
+
+    private static func nonEmpty(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = ClaudeSessionScan.singleLine(string, limit: AgentTranscriptLimits.summaryCharacters)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// 压缩摘要之类可能是字符串也可能是块数组。

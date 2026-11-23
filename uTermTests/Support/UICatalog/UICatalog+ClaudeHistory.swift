@@ -8,10 +8,18 @@ enum UICatalogClaudeHistory {
     private static let root = "/home/user/.claude/projects"
     private static let project = ClaudeProjectPath.encode(directory)
 
-    static func model() async -> AgentHistoryModel {
+    /// 打开哪一份：默认是最新的那段对话；`subagents` 是派了子代理的那份，`subagentTranscript` 再点进其中一个子代理。
+    enum Opening {
+        case conversation, subagents, subagentTranscript
+    }
+
+    static let agentsSessionID = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+
+    static func model(opening: Opening = .conversation) async -> AgentHistoryModel {
         let now = UICatalogFixtures.now
         let sessions: [(id: String, data: Data, age: TimeInterval)] = [
             ("6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8", conversation(), 60 * 12),
+            (agentsSessionID, withSubagents(), 60 * 40),
             ("1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", simple(title: "给订单接口加分页", ask: "订单列表接口加上分页参数"), 3600 * 5),
             ("9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b", simple(title: "排查 502", ask: "nginx 偶尔回 502，帮我看看"), 86_400 * 2),
             ("0f0e0d0c-0b0a-4908-8706-050403020100", desktop(), 86_400 * 3),
@@ -20,21 +28,96 @@ enum UICatalogClaudeHistory {
         tree["\(root)/\(project)"] = sessions.map {
             ClaudeFixture.entry("\($0.id).jsonl", size: UInt64($0.data.count), mtime: now.addingTimeInterval(-$0.age))
         }
+        let subagentsDir = "\(root)/\(project)/\(agentsSessionID)/subagents"
+        let agentTime = now.addingTimeInterval(-60 * 38)
+        tree["\(root)/\(project)"]?.append(ClaudeFixture.entry(agentsSessionID, directory: true, mtime: now))
+        tree["\(root)/\(project)/\(agentsSessionID)"] = [ClaudeFixture.entry("subagents", directory: true, mtime: now)]
+        let agents = subagents()
+        tree[subagentsDir] = agents.flatMap { agent -> [RemoteEntry] in
+            [ClaudeFixture.entry("agent-\(agent.id).jsonl", size: UInt64(agent.data.count), mtime: agentTime),
+             ClaudeFixture.entry("agent-\(agent.id).meta.json", size: UInt64(agent.meta.count), mtime: agentTime)]
+        }
         let sftp = MockSFTP(tree: tree)
         for session in sessions {
             await sftp.setFile("\(root)/\(project)/\(session.id).jsonl", data: session.data,
                                mtime: now.addingTimeInterval(-session.age))
+        }
+        for agent in agents {
+            await sftp.setFile("\(subagentsDir)/agent-\(agent.id).jsonl", data: agent.data, mtime: agentTime)
+            await sftp.setFile("\(subagentsDir)/agent-\(agent.id).meta.json", data: agent.meta, mtime: agentTime)
         }
         let history = AgentHistoryModel(source: ClaudeHistorySource(provider: sftp), preferredDirectory: directory)
         await history.start()
         for _ in 0..<100 where history.hasMore {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        if let first = history.visibleFiles.first { history.select(first) }
+        let pick = opening == .conversation ? history.visibleFiles.first
+            : history.visibleFiles.first { $0.sessionID == agentsSessionID }
+        if let pick { history.select(pick) }
         for _ in 0..<100 where history.transcript?.reachedStart != true {
             try? await Task.sleep(for: .milliseconds(10))
         }
+        guard opening != .conversation, let transcript = history.transcript else { return history }
+        for _ in 0..<100 where transcript.subagentLinks.count < 2 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard opening == .subagentTranscript, let link = transcript.subagentLinks["toolu_s2"] else { return history }
+        history.openSubagent(link)
+        for _ in 0..<100 where history.displayedTranscript?.reachedStart != true
+            || history.displayedTranscript?.subagentLinks.isEmpty != false {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         return history
+    }
+
+    /// 派了两个子代理的会话。
+    private static func withSubagents() -> Data {
+        let cwd = directory
+        return ClaudeFixture.file([
+            ClaudeFixture.userText("给订单服务补上集成测试，顺便看看订单列表为什么慢。", cwd: cwd),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("分两路并行：一路写测试，一路查慢查询。"), cwd: cwd),
+            ClaudeFixture.assistant(ClaudeFixture.spawn(id: "toolu_s1", description: "补订单服务的集成测试"), uuid: "a-2", cwd: cwd),
+            ClaudeFixture.assistant(ClaudeFixture.spawn(id: "toolu_s2", description: "排查订单列表的慢查询", type: "Explore"),
+                                    uuid: "a-3", cwd: cwd),
+            ClaudeFixture.spawnResult(id: "toolu_s1", agentID: "a7c1e9", text: "补了 6 个用例，全部通过。"),
+            ClaudeFixture.spawnResult(id: "toolu_s2", agentID: "b3d8f2", text: "慢在 orders.created_at 没有索引，加上后 1.8s → 40ms。"),
+            ClaudeFixture.assistant(ClaudeFixture.textBlock("""
+                两边都好了：
+
+                - 集成测试补了 6 个用例，全部通过；
+                - 订单列表慢是因为 `orders.created_at` 没有索引，迁移脚本已经加上。
+                """), uuid: "a-4", cwd: cwd),
+            ClaudeFixture.aiTitle("订单服务测试与慢查询"),
+        ])
+    }
+
+    /// 两个子代理的记录；查慢查询的那个又派了一个子代理（第二层）。
+    private static func subagents() -> [(id: String, data: Data, meta: Data)] {
+        [
+            ("a7c1e9", ClaudeFixture.file([
+                ClaudeFixture.sidechainUser("为订单服务补集成测试：下单、取消、退款各两条。", agentID: "a7c1e9"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.toolUse(id: "toolu_t1", name: "Bash",
+                                                                       input: #"{"command":"go test ./internal/order/..."}"#),
+                                                 agentID: "a7c1e9"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.textBlock("补了 6 个用例，全部通过。"), agentID: "a7c1e9", uuid: "s-a-2"),
+            ]), ClaudeFixture.subagentMeta(toolUseID: "toolu_s1", description: "补订单服务的集成测试")),
+            ("b3d8f2", ClaudeFixture.file([
+                ClaudeFixture.sidechainUser("订单列表接口偶尔要 2 秒，找出慢在哪。", agentID: "b3d8f2"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.thinkingBlock("先看慢查询日志，再看执行计划。"), agentID: "b3d8f2"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.toolUse(id: "toolu_g1", name: "Grep",
+                                                                       input: #"{"pattern":"ORDER BY created_at"}"#),
+                                                 agentID: "b3d8f2", uuid: "s-a-2"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.spawn(id: "toolu_s3", description: "核对索引前后的执行计划", type: "Explore"),
+                                                 agentID: "b3d8f2", uuid: "s-a-3"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.textBlock("慢在 `orders.created_at` 没有索引，加上后 1.8s → 40ms。"),
+                                                 agentID: "b3d8f2", uuid: "s-a-4"),
+            ]), ClaudeFixture.subagentMeta(toolUseID: "toolu_s2", type: "Explore", description: "排查订单列表的慢查询")),
+            ("c9e4a0", ClaudeFixture.file([
+                ClaudeFixture.sidechainUser("对比加索引前后的 EXPLAIN。", agentID: "c9e4a0"),
+                ClaudeFixture.sidechainAssistant(ClaudeFixture.textBlock("加索引后走 index scan，扫描行数从 120 万降到 50。"),
+                                                 agentID: "c9e4a0"),
+            ]), ClaudeFixture.subagentMeta(toolUseID: "toolu_s3", type: "Explore", description: "核对索引前后的执行计划", depth: 2)),
+        ]
     }
 
     private static func conversation() -> Data {

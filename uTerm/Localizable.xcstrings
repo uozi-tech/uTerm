@@ -18900,6 +18900,35 @@
         }
       }
     },
+    "任务" : {
+      "comment" : "子代理记录里，派它的那一方交给它的话",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タスク"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "작업"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任務"
+          }
+        }
+      }
+    },
     "会在「%@」上下载、校验后替换并重启，新版本起不来会自动换回。" : {
       "localizations" : {
         "en" : {
@@ -32940,6 +32969,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "如果你最近沒有重新安裝這台主機，請不要繼續，先透過其他管道與管理員確認。"
+          }
+        }
+      }
+    },
+    "子代理" : {
+      "comment" : "Claude Code 派出去干活的子代理（subagent）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서브에이전트"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子代理"
           }
         }
       }
@@ -53462,6 +53520,34 @@
         }
       }
     },
+    "查看子代理的记录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View Subagent Transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェントの記録を見る"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서브에이전트 기록 보기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看子代理的記錄"
+          }
+        }
+      }
+    },
     "查看屏幕" : {
       "localizations" : {
         "en" : {
@@ -71225,6 +71311,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "返回"
+          }
+        }
+      }
+    },
+    "返回上一层" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前の階層に戻る"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 단계로 돌아가기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回上一層"
           }
         }
       }

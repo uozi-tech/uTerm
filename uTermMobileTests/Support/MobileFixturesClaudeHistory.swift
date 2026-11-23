@@ -86,6 +86,77 @@ enum MobileClaudeFixture {
         ])
     }
 
+    // MARK: 子代理
+
+    static func spawn(id: String, description: String, type: String = "general-purpose") -> String {
+        toolUse(id: id, name: "Agent",
+                input: #"{"description":\#(json(description)),"prompt":"按说明去做","subagent_type":\#(json(type))}"#)
+    }
+
+    /// 派子代理那次调用的结果，行顶层带 `toolUseResult.agentId`。
+    static func spawnResult(id: String, agentID: String, text: String) -> String {
+        #"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"tool_use_id":"\#(id)","type":"tool_result","content":[{"type":"text","text":\#(json(text))}]}]},"uuid":"r-\#(id)",\#(meta("cli", cwd: directory)),"toolUseResult":{"status":"completed","agentId":"\#(agentID)"}}"#
+    }
+
+    static func sideUser(_ text: String, agent: String) -> String {
+        #"{"parentUuid":null,"isSidechain":true,"agentId":"\#(agent)","type":"user","message":{"role":"user","content":\#(json(text))},"uuid":"s-u",\#(meta("cli", cwd: directory))}"#
+    }
+
+    static func sideAssistant(_ blocks: String, agent: String, uuid: String = "s-a") -> String {
+        #"{"parentUuid":"s-u","isSidechain":true,"agentId":"\#(agent)","message":{"model":"test-model","id":"msg_s","type":"message","role":"assistant","content":[\#(blocks)]},"type":"assistant","uuid":"\#(uuid)",\#(meta("cli", cwd: directory))}"#
+    }
+
+    static func subagentMeta(toolUseID: String, type: String, description: String) -> Data {
+        Data(#"{"agentType":\#(json(type)),"description":\#(json(description)),"spawnDepth":1,"toolUseId":"\#(toolUseID)"}"#.utf8)
+    }
+
+    /// 派了两个子代理的会话（第二个又派了一个）。主对话之外，`<会话>/subagents/` 下有三份记录和它们的 meta。
+    static func withSubagents(now: Date = Date()) -> MobileFakeClaudeTree {
+        let session = sessionID(7)
+        let dir = projectPath + "/" + session + "/subagents"
+        let main = file([
+            user("给订单服务补上集成测试，顺便看看订单列表为什么慢。"),
+            assistant(text("分两路并行：一路写测试，一路查慢查询。")),
+            assistant(spawn(id: "toolu_s1", description: "补订单服务的集成测试"), uuid: "a-2"),
+            assistant(spawn(id: "toolu_s2", description: "排查订单列表的慢查询", type: "Explore"), uuid: "a-3"),
+            spawnResult(id: "toolu_s1", agentID: "a7c1e9", text: "补了 6 个用例，全部通过。"),
+            spawnResult(id: "toolu_s2", agentID: "b3d8f2", text: "慢在 orders.created_at 没有索引。"),
+            assistant(text("两边都好了：测试补了 6 个用例；订单列表慢是因为 `orders.created_at` 没有索引，迁移脚本已经加上。"),
+                      uuid: "a-4"),
+            title("订单服务测试与慢查询"),
+        ])
+        let first = file([
+            sideUser("为订单服务补集成测试：下单、取消、退款各两条。", agent: "a7c1e9"),
+            sideAssistant(toolUse(id: "toolu_t1", name: "Bash", input: #"{"command":"go test ./internal/order/..."}"#),
+                          agent: "a7c1e9"),
+            sideAssistant(text("补了 6 个用例，全部通过。"), agent: "a7c1e9", uuid: "s-a-2"),
+        ])
+        let second = file([
+            sideUser("订单列表接口偶尔要 2 秒，找出慢在哪。", agent: "b3d8f2"),
+            sideAssistant(thinking("先看慢查询日志，再看执行计划。"), agent: "b3d8f2"),
+            sideAssistant(spawn(id: "toolu_s3", description: "核对索引前后的执行计划", type: "Explore"), agent: "b3d8f2",
+                          uuid: "s-a-2"),
+            sideAssistant(text("慢在 `orders.created_at` 没有索引，加上后 1.8s → 40ms。"), agent: "b3d8f2", uuid: "s-a-3"),
+        ])
+        let third = file([
+            sideUser("对比加索引前后的 EXPLAIN。", agent: "c9e4a0"),
+            sideAssistant(text("加索引后走 index scan，扫描行数从 120 万降到 50。"), agent: "c9e4a0"),
+        ])
+        let time = now.addingTimeInterval(-60 * 30)
+        return MobileFakeClaudeTree(home: home, files: [
+            (projectPath + "/" + session + ".jsonl", main, now.addingTimeInterval(-60 * 20)),
+            (dir + "/agent-a7c1e9.jsonl", first, time),
+            (dir + "/agent-a7c1e9.meta.json", subagentMeta(toolUseID: "toolu_s1", type: "general-purpose",
+                                                           description: "补订单服务的集成测试"), time),
+            (dir + "/agent-b3d8f2.jsonl", second, time),
+            (dir + "/agent-b3d8f2.meta.json", subagentMeta(toolUseID: "toolu_s2", type: "Explore",
+                                                           description: "排查订单列表的慢查询"), time),
+            (dir + "/agent-c9e4a0.jsonl", third, time),
+            (dir + "/agent-c9e4a0.meta.json", subagentMeta(toolUseID: "toolu_s3", type: "Explore",
+                                                           description: "核对索引前后的执行计划"), time),
+        ])
+    }
+
     /// 截图与用例共用的一份：三条命令行会话 + 一条桌面版（不列出）。
     static func standard(now: Date = Date()) -> MobileFakeClaudeTree {
         MobileFakeClaudeTree(home: home, files: [

@@ -54,6 +54,34 @@ enum AgentHistoryText {
         metadata?.title ?? String(localized: "（无标题）")
     }
 
+    // MARK: 子代理
+
+    /// 派子代理的调用下面那个入口。
+    static var subagentEntry: String { String(localized: "查看子代理的记录") }
+
+    /// 入口的第二行：类型 · 大小。
+    static func subagentEntryDetail(_ link: AgentSubagentLink) -> String {
+        var parts: [String] = []
+        if let type = link.agentType { parts.append(type) }
+        if let size = link.file.size, size > 0 { parts.append(size.formatted(.byteCount(style: .file))) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 子代理记录的标题：派它时写的描述。
+    static func subagentTitle(_ link: AgentSubagentLink) -> String {
+        link.description ?? String(localized: "子代理", comment: "Claude Code 派出去干活的子代理（subagent）")
+    }
+
+    /// 子代理记录顶上的第二行：子代理 · 类型 · 最后活动。
+    static func subagentDetail(_ link: AgentSubagentLink) -> String {
+        var parts = [String(localized: "子代理", comment: "Claude Code 派出去干活的子代理（subagent）")]
+        if let type = link.agentType { parts.append(type) }
+        if let modified = link.file.modifiedAt { parts.append(relative(modified)) }
+        return parts.joined(separator: " · ")
+    }
+
+    static var backToParent: String { String(localized: "返回上一层") }
+
     /// 范围里一行都没列出来时的说明。
     static func emptyListDetail(hidden: Int) -> String {
         hidden > 0
@@ -70,8 +98,10 @@ enum AgentHistoryText {
         String(localized: "这台主机上没有找到 Claude Code 的会话记录（~/.claude/projects）。")
     }
 
-    static func roleLabel(_ role: AgentTranscriptItem.Role) -> String {
-        role == .user ? String(localized: "你") : "Claude"
+    /// 说话的一方。子代理的记录里「用户」那一侧是派它的主代理交给它的任务，不是你。
+    static func roleLabel(_ role: AgentTranscriptItem.Role, inSubagent: Bool = false) -> String {
+        guard role == .user else { return "Claude" }
+        return inSubagent ? String(localized: "任务", comment: "子代理记录里，派它的那一方交给它的话") : String(localized: "你")
     }
 
     static func resultLabel(_ result: AgentToolResult) -> String {

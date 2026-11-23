@@ -108,6 +108,14 @@ nonisolated struct AgentToolCall: Equatable, Sendable {
     /// 参数的一行摘要（命令、文件路径、搜索词……）。
     let summary: String
     var result: AgentToolResult?
+    /// 这次调用派出了一个子代理（Claude：`Agent`，旧版本叫 `Task`）。
+    var spawn: AgentSpawnRequest? = nil
+}
+
+/// 派子代理时写的参数。
+nonisolated struct AgentSpawnRequest: Equatable, Sendable {
+    var description: String?
+    var agentType: String?
 }
 
 nonisolated struct AgentToolResult: Equatable, Sendable {
@@ -115,6 +123,8 @@ nonisolated struct AgentToolResult: Equatable, Sendable {
     let content: AgentClippedText
     let isError: Bool
     let imageCount: Int
+    /// 派子代理那次调用的结果里报的子代理 ID（用来找到它的记录）。
+    var spawnedAgentID: String? = nil
 }
 
 /// 显示的上限。记录里的字节大头是工具结果，展开也只给前面一段。

@@ -84,6 +84,7 @@ struct ClaudeHistorySessionBody: View {
 }
 
 /// 列表与对话。宽的格子（iPad、展开的 Duo 横屏）左右并排；窄的先是列表，点一条进到对话，左上角返回列表。
+/// 对话里点进子代理的记录再一层层往里进，左上角一层层返回。
 struct ClaudeHistoryBrowser: View {
     let history: AgentHistoryModel
     let canResume: Bool
@@ -112,16 +113,34 @@ struct ClaudeHistoryBrowser: View {
 
     @ViewBuilder private func detail(showsBack: Bool) -> some View {
         if let transcript = history.transcript {
-            ClaudeTranscriptView(transcript: transcript,
-                                 metadata: history.metadata[transcript.file.path],
-                                 canResume: canResume && history.resumeCommand(for: transcript.file) != nil,
-                                 onBack: showsBack ? { history.select(nil) } : nil,
-                                 onResume: { onResume(transcript.file) })
-                .id(transcript.file.path)
+            // 主对话与点进去的一层层子代理记录都挂着，只露出最里面那层：返回时滚动位置、展开的块都还在。
+            let levels = [transcript] + history.subagentStack
+            let top = levels.last?.path
+            ZStack {
+                ForEach(levels, id: \.path) { level in
+                    let isTop = level.path == top
+                    ClaudeTranscriptView(transcript: level,
+                                         metadata: history.metadata[level.file.path],
+                                         canResume: canResume && history.resumeCommand(for: level.file) != nil,
+                                         onBack: back(for: level, showsBack: showsBack),
+                                         onResume: { onResume(level.file) },
+                                         onOpenSubagent: { history.openSubagent($0) })
+                        .opacity(isTop ? 1 : 0)
+                        .allowsHitTesting(isTop)
+                        .accessibilityHidden(!isTop)
+                }
+            }
+            .id(transcript.file.path)
         } else {
             ClaudeHistoryState(icon: "clock", title: String(localized: "选择一个会话"),
                                message: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
         }
+    }
+
+    /// 子代理的记录回上一层；主对话在窄屏回列表，宽屏没有返回。
+    private func back(for level: AgentTranscriptModel, showsBack: Bool) -> (() -> Void)? {
+        if level.subagent != nil { return { history.closeSubagent() } }
+        return showsBack ? { history.select(nil) } : nil
     }
 }
 
@@ -275,9 +294,10 @@ private struct ClaudeTranscriptView: View {
     let transcript: AgentTranscriptModel
     let metadata: AgentHistorySessionMetadata?
     let canResume: Bool
-    /// 窄屏：回到列表。宽屏列表一直在左边，没有。
+    /// 窄屏：回到列表；子代理的记录：回上一层。宽屏的主对话没有（列表一直在左边）。
     let onBack: (() -> Void)?
     let onResume: () -> Void
+    let onOpenSubagent: (AgentSubagentLink) -> Void
 
     @State private var expanded: Set<String> = []
     @State private var pendingAnchor: String?
@@ -323,16 +343,18 @@ private struct ClaudeTranscriptView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())
-            .accessibilityLabel(Text("返回会话列表"))
+            .accessibilityLabel(Text(transcript.subagent == nil ? String(localized: "返回会话列表")
+                                                                 : AgentHistoryText.backToParent))
         }
     }
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(AgentHistoryText.transcriptTitle(metadata))
+            Text(transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata))
                 .font(M.sans(14.5, weight: .semibold)).foregroundStyle(M.text)
                 .lineLimit(1)
-            Text(AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata))
+            Text(transcript.subagent.map(AgentHistoryText.subagentDetail)
+                 ?? AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata))
                 .font(M.sans(11.5)).foregroundStyle(M.text3)
                 .lineLimit(1).truncationMode(.middle)
         }
@@ -343,8 +365,10 @@ private struct ClaudeTranscriptView: View {
     private var actions: some View {
         HStack(spacing: 6) {
             MMenu {
-                Button { UIPasteboard.general.string = transcript.file.sessionID } label: {
-                    Label("拷贝会话 ID", systemImage: "number")
+                if transcript.subagent == nil {
+                    Button { UIPasteboard.general.string = transcript.file.sessionID } label: {
+                        Label("拷贝会话 ID", systemImage: "number")
+                    }
                 }
                 Button { UIPasteboard.general.string = transcript.plainText } label: {
                     Label("拷贝已加载的对话", systemImage: "doc.on.doc")
@@ -355,10 +379,15 @@ private struct ClaudeTranscriptView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(Text("拷贝"))
-            MBtn(title: String(localized: "继续这个会话"), icon: "run", kind: .tinted, height: 34,
-                 disabled: !canResume, action: onResume)
-                .fixedSize()
-                .padding(.trailing, 10)
+            // 子代理的记录只读：不能单独继续。
+            if transcript.subagent == nil {
+                MBtn(title: String(localized: "继续这个会话"), icon: "run", kind: .tinted, height: 34,
+                     disabled: !canResume, action: onResume)
+                    .fixedSize()
+                    .padding(.trailing, 10)
+            } else {
+                Color.clear.frame(width: 4, height: 1)
+            }
         }
     }
 
@@ -370,7 +399,9 @@ private struct ClaudeTranscriptView: View {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     top
                     ForEach(items) { item in
-                        ClaudeTranscriptRow(item: item, showsRole: runStarts.contains(item.id), expanded: $expanded)
+                        ClaudeTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
+                                            subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
+                                            expanded: $expanded)
                             .id(item.id)
                     }
                     if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
@@ -417,17 +448,27 @@ private struct ClaudeTranscriptView: View {
         pendingAnchor = transcript.firstItemID
         Task { await transcript.loadEarlier() }
     }
+
+    private func subagentLink(_ item: AgentTranscriptItem) -> AgentSubagentLink? {
+        guard case .toolCall(let call) = item.kind else { return nil }
+        return transcript.subagentLink(for: call)
+    }
 }
 
 private struct ClaudeTranscriptRow: View {
     let item: AgentTranscriptItem
     let showsRole: Bool
+    /// 子代理的记录：「用户」那一侧标成「任务」。
+    var inSubagent = false
+    /// 这次调用派出的子代理（找得到记录的才有）。
+    let subagent: AgentSubagentLink?
+    let onOpenSubagent: (AgentSubagentLink) -> Void
     @Binding var expanded: Set<String>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             if showsRole {
-                Text(AgentHistoryText.roleLabel(item.role))
+                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent))
                     .font(M.sans(12, weight: .semibold)).foregroundStyle(M.text3)
                     .padding(.top, 6)
             }
@@ -483,6 +524,10 @@ private struct ClaudeTranscriptRow: View {
                         .font(M.mono(12.5)).foregroundStyle(M.text3)
                         .lineLimit(1).truncationMode(.tail)
                 }
+                if let subagent {
+                    ClaudeSubagentEntry(link: subagent) { onOpenSubagent(subagent) }
+                        .padding(.leading, 18)
+                }
                 if let result = call.result {
                     ClaudeClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
                                        isError: result.isError, expanded: $expanded)
@@ -517,6 +562,40 @@ private struct ClaudeTranscriptRow: View {
     private func binding(_ key: String) -> Binding<Bool> {
         Binding(get: { expanded.contains(key) },
                 set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
+
+/// 派子代理的调用下面的入口：点进去看那个子代理自己的记录。同 Mac。
+private struct ClaudeSubagentEntry: View {
+    let link: AgentSubagentLink
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(M.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(AgentHistoryText.subagentEntry)
+                        .font(M.sans(13.5, weight: .medium)).foregroundStyle(M.accent)
+                    let detail = AgentHistoryText.subagentEntryDetail(link)
+                    if !detail.isEmpty {
+                        Text(verbatim: detail)
+                            .font(M.sans(11.5)).foregroundStyle(M.text3)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                MIcon(name: "chev", size: 11, color: M.text4, weight: .semibold)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(minHeight: M.minTarget)
+            .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous).fill(M.fillFaint))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }
 

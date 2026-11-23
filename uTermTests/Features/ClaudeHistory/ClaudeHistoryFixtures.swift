@@ -43,6 +43,36 @@ enum ClaudeFixture {
         user(content: #"[{"tool_use_id":"\#(id)","type":"tool_result","content":\#(json(text)),"is_error":\#(isError)}]"#)
     }
 
+    // MARK: 子代理
+
+    /// 派子代理的调用（`Agent`；旧版本 `Task`）。
+    static func spawn(id: String, description: String, type: String? = "general-purpose", name: String = "Agent") -> String {
+        let typeField = type.map { #","subagent_type":\#(json($0))"# } ?? ""
+        return toolUse(id: id, name: name,
+                       input: #"{"description":\#(json(description)),"prompt":"按说明去做"\#(typeField)}"#)
+    }
+
+    /// 派子代理那次调用的结果；`agentID` 不为 nil 时行顶层带 `toolUseResult.agentId`（2.1.x 的写法）。
+    static func spawnResult(id: String, agentID: String?, text: String = "子代理做完了") -> String {
+        let flags = agentID.map { #","toolUseResult":{"status":"completed","agentId":"\#($0)","prompt":"按说明去做"}"# } ?? ""
+        return user(content: #"[{"tool_use_id":"\#(id)","type":"tool_result","content":[{"type":"text","text":\#(json(text))}]}]"#,
+                    uuid: "r-\(id)", flags: flags)
+    }
+
+    /// 子代理自己的记录里的行：`isSidechain: true`，多一个 `agentId`。
+    static func sidechainUser(_ text: String, agentID: String, uuid: String = "s-u-1") -> String {
+        #"{"parentUuid":null,"isSidechain":true,"agentId":"\#(agentID)","type":"user","message":{"role":"user","content":\#(json(text))},"uuid":"\#(uuid)",\#(meta(entrypoint: "cli", cwd: cwd))}"#
+    }
+
+    static func sidechainAssistant(_ blocks: String, agentID: String, uuid: String = "s-a-1") -> String {
+        #"{"parentUuid":"s-u-1","isSidechain":true,"agentId":"\#(agentID)","message":{"model":"test-model","id":"msg_s","type":"message","role":"assistant","content":[\#(blocks)]},"type":"assistant","uuid":"\#(uuid)",\#(meta(entrypoint: "cli", cwd: cwd))}"#
+    }
+
+    /// `agent-<ID>.meta.json` 的内容。
+    static func subagentMeta(toolUseID: String, type: String = "general-purpose", description: String, depth: Int = 1) -> Data {
+        Data(#"{"agentType":\#(json(type)),"description":\#(json(description)),"spawnDepth":\#(depth),"toolUseId":"\#(toolUseID)"}"#.utf8)
+    }
+
     static func aiTitle(_ title: String) -> String { #"{"type":"ai-title","aiTitle":\#(json(title)),"sessionId":"\#(sessionID)"}"# }
     static func customTitle(_ title: String) -> String {
         #"{"type":"custom-title","customTitle":\#(json(title)),"sessionId":"\#(sessionID)"}"#
