@@ -623,10 +623,12 @@ private struct AgentNewMessagesPill: View {
                 Text(AgentHistoryText.newMessages)
                     .font(.system(size: 11.5, weight: .medium))
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(UD.accent)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Capsule().fill(UD.accent))
+            // 浮层的底色（浅色下是白的），不用强调色整块铺：它盖在对话上，只是个提示。
+            .background(Capsule().fill(UD.overlay))
+            .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
             .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
             .contentShape(Capsule())
         }

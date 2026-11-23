@@ -877,10 +877,12 @@ private struct ClaudeNewMessagesPill: View {
                 Image(systemName: "arrow.down").font(.system(size: 12, weight: .semibold))
                 Text(AgentHistoryText.newMessages).font(M.sans(13.5, weight: .medium))
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(M.accent)
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
-            .background(Capsule().fill(M.accent))
+            // 浮层的底色（浅色下是白的），同 Mac。
+            .background(Capsule().fill(M.overlay))
+            .overlay(Capsule().strokeBorder(M.border, lineWidth: 1))
             .shadow(color: .black.opacity(0.18), radius: 5, y: 1)
             .contentShape(Capsule())
         }
