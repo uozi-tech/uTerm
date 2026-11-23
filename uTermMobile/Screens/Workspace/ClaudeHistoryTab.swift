@@ -543,8 +543,7 @@ private struct ClaudeTranscriptView: View {
                     .lineLimit(1)
                 if transcript.isUpdating { ClaudeUpdatingBadge() }
             }
-            Text(transcript.subagent.map(AgentHistoryText.subagentDetail)
-                 ?? AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata))
+            AgentTranscriptDetailText(transcript: transcript, metadata: metadata)
                 .font(M.sans(11.5)).foregroundStyle(M.text3)
                 .lineLimit(1).truncationMode(.middle)
         }

@@ -22,9 +22,12 @@ enum UICatalogClaudeHistory {
     static func appendLiveTurn(_ history: AgentHistoryModel) async {
         guard let liveFile, let transcript = history.transcript else { return }
         var data = (try? await liveFile.sftp.readRange(liveFile.path, offset: 0, length: Int.max / 2)) ?? Data()
-        data.append(Data((ClaudeFixture.userText("顺便把慢查询日志也打开吧。", uuid: "u-live", cwd: directory) + "\n"
+        // 新接上的这一问一答是刚写的：时间戳取此刻，顶栏的「最后活动」才和「正在更新」对得上。
+        let stamp = Date().formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        let turn = ClaudeFixture.userText("顺便把慢查询日志也打开吧。", uuid: "u-live", cwd: directory) + "\n"
             + ClaudeFixture.assistant(ClaudeFixture.textBlock("好，已经在 `postgresql.conf` 里打开了。"),
-                                      uuid: "a-live", cwd: directory) + "\n").utf8))
+                                      uuid: "a-live", cwd: directory) + "\n"
+        data.append(Data(turn.replacingOccurrences(of: "2026-11-20T10:00:00.000Z", with: stamp).utf8))
         await liveFile.sftp.setFile(liveFile.path, data: data, mtime: UICatalogFixtures.now)
         await transcript.followOnce()
     }

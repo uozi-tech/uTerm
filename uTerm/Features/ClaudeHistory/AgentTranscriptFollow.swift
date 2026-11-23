@@ -16,6 +16,8 @@ nonisolated struct AgentTranscriptFollowTiming: Sendable {
     /// 睡一段（测试换成不真睡的）。被取消时抛错。
     var sleep: @Sendable (Duration) async throws -> Void
     var now: @Sendable () -> ContinuousClock.Instant
+    /// 墙上时间：新接上的条目没带时间戳时，「最后活动」记成读到它的这一刻（测试换成假的）。
+    var date: @Sendable () -> Date = { Date() }
 
     static let standard = AgentTranscriptFollowTiming(
         interval: .seconds(2), maxBackoff: .seconds(30), activeWindow: .seconds(60), subagentRelist: .seconds(5),

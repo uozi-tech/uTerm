@@ -527,6 +527,9 @@ final class AgentTranscriptModel {
     private(set) var highlightedItemID: String?
     /// 要界面滚到高亮那一条时 +1。
     private(set) var focusGeneration = 0
+    /// 已加载内容里最新一条的时间（顶栏第二行的「最后活动」）。第一页、实时跟随接上的、往后翻的都算，往前翻旧页不会把它
+    /// 改旧；跟随接上的条目没带时间戳就记成读到它的那一刻。还不知道为 nil（界面退回会话信息里的时间）。
+    private(set) var lastActivity: Date?
 
     /// 同时读几份子代理的信息文件。
     nonisolated static let infoConcurrency = 4
@@ -599,6 +602,7 @@ final class AgentTranscriptModel {
             }
             seenIDs.formUnion(page.items.map(\.id))
             let isFirstPage = items.isEmpty
+            if isFirstPage { noteActivity(page.items, arrivedNow: false) }
             items = AgentTranscriptAssembler.attachResults(page.items + items)
             reachedStart = page.reachedStart
             prependGeneration += 1
@@ -629,6 +633,7 @@ final class AgentTranscriptModel {
             case .appended(let new, let hasMore):
                 let fresh = new.filter { !seenIDs.contains($0.id) }
                 seenIDs.formUnion(fresh.map(\.id))
+                noteActivity(fresh, arrivedNow: false)
                 if !fresh.isEmpty { items = AgentTranscriptAssembler.attachResults(items + fresh) }
                 reachedEnd = !hasMore
                 laterGeneration += 1
@@ -645,6 +650,13 @@ final class AgentTranscriptModel {
         } catch {
             if epoch == contentEpoch { laterErrorMessage = error.localizedDescription }
         }
+    }
+
+    /// 新读到的条目里最新的时间戳；只往新里改。`arrivedNow`（实时跟随接上的）且没有时间戳时取此刻。
+    private func noteActivity(_ new: [AgentTranscriptItem], arrivedNow: Bool) {
+        guard !new.isEmpty else { return }
+        guard let candidate = new.compactMap(\.timestamp).max() ?? (arrivedNow ? followTiming.date() : nil) else { return }
+        if lastActivity.map({ candidate > $0 }) ?? true { lastActivity = candidate }
     }
 
     /// 高亮这一条并让界面滚过去（它已经读进来了）。
@@ -721,6 +733,7 @@ final class AgentTranscriptModel {
         let fresh = new.filter { !seenIDs.contains($0.id) }
         guard !fresh.isEmpty else { return }
         seenIDs.formUnion(fresh.map(\.id))
+        noteActivity(fresh, arrivedNow: true)
         items = AgentTranscriptAssembler.attachResults(items + fresh)
         appendGeneration += 1
         if !followsTail { hasNewBelow = true }
@@ -743,6 +756,7 @@ final class AgentTranscriptModel {
         // 文件换掉了：命中处的位置不再作数，从末尾重读。
         reachedEnd = true
         highlightedItemID = nil
+        lastActivity = nil
         errorMessage = nil
         seenIDs = []
         subagentLinks = [:]

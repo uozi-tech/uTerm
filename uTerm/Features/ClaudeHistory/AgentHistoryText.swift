@@ -41,13 +41,21 @@ enum AgentHistoryText {
         return parts.joined(separator: " · ")
     }
 
-    /// 对话顶上的那一行：目录 · 分支 · 最后活动。
-    static func transcriptDetail(_ file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?) -> String {
+    /// 对话顶上的那一行：目录 · 分支 · 最后活动。`lastActivity` 是已加载内容里最新那条的时间（实时跟随时跟着变），
+    /// 没有就用会话信息里的最后活动、再没有用文件的修改时间。
+    static func transcriptDetail(_ file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?,
+                                 lastActivity: Date? = nil) -> String {
         var parts: [String] = []
         if let directory = metadata?.resumeDirectory ?? metadata?.lastDirectory { parts.append(directory) }
         if let branch = metadata?.gitBranch { parts.append(branch) }
-        parts.append(relative(metadata?.lastActivity ?? file.modifiedAt))
+        parts.append(relative(lastActivity ?? metadata?.lastActivity ?? file.modifiedAt))
         return parts.joined(separator: " · ")
+    }
+
+    /// 对话顶栏的第二行（主对话或子代理的记录），时间取 `transcript.lastActivity`，没有再退回原来的来源。
+    static func transcriptDetail(_ transcript: AgentTranscriptModel, metadata: AgentHistorySessionMetadata?) -> String {
+        if let link = transcript.subagent { return subagentDetail(link, lastActivity: transcript.lastActivity) }
+        return transcriptDetail(transcript.file, metadata: metadata, lastActivity: transcript.lastActivity)
     }
 
     static func transcriptTitle(_ metadata: AgentHistorySessionMetadata?) -> String {
@@ -72,11 +80,11 @@ enum AgentHistoryText {
         link.description ?? String(localized: "子代理", comment: "Claude Code 派出去干活的子代理（subagent）")
     }
 
-    /// 子代理记录顶上的第二行：子代理 · 类型 · 最后活动。
-    static func subagentDetail(_ link: AgentSubagentLink) -> String {
+    /// 子代理记录顶上的第二行：子代理 · 类型 · 最后活动（`lastActivity` 没有就用记录文件的修改时间）。
+    static func subagentDetail(_ link: AgentSubagentLink, lastActivity: Date? = nil) -> String {
         var parts = [String(localized: "子代理", comment: "Claude Code 派出去干活的子代理（subagent）")]
         if let type = link.agentType { parts.append(type) }
-        if let modified = link.file.modifiedAt { parts.append(relative(modified)) }
+        if let modified = lastActivity ?? link.file.modifiedAt { parts.append(relative(modified)) }
         return parts.joined(separator: " · ")
     }
 

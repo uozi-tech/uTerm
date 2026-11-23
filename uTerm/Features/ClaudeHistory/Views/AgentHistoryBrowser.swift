@@ -437,7 +437,7 @@ struct AgentTranscriptPane: View {
                         .lineLimit(1)
                     if transcript.isUpdating { AgentUpdatingBadge() }
                 }
-                Text(detailLine)
+                AgentTranscriptDetailText(transcript: transcript, metadata: metadata)
                     .font(.system(size: 11))
                     .foregroundStyle(UD.text3)
                     .lineLimit(1)
@@ -472,11 +472,6 @@ struct AgentTranscriptPane: View {
 
     private var titleLine: String {
         transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata)
-    }
-
-    private var detailLine: String {
-        transcript.subagent.map(AgentHistoryText.subagentDetail)
-            ?? AgentHistoryText.transcriptDetail(transcript.file, metadata: metadata)
     }
 
     private var messages: some View {

@@ -386,8 +386,11 @@ final class StyleGalleryTests: XCTestCase {
             let liveFile = try XCTUnwrap(liveModel.visibleFiles.first)
             liveModel.select(liveFile)
             _ = await MobileFakeTerminal.waitUntil { liveModel.transcript?.reachedStart == true }
-            await liveTree.append(liveFile.path, MobileClaudeFixture.user("顺便把慢查询日志也打开吧。", uuid: "u-live") + "\n"
+            // 新接上的这一问一答是刚写的：时间戳取此刻，顶栏的「最后活动」才和「正在更新」对得上。
+            let liveStamp = Date().formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+            await liveTree.append(liveFile.path, (MobileClaudeFixture.user("顺便把慢查询日志也打开吧。", uuid: "u-live") + "\n"
                 + MobileClaudeFixture.assistant(MobileClaudeFixture.text("好，已经在 `postgresql.conf` 里打开了。"), uuid: "a-live") + "\n")
+                .replacingOccurrences(of: "2026-11-20T10:00:00.000Z", with: liveStamp))
             let liveTranscript = try XCTUnwrap(liveModel.transcript)
             liveTranscript.setFollowsTail(false)
             await liveTranscript.followOnce()
