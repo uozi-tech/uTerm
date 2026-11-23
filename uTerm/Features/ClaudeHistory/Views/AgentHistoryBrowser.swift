@@ -171,7 +171,7 @@ struct AgentHistorySessionList: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(files) { file in
-                    AgentHistorySessionRow(file: file, metadata: history.metadata[file.path],
+                    AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                            showsProject: history.scope == .all,
                                            isSelected: history.selectedFile?.path == file.path)
                         .onTapGesture { history.select(file) }
@@ -288,10 +288,12 @@ struct AgentHistorySearchResults: View {
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
-                Text(AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all))
-                    .font(.system(size: 11))
-                    .foregroundStyle(UD.text3)
-                    .lineLimit(1)
+                AgentSessionTimeText(history: history, file: session.file) { activity in
+                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all, activity: activity)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
             }
             .padding(.horizontal, 10)
             .padding(.top, 2)
@@ -337,6 +339,7 @@ private struct AgentHistorySearchHitRow: View {
 }
 
 private struct AgentHistorySessionRow: View {
+    let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     let showsProject: Bool
@@ -349,10 +352,12 @@ private struct AgentHistorySessionRow: View {
                 .foregroundStyle(UD.text)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(subtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-                .lineLimit(1)
+            AgentSessionTimeText(history: history, file: file) { activity in
+                AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(UD.text3)
+            .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -363,10 +368,6 @@ private struct AgentHistorySessionRow: View {
     }
 
     private var title: String { AgentHistoryText.sessionTitle(file, metadata: metadata) }
-
-    private var subtitle: String {
-        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject)
-    }
 }
 
 // MARK: - 对话

@@ -24,16 +24,21 @@ enum AgentHistoryText {
         String(localized: "当前项目（\(projectName(project))）")
     }
 
+    private static func later(_ date: Date, _ other: Date?) -> Date {
+        other.map { max(date, $0) } ?? date
+    }
+
     /// 列表一行的标题。读不到标题时用会话 ID 的前 8 位。
     static func sessionTitle(_ file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?) -> String {
         if let title = metadata?.title { return title }
         return String(localized: "（无标题）\(String(file.sessionID.prefix(8)))")
     }
 
-    /// 列表一行的第二行：多久以前 · 大小 · 分支 ·（全部项目时）项目。
+    /// 列表一行的第二行：多久以前 · 大小 · 分支 ·（全部项目时）项目。`activity` 是看这个会话时读到的更新的时间
+    /// （`AgentHistoryModel.liveActivity`），比文件的修改时间新就用它。
     static func sessionSubtitle(_ file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?,
-                                showsProject: Bool) -> String {
-        var parts = [relative(file.modifiedAt), file.size.formatted(.byteCount(style: .file))]
+                                showsProject: Bool, activity: Date? = nil) -> String {
+        var parts = [relative(later(file.modifiedAt, activity)), file.size.formatted(.byteCount(style: .file))]
         if let branch = metadata?.gitBranch { parts.append(branch) }
         if showsProject {
             parts.append(metadata?.lastDirectory.map { ($0 as NSString).lastPathComponent } ?? projectName(file.project))
@@ -159,9 +164,10 @@ enum AgentHistoryText {
         }
     }
 
-    /// 结果里一个会话那一组的第二行：多久以前 ·（全部项目时）项目。
-    static func searchSessionDetail(_ session: AgentHistorySearchSession, showsProject: Bool) -> String {
-        var parts = [relative(session.metadata.lastActivity ?? session.file.modifiedAt)]
+    /// 结果里一个会话那一组的第二行：多久以前 ·（全部项目时）项目。`activity` 同 `sessionSubtitle`。
+    static func searchSessionDetail(_ session: AgentHistorySearchSession, showsProject: Bool,
+                                    activity: Date? = nil) -> String {
+        var parts = [relative(later(session.metadata.lastActivity ?? session.file.modifiedAt, activity))]
         if showsProject {
             parts.append(session.metadata.lastDirectory.map { ($0 as NSString).lastPathComponent }
                          ?? projectName(session.file.project))

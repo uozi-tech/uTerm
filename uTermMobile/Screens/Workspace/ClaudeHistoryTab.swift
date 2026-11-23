@@ -270,7 +270,7 @@ private struct ClaudeHistoryList: View {
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(files) { file in
                     Button { history.select(file) } label: {
-                        ClaudeHistoryRow(file: file, metadata: history.metadata[file.path],
+                        ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
                                          showsProject: history.scope == .all,
                                          isSelected: history.selectedFile?.path == file.path)
                     }
@@ -375,9 +375,11 @@ private struct ClaudeHistorySearchResults: View {
                 Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
                     .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
                     .lineLimit(1)
-                Text(AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all))
-                    .font(M.sans(12.5)).foregroundStyle(M.text3)
-                    .lineLimit(1)
+                AgentSessionTimeText(history: history, file: session.file) { activity in
+                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all, activity: activity)
+                }
+                .font(M.sans(12.5)).foregroundStyle(M.text3)
+                .lineLimit(1)
             }
             .padding(.horizontal, 12).padding(.bottom, 2)
             ForEach(session.hits) { hit in
@@ -425,6 +427,7 @@ private struct ClaudeHistorySearchHitRow: View {
 }
 
 private struct ClaudeHistoryRow: View {
+    let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     let showsProject: Bool
@@ -437,9 +440,11 @@ private struct ClaudeHistoryRow: View {
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                Text(AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject))
-                    .font(M.sans(12.5)).foregroundStyle(M.text3)
-                    .lineLimit(1)
+                AgentSessionTimeText(history: history, file: file) { activity in
+                    AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                }
+                .font(M.sans(12.5)).foregroundStyle(M.text3)
+                .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)

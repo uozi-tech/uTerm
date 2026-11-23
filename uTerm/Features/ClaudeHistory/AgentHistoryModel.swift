@@ -59,6 +59,8 @@ final class AgentHistoryModel {
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var failed: Set<String> = []
     @ObservationIgnored private var listGeneration = 0
+    /// 看过的会话里读到的最新时间（按路径）：切到别的会话之后，列表那一行还用它。重新列一次就清掉。
+    private var seenActivity: [String: Date] = [:]
     /// 打开着的对话多久看一次文件末尾（测试换成不真睡的）。
     @ObservationIgnored let followTiming: AgentTranscriptFollowTiming
     /// 平台说对话现在看不看得见（`setTranscriptVisible`）。
@@ -161,6 +163,8 @@ final class AgentHistoryModel {
         }
         guard generation == listGeneration else { return }
         files = listed
+        // 列表里的修改时间是刚列的了，之前记的不再需要（正开着的那份照样从对话里取）。
+        seenActivity.removeAll()
         failed.removeAll()
         // 文件变过的（大小或修改时间不一样了）信息作废，重读。
         for file in listed where metadataKeys[file.path] != nil && metadataKeys[file.path] != file.cacheKey {
@@ -253,8 +257,27 @@ final class AgentHistoryModel {
         open(file, at: nil)
     }
 
+    /// 列表里这个会话那一行该用的更新的时间：正开着的取对话已加载内容里最新那条的（实时跟随时跟着变），看过又切走的
+    /// 取切走时记下的。不比列表里记的修改时间新就是 nil（那一行照旧用修改时间）。
+    func liveActivity(of file: AgentHistorySessionFile) -> Date? {
+        var latest = seenActivity[file.path]
+        if selectedFile?.path == file.path, let open = transcript?.lastActivity, latest.map({ open > $0 }) ?? true {
+            latest = open
+        }
+        guard let latest, latest > file.modifiedAt else { return nil }
+        return latest
+    }
+
+    /// 要换掉正开着的对话了：记下在它里面读到的最新时间。
+    private func rememberActivity() {
+        guard let transcript, let seen = transcript.lastActivity else { return }
+        let path = transcript.file.path
+        seenActivity[path] = max(seen, seenActivity[path] ?? seen)
+    }
+
     /// 打开一份对话：`hit` 为 nil 从末尾打开，否则从命中那一行打开并高亮它。
     private func open(_ file: AgentHistorySessionFile?, at hit: AgentHistorySearchHit?) {
+        rememberActivity()
         selectedFile = file
         stopFollowingAll()
         subagentStack = []
