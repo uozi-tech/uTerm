@@ -27,8 +27,7 @@ enum UICatalogClaudeHistory {
         }
         let history = AgentHistoryModel(source: ClaudeHistorySource(provider: sftp), preferredDirectory: directory)
         await history.start()
-        for file in history.files { history.rowAppeared(file) }
-        for _ in 0..<100 where history.metadata.count < history.files.count {
+        for _ in 0..<100 where history.hasMore {
             try? await Task.sleep(for: .milliseconds(10))
         }
         if let first = history.visibleFiles.first { history.select(first) }

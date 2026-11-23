@@ -12,7 +12,8 @@ import Foundation
 ///
 /// 命令包在子 shell `( … )` 里：命令里的 `exit` 只退出子 shell —— 不包的话它会把用户这个
 /// 窗口的登录 shell 一起退掉，会话断开，结果也就拿不到了。代价是命令里的 `cd` / `export`
-/// 不会留在窗口里。
+/// 不会留在窗口里。App 自己拼的、确定没有 `exit` 的命令可以不包（`inSubshell: false`）：「继续这个会话」
+/// 先 `cd` 进项目目录再起 Claude Code，退出之后 shell 应当还在项目目录里。
 ///
 /// 用户看到的只有命令本身，包装不露出来：
 /// - 等远端的行编辑器起来再打（`TrackedRunInjectionGate`）。早打的话终端驱动先把这行回显一遍，行编辑器起来又画一遍。
@@ -33,6 +34,8 @@ struct TerminalTrackedRun {
 
     let id: String
     let command: String
+    /// 命令包不包在子 shell `( … )` 里。不包时命令里的 `cd` 留在窗口里，`exit` 会退掉登录 shell。
+    let inSubshell: Bool
     let requestedAt: Date
     var phase: Phase = .pending
     var injected = false
@@ -45,9 +48,10 @@ struct TerminalTrackedRun {
     var startedAt: Date?
     var finishedAt: Date?
 
-    init(command: String, requestedAt: Date = Date()) {
+    init(command: String, inSubshell: Bool = true, requestedAt: Date = Date()) {
         self.id = String(UUID().uuidString.prefix(8)).lowercased()
         self.command = command
+        self.inSubshell = inSubshell
         self.requestedAt = requestedAt
     }
 
@@ -55,8 +59,8 @@ struct TerminalTrackedRun {
     var inputLine: String { echoPrefix + command + echoSuffix }
 
     /// 回显出来的那一行里命令前面、后面的包装（行编辑器原样回显，`\033` 显示成四个字）。
-    var echoPrefix: String { " printf '\\033]\(Self.oscCode);S;\(id)\\007'; (" }
-    var echoSuffix: String { "); printf '\\033]\(Self.oscCode);D;\(id);%s\\007' \"$?\"" }
+    var echoPrefix: String { " printf '\\033]\(Self.oscCode);S;\(id)\\007'; " + (inSubshell ? "(" : "") }
+    var echoSuffix: String { (inSubshell ? ")" : "") + "; printf '\\033]\(Self.oscCode);D;\(id);%s\\007' \"$?\"" }
 
     /// 开始标记在字节流里的样子（`printf` 打出来的）。
     var startMarkerBytes: Data { Data("\u{1B}]\(Self.oscCode);S;\(id)\u{07}".utf8) }
@@ -166,9 +170,10 @@ extension TerminalSession {
     }
 
     /// 登记一条要跑的命令。已连上就立刻打进去，否则等 `connect` 成功后再打。
+    /// `inSubshell` 见 `TerminalTrackedRun.inSubshell`。
     @discardableResult
-    func startTrackedRun(_ command: String) -> TerminalTrackedRun {
-        let run = TerminalTrackedRun(command: command)
+    func startTrackedRun(_ command: String, inSubshell: Bool = true) -> TerminalTrackedRun {
+        let run = TerminalTrackedRun(command: command, inSubshell: inSubshell)
         trackedRun = run
         injectPendingTrackedRun()
         return run

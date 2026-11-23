@@ -203,10 +203,9 @@ final class AgentHistoryModelTests: XCTestCase {
         XCTAssertEqual(model.phase, .ready)
         XCTAssertEqual(model.currentProject?.id, project)
         XCTAssertEqual(model.scope, .project(try XCTUnwrap(model.currentProject)))
-        XCTAssertEqual(model.visibleFiles.count, 2)
-
-        model.rowAppeared(try XCTUnwrap(model.visibleFiles.first))
-        await waitUntil { model.metadata.count == 2 }
+        XCTAssertEqual(model.files.count, 2)
+        // 还没读过信息的不显示（读到了才知道要不要列）；第一批不用催，自己读。
+        await waitUntil { !model.hasMore }
         XCTAssertEqual(model.visibleFiles.map(\.sessionID), [cli])
         XCTAssertEqual(model.hiddenCount, 1)
 
@@ -220,6 +219,127 @@ final class AgentHistoryModelTests: XCTestCase {
 
         await model.setScope(.all)
         XCTAssertEqual(model.files.count, 2)
+    }
+
+    /// 一个项目里 `count` 份记录，新的在前；序号是 3 的倍数的是命令行起的，其余是桌面版的。
+    private func makeMixedProject(count: Int) async -> (sftp: MockSFTP, listedIDs: [String]) {
+        var entries: [RemoteEntry] = []
+        var blobs: [(path: String, data: Data, mtime: Date)] = []
+        var listedIDs: [String] = []
+        for index in 0..<count {
+            let id = String(format: "00000000-0000-4000-8000-%012d", index)
+            let isCLI = index % 3 == 0
+            let data = ClaudeFixture.file([
+                ClaudeFixture.userText("问题 \(index)", entrypoint: isCLI ? "cli" : "claude-desktop"),
+                ClaudeFixture.aiTitle("会话 \(index)"),
+            ])
+            let mtime = Date(timeIntervalSince1970: TimeInterval(1_000_000 - index))
+            entries.append(ClaudeFixture.entry("\(id).jsonl", size: UInt64(data.count), mtime: mtime))
+            blobs.append(("\(root)/\(project)/\(id).jsonl", data, mtime))
+            if isCLI { listedIDs.append(id) }
+        }
+        let sftp = MockSFTP(tree: [root: [ClaudeFixture.entry(project, directory: true)], "\(root)/\(project)": entries])
+        for blob in blobs { await sftp.setFile(blob.path, data: blob.data, mtime: blob.mtime) }
+        return (sftp, listedIDs)
+    }
+
+    /// 读到了才显示、一批一批往后读：行只往后加，没有「先占位、读完再消失」。
+    func testRowsAppearOnlyAfterTheyAreReadAndLoadInBatches() async throws {
+        let (sftp, listedIDs) = await makeMixedProject(count: 120)
+        XCTAssertEqual(listedIDs.count, 40)
+        let model = AgentHistoryModel(source: ClaudeHistorySource(provider: sftp),
+                                      preferredDirectory: "/home/user/projects/demo")
+        await model.start()
+        XCTAssertEqual(model.files.count, 120)
+
+        // 第一批自己读：够一屏多就停，不把 120 份全读了。
+        await waitUntil { model.visibleFiles.count >= 24 }
+        try await Task.sleep(for: .milliseconds(100))
+        let first = model.visibleFiles.map(\.sessionID)
+        XCTAssertEqual(first, Array(listedIDs.prefix(first.count)), "按新旧顺序、从头起的一段")
+        XCTAssertLessThan(first.count, 40)
+        XCTAssertTrue(model.hasMore)
+        XCTAssertLessThan(model.metadata.count, 120, "没滚到底就把全部记录读了")
+        XCTAssertTrue(model.visibleFiles.allSatisfy { model.metadata[$0.path]?.isListed == true }, "没有占位行")
+
+        // 上一批还在读的时候催它没有用（列表还短时底下那行一直露着，会被反复催）。
+        let (slowSFTP, _) = await makeMixedProject(count: 120)
+        let eager = AgentHistoryModel(source: ClaudeHistorySource(provider: slowSFTP),
+                                      preferredDirectory: "/home/user/projects/demo")
+        await eager.start()
+        for _ in 0..<50 { eager.loadMore() }
+        await waitUntil { eager.visibleFiles.count >= 24 }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(eager.visibleFiles.count, first.count, "读第一批时被催了 50 次，读的应当还是一批")
+
+        // 滚到底：再读一批。这里剩下的不够一批，读完为止。
+        model.loadMore()
+        await waitUntil { !model.hasMore }
+        let second = model.visibleFiles.map(\.sessionID)
+        XCTAssertEqual(second, listedIDs)
+        XCTAssertEqual(Array(second.prefix(first.count)), first, "先前列出来的行原样还在")
+        XCTAssertEqual(model.hiddenCount, 80)
+
+        // 读完了再调没有效果。
+        model.loadMore()
+        XCTAssertEqual(model.visibleFiles.count, 40)
+    }
+
+    /// 读过的那几份全是不用列的、后面还有没读的：列表是「还在读」，不是「没有」。
+    func testAllHiddenProjectEndsUpEmptyOnlyAfterEverythingIsRead() async throws {
+        let cli = "33333333-3333-4333-8333-333333333333"
+        let data = ClaudeFixture.file([ClaudeFixture.userText("b", entrypoint: "claude-desktop")])
+        var entries: [RemoteEntry] = []
+        let sftp = MockSFTP()
+        for index in 0..<30 {
+            let id = String(format: "00000000-0000-4000-8000-%012d", index)
+            let mtime = Date(timeIntervalSince1970: TimeInterval(1_000 - index))
+            entries.append(ClaudeFixture.entry("\(id).jsonl", size: UInt64(data.count), mtime: mtime))
+            await sftp.setFile("\(root)/\(project)/\(id).jsonl", data: data, mtime: mtime)
+        }
+        await sftp.setTree([root: [ClaudeFixture.entry(project, directory: true)], "\(root)/\(project)": entries])
+        let model = AgentHistoryModel(source: ClaudeHistorySource(provider: sftp),
+                                      preferredDirectory: "/home/user/projects/demo")
+        await model.start()
+        // 一行都凑不出来，就一直读到完。
+        await waitUntil { !model.hasMore }
+        XCTAssertTrue(model.visibleFiles.isEmpty)
+        XCTAssertEqual(model.hiddenCount, 30)
+        XCTAssertFalse(model.files.contains { $0.sessionID == cli })
+    }
+
+    /// 刷新：文件变过（大小、修改时间不一样了）的重读标题，没变的不重读。
+    func testReloadRereadsChangedRecords() async throws {
+        let changed = "44444444-4444-4444-8444-444444444444", same = "55555555-5555-4555-8555-555555555555"
+        let directory = "\(root)/\(project)"
+        let before = ClaudeFixture.file([ClaudeFixture.userText("a"), ClaudeFixture.aiTitle("旧标题")])
+        let untouched = ClaudeFixture.file([ClaudeFixture.userText("c"), ClaudeFixture.aiTitle("没动过")])
+        let old = Date(timeIntervalSince1970: 100)
+        let sftp = MockSFTP(tree: [
+            root: [ClaudeFixture.entry(project, directory: true)],
+            directory: [ClaudeFixture.entry("\(changed).jsonl", size: UInt64(before.count), mtime: old),
+                        ClaudeFixture.entry("\(same).jsonl", size: UInt64(untouched.count), mtime: old)],
+        ])
+        await sftp.setFile("\(directory)/\(changed).jsonl", data: before, mtime: old)
+        await sftp.setFile("\(directory)/\(same).jsonl", data: untouched, mtime: old)
+        let model = AgentHistoryModel(source: ClaudeHistorySource(provider: sftp),
+                                      preferredDirectory: "/home/user/projects/demo")
+        await model.start()
+        await waitUntil { !model.hasMore }
+        XCTAssertEqual(Set(model.visibleFiles.compactMap { model.metadata[$0.path]?.title }), ["旧标题", "没动过"])
+
+        let after = ClaudeFixture.file([ClaudeFixture.userText("a"), ClaudeFixture.userText("b", uuid: "u-2"),
+                                        ClaudeFixture.aiTitle("新标题")])
+        let new = Date(timeIntervalSince1970: 200)
+        await sftp.setFile("\(directory)/\(changed).jsonl", data: after, mtime: new)
+        await sftp.setTree([
+            root: [ClaudeFixture.entry(project, directory: true)],
+            directory: [ClaudeFixture.entry("\(changed).jsonl", size: UInt64(after.count), mtime: new),
+                        ClaudeFixture.entry("\(same).jsonl", size: UInt64(untouched.count), mtime: old)],
+        ])
+        await model.reload()
+        await waitUntil { !model.hasMore }
+        XCTAssertEqual(model.visibleFiles.compactMap { model.metadata[$0.path]?.title }, ["新标题", "没动过"])
     }
 
     func testNoHistoryDirectory() async {

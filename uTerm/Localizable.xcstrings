@@ -73522,6 +73522,34 @@
         }
       }
     },
+    "这台主机的密钥还没有被信任，或者和已信任的不一致。请先在终端里连接这台主机并信任它的密钥，再回来打开历史会话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host’s key isn’t trusted yet, or it doesn’t match the trusted one. Connect to this host in a terminal and trust its key first, then open the session history again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストの鍵はまだ信頼されていないか、信頼済みのものと一致しません。先にターミナルでこのホストに接続して鍵を信頼してから、もう一度セッション履歴を開いてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 키를 아직 신뢰하지 않았거나 신뢰한 키와 일치하지 않습니다. 먼저 터미널에서 이 호스트에 연결해 키를 신뢰한 다음 세션 기록을 다시 여십시오."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機的金鑰尚未被信任，或與已信任的不一致。請先在終端機中連線到這台主機並信任其金鑰，再回來打開歷史工作階段。"
+          }
+        }
+      }
+    },
     "这台手机" : {
       "localizations" : {
         "en" : {

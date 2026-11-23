@@ -41,6 +41,19 @@ final class TrackedRunEchoRewriteTests: XCTestCase {
         XCTAssertEqual(run.startMarkerBytes, Data("\u{1B}]6973;S;\(run.id)\u{07}".utf8))
     }
 
+    /// 不包子 shell 的那种（「继续这个会话」）：命令里的 `cd` 要留在窗口里。回显照样改写成只剩命令。
+    func testRunOutsideASubshellHasNoParenthesesAndStillRewrites() throws {
+        let command = "cd -- '/srv/it'\\''s a dir' && claude --resume 0b0e5f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
+        let run = TerminalTrackedRun(command: command, inSubshell: false)
+        XCTAssertEqual(run.inputLine,
+                       " printf '\\033]6973;S;\(run.id)\\007'; \(command); printf '\\033]6973;D;\(run.id);%s\\007' \"$?\"")
+
+        let terminal = makeTerminal(cols: 60)
+        try echoAndRewrite(terminal, run: run)
+        feed(terminal, "resumed\r\n")
+        XCTAssertEqual(screenLines(terminal).joined(), "Last login% " + command + "resumed")
+    }
+
     /// 包装折成三行，改写后只剩命令一行，下面的输出接在它正下方，读输出不丢行、命令行不和输出并成一行。
     func testWrappedEchoCollapsesToTheCommandAndOutputFollows() throws {
         let terminal = makeTerminal(cols: 40)

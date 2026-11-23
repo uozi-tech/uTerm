@@ -2,6 +2,7 @@ import AppKit
 import Observation
 import SwiftData
 import SwiftUI
+import Synchronization
 import UDesignKit
 import UPaneGroups
 
@@ -57,6 +58,7 @@ final class ClaudeHistoryResumeRouter {
 
 /// 「继续这个会话」：在同一台主机上开新终端标签，执行 `cd -- '<目录>' && claude --resume <ID>`。
 /// 命令经 `startTrackedRun` 打进去：连上、等行编辑器起来之后才打，用户看到的就是这一行命令。
+/// 不包子 shell：退出 Claude Code 之后 shell 留在项目目录里（SSH 的新标签是从主目录起的）。
 @MainActor
 enum ClaudeHistoryResume {
     /// 等新开的终端连上的上限。SSH 首连可能要确认主机密钥，所以给得宽。
@@ -66,13 +68,13 @@ enum ClaudeHistoryResume {
         guard let open = registry.openLocalShell, let paneID = open(directory) else { return }
         // 加进已有本机终端窗口的标签马上就在；新开窗口的要等窗口搭起来、会话登记上。
         if let pane = LocalShellWindowRouter.shared.allPanes.first(where: { $0.id == paneID }) {
-            pane.session.startTrackedRun(command)
+            pane.session.startTrackedRun(command, inSubshell: false)
             return
         }
         Task {
             guard await registry.waitForSession(id: paneID, timeout: connectTimeout) != nil,
                   let session = registry.session(for: paneID) else { return }
-            session.startTrackedRun(command)
+            session.startTrackedRun(command, inSubshell: false)
         }
     }
 
@@ -84,7 +86,7 @@ enum ClaudeHistoryResume {
         Task {
             guard let entry = await registry.waitForSession(inWindow: windowID, timeout: connectTimeout),
                   let session = registry.session(for: entry.id) else { return }
-            session.startTrackedRun(command)
+            session.startTrackedRun(command, inSubshell: false)
         }
     }
 }
@@ -98,7 +100,7 @@ extension OpenWindowAction {
             guard let workspace else { return false }
             let tabID = workspace.openServer(profileID: serverID, title: title)
             guard let pane = workspace.terminalGroups.tab(tabID)?.payload else { return false }
-            pane.session.startTrackedRun(command)
+            pane.session.startTrackedRun(command, inSubshell: false)
             workspace.revealTerminal(paneID: pane.id)
             return true
         }
@@ -110,6 +112,30 @@ extension OpenWindowAction {
     @MainActor
     func openClaudeHistory(localPane pane: LocalShellPane) {
         self(value: ClaudeHistoryWindowID(host: .local, directory: pane.workingDirectory.flatMap(ClaudeProjectPath.normalized)))
+    }
+}
+
+/// 历史窗口连主机时怎么对待主机密钥：**不弹确认**，只记下「被问过」。
+///
+/// 能从终端标签打开这个窗口，说明终端已经连过这台主机、密钥早已信任，正常不会被问。被问了（密钥没信任过，或者和已信任的
+/// 不一致）就连不上，这时提示用户回终端里去信任——底层的报错写的是「用户拒绝了未知主机密钥」，但这里没人问过用户。
+nonisolated final class ClaudeHistoryHostKeyGate: Sendable {
+    private let challenged = Mutex(false)
+
+    var wasChallenged: Bool { challenged.withLock { $0 } }
+
+    var approver: @Sendable (HostKeyChallenge) async -> Bool {
+        { [self] _ in
+            challenged.withLock { $0 = true }
+            return false
+        }
+    }
+
+    /// 连不上时给用户看的话。
+    func failureMessage(for error: any Error) -> String {
+        wasChallenged
+            ? String(localized: "这台主机的密钥还没有被信任，或者和已信任的不一致。请先在终端里连接这台主机并信任它的密钥，再回来打开历史会话。")
+            : FriendlyError.describe(error)
     }
 }
 
@@ -151,6 +177,7 @@ final class ClaudeHistoryWindowModel {
         isOpening = true
         defer { isOpening = false }
         phase = .connecting
+        let hostKeys = ClaudeHistoryHostKeyGate()
         do {
             let provider: any SFTPProviding
             switch windowID.host {
@@ -164,8 +191,7 @@ final class ClaudeHistoryWindowModel {
                     return
                 }
                 hostName = profile.name
-                // 能开到这里说明终端已经连过这台主机、指纹早已确认；这里不弹确认，遇到新指纹直接失败。
-                provider = try await SFTPSession.make(profile: profile, container: container, approver: { _ in false })
+                provider = try await SFTPSession.make(profile: profile, container: container, approver: hostKeys.approver)
             }
             self.provider = provider
             let history = AgentHistoryModel(source: ClaudeHistorySource(provider: provider),
@@ -173,7 +199,7 @@ final class ClaudeHistoryWindowModel {
             phase = .ready(history)
             await history.start()
         } catch {
-            phase = .failed(FriendlyError.describe(error))
+            phase = .failed(hostKeys.failureMessage(for: error))
         }
     }
 

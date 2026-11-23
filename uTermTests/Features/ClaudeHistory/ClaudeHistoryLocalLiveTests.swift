@@ -202,30 +202,58 @@ final class ClaudeHistoryLocalLiveTests: XCTestCase {
         }
         defer { heartbeat.cancel() }
 
-        // 没人调 `rowAppeared`：标题只能是露出来的行自己去读的。
-        await waitUntil("露出来的行读到标题") { !model.metadata.isEmpty }
-        await waitUntil("第一屏的标题读完") { model.metadata.count >= min(model.files.count, 12) }
-
-        let listedFiles = model.files.filter { model.metadata[$0.path]?.isListed == true }
-        let target = try XCTUnwrap(listedFiles.max { $0.size < $1.size }, "第一屏里没有命令行起的会话")
-        let started = ContinuousClock.now
-        longestGap = .zero
-        model.select(target)
-        let transcript = try XCTUnwrap(model.transcript)
-        await waitUntil("对话的第一页") { !transcript.items.isEmpty || transcript.errorMessage != nil }
-        XCTAssertNil(transcript.errorMessage)
-        let loaded = ContinuousClock.now - started
-        // 让视图把这一页画完。
-        try await Task.sleep(for: .seconds(1))
-        if !transcript.reachedStart {
-            await transcript.loadEarlier()
-            try await Task.sleep(for: .milliseconds(500))
+        // 第一批：列表里有了一屏多的行，或者整个范围读完了。
+        await waitUntil("第一批会话") { model.visibleFiles.count >= 24 || !model.hasMore }
+        // 没人滚动：读得停下来。懒加载的列表会把视口下面不远的那行「正在读取」也先建出来，所以会多预取一批，
+        // 但不能一路读到底（改之前会：列表还短时那一行一直露着，每多一行催一次，主线程因此卡过 5 秒）。
+        var settled = model.visibleFiles.count
+        var stableSince = ContinuousClock.now
+        let settleDeadline = ContinuousClock.now + .seconds(20)
+        while ContinuousClock.now - stableSince < .seconds(1), ContinuousClock.now < settleDeadline {
+            try await Task.sleep(for: .milliseconds(50))
+            if model.visibleFiles.count != settled {
+                settled = model.visibleFiles.count
+                stableSince = ContinuousClock.now
+            }
         }
-        print("""
-            [claude-history-local] view: rows=\(model.files.count) metadata=\(model.metadata.count) \
-            opened bytes=\(target.size) items=\(transcript.items.count) first page in \(loaded), longest main-thread gap \(longestGap)
-            """)
-        XCTAssertLessThan(longestGap, .seconds(1), "打开对话时主线程卡了 \(longestGap)")
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - stableSince, .seconds(1), "没人滚动，列表却一直在往后读")
+        if model.files.count > 200 {
+            XCTAssertTrue(model.hasMore, "\(model.files.count) 份记录没滚动就全读了")
+        }
+        // 列出来的每一行都已经有信息：没有占位行，之后也不会消失。
+        XCTAssertTrue(model.visibleFiles.allSatisfy { model.metadata[$0.path]?.isListed == true })
+        let before = model.visibleFiles.map(\.path)
+
+        // 往下滚到底一次：再来一批，先前的行原样还在。
+        model.loadMore()
+        await waitUntil("下一批会话") { model.visibleFiles.count >= settled + 24 || !model.hasMore }
+        XCTAssertEqual(Array(model.visibleFiles.map(\.path).prefix(before.count)), before)
+        print("[claude-history-local] list: settled at \(settled) rows without scrolling, \(model.visibleFiles.count) after one more batch, of \(model.files.count) records")
+
+        // 挨个点开最大的几份：第一页读得出来，画的时候主线程不长时间卡住。
+        let targets = model.visibleFiles.sorted { $0.size > $1.size }.prefix(4)
+        XCTAssertFalse(targets.isEmpty, "没有命令行起的会话")
+        for target in targets {
+            let started = ContinuousClock.now
+            longestGap = .zero
+            model.select(target)
+            let transcript = try XCTUnwrap(model.transcript)
+            await waitUntil("对话的第一页") { !transcript.items.isEmpty || transcript.errorMessage != nil }
+            XCTAssertNil(transcript.errorMessage)
+            let loaded = ContinuousClock.now - started
+            // 让视图把这一页画完，再往前翻一页。
+            try await Task.sleep(for: .seconds(1))
+            if !transcript.reachedStart {
+                await transcript.loadEarlier()
+                try await Task.sleep(for: .milliseconds(500))
+            }
+            print("""
+                [claude-history-local] view: rows=\(model.visibleFiles.count)/\(model.files.count) \
+                opened bytes=\(target.size) items=\(transcript.items.count) first page in \(loaded), \
+                longest main-thread gap \(longestGap)
+                """)
+            XCTAssertLessThan(longestGap, .seconds(1), "打开 \(target.size) 字节的对话时主线程卡了 \(longestGap)")
+        }
     }
 
     // MARK: - 继续这个会话
@@ -253,7 +281,7 @@ final class ClaudeHistoryLocalLiveTests: XCTestCase {
         session.sendHostBytes(Data(
             " unalias claude 2>/dev/null; function claude { { pwd -P; printf '%s\\n' \"$@\"; } > \(quotedRecord); }\n".utf8))
 
-        session.startTrackedRun(command)
+        session.startTrackedRun(command, inSubshell: false)
         await waitUntil("命令跑完") {
             if case .finished = session.trackedRun?.phase { return true }
             return false
@@ -263,6 +291,10 @@ final class ClaudeHistoryLocalLiveTests: XCTestCase {
         let recorded = try String(contentsOf: record, encoding: .utf8)
         XCTAssertEqual(recorded.split(separator: "\n").map(String.init),
                        [project.resolvingSymlinksInPath().path, "--resume", sessionID])
+        // 「退出」之后 shell 还在项目目录里。
+        let current = await backend.workingDirectory()
+        XCTAssertEqual(current.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path },
+                       project.resolvingSymlinksInPath().path)
         await backend.close()
     }
 }

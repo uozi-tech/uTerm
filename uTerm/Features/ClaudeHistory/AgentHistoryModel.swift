@@ -3,8 +3,9 @@ import Observation
 
 /// 历史会话窗口的状态：会话列表（当前项目或全部项目）、选中的会话、它的对话。两端共用，平台只画。
 ///
-/// 列表里每一行的标题与来源要读文件末尾一小块，**滚到哪行读哪行**（`rowAppeared`），读过的按
-/// （路径、大小、修改时间）缓存在数据源里。来源不是命令行的（桌面版等）读到之后从列表里拿掉。
+/// 列表里每一行的标题与来源要读文件末尾一小块，**读到了才知道这一行要不要列**（桌面版起的不列）。所以列表只显示
+/// 从头数起已经读过的那一段，一批一批往后读（`loadMore`，列表滚到底时由界面调）：行只会往后加，不会先占位再消失——
+/// 慢的主机上、藏起来的比列出来的多时，占位行一批批消失很难看。读过的按（路径、大小、修改时间）缓存在数据源里。
 ///
 /// 对话内容只在内存里，关窗口就没了：不落盘、不进 iCloud、不进偏好设置。
 @MainActor
@@ -36,13 +37,21 @@ final class AgentHistoryModel {
     /// 范围里的全部记录文件，新的在前（还没读过信息的也在里面）。
     private(set) var files: [AgentHistorySessionFile] = []
     private(set) var metadata: [String: AgentHistorySessionMetadata] = [:]
+    /// `files` 从头数起，信息已经读到的有几份。列表只显示这一段。
+    private(set) var resolvedCount = 0
     private(set) var selectedFile: AgentHistorySessionFile?
     private(set) var transcript: AgentTranscriptModel?
 
     /// 同时读几份记录的末尾。
     @ObservationIgnored private let metadataConcurrency = 4
-    /// 一行露出来时顺带把后面几行也读了，往下滚时不用等。
-    @ObservationIgnored private let prefetchCount = 12
+    /// 排在已读那一段后面、提前读的份数。
+    @ObservationIgnored private let lookahead = 12
+    /// 一批要让列表多出几行（窗口再高一屏也放不下这么多）。
+    @ObservationIgnored private let pageRows = 24
+    /// 读到列表有这么多行为止。
+    @ObservationIgnored private var targetRows = 0
+    /// 每份信息是照哪个（路径、大小、修改时间）读的：刷新后文件变了就重读。
+    @ObservationIgnored private var metadataKeys: [String: AgentHistorySessionFile.CacheKey] = [:]
     @ObservationIgnored private var queued: [AgentHistorySessionFile] = []
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var failed: Set<String> = []
@@ -53,9 +62,9 @@ final class AgentHistoryModel {
         self.preferredDirectory = preferredDirectory
     }
 
-    /// 列表里显示的：读过信息、要列出来的，以及还没读到的（显示成占位行）。
+    /// 列表里显示的：已经读过的那一段里要列出来的。
     var visibleFiles: [AgentHistorySessionFile] {
-        files.filter { metadata[$0.path]?.isListed ?? true }
+        files.prefix(resolvedCount).filter { metadata[$0.path]?.isListed ?? true }
     }
 
     /// 读过信息、不列出来的（桌面版等）有几个。
@@ -124,16 +133,44 @@ final class AgentHistoryModel {
         guard generation == listGeneration else { return }
         files = listed
         failed.removeAll()
+        // 文件变过的（大小或修改时间不一样了）信息作废，重读。
+        for file in listed where metadataKeys[file.path] != nil && metadataKeys[file.path] != file.cacheKey {
+            metadata[file.path] = nil
+            metadataKeys[file.path] = nil
+        }
+        resolvedCount = 0
+        advanceResolved()
+        targetRows = pageRows
+        fill()
         if let selectedFile, !listed.contains(where: { $0.path == selectedFile.path }) {
             select(nil)
         }
     }
 
-    /// 一行露出来了：读它和后面几行的信息。
-    func rowAppeared(_ file: AgentHistorySessionFile) {
-        let visible = visibleFiles
-        guard let index = visible.firstIndex(where: { $0.path == file.path }) else { return }
-        for candidate in visible[index..<min(visible.count, index + prefetchCount)] {
+    /// 后面还有没读的记录（列表底下画「正在读取」）。
+    var hasMore: Bool { resolvedCount < files.count }
+
+    /// 再往后读一批：读到列表多出一批行，或者读完为止。列表滚到底时调。
+    ///
+    /// 上一批还没读够时不起作用：行是一份一份冒出来的，列表还短的时候底下那行一直露着、每多一行就又调一次，
+    /// 不挡的话目标跟着行数往上涨，一路读下去停不住。
+    func loadMore() {
+        let shown = visibleFiles.count
+        guard hasMore, shown >= targetRows else { return }
+        targetRows = shown + pageRows
+        fill()
+    }
+
+    private func advanceResolved() {
+        while resolvedCount < files.count, metadata[files[resolvedCount].path] != nil {
+            resolvedCount += 1
+        }
+    }
+
+    /// 行数还没到目标就接着读：已读那一段后面的 `lookahead` 份排上队。
+    private func fill() {
+        guard hasMore, visibleFiles.count < targetRows else { return }
+        for candidate in files[resolvedCount..<min(files.count, resolvedCount + lookahead)] {
             enqueue(candidate)
         }
         pump()
@@ -158,6 +195,13 @@ final class AgentHistoryModel {
 
     private func finished(_ file: AgentHistorySessionFile, _ result: AgentHistorySessionMetadata?) {
         inFlight.remove(file.path)
+        // 读的时候文件又变了（中途刷新过）：这份信息是旧的，丢掉重读。
+        if let current = files.first(where: { $0.path == file.path }), current.cacheKey != file.cacheKey {
+            pump()
+            fill()
+            return
+        }
+        metadataKeys[file.path] = file.cacheKey
         if let result {
             metadata[file.path] = result
         } else {
@@ -167,7 +211,9 @@ final class AgentHistoryModel {
                                                               resumeDirectory: file.project.directory,
                                                               gitBranch: nil, lastActivity: nil)
         }
+        advanceResolved()
         pump()
+        fill()
     }
 
     func select(_ file: AgentHistorySessionFile?) {

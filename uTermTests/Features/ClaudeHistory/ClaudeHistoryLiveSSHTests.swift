@@ -164,8 +164,9 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         XCTAssertEqual(Set(model.files.map(\.sessionID)),
                        [Session.cli, Session.desktop, Session.mixed, Session.empty, Session.moved])
 
-        for row in model.files { model.rowAppeared(row) }
-        await waitUntil("五份记录的信息都读到") { model.metadata.count == 5 }
+        // 不用谁去催：列出来之后自己把第一批读了。
+        await waitUntil("五份记录的信息都读到") { !model.hasMore }
+        XCTAssertEqual(model.metadata.count, 5)
 
         XCTAssertEqual(Set(model.visibleFiles.map(\.sessionID)), [Session.cli, Session.mixed, Session.moved])
         XCTAssertEqual(model.hiddenCount, 2)
@@ -262,8 +263,7 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         let source = ClaudeHistorySource(provider: files)
         let model = AgentHistoryModel(source: source, preferredDirectory: workdir + "/sub dir")
         await model.start()
-        for row in model.files { model.rowAppeared(row) }
-        await waitUntil("记录的信息") { model.metadata.count == 5 }
+        await waitUntil("记录的信息") { !model.hasMore }
         let moved = try file(Session.moved, among: model.files)
         let plan = try XCTUnwrap(model.resumeCommand(for: moved))
         XCTAssertEqual(plan.directory, workdir)
@@ -285,7 +285,8 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
         XCTAssertEqual(session.connectionState, .connected)
         session.sendHostBytes(Data("PATH=\(Self.quoted(scratch + "/bin")):$PATH\n".utf8))
 
-        let run = session.startTrackedRun(plan.command)
+        // 和窗口里一样不包子 shell：退出 Claude Code 之后 shell 要留在项目目录里。
+        let run = session.startTrackedRun(plan.command, inSubshell: false)
         await waitUntil("命令跑完") {
             if case .finished = session.trackedRun?.phase { return true }
             return false
@@ -296,6 +297,17 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
 
         let recorded = String(decoding: try await files.download(remotePath: record), as: UTF8.self)
         XCTAssertEqual(recorded.split(separator: "\n").map(String.init), [workdir, "--resume", Session.moved])
+
+        // 「退出」之后 shell 还在项目目录里（新标签是从主目录起的）。
+        let after = scratch + "/bin/after.txt"
+        session.sendHostBytes(Data(" pwd > \(Self.quoted(after))\n".utf8))
+        var where_ = ""
+        let deadline = ContinuousClock.now + .seconds(10)
+        while where_.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+            where_ = (try? await files.download(remotePath: after)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        }
+        XCTAssertEqual(where_.trimmingCharacters(in: .newlines), workdir)
 
         await connection.close()
         session.dispose()
@@ -309,22 +321,29 @@ final class ClaudeHistoryLiveSSHTests: XCTestCase {
             for: ServerProfile.self, KnownHost.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
         // 不走共享连接：池里已经有 `setUp` 开的那条，拿到它就不会再核指纹。
+        let unknown = ClaudeHistoryHostKeyGate()
         do {
             let client = try await SSHClientFactory.connect(
                 profile: profile, auth: auth, jumpHostAuth: nil,
-                hostKeyVerifier: HostKeyVerifier(modelContainer: fresh), hostKeyApprover: { _ in false })
+                hostKeyVerifier: HostKeyVerifier(modelContainer: fresh), hostKeyApprover: unknown.approver)
             await client.close()
             XCTFail("没确认过的指纹不该连上")
         } catch {
-            let message = FriendlyError.describe(error)
-            XCTAssertFalse(message.isEmpty)
-            print("[claude-history-live] unknown host key → \(message)")
+            XCTAssertTrue(unknown.wasChallenged)
+            // 提示的是「回终端里去确认」，不是底层那句「用户拒绝了」——这里没人问过用户。
+            XCTAssertNotEqual(unknown.failureMessage(for: error), FriendlyError.describe(error))
+            XCTAssertFalse(unknown.failureMessage(for: error).isEmpty)
         }
 
         // 同一个库里指纹已经确认过（`setUp` 那次）：不问也能连上。
+        let known = ClaudeHistoryHostKeyGate()
         let client = try await SSHClientFactory.connect(
             profile: profile, auth: auth, jumpHostAuth: nil,
-            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in false })
+            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: known.approver)
         await client.close()
+        XCTAssertFalse(known.wasChallenged)
+        // 别的失败照原样报。
+        struct Other: LocalizedError { var errorDescription: String? { "别的错" } }
+        XCTAssertEqual(known.failureMessage(for: Other()), FriendlyError.describe(Other()))
     }
 }

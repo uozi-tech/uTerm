@@ -110,7 +110,8 @@ struct AgentHistorySessionList: View {
             }
         case .ready:
             let files = history.visibleFiles
-            if history.isListing && files.isEmpty {
+            // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
+            if files.isEmpty && (history.isListing || history.hasMore) {
                 RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
             } else if files.isEmpty {
                 RemoteMacStateView(systemImage: "tray", title: String(localized: "没有命令行会话"),
@@ -136,9 +137,20 @@ struct AgentHistorySessionList: View {
                                            showsProject: history.scope == .all,
                                            isSelected: history.selectedFile?.path == file.path)
                         .onTapGesture { history.select(file) }
-                        .onAppear { history.rowAppeared(file) }
                 }
-                if history.hiddenCount > 0 {
+                if history.hasMore {
+                    // 滚到底露出来就再读一批。行数变了它就是一个新视图：窗口高、读完一批它还露着时也会接着读。
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("正在读取…")
+                            .font(UD.caption)
+                            .foregroundStyle(UD.text4)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .id(files.count)
+                    .onAppear { history.loadMore() }
+                } else if history.hiddenCount > 0 {
                     Text("另有 \(history.hiddenCount) 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。")
                         .font(UD.caption)
                         .foregroundStyle(UD.text4)
@@ -161,7 +173,7 @@ private struct AgentHistorySessionRow: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(metadata == nil ? UD.text3 : UD.text)
+                .foregroundStyle(UD.text)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(subtitle)
@@ -179,7 +191,6 @@ private struct AgentHistorySessionRow: View {
 
     private var title: String {
         if let title = metadata?.title { return title }
-        if metadata == nil { return String(localized: "正在读取…") }
         return String(localized: "（无标题）\(String(file.sessionID.prefix(8)))")
     }
 
