@@ -2,7 +2,7 @@ import Foundation
 
 /// 建数据源只在这里：要哪几种工具的记录，就给哪几种建一份，再合起来交给 `AgentHistoryModel`。
 ///
-/// 只建出一种时直接给它本身（不包一层），行为和只认 Claude Code 的时候一模一样（iOS 只要 `.claude`）。
+/// 只建出一种时直接给它本身（不包一层），行为和只认 Claude Code 的时候一模一样。
 nonisolated enum AgentHistorySources {
     /// `home`：主目录，不给就各自问 `provider`（见 `ClaudeHistorySource.init`）。
     static func make(tools: [AgentHistoryTool], provider: any SFTPProviding, home: String? = nil) -> any AgentHistorySource {

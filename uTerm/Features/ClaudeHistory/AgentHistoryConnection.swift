@@ -102,7 +102,7 @@ final class AgentHistoryConnection {
 
     /// 这台主机能不能跑命令（搜索要用）：连上之后问一次。标成只许 SFTP 的主机不能。
     @ObservationIgnored private let allowsCommands: @MainActor () -> Bool
-    /// 读哪几种工具的记录。iOS 只要 Claude Code；Mac 的列表能装下几种。
+    /// 读哪几种工具的记录。两端的界面都给 `AgentHistoryTool.allCases`；默认只读 Claude Code（老的调用点与测试）。
     let tools: [AgentHistoryTool]
     /// 见 `AgentHistoryModel.followsCurrentProject`。
     @ObservationIgnored private let followsCurrentProject: Bool

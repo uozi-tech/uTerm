@@ -27,7 +27,7 @@ enum MWorkTab: Identifiable {
     case files(FileTab)
     /// 终端里的程序请求预览的文件（只读，见 `FilePreviewTab`）。
     case preview(FilePreviewTab)
-    /// 一台主机上 Claude Code 的历史会话（只读，见 `ClaudeHistoryTab`）。
+    /// 一台主机上编码工具（Claude Code、Codex 等）的历史会话（只读，见 `ClaudeHistoryTab`）。
     case history(ClaudeHistoryTab)
 
     var id: UUID {

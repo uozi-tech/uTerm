@@ -92,9 +92,9 @@ struct WorkspaceTabStrip: View {
     var onSelect: (UUID) -> Void
     var onClose: (UUID) -> Void
     var onNew: (MConnectKind) -> Void
-    /// 「+」菜单里的「Claude 历史会话」：选一台主机打开它的历史会话标签。nil = 不出这一项。
+    /// 「+」菜单里的「历史会话」：选一台主机打开它的历史会话标签。nil = 不出这一项。
     var onNewHistory: (() -> Void)? = nil
-    /// 终端标签长按菜单里的「Claude 历史会话」：打开这个标签那台主机（那台 Mac）的历史会话。
+    /// 终端标签长按菜单里的「历史会话」：打开这个标签那台主机（那台 Mac）的历史会话。
     var onOpenHistory: (UUID) -> Void = { _ in }
     var onBack: () -> Void
     /// 切换当前终端标签的「终端 ⇄ Agent」模式。
@@ -197,7 +197,7 @@ struct WorkspaceTabStrip: View {
             Button { onNew(.terminal) } label: { Label("新建终端", systemImage: MGlyph.symbol("term")) }
             Button { onNew(.sftp) } label: { Label("浏览文件", systemImage: MGlyph.symbol("folder")) }
             if let onNewHistory {
-                Button(action: onNewHistory) { Label("Claude 历史会话", systemImage: MGlyph.symbol("clock")) }
+                Button(action: onNewHistory) { Label("历史会话", systemImage: MGlyph.symbol("clock")) }
             }
         } label: {
             MIcon(name: "plus", size: inStatusRow ? 16 : 14, color: M.text2, weight: .semibold)
@@ -297,7 +297,7 @@ struct WorkspaceTabChip: View {
     var onSelect: () -> Void
     var onClose: () -> Void
     var onMove: () -> Void = {}
-    /// 长按菜单「Claude 历史会话」（只有能开的终端标签有，见 `TermTab.offersClaudeHistory`）。
+    /// 长按菜单「历史会话」（只有能开的终端标签有，见 `TermTab.offersClaudeHistory`）。
     var onOpenHistory: () -> Void = {}
     var onDragStart: () -> Void = {}
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
@@ -394,7 +394,7 @@ struct WorkspaceTabChip: View {
             }
             if case .terminal(let terminal) = tab, terminal.offersClaudeHistory {
                 Button(action: onOpenHistory) {
-                    Label("Claude 历史会话", systemImage: "clock.arrow.circlepath")
+                    Label("历史会话", systemImage: "clock.arrow.circlepath")
                 }
             }
             if canMove {

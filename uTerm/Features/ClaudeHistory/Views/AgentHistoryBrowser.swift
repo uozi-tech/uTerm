@@ -2,19 +2,6 @@ import AppKit
 import SwiftUI
 import UDesignKit
 
-/// 「＋」新会话：默认开在哪个目录、选好工具之后怎么开（新开一个终端标签页跑 `command`）。
-struct AgentHistoryNewSession {
-    /// 终端当前目录；不知道为 nil（按钮不可用）。
-    let directory: String?
-    let start: (_ tool: AgentHistoryTool, _ command: String, _ directory: String) -> Void
-}
-
-/// 要列表定位到哪个目录（展开那一组并滚过去）。每次请求换一个 `generation`，同一个目录再要一次也会再滚。
-struct AgentHistoryReveal: Equatable {
-    let directory: String
-    let generation: Int
-}
-
 /// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口和终端窗口的 Code 模式都是它。
 struct AgentHistoryBrowser: View {
     let history: AgentHistoryModel
@@ -109,12 +96,11 @@ struct AgentHistorySessionList: View {
 
     /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
     private var grouping: AgentHistoryGrouping {
-        let stored = AgentHistoryListPreferences.decodeGrouping(groupingRaw)
-        return stored == .tool && !history.isMultiTool ? .default : stored
+        AgentHistoryListPreferences.effectiveGrouping(groupingRaw, isMultiTool: history.isMultiTool)
     }
 
     private var groupingChoices: [AgentHistoryGrouping] {
-        AgentHistoryGrouping.allCases.filter { $0 != .tool || history.isMultiTool }
+        AgentHistoryListPreferences.groupingChoices(isMultiTool: history.isMultiTool)
     }
 
     var body: some View {

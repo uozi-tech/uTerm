@@ -4,9 +4,10 @@ import SwiftUI
 import XCTest
 @testable import uTermMobile
 
-/// 「Claude 历史会话」标签：放进工作区、一台主机一个、关掉放掉通道、远控 Mac 没有 `files` 能力时不给入口，
-/// 以及「继续这个会话」新开的终端标签在行编辑器起来之后才打进命令。文件读的是手写的假树（`MobileFakeClaudeTree`），
-/// 终端接假传输，不建任何真实连接。
+/// 「历史会话」标签：放进工作区、一台主机一个、关掉放掉通道、远控 Mac 没有 `files` 能力时不给入口，
+/// 几种工具混排时的分组、筛选、定位接到界面上，「继续这个会话」「＋新会话」开新终端标签页、行编辑器起来之后才打进命令。
+/// 文件读的是手写的假树（`MobileFakeClaudeTree`）或手写的假数据源（`MobileFakeAgentSource`），终端接假传输，
+/// 不建任何真实连接。
 @MainActor
 final class ClaudeHistoryTabTests: XCTestCase {
 
@@ -39,7 +40,12 @@ final class ClaudeHistoryTabTests: XCTestCase {
         let settled = await MobileFakeClaudeHistory.settle(history)
         XCTAssertTrue(settled)
         let model = try XCTUnwrap(history.connection.history)
-        XCTAssertEqual(model.scope, .project(try XCTUnwrap(model.currentProject)), "先列终端当前目录所在的项目")
+        XCTAssertEqual(model.scope, .all, "一直列全部项目（按项目分组，定位到终端目录那一组）")
+        XCTAssertEqual(history.pendingReveal?.directory, MobileClaudeFixture.directory)
+        XCTAssertEqual(model.configuredTools, AgentHistoryTool.allCases, "四种工具都读")
+        XCTAssertEqual(model.availableTools, [.claude], "树里只有 Claude Code 的记录：别的工具目录不存在，列出空的")
+        XCTAssertFalse(model.isMultiTool)
+        XCTAssertEqual(model.toolFailures, [:], "没有记录目录不算读不出来")
         XCTAssertEqual(model.visibleFiles.map { model.metadata[$0.path]?.title },
                        ["登录接口偶发 500", "给订单接口加分页", "排查 502"], "新的在前，桌面版的不列")
         XCTAssertEqual(model.hiddenCount, 1)
@@ -292,5 +298,153 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertTrue(written.hasSuffix(command + "\r"), "打进命令和回车：\(written.debugDescription)")
         XCTAssertEqual(written.components(separatedBy: "claude --resume").count, 2, "只打一次")
         term.controller.close()
+    }
+
+    // MARK: - 几种工具
+
+    /// App 里建的两种标签：四种工具都读、一直列全部项目；直连主机记下终端目录并要求定位，配对的 Mac 没有目录、不定位。
+    func testTabsReadEveryToolAndOnlyDirectHostsReveal() throws {
+        let container = try MobileFixtures.modelContainer(seed: .smoke)
+        let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
+        let direct = ClaudeHistoryTab(server: server, directory: MobileAgentHistoryFixture.shop, container: container)
+        XCTAssertEqual(direct.connection.tools, AgentHistoryTool.allCases)
+        XCTAssertEqual(direct.directory, MobileAgentHistoryFixture.shop, "「＋」新会话开在终端目录")
+        XCTAssertEqual(direct.pendingReveal?.directory, MobileAgentHistoryFixture.shop)
+
+        let picked = ClaudeHistoryTab(server: server, directory: nil, container: container)
+        XCTAssertNil(picked.directory, "「+」菜单选主机开的：没有终端，不知道目录")
+        XCTAssertNil(picked.pendingReveal)
+
+        let mac = ClaudeHistoryTab(pairedMac: unreachableMac())
+        XCTAssertEqual(mac.connection.tools, AgentHistoryTool.allCases, "配对的 Mac 同样四种工具")
+        XCTAssertNil(mac.pendingReveal)
+    }
+
+    /// 几种工具混排：同一个目录下几种工具的会话并成一组；列表挂上之后定位到终端目录那一组（折着的展开），
+    /// 已经开着的标签从终端再来一次也会再定位。
+    func testMixedToolsGroupByProjectAndRevealTheTerminalDirectory() async throws {
+        let (defaults, suite) = privateDefaults()
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+        let ws = MobileWorkspace()
+        let tab = ws.openHistory(MobileAgentHistoryFixture.tab(host: host(), source: MobileAgentHistoryFixture.source()))
+        let settled = await MobileFakeClaudeHistory.settle(tab)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(tab.connection.history)
+        XCTAssertTrue(model.isMultiTool)
+        XCTAssertEqual(model.availableTools, [.claude, .codex, .cursor])
+        let groups = AgentHistoryListing.groups(model.visibleFiles, by: .project, metadata: model.metadata)
+        let shopID = "project:" + MobileAgentHistoryFixture.shop
+        let shop = try XCTUnwrap(groups.first { $0.id == shopID })
+        XCTAssertEqual(Set(shop.files.map(\.tool)), [.claude, .codex, .cursor], "同一个目录下几种工具并成一组")
+        XCTAssertEqual(groups.count, 3)
+
+        model.collapsedGroups = [shopID]
+        defer { MobileProbeWindow.closeAll() }
+        _ = MobileProbeWindow.make(size: CGSize(width: 390, height: 700), rootView:
+            ClaudeHistorySessionBody(tab: tab) { _, _ in }.defaultAppStorage(defaults))
+        let revealed = await MobileFakeTerminal.waitUntil { tab.pendingReveal == nil }
+        XCTAssertTrue(revealed, "列表列出那一组之后清掉定位请求")
+        XCTAssertFalse(model.collapsedGroups.contains(shopID), "折着的那一组展开")
+
+        model.collapsedGroups = [shopID]
+        tab.reveal(directory: MobileAgentHistoryFixture.shop + "/internal/auth")
+        let again = await MobileFakeTerminal.waitUntil { tab.pendingReveal == nil && !model.collapsedGroups.contains(shopID) }
+        XCTAssertTrue(again, "终端在项目的子目录里：定位到项目那一组")
+    }
+
+    /// 「分组与显示」菜单写的是和 Mac 同一对偏好键：列表按它筛（只放枚举的原始值），改了就地重筛；
+    /// 只有一种工具时「工具」分组退回默认、菜单里也不出。
+    func testListPreferencesDriveTheListAndFallBackWithOneTool() async throws {
+        let (defaults, suite) = privateDefaults()
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+        defaults.set("codex,cursor", forKey: DefaultsKey.agentHistoryShownTools)
+        let ws = MobileWorkspace()
+        let tab = ws.openHistory(MobileAgentHistoryFixture.tab(host: host(), source: MobileAgentHistoryFixture.source()))
+        let settled = await MobileFakeClaudeHistory.settle(tab)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(tab.connection.history)
+        defer { MobileProbeWindow.closeAll() }
+        _ = MobileProbeWindow.make(size: CGSize(width: 390, height: 700), rootView:
+            ClaudeHistorySessionBody(tab: tab) { _, _ in }.defaultAppStorage(defaults))
+
+        let filtered = await MobileFakeTerminal.waitUntil {
+            model.shownTools == [.codex, .cursor] && !model.hasMore && !model.visibleFiles.isEmpty
+        }
+        XCTAssertTrue(filtered, "挂上列表就按存的「显示」筛")
+        XCTAssertEqual(Set(model.visibleFiles.map(\.tool)), [.codex, .cursor])
+
+        defaults.set("", forKey: DefaultsKey.agentHistoryShownTools)
+        let all = await MobileFakeTerminal.waitUntil { model.shownTools == nil && model.visibleFiles.count == 7 }
+        XCTAssertTrue(all, "「恢复默认」清空之后回到全部")
+
+        XCTAssertEqual(AgentHistoryListPreferences.effectiveGrouping("tool", isMultiTool: true), .tool)
+        XCTAssertEqual(AgentHistoryListPreferences.effectiveGrouping("tool", isMultiTool: false), .project)
+        XCTAssertEqual(AgentHistoryListPreferences.effectiveGrouping("date", isMultiTool: false), .date)
+        XCTAssertEqual(AgentHistoryListPreferences.effectiveGrouping(nil, isMultiTool: true), .project)
+        XCTAssertFalse(AgentHistoryListPreferences.groupingChoices(isMultiTool: false).contains(.tool))
+        XCTAssertEqual(AgentHistoryListPreferences.groupingChoices(isMultiTool: true), AgentHistoryGrouping.allCases)
+    }
+
+    /// 搜索：几种工具一起搜；有一种的记录没法在主机上搜时，结果照出、`searchExcludedTools` 点名它（结果上方那句说明）。
+    func testSearchAcrossToolsNamesTheUnsearchableOne() async throws {
+        let ws = MobileWorkspace()
+        let tab = ws.openHistory(MobileAgentHistoryFixture.tab(host: host(), source: MobileAgentHistoryFixture.source()))
+        let settled = await MobileFakeClaudeHistory.settle(tab)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(tab.connection.history)
+        XCTAssertEqual(model.searchExcludedTools, [.cursor])
+        model.searchText = "订单"
+        model.submitSearch()
+        let finished = await MobileFakeTerminal.waitUntil { model.search?.phase == .finished }
+        XCTAssertTrue(finished)
+        XCTAssertEqual(model.search?.sessions.map(\.metadata.title), ["登录接口偶发 500", "订单服务测试与慢查询", "给订单接口加分页"],
+                       "按会话的新旧排，Claude Code 与 Codex 的混在一起")
+        XCTAssertEqual(AgentHistoryText.searchUnsupported(model.searchExcludedTools), "Cursor 的会话不参与搜索")
+    }
+
+    /// 「继续这个会话」按工具出命令、「＋新会话」先选工具，都在这台主机上开一个新的终端标签页跑；
+    /// 「+」菜单开的标签不知道目录，「＋」里只有说明；只许 SFTP 的主机都开不了。
+    func testResumeAndNewSessionOpenANewTerminalTab() async throws {
+        let server = host()
+        let ws = MobileWorkspace()
+        let tab = ws.openHistory(MobileAgentHistoryFixture.tab(host: server, source: MobileAgentHistoryFixture.source()))
+        let settled = await MobileFakeClaudeHistory.settle(tab)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(tab.connection.history)
+        let codexFile = try XCTUnwrap(model.visibleFiles.first { $0.tool == .codex })
+        let plan = try XCTUnwrap(model.resumeCommand(for: codexFile))
+        XCTAssertEqual(plan.command, "cd -- '\(MobileAgentHistoryFixture.shop)' && codex resume x-tests", "Codex 的会话用 Codex 的命令")
+
+        let store = MobileStore()
+        try await tab.runInNewTerminal(plan.command, directory: plan.directory, store: store)
+        XCTAssertEqual(store.openTarget?.kind, .terminal)
+        XCTAssertEqual(store.openTarget?.command, plan.command)
+        XCTAssertEqual(store.connecting?.allowDuplicate, true, "总是新开一个终端标签页")
+
+        XCTAssertEqual(model.newSessionTools(directory: tab.directory), [.claude, .codex, .cursor], "不止一种：先选工具")
+        let directory = try XCTUnwrap(tab.directory)
+        let newCommand = try XCTUnwrap(model.newSessionCommand(tool: .cursor, directory: directory))
+        let fresh = MobileStore()
+        try await tab.runInNewTerminal(newCommand, directory: directory, store: fresh)
+        XCTAssertEqual(fresh.openTarget?.command, "cd -- '\(MobileAgentHistoryFixture.shop)' && cursor")
+
+        let picked = ws.openHistory(MobileAgentHistoryFixture.tab(host: host("db-01"), source: MobileAgentHistoryFixture.source(),
+                                                                  directory: nil))
+        XCTAssertNil(picked.directory)
+        XCTAssertEqual(model.newSessionTools(directory: picked.directory), [], "不知道目录：「＋」里只有说明")
+
+        let sftp = host("files-only")
+        sftp.sftpOnly = true
+        let blocked = MobileAgentHistoryFixture.tab(host: sftp, source: MobileAgentHistoryFixture.source())
+        XCTAssertFalse(blocked.canResume, "只许 SFTP：不出「＋」，「继续这个会话」灰掉")
+        let untouched = MobileStore()
+        try await blocked.runInNewTerminal(plan.command, directory: plan.directory, store: untouched)
+        XCTAssertNil(untouched.openTarget)
+    }
+
+    /// 用例自己的设置存储：`.standard` 是宿主 App 的真实设置，不能写。
+    private func privateDefaults() -> (UserDefaults, String) {
+        let suite = "ClaudeHistoryTabTests.\(UUID().uuidString)"
+        return (UserDefaults(suiteName: suite)!, suite)
     }
 }

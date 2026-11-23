@@ -4,8 +4,9 @@ import SwiftData
 import Observation
 import UIKit
 
-/// 「Claude 历史会话」标签：一台主机（或一台配对过的 Mac）上 Claude Code 在命令行里的会话，只读。
-/// 连接、列表、翻页都在两端共用的 `AgentHistoryConnection` / `AgentHistoryModel` 里，这里只是标签与画面。
+/// 「历史会话」标签：一台主机（或一台配对过的 Mac）上编码工具（Claude Code、Codex、Cursor、Antigravity）在命令行里的
+/// 会话，只读。连接、列表、分组、翻页都在两端共用的 `AgentHistoryConnection` / `AgentHistoryModel` / `AgentHistoryListing`
+/// 里，这里只是标签与画面。
 ///
 /// 内容只在内存里：不落盘、不进 iCloud、不进标签归档（`MobileTerminalTabArchive` 只管终端），重启不恢复。
 /// 一台主机（一台 Mac）至多一个，再开就带到前台。
@@ -19,32 +20,64 @@ final class ClaudeHistoryTab: Identifiable {
     /// 读的是这台配对过的 Mac（远控链路），不是 SSH 主机。
     let remoteMac: RemoteMacClient?
     let connection: AgentHistoryConnection
+    /// 打开它的那个终端当时所在的目录（终端标签长按打开的）；「+」菜单开的没有终端，为 nil。
+    /// 「＋」新会话开在这里；没有就说明原因（同 Mac 的独立历史窗口）。
+    private(set) var directory: String?
+    /// 还没定位成功的「展开这个目录那一组并滚过去」：列表列出那一组之后由列表清掉。放在标签上而不是视图的 `@State` 里：
+    /// Plus / Max 横竖屏切换会换外壳、重建视图，请求不能跟着丢。
+    var pendingReveal: AgentHistoryReveal?
+    @ObservationIgnored private var revealGeneration = 0
 
     init(host: ServerProfile, connection: AgentHistoryConnection, remoteMac: RemoteMacClient? = nil) {
         self.host = host
         self.hostName = host.name
         self.remoteMac = remoteMac
         self.connection = connection
+        reveal(directory: connection.preferredDirectory)
     }
 
-    /// 已保存的主机（经 SFTP，与同主机的终端共用一条 SSH 连接）。`directory` 是终端当前目录，先列它所在的项目。
+    /// 已保存的主机（经 SFTP，与同主机的终端共用一条 SSH 连接）。`directory` 是终端当前目录：列表按项目分组，定位到它那一组。
+    /// 四种工具都读、一直列全部项目（同 Mac 的 Code 模式）。
     convenience init(server host: ServerProfile, directory: String?, container: ModelContainer) {
         self.init(host: host, connection: AgentHistoryConnection(
-            preferredDirectory: directory, allowsCommands: { !host.sftpOnly },
-            connect: AgentHistoryAccess.server(host, container: container)))
+            preferredDirectory: directory, allowsCommands: { !host.sftpOnly }, tools: AgentHistoryTool.allCases,
+            followsCurrentProject: false, connect: AgentHistoryAccess.server(host, container: container)))
     }
 
-    /// 配对过的 Mac：读它上面的 `~/.claude`。远控协议里没有终端的当前目录，列全部项目。
+    /// 配对过的 Mac：读它上面的记录。远控协议里没有终端的当前目录，不定位。
     convenience init(pairedMac client: RemoteMacClient) {
         self.init(host: client.filesTabHost,
-                  connection: AgentHistoryConnection(preferredDirectory: nil, connect: AgentHistoryAccess.pairedMac(client)),
+                  connection: AgentHistoryConnection(preferredDirectory: nil, tools: AgentHistoryTool.allCases,
+                                                     followsCurrentProject: false,
+                                                     connect: AgentHistoryAccess.pairedMac(client)),
                   remoteMac: client)
     }
 
-    /// 能不能「继续这个会话」：要在那台主机上开终端。仅 SFTP 的主机开不了；配对的 Mac 要认得「新建本机终端」。
+    /// 能不能「继续这个会话」「＋新会话」：要在那台主机上开终端。仅 SFTP 的主机开不了；配对的 Mac 要认得「新建本机终端」。
     var canResume: Bool {
         if let remoteMac { return remoteMac.supportsLocalShell }
         return !host.sftpOnly
+    }
+
+    /// 从终端标签再来一次（标签已经开着）：记下终端现在的目录，列表定位到它那一组。不知道目录就什么都不做。
+    func reveal(directory: String?) {
+        guard let directory else { return }
+        self.directory = directory
+        revealGeneration += 1
+        pendingReveal = AgentHistoryReveal(directory: directory, generation: revealGeneration)
+    }
+
+    /// 在这台主机上新开一个终端标签页，连上、行编辑器起来之后打进 `command`（「继续这个会话」「＋新会话」）。
+    /// 直连主机走连接中页（同「新建终端」，主机密钥要确认也在那里）；配对的 Mac 先请它开一个本机终端（开在 `directory`），
+    /// 再整台接管、把那个终端放到前台。开不成（那台 Mac 不能新建终端等）抛出来，由界面提示。
+    func runInNewTerminal(_ command: String, directory: String, store: MobileStore) async throws {
+        guard canResume else { return }
+        if let remoteMac {
+            let sessionID = try await remoteMac.openLocalShell(directory: directory)
+            store.takeOver(remoteMac, focus: sessionID, typing: command)
+        } else {
+            store.requestConnect(host, kind: .terminal, allowDuplicate: true, typing: command)
+        }
     }
 
     func start() {
@@ -61,8 +94,8 @@ struct ClaudeHistorySessionBody: View {
     let tab: ClaudeHistoryTab
     /// 标签在前台、工作区没收起：打开着的对话才盯着文件末尾（实时跟随）。
     var isActive = true
-    /// 在终端里继续选中的会话（命令由共享的 `ClaudeResumeCommand` 生成）。
-    var onResume: (_ command: String, _ directory: String) -> Void
+    /// 在这台主机上新开一个终端标签页跑这条命令：「继续这个会话」（命令由各工具的数据源给）和「＋」新会话。
+    var onRun: (_ command: String, _ directory: String) -> Void
 
     var body: some View {
         Group {
@@ -75,9 +108,14 @@ struct ClaudeHistorySessionBody: View {
                     Task { await tab.connection.open() }
                 }
             case .ready(let history):
-                ClaudeHistoryBrowser(history: history, canResume: tab.canResume, isActive: isActive) { file in
+                ClaudeHistoryBrowser(
+                    history: history, canResume: tab.canResume, isActive: isActive,
+                    newSession: tab.canResume
+                        ? AgentHistoryNewSession(directory: tab.directory) { _, command, directory in onRun(command, directory) }
+                        : nil,
+                    reveal: Binding(get: { tab.pendingReveal }, set: { tab.pendingReveal = $0 })) { file in
                     guard let plan = history.resumeCommand(for: file) else { return }
-                    onResume(plan.command, plan.directory)
+                    onRun(plan.command, plan.directory)
                 }
             }
         }
@@ -86,12 +124,18 @@ struct ClaudeHistorySessionBody: View {
     }
 }
 
-/// 列表与对话。宽的格子（iPad、展开的 Duo 横屏）左右并排；窄的先是列表，点一条进到对话，左上角返回列表。
+/// 列表与对话。宽的格子（iPad、展开的 Duo 横屏）左边列表一直在、右边对话；窄的先是列表，点一条进到对话，左上角返回列表。
 /// 对话里点进子代理的记录再一层层往里进，左上角一层层返回。
+///
+/// 只认 `AgentHistoryModel` 与几个回调，不管自己被放在哪里（单独的标签页，或者以后别的容器）。
 struct ClaudeHistoryBrowser: View {
     let history: AgentHistoryModel
     let canResume: Bool
     var isActive = true
+    /// 「＋」新会话；nil = 不出这个按钮（这台主机开不了终端）。
+    var newSession: AgentHistoryNewSession? = nil
+    /// 要列表定位到的目录（定位成功后由列表清掉）。
+    var reveal: Binding<AgentHistoryReveal?> = .constant(nil)
     let onResume: (AgentHistorySessionFile) -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -103,7 +147,7 @@ struct ClaudeHistoryBrowser: View {
         GeometryReader { geo in
             if geo.size.width >= Self.sideBySideMinWidth {
                 HStack(spacing: 0) {
-                    ClaudeHistoryList(history: history)
+                    list
                         .frame(width: 300)
                     Rectangle().fill(M.divider).frame(width: 1)
                     detail(showsBack: false)
@@ -112,7 +156,7 @@ struct ClaudeHistoryBrowser: View {
             } else if history.transcript != nil {
                 detail(showsBack: true)
             } else {
-                ClaudeHistoryList(history: history)
+                list
             }
         }
         // 实时跟随只在看得见时查：标签不在前台、工作区收起、App 进了后台就停（省电），回来马上查一次。
@@ -120,6 +164,10 @@ struct ClaudeHistoryBrowser: View {
             history.setTranscriptVisible(visible)
         }
         .onDisappear { history.setTranscriptVisible(false) }
+    }
+
+    private var list: some View {
+        ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal)
     }
 
     @ViewBuilder private func detail(showsBack: Bool) -> some View {
@@ -146,8 +194,13 @@ struct ClaudeHistoryBrowser: View {
             .id(ObjectIdentifier(transcript))
         } else {
             ClaudeHistoryState(icon: "clock", title: String(localized: "选择一个会话"),
-                               message: String(localized: "左边列的是在命令行里用 Claude Code 的会话，内容只读。"))
+                               message: AgentHistoryText.selectSessionDetail(tools: listedTools))
         }
+    }
+
+    /// 说明里点名的工具：这台主机上有记录的；一种都没有时是读了的那几种。同 Mac。
+    private var listedTools: [AgentHistoryTool] {
+        history.availableTools.isEmpty ? history.configuredTools : history.availableTools
     }
 
     /// 子代理的记录回上一层；主对话在窄屏回列表，宽屏没有返回。
@@ -159,8 +212,19 @@ struct ClaudeHistoryBrowser: View {
 
 // MARK: - 会话列表
 
+/// 会话列表：顶上「分组与显示」菜单、「＋」新会话、刷新，下面搜索框；再下面按分组列（组可以折起来），搜索时换成搜索结果。
+/// 分组方式与「只看哪几种工具」和 Mac 同一对偏好键、同一套编解码（`AgentHistoryListPreferences`）。
 private struct ClaudeHistoryList: View {
     let history: AgentHistoryModel
+    let newSession: AgentHistoryNewSession?
+    @Binding var reveal: AgentHistoryReveal?
+
+    @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
+    @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
+
+    private var grouping: AgentHistoryGrouping {
+        AgentHistoryListPreferences.effectiveGrouping(groupingRaw, isMultiTool: history.isMultiTool)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -179,6 +243,8 @@ private struct ClaudeHistoryList: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .onAppear { history.setShownTools(AgentHistoryListPreferences.decodeTools(shownToolsRaw)) }
+        .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
     }
 
     private var searchBar: some View {
@@ -196,39 +262,13 @@ private struct ClaudeHistoryList: View {
         .padding(.bottom, 8)
     }
 
+    /// 左边是「分组与显示」菜单（字是当前的分组方式，一眼看得出按什么分的），右边「＋」与刷新。
+    /// 放在搜索框上面一行而不是和它挤一行：窄的格子（Duo 分屏 330pt）里搜索框还要留得下提示字。
     private var header: some View {
-        HStack(spacing: 6) {
-            MMenu {
-                if let current = history.currentProject {
-                    Button(AgentHistoryText.currentProjectItem(current)) {
-                        Task { await history.setScope(.project(current)) }
-                    }
-                }
-                Button(String(localized: "全部项目")) { Task { await history.setScope(.all) } }
-                let others = history.projects.filter { $0.id != history.currentProject?.id }.prefix(40)
-                if !others.isEmpty {
-                    Section(String(localized: "其他项目")) {
-                        ForEach(Array(others)) { project in
-                            Button(AgentHistoryText.projectName(project)) {
-                                Task { await history.setScope(.project(project)) }
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(AgentHistoryText.scopeTitle(history.scope))
-                        .font(M.sans(14, weight: .semibold)).foregroundStyle(M.text)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(M.text3)
-                }
-                .padding(.horizontal, 14)
-                .frame(minHeight: M.minTarget)
-                .contentShape(Rectangle())
-            }
-            .accessibilityLabel(Text("切换项目"))
+        HStack(spacing: 2) {
+            optionsMenu
             Spacer(minLength: 0)
+            if let newSession { newSessionButton(newSession) }
             Button { Task { await history.reload() } } label: {
                 MIcon(name: "refresh", size: 15, color: M.text2)
                     .frame(width: M.minTarget, height: M.minTarget)
@@ -237,6 +277,94 @@ private struct ClaudeHistoryList: View {
             .buttonStyle(MPressStyle())
             .accessibilityLabel(Text("刷新"))
         }
+        .padding(.trailing, 4)
+    }
+
+    /// 分组方式、只看哪几种工具（不止一种工具时才有）、恢复默认。同 Mac。
+    private var optionsMenu: some View {
+        MMenu {
+            Section {
+                Picker(selection: Binding(get: { grouping }, set: { groupingRaw = $0.rawValue })) {
+                    ForEach(AgentHistoryListPreferences.groupingChoices(isMultiTool: history.isMultiTool)) { choice in
+                        Text(AgentHistoryText.groupingName(choice)).tag(choice)
+                    }
+                } label: {
+                    Text("分组方式", comment: "历史会话列表菜单：按什么分组")
+                }
+                .pickerStyle(.inline)
+            } header: {
+                Text("分组方式", comment: "历史会话列表菜单：按什么分组")
+            }
+            if history.isMultiTool {
+                Section(String(localized: "显示", comment: "历史会话列表菜单：只看哪几种编码工具")) {
+                    let effective = history.effectiveTools
+                    ForEach(history.availableTools) { tool in
+                        Toggle(tool.displayName, isOn: Binding(
+                            get: { effective.contains(tool) },
+                            set: { _ in
+                                let next = AgentHistoryListing.toggling(tool, shown: history.shownTools,
+                                                                        available: history.availableTools)
+                                shownToolsRaw = AgentHistoryListPreferences.encodeTools(next)
+                            }))
+                        // 不许一种都不勾：只剩它时它点不掉。
+                        .disabled(effective == [tool])
+                    }
+                }
+            }
+            Section {
+                Button(String(localized: "恢复默认")) {
+                    groupingRaw = AgentHistoryGrouping.default.rawValue
+                    shownToolsRaw = ""
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(M.text2)
+                Text(AgentHistoryText.groupingName(grouping))
+                    .font(M.sans(14, weight: .semibold)).foregroundStyle(M.text)
+                    .lineLimit(1)
+                // 只看了其中几种：标签上带个数，免得以为别的工具没有记录。
+                if history.isMultiTool, history.effectiveTools.count < history.availableTools.count {
+                    Text(verbatim: "\(history.effectiveTools.count)/\(history.availableTools.count)")
+                        .font(M.mono(11.5, weight: .medium)).foregroundStyle(M.text3)
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(M.text3)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: M.minTarget)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("分组与显示"))
+        .accessibilityValue(Text(AgentHistoryText.groupingName(grouping)))
+    }
+
+    /// 「＋」：一律是菜单——能开的工具在里面选；开不了（不知道目录、这台主机上的工具都不能新开）时菜单里说明原因，
+    /// 手机上没有悬停提示，灰掉的按钮说不清为什么。
+    private func newSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
+        let tools = history.newSessionTools(directory: newSession.directory)
+        return MMenu {
+            if let directory = newSession.directory, !tools.isEmpty {
+                Section(AgentHistoryText.newSessionTitle(directory: directory)) {
+                    ForEach(tools) { tool in
+                        Button(tool.displayName) {
+                            guard let command = history.newSessionCommand(tool: tool, directory: directory) else { return }
+                            newSession.start(tool, command, directory)
+                        }
+                    }
+                }
+            } else {
+                Text(newSession.directory == nil
+                     ? AgentHistoryText.newSessionHelp(directory: nil)
+                     : String(localized: "这台主机上的编码工具都不能在终端里新开会话"))
+            }
+        } label: {
+            MIcon(name: "plus", size: 15, color: M.text2, weight: .semibold)
+                .frame(width: M.minTarget, height: M.minTarget)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text(AgentHistoryText.newSession))
     }
 
     @ViewBuilder private var content: some View {
@@ -245,7 +373,7 @@ private struct ClaudeHistoryList: View {
             ClaudeHistoryProgress(text: String(localized: "正在读取会话列表…"))
         case .empty:
             ClaudeHistoryState(icon: "clock", title: String(localized: "没有历史会话"),
-                               message: AgentHistoryText.noHistoryDetail)
+                               message: AgentHistoryText.noHistoryDetail(tools: history.configuredTools))
         case .failed(let message):
             ClaudeHistoryState(icon: "warn", title: String(localized: "无法读取会话列表"), message: message,
                                actionTitle: String(localized: "重试")) {
@@ -266,34 +394,129 @@ private struct ClaudeHistoryList: View {
     }
 
     private func list(_ files: [AgentHistorySessionFile]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(files) { file in
-                    Button { history.select(file) } label: {
-                        ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
-                                         showsProject: history.scope == .all,
-                                         isSelected: history.selectedFile?.path == file.path)
+        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata,
+                                                date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
+        let showsTool = history.isMultiTool
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(groups) { group in
+                        let collapsed = history.collapsedGroups.contains(group.id)
+                        if group.kind != .all {
+                            ClaudeHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
+                                .id(group.id)
+                        }
+                        if !collapsed {
+                            ForEach(group.files) { file in
+                                Button { history.select(file) } label: {
+                                    ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
+                                                     showsProject: grouping != .project, showsTool: showsTool,
+                                                     isSelected: history.selectedFile?.path == file.path)
+                                }
+                                .buttonStyle(MPressStyle())
+                            }
+                        }
                     }
-                    .buttonStyle(MPressStyle())
+                    footer(files)
                 }
-                if history.hasMore {
-                    // 滚到底露出来就再读一批（同 Mac：行数变了它就是一个新视图，格子高、读完一批还露着时也会接着读）。
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("正在读取…").font(M.sans(12.5)).foregroundStyle(M.text4)
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 10)
-                    .id(files.count)
-                    .onAppear { history.loadMore() }
-                } else if history.hiddenCount > 0 {
-                    Text(AgentHistoryText.hiddenNote(history.hiddenCount))
-                        .font(M.sans(12.5)).foregroundStyle(M.text4)
-                        .padding(.horizontal, 12).padding(.vertical, 10)
-                }
+                .padding(8)
             }
-            .padding(8)
+            .mKeepsScrollContentInSafeArea()
+            .onChange(of: reveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
+            .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
         }
-        .mKeepsScrollContentInSafeArea()
+    }
+
+    /// 定位到终端当前目录那一组：展开它并滚过去。还没列到它就等列表变了再试；不按项目分组时不动（同 Mac）。
+    private func tryReveal(_ groups: [AgentHistoryGroup], proxy: ScrollViewProxy) {
+        guard let request = reveal, grouping == .project,
+              let id = AgentHistoryListing.groupID(containing: request.directory, in: groups) else { return }
+        reveal = nil
+        history.collapsedGroups.remove(id)
+        Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
+    }
+
+    private func toggle(_ id: String) {
+        if history.collapsedGroups.contains(id) {
+            history.collapsedGroups.remove(id)
+        } else {
+            history.collapsedGroups.insert(id)
+        }
+    }
+
+    @ViewBuilder private func footer(_ files: [AgentHistorySessionFile]) -> some View {
+        if history.hasMore {
+            // 滚到底露出来就再读一批（同 Mac：行数变了它就是一个新视图，格子高、读完一批还露着时也会接着读；
+            // 上一批没读够时 `loadMore` 自己不起作用，不会一露出来就一路读下去）。
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("正在读取…").font(M.sans(12.5)).foregroundStyle(M.text4)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .id(files.count)
+            .onAppear { history.loadMore() }
+        } else if history.hiddenCount > 0 {
+            Text(AgentHistoryText.hiddenNote(history.hiddenCount))
+                .font(M.sans(12.5)).foregroundStyle(M.text4)
+                .padding(.horizontal, 12).padding(.vertical, 10)
+        }
+        // 某种工具的记录读不出来：别的照常列着，底下说一句。
+        ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
+            ClaudeHistoryWarningNote(text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
+        }
+    }
+}
+
+/// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。项目组的标题是目录名（不翻译），完整路径给读屏。
+private struct ClaudeHistoryGroupHeader: View {
+    let group: AgentHistoryGroup
+    let collapsed: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 7) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(M.text4)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .frame(width: 14)
+                if case .tool(let tool) = group.kind {
+                    AgentHistoryToolBadge(tool: tool, size: 16)
+                }
+                Text(AgentHistoryText.groupTitle(group))
+                    .font(M.sans(13.5, weight: .semibold)).foregroundStyle(M.text2)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 6)
+                Text(verbatim: "\(group.files.count)")
+                    .font(M.mono(12)).foregroundStyle(M.text4)
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
+        .padding(.top, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed)))
+        .accessibilityHint(Text(verbatim: AgentHistoryText.groupHelp(group) ?? ""))
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// 列表、搜索结果里的一句警示（某种工具读不出来、搜索出错）。
+private struct ClaudeHistoryWarningNote: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            MIcon(name: "warn", size: 12, color: M.warning, weight: .semibold)
+            Text(verbatim: text)
+                .font(M.sans(12.5)).foregroundStyle(M.text2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -306,11 +529,17 @@ private struct ClaudeHistorySearchResults: View {
 
     var body: some View {
         if search.sessions.isEmpty, !search.isRunning {
-            emptyState
+            VStack(spacing: 0) {
+                excludedNote
+                unsearchedNote
+                emptyState
+            }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     status
+                    excludedNote
+                    unsearchedNote
                     ForEach(search.sessions) { session in
                         group(session)
                     }
@@ -320,6 +549,19 @@ private struct ClaudeHistorySearchResults: View {
             }
             .mKeepsScrollContentInSafeArea()
         }
+    }
+
+    /// 有的工具的会话没参与搜索（记录的格式没法在主机上搜）：结果上方说一句。全都不能搜时失败页已经说了，不重复。同 Mac。
+    @ViewBuilder private var excludedNote: some View {
+        let excluded = history.searchExcludedTools
+        if !excluded.isEmpty, search.phase != .failed(AgentHistoryText.searchUnsupported(excluded)) {
+            note(AgentHistoryText.searchUnsupported(excluded))
+        }
+    }
+
+    /// 压缩过的记录没搜（主机上没有解压的工具）：也说一句，免得以为搜全了。
+    @ViewBuilder private var unsearchedNote: some View {
+        if search.unsearched > 0 { note(AgentHistoryText.searchSkippedCompressed(search.unsearched)) }
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -359,22 +601,26 @@ private struct ClaudeHistorySearchResults: View {
         } else if search.phase == .stopped {
             note(AgentHistoryText.searchStopped(search))
         } else if case .failed(let message) = search.phase {
-            Text(verbatim: message).font(M.sans(12.5)).foregroundStyle(M.warning)
-                .padding(.horizontal, 12)
+            ClaudeHistoryWarningNote(text: message)
         }
     }
 
     private func note(_ text: String) -> some View {
-        Text(text).font(M.sans(12.5)).foregroundStyle(M.text4)
+        // text3 而不是 text4：「哪种工具不参与搜索」这类说明要读得清（text4 压在浅色底上太淡）。
+        Text(text).font(M.sans(12.5)).foregroundStyle(M.text3)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12).padding(.vertical, 4)
     }
 
     private func group(_ session: AgentHistorySearchSession) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
-                    .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
-                    .lineLimit(1)
+                HStack(spacing: 7) {
+                    if history.isMultiTool { AgentHistoryToolBadge(tool: session.file.tool, size: 17) }
+                    Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
+                        .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
+                        .lineLimit(1)
+                }
                 AgentSessionTimeText(history: history, file: session.file) { activity in
                     AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all, activity: activity)
                 }
@@ -384,7 +630,7 @@ private struct ClaudeHistorySearchResults: View {
             .padding(.horizontal, 12).padding(.bottom, 2)
             ForEach(session.hits) { hit in
                 Button { history.openHit(hit, in: session) } label: {
-                    ClaudeHistorySearchHitRow(hit: hit, isSelected: isOpen(hit, in: session))
+                    ClaudeHistorySearchHitRow(hit: hit, tool: session.file.tool, isSelected: isOpen(hit, in: session))
                 }
                 .buttonStyle(MPressStyle())
             }
@@ -401,12 +647,14 @@ private struct ClaudeHistorySearchResults: View {
 
 private struct ClaudeHistorySearchHitRow: View {
     let hit: AgentHistorySearchHit
+    /// 回答的一方叫什么（Codex 的回答不标「Claude」）。
+    let tool: AgentHistoryTool
     let isSelected: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(AgentHistoryText.roleLabel(hit.role))
+                Text(AgentHistoryText.roleLabel(hit.role, tool: tool))
                     .font(M.sans(11.5, weight: .semibold)).foregroundStyle(M.text4)
                 Text(AgentHistorySnippetText.attributed(hit.snippet, match: M.accent))
                     .font(M.sans(14)).foregroundStyle(M.text2)
@@ -431,10 +679,16 @@ private struct ClaudeHistoryRow: View {
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     let showsProject: Bool
+    /// 不止一种工具时行首带工具标记（共享的 `AgentHistoryToolMark`）。
+    var showsTool = false
     let isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 9) {
+            if showsTool {
+                AgentHistoryToolBadge(tool: file.tool, size: 18)
+                    .padding(.top, 1)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(AgentHistoryText.sessionTitle(file, metadata: metadata))
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
@@ -594,6 +848,7 @@ private struct ClaudeTranscriptView: View {
                     top
                     ForEach(items) { item in
                         ClaudeTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
+                                            tool: transcript.file.tool,
                                             subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
                                             isHighlighted: item.id == transcript.highlightedItemID,
                                             expanded: $expanded)
@@ -699,6 +954,8 @@ private struct ClaudeTranscriptRow: View {
     let showsRole: Bool
     /// 子代理的记录：「用户」那一侧标成「任务」。
     var inSubagent = false
+    /// 回答的一方叫什么（Claude Code 照旧叫「Claude」，别的工具用产品名）。
+    var tool: AgentHistoryTool = .claude
     /// 这次调用派出的子代理（找得到记录的才有）。
     let subagent: AgentSubagentLink?
     let onOpenSubagent: (AgentSubagentLink) -> Void
@@ -709,7 +966,7 @@ private struct ClaudeTranscriptRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             if showsRole {
-                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent))
+                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent, tool: tool))
                     .font(M.sans(12, weight: .semibold)).foregroundStyle(M.text3)
                     .padding(.top, 6)
             }

@@ -1,7 +1,7 @@
 import Foundation
 @testable import uTermMobile
 
-/// 「Claude 历史会话」标签的假数据：一台主机上的 `~/.claude/projects`，全是手写的（结构照 Claude Code 2.1.x 的记录行，
+/// 历史会话标签的假数据（Claude Code 的那一份）：一台主机上的 `~/.claude/projects`，全是手写的（结构照 Claude Code 2.1.x 的记录行，
 /// 内容全是编的）。仓库是公开的：这里绝不能放真实的对话、路径、账号。
 enum MobileClaudeFixture {
     static let home = "/home/user"
@@ -267,10 +267,12 @@ actor MobileFakeClaudeTree: SFTPProviding {
 
 @MainActor
 enum MobileFakeClaudeHistory {
-    /// 一个接着假文件树的历史标签（还没开始读）。
+    /// 一个接着假文件树的历史标签（还没开始读）。建连接的参数同 App：四种工具的数据源都建（树里只有 `~/.claude`，
+    /// 别的工具的记录目录不存在、各自列出空的），一直列全部项目。
     static func tab(host: ServerProfile, tree: MobileFakeClaudeTree, directory: String? = MobileClaudeFixture.directory)
         -> ClaudeHistoryTab {
-        ClaudeHistoryTab(host: host, connection: AgentHistoryConnection(preferredDirectory: directory) { _ in tree })
+        ClaudeHistoryTab(host: host, connection: AgentHistoryConnection(
+            preferredDirectory: directory, tools: AgentHistoryTool.allCases, followsCurrentProject: false) { _ in tree })
     }
 
     /// 等列表读完（或超时）。

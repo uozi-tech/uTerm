@@ -239,6 +239,17 @@ nonisolated struct AgentHistoryListPreferences: Equatable, Sendable {
         raw.flatMap(AgentHistoryGrouping.init(rawValue:)) ?? .default
     }
 
+    /// 列表实际用的分组：只有一种工具时没有「工具」这种分组，存的是它就按默认的来。
+    static func effectiveGrouping(_ raw: String?, isMultiTool: Bool) -> AgentHistoryGrouping {
+        let stored = decodeGrouping(raw)
+        return stored == .tool && !isMultiTool ? .default : stored
+    }
+
+    /// 菜单里能选的分组方式（只有一种工具时不出「工具」）。
+    static func groupingChoices(isMultiTool: Bool) -> [AgentHistoryGrouping] {
+        AgentHistoryGrouping.allCases.filter { $0 != .tool || isMultiTool }
+    }
+
     /// 逗号分隔的原始值。认不出的跳过（以后删掉的工具）；空串、或者一种都认不出 = 全部。
     static func decodeTools(_ raw: String) -> Set<AgentHistoryTool>? {
         let tools = Set(raw.split(separator: ",").compactMap { AgentHistoryTool(rawValue: String($0)) })

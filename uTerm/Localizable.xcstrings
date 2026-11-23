@@ -9898,6 +9898,7 @@
       }
     },
     "Claude 历史会话" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -23526,6 +23527,7 @@
       }
     },
     "其他项目" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -24781,6 +24783,7 @@
       }
     },
     "切换项目" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -36785,6 +36788,7 @@
       }
     },
     "左边列的是在命令行里用 Claude Code 的会话，内容只读。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

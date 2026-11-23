@@ -59,7 +59,10 @@ final class StyleGalleryTests: XCTestCase {
                                 _ view: () -> V) async throws -> Int {
         var written = 0
         for style in [UIUserInterfaceStyle.light, .dark] {
+            // 宿主 App 的场景跟着模拟器的外观走（常是深色），只改探针窗口的 `overrideUserInterfaceStyle` 截出来的
+            // 浅色版仍是深色的（两张逐字节相同）：SwiftUI 这一层再明说一次。
             let root = view()
+                .environment(\.colorScheme, style == .dark ? .dark : .light)
                 .environment(\.horizontalSizeClass, device.hSize)
                 .environment(\.mAccent, M.accent)
                 .tint(M.accent)
@@ -348,7 +351,7 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    // MARK: - Claude 历史会话（假的 ~/.claude/projects）
+    // MARK: - 历史会话：只有 Claude Code（假的 ~/.claude/projects，四种工具的数据源都建，只有它有记录）
 
     /// 列表、对话、空态。宽屏（展开的 Duo、iPad）列表与对话左右并排，窄屏点进对话、左上角返回。
     func testClaudeHistoryTab() async throws {
@@ -446,6 +449,70 @@ final class StyleGalleryTests: XCTestCase {
             let emptySettled = await MobileFakeClaudeHistory.settle(none)
             XCTAssertTrue(emptySettled)
             try await shoot("claude-history-empty", on: device, settle: .milliseconds(500)) { mount(empty) }
+        }
+    }
+
+    /// 几种编码工具混排的历史会话标签（手写的假数据源，Claude Code / Codex / Cursor）：按项目分组（定位到终端目录那一组）、
+    /// 按工具、按日期、只看其中几种、搜索结果（Cursor 不参与搜索的说明）、某种工具读不出来、对话。
+    /// 只有 Claude Code 的样子见 `testClaudeHistoryTab`（`claude-history-*`）。
+    func testAgentHistoryMixedTools() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+        let relay = HostKeyChallengeRelay()
+        let suite = "StyleGalleryTests.agentHistory"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        func mount(_ workspace: MobileWorkspace) -> some View {
+            WorkspaceScreen()
+                .environment(workspaceStore())
+                .environment(relay)
+                .environment(workspace)
+                .modelContainer(c)
+                .defaultAppStorage(defaults)
+        }
+
+        func open(_ source: any AgentHistorySource, grouping: AgentHistoryGrouping = .project, shown: String = "")
+            async throws -> (MobileWorkspace, AgentHistoryModel) {
+            defaults.set(grouping.rawValue, forKey: DefaultsKey.agentHistoryGrouping)
+            defaults.set(shown, forKey: DefaultsKey.agentHistoryShownTools)
+            let workspace = MobileWorkspace()
+            let tab = workspace.openHistory(MobileAgentHistoryFixture.tab(host: host, source: source))
+            let settled = await MobileFakeClaudeHistory.settle(tab)
+            XCTAssertTrue(settled)
+            return (workspace, try XCTUnwrap(tab.connection.history))
+        }
+
+        let shots = Self.devices.filter { ["iphone", "ipad", "duo-split", "duo-unfolded"].contains($0.name) }
+        for device in shots {
+            let (projects, projectModel) = try await open(MobileAgentHistoryFixture.source())
+            // 「博客」那一组折起来：看折叠箭头与会话数。
+            projectModel.collapsedGroups = ["project:" + MobileAgentHistoryFixture.blog]
+            try await shoot("agent-history-projects", on: device, settle: .milliseconds(600)) { mount(projects) }
+
+            let (byTool, _) = try await open(MobileAgentHistoryFixture.source(), grouping: .tool)
+            try await shoot("agent-history-by-tool", on: device, settle: .milliseconds(600)) { mount(byTool) }
+
+            let (byDate, _) = try await open(MobileAgentHistoryFixture.source(), grouping: .date)
+            try await shoot("agent-history-by-date", on: device, settle: .milliseconds(600)) { mount(byDate) }
+
+            let (filtered, _) = try await open(MobileAgentHistoryFixture.source(), shown: "codex,cursor")
+            try await shoot("agent-history-filtered", on: device, settle: .milliseconds(600)) { mount(filtered) }
+
+            let (failing, _) = try await open(MobileAgentHistoryFixture.source(antigravityFails: true))
+            try await shoot("agent-history-tool-failure", on: device, settle: .milliseconds(600)) { mount(failing) }
+
+            let (searching, searchModel) = try await open(MobileAgentHistoryFixture.source())
+            searchModel.searchText = "订单"
+            searchModel.submitSearch()
+            _ = await MobileFakeTerminal.waitUntil { searchModel.search?.phase == .finished }
+            try await shoot("agent-history-search", on: device, settle: .milliseconds(600)) { mount(searching) }
+
+            let (reading, readModel) = try await open(MobileAgentHistoryFixture.source())
+            readModel.select(try XCTUnwrap(readModel.visibleFiles.first { $0.tool == .codex }))
+            _ = await MobileFakeTerminal.waitUntil { readModel.transcript?.reachedStart == true }
+            try await shoot("agent-history-transcript", on: device, settle: .milliseconds(900)) { mount(reading) }
         }
     }
 

@@ -33,7 +33,7 @@ struct WorkspaceScreen: View {
     @State private var closeFlow = MTabCloseFlow()
     /// 正在 stat、还没开预览标签的主机（`showPreview`）。
     @State private var previewsBeingChecked: Set<PersistentIdentifier> = []
-    /// 「+」菜单选了「Claude 历史会话」：先选主机。
+    /// 「+」菜单选了「历史会话」：先选主机。
     @State private var pickingHistoryHost = false
     /// 「继续这个会话」没开成（那台 Mac 不能新建终端等）。
     @State private var resumeError: String?
@@ -286,42 +286,39 @@ struct WorkspaceScreen: View {
         }
     }
 
-    // MARK: - Claude 历史会话
+    // MARK: - 历史会话
 
-    /// 终端标签长按「Claude 历史会话」：直连主机读它的 `~/.claude`（先列终端当前目录所在的项目），
-    /// 远控标签读那台 Mac 的。已经开着就带到前台。
+    /// 终端标签长按「历史会话」：直连主机读它上面几种编码工具的记录（按项目分组，定位到终端当前目录那一组），
+    /// 远控标签读那台 Mac 的。已经开着就带到前台、再定位一次。
     private func openHistory(for tabID: UUID) {
         guard let term = workspace.tab(tabID)?.terminal, term.offersClaudeHistory else { return }
         workspace.focus(pane: workspace.panes[workspace.paneIndex(containing: tabID) ?? 0].id)
         if let remote = term.remote {
             workspace.openHistory(ClaudeHistoryTab(pairedMac: remote.client))
         } else {
-            workspace.openHistory(ClaudeHistoryTab(server: term.host, directory: term.claudeHistoryDirectory,
-                                                   container: context.container))
+            let directory = term.claudeHistoryDirectory
+            let fresh = ClaudeHistoryTab(server: term.host, directory: directory, container: context.container)
+            // 新开的在建的时候已经要了定位；带到前台的那个按终端现在的目录再要一次（可能已经滚走、折起来了）。
+            let opened = workspace.openHistory(fresh)
+            if opened !== fresh { opened.reveal(directory: directory) }
         }
         syncKeyboard()
     }
 
-    /// 「继续这个会话」：在同一台主机上新开终端标签，连上、行编辑器起来之后打进命令。
+    /// 「继续这个会话」「＋新会话」：在同一台主机上新开终端标签，连上、行编辑器起来之后打进命令。
     /// 直连主机走连接中页（同「新建终端」，主机密钥要确认也在那里）；配对的 Mac 先请它开一个本机终端（开在项目目录里），
     /// 再整台接管、把那个终端放到前台。
-    private func resume(_ history: ClaudeHistoryTab, command: String, directory: String) {
-        guard history.canResume else { return }
-        if let client = history.remoteMac {
-            Task {
-                do {
-                    let sessionID = try await client.openLocalShell(directory: directory)
-                    store.takeOver(client, focus: sessionID, typing: command)
-                } catch {
-                    resumeError = error.localizedDescription
-                }
+    private func runInNewTerminal(_ history: ClaudeHistoryTab, command: String, directory: String) {
+        Task {
+            do {
+                try await history.runInNewTerminal(command, directory: directory, store: store)
+            } catch {
+                resumeError = error.localizedDescription
             }
-        } else {
-            store.requestConnect(history.host, kind: .terminal, allowDuplicate: true, typing: command)
         }
     }
 
-    /// 「+」菜单的「Claude 历史会话」：选一台主机（或一台配对过的 Mac）。
+    /// 「+」菜单的「历史会话」：选一台主机（或一台配对过的 Mac）。没有终端，不知道目录：不定位，「＋」新会话说明原因。
     private var historyHostSheet: some View {
         let candidates = hosts.filter { !DemoHostProfile.isDemo($0) }
         return NavigationStack {
@@ -349,7 +346,7 @@ struct WorkspaceScreen: View {
                 .padding(16)
             }
             .background(M.canvas)
-            .navigationTitle("Claude 历史会话")
+            .navigationTitle("历史会话")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { pickingHistoryHost = false } } }
         }
@@ -668,7 +665,7 @@ struct WorkspaceScreen: View {
             FilePreviewSessionBody(tab: preview, onClose: { closeTab(preview.id) })
         case .history(let history):
             ClaudeHistorySessionBody(tab: history, isActive: front && visible) { command, directory in
-                resume(history, command: command, directory: directory)
+                runInNewTerminal(history, command: command, directory: directory)
             }
         }
     }
@@ -769,7 +766,7 @@ struct WorkspaceScreen: View {
     }
 }
 
-/// 「Claude 历史会话」的选主机抽屉与「继续这个会话」失败的提示（单独成一层：工作区屏的修饰链已经长到类型检查超时）。
+/// 「历史会话」的选主机抽屉与「继续这个会话」失败的提示（单独成一层：工作区屏的修饰链已经长到类型检查超时）。
 private struct ClaudeHistoryOverlays<Sheet: View>: ViewModifier {
     @Binding var picking: Bool
     @Binding var resumeError: String?
