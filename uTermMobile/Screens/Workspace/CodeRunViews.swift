@@ -88,7 +88,7 @@ struct CodeRunHeader: View {
                 // 详情露着终端时才有这条标题行，所以这里是「查看记录」；看记录时回终端的按钮在记录的标题行上。
                 if run.sessionPath != nil {
                     Button { code.tab.setShowsTerminal(run.id, !run.showsTerminal) } label: {
-                        Label(run.showsTerminal ? String(localized: "查看记录") : String(localized: "回到终端"),
+                        Label(run.showsTerminal ? String(localized: "查看记录") : String(localized: "返回终端"),
                               systemImage: run.showsTerminal ? "clock" : "terminal")
                     }
                 }

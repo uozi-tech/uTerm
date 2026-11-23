@@ -818,7 +818,7 @@ final class WorkspaceModel {
         terminalGroups.tab(id)?.payload.codeTab?.requestReveal(directory: directory)
     }
 
-    /// 「挪到新标签页」：把 Code 标签页里跑着的一个会话开成同一组里的普通终端标签页（同一条会话，不重开）。
+    /// 「移到新标签页」：把 Code 标签页里跑着的一个会话开成同一组里的普通终端标签页（同一条会话，不重开）。
     func moveCodeRunToTab(_ runID: UUID, fromCodeTab tabID: UUID) {
         guard let code = terminalGroups.tab(tabID)?.payload.codeTab, let at = terminalGroups.locateTab(tabID),
               let pane = code.detach(runID) as? PaneModel else { return }

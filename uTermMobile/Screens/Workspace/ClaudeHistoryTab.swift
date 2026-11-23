@@ -297,7 +297,7 @@ struct ClaudeHistoryBrowser: View {
         }
     }
 
-    /// 这份记录正跑着（在 Code 标签页里继续着）：记录顶上「继续这个会话」换成「回到终端」，一键回去。
+    /// 这份记录正跑着（在 Code 标签页里继续着）：记录顶上「继续这个会话」换成「返回终端」，一键回去。
     private func backToTerminal(for file: AgentHistorySessionFile) -> (() -> Void)? {
         guard let code, let run = code.board.run(forSession: file.path), run.isRunning else { return nil }
         return { code.tab.setShowsTerminal(run.id, true) }
@@ -542,7 +542,8 @@ private struct ClaudeHistoryList: View {
             }
             .mKeepsScrollContentInSafeArea()
             // 下拉刷新：重新列项目与会话（读过的信息按缓存复用）。
-            .refreshable { await history.reload() }
+            // 下拉刷新：列表不换成「正在读取…」（那样内容会消失一下、转圈跟着闪），安静地重列。
+            .refreshable { await history.reload(showsLoading: false) }
             .onChange(of: reveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
             .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
         }
@@ -855,7 +856,7 @@ private struct ClaudeTranscriptView: View {
     let onOpenSubagent: (AgentSubagentLink) -> Void
     /// 从搜索命中处打开的：换回从末尾打开。
     var onJumpToLatest: () -> Void = {}
-    /// 这份记录正在 Code 标签页里继续着：「继续这个会话」换成「回到终端」。
+    /// 这份记录正在 Code 标签页里继续着：「继续这个会话」换成「返回终端」。
     var onBackToTerminal: (() -> Void)? = nil
 
     @State private var expanded: Set<String> = []
@@ -962,7 +963,7 @@ private struct ClaudeTranscriptView: View {
             .accessibilityLabel(Text("拷贝"))
             // 子代理的记录只读：不能单独继续。
             if let onBackToTerminal {
-                MBtn(title: String(localized: "回到终端"), icon: "term", kind: .tinted, height: 34, action: onBackToTerminal)
+                MBtn(title: String(localized: "返回终端"), icon: "term", kind: .tinted, height: 34, action: onBackToTerminal)
                     .fixedSize()
                     .padding(.trailing, 10)
             } else if transcript.subagent == nil {

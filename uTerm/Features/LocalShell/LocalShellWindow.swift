@@ -367,7 +367,7 @@ final class LocalShellWindowModel {
         groups.tab(id)?.payload.codeTab?.requestReveal(directory: directory)
     }
 
-    /// 「挪到新标签页」：把 Code 标签页里跑着的一个 shell 开成同一组里的普通标签（同一个 shell，不重开）。
+    /// 「移到新标签页」：把 Code 标签页里跑着的一个 shell 开成同一组里的普通标签（同一个 shell，不重开）。
     func moveCodeRunToTab(_ runID: UUID, fromCodeTab tabID: UUID) {
         guard let code = groups.tab(tabID)?.payload.codeTab, let at = groups.locateTab(tabID),
               let pane = code.detach(runID) as? LocalShellPane else { return }

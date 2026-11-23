@@ -237,7 +237,7 @@ final class CodeTabModel {
 
     // MARK: 挪走 / 结束
 
-    /// 「挪到新标签页」：把这个终端交给宿主开成普通标签页，从这里拿掉（不结束它）。
+    /// 「移到新标签页」：把这个终端交给宿主开成普通标签页，从这里拿掉（不结束它）。
     func detach(_ id: UUID) -> (any CodeTabTerminal)? {
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return nil }
         let run = runs.remove(at: index)

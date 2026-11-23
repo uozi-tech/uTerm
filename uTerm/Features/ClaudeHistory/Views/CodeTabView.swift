@@ -19,7 +19,7 @@ struct CodeTabView: View {
     let makeConnection: () -> AgentHistoryConnection
     /// 右边那个终端的面板（SSH 是 `PaneView`，本机是本机终端的面板）。
     let terminal: (any CodeTabTerminal) -> AnyView
-    /// 「挪到新标签页」；nil = 不出这个按钮。
+    /// 「移到新标签页」；nil = 不出这个按钮。
     var onMoveToTab: ((UUID) -> Void)? = nil
 
     var body: some View {
@@ -143,7 +143,7 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、挪到新标签页）。
+    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页）。
     /// 右边显示着终端本身就说明在跑，不再写「运行中」。与侧栏顶部那一行等高，中间的竖线上下贯通。
     private func runHeader(_ run: CodeTabModel.Run) -> some View {
         let title = code.runningRows().first { $0.id == run.id }?.title ?? AgentHistoryText.newSession
@@ -165,7 +165,7 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「挪到新标签页」。没对上记录的新会话没有记录可看。
+    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「移到新标签页」。没对上记录的新会话没有记录可看。
     @ViewBuilder private func runMenu(_ run: CodeTabModel.Run) -> some View {
         let showsRecord = code.detail == .transcript
         if run.path != nil || onMoveToTab != nil {
@@ -196,7 +196,7 @@ private struct CodeTabBrowser: View {
     }
 
     private static var moveToTab: String {
-        String(localized: "挪到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
+        String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
     }
 }
 
