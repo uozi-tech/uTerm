@@ -34,13 +34,18 @@ final class AgentHistoryCompositeSourceTests: XCTestCase {
 
     // MARK: 工厂
 
-    func testFactoryBuildsOnlyImplementedTools() {
+    func testFactoryBuildsEachToolOnce() {
         let sftp = MockSFTP()
         XCTAssertTrue(AgentHistorySources.make(tools: [.claude], provider: sftp, home: "/h") is ClaudeHistorySource,
                       "只要 Claude Code（iOS）：不包一层")
-        // 另外三种还没接上：工厂跳过它们，剩下一种也不包。
-        XCTAssertTrue(AgentHistorySources.make(tools: AgentHistoryTool.allCases, provider: sftp, home: "/h") is ClaudeHistorySource)
-        XCTAssertTrue(AgentHistorySources.make(tools: [.claude, .claude], provider: sftp, home: "/h") is ClaudeHistorySource)
+        XCTAssertTrue(AgentHistorySources.make(tools: [.claude, .claude], provider: sftp, home: "/h") is ClaudeHistorySource,
+                      "重复要同一种：只建一份，也不包")
+        // 四种都有实现：每种工具各建一份、带着自己的 tool，按要的顺序合起来。
+        for tool in AgentHistoryTool.allCases {
+            XCTAssertEqual(AgentHistorySources.make(tool, provider: sftp, home: "/h")?.tool, tool)
+        }
+        let all = AgentHistorySources.make(tools: AgentHistoryTool.allCases, provider: sftp, home: "/h")
+        XCTAssertEqual((all as? AgentHistoryCompositeSource)?.tools, AgentHistoryTool.allCases)
     }
 
     func testCompositeKeepsFirstSourcePerTool() {

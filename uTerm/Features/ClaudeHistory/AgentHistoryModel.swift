@@ -422,6 +422,8 @@ final class AgentHistoryModel {
         var total = 0
         /// 命中到了上限，后面没再找。
         var truncated = false
+        /// 范围里有这么多份压缩过的记录没搜：主机上没有解压的工具（Codex 的旧记录要 `zstd`）。
+        var unsearched = 0
 
         var hitCount: Int { sessions.reduce(0) { $0 + $1.hits.count } }
         var isRunning: Bool { phase == .waiting || phase == .searching }
@@ -502,6 +504,13 @@ final class AgentHistoryModel {
         let source = self.source
         let limits = searchLimits
         searchTask = Task { [weak self] in
+            // 先问一句有没有搜不了的（数据源在列表那一步多半已经知道了，不另外费时间）。
+            var unsearched = 0
+            for tool in Set(files.map(\.tool)) {
+                guard let reporter = self?.source(for: tool) as? any AgentHistorySearchCoverageReporting else { continue }
+                unsearched += await reporter.searchCoverage(of: files.filter { $0.tool == tool }).unsearchable
+            }
+            self?.noteUnsearched(unsearched, generation: generation)
             do {
                 try await source.search(query, in: files, limits: limits) { [weak self] event in
                     await self?.apply(event, generation: generation)
@@ -528,6 +537,11 @@ final class AgentHistoryModel {
             searchTask = nil
         }
         search = current
+    }
+
+    private func noteUnsearched(_ count: Int, generation: Int) {
+        guard generation == searchGeneration, count > 0 else { return }
+        search?.unsearched = count
     }
 
     private func searchFailed(_ error: any Error, generation: Int) {

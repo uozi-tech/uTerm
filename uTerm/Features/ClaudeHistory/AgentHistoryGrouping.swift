@@ -39,6 +39,8 @@ nonisolated struct AgentHistoryGroup: Identifiable, Equatable, Sendable {
         /// 这时 `name` 是记录目录的名字。
         /// `name` 是组标题：目录最后一段，有同名的目录时往上多带一段（`a/api`、`b/api`）。
         case project(directory: String?, name: String)
+        /// 这种工具没有记下工作目录的会话（Antigravity 没开文件夹的会话、Cursor 对不上目录的）：一种工具一组。
+        case noDirectory(AgentHistoryTool)
         case date(AgentHistoryDateBucket)
         case tool(AgentHistoryTool)
         /// 不分组：只有一组，不画组标题。
@@ -98,7 +100,9 @@ nonisolated enum AgentHistoryListing {
            let normalized = ClaudeProjectPath.normalized(directory) {
             return .directory(normalized)
         }
-        return .unresolved(file.tool, file.project.id)
+        // 只有 Claude Code 的记录目录名看得懂（工作目录换出来的）；别的工具没有目录时那个名字是哈希或占位，
+        // 不拿来当标题，一种工具并成一组。
+        return .unresolved(file.tool, file.tool == .claude ? file.project.id : "")
     }
 
     /// 同一个工作目录下几种工具的会话并成一组。
@@ -137,6 +141,8 @@ nonisolated enum AgentHistoryListing {
                 let name = titles[directory] ?? (directory as NSString).lastPathComponent
                 return AgentHistoryGroup(id: "project:" + directory, kind: .project(directory: directory, name: name),
                                          files: group)
+            case .unresolved(let tool, _) where tool != .claude:
+                return AgentHistoryGroup(id: "project?\(tool.rawValue)", kind: .noDirectory(tool), files: group)
             case .unresolved(let tool, let name):
                 return AgentHistoryGroup(id: "project?\(tool.rawValue):\(name)", kind: .project(directory: nil, name: name),
                                          files: group)

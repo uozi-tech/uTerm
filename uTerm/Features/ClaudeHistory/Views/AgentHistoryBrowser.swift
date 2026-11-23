@@ -414,6 +414,7 @@ struct AgentHistorySearchResults: View {
         if search.sessions.isEmpty, !search.isRunning {
             VStack(spacing: 0) {
                 excludedNote
+                unsearchedNote
                 emptyState
             }
         } else {
@@ -421,6 +422,7 @@ struct AgentHistorySearchResults: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     status
                     excludedNote
+                    unsearchedNote
                     ForEach(search.sessions) { session in
                         group(session)
                     }
@@ -437,6 +439,11 @@ struct AgentHistorySearchResults: View {
         if !excluded.isEmpty, search.phase != .failed(AgentHistoryText.searchUnsupported(excluded)) {
             note(AgentHistoryText.searchUnsupported(excluded))
         }
+    }
+
+    /// 压缩过的记录没搜（主机上没有解压的工具）：也说一句，免得以为搜全了。
+    @ViewBuilder private var unsearchedNote: some View {
+        if search.unsearched > 0 { note(AgentHistoryText.searchSkippedCompressed(search.unsearched)) }
     }
 
     @ViewBuilder private var emptyState: some View {

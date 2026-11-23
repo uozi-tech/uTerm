@@ -3095,6 +3095,34 @@
         }
       }
     },
+    "%@ 没有记下这些会话的工作目录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ didn't record a working directory for these sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はこれらのセッションの作業ディレクトリを記録していません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에 이 세션들의 작업 디렉터리가 기록되어 있지 않습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 沒有記下這些工作階段的工作目錄"
+          }
+        }
+      }
+    },
     "%@ 的会话不参与搜索" : {
       "localizations" : {
         "en" : {
@@ -6648,7 +6676,6 @@
       }
     },
     "%lld 台 · 成功 %lld%@ · %@" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13145,7 +13172,6 @@
       }
     },
     "SSH 连接已断开" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -19349,6 +19375,146 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "讀不到工作階段列表，無法搜尋"
+          }
+        }
+      }
+    },
+    "会话记录一直在写入，几次读到的都对不上，稍后再试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The session record is still being written and several reads were inconsistent. Try again later"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションの記録が書き込み中で、何度読み込んでも内容が一致しませんでした。しばらくしてからやり直してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록이 계속 쓰이고 있어 여러 번 읽은 내용이 일치하지 않습니다. 나중에 다시 시도하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作階段記錄一直在寫入，幾次讀到的都對不上，請稍後再試"
+          }
+        }
+      }
+    },
+    "会话记录不是 SQLite 数据库" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The session record isn't a SQLite database"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションの記録が SQLite データベースではありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록이 SQLite 데이터베이스가 아닙니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作階段記錄不是 SQLite 資料庫"
+          }
+        }
+      }
+    },
+    "会话记录不见了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The session record is gone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションの記録が見つかりません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록을 찾을 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作階段記錄不見了"
+          }
+        }
+      }
+    },
+    "会话记录有 %@，超过了能读的上限 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The session record is %1$@, over the %2$@ limit that can be read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションの記録は %1$@ あり、読み込める上限 %2$@ を超えています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록이 %1$@로, 읽을 수 있는 한도 %2$@를 넘습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作階段記錄有 %1$@，超過了能讀的上限 %2$@"
+          }
+        }
+      }
+    },
+    "会话记录读不了：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't read the session record: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションの記録を読み込めません：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 기록을 읽을 수 없습니다: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀不了工作階段記錄：%@"
           }
         }
       }
@@ -28019,7 +28185,6 @@
       }
     },
     "各路径的失败原因见下方。" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -39169,7 +39334,6 @@
       }
     },
     "已连接 · 正在打开%@…" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -46550,7 +46714,6 @@
       }
     },
     "操作未能完成（系统错误码 %d）" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -51934,6 +52097,34 @@
         }
       }
     },
+    "有 %lld 份压缩过的记录没有搜：这台主机上没有解压用的 zstd" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld compressed records weren't searched: this host doesn't have zstd to decompress them"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圧縮された記録 %lld 件は検索していません：このホストには展開に使う zstd がありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "압축된 기록 %lld개는 검색하지 않았습니다: 이 호스트에 압축을 푸는 zstd가 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 份壓縮過的記錄沒有搜尋：這台主機上沒有解壓縮用的 zstd"
+          }
+        }
+      }
+    },
     "有 IPv6" : {
       "localizations" : {
         "en" : {
@@ -53584,7 +53775,6 @@
       }
     },
     "本地端口 %lld 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -59101,6 +59291,34 @@
         }
       }
     },
+    "没有工作目录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Working Directory"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作業ディレクトリなし"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "작업 디렉터리 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有工作目錄"
+          }
+        }
+      }
+    },
     "没有应用能打开这个文件。" : {
       "localizations" : {
         "en" : {
@@ -61953,7 +62171,6 @@
       }
     },
     "监听端口 %lld 已被占用" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -65564,7 +65781,6 @@
       }
     },
     "粘贴剪贴板里的图片" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -65593,7 +65809,6 @@
       }
     },
     "粘贴剪贴板里的图片或视频" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -65622,7 +65837,6 @@
       }
     },
     "粘贴图片" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -65651,7 +65865,6 @@
       }
     },
     "粘贴图片或视频" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -74406,6 +74619,62 @@
         }
       }
     },
+    "这份 Codex 记录是压缩过的，但解不开（文件可能不完整或者坏了）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Codex record is compressed but can't be decompressed (the file may be incomplete or damaged)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Codex の記録は圧縮されていますが、展開できません（ファイルが不完全か、壊れている可能性があります）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Codex 기록은 압축되어 있지만 풀 수 없습니다(파일이 불완전하거나 손상되었을 수 있습니다)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這份 Codex 記錄是壓縮過的，但解不開（檔案可能不完整或已損毀）。"
+          }
+        }
+      }
+    },
+    "这份 Codex 记录是压缩过的，解开后至少有 %@，超过了这里能打开的上限（%@）。可以在终端里用 codex resume 继续它。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Codex record is compressed and is at least %1$@ once decompressed, over the %2$@ limit that can be opened here. You can continue it in a terminal with codex resume."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Codex の記録は圧縮されていて、展開すると少なくとも %1$@ あり、ここで開ける上限（%2$@）を超えています。ターミナルで codex resume を使えば続けられます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Codex 기록은 압축되어 있으며 풀면 최소 %1$@로, 여기서 열 수 있는 한도(%2$@)를 넘습니다. 터미널에서 codex resume으로 이어서 할 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這份 Codex 記錄是壓縮過的，解開後至少有 %1$@，超過了這裡能打開的上限（%2$@）。可以在終端機裡用 codex resume 繼續它。"
+          }
+        }
+      }
+    },
     "这份中继配置里的成员密钥无效，需要重新导入。" : {
       "localizations" : {
         "en" : {
@@ -76520,7 +76789,6 @@
       }
     },
     "远程控制的 Mac 终端还不能贴视频，只能贴图片" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -77554,7 +77822,6 @@
       }
     },
     "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，%@。" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -78157,7 +78424,6 @@
       }
     },
     "退出码 %lld" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

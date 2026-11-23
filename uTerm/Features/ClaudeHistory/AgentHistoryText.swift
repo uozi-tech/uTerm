@@ -248,10 +248,16 @@ enum AgentHistoryText {
         }
     }
 
+    /// 有压缩过的记录没搜。
+    static func searchSkippedCompressed(_ count: Int) -> String {
+        String(localized: "有 \(count) 份压缩过的记录没有搜：这台主机上没有解压用的 zstd")
+    }
+
     /// 组标题。项目组是目录名（不翻译）。
     static func groupTitle(_ group: AgentHistoryGroup) -> String {
         switch group.kind {
         case .project(_, let name): return name
+        case .noDirectory: return String(localized: "没有工作目录")
         case .date(let bucket): return dateBucket(bucket)
         case .tool(let tool): return tool.displayName
         case .all: return String(localized: "全部会话")
@@ -260,8 +266,14 @@ enum AgentHistoryText {
 
     /// 组标题的悬停：项目组是完整路径，对不上路径的说明一句。
     static func groupHelp(_ group: AgentHistoryGroup) -> String? {
-        guard case .project(let directory, let name) = group.kind else { return nil }
-        return directory ?? String(localized: "记录目录 \(name)（对不上工作目录）")
+        switch group.kind {
+        case .project(let directory, let name):
+            return directory ?? String(localized: "记录目录 \(name)（对不上工作目录）")
+        case .noDirectory(let tool):
+            return String(localized: "\(tool.displayName) 没有记下这些会话的工作目录")
+        case .date, .tool, .all:
+            return nil
+        }
     }
 
     /// 组标题的读屏文字：标题 + 几个会话 + 折没折。

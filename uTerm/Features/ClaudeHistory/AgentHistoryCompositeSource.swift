@@ -19,10 +19,13 @@ nonisolated enum AgentHistorySources {
         switch tool {
         case .claude:
             return ClaudeHistorySource(provider: provider, home: home)
-        // 另外三种的数据源在各自的目录里（`Tools/<Codex|Cursor|Antigravity>/`），汇合时在这里接上：
-        // `init(provider:home:)`，同 `ClaudeHistorySource`。
-        case .codex, .cursor, .antigravity:
-            return nil
+        case .codex:
+            return CodexHistorySource(provider: provider, home: home)
+        case .cursor:
+            return CursorHistorySource(provider: provider, home: home)
+        case .antigravity:
+            // 工作区和标题在它的 SQLite 摘要库里，读不出来时数据源自己退回只靠记录。
+            return AntigravityHistorySource(provider: provider, home: home, index: AntigravitySummaryIndex())
         }
     }
 }
