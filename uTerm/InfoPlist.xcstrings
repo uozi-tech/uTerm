@@ -1,41 +1,90 @@
 {
-  "sourceLanguage": "zh-Hans",
-  "strings": {
-    "NSLocalNetworkUsageDescription": {
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "new",
-            "value": "uTerm 使用局域网在 Mac 与 iPhone、iPad 之间同步设置，并让配对过的手机远程控制这台 Mac 上的终端和屏幕。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "uTerm uses the local network to sync settings between your Mac, iPhone, and iPad, and to let paired phones remotely control the terminals and screen on this Mac."
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "uTerm 使用區域網路在 Mac 與 iPhone、iPad 之間同步設定，並讓配對過的手機遠端控制這台 Mac 上的終端機和螢幕。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "uTerm はローカルネットワークを使って Mac と iPhone、iPad の間で設定を同期し、ペアリング済みのスマートフォンからこの Mac のターミナルと画面をリモート操作できるようにします。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "uTerm은 로컬 네트워크를 사용해 Mac과 iPhone, iPad 간에 설정을 동기화하고, 페어링된 휴대폰이 이 Mac의 터미널과 화면을 원격으로 제어할 수 있게 합니다."
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "CFBundleDisplayName" : {
+      "comment" : "Bundle display name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "uTerm"
           }
         }
       }
+    },
+    "CFBundleName" : {
+      "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "uTerm"
+          }
+        }
+      }
+    },
+    "NSHumanReadableCopyright" : {
+      "comment" : "Copyright (human-readable)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : ""
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "Privacy - Local Network Usage Description",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm uses the local network to sync settings between your Mac, iPhone, and iPad, and to let paired phones remotely control the terminals and screen on this Mac."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm はローカルネットワークを使って Mac と iPhone、iPad の間で設定を同期し、ペアリング済みのスマートフォンからこの Mac のターミナルと画面をリモート操作できるようにします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm은 로컬 네트워크를 사용해 Mac과 iPhone, iPad 간에 설정을 동기화하고, 페어링된 휴대폰이 이 Mac의 터미널과 화면을 원격으로 제어할 수 있게 합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "uTerm 使用局域网在 Mac 与 iPhone、iPad 之间同步设置，并让配对过的手机远程控制这台 Mac 上的终端和屏幕。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm 使用區域網路在 Mac 與 iPhone、iPad 之間同步設定，並讓配對過的手機遠端控制這台 Mac 上的終端機和螢幕。"
+          }
+        }
+      }
+    },
+    "uTerm file buffer drag identifier" : {
+
+    },
+    "uTerm pane drag identifier" : {
+
+    },
+    "uTerm remote file drag identifier" : {
+
+    },
+    "uTerm tab drag identifier" : {
+
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }

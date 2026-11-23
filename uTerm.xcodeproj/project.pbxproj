@@ -642,13 +642,6 @@
 			);
 			target = 52484F53540000000000000E /* uTermRemoteHost */;
 		};
-		5348454C4C000000000000E1 /* Exceptions for "uTerm" folder in "uTermShellAgent" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Localizable.xcstrings,
-			);
-			target = 5348454C4C00000000000004 /* uTermShellAgent */;
-		};
 		5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -656,6 +649,13 @@
 				ShellAgentServer.swift,
 			);
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
+		};
+		5348454C4C000000000000E1 /* Exceptions for "uTerm" folder in "uTermShellAgent" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Localizable.xcstrings,
+			);
+			target = 5348454C4C00000000000004 /* uTermShellAgent */;
 		};
 		555445524D53534800000002 /* Exceptions for "uTermSSH" folder in "uTerm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -752,8 +752,8 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */,
-				52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */,
 				5348454C4C000000000000E1 /* Exceptions for "uTerm" folder in "uTermShellAgent" target */,
+				52484F535400000000000004 /* Exceptions for "uTerm" folder in "uTermRemoteHost" target */,
 			);
 			path = uTerm;
 			sourceTree = "<group>";
@@ -1340,14 +1340,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5348454C4C000000000000E2 /* Resources */ = {
+		52484F535400000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		52484F535400000000000009 /* Resources */ = {
+		5348454C4C000000000000E2 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (

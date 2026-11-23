@@ -2,15 +2,9 @@
   "sourceLanguage" : "zh-Hans",
   "strings" : {
     "" : {
-      "localizations" : {
-
-      },
       "shouldTranslate" : false
     },
     " " : {
-      "localizations" : {
-
-      },
       "shouldTranslate" : false
     },
     "  ·  系统内置，不可删除" : {
@@ -239,7 +233,7 @@
       }
     },
     "，" : {
-      "comment" : "无障碍标签里主机别名与标记之间的分隔符",
+      "comment" : "无障碍朗读值里各项之间的分隔符\n无障碍标签里主机别名与标记之间的分隔符\n读屏文字里各段之间的分隔符\n读屏标签各段之间的分隔符",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -268,7 +262,7 @@
       }
     },
     "、" : {
-      "comment" : "并列名称之间的分隔符",
+      "comment" : "列举共享文件夹的分隔符\n列举进程名的分隔符\n并列名称之间的分隔符\n并列的主机名之间的分隔符\n并列的文件名之间的分隔符\n并列设备名之间的分隔符\n并列项之间的分隔符",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4014,7 +4008,7 @@
       }
     },
     "%@：%@" : {
-      "comment" : "运行日志：主机名：结论",
+      "comment" : "本地文件操作失败：系统错误原文\n路径：出错原因\n运行日志：主机名：结论",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -5307,7 +5301,7 @@
       }
     },
     "%@（%@）" : {
-      "comment" : "Agent 的主机上下文：主机名（地址）",
+      "comment" : "会话 id（主机名）\n名称（id）\n设备名（设备 id），id 原样给命令行用",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -6542,6 +6536,7 @@
       }
     },
     "%lld 台 · 成功 %lld%@ · %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -9987,34 +9982,6 @@
         }
       }
     },
-    "Ed25519（推荐）" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ed25519 (Recommended)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ed25519（推奨）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ed25519(권장)"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ed25519（建議）"
-          }
-        }
-      }
-    },
     "ed25519（推荐）" : {
       "localizations" : {
         "en" : {
@@ -10039,6 +10006,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ed25519（推薦）"
+          }
+        }
+      }
+    },
+    "Ed25519（推荐）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ed25519 (Recommended)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ed25519（推奨）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ed25519(권장)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ed25519（建議）"
           }
         }
       }
@@ -11225,6 +11220,9 @@
           }
         }
       }
+    },
+    "Mac 上的辅助程序没有响应" : {
+
     },
     "Mac 上的辅助程序没有响应：%@" : {
       "localizations" : {
@@ -13005,6 +13003,7 @@
       }
     },
     "SSH 连接已断开" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13357,6 +13356,7 @@
       }
     },
     "Tweaks" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13385,6 +13385,7 @@
       }
     },
     "Tweaks…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -16849,7 +16850,7 @@
       }
     },
     "主机" : {
-      "comment" : "端口转发：目标主机",
+      "comment" : "命令面板分组标题\n端口转发：目标主机",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -20403,7 +20404,7 @@
       }
     },
     "修改时间" : {
-      "comment" : "文件列表列头",
+      "comment" : "文件列表列头\n文件列表排序键\n文件详情字段",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -20460,7 +20461,7 @@
       }
     },
     "停止" : {
-      "comment" : "停止检测",
+      "comment" : "Claude 历史会话：停止正在进行的搜索\n停止检测",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -22960,7 +22961,7 @@
       }
     },
     "其他" : {
-      "comment" : "文件权限类别：其他用户",
+      "comment" : "文件权限类别：其他用户\n网络类型：其他",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -23315,7 +23316,7 @@
       }
     },
     "最近" : {
-      "comment" : "命令面板二级分组：最近打开的文件",
+      "comment" : "侧栏：最近连接的主机\n命令面板二级分组：最近打开的文件",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -27566,6 +27567,7 @@
       }
     },
     "各路径的失败原因见下方。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -28155,7 +28157,7 @@
       }
     },
     "名称" : {
-      "comment" : "模型服务的名称",
+      "comment" : "主机名称\n快捷命令名称\n文件列表列头\n文件列表排序键\n模型服务的名称",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -31129,6 +31131,7 @@
       }
     },
     "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -31998,7 +32001,7 @@
       }
     },
     "地址" : {
-      "comment" : "端口转发：监听地址",
+      "comment" : "主机地址\n端口转发：监听地址",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -32687,7 +32690,7 @@
       }
     },
     "大小" : {
-      "comment" : "文件列表列头",
+      "comment" : "文件列表列头\n文件列表排序键\n文件详情字段",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -33409,7 +33412,7 @@
       }
     },
     "完成" : {
-      "comment" : "导入 SSH 配置的步骤",
+      "comment" : "关闭面板的按钮\n导入 SSH 配置的步骤\n结束重命名",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -33675,7 +33678,7 @@
       }
     },
     "密码" : {
-      "comment" : "SSH 认证方式",
+      "comment" : "SSH 认证方式\n认证方式",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -36406,7 +36409,7 @@
       }
     },
     "已信任" : {
-      "comment" : "主机密钥指纹：此前已信任的那一份",
+      "comment" : "主机密钥指纹：此前已信任的那一份\n此前已信任的主机密钥指纹",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -36463,7 +36466,7 @@
       }
     },
     "已停止" : {
-      "comment" : "Agent 本轮已被用户停止",
+      "comment" : "Agent 本轮已被用户停止\n中继连接状态",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -38573,6 +38576,7 @@
       }
     },
     "已连接 · 正在打开%@…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -41661,7 +41665,7 @@
       }
     },
     "所有者" : {
-      "comment" : "文件列表列头",
+      "comment" : "文件列表列头\n文件权限类别\n文件详情字段",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -43623,7 +43627,7 @@
       }
     },
     "拒绝" : {
-      "comment" : "拒绝加入设备组的请求",
+      "comment" : "拒绝加入设备组的请求\n拒绝配对请求",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -44269,7 +44273,7 @@
       }
     },
     "指纹" : {
-      "comment" : "主机密钥指纹",
+      "comment" : "SSH 密钥指纹\n主机密钥指纹",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -44580,7 +44584,7 @@
       }
     },
     "授权" : {
-      "comment" : "请求系统授权的按钮",
+      "comment" : "授权引导：请求系统权限\n请求系统授权的按钮",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -46233,7 +46237,7 @@
       }
     },
     "收起" : {
-      "comment" : "收起展开的内容",
+      "comment" : "收起历史记录\n收起展开的内容",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -46766,7 +46770,7 @@
       }
     },
     "文件" : {
-      "comment" : "命令面板二级分组",
+      "comment" : "命令面板二级分组\n命令面板分组标题\n文件类型：普通文件\n设置分组：远程文件的编辑",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -46935,7 +46939,7 @@
       }
     },
     "文件夹" : {
-      "comment" : "命令面板二级分组",
+      "comment" : "命令面板二级分组\n文件类型",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -47497,7 +47501,7 @@
       }
     },
     "新建" : {
-      "comment" : "新建端口转发规则",
+      "comment" : "工具栏按钮：新建主机\n新建端口转发规则",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -50825,7 +50829,7 @@
       }
     },
     "更新" : {
-      "comment" : "更新中继到新版本",
+      "comment" : "更新中继到新版本\n设置分组：App 更新",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -52052,7 +52056,7 @@
       }
     },
     "未知" : {
-      "comment" : "退出码未知",
+      "comment" : "网络诊断：失败原因未知\n退出码未知\n钥匙串错误的说明取不到时的占位",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -53390,7 +53394,7 @@
       }
     },
     "本次出示" : {
-      "comment" : "主机密钥指纹：这次连接主机出示的那一份",
+      "comment" : "主机密钥指纹：这次连接主机出示的那一份\n主机这次出示的密钥指纹",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -53419,7 +53423,7 @@
       }
     },
     "权限" : {
-      "comment" : "文件列表列头",
+      "comment" : "文件列表列头\n文件详情字段",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -62785,7 +62789,7 @@
       }
     },
     "移除" : {
-      "comment" : "从传输列表移除",
+      "comment" : "从传输列表移除\n从设备组移除设备",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -64623,7 +64627,7 @@
       }
     },
     "类型" : {
-      "comment" : "模型服务的类型",
+      "comment" : "SSH 密钥类型\n模型服务的类型",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -64736,6 +64740,7 @@
       }
     },
     "粘贴剪贴板里的图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -64764,6 +64769,7 @@
       }
     },
     "粘贴剪贴板里的图片或视频" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -64792,6 +64798,7 @@
       }
     },
     "粘贴图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -64820,6 +64827,7 @@
       }
     },
     "粘贴图片或视频" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -65141,7 +65149,7 @@
       }
     },
     "终端" : {
-      "comment" : "设置分区",
+      "comment" : "窗口类型，用于窗口标题「主机 — 终端」\n终端 / Agent 模式切换\n终端标签页的默认标题\n设置分区",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -68139,7 +68147,7 @@
       }
     },
     "解锁" : {
-      "comment" : "按钮：解锁那台 Mac",
+      "comment" : "应用锁屏上的解锁按钮\n按钮：解锁那台 Mac",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -69122,7 +69130,7 @@
       }
     },
     "设置" : {
-      "comment" : "设置窗口的标题",
+      "comment" : "命令面板分组标题\n设置窗口的标题",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -69264,7 +69272,7 @@
       }
     },
     "诊断" : {
-      "comment" : "设置分区",
+      "comment" : "Agent 示例提示的分组\n设置分区",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -70414,7 +70422,7 @@
       }
     },
     "超时" : {
-      "comment" : "打洞诊断失败原因",
+      "comment" : "打洞诊断失败原因\n网络诊断失败原因",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -75520,6 +75528,7 @@
       }
     },
     "远程控制的 Mac 终端还不能贴视频，只能贴图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -75856,7 +75865,7 @@
       }
     },
     "连接" : {
-      "comment" : "命令面板提示：连接到这台主机",
+      "comment" : "命令面板提示：连接到这台主机\n命令面板：主机条目的动作提示\n设置分区",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -76553,6 +76562,7 @@
       }
     },
     "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，%@。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -77920,7 +77930,7 @@
       }
     },
     "通" : {
-      "comment" : "中继连通性检查的一项：通过",
+      "comment" : "中继连通性检查的一项：通过\n网络诊断：这条路通了",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -79566,7 +79576,7 @@
       }
     },
     "重试" : {
-      "comment" : "重新检查辅助程序",
+      "comment" : "自动保存失败后再存一次\n重新检查辅助程序",
       "localizations" : {
         "en" : {
           "stringUnit" : {
