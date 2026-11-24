@@ -9,7 +9,7 @@
 #      两端的 TerminalEngineLockTests 拦着）。
 
 # 引擎版本串：Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控握手和 holder 检查点靠它判断是不是同一个引擎。
-engine_version=ghostty-56de3f0f+p0024/snapshot-1
+engine_version=ghostty-56de3f0f+p0025/snapshot-1
 
 # 来源。fetch 脚本不读；build-ghostty-engine.sh 按它们现编：克隆这个 tag 并核对提交前缀、核对它的 Ghostty.ref 等于
 # ghostty_commit（写全 40 位），用这一版 Zig（没有就从 ziglang.org 下，按 zig_aarch64_macos_sha256 核）。
@@ -22,13 +22,14 @@ zig_aarch64_macos_sha256=75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1
 # GhosttyKit（完整的 libghostty：解析 + 渲染）。23 个上游补丁（0022 是逐像素平滑滚动；0023 是滚动那一帧交到图层的信号，
 # 原来是我们的 0024，2026-11-23 进了上游）+ 我们的 0024 最低对比度（原来的 0023，文件没改、只改了号）。
 # 2026-11-24 换到上游 2.2.2026112401：补丁还是这 24 个，Ghostty 提交从 5ebe501a 换成 56de3f0f，所以 engine_version 换了。
-ghosttykit_zip=GhosttyKit-56de3f0f-0024.xcframework.zip
-ghosttykit_sha256=9e3e72b05ac6bd7d3e30ce135acc933b0e9be485491621b27371529aab922359
+# 同一天加了我们的 0025（空闲后的第一帧当场画，只改渲染；p0024 记进 TerminalEngineVersion.sameSnapshotFormat）。
+ghosttykit_zip=GhosttyKit-56de3f0f-0025.xcframework.zip
+ghosttykit_sha256=2b981e34b20ecfc30f4373f84bd89dd1f2a0e31f5407d6e65646a47db6bc0a15
 ghosttykit_dir=GhosttyKit.xcframework
 
 # libghostty-vt（影子终端）。和 GhosttyKit 同一棵打过补丁的源码树编的，每个 slice 预链接、只导出 ghostty_*。
-ghosttyvt_zip=ghostty-vt-56de3f0f-0024.xcframework.zip
-ghosttyvt_sha256=ad0afa62a340080e38491f3074dc11c4cad2c9597fd4251d33a9fa5d1d1801ee
+ghosttyvt_zip=ghostty-vt-56de3f0f-0025.xcframework.zip
+ghosttyvt_sha256=f7aee3c2633dd684a53dc5e576f3119e347bd61d2e9c123c2583d70431c70a31
 ghosttyvt_dir=ghostty-vt.xcframework
 
 # 不发布二进制（已定）：zip 只给维护者本机用（环境变量 UTERM_GHOSTTY_ARTIFACTS 指向的目录），脚本不联网下载。

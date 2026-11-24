@@ -1,0 +1,52 @@
+uTerm: draw the first frame after an idle stretch without waiting for vsync
+(libghostty-spm patch 0025)
+
+Drop this file into libghostty-spm's Patches/ghostty/ (after 0024);
+build.sh applies it with `git apply` on every target. It is cut against
+libghostty-spm 2.2.2026112401 with 0001-0024 applied, Ghostty 56de3f0f.
+
+What it does (UTERM-PATCHES.md, "空闲后的第一帧当场画"):
+  - renderer/Thread.zig renderCallback: note whether the display link was
+    running before `updateFrame`. `updateFrame` starts the link whenever it
+    rebuilt cells, and `drawFrame(false)` then leaves the frame to the next
+    display-link tick, so with `window-vsync = true` every change waited for
+    vsync even after the terminal had been idle. If the link was idle, the
+    frame is drawn now (`drawFrame(true)`); while it is running (streaming
+    output, scrolling) frames stay paced by vsync as before.
+
+Only macOS has a display link (`hasVsync()` is always false on iOS, Mac
+Catalyst and visionOS, where `drawFrame(true)` and `drawFrame(false)` do the
+same), so this changes nothing there. Rendering only: snapshot format and
+`src/terminal` untouched.
+
+Measurements: keystroke to frame on the layer, 120 Hz display, p50
+10.4 ms -> ~2 ms (uTermTests GhosttyMeasureTests.testM6EchoLatency).
+
+--- a/src/renderer/Thread.zig
++++ b/src/renderer/Thread.zig
+@@ -572,6 +572,16 @@
+     // we'll catch up when the .visible mailbox message flips us back on.
+     // Kitty graphics animations pause with us and resume on visibility.
+     if (!t.flags.visible) return .disarm;
++
++    // uTerm (patch 0025): whether the display link was idle before this
++    // update. `updateFrame` starts the link when it rebuilt something, and
++    // `drawFrame(false)` then leaves the frame to the next vsync. After an
++    // idle stretch that is the frame a keystroke's echo is waiting for: it
++    // sat up to a whole refresh interval (p50 ~10 ms to the layer on a
++    // 120 Hz display, ~2 ms drawn here). So the first frame after idle is
++    // drawn now; while the link is already running (streaming output,
++    // scrolling) frames stay paced by vsync as before.
++    const link_was_idle = !t.renderer.hasVsync();
+ 
+     // Update our frame data
+     t.renderer.updateFrame(
+@@ -581,7 +591,7 @@
+         log.warn("error rendering err={}", .{err});
+ 
+     // Draw
+-    t.drawFrame(false);
++    t.drawFrame(link_was_idle);
+ 
+     // Schedule the next animation wake, if the renderer needs one.
+     t.armAnimationTimer();

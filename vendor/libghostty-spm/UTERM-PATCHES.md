@@ -105,7 +105,7 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 | `Package.swift` | 见「manifest 改动」 |
 | `ENGINE.lock` | 两个二进制的清单：引擎版本串、zip 文件名、sha256 |
 | `BinaryTarget/` | `GhosttyKit.xcframework`、`ghostty-vt.xcframework` 解在这里，**不进版本库**（`.gitignore`），由 `make engine` 放进来 |
-| `Patches/ghostty/` | 我们加的引擎补丁 `0024`（接在上游的 `0001`–`0023` 后面） |
+| `Patches/ghostty/` | 我们加的引擎补丁 `0024`、`0025`（接在上游的 `0001`–`0023` 后面） |
 | `Scripts/prelink-vt.sh` | vt 的预链接：每个 slice 并成一个 `.o`、只导出 `ghostty_*` |
 | `BUILD.md` | 怎么从上游 tag 编出这两个二进制 |
 
@@ -117,9 +117,9 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 二进制不进版本库（GhosttyKit 解开 197 MB，vt 14 MB）。`ENGINE.lock` 记着要哪两份：
 
 ```
-engine_version=ghostty-56de3f0f+p0024/snapshot-1
-ghosttykit_zip=GhosttyKit-56de3f0f-0024.xcframework.zip     sha256 9e3e72b0…2359
-ghosttyvt_zip=ghostty-vt-56de3f0f-0024.xcframework.zip      sha256 ad0afa62…01ee
+engine_version=ghostty-56de3f0f+p0025/snapshot-1
+ghosttykit_zip=GhosttyKit-56de3f0f-0025.xcframework.zip     sha256 2b981e34…0a15
+ghosttyvt_zip=ghostty-vt-56de3f0f-0025.xcframework.zip      sha256 f7aee3c2…0a31
 ```
 
 `make engine`（`scripts/fetch-ghostty-engine.sh`）按它从本地目录取 zip、校验 sha256、解到 `BinaryTarget/`，旁边各留一个
@@ -160,8 +160,8 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
 
 ## 引擎补丁（`Patches/ghostty/`）
 
-上游 `Patches/ghostty/` 里的 `0001`–`0023` 原样用。我们加的一个接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
-这个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
+上游 `Patches/ghostty/` 里的 `0001`–`0023` 原样用。我们加的两个（`0024`、`0025`）接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
+这两个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
 
 写我们自己的补丁要注意：上游的 `.sh` 补丁靠「自己加的那段文字原样还在」判断打没打过（`Script/support/anchored_edit.py`），
 `build.sh` 每个平台都把整个补丁栈再跑一遍。我们的补丁只要改到上游某个补丁加的文字里面，它下一遍就认不出自己、把那段再插一次
@@ -227,9 +227,35 @@ Swift 侧不再记镜像；小数记着它属于哪个视口（屏、滚动条�
 回归用例：`uTermTests/Features/Terminal/TerminalContrastTests.swift`（读真的 surface 画出来的像素）、
 `uTermMobileTests/Probes/GhosttyColorParityTests.swift`（测量门控，`UTERM_MEASURE=1` 才跑）。
 
+### 0025 空闲后的第一帧当场画（打字回显不等 vsync）
+
+`0025-uterm-draw-first-frame-after-idle.patch`，2026-11-24 加。文件：`src/renderer/Thread.zig`（`renderCallback`）。
+切在 libghostty-spm `2.2.2026112401` 打完 `0001`–`0024` 的树上（Ghostty `56de3f0f`）。
+
+Mac 上开着 vsync（默认，也是我们的配置）时，渲染线程收到 wakeup 先 `updateFrame` 重建这一帧，重建了东西就在 `updateFrame` 末尾把
+display link 打开（`syncDisplayLink`），紧接着的 `drawFrame(false)` 看见 link 在跑就不画、留给下一拍。所以哪怕终端空闲了很久、link
+早就停了，打字回显那一帧也一定等到下一个 vsync：120 Hz 屏上按键到交帧 p50 约 10 ms（关 vsync 约 2 ms）。补丁在 `updateFrame`
+之前记下 link 停没停：停着（空闲）就当场画这一帧（`drawFrame(true)`）；在跑（连续输出、滚动）照旧按 vsync 走。画完 `cells_rebuilt`
+清掉，下一拍 link 看见没东西要画就停，不多画帧。
+
+为什么不直接关 vsync：上游说明里写着 macOS 14.4 起不跟屏幕同步的渲染可能导致内核 panic、外接 DisplayLink 显示器性能问题；
+连续输出时也会按输出的节奏狂画。补丁只让「空闲之后的第一帧」不等节拍——引擎建不成 display link 时（锁屏）的后备模式整个都是这么画的，
+Mac Catalyst 版的终端（没有 display link）每一帧都这么画。只影响 macOS：iOS / Catalyst / visionOS 没有 display link，`hasVsync()`
+恒为 false，`drawFrame(true)` 与原来的 `drawFrame(false)` 一样。只改渲染，快照格式没变（p0024 记进 `sameSnapshotFormat`）。
+
+在 Swift 层用主线程 `ghostty_surface_draw` 抢画行不通：它只把上一次 `updateFrame` 建好的那一帧再画一遍（不重建），常常画在渲染线程
+重建之前，画出旧帧，之后渲染线程也不再补（实测一半的按键光标停在原处直到下一次闪烁）。
+
+读数（`GhosttyMeasureTests.testM6EchoLatency`，Debug 构建，120 Hz，按键到交帧 p50 / p95）：裸 Ghostty 10.4 / 16.0 → 1.7 / 2.2 ms
+（关 vsync 1.8 / 2.3）；本机 shell（`cat`）10.2 → 2.4 ms、真窗口 10.5 → 1.8 ms、zsh 提示符 10.0 → 5.4 ms（其中 zsh 自己约 3.5 ms）；
+SSH（本机容器）进程内 2.9、经 `uterm-ssh` 4.8、经主机上的保持进程 4.4 ms。空闲时照旧每秒 0 帧。
+
+回归用例：`GhosttyMacScrollTests`、`GhosttyMagicMouseScrollTests`、`GhosttyPinnedScrollJitterTests`、`GhosttyMacHostTests`、
+`GhosttyDisplayLinkTests`、`GhosttyFontRenderingTests`、`TerminalRowFillSurfaceTests`（34 个，换上补丁后全过）。
+
 ## GhosttyVt（libghostty-vt）
 
-- 和 GhosttyKit 同一棵打过 `0001`–`0024` 的源码树编出来（上游的 0022 给 `src/terminal/PageList.zig` 加了视口移动计数，
+- 和 GhosttyKit 同一棵打过 `0001`–`0025` 的源码树编出来（上游的 0022 给 `src/terminal/PageList.zig` 加了视口移动计数，
   所以 vt 也必须带上它；0023 只改 shader 和渲染器，0024 只改 surface 和渲染器）。
 - 三个 slice：`ios-arm64`、`ios-arm64-simulator`（只有 arm64，Intel Mac 上的模拟器链不了）、`macos-arm64_x86_64`。
 - 每个 slice 预链接成一个 `.o`（`Scripts/prelink-vt.sh`），只导出 209 个 `ghostty_*`，Zig 打包进来的 ubsan、memset、simdutf、

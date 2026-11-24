@@ -94,7 +94,7 @@ M16 需要在评估分支上临时挂一个能连主机的入口（不进 main�
 | M3 | 过 | 影子解析 0.39 ms/s（预算 10.3 ms/s），520–630 MB/s，1 万行回滚每会话常驻 5.1 MB。 |
 | M4 | 过 | 576 个检查点 + 中途 resize 24 项，0 差异。前提见第 2 步。 |
 | M5 | 过 | 同 commit 33,243 切点 0 差异；快照 → replay 进 surface 真实语料 320/320 一致。 |
-| M6 | 过（iOS）/ 定（Mac） | iOS 真实 `insertText` p50 16–24 / 28–36 ms。Mac 到交给 Core Animation：默认 vsync 11.5 / 1.3 ms，关 vsync 1.9 ms。**定：Mac 保持默认 vsync，接受约一帧**（上游说明关 vsync 曾致内核 panic；真上屏时 SwiftTerm 也要等同步，实际差距更小）。 |
+| M6 | 过（iOS）/ 定（Mac） | iOS 真实 `insertText` p50 16–24 / 28–36 ms。Mac 到交给 Core Animation：默认 vsync 11.5 / 1.3 ms，关 vsync 1.9 ms。**定：Mac 保持默认 vsync，接受约一帧**（2026-11-24 改：引擎补丁 0025 让空闲后的第一帧不等节拍，打字回显 p50 10 → 2 ms，vsync 照开，见 `vendor/libghostty-spm/UTERM-PATCHES.md`）（上游说明关 vsync 曾致内核 panic；真上屏时 SwiftTerm 也要等同步，实际差距更小）。 |
 | M7 | 定 | 开窗格到首帧：Mac p50 5.6 / 7.0 ms，iOS 热 p50 24.6 / 9.4 ms。恢复 20 个：Mac 0.20 / 3.14 s（峰值 +939 / +831 MB），iOS 0.50 / 2.26 s（+626 / +125 MB）。**定：接受；恢复时先还原影子终端，标签第一次露出再建 surface。** |
 | M8 | 过 | 4 格 Claude 式输出：Mac 主线程 11.9% / 27.0%，iOS 全进程 5.3% / 21–25%。Mac 只要有输出每格按约 90 fps 交帧（内容不变也画）。 |
 | M9 | 过 | 10 分钟 CPU 时间 20.3 / 85.0 s，热状态正常；焦耳数没录成。 |
