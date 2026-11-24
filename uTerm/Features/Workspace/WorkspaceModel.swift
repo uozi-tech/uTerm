@@ -86,9 +86,15 @@ final class WorkspaceModel {
     @ObservationIgnored private var layoutWriter: HeldLayoutWriter<PaneModel>?
     /// 终端窗口的位置跟布局一起存；接回时照它还原（工作区窗口由系统恢复，不挂它）。
     @ObservationIgnored let windowTracker = HeldWindowTracker()
-    /// 布局里记的是会话 id（`PaneModel.id`，不是标签 id）；文件标签、Code 标签页不是会话，不进布局
-    ///（Code 标签页里跑着的会话不在标签树里，重启后以普通终端标签页接回，见 `adoptHeldSessions`）。
+    /// 终端标签的会话 id（`PaneModel.id`，不是标签 id）；文件标签、Code 标签页不是会话，为 nil。
+    /// 手机远控的标签顺序按它（`setTabOrder` / `setArranger`）。
     static let heldSessionID: (TerminalTab) -> UUID? = { $0.payload.isTerminal ? $0.payload.id : nil }
+
+    /// 写进保持进程布局的标签 id：终端标签是会话 id，Code 标签页是它自己的 id（`PaneModel.id`；它是什么、里面跑着
+    /// 哪些会话记在 `HeldSessionLayout.codeTabs`），重启后都在原位接回。文件标签不进布局。
+    static let layoutTabID: (TerminalTab) -> UUID? = {
+        $0.payload.isTerminal || $0.payload.codeTab != nil ? $0.payload.id : nil
+    }
 
     init(windowID: WorkspaceWindowID? = nil,
          fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
@@ -172,8 +178,11 @@ final class WorkspaceModel {
         }
         // 布局写进每条 SSH 会话的 holder 归属：重启后没有工作区快照可用时（纯终端窗口、关了自动恢复）
         // 按它放回标签的顺序与分屏。文件标签不是会话，不进布局。
-        let layoutWriter = HeldLayoutWriter(groups: terminalGroups, id: Self.heldSessionID) { [weak self] layout in
-            // Code 标签页里跑着的会话也带上：重启后它们按这份布局的窗口位置接回，补在标签末尾。
+        // Code 标签页记成它自己的 id，里面跑着哪些会话记在 `codeTabs`：重启后它和里面的会话回到原位。
+        let layoutWriter = HeldLayoutWriter(groups: terminalGroups, id: Self.layoutTabID, codeTabs: { [weak self] in
+            self?.codeTabRecords() ?? []
+        }) { [weak self] layout in
+            // Code 标签页里跑着的会话也各存一份：窗口里只剩它们时也接得回来。
             for pane in self?.terminalPanes ?? [] { pane.updateLayout(layout) }
         }
         windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
@@ -740,18 +749,42 @@ final class WorkspaceModel {
     }
 
     /// 把上次留下的 SSH 会话放回来（窗格 id 就是会话 id，连接时接回）。已经在标签树里的（快照恢复的）跳过。
-    func adoptHeldSessions(_ sessions: [SSHSessionRestorer.Session]) {
+    ///
+    /// 布局里记着的 Code 标签页也开回来（里面没有会话在跑的也开），记在它名下、还活着的会话回到它里面，不再各开一个
+    /// 终端标签页；工具认不出来的照普通终端标签页接回，不丢。`knownServerIDs` 非空时，主机已经删了的 Code 标签页不开
+    ///（会话本身由 `SSHSessionRestorer` 按同一张表筛过）。
+    func adoptHeldSessions(_ sessions: [SSHSessionRestorer.Session], knownServerIDs: Set<UUID> = []) {
         let byID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        func tab(_ id: UUID) -> TerminalTab {
+        func makeSessionPane(_ id: UUID) -> PaneModel {
             let session = byID[id]!
-            return TerminalTab(payload: makePane(id: session.id, serverProfileID: session.serverID, tabTitle: session.title,
-                                                 sessionOrder: session.order))
+            return makePane(id: session.id, serverProfileID: session.serverID, tabTitle: session.title,
+                            sessionOrder: session.order)
         }
-        // 工作区快照已经放好了布局的话，快照为准；否则（纯终端窗口、关了自动恢复）按会话自己存的布局放回。
+        func tab(_ id: UUID) -> TerminalTab { TerminalTab(payload: makeSessionPane(id)) }
+        // 工作区快照已经放好了布局的话，快照为准（Code 标签页插到它在布局里的邻居旁边）；否则（纯终端窗口、
+        // 关了自动恢复）按会话自己存的布局放回。
         let layout = HeldSessionLayout.newest(sessions.map(\.layout))
-        let applied = terminalGroups.adoptHeldSessions(sessions.map(\.id), layout: layout,
-                                                       id: Self.heldSessionID, make: tab,
-                                                       append: { id in terminalGroups.openTab({ tab(id) }, in: nil) })
+        let present = Set(terminalPanes.map(\.id))
+        let codeTabs = (layout?.codeTabs ?? []).filter { record in
+            guard let host = record.host else { return false }
+            return knownServerIDs.isEmpty || knownServerIDs.contains(host)
+        }
+        let codeRuns = CodeTabRecord.adoptableRuns(codeTabs, live: Set(byID.keys).subtracting(present))
+        let inCodeTabs = Set(codeRuns.values.flatMap { $0.map(\.session) })
+        let records = Dictionary(codeTabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func codeTab(_ id: UUID) -> TerminalTab? {
+            guard let record = records[id], let host = record.host else { return nil }
+            let tab = makeCodeTab(id: id, serverID: host, hostName: record.hostName ?? "", directory: record.directory)
+            var terminals: [UUID: any CodeTabTerminal] = [:]
+            for run in codeRuns[id] ?? [] { terminals[run.session] = makeSessionPane(run.session) }
+            tab.payload.codeTab?.restore(record, terminals: terminals)
+            return tab
+        }
+        let applied = terminalGroups.adoptHeldSessions(
+            sessions.map(\.id).filter { !inCodeTabs.contains($0) && !present.contains($0) }, layout: layout,
+            id: Self.layoutTabID, make: tab,
+            append: { id in terminalGroups.openTab({ tab(id) }, in: nil) },
+            extras: codeTabs.map(\.id), makeExtra: codeTab)
         // 窗口只有挂了 `HeldWindowTrackerBinding`（纯终端窗口）才会被摆；工作区窗口的位置归系统恢复。
         if applied { windowTracker.restore(layout?.window) }
         syncTerminalTitles()
@@ -760,8 +793,9 @@ final class WorkspaceModel {
     /// 窗格平时要等显示出来才连接，后台标签就一直不连。接回不一样：不握手，几乎没有成本，而且没接回之前
     /// 手机和 CLI 看不到这条会话，退出时「全部结束」也关不到它。所以恢复时不等显示，立刻接回。
     func reattachHeldSessions(_ sessions: [SSHSessionRestorer.Session], profiles: [ServerProfile], modelContainer: ModelContainer) {
+        // Code 标签页里接回的会话也在这里连（`terminalPanes` 含它们）。
         for session in sessions {
-            guard let pane = terminalGroups.allTabs.first(where: { $0.payload.id == session.id })?.payload,
+            guard let pane = terminalPanes.first(where: { $0.id == session.id }),
                   let profile = profiles.first(where: { $0.id == session.serverID }) else { continue }
             Task { await pane.connect(profile: profile, modelContainer: modelContainer) }
         }
@@ -834,11 +868,18 @@ final class WorkspaceModel {
         return nil
     }
 
-    private func makeCodeTab(serverID: UUID, hostName: String, directory: String?) -> TerminalTab {
+    private func makeCodeTab(id: UUID = UUID(), serverID: UUID, hostName: String, directory: String?) -> TerminalTab {
         let code = CodeTabModel(hostName: hostName, directory: directory) { [weak self] _ in
             self?.makeCodeRun(serverID: serverID, hostName: hostName)
         }
-        return TerminalTab(payload: makePane(serverProfileID: serverID, codeTab: code, tabTitle: hostName))
+        return TerminalTab(payload: makePane(id: id, serverProfileID: serverID, codeTab: code, tabTitle: hostName))
+    }
+
+    /// 存进布局的 Code 标签页（`HeldSessionLayout.codeTabs`），id 是它的 `PaneModel.id`（同 `layoutTabID`）。
+    func codeTabRecords() -> [CodeTabRecord] {
+        terminalGroups.allTabs.compactMap { tab in
+            tab.payload.codeTab?.record(id: tab.payload.id, host: tab.payload.serverProfileID)
+        }
     }
 
     /// Code 标签页里继续 / 新开一个会话的终端：和普通标签页一样登记、写保持进程的归属，只是不进标签树。

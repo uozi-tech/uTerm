@@ -14,12 +14,23 @@ protocol CodeTabTerminal: AnyObject {
     var codeCommandHasEnded: Bool { get }
     /// 结束这个终端（关 shell、注销）。
     func dispose()
+    /// 那条命令起止标记的编号（存进保持进程的布局，重启后据此认出程序退出）。没有为 nil。
+    var codeCommandMarker: String? { get }
+    /// App 重启后接回：命令照「还在跑」接上，再判一次程序在 App 不在时是不是已经退出了（规则见
+    /// `TerminalSession.restoreCodeCommand`）。
+    func restoreCodeCommand(marker: String?, startedAt: Date)
+}
+
+extension CodeTabTerminal {
+    var codeCommandMarker: String? { nil }
+    func restoreCodeCommand(marker: String?, startedAt: Date) {}
 }
 
 /// 一个 Code 标签页：左边这台主机上编码工具的历史会话，右边看选中那份记录，或者就在右边接着聊（一个跑着继续命令的终端）。
 ///
 /// 被「继续」过的会话各自留着自己的终端（`runs`）：点侧栏里别的会话不打断正在跑的，点回去就回到它的终端。
 /// 终端里的程序退出（用户退出了 Claude）就结束那个终端，这个会话回到只读记录，记录重新读到最新。
+/// App 重启后整个标签页按保持进程里存的布局开回来（`record` 存、`restore` 接回），里面的会话回到它里面。
 @MainActor
 @Observable
 final class CodeTabModel {
@@ -33,12 +44,31 @@ final class CodeTabModel {
         let startedAt: Date
         /// 对应的记录文件。「＋」新开的会话一开始没有（记录还没写出来或还没列到），对上之后填上（`matchNewSessions`）。
         var path: String?
-        /// 起的时候列表里已经有的记录：新会话对记录时不考虑它们。
+        /// 起的时候列表里已经有的记录：新会话对记录时不考虑它们。重启后接回的新会话不知道（不存记录的路径），为空。
         let knownPaths: Set<String>
         /// 起的时候那份记录的标题（继续的会话）；新会话为 nil。
         let title: String?
         /// 右边现在看的是它的记录（「终端 / 记录」切到「记录」）。
         var showsTranscript = false
+        /// 对应的是哪份记录（工具 + 会话 ID，同置顶的认法）：和 `path` 一起填上，存进布局的就是它。重启后接回的会话
+        /// 先只有它，列表读出来之后再找回 `path`（`resolveRestoredRuns`）；找到之前不当新会话去对别的记录。
+        var key: AgentHistoryPinKey?
+
+        init(terminal: any CodeTabTerminal, tool: AgentHistoryTool, directory: String, startedAt: Date, path: String?,
+             knownPaths: Set<String>, title: String?, showsTranscript: Bool = false, key: AgentHistoryPinKey? = nil) {
+            self.terminal = terminal
+            self.tool = tool
+            self.directory = directory
+            self.startedAt = startedAt
+            self.path = path
+            self.knownPaths = knownPaths
+            self.title = title
+            self.showsTranscript = showsTranscript
+            self.key = key
+        }
+
+        /// 还没对上任何记录的新会话（接回后等着找回记录的不算）。
+        var isUnmatched: Bool { path == nil && key == nil }
     }
 
     /// 右边显示什么。
@@ -75,6 +105,13 @@ final class CodeTabModel {
     /// 有新会话还没对上记录时，隔多久安静地重列一次（不闪「正在读取」）。
     nonisolated static let refreshInterval: Duration = .seconds(10)
 
+    /// 重启前右边看的是什么：列表还没列出来，先记着，列出来之后还原（`applyRestoredState`）；用户先点了别的就作废。
+    private enum RestoredSelection: Equatable {
+        case run(UUID)
+        case record(AgentHistoryPinKey)
+    }
+    private var restoredSelection: RestoredSelection?
+
     /// 宿主建一个终端，开在 `directory`，返回它（已经登记、开始连接）。宿主没了为 nil。
     @ObservationIgnored private let makeTerminal: @MainActor (_ directory: String) -> (any CodeTabTerminal)?
     @ObservationIgnored private var revealGeneration = 0
@@ -97,6 +134,7 @@ final class CodeTabModel {
         guard !isClosed else { return }
         if connection == nil { connection = make() }
         await connection?.open()
+        applyRestoredState()
     }
 
     /// 测试、画廊直接放一份接好假数据的连接。
@@ -112,6 +150,7 @@ final class CodeTabModel {
         for run in runs { run.terminal.dispose() }
         runs = []
         selectedRunID = nil
+        restoredSelection = nil
         connection?.close()
     }
 
@@ -150,6 +189,7 @@ final class CodeTabModel {
     /// 点了侧栏顶上一个列表里没有行的会话（`unlistedRuns`）：有记录的选中那份记录（右边是它的终端），没有记录的新会话单独选中。
     func selectRun(_ id: UUID) {
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
+        restoredSelection = nil
         runs[index].showsTranscript = false
         if let path = runs[index].path, let file = history?.files.first(where: { $0.path == path }) {
             selectedRunID = nil
@@ -163,7 +203,9 @@ final class CodeTabModel {
 
     /// 列表的选中变了（用户点了列表里的一行）：不再看那个没对上记录的新会话。
     func historySelectionChanged() {
-        if history?.selectedFile != nil { selectedRunID = nil }
+        guard history?.selectedFile != nil else { return }
+        selectedRunID = nil
+        restoredSelection = nil
     }
 
     /// 「终端 / 记录」切换。没有记录的新会话只有终端。
@@ -190,6 +232,7 @@ final class CodeTabModel {
     @discardableResult
     func resume(_ file: AgentHistorySessionFile) -> Run? {
         guard let history else { return nil }
+        restoredSelection = nil
         if let index = runs.firstIndex(where: { $0.path == file.path }) {
             runs[index].showsTranscript = false
             selectedRunID = nil
@@ -198,7 +241,8 @@ final class CodeTabModel {
         }
         guard let plan = history.resumeCommand(for: file) else { return nil }
         let title = AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])
-        guard let run = start(plan.command, tool: file.tool, directory: plan.directory, path: file.path, title: title) else {
+        guard let run = start(plan.command, tool: file.tool, directory: plan.directory, path: file.path, title: title,
+                              key: AgentHistoryPinKey(file)) else {
             return nil
         }
         selectedRunID = nil
@@ -209,21 +253,129 @@ final class CodeTabModel {
     /// 「＋」新会话：在右边起一个终端跑新会话的命令。它在列表里还没有行，单独选中，等对上记录（`matchNewSessions`）。
     @discardableResult
     func startNewSession(tool: AgentHistoryTool, command: String, directory: String) -> Run? {
-        guard let run = start(command, tool: tool, directory: directory, path: nil, title: nil) else { return nil }
+        guard let run = start(command, tool: tool, directory: directory, path: nil, title: nil, key: nil) else { return nil }
+        restoredSelection = nil
         history?.select(nil)
         selectedRunID = run.id
         return run
     }
 
     private func start(_ command: String, tool: AgentHistoryTool, directory: String, path: String?,
-                       title: String?) -> Run? {
+                       title: String?, key: AgentHistoryPinKey?) -> Run? {
         guard !isClosed, let terminal = makeTerminal(directory) else { return nil }
         terminal.runCodeCommand(command)
         let run = Run(terminal: terminal, tool: tool, directory: directory, startedAt: Date(), path: path,
-                      knownPaths: Set(history?.files.map(\.path) ?? []), title: title)
+                      knownPaths: Set(history?.files.map(\.path) ?? []), title: title, key: key)
         runs.append(run)
         startWatching()
         return run
+    }
+
+    // MARK: 重启后接回
+
+    /// App 重启后把记下来的会话放回这个标签页。终端由宿主按会话 id 接回了保持进程（`terminals`，键是
+    /// `CodeRunRecord.session`），这里只认领：命令照「还在跑」接上（`CodeTabTerminal.restoreCodeCommand`），
+    /// 对上了记录的先只知道工具 + 会话 ID，列表列出来之后找回记录（`resolveRestoredRuns`）；新会话照旧去对记录。
+    /// 右边看的是哪一个：看终端的立刻还原；看记录的等列表列出来（`applyRestoredState`）。返回放进来的会话 id。
+    @discardableResult
+    func restore(_ record: CodeTabRecord, terminals: [UUID: any CodeTabTerminal]) -> [UUID] {
+        guard !isClosed else { return [] }
+        if let directory = record.directory { newSessionDirectory = directory }
+        var adopted: [UUID] = []
+        for saved in record.runs {
+            guard let tool = saved.agentTool, let terminal = terminals[saved.session],
+                  !runs.contains(where: { $0.id == terminal.id }) else { continue }
+            terminal.restoreCodeCommand(marker: saved.marker, startedAt: saved.startedAt)
+            runs.append(Run(terminal: terminal, tool: tool, directory: saved.directory, startedAt: saved.startedAt,
+                            path: nil, knownPaths: [], title: nil, showsTranscript: saved.showsTranscript ?? false,
+                            key: saved.key))
+            adopted.append(terminal.id)
+        }
+        if let id = record.selectedRun, runs.contains(where: { $0.id == id }) {
+            restoredSelection = .run(id)
+            // 先看它的终端：不等列表（终端已经接回来了）。看的是它的记录的，等列表。
+            if runs.first(where: { $0.id == id })?.showsTranscript != true { selectedRunID = id }
+        } else if let stored = record.selectedRecord, let key = AgentHistoryPinKey(stored: stored) {
+            restoredSelection = .record(key)
+        } else if record.selectedRun != nil || record.selectedRecord != nil {
+            // 看着的那个会话没接回来（App 不在时结束了）：退到第一个跑着的会话。
+            restoredSelection = runs.first.map { .run($0.id) }
+            if let first = runs.first { selectedRunID = first.id }
+        }
+        if !runs.isEmpty { startWatching() }
+        applyRestoredState()
+        return adopted
+    }
+
+    /// 列表列出来之后：接回的会话找回记录，再还原右边看的那一个。认不出（那份记录没列出来）的退到第一个跑着的会话，
+    /// 没有就空着。列表还没列出来时什么都不做，下次再来（`open` 之后、每次对新会话时）。
+    func applyRestoredState() {
+        guard let history, history.phase == .ready || history.phase == .empty else { return }
+        resolveRestoredRuns()
+        guard let wanted = restoredSelection else { return }
+        restoredSelection = nil
+        switch wanted {
+        case .run(let id):
+            guard let run = runs.first(where: { $0.id == id }) else { return selectFirstRunOrNothing() }
+            if run.showsTranscript, let path = run.path, let file = history.files.first(where: { $0.path == path }) {
+                selectedRunID = nil
+                history.select(file)
+            } else {
+                let showsTranscript = run.showsTranscript
+                selectRun(id)
+                // 看记录但记录没找到：只能看终端（`selectRun` 已经切回终端）。
+                if showsTranscript, run.path != nil { setShowsTranscript(true, for: id) }
+            }
+        case .record(let key):
+            if let run = runs.first(where: { $0.key == key }), !run.showsTranscript {
+                selectRun(run.id)
+            } else if let file = history.files.first(where: { AgentHistoryPinKey($0) == key }) {
+                selectedRunID = nil
+                history.select(file)
+            } else {
+                selectFirstRunOrNothing()
+            }
+        }
+    }
+
+    private func selectFirstRunOrNothing() {
+        if let first = runs.first { selectRun(first.id) } else { selectedRunID = nil }
+    }
+
+    /// 接回的会话按工具 + 会话 ID 找回列表里的记录。找不到的（记录没列出来）留着，下次重列再找，不当新会话去对别的记录。
+    func resolveRestoredRuns() {
+        guard let history, runs.contains(where: { $0.path == nil && $0.key != nil }) else { return }
+        var byKey: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
+        for file in history.files where byKey[AgentHistoryPinKey(file)] == nil { byKey[AgentHistoryPinKey(file)] = file }
+        let claimed = Set(runs.compactMap(\.path))
+        for index in runs.indices where runs[index].path == nil {
+            guard let key = runs[index].key, let file = byKey[key], !claimed.contains(file.path) else { continue }
+            runs[index].path = file.path
+        }
+    }
+
+    /// 存进布局的样子（`HeldSessionLayout.codeTabs`）：跑着的会话、右边看的是哪一个。`id` 是标签页的 id。
+    /// 列表还没列出来、重启前的选中还没还原时，照原样记下那份选中（马上又退出也不丢）。
+    func record(id: UUID, host: UUID? = nil) -> CodeTabRecord {
+        let saved = runs.map { run in
+            CodeRunRecord(session: run.id, tool: run.tool, sessionID: run.key?.sessionID, directory: run.directory,
+                          startedAt: run.startedAt, marker: run.terminal.codeCommandMarker,
+                          showsTranscript: run.showsTranscript ? true : nil)
+        }
+        var record = CodeTabRecord(id: id, host: host, hostName: hostName, directory: newSessionDirectory, runs: saved)
+        switch restoredSelection {
+        case .run(let id):
+            record.selectedRun = id
+        case .record(let key):
+            record.selectedRecord = key.stored
+        case nil:
+            if let run = displayedRun {
+                record.selectedRun = run.id
+            } else if let file = history?.selectedFile {
+                record.selectedRecord = AgentHistoryPinKey(file).stored
+            }
+        }
+        return record
     }
 
     // MARK: 挪走 / 结束
@@ -277,14 +429,21 @@ final class CodeTabModel {
         // 右边正看着它：回到它的记录，并从末尾重新读到最新。没对上记录的新会话就回到空态，等下面重列之后再对。
         if let path = run.path, history?.selectedFile?.path == path { history?.jumpToLatest() }
         if selectedRunID == run.id { selectedRunID = nil }
+        // 重启后接回、列表还没读出来就结束了的（App 不在时程序已经退出）：要还原的选中改成它的记录。
+        if case .run(run.id)? = restoredSelection { restoredSelection = run.key.map { .record($0) } }
         let pending = run.path == nil ? run : nil
         Task { [weak self] in
             await self?.refreshList()
             guard let self, let pending, let history = self.history else { return }
-            // 跑完了才列到的新会话：右边没在看别的就打开那份记录。
-            if let path = Self.match([pending], files: history.files, metadata: history.metadata,
-                                     claimed: Set(self.runs.compactMap(\.path)))[pending.id],
-               history.selectedFile == nil, self.selectedRunID == nil,
+            // 跑完了才列到的新会话（或者接回后还没找回记录的）：右边没在看别的就打开那份记录。
+            let path: String?
+            if let key = pending.key {
+                path = history.files.first { AgentHistoryPinKey($0) == key }?.path
+            } else {
+                path = Self.match([pending], files: history.files, metadata: history.metadata,
+                                  claimed: Set(self.runs.compactMap(\.path)))[pending.id]
+            }
+            if let path, history.selectedFile == nil, self.selectedRunID == nil,
                let file = history.files.first(where: { $0.path == path }) {
                 history.select(file)
             }
@@ -302,13 +461,15 @@ final class CodeTabModel {
     /// 列表里那份记录平常的那一行标成在跑（不自动置顶）；
     /// 右边正看着它的继续看它的终端（改由列表选中那份记录）。
     func matchNewSessions() {
-        guard let history, runs.contains(where: { $0.path == nil }) else { return }
+        applyRestoredState()
+        guard let history, runs.contains(where: \.isUnmatched) else { return }
         let claimed = Set(runs.compactMap(\.path))
-        let matches = Self.match(runs.filter { $0.path == nil }, files: history.files, metadata: history.metadata,
+        let matches = Self.match(runs.filter(\.isUnmatched), files: history.files, metadata: history.metadata,
                                  claimed: claimed)
         for (id, path) in matches {
             guard let index = runs.firstIndex(where: { $0.id == id }) else { continue }
             runs[index].path = path
+            runs[index].key = history.files.first { $0.path == path }.map { AgentHistoryPinKey($0) }
             if selectedRunID == id, let file = history.files.first(where: { $0.path == path }) {
                 selectedRunID = nil
                 history.select(file)
@@ -322,6 +483,9 @@ final class CodeTabModel {
     ///    目录对得上（项目的目录；Claude 的项目名是目录换出来的；或者记录里的工作目录）。
     /// 2. 同一种工具、同一个目录只有一个新会话在等时才对：有候选就取最近改过的那份（正跑着的那个一直在写）。
     ///    同时等着好几个时分不清谁是谁，都不对，各自留在侧栏顶上当「新会话」（不丢、不重复）；跑完一个、剩下一个时再对。
+    ///
+    /// 重启后接回的新会话不知道起的时候列表里已经有哪些记录（`knownPaths` 为空，布局里不存记录的路径），只剩修改时间
+    /// 这一条挡着：同一个目录里另有一个同种工具的会话在 App 不在时也写过记录，就可能被认成它。
     static func match(_ pending: [Run], files: [AgentHistorySessionFile],
                       metadata: [String: AgentHistorySessionMetadata], claimed: Set<String>) -> [UUID: String] {
         var result: [UUID: String] = [:]
@@ -357,9 +521,12 @@ final class CodeTabModel {
     }
 
     /// 一个跑着的会话叫什么：对上了记录用记录的标题，继续的会话用起的时候的标题，新会话叫「新会话」。
+    /// 接回后还没找回记录的会话用会话 ID 的前 8 位（同列表里读不到标题的那一行）。
     func title(of run: Run) -> String {
         let file = run.path.flatMap { path in history?.files.first { $0.path == path } }
-        return file.map { AgentHistoryText.sessionTitle($0, metadata: history?.metadata[$0.path]) }
-            ?? run.title ?? AgentHistoryText.newSession
+        if let file { return AgentHistoryText.sessionTitle(file, metadata: history?.metadata[file.path]) }
+        if let title = run.title { return title }
+        if let key = run.key { return String(localized: "（无标题）\(String(key.sessionID.prefix(8)))") }
+        return AgentHistoryText.newSession
     }
 }

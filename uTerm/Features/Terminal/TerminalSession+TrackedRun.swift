@@ -49,11 +49,26 @@ struct TerminalTrackedRun {
     var finishedAt: Date?
 
     init(command: String, inSubshell: Bool = true, requestedAt: Date = Date()) {
-        self.id = String(UUID().uuidString.prefix(8)).lowercased()
+        self.id = Self.newID()
         self.command = command
         self.inSubshell = inSubshell
         self.requestedAt = requestedAt
     }
+
+    /// 重启后接回的会话里那条命令（Code 标签页里继续 / 新开的）：编号沿用重启前的，程序退出时打出的结束标记照样认得出；
+    /// 已经在跑，不再打进去。命令原文不记（`command` 为空）。不知道编号时另起一个（那就只能靠接回时的探测，见
+    /// `TerminalSession.restoreCodeCommand`）。
+    init(resuming id: String?, requestedAt: Date) {
+        self.id = id.flatMap { $0.isEmpty ? nil : $0 } ?? Self.newID()
+        command = ""
+        inSubshell = false
+        self.requestedAt = requestedAt
+        phase = .running
+        injected = true
+        startedAt = requestedAt
+    }
+
+    private static func newID() -> String { String(UUID().uuidString.prefix(8)).lowercased() }
 
     /// 打进 shell 的那一行（不含回车）。
     var inputLine: String { echoPrefix + command + echoSuffix }
@@ -291,5 +306,45 @@ extension TerminalSession {
     var codeCommandHasEnded: Bool {
         if case .finished = trackedRun?.phase { return true }
         return connectionState == .disconnected
+    }
+
+    /// 起止标记的编号（重启后接回时要用，见 `restoreCodeCommand`）。还没有命令为 nil。
+    var codeCommandMarker: String? { trackedRun?.id }
+
+    /// App 重启后接回 Code 标签页里的会话：命令照「还在跑」接上（编号沿用重启前的 `marker`，之后程序退出时的结束标记
+    /// 照样认得出），然后判一次 App 不在的那段时间里程序是不是已经退出了。
+    ///
+    /// 退出的那一刻打出的结束标记可能已经认不出来了：App 不在时它进了保持进程，接回时补回来的那段字节不一定还带着它
+    /// （超了保存的上限，或者已经折进了检查点）。所以连上之后再问一次前台进程（关标签前的确认用的同一个探测）：
+    /// - 前台是 shell 自己、停在提示符上（`.idle`）：程序已经退出了，标成跑完，Code 标签页随后照常收尾、回到记录。
+    /// - 前台还有程序（`.running`）：接着当它在跑。
+    /// - 判断不了（`.unknown`：主机上没有 `ps`、探测超时），或者一直没连上（`waitLimit` 内）：也当它在跑。
+    ///   宁可让用户看见一个停在提示符上的终端（自己关掉或挪成普通标签页），也不能把还在跑的会话当成结束了关掉。
+    /// shell 自己退出了（`.disconnected`）照旧由 `codeCommandHasEnded` 认出。
+    func restoreCodeCommand(marker: String?, startedAt: Date, waitLimit: Duration = .seconds(120)) {
+        let run = TerminalTrackedRun(resuming: marker, requestedAt: startedAt)
+        trackedRun = run
+        let id = run.id
+        Task { [weak self] in
+            let deadline = ContinuousClock.now + waitLimit
+            while ContinuousClock.now < deadline {
+                guard let self, self.trackedRun?.id == id, self.trackedRun?.phase == .running else { return }
+                switch self.connectionState {
+                case .connected:
+                    let activity = await self.foregroundActivity()
+                    guard self.trackedRun?.id == id, self.trackedRun?.phase == .running else { return }
+                    if activity == .idle {
+                        // 退出码不知道：同标记里读不出退出码时的约定（-1）。
+                        self.trackedRun?.phase = .finished(-1)
+                        self.trackedRun?.finishedAt = Date()
+                    }
+                    return
+                case .disconnected:
+                    return
+                case .idle, .connecting, .failed:
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+            }
+        }
     }
 }

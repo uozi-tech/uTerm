@@ -265,12 +265,36 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
 /// 存进窗口里**每个**会话的 holder 归属：holder 是会话的真值，App 重启后谁活着就从谁那里读。布局一变就重写
 /// 一遍，各份副本可能新旧不一（刚开的会话还没连上、写的那一刻某个 holder 正好没接上），恢复时取 `revision`
 /// 最大的一份。
+///
+/// Code 标签页也在树里，记成它自己的 id（`CodeTabRecord.id`），它是什么、里面跑着哪些会话记在 `codeTabs`。
+/// 这样旧版读到新版写的布局也不出事：旧版不认 `codeTabs`（不认识的键被忽略），树里那个 id 不是它手里的会话，
+/// 照「布局里有、会话没了」丢掉；Code 标签页里跑着的会话不在树里，照「布局里没有的会话」接在后面成普通终端标签页。
 nonisolated struct HeldSessionLayout: Codable, Equatable, Sendable {
     /// 写下这份布局的时刻（Unix 秒）。
     var revision: Double
     var tree: UPaneGroupsSnapshot<UUID>
     /// 窗口的位置与大小。旧版写的、还没挂上窗口时写的没有。
     var window: HeldWindowFrame? = nil
+    /// 窗口里的 Code 标签页（树里记着它们的 id）。旧版写的没有。
+    var codeTabs: [CodeTabRecord]? = nil
+
+    init(revision: Double, tree: UPaneGroupsSnapshot<UUID>, window: HeldWindowFrame? = nil,
+         codeTabs: [CodeTabRecord]? = nil) {
+        self.revision = revision
+        self.tree = tree
+        self.window = window
+        self.codeTabs = codeTabs
+    }
+
+    /// Code 标签页那一段是别的版本写的、解不开时当没有：不连累整份布局（标签顺序和分屏照样还原，
+    /// 里面的会话退回普通终端标签页）。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        revision = try container.decode(Double.self, forKey: .revision)
+        tree = try container.decode(UPaneGroupsSnapshot<UUID>.self, forKey: .tree)
+        window = try container.decodeIfPresent(HeldWindowFrame.self, forKey: .window)
+        codeTabs = try? container.decodeIfPresent([CodeTabRecord].self, forKey: .codeTabs)
+    }
 
     static func newest(_ layouts: some Sequence<HeldSessionLayout?>) -> HeldSessionLayout? {
         layouts.compactMap { $0 }.max { $0.revision < $1.revision }
@@ -322,30 +346,81 @@ extension UPaneGroupsModel {
     /// 按 `ids` 的顺序交给 `append`。只在模型还空着时套用布局，已经有标签的不动它们的位置。
     /// `id` 取标签的会话 id（SSH 终端的标签 id 与会话 id 不是同一个）。
     /// 返回是否套用了布局（模型原本空着）：说明这个窗口就是为接回开的，窗口位置也该照布局还原。
+    ///
+    /// `extras`：布局树里不是会话的标签（Code 标签页，`HeldSessionLayout.codeTabs`），由 `makeExtra` 开回来。
+    /// 模型空着时和会话一样照布局放回原位；模型里已经有标签（工作区窗口的快照先放好了）时放到它在布局里的邻居旁边
+    /// （`insertNearLayoutNeighbors`），不动已有标签的位置和前台。`makeExtra` 返回 nil 的不开。
     @discardableResult
     func adoptHeldSessions(_ ids: [UUID], layout: HeldSessionLayout?, id: (UPaneTab<Payload>) -> UUID?,
-                           make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void) -> Bool {
+                           make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void,
+                           extras: [UUID] = [], makeExtra: (UUID) -> UPaneTab<Payload>? = { _ in nil }) -> Bool {
         let existing = Set(allTabs.compactMap(id))
         var remaining = ids.filter { !existing.contains($0) }
+        let wantedExtras = Set(extras).subtracting(existing).subtracting(remaining)
+        var remainingExtras = extras.filter { wantedExtras.contains($0) }
         var restoredActive: UUID?
         var applied = false
         if allTabs.isEmpty, let layout {
             let wanted = Set(remaining)
             var placed: Set<UUID> = []
             restore(layout.tree) { id -> UPaneTab<Payload>? in
-                guard wanted.contains(id), placed.insert(id).inserted else { return nil }
-                return make(id)
+                if wanted.contains(id), placed.insert(id).inserted { return make(id) }
+                if wantedExtras.contains(id), placed.insert(id).inserted { return makeExtra(id) }
+                return nil
             }
             remaining.removeAll { placed.contains($0) }
+            remainingExtras.removeAll { placed.contains($0) }
             restoredActive = activeTab?.id
             applied = true
         }
+        let fronts = groupIDs.compactMap { group in groups[group]?.activeTab.map { (group: group, tab: $0.id) } }
+        let activeGroup = activeGroupID
         for id in remaining { append(id) }
-        // 补在后面的会话开进来时会抢成前台，把布局里的前台标签还回去。
-        if !remaining.isEmpty, let restoredActive, let at = locateTab(restoredActive) {
-            activateTab(groupID: at.groupID, index: at.index)
+        var insertedExtra = false
+        for extra in remainingExtras {
+            guard let tab = makeExtra(extra) else { continue }
+            insertNearLayoutNeighbors(tab, layoutID: extra, layout: applied ? nil : layout, id: id)
+            insertedExtra = true
+        }
+        if applied {
+            // 补在后面的会话开进来时会抢成前台，把布局里的前台标签还回去。
+            if !remaining.isEmpty || insertedExtra, let restoredActive, let at = locateTab(restoredActive) {
+                activateTab(groupID: at.groupID, index: at.index)
+            }
+        } else if insertedExtra {
+            // 插进已有标签之间的 Code 标签页不抢前台：各组的前台标签与活动组还回去（活动组最后还）。
+            for front in fronts.filter({ $0.group != activeGroup }) + fronts.filter({ $0.group == activeGroup }) {
+                if let at = locateTab(front.tab) { activateTab(groupID: at.groupID, index: at.index) }
+            }
         }
         return applied
+    }
+
+    /// 把 `tab` 放到布局里它邻居的旁边：同一组里排在它前面、现在在场的最近一个之后；前面一个都不在场就放在后面
+    /// 最近一个之前；整组都不在场（或者没有布局）就接在活动组末尾。
+    private func insertNearLayoutNeighbors(_ tab: UPaneTab<Payload>, layoutID: UUID, layout: HeldSessionLayout?,
+                                           id: (UPaneTab<Payload>) -> UUID?) {
+        var present: [UUID: UUID] = [:]
+        for existing in allTabs {
+            if let layoutKey = id(existing), present[layoutKey] == nil { present[layoutKey] = existing.id }
+        }
+        let siblings = layout?.tree.groups.first { $0.tabs.contains(layoutID) }?.tabs ?? []
+        let position = siblings.firstIndex(of: layoutID) ?? 0
+        let before = siblings[..<min(position, siblings.count)].reversed().lazy.compactMap { present[$0] }.first
+        let after = siblings.dropFirst(position + 1).lazy.compactMap { present[$0] }.first
+        if let before, let at = locateTab(before) {
+            openTab({ tab }, in: at.groupID)
+            // `openTab` 接在组的末尾；邻居后面还有标签就挪到紧挨着邻居的那一格。
+            if let tabs = groups[at.groupID]?.tabs, let index = tabs.firstIndex(where: { $0.id == before }),
+               index + 1 < tabs.count, tabs[index + 1].id != tab.id {
+                reorderTab(tab.id, before: tabs[index + 1].id)
+            }
+        } else if let after, let at = locateTab(after) {
+            openTab({ tab }, in: at.groupID)
+            reorderTab(tab.id, before: after)
+        } else {
+            openTab({ tab }, in: nil)
+        }
     }
 }
 
@@ -377,6 +452,8 @@ final class HeldLayoutWriter<Payload> {
     private let delay: Duration
     private let id: (UPaneTab<Payload>) -> UUID?
     private let write: @MainActor (HeldSessionLayout) -> Void
+    /// 窗口里的 Code 标签页此刻的样子（跑着哪些会话、看着哪一个）。它们变了也要重写：观察时一并读。
+    private let codeTabs: @MainActor () -> [CodeTabRecord]
     private var pending: Task<Void, Never>?
     /// 布局变了、还没写。变化的那一刻就记下（观察回调里同步），不等攒批任务排上：⌘Q 可能就在下一刻。
     private var isDirty = false
@@ -385,10 +462,13 @@ final class HeldLayoutWriter<Payload> {
     private var window: HeldWindowFrame?
 
     init(groups: UPaneGroupsModel<Payload>, delay: Duration = .milliseconds(300),
-         id: @escaping (UPaneTab<Payload>) -> UUID?, write: @escaping @MainActor (HeldSessionLayout) -> Void) {
+         id: @escaping (UPaneTab<Payload>) -> UUID?,
+         codeTabs: @escaping @MainActor () -> [CodeTabRecord] = { [] },
+         write: @escaping @MainActor (HeldSessionLayout) -> Void) {
         self.groups = groups
         self.delay = delay
         self.id = id
+        self.codeTabs = codeTabs
         self.write = write
         observe()
         HeldLayoutWriters.add(self) { [weak self] in self?.flushPending() }
@@ -427,13 +507,16 @@ final class HeldLayoutWriter<Payload> {
         pending = nil
         isDirty = false
         guard !isStopped, let groups else { return }
-        write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id), window: window))
+        let codeTabs = codeTabs()
+        write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id), window: window,
+                                codeTabs: codeTabs.isEmpty ? nil : codeTabs))
     }
 
     private func observe() {
         guard !isStopped, let groups else { return }
         withObservationTracking {
             _ = groups.snapshot(id)
+            _ = codeTabs()
         } onChange: { [weak self] in
             // 布局模型只在主线程上改，回调同步跑在改它的那一刻。
             MainActor.assumeIsolated { self?.isDirty = true }

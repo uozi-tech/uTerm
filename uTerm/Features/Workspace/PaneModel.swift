@@ -48,7 +48,8 @@ final class PaneModel: Identifiable {
         }
     }
 
-    /// 是终端标签（不是文件、不是 Code 标签页）。只有它连主机、登记、进保持进程的布局。
+    /// 是终端标签（不是文件、不是 Code 标签页）。只有它连主机、登记；保持进程的布局里记的是它的会话 id
+    ///（Code 标签页记它自己的 id，见 `WorkspaceModel.layoutTabID`）。
     var isTerminal: Bool { fileBuffer == nil && codeTab == nil }
 
     /// 按连接状态同步跨窗口注册表：`.connected` 登记，其余一律注销。
@@ -204,4 +205,8 @@ final class PaneModel: Identifiable {
 extension PaneModel: CodeTabTerminal {
     func runCodeCommand(_ command: String) { session.startCodeCommand(command) }
     var codeCommandHasEnded: Bool { session.codeCommandHasEnded }
+    var codeCommandMarker: String? { session.codeCommandMarker }
+    func restoreCodeCommand(marker: String?, startedAt: Date) {
+        session.restoreCodeCommand(marker: marker, startedAt: startedAt)
+    }
 }

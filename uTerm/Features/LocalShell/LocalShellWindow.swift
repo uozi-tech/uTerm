@@ -179,6 +179,10 @@ final class LocalShellPane: Identifiable {
 extension LocalShellPane: CodeTabTerminal {
     func runCodeCommand(_ command: String) { session.startCodeCommand(command) }
     var codeCommandHasEnded: Bool { session.codeCommandHasEnded }
+    var codeCommandMarker: String? { session.codeCommandMarker }
+    func restoreCodeCommand(marker: String?, startedAt: Date) {
+        session.restoreCodeCommand(marker: marker, startedAt: startedAt)
+    }
 }
 
 /// 一个本机终端窗口的布局：VSCode 编辑组模型，与 SSH 终端窗口同一套（`UPaneGroupsModel`）。
@@ -208,8 +212,12 @@ final class LocalShellWindowModel {
     /// 活动组的前台标签（可能是 Code 标签页）。
     var active: LocalShellPane? { groups.activeTab?.payload }
 
-    /// 进保持进程布局的是 shell 的会话 id；Code 标签页不进（重启后不恢复，里面跑着的会话以普通标签接回）。
+    /// shell 标签的会话 id；Code 标签页不是会话，为 nil。手机远控的标签顺序按它（`setTabOrder` / `setArranger`）。
     static let heldSessionID: (UPaneTab<LocalShellPane>) -> UUID? = { $0.payload.isTerminal ? $0.payload.id : nil }
+
+    /// 写进保持进程布局的标签 id：shell 标签是会话 id，Code 标签页是它自己的 id（它是什么、里面跑着哪些会话记在
+    /// `HeldSessionLayout.codeTabs`），重启后都在原位接回。
+    static let layoutTabID: (UPaneTab<LocalShellPane>) -> UUID? = { $0.payload.id }
 
     /// 按会话 id 找 shell（含 Code 标签页里跑着的）。
     func pane(_ id: UUID) -> LocalShellPane? { panes.first { $0.id == id } }
@@ -226,8 +234,11 @@ final class LocalShellWindowModel {
         }
         // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
         groups.makeTabForNewGroup = { [weak self] in self?.makeTab() }
-        // 重启后按它放回标签的顺序和分屏（`LocalShellRestorer`）。
-        let layoutWriter = HeldLayoutWriter(groups: groups, id: Self.heldSessionID) { [weak self] layout in
+        // 重启后按它放回标签的顺序和分屏、Code 标签页和里面跑着的会话（`LocalShellRestorer`）。
+        // Code 标签页里跑着的 shell 也各存一份：窗口里只剩它们时也接得回来。
+        let layoutWriter = HeldLayoutWriter(groups: groups, id: Self.layoutTabID, codeTabs: { [weak self] in
+            self?.codeTabRecords() ?? []
+        }) { [weak self] layout in
             for pane in self?.panes ?? [] { pane.updateLayout(layout) }
         }
         windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
@@ -316,12 +327,32 @@ final class LocalShellWindowModel {
     }
 
     /// 接回上次留下的会话（`LocalShellRestorer`）：窗口还空着时按布局放回原位，其余按序号接在活动组末尾。
+    ///
+    /// 布局里记着的 Code 标签页照原位开回来（里面没有会话在跑的也开），记在它名下、还活着的 shell 回到它里面，
+    /// 不再各开一个标签页；工具认不出来的（以后删掉的工具）照普通标签页接回，不丢。
     func adopt(_ restored: [(id: UUID, ordinal: Int)], layout: HeldSessionLayout?) {
         let ordinals = Dictionary(restored.map { ($0.id, $0.ordinal) }, uniquingKeysWith: { first, _ in first })
-        let applied = groups.adoptHeldSessions(restored.map(\.id), layout: layout, id: Self.heldSessionID,
-                                               make: { makeTab(id: $0, ordinal: ordinals[$0]) },
-                                               append: { addTab(id: $0, ordinal: ordinals[$0]) })
+        let present = Set(panes.map(\.id))
+        let live = Set(restored.map(\.id)).subtracting(present)
+        let codeTabs = layout?.codeTabs ?? []
+        let codeRuns = CodeTabRecord.adoptableRuns(codeTabs, live: live)
+        let inCodeTabs = Set(codeRuns.values.flatMap { $0.map(\.session) })
+        let records = Dictionary(codeTabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let applied = groups.adoptHeldSessions(
+            restored.map(\.id).filter { !inCodeTabs.contains($0) && !present.contains($0) }, layout: layout,
+            id: Self.layoutTabID,
+            make: { makeTab(id: $0, ordinal: ordinals[$0]) },
+            append: { addTab(id: $0, ordinal: ordinals[$0]) },
+            extras: codeTabs.map(\.id),
+            makeExtra: { id in
+                records[id].map { makeRestoredCodeTab($0, runs: codeRuns[id] ?? [], ordinals: ordinals) }
+            })
         if applied { windowTracker.restore(layout?.window) }
+    }
+
+    /// 存进布局的 Code 标签页（`HeldSessionLayout.codeTabs`）。
+    func codeTabRecords() -> [CodeTabRecord] {
+        groups.allTabs.compactMap { tab in tab.payload.codeTab?.record(id: tab.payload.id) }
     }
 
     func syncFocus() {
@@ -382,17 +413,30 @@ final class LocalShellWindowModel {
         return nil
     }
 
-    private func makeCodeTab(directory: String?) -> UPaneTab<LocalShellPane> {
+    private func makeCodeTab(id: UUID = UUID(), directory: String?) -> UPaneTab<LocalShellPane> {
         let code = CodeTabModel(hostName: LocalShellIdentity.serverName, directory: directory) { [weak self] directory in
             self?.makeCodeRun(directory: directory)
         }
-        let pane = LocalShellPane(ordinal: 0, codeTab: code)
+        let pane = LocalShellPane(id: id, ordinal: 0, codeTab: code)
         return UPaneTab(id: pane.id, payload: pane)
     }
 
+    /// 重启后开回一个 Code 标签页（同一个 id），记在它名下的 shell 按会话 id 接回保持进程、放回它里面。
+    private func makeRestoredCodeTab(_ record: CodeTabRecord, runs: [CodeRunRecord],
+                                     ordinals: [UUID: Int]) -> UPaneTab<LocalShellPane> {
+        let tab = makeCodeTab(id: record.id, directory: record.directory)
+        var terminals: [UUID: any CodeTabTerminal] = [:]
+        for run in runs {
+            terminals[run.session] = makeCodeRun(id: run.session, ordinal: ordinals[run.session], directory: run.directory)
+        }
+        tab.payload.codeTab?.restore(record, terminals: terminals)
+        return tab
+    }
+
     /// Code 标签页里继续 / 新开一个会话的 shell：开在会话的目录里，和普通标签一样登记、写保持进程的归属，只是不进标签树。
-    private func makeCodeRun(directory: String) -> LocalShellPane {
-        let pane = LocalShellPane(ordinal: nextOrdinal(), directory: directory)
+    /// 重启后接回时带着原来的会话 id 与序号（`makeRestoredCodeTab`）。
+    private func makeCodeRun(id: UUID = UUID(), ordinal: Int? = nil, directory: String) -> LocalShellPane {
+        let pane = LocalShellPane(id: id, ordinal: ordinal ?? nextOrdinal(), directory: directory)
         if let registrar { pane.attach(registrar) }
         startShell(pane)
         return pane
@@ -600,7 +644,10 @@ struct LocalShellWindowView: View {
             }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
-            if model.panes.isEmpty { model.addTab(id: windowID.firstPaneID ?? UUID(), directory: windowID.directory) }
+            // 按标签页数，不按 shell 数：接回的可能只有一个 Code 标签页（里面的会话这时可能还没接回）。
+            if model.groups.allTabs.isEmpty {
+                model.addTab(id: windowID.firstPaneID ?? UUID(), directory: windowID.directory)
+            }
         }
         .onChange(of: controlActiveState) { _, state in
             guard let windowID else { return }

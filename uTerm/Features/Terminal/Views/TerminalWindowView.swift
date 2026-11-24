@@ -152,7 +152,7 @@ struct TerminalWindowView: View {
             if heldSessions.isEmpty {
                 openTab(serverID: windowID.serverID)
             } else {
-                workspace.adoptHeldSessions(heldSessions)
+                workspace.adoptHeldSessions(heldSessions, knownServerIDs: Set(profiles.map(\.id)))
                 workspace.reattachHeldSessions(heldSessions, profiles: profiles, modelContainer: modelContext.container)
             }
         }

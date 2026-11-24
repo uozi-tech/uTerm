@@ -185,7 +185,7 @@ struct WorkspaceWindowView: View {
                                   knownServerIDs: Set(profiles.map(\.id)))
             }
             // 还活着的 SSH 会话不跟「恢复布局」这个开关走：里面的程序还在跑，不能丢。
-            workspace.adoptHeldSessions(heldSessions)
+            workspace.adoptHeldSessions(heldSessions, knownServerIDs: Set(profiles.map(\.id)))
             workspace.reattachHeldSessions(heldSessions, profiles: profiles, modelContainer: modelContext.container)
             // 兜底：快照为空 / 关了自动恢复 / 叶子全被剪掉 —— 都必须留下一个
             // 连本窗口服务器的可用终端。

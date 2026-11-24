@@ -3,7 +3,8 @@ import XCTest
 @testable import uTerm
 
 /// Code 标签页：右边三种状态、继续 / 新开在本标签页里跑、切走再切回、程序退出后回到记录、新会话对上真实记录、关标签页；
-/// 两种宿主（SSH 的终端区、本机终端窗口）里开得出来、不进保持进程的布局。终端都是假的，不连主机、不起 shell。
+/// 两种宿主（SSH 的终端区、本机终端窗口）里开得出来、不算一个会话（重启接回见 `CodeTabRestoreTests`）。
+/// 终端都是假的，不连主机、不起 shell。
 @MainActor
 final class CodeTabTests: XCTestCase {
     /// 假终端：记下打进去的命令、有没有被结束；「命令跑完了」由用例拨。不碰终端引擎（`CodeTabModel` 只认这个协议）。
@@ -263,7 +264,7 @@ final class CodeTabTests: XCTestCase {
 
     // MARK: SSH 的终端区
 
-    func testWorkspaceOpensCodeTabForTheFrontHostAndKeepsItOutOfTheLayout() throws {
+    func testWorkspaceOpensCodeTabForTheFrontHostAndItIsNotASession() throws {
         let workspace = WorkspaceModel()
         let host = UUID(), other = UUID()
         workspace.openServer(profileID: host, title: "prod-web-01")
@@ -276,8 +277,9 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(workspace.focusedTerminalServerID, host, "标题栏跟着 Code 标签页的主机")
         XCTAssertNil(workspace.focusedTerminalSession(), "右边没有终端")
 
-        XCTAssertNil(WorkspaceModel.heldSessionID(tab), "Code 标签页不进保持进程的布局")
-        XCTAssertEqual(workspace.snapshot().terminalGroups?.groups.flatMap(\.tabs).count, 1, "也不进工作区快照")
+        XCTAssertNil(WorkspaceModel.heldSessionID(tab), "Code 标签页不是会话（手机远控的标签顺序不含它）")
+        XCTAssertEqual(WorkspaceModel.layoutTabID(tab), tab.payload.id, "保持进程的布局里记着它自己的 id，重启后在原位开回来")
+        XCTAssertEqual(workspace.snapshot().terminalGroups?.groups.flatMap(\.tabs).count, 1, "不进工作区快照")
 
         let empty = WorkspaceModel()
         let fallbackID = empty.openCodeTab(fallbackServerID: other) { _ in "fallback" }
@@ -299,7 +301,7 @@ final class CodeTabTests: XCTestCase {
 
         XCTAssertEqual(connected, [pane.id], "建好就去连，不等面板显示出来")
         XCTAssertEqual(pane.serverProfileID, host)
-        XCTAssertEqual(pane.tabTitle, "prod-web-01", "重启后以普通标签页接回时的名字")
+        XCTAssertEqual(pane.tabTitle, "prod-web-01", "旧版重启后把它接回成普通标签页时的名字")
         XCTAssertEqual(workspace.terminalGroups.allTabs.count, 2, "不在标签树里")
         XCTAssertTrue(workspace.terminalPanes.contains { $0 === pane }, "关窗口的确认、注册表都看得到它")
         XCTAssertTrue(workspace.terminalSessions.contains { $0 === pane.session })
@@ -382,7 +384,8 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(started, [shell], "Code 标签页本身不起 shell")
         XCTAssertEqual(code.newSessionDirectory, "/Users/me/shop", "「＋」新会话的目录取前台标签页的")
         XCTAssertEqual(code.hostName, LocalShellIdentity.serverName)
-        XCTAssertNil(LocalShellWindowModel.heldSessionID(tab), "不进保持进程的布局")
+        XCTAssertNil(LocalShellWindowModel.heldSessionID(tab), "不是会话（手机远控的标签顺序不含它）")
+        XCTAssertEqual(LocalShellWindowModel.layoutTabID(tab), codeID, "保持进程的布局里记着它自己的 id")
         XCTAssertEqual(model.panes.map(\.id), [shell], "也不算一个 shell")
         XCTAssertNil(model.focusedSessionID)
 
