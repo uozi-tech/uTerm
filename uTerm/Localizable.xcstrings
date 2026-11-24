@@ -13249,7 +13249,6 @@
       }
     },
     "SSH 连接已断开" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
