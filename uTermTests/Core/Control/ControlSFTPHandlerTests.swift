@@ -730,6 +730,29 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertTrue(detail.contains("SSH_FX 2"), detail)
     }
 
+    /// 服务器的状态消息会被 utermctl 打到用户终端里：ESC / OSC、C1、双向覆盖符不能原样过去，超长的截断。
+    func testErrorDetailSanitizesTheServerMessage() {
+        let hostile = "denied\u{1B}]0;pwned\u{07}\u{9B}2J\u{202E}gnp.exe\nforged line"
+        let detail = ControlFilePayloadBuilder.errorDetail(for: Self.status(.permissionDenied, hostile))
+        for scalar in detail.unicodeScalars {
+            XCTAssertFalse(scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value), detail.debugDescription)
+            XCTAssertNotEqual(scalar.properties.generalCategory, .format, detail.debugDescription)
+        }
+        XCTAssertTrue(detail.contains("denied]0;pwned2Jgnp.exe forged line"), detail)
+        XCTAssertTrue(detail.contains("SSH_FX 3"), detail)
+
+        let long = ControlFilePayloadBuilder.errorDetail(
+            for: Self.status(.failure, String(repeating: "x", count: 5_000)))
+        XCTAssertLessThan(long.count, 400, "超长的服务器原话截断")
+    }
+
+    /// USSHCore 新增的两种本端限制：区间越界是请求不合法，超出读取上限是文件太大。
+    func testOffsetOutOfRangeAndLimitExceededHaveTheirOwnCodes() {
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: SFTPError.offsetOutOfRange), .invalid_request)
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: SFTPError.limitExceeded(maximumBytes: 10)),
+                       .file_too_large)
+    }
+
     private static func status(_ code: SFTPStatusCode, _ message: String) -> SFTPError {
         .status(code: code, message: message, languageTag: "en")
     }

@@ -534,6 +534,7 @@ def main():
         exercise_on_demand_launch(root)
         exercise_socket_path_too_long()
         exercise_localization()
+        exercise_peer_text()
         print("")
         if FAILURES:
             print("%d 项失败：" % len(FAILURES))
@@ -1427,6 +1428,25 @@ def exercise_localization():
         help_in_languages(client)
     finally:
         subprocess.Popen = patched_popen
+
+
+def exercise_peer_text():
+    """服务器给的文字（文件名、SFTP 报错原话）打到终端之前去掉控制字符与双向覆盖符；JSON 里一字不差。"""
+    print("服务器原话")
+    client = load_client_module()
+    hostile = "a\x1b]0;pwned\x07b\u009b2J\u202ec\U000e0041d\nnext"
+    equal(client.terminal_safe(hostile), "a]0;pwnedb2Jcd next", "terminal_safe 去掉 ESC / C1 / 双向覆盖，换行变空格")
+    escaped_name = "caf\ufffdE9\u2060.txt"
+    equal(client.terminal_safe(escaped_name), escaped_name, "非 UTF-8 名字的转义结束符 U+2060 留着")
+    response = {"ok": False, "code": "operation_failed", "message": hostile}
+    text = client.as_json(response)
+    check(all(not (0x7F <= ord(c) <= 0x9F) and c not in "\u202e\U000e0041" for c in text),
+          "as_json 把 C1 / Cf 写成 \\u 转义")
+    equal(json.loads(text), response, "as_json 解析回来一字不差")
+    table = client.render_table(["name"], [[hostile]])
+    check("\x1b" not in table and "\u202e" not in table, "表格里的远端文字去掉了控制字符")
+    csv_text = client.render_csv(["name"], [[hostile]])
+    check("\x1b" not in csv_text and "\u009b" not in csv_text, "CSV 里的远端文字去掉了控制字符")
 
 
 def help_in_languages(client):

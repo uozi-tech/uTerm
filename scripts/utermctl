@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 
 # ---------------------------------------------------------------------------
@@ -2145,8 +2146,32 @@ def make_request(args):
     return request
 
 
+def _is_unsafe_char(char):
+    """C0 / C1 控制字符、DEL 与 Unicode Cf（双向覆盖 / 隔离符、零宽字符……）：打到终端里会被当成
+    控制命令或把文字显示成别的样子。规则同 USSHKit 的 `SSHPeerText.sanitize`。"""
+    code = ord(char)
+    if code == 0x2060:
+        # WORD JOINER 是 uTerm 给非 UTF-8 文件名转义时的结束符（`RemoteName`），去掉了那个名字就对不上了；它本身不可见、不改显示。
+        return False
+    return code < 0x20 or 0x7F <= code <= 0x9F or unicodedata.category(char) == "Cf"
+
+
+def terminal_safe(text):
+    """服务器给的文字（远端文件名、SFTP 的报错原话）直接打到终端之前过一遍：空白类控制字符换成空格，
+    其余控制字符与不可见格式字符去掉。只用于给人看的表格与提示；JSON 走 `as_json`，那里不丢字。"""
+    if not isinstance(text, str):
+        text = str(text)
+    out = []
+    for char in text:
+        if char in "\t\n\r\v\f\x85\u2028\u2029":
+            out.append(" ")
+        elif not _is_unsafe_char(char):
+            out.append(char)
+    return "".join(out)
+
+
 def fail(message):
-    sys.stderr.write(message + "\n")
+    sys.stderr.write(terminal_safe(message) + "\n")
     sys.exit(EXIT_LOCAL)
 
 
@@ -3257,7 +3282,7 @@ def tree_response(verb, summary, failed, **payload):
     payload["failed"] = failed
     ok = not failed
     message = summary if ok else summary + _("；{count} 个没成，见 failed").format(count=len(failed))
-    sys.stderr.write(_("{verb}：{message}").format(verb=verb, message=message) + "\n")
+    sys.stderr.write(terminal_safe(_("{verb}：{message}").format(verb=verb, message=message)) + "\n")
     return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed",
             "message": message, "tree": payload}
 
@@ -3412,7 +3437,7 @@ def do_mac_sync(args):
         summary += _("；跳过 {count} 个符号链接").format(count=len(links))
     ok = not failed
     message = summary if ok else summary + _("；{count} 个没成，见 failed").format(count=len(failed))
-    sys.stderr.write(_("同步完成：{message}").format(message=message) + "\n")
+    sys.stderr.write(terminal_safe(_("同步完成：{message}").format(message=message)) + "\n")
     return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed", "message": message,
             "sync": {"direction": args.direction, "dryRun": False, "transferred": done, "deleted": deleted,
                      "unchanged": unchanged, "bytes": moved, "failed": failed, "skippedLinks": links,
@@ -3578,7 +3603,7 @@ def render_table(header, rows, limit=60):
     for row in rows:
         cells = []
         for index, value in enumerate(row):
-            text = value.replace("\n", " ")
+            text = terminal_safe(value)
             if len(text) > limit:
                 text = text[: limit - 1] + "…"
             cells.append(text)
@@ -3595,12 +3620,30 @@ def render_csv(header, rows):
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([[terminal_safe(cell) for cell in row] for row in rows])
     return buffer.getvalue().rstrip("\n")
 
 
 def as_json(response):
-    return json.dumps(response, ensure_ascii=False, indent=2, sort_keys=True)
+    # C0 由 json 自己转义；C1 与 Cf（双向覆盖符等）在 ensure_ascii=False 下会原样落到终端里，
+    # 这里也写成 \uXXXX。解析回来一字不差（JSON 字符串里本来就可以这样写）。
+    # （C0 不在这里动：字符串里的 json 已经转义了，剩下的是缩进用的换行。）
+    text = json.dumps(response, ensure_ascii=False, indent=2, sort_keys=True)
+    if not any(_needs_json_escape(char) for char in text):
+        return text
+    return "".join(_json_escape(char) if _needs_json_escape(char) else char for char in text)
+
+
+def _needs_json_escape(char):
+    return ord(char) >= 0x7F and _is_unsafe_char(char)
+
+
+def _json_escape(char):
+    code = ord(char)
+    if code <= 0xFFFF:
+        return "\\u%04x" % code
+    code -= 0x10000
+    return "\\u%04x\\u%04x" % (0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF))
 
 
 def run_output(response):

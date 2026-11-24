@@ -114,6 +114,9 @@ nonisolated enum ControlFilePayloadBuilder {
         if error is SFTPDownloadLimitExceeded { return .file_too_large }
         if error is SFTPShortReadError { return .operation_failed }
         if case SFTPError.shortRead = error { return .operation_failed }
+        if case SFTPError.limitExceeded = error { return .file_too_large }
+        // 区间越过了 UInt64：请求本身不合法。
+        if case SFTPError.offsetOutOfRange = error { return .invalid_request }
         if error is SFTPFileExistsError { return .file_exists }
 
         if let status = sftpStatus(of: error) {
@@ -153,10 +156,13 @@ nonisolated enum ControlFilePayloadBuilder {
     /// CLI 面向模型 / 开发者，`FriendlyError.describe` 那句「操作未能完成，请稍后
     /// 重试」对排查毫无价值。服务端状态在的话优先给它自带的文案 + `SSH_FX` 码
     /// （`No such file (SSH_FX 2)`），否则退到 `String(describing:)`。
+    ///
+    /// 服务器的原话（状态消息，以及 `String(describing:)` 里夹带的对端文字）先过 `SSHPeerText.sanitize`：
+    /// 这句话会被 utermctl 打到用户的终端里，里面的 ESC / 双向覆盖符不能原样过去。
     static func errorDetail(for rawError: Error) -> String {
         let error = SFTPWriteStageError.unwrap(rawError)
         if let status = sftpStatus(of: error) {
-            let text = status.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = SSHPeerText.sanitize(status.message)
             let code = "SSH_FX \(status.code.rawValue)"
             return text.isEmpty ? code : "\(text)（\(code)）"
         }
@@ -166,7 +172,7 @@ nonisolated enum ControlFilePayloadBuilder {
         if let short = error as? SFTPShortReadError {
             return short.localizedDescription
         }
-        return String(describing: error)
+        return SSHPeerText.sanitize(String(describing: error))
     }
 
     /// 文本兜底匹配。返回 nil = 没有可靠结论（调用方落 `operation_failed`）。
