@@ -246,4 +246,61 @@ final class SFTPSessionAtomicUploadTests: XCTestCase {
         XCTAssertEqual(Array(path.bytes), Array("/srv/www/.".utf8) + [0xFF] + Array("x.uterm-upload.tmp".utf8))
         XCTAssertEqual(Array(SFTPSession.temporaryUploadPath(for: "bare").bytes), Array(".bare.uterm-upload.tmp".utf8))
     }
+
+    // MARK: - 长名字
+
+    private func temporaryName(forBytes name: [UInt8]) -> [UInt8] {
+        let path = Array(SFTPSession.temporaryUploadPath(for: SFTPPath(bytes: Array("/srv/".utf8) + name)).bytes)
+        return Array(path.dropFirst(5))
+    }
+
+    /// 237 字节的名字加上前后缀正好 255；再长就截短 + 摘要，永远不超过 255，不同的长名字临时名也不同。
+    func testTemporaryNameNeverExceedsTheNameLimit() {
+        for length in [237, 238, 255] {
+            let name = Array(repeating: UInt8(ascii: "n"), count: length)
+            let temporary = temporaryName(forBytes: name)
+            XCTAssertLessThanOrEqual(temporary.count, 255, "\(length) 字节的名字")
+            XCTAssertTrue(temporary.starts(with: Array(".".utf8)))
+            XCTAssertTrue(temporary.reversed().starts(with: Array(".uterm-upload.tmp".utf8).reversed()))
+        }
+        XCTAssertEqual(temporaryName(forBytes: Array(repeating: UInt8(ascii: "n"), count: 237)).count, 255,
+                       "237 字节不用截")
+        let a = Array(repeating: UInt8(ascii: "n"), count: 250) + Array("a".utf8)
+        let b = Array(repeating: UInt8(ascii: "n"), count: 250) + Array("b".utf8)
+        XCTAssertNotEqual(temporaryName(forBytes: a), temporaryName(forBytes: b), "前面一样的两个长名字撞到同一个临时文件")
+    }
+
+    /// 80 个汉字（240 字节）：截短落在字符边界上，临时名仍是合法 UTF-8。
+    func testLongCJKNameIsTruncatedOnACharacterBoundary() {
+        let name = Array(String(repeating: "汉", count: 80).utf8)
+        let temporary = temporaryName(forBytes: name)
+        XCTAssertLessThanOrEqual(temporary.count, 255)
+        XCTAssertNotNil(String(validating: temporary, as: UTF8.self))
+    }
+
+    /// 238 与 255 字节的新文件照样走临时文件 + 改名（以前临时名超长，退成直接写目标，断线时留下半截）。
+    func testLongNewFileNamesStillUseTheTemporaryFile() async throws {
+        for length in [237, 238, 255] {
+            let name = String(repeating: "n", count: length - 4) + ".txt"
+            let before = faults.requestCount(of: .rename)
+            try await session.upload(data: Data("hello".utf8), toRemotePath: "/" + name, onProgress: nil)
+            XCTAssertEqual(try text(name), "hello")
+            XCTAssertEqual(faults.requestCount(of: .rename), before + 1, "\(length) 字节的名字没走改名")
+            try FileManager.default.removeItem(at: local(name))
+        }
+        try assertOnly([])
+    }
+
+    /// 新文件直接建目标时，只有「已经有人建了」才退回原地写；别的错误照实报，不再原地写一遍。
+    func testDirectNewFileWriteDoesNotFallBackOnUnrelatedErrors() async throws {
+        // 让临时文件与目标的独占创建都拒绝（权限），原地写那一下要是还发了就会多一次 open。
+        faults.fail(.open, occurrence: 1, times: 3, with: .permissionDenied, message: "denied")
+        do {
+            try await session.upload(data: Data("x".utf8), toRemotePath: "/fresh.txt", onProgress: nil)
+            XCTFail("权限不够应当报错")
+        } catch {}
+        XCTAssertEqual(faults.requestCount(of: .open), 2, "临时文件一次、目标一次，不该再原地写")
+        try assertOnly([])
+    }
 }
+

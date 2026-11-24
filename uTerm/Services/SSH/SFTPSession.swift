@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NIOCore
 import USSHKit
@@ -330,8 +331,8 @@ actor SFTPSession: SFTPProviding {
         let file: SFTPFile
         do {
             file = try await sftp.openFile(target, flags: [.write, .create, .exclusive])
-        } catch {
-            // 期间有人建了它：退回原地写。
+        } catch let error as SFTPError where error.statusCode == .fileAlreadyExists || error.statusCode == .failure {
+            // 期间有人建了它（SFTP v3 撞上 EXCL 只回 failure）：退回原地写。别的错误（权限、路径不在……）照实报。
             try Task.checkCancellation()
             return try await writeInPlace(target, write: write)
         }
@@ -375,12 +376,40 @@ actor SFTPSession: SFTPProviding {
     }
 
     /// 目标旁边的隐藏临时文件：`<目录>/.<名字>.uterm-upload.tmp`（按字节拼，不是 UTF-8 的名字照样对）。
+    ///
+    /// 文件名最多 255 字节（ext4 / XFS / APFS 的 NAME_MAX）：名字长到加上前后缀会超的（超过 237 字节，比如 80 来个
+    /// 汉字），截短成「前一段 + `~` + 整个名字 SHA-256 的前 16 位十六进制」，不同的长名字不会撞到同一个临时文件。
+    /// 截短按字符边界来（名字是合法 UTF-8 时）。
     nonisolated static func temporaryUploadPath(for target: SFTPPath) -> SFTPPath {
         let bytes = Array(target.bytes)
         let slash = bytes.lastIndex(of: UInt8(ascii: "/"))
         let directory = slash.map { Array(bytes[...$0]) } ?? []
         let name = slash.map { Array(bytes[($0 + 1)...]) } ?? bytes
-        return SFTPPath(bytes: directory + Array(".".utf8) + name + Array(".uterm-upload.tmp".utf8))
+        let suffix = Array(".uterm-upload.tmp".utf8)
+        let budget = maximumNameBytes - 1 - suffix.count
+        var stem = name
+        if name.count > budget {
+            let digest = CryptoKit.SHA256.hash(data: Data(name)).prefix(8).map { String(format: "%02x", $0) }.joined()
+            let tag = Array("~\(digest)".utf8)
+            stem = truncatedOnCharacterBoundary(name, toBytes: budget - tag.count) + tag
+        }
+        return SFTPPath(bytes: directory + Array(".".utf8) + stem + suffix)
+    }
+
+    /// 一个文件名最多多少字节。
+    nonisolated static let maximumNameBytes = 255
+
+    /// 截到最多 `limit` 字节；是合法 UTF-8 时不切断字符（不是的话按字节截，反正本来就不是字符）。
+    nonisolated static func truncatedOnCharacterBoundary(_ bytes: [UInt8], toBytes limit: Int) -> [UInt8] {
+        guard bytes.count > limit else { return bytes }
+        guard let text = String(validating: bytes, as: UTF8.self) else { return Array(bytes.prefix(limit)) }
+        var result: [UInt8] = []
+        for character in text {
+            let size = String(character).utf8.count
+            guard result.count + size <= limit else { break }
+            result += Array(String(character).utf8)
+        }
+        return result
     }
 
     func download(remotePath: String,
