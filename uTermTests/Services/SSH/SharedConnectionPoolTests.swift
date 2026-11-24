@@ -283,6 +283,117 @@ extension SharedConnectionPoolTests {
         XCTAssertEqual(second.connection.closeCount, 0)
     }
 
+    // MARK: - 加入在途建连的人：等到结果之后的认领
+
+    /// 两人同时要同一台：第二个加入第一个的建连。第二个认领之前，第一个已经借了、又还光了（正在关，`isAlive` 仍真）——
+    /// 第二个不能把这条正在关的连接登记回去、借出去，要另建一条。
+    func testJoinedWaiterNeverRegistersAConnectionThatWasAlreadyReleased() async throws {
+        let pool = SharedConnectionPool<String, SlowClosingConnection>(maxLeasesPerConnection: 6)
+        let connectGate = Gate()
+        let claimGate = Gate()
+        let made = SlowConnections()
+        let connect: @Sendable @concurrent () async throws -> SlowClosingConnection = {
+            await connectGate.wait()
+            return made.make()
+        }
+
+        async let first = pool.acquire("host", connect: connect)
+        try await waitUntil {
+            let pending = await pool.pendingCount(for: "host")
+            return made.count == 0 && pending == 1
+        }
+        async let second = pool.acquire("host", sharesHandshake: true, connect: connect, beforeClaim: { await claimGate.wait() })
+        try await Task.sleep(for: .milliseconds(50))
+        await connectGate.open()
+
+        let one = try await first
+        let closing = Task { await pool.release(one.lease) }   // 最后一份 → 摘出表、开始关（挂在 finishClose 上）
+        try await waitUntil { one.connection.closeStarted }
+        XCTAssertTrue(one.connection.isAlive, "前提：还没关完")
+
+        await claimGate.open()
+        let two = try await second
+        XCTAssertFalse(two.connection === one.connection, "正在关的连接被登记回去借出去了")
+        XCTAssertEqual(made.count, 2, "应当另建了一条")
+        one.connection.finishClose()
+        await closing.value
+    }
+
+    /// 加入者认领时，那条连接已经断了（还没来得及收到回调）：不借出去，另建。
+    func testJoinedWaiterSkipsAConnectionThatDiedBeforeItClaimed() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let connectGate = Gate()
+        let claimGate = Gate()
+        let connect: @Sendable @concurrent () async throws -> FakeConnection = {
+            await connectGate.wait()
+            return await counter.makeConnection()
+        }
+        async let first = pool.acquire("host", connect: connect)
+        try await waitUntil { (await pool.pendingCount(for: "host")) == 1 }
+        async let second = pool.acquire("host", sharesHandshake: true, connect: connect, beforeClaim: { await claimGate.wait() })
+        try await Task.sleep(for: .milliseconds(50))
+        await connectGate.open()
+
+        let one = try await first
+        one.connection.markDeadSilently()
+        await claimGate.open()
+        let two = try await second
+        XCTAssertFalse(two.connection === one.connection)
+        XCTAssertTrue(two.connection.isAlive)
+    }
+
+    /// 加入者认领时，先来的已经把名额占满：不超额借出，另建一条。
+    func testJoinedWaiterRespectsTheLeaseLimit() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 1)
+        let counter = ConnectCounter()
+        let connectGate = Gate()
+        let claimGate = Gate()
+        let connect: @Sendable @concurrent () async throws -> FakeConnection = {
+            await connectGate.wait()
+            return await counter.makeConnection()
+        }
+        async let first = pool.acquire("host", connect: connect)
+        try await waitUntil { (await pool.pendingCount(for: "host")) == 1 }
+        async let second = pool.acquire("host", sharesHandshake: true, connect: connect, beforeClaim: { await claimGate.wait() })
+        try await Task.sleep(for: .milliseconds(50))
+        await connectGate.open()
+
+        let one = try await first
+        await claimGate.open()
+        let two = try await second
+        XCTAssertFalse(two.connection === one.connection, "一条连接只许一份租约")
+        let connects = await counter.count
+        XCTAssertEqual(connects, 2)
+    }
+
+    /// 不能问用户的建连（主机密钥一律拒绝）与能问的不共用握手：两个方向都各握各的手，谁也不替谁回答主机密钥。
+    /// 握好之后的连接照常复用。
+    func testNonInteractiveConnectsNeverShareAHandshake() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let gate = Gate()
+        let connect: @Sendable @concurrent () async throws -> FakeConnection = {
+            let connection = await counter.makeConnection()
+            await gate.wait()
+            return connection
+        }
+
+        async let background = pool.acquire("host", sharesHandshake: false, connect: connect)
+        try await waitUntil { await counter.count == 1 }
+        async let interactive = pool.acquire("host", sharesHandshake: true, connect: connect)
+        try await waitUntil { await counter.count == 2 }
+        async let lateBackground = pool.acquire("host", sharesHandshake: false, connect: connect)
+        try await waitUntil { await counter.count == 3 }
+        await gate.open()
+
+        let results = try await [background, interactive, lateBackground]
+        XCTAssertEqual(results.map(\.origin), [.created, .created, .created], "谁也没加入别人的握手")
+
+        let reused = try await pool.acquire("host", sharesHandshake: false, connect: connect)
+        XCTAssertEqual(reused.origin, .reused, "握好的连接照常复用")
+    }
+
     func testInvalidatedConnectionIsNeverHandedOutWhileItCloses() async throws {
         let pool = SharedConnectionPool<String, SlowClosingConnection>(maxLeasesPerConnection: 6)
         let first = try await pool.acquire("host") { SlowClosingConnection() }
@@ -373,6 +484,17 @@ private final class FakeConnection: PooledConnection, @unchecked Sendable {
 
     func markDeadSilently() {
         lock.withLock { alive = false }
+    }
+}
+
+private final class SlowConnections: @unchecked Sendable {
+    private let lock = NSLock()
+    private var made: [SlowClosingConnection] = []
+    var count: Int { lock.withLock { made.count } }
+    func make() -> SlowClosingConnection {
+        let connection = SlowClosingConnection()
+        lock.withLock { made.append(connection) }
+        return connection
     }
 }
 

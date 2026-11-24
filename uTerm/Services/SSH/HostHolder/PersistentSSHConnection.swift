@@ -606,7 +606,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
                 }
                 guard let connected = try? await SSHClientFactory.connectShared(
                     profile: target.profile, auth: target.auth, jumpHostAuth: target.jump,
-                    hostKeyVerifier: verifier, hostKeyApprover: { _ in false }) else { return }
+                    hostKeyVerifier: verifier, hostKeyApprover: { _ in false },
+                    approvesInteractively: false) else { return }
                 _ = try? await connected.exec(command)
                 await connected.close()
             }

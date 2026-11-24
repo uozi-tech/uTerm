@@ -518,7 +518,8 @@ final class WorkspaceModel {
             guard let profile = try container.mainContext.fetch(descriptor).first else {
                 throw CancellationError()
             }
-            return try await SFTPSession.make(profile: profile, container: container, approver: { _ in false })
+            return try await SFTPSession.make(profile: profile, container: container, approver: { _ in false },
+                                              approvesInteractively: false)
         }
     }
 

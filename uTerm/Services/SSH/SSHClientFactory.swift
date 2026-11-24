@@ -235,10 +235,13 @@ nonisolated enum SSHClientFactory {
         auth: ResolvedAuth,
         jumpHostAuth: ResolvedAuth?,
         hostKeyVerifier: HostKeyVerifier,
-        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
+        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+        approvesInteractively: Bool = true
     ) async throws -> ConnectedClient {
         let key = SharedSSHKey(profile: profile, auth: auth, jumpHostAuth: jumpHostAuth)
-        let acquired = try await SharedSSHConnections.pool.acquire(key) {
+        // 不能问用户的建连（主机密钥一律拒绝）不和别人共用握手：它替同时打开的标签页答掉主机密钥问题的话，
+        // 用户连确认框都看不到。已经建好的连接照样复用（那时候主机密钥已经定了）。
+        let acquired = try await SharedSSHConnections.pool.acquire(key, sharesHandshake: approvesInteractively) {
             try await connect(
                 profile: profile,
                 auth: auth,
