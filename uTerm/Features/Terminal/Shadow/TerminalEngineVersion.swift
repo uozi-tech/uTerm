@@ -9,7 +9,7 @@ import Foundation
 /// `engine_version` 一字不差——`TerminalEngineLockTests` 读那份清单来核，忘了改会失败。步骤见 `vendor/libghostty-spm/UTERM-PATCHES.md`。
 nonisolated enum TerminalEngineVersion {
     /// Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。
-    static let current = "ghostty-5ebe501a+p0024/snapshot-1"
+    static let current = "ghostty-56de3f0f+p0024/snapshot-1"
 
     /// 快照和后一个版本互认的旧版本：旧版本 → 新版本。
     ///
@@ -17,11 +17,10 @@ nonisolated enum TerminalEngineVersion {
     /// 换了这种补丁时把旧串记在这里，旧版本存的 holder 检查点照常接回、两端照常镜像。**动了 `src/terminal`、换了 Ghostty
     /// 提交、快照修订号加了一，都不能记**（宁可走回放流也别拿另一种格式去解）。每一条都要能一路走到 `current`，
     /// 键和值的 Ghostty 提交、快照修订号必须相同（`TerminalEngineLockTests` 核这两条）。
-    static let sameSnapshotFormat: [String: String] = [
-        // p0024 相对 p0023 只加了渲染线程上报「这一帧交到图层」（include/ghostty.h、Surface.zig、apprt/embedded.zig、renderer/）。
-        // 那时它是我们的 0024；2026-11-23 起它是上游的 0023、最低对比度改号成 0024，补丁集没变，版本串也没变。
-        "ghostty-5ebe501a+p0023/snapshot-1": "ghostty-5ebe501a+p0024/snapshot-1",
-    ]
+    ///
+    /// 现在是空的：2026-11-24 换了 Ghostty 提交（`5ebe501a` → `56de3f0f`，上游 libghostty-spm `2.2.2026112401`），之前的
+    /// `5ebe501a+p0023` / `+p0024` 都不再互认。旧版本存的检查点走回放流接回；远控镜像对着旧引擎改发回放流，对端不认回放流（更早的版本）时要两端一起更新。
+    static let sameSnapshotFormat: [String: String] = [:]
 
     /// 两个版本存的快照能不能互相解。对称：远控进程拿手机报的版本和 App 报的版本比，两边谁新谁旧都有可能。
     static func snapshotsCompatible(_ lhs: String, _ rhs: String) -> Bool {

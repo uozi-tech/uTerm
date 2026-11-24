@@ -1,9 +1,46 @@
 # uTerm 对 libghostty-spm 的 fork
 
-上游：`https://github.com/Lakr233/libghostty-spm`，基线 tag `2.2.2026112301`（revision `1f378020`）。
-它钉的 Ghostty 提交（`Ghostty.ref`）是 `5ebe501a63425b13d9952e8c54682c046386e5af`（2026-11-16，版本串 `+5ebe501a6`），Zig 0.17.1。
+上游：`https://github.com/Lakr233/libghostty-spm`，基线 tag `2.2.2026112401`（revision `df874b7f`）。
+它钉的 Ghostty 提交（`Ghostty.ref`）是 `56de3f0f6786a3ff4f971d075a28f73409212983`（2026-11-23，版本串 `+56de3f0f6`），Zig 0.17.1。
 
-上一个基线是 `2.2.2026111701`（`b9694b50`，同一个 Ghostty 提交）。2026-11-23 换到现在这个，上游这两个 tag 之间的变化：
+上一个基线是 `2.2.2026112301`（`1f378020`，Ghostty `5ebe501a`）。2026-11-24 换到现在这个，上游这两个 tag 之间的变化：
+- [#127](https://github.com/Lakr233/libghostty-spm/pull/127)：我们提的触控屏 Mac（macOS 27）滚动修复，只动 Mac：手指在屏上拖动时每次刷新滚一步
+  （`Platform/Shared/TerminalTouchResampler.swift`，刷新后 3 ms、整像素、不逆着手指走）、松手速度取手指最后 25 ms 的位移
+  （`NSPanGestureRecognizer.velocity(in:)` 在触控屏上是滞后的滑动平均，拖到停下再抬手会让画面又滑出去）、滑行跟着刷新走、
+  慢松手去前方那一行、点停滑行不算点击。维护者合并前加了一轮加固（`101b9c1`：每个轴记住上一次的行进方向、视图离开窗口时清掉拖动状态、
+  `directTouchIsScrolling` 以 `heldIdleDelay` 为限、停帧时取消排着的那一步），一起带进来了。全部在只收手指的手势识别器后面，
+  没有触控屏的 Mac 不受影响。`AppTerminalView+DirectTouch.swift` 我们没改过，原样取上游；它接协调器的那一处见 Swift 层第 2 条。
+  我们没有触控屏的 Mac，这一条在 uTerm 里**没有真机验证**。
+- [#125](https://github.com/Lakr233/libghostty-spm/pull/125)（iOS）：长按在文字上直接选中那个词并跟着手指扩选（放大镜），长按空白处才弹菜单（原来长按一律弹菜单）。
+- [#126](https://github.com/Lakr233/libghostty-spm/pull/126)（iOS）：单指点 http / https 链接直接打开（引擎报 `GHOSTTY_ACTION_OPEN_URL`，
+  走委托的 `terminalDidRequestOpenURL`，uTerm 里就是 `MobileTerminalController.openTerminalLink`），这一下不弹键盘；程序抓着鼠标时不生效。
+  菜单里多一项「Open Link」（`terminal.openLink`，带 19 种语言的文案）。uTerm 选中网址 / 路径时自己有一项带名字的「打开」，
+  `MGhosttyTerminalView.touchSelectionMenuItems` 在放自己那项时把上游这项去掉，不并排放两项。
+  这两条是 iOS 上用户看得到的行为变化，发版说明要写。
+- Ghostty `5ebe501a..56de3f0f` 42 个提交，和我们有关的：CoreText 排版器缓存的字体按字体网格的编号失效、不按地址（`5e12d3a6`：显示器 DPI 短时间内来回切换，比如从睡眠唤醒，新网格落在旧网格的地址上，会拿另一种字体的字形来画）；
+  排版的一段文字停在最后一个有字的格子、行尾的空格不再送去排版（`5749a0f6` / `7f8b1c95` / `6874ea6d`）；超链接的字符串一次哈希完（`e15b14ba`）；
+  带左右边距的插行 / 删行跨页搬一行时留着 kitty 图片占位符的标记（`8411b955`）；kitty 拖放协议重构（`src/terminal/dnd.zig` 等，嵌入方式下没接）；内置主题更新。
+  `src/terminal` 里页、格子、行的内存布局没变（`page.zig` 只多了一个方法和上面那处标记）。vt 的 C 头文件只有 `mouse/encoder.h` 变了
+  （鼠标编码器在同步设置时留着上一个格子），`ShadowTerminal.swift` 不用鼠标编码器，不用改。`include/ghostty.h`（GhosttyKit 的头）没变。
+- 上游的补丁还是 `0001`–`0023`，文件没变；我们的 `0024` 在新树上原样打上。
+- **Ghostty 提交换了，版本串跟着换**（`ghostty-56de3f0f+p0024/snapshot-1`），`sameSnapshotFormat` 清空：这次升级算协议变更。
+  新旧引擎之间远控镜像改发回放流（`b6a6f79b` 起，两端都认 `terminal-replay` 才行）；对端是那之前发出去的版本（2.4.2 及更早）时照旧接不上终端，
+  要两端一起更新。旧检查点走回放流（见「引擎版本串」）。
+- 验证（新二进制，zip 取自 `make engine`）：
+  - 在打完 `0001`–`0024` 的新树上跑 `zig build test-lib-vt`，退出码 0，`ghostty-vt-test` / `ghostty-vt-c-test` 各 18 个分片。
+  - `make test-fast` 4605 条：并行 4433 过、10 条失败，串行复核后剩 3 条，都是远程桌面的用例、不经过终端引擎，当时机器负载 60 上下：
+    `RemoteDesktopRecoveryTests.test_main_stream_recovers_quickly_after_early_loss_with_pressed_pacing`（在老引擎的构建上单独跑 3 遍同样全失败）、
+    `RemoteDesktopWindowTests.test_new_layout_waits_for_the_first_frame_of_the_new_shape`（新老引擎各单独跑 15 遍，都是 10 遍失败）、
+    `RemoteWANImpairmentTests.test_desktop_adapts_to_a_narrow_lossy_link`（单独跑 3 遍全过）。并行时失败过的
+    `LocalShellHolderIntegrationTests.test_replay_does_not_answer_terminal_queries_from_history` 在新老引擎上表现一样（各 3 遍里第 1 遍失败）。
+    终端这边的 `GhosttySpikeTests`、`TerminalSnapshotTests`、`TerminalMirrorSnapshotTests`、`ShadowTerminalReadingTests`、`TerminalContrastTests`、
+    `GhosttyFontRenderingTests`、`GhosttyMacScrollTests`、`GhosttyMacHostTests`、`TerminalEngineLockTests` 全过、没有被跳过的。
+  - `make test-mobile-fast`（模拟器）785 条：并行 714 过、2 条失败（订阅、常驻会话的性能探针），串行复核都过。新加的
+    `uTermMobileTests/GhosttyOpenLinkMenuTests`（菜单里的「打开」只有一项）3 条过。
+  - **iPhone Duo 真机上的滚动回归这次没跑成**（跑的时候手机锁着，xcodebuild 起不了测试宿主；真机版编过了）。iOS 滚动的 Swift 代码这次上游没动，
+    Ghostty 渲染那边只动了排版。触控屏 Mac 的那部分没有设备可验。
+
+再上一个基线是 `2.2.2026111701`（`b9694b50`，同一个 Ghostty 提交 `5ebe501a`）。2026-11-23 换到 `2.2.2026112301`，上游这两个 tag 之间的变化：
 - [#123](https://github.com/Lakr233/libghostty-spm/pull/123)：我们提的滚动修复。Swift 层第 18、19 条整条进了上游，第 20、21 条进了一部分（见各条）；
   原来我们的引擎补丁 0024（滚动那一帧交到图层的信号）成了上游的 `0023-smooth-scroll-presented.sh`，我们的最低对比度从 0023 改号成 0024（文件内容没改）。
   维护者合并前加了两处修正，一起带进来了：按住一段从静止起步的吸附再抬手，接着它原来的方向走、不掉头
@@ -20,7 +57,7 @@
   `testUIKitReleasePremises`（量普通 `UIScrollView` 自己的减速，不经过终端）有一次 1.2548 对上限 1.25 擦线没过，单独重跑 3 遍都过，其余全过。
   没重跑 `zig build test-lib-vt`（Ghostty 提交没换，补丁只多了动渲染的 0023）。
 
-再上一个基线是 `2.2.2026111501`（Ghostty `cf5519b2`，Zig 0.17.0）。2026-11-17 换到 `2.2.2026111701`，上游这两个 tag 之间的变化：
+更早的基线是 `2.2.2026111501`（Ghostty `cf5519b2`，Zig 0.17.0）。2026-11-17 换到 `2.2.2026111701`，上游这两个 tag 之间的变化：
 - Swift 层只动了 `UITerminalView+Keyboard.swift`（我们没改过这个文件，原样取上游）：硬件键盘交给输入法的按键各自等
   0.25 s 的认领窗口，窗口没过不会被别的键的 flush 当成没人认领而原样重放（原来会打两遍）；校准时转交按键带上它的
   `UIPressesEvent`（不带的话 iOS 27 的拼音不认进程的第一个延后按键）。代价：转交模式下没有输入法认领的键要等满 0.25 s 才原样补发。
@@ -77,9 +114,9 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 二进制不进版本库（GhosttyKit 解开 197 MB，vt 14 MB）。`ENGINE.lock` 记着要哪两份：
 
 ```
-engine_version=ghostty-5ebe501a+p0024/snapshot-1
-ghosttykit_zip=GhosttyKit-5ebe501a-2026112301-0024.xcframework.zip     sha256 001bf8fe…8342
-ghosttyvt_zip=ghostty-vt-5ebe501a-2026112301-0024.xcframework.zip      sha256 ef6f8c0b…7fbe
+engine_version=ghostty-56de3f0f+p0024/snapshot-1
+ghosttykit_zip=GhosttyKit-56de3f0f-0024.xcframework.zip     sha256 9e3e72b0…2359
+ghosttyvt_zip=ghostty-vt-56de3f0f-0024.xcframework.zip      sha256 ad0afa62…01ee
 ```
 
 `make engine`（`scripts/fetch-ghostty-engine.sh`）按它从本地目录取 zip、校验 sha256、解到 `BinaryTarget/`，旁边各留一个
@@ -112,6 +149,7 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
   远控照常镜像，旧版本存的 holder 检查点照常接回。`TerminalEngineLockTests.testSnapshotCompatibilityTableOnlyBridgesPatchLevels`
   核每一条只差补丁编号、走得到 `current`。0024 就是这样记的（2026-11-23，p0023 → p0024）。
   同一天换到上游 `2.2.2026112301` 时补丁只是换了编号和出处（上游的 0023 + 我们的 0024，内容就是原来的 0024 + 0023），版本串没动，表也不用加。
+  2026-11-24 换到 `2.2.2026112401` 时 Ghostty 提交换了，走的是下面那一条，这张表清空了。
 - 快照格式可能变了（换 Ghostty 提交、动了 `src/terminal`、快照修订号加一）：不记表，表清空。新旧版本之间远控镜像改发回放流
   （`RemoteTerminalReplay`：设备按本机引擎重画；两端都要是认得 `terminal-replay` 的版本，否则接不上终端、提示两端更新到同一版本）；Mac 本机终端重启后二进制快照解不开，改用检查点里退出时另存的回放流（`TerminalCheckpointBlob`
   第 3 版，VT 字节、最近 2000 行回滚）重画那一屏；iOS 经主机上的保持进程接回同理（那边每张检查点都带回放流）。
@@ -197,7 +235,7 @@ Swift 侧不再记镜像；小数记着它属于哪个视口（屏、滚动条�
   `ghostty_simd_codepoint_width`、`ghostty_simd_decode_utf8_until_control_seq`、`ghostty_simd_index_of`。常规链接不撞（两端的 App 都链过，
   各只留一份定义，两份实现来自同一棵树）；**加 `-all_load` 或 `-force_load` 就报 duplicate symbol**。工程里现在没有这两个参数。
 - 模块名 `GhosttyVt`，要链 libc++（`GhosttyKit` target 已经带了 `.linkedLibrary("c++")`，两者总是一起用）。
-- 这是 Ghostty `5ebe501a` 时的 vt C API（和 `cf5519b2` 相比只有 `version.h` 变了），和官方 vt-1.0.0 的文档对不上：`ghostty_terminal_new` 只有 cols / rows，
+- 这是 Ghostty `56de3f0f` 时的 vt C API（`cf5519b2` → `5ebe501a` 只有 `version.h` 变了，`5ebe501a` → `56de3f0f` 只有 `mouse/encoder.h` 变了，我们没用鼠标编码器），和官方 vt-1.0.0 的文档对不上：`ghostty_terminal_new` 只有 cols / rows，
   formatter 的选项一次传一个结构体，没有读当前画笔的接口。对着 `BinaryTarget/ghostty-vt.xcframework/*/Headers/ghostty/vt/` 写。
 - 测试 target 不依赖这个 product（给测试 target 加包依赖会让 Xcode 换成动态的 PackageFrameworks），经 `@testable import` 用 App 里的类型。
 
@@ -231,6 +269,10 @@ C 接口不动。源码里每一处都标着「uTerm 本地补丁」，升级时
   说不同步时滚动发糊），Mac false（渲染线程自己会画，主线程每跨一行白画一帧 1.4–2.2 ms，还挡着渲染线程）。尺寸、度量、可见性、选区、
   首帧这些宿主侧的变化两端都照旧同步重画。实现是 `pendingSyncDraw` 和 `requestImmediateTick(syncDraw:)`。
   例外是第 20 条：iOS 上系统滚动动着时，wakeup 先不同步重画（`wakeupDefersSyncDraw`），慢下来以后也不开 display link（`wakeupDefersDisplayLink`）。
+- Mac 的触控屏滚动（上游 [#127](https://github.com/Lakr233/libghostty-spm/pull/127)，`AppTerminalView+DirectTouch.swift` 原样取上游）在上游接的是
+  它那份协调器的 `wakeupSkipsDraw`；我们的协调器里没有这个名字，`AppTerminalView.swift` 里改成设 `wakeupDefersSyncDraw`
+  （手指拖着或滑行时 wakeup 的 tick 不 refresh、欠着，停下后补；Mac 上 wakeup 本来就不同步重画）。没有触控屏的 Mac 上那个闭包恒为 false。
+  升级时上游要是给 `wakeupSkipsDraw` 加了新的调用点，照这个对应关系改。
 - 几处 trace 打点（`tick-app` / `tick-refresh` / `tick-draw` / `wakeup-tick`），trace 关着时零开销。
 
 回归用例：`uTermMobileTests/TerminalHiddenRenderingTests.swift`（surface 放掉 / 重建）、`uTermMobileTests/Probes/GhosttyFrameBudgetTests.swift`、
