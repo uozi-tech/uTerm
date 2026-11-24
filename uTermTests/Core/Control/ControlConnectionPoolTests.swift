@@ -149,6 +149,32 @@ final class ControlConnectionPoolTests: XCTestCase {
 
     // MARK: 懒建 / 复用
 
+    /// 建连失败的归类：认证、握手、主机密钥（目标那一跳或跳板机那一跳）都是「重试也不会好」——`borrow` 不重试，
+    /// 并行传输的其余通道一起停；只有网络问题（含跳板机连不上目标）照旧重试。
+    func testConnectErrorsAreClassifiedByTypeIncludingTheJumpHostCause() {
+        typealias App = SSHConnection.SSHConnectionError
+        func mapped(_ error: Error) -> ControlConnectError {
+            ControlConnectionPool.mapConnectError(error, sink: HostKeyChallengeSink())
+        }
+        for permanent: Error in [App.authenticationFailed("x"), App.jumpHostFailed("x", cause: .authentication)] {
+            guard case .authFailed = mapped(permanent) else { return XCTFail("\(permanent) 应归认证失败") }
+        }
+        for permanent: Error in [App.handshakeFailed("x"), App.hostKeyRejected("x"),
+                                 App.jumpHostFailed("x", cause: .hostKey), App.jumpHostFailed("x", cause: .handshake)] {
+            let error = mapped(permanent)
+            guard case .connectRejected = error else { return XCTFail("\(permanent) 应归配置问题，实得 \(error)") }
+            XCTAssertFalse(error.isRetryableBorrowFailure)
+            XCTAssertTrue(ParallelTransfer.stopsAllWorkers(error))
+            XCTAssertEqual(error.code, .connect_failed)
+        }
+        for transient: Error in [App.connectFailed("x"), App.jumpHostFailed("x", cause: .unreachable)] {
+            let error = mapped(transient)
+            guard case .connectFailed = error else { return XCTFail("\(transient) 应归网络问题") }
+            XCTAssertTrue(error.isRetryableBorrowFailure)
+            XCTAssertFalse(ParallelTransfer.stopsAllWorkers(error))
+        }
+    }
+
     func testExecutorIsBuiltLazilyAndReusedPerHost() async throws {
         let factory = Factory()
         let clock = Clock()

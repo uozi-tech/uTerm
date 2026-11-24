@@ -85,6 +85,9 @@ nonisolated enum ControlConnectError: Error, Sendable {
     /// —— 这是中间人风险的最后一道闸。
     case hostKeyChanged(fingerprint: String, algorithm: String)
     case connectFailed(String)
+    /// 连上了服务器、但配置不对（握手失败、没有共同算法、主机密钥被拒，含经跳板机时那一跳的）：和认证失败一样
+    /// 重试也不会好，`borrow` 不重试、并行传输的其余通道一起停。对外的码和文案同 `connectFailed`。
+    case connectRejected(String)
     case authFailed(String)
     /// 建连**成功了**，但这条连接刚建好就没人认领 —— 建连期间该主机被
     /// `disconnect` / `disconnectAll` 释放（用户关了主开关、或显式断开）。
@@ -100,7 +103,7 @@ extension ControlConnectError {
         switch self {
         case .hostKeyUnknown: return .host_key_unknown
         case .hostKeyChanged: return .host_key_changed
-        case .connectFailed: return .connect_failed
+        case .connectFailed, .connectRejected: return .connect_failed
         case .authFailed: return .auth_failed
         // 「稍后重试」语义，回 `server_busy` —— 客户端对这个码有退避重试。
         case .released: return .server_busy
@@ -114,7 +117,7 @@ extension ControlConnectError {
             return String(localized: "主机「\(host)」的密钥尚未信任（\(fingerprint)）。请让用户核对指纹，确认无误后跑 `utermctl trust -H \(host) --fingerprint \(fingerprint)`。")
         case .hostKeyChanged(let fingerprint, _):
             return String(localized: "主机「\(host)」的密钥与信任库里的记录不一致（当前 \(fingerprint)）。这可能是中间人攻击。CLI 不允许覆盖，请到 uTerm 界面里连接一次并由用户处理。")
-        case .connectFailed(let reason):
+        case .connectFailed(let reason), .connectRejected(let reason):
             return String(localized: "连接「\(host)」失败：\(reason)")
         case .authFailed(let reason):
             return String(localized: "「\(host)」认证失败：\(reason)")
@@ -127,7 +130,7 @@ extension ControlConnectError {
     var isRetryableBorrowFailure: Bool {
         switch self {
         case .connectFailed, .released: return true
-        case .authFailed, .hostKeyUnknown, .hostKeyChanged: return false
+        case .authFailed, .connectRejected, .hostKeyUnknown, .hostKeyChanged: return false
         }
     }
 

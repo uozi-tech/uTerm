@@ -726,11 +726,16 @@ extension ControlConnectionPool {
         }
         if let already = error as? ControlConnectError { return already }
         let text = FriendlyError.describe(error)
-        if case SSHConnection.SSHConnectionError.jumpHostFailed(_, .authentication) = error {
-            return .authFailed(text)
-        }
-        if case SSHConnection.SSHConnectionError.authenticationFailed = error {
-            return .authFailed(text)
+        if let error = error as? SSHConnection.SSHConnectionError {
+            switch error {
+            case .authenticationFailed, .jumpHostFailed(_, .authentication):
+                return .authFailed(text)
+            // 握手 / 主机密钥：目标那一跳或跳板机那一跳都一样，重试不会好。
+            case .handshakeFailed, .hostKeyRejected, .jumpHostFailed(_, .hostKey), .jumpHostFailed(_, .handshake):
+                return .connectRejected(text)
+            case .notConnected, .alreadyClosed, .connectFailed, .jumpHostFailed(_, .unreachable):
+                break
+            }
         }
         if text.contains("认证失败") || text.localizedCaseInsensitiveContains("authentication") {
             return .authFailed(text)
