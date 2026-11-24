@@ -35,9 +35,11 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
     /// 谁来都放行的服务端（只活在本用例里，端口由内核分配）。`maximumPacketSize` 决定它通告的通道窗口（× 64）。
     private static func startServer(fs: SFTPMemoryFileSystem,
                                     maximumPacketSize: Int = 1 << 17,
+                                    rekeyLimits: NIOSSHRekeyLimits = .default,
                                     sftp: SFTPServer.Configuration = SFTPServer.Configuration()) async throws -> SSHTestServer {
         var configuration = SSHTestServer.Configuration(
             authentication: .acceptAnyone, maximumPacketSize: maximumPacketSize)
+        configuration.rekeyLimits = rekeyLimits
         configuration.serveSFTP(fileSystem: fs, configuration: sftp)
         return try await SSHTestServer.start(configuration)
     }
@@ -119,6 +121,37 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
         XCTAssertEqual(sha256(fetched), sha256(source))
     }
 
+    /// 服务端每 256 KiB 就换一次钥匙：并行的分片写、整份往返都要跨过几十次重新协商，
+    /// 换钥匙期间排队的包不能丢、不能乱序，结果逐字节一致。
+    func testParallelTransferSurvivesFrequentRekeys() async throws {
+        await session.close()
+        await server.stop()
+        server = try await Self.startServer(
+            fs: fs, rekeyLimits: NIOSSHRekeyLimits(packets: nil, bytes: 256 * 1024))
+        session = try await SFTPSession(connected: try await connect(port: server.port))
+
+        let chunk = 1_048_576
+        let chunks = (0..<6).map { _ in payload(chunk) }
+        let whole = chunks.reduce(into: Data()) { $0.append($1) }
+        try await session.writeRange("/home/test/rekey.bin", offset: 0,
+                                     data: chunks[0], mode: .overwrite)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 1..<chunks.count {
+                let data = chunks[index]
+                let offset = UInt64(index * chunk)
+                group.addTask { [session] in
+                    try await session!.writeRange("/home/test/rekey.bin",
+                                                  offset: offset, data: data, mode: .write)
+                }
+            }
+            try await group.waitForAll()
+        }
+        XCTAssertEqual(sha256(Data(try XCTUnwrap(fs.contents("/home/test/rekey.bin")))), sha256(whole))
+
+        let fetched = try await session.download(remotePath: "/home/test/rekey.bin")
+        XCTAssertEqual(sha256(fetched), sha256(whole))
+    }
+
     /// 分片并行写：多段 `writeRange(.write)` 落在同一文件的不同区间，拼起来完整。
     func testParallelRangeWritesAssembleTheWholeFile() async throws {
         let chunk = 1_048_576
@@ -195,6 +228,23 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
             // 同上（USSHCore 自己读的那几段）。
         }
         fs.setLieAboutEOF(from: nil)
+    }
+
+    /// 服务端在文件中途回 0 字节的 DATA（不是 EOF）：协议错误，下载报错——不当成读完了，也不原地一直重读。
+    func testZeroLengthDataMidFileFailsTheDownload() async throws {
+        fs.put("/home/test/zero.bin", Array(payload(1_048_576)))
+        fs.setZeroLengthData(from: 128 * 1_024)
+        defer { fs.setZeroLengthData(from: nil) }
+
+        do {
+            let fetched = try await session.download(remotePath: "/home/test/zero.bin")
+            XCTFail("0 字节的 DATA 必须报错，实际拿回了 \(fetched.count) 字节")
+        } catch SFTPError.invalidResponse {
+        } catch is SFTPShortReadError {
+        } catch SFTPError.shortRead {
+        }
+        XCTAssertTrue(ParallelTransfer.stopsAllWorkers(SFTPError.invalidResponse("x")),
+                      "并行传输碰到它整次失败，不按段重试")
     }
 
     /// 区间读：读回的就是那一段；越过末尾只是短，不报错。

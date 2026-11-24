@@ -157,8 +157,10 @@ final class ControlSFTPHandlerTests: XCTestCase {
 
     /// 像 `ControlServer` 那样把 fd 挂进请求上下文再调 handler。fd 的所有权交给 handler
     /// （它负责关）；返回响应与上下文（好查进度账）。
-    private func transfer(_ request: ControlRequest, fd: Int32?) async -> (ControlResponse, ControlRequestContext) {
+    private func transfer(_ request: ControlRequest, fd: Int32?,
+                          on target: ControlHandler? = nil) async -> (ControlResponse, ControlRequestContext) {
         let context = ControlRequestContext(fileDescriptors: fd.map { [$0] } ?? [])
+        let handler = target ?? self.handler!
         let response = await ControlRequestContext.$current.withValue(context) {
             await handler.handle(request)
         }
@@ -688,6 +690,33 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertTrue(rm.ok, rm.message)
         XCTAssertNil(fs.contents(SFTPPath(bytes: Array("/home/test/".utf8) + first)))
         XCTAssertEqual(fs.contents(SFTPPath(bytes: Array("/home/test/".utf8) + second)), Array("second".utf8))
+    }
+
+    /// 服务端回 0 字节的 DATA（协议错误）：`sftp get` 失败，并行的各通道不按段反复重读（请求数有上限）。
+    func testZeroLengthDataFailsAParallelGetWithoutARetryLoop() async throws {
+        let fs = SFTPMemoryFileSystem()
+        fs.put("/home/test/big.bin", [UInt8](repeating: 7, count: 20 << 20))
+        fs.setZeroLengthData(from: 9 << 20)
+        let faults = SFTPFaultInjector()
+        var configuration = SSHTestServer.Configuration(authentication: .acceptAnyone)
+        configuration.serveSFTP(fileSystem: fs, faults: faults)
+        let server = try await SSHTestServer.start(configuration)
+        let connected = try await SSHClientFactory.connect(
+            profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: server.port, jumpHost: nil),
+            auth: .password(username: "tester", password: "unused"), jumpHostAuth: nil,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in true })
+        let session = try await SFTPSession(connected: connected, pacesUploads: false)
+        let realHandler = ControlHandler(
+            settings: settings, modelContainer: container, forwardingCoordinator: ForwardingCoordinator(),
+            pool: FakePool(session: session), registry: TerminalSessionRegistry())
+        defer { Task { await session.close(); await server.stop() } }
+        let local = try localFile(Data())
+
+        let (response, _) = await transfer(request(.sftpGet, path: "/home/test/big.bin", parallel: 1), fd: local.fd, on: realHandler)
+
+        XCTAssertFalse(response.ok, "0 字节的 DATA 必须让传输失败")
+        // 20 MiB 按 255 KiB 一片约 80 个 READ；按段重试 3 次也就两三百个。这里只许一遍多一点。
+        XCTAssertLessThan(faults.requestCount(of: .read), 200, "按段重试了")
     }
 
     // MARK: - 服务端状态（`SFTPError.status`）

@@ -14,6 +14,16 @@ final class SFTPMemoryFileSystem: SFTPServerFileSystem, @unchecked Sendable {
     private var shortReadBudget = 0
     /// 从这个 offset 起一律回空 —— 模拟服务端在文件中途谎报 EOF。
     private var lieAboutEOFFrom: Int?
+    /// 从这个 offset 起回 0 字节的 DATA（不是 EOF）——协议错误，客户端必须报错，不能当 EOF 或原地重读。
+    private var zeroLengthDataFrom: Int?
+
+    func setZeroLengthData(from offset: Int?) {
+        lock.withLock { zeroLengthDataFrom = offset }
+    }
+
+    func sendsZeroLengthData(at offset: Int) -> Bool {
+        lock.withLock { zeroLengthDataFrom.map { offset >= $0 } ?? false }
+    }
 
     func setShortReadBudget(_ count: Int) {
         lock.withLock { shortReadBudget = count }
@@ -137,6 +147,7 @@ private struct SFTPMemoryFile: SFTPServerFile {
     let fs: SFTPMemoryFileSystem
 
     func read(at offset: UInt64, length: Int) async throws -> ByteBuffer? {
+        if fs.sendsZeroLengthData(at: Int(offset)) { return ByteBuffer() }
         let bytes = fs.read(path, at: Int(offset), length: length)
         return bytes.isEmpty ? nil : ByteBuffer(bytes: bytes)
     }

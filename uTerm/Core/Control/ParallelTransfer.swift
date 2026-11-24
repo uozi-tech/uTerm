@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import NIOCore
+import USSHKit
 
 /// CLI 大文件传输引擎：**一次传输 = 一条 IPC 请求**，并行在 uTerm 里面做。
 ///
@@ -288,6 +289,8 @@ nonisolated enum ParallelTransfer {
     /// 这个错误一旦出现，别的工作者再去借会话也只会同样失败：整次传输就此失败，其余工作者不再借。
     static func stopsAllWorkers(_ error: any Error) -> Bool {
         if let error = error as? ControlConnectError { return !error.isRetryableBorrowFailure }
+        // 服务端回的东西不合协议（比如 0 字节的 DATA）：换条会话、重读那一段也还是它，整次传输就此失败。
+        if case SFTPError.invalidResponse = error { return true }
         return SSHTransportFailure.isPermanentConnectFailure(error)
     }
 
