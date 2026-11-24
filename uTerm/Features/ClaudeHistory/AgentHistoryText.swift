@@ -317,6 +317,77 @@ enum AgentHistoryText {
         return String(localized: "在 \(directory) 里新开一个会话")
     }
 
+    // MARK: 新会话（选目录、选工具）
+
+    static var newSessionDirectoryLabel: String {
+        String(localized: "目录", comment: "新会话：在哪个目录里开")
+    }
+
+    static var newSessionToolLabel: String {
+        String(localized: "工具", comment: "新会话：用哪种编码工具")
+    }
+
+    /// 目录还不知道时选择器上的字。
+    static var newSessionNoDirectory: String {
+        String(localized: "选择一个目录", comment: "新会话：还没选目录时目录选择器上的字")
+    }
+
+    /// 「开始」按钮：只有一种工具时写明是哪种。
+    static func newSessionStartTitle(tool: AgentHistoryTool?, toolCount: Int) -> String {
+        guard let tool, toolCount == 1 else { return String(localized: "开始", comment: "新会话：开始按钮") }
+        return String(localized: "用 \(tool.displayName) 开始", comment: "新会话：只有一种工具时的开始按钮")
+    }
+
+    /// 开始不了的原因；开得了为 nil。
+    static func newSessionBlockedReason(directory: String?, tools: [AgentHistoryTool]) -> String? {
+        guard directory != nil else { return String(localized: "先选一个目录", comment: "新会话：还没选目录时开始按钮下的说明") }
+        guard tools.isEmpty else { return nil }
+        return String(localized: "这台主机上的编码工具都不能在终端里新开会话")
+    }
+
+    /// 目录菜单最后一项：本机是系统的文件夹面板，SSH 主机是输入路径。
+    static var chooseFolder: String {
+        String(localized: "选择文件夹…", comment: "新会话：目录菜单的最后一项")
+    }
+
+    /// 文件夹面板、输入路径面板上确认的按钮。
+    static var chooseFolderPrompt: String {
+        String(localized: "选择", comment: "新会话：选好目录后确认的按钮")
+    }
+
+    /// iOS 面板里目录列表的最后一项。
+    static var enterPath: String {
+        String(localized: "输入路径…", comment: "新会话：手动输入一个目录")
+    }
+
+    static var enterPathTitle: String {
+        String(localized: "输入路径", comment: "新会话：手动输入目录的面板标题")
+    }
+
+    static var enterPathPlaceholder: String {
+        String(localized: "~/project 或 /srv/app", comment: "新会话：输入目录的占位提示，路径照原样不翻译")
+    }
+
+    static var enterPathHint: String {
+        String(localized: "~ 开头的按这台主机上的主目录展开。", comment: "新会话：输入目录时的说明")
+    }
+
+    /// 手输的目录核对不过时的说明（`AgentHistoryDirectoryInput.Problem`）。
+    static func directoryProblem(_ problem: AgentHistoryDirectoryInput.Problem) -> String {
+        switch problem {
+        case .empty:
+            return String(localized: "请输入一个目录")
+        case .notAbsolute:
+            return String(localized: "请输入以 / 或 ~ 开头的完整路径")
+        case .unknownHome:
+            return String(localized: "还不知道这台主机的主目录，请输入以 / 开头的完整路径")
+        case .missing(let path):
+            return String(localized: "找不到 \(path)")
+        case .notDirectory(let path):
+            return String(localized: "\(path) 不是目录")
+        }
+    }
+
     /// 「继续这个会话」的悬停。
     static func resumeHelp(_ tool: AgentHistoryTool, canResume: Bool) -> String {
         guard canResume else { return String(localized: "不知道这个会话的工作目录，无法继续") }

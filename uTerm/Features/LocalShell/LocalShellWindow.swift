@@ -414,7 +414,13 @@ final class LocalShellWindowModel {
     }
 
     private func makeCodeTab(id: UUID = UUID(), directory: String?) -> UPaneTab<LocalShellPane> {
-        let code = CodeTabModel(hostName: LocalShellIdentity.serverName, directory: directory) { [weak self] directory in
+        // 起始页的候选接上本机终端最近待过的目录（同标签条「＋」菜单那一份：开着的标签所在的目录在前）；
+        // 「选择文件夹…」用系统的文件夹面板。
+        let code = CodeTabModel(hostName: LocalShellIdentity.serverName, directory: directory,
+                                directoryChooser: .localFolder,
+                                recentDirectories: {
+                                    LocalShellWorkspaces.shared.list(open: LocalShellWindowRouter.shared.openDirectories)
+                                }) { [weak self] directory in
             self?.makeCodeRun(directory: directory)
         }
         let pane = LocalShellPane(id: id, ordinal: 0, codeTab: code)

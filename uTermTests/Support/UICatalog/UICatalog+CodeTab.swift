@@ -9,6 +9,7 @@ import UPaneGroups
 extension UICatalog {
     static var codeTab: [UICatalogEntry] {
         let src = "uTerm/Features/ClaudeHistory/Views/CodeTabView.swift"
+        let page = "uTerm/Features/ClaudeHistory/Views/CodeTabNewSessionPage.swift"
         let local = "uTerm/Features/LocalShell/LocalShellWindow.swift"
         let size = CGSize(width: 1180, height: 740)
         let localSize = CGSize(width: 1100, height: 700)
@@ -54,8 +55,35 @@ extension UICatalog {
             UICatalogEntry("终端窗口/Code 标签页_只有一种工具", source: src, symbol: "CodeTabView", size: size) { stage in
                 try await codeTabRender(stage, .init(fixtures: .init(tools: [.claude])))
             },
-            UICatalogEntry("终端窗口/Code 标签页_没选会话", source: src, symbol: "CodeTabView", size: size) { stage in
+            // 什么都没选：右边是「新会话」起始页（目录选择器、几种工具可选、开始）。
+            UICatalogEntry("终端窗口/Code 标签页_新会话起始页", source: page, symbol: "CodeTabNewSessionPage",
+                           size: size) { stage in
                 try await codeTabRender(stage, .init(selects: false))
+            },
+            // 只有一种工具：不出工具选择，开始按钮上写明是哪种。
+            UICatalogEntry("终端窗口/Code 标签页_新会话起始页_一种工具", source: page, symbol: "CodeTabNewSessionPage",
+                           size: size) { stage in
+                try await codeTabRender(stage, .init(fixtures: .init(tools: [.claude]), selects: false))
+            },
+            // 打开它的终端不知道目录（没有 OSC 7）：目录选择器上写「选择一个目录」，开始按钮灰着、下面说明。
+            UICatalogEntry("终端窗口/Code 标签页_新会话起始页_没有目录", source: page, symbol: "CodeTabNewSessionPage",
+                           size: size) { stage in
+                try await codeTabRender(stage, .init(selects: false, directory: .some(nil)))
+            },
+            // SSH 主机上「选择文件夹…」：输入路径的小面板，核对不过的那一句。
+            UICatalogEntry("终端窗口/Code 标签页_输入路径", source: page, symbol: "CodeTabPathSheet",
+                           size: CGSize(width: 420, height: 170)) { stage in
+                let s = try stage.session()
+                let entry = AgentHistoryPathEntry(text: "~/shop-api/docs",
+                                                  problem: .missing(UICatalogCodeMode.shop + "/docs"))
+                return UICatalogRender(s.wrap(CodeTabPathSheet(entry: entry, connection: nil, onChoose: { _ in },
+                                                               onCancel: {})))
+            },
+            UICatalogEntry("终端窗口/Code 标签页_输入路径_空", source: page, symbol: "CodeTabPathSheet",
+                           size: CGSize(width: 420, height: 170)) { stage in
+                let s = try stage.session()
+                return UICatalogRender(s.wrap(CodeTabPathSheet(entry: AgentHistoryPathEntry(), connection: nil,
+                                                               onChoose: { _ in }, onCancel: {})))
             },
             // 搜「订单」：Codex 那一种假设不能在主机上搜，结果上方说一句。
             UICatalogEntry("终端窗口/Code 标签页_搜索结果", source: src, symbol: "AgentHistorySearchResults", size: size) { stage in
@@ -80,7 +108,13 @@ extension UICatalog {
             UICatalogEntry("本机终端/Code 标签页_置顶", source: local, symbol: "LocalShellTerminalArea", size: localSize) { stage in
                 try await localCodeTabRender(stage, .init(fixtures: .init(pinned: ["c-login", "c-dots"]), running: ["x-tests"]))
             },
-            UICatalogEntry("本机终端/Code 标签页_没选会话", source: local, symbol: "LocalShellTerminalArea", size: localSize) { stage in
+            UICatalogEntry("本机终端/Code 标签页_新会话起始页", source: page, symbol: "CodeTabNewSessionPage",
+                           size: localSize) { stage in
+                try await localCodeTabRender(stage, .init(selects: false))
+            },
+            // 本机终端窗口的最小尺寸下的起始页（侧栏收成窄轨）。
+            UICatalogEntry("本机终端/Code 标签页_新会话起始页_最小窗口", source: page, symbol: "CodeTabNewSessionPage",
+                           size: CGSize(width: 560, height: 360)) { stage in
                 try await localCodeTabRender(stage, .init(selects: false))
             },
             // 本机终端窗口的最小尺寸：侧栏收成一条窄轨（带着在跑的个数），点开盖在右边上面。
@@ -121,6 +155,8 @@ extension UICatalog {
         var showsRecord = false
         /// 摆成「正拖着这个会话（会话 ID）、落在这里」的样子。
         var pinDrag: (session: String, target: AgentHistoryPinDrop)?
+        /// Code 标签页「新会话」的目录；nil = 照默认（项目 shop-api），`.some(nil)` = 不知道。
+        var directory: String?? = nil
     }
 
     /// SSH 终端窗口：一个终端标签页 + 一个 Code 标签页（前台）。
@@ -135,11 +171,12 @@ extension UICatalog {
             pane.session.attentionSink = { _ in }
             await pane.session.connect(using: MockBackend())
         }
-        let codeID = workspace.openCodeTab(serverID: server.id, hostName: server.name, directory: UICatalogCodeMode.shop)
+        let codeID = workspace.openCodeTab(serverID: server.id, hostName: server.name,
+                                           directory: setup.directory ?? UICatalogCodeMode.shop)
         guard let code = workspace.terminalGroups.tab(codeID)?.payload.codeTab else { throw CancellationError() }
         var fixtures = setup.fixtures
         fixtures.pinDefaults = s.defaults
-        let terminals = await prepare(code, setup, fixtures: fixtures)
+        let terminals = await prepare(code, setup, fixtures: fixtures, home: UICatalogCodeMode.sshRoot)
         let view = s.wrap(TerminalWindowView(windowID: TerminalWindowID(id: UUID(), serverID: server.id),
                                              catalogModel: workspace))
         return UICatalogRender(view, after: { _ in
@@ -165,7 +202,9 @@ extension UICatalog {
         var fixtures = setup.fixtures
         fixtures.root = UICatalogCodeMode.localRoot
         fixtures.pinDefaults = s.defaults
-        let terminals = await prepare(code, setup, fixtures: fixtures)
+        // 本机最近待过的目录换成假的（真的那份是这台 Mac 上的路径）。
+        code.recentDirectories = { [UICatalogCodeMode.localHome + "/notes", UICatalogCodeMode.localHome + "/Downloads"] }
+        let terminals = await prepare(code, setup, fixtures: fixtures, home: UICatalogCodeMode.localHome)
         let view = s.wrap(LocalShellWindowView(windowID: LocalShellWindowID(id: UUID()), catalogModel: model))
         return UICatalogRender(view, after: { _ in
             await feed(terminals)
@@ -177,11 +216,11 @@ extension UICatalog {
 
     /// 装上假数据的连接，起好跑着的会话（终端接假后端），选好右边显示什么。返回要喂输出的终端。
     private static func prepare(_ code: CodeTabModel, _ setup: CodeTabSetup,
-                                fixtures: UICatalogCodeMode.Setup) async -> [(TerminalSession, String)] {
+                                fixtures: UICatalogCodeMode.Setup, home: String) async -> [(TerminalSession, String)] {
         var fixtures = fixtures
         fixtures.selects = setup.selects && setup.showsRun == nil && !setup.newSession
         let history = await UICatalogCodeMode.model(fixtures)
-        code.install(AgentHistoryConnection(history: history))
+        code.install(AgentHistoryConnection(history: history, home: home))
         AgentHistoryPinDragModel.catalogPreset = setup.pinDrag.flatMap { drag in
             history.files.first { $0.sessionID == drag.session }.map { (AgentHistoryPinKey($0), drag.target) }
         }
@@ -249,6 +288,8 @@ enum UICatalogCodeMode {
 
     nonisolated static let sshRoot = "/home/deploy"
     nonisolated static let localRoot = "/Users/demo/code"
+    /// 本机的假主目录（`localRoot` 在它下面）。
+    nonisolated static let localHome = "/Users/demo"
     static var shop: String { sshRoot + "/shop-api" }
     static var localShop: String { localRoot + "/shop-api" }
 

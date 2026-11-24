@@ -73,6 +73,7 @@ final class CodeTabModel {
 
     /// 右边显示什么。
     enum Detail: Equatable {
+        /// 什么都没选：「新会话」起始页（选目录、选工具、开始）。侧栏顶上的「＋」也回到这里。
         case empty
         /// 选中那份记录的只读对话。
         case transcript
@@ -82,8 +83,13 @@ final class CodeTabModel {
 
     /// 主机名（标签页标题用）。
     let hostName: String
-    /// 「＋」新会话默认开在哪：打开这个标签页时那个终端的当前目录；不知道为 nil（按钮不可用）。
+    /// 「新会话」开在哪：打开这个标签页时那个终端的当前目录，起始页上选了别的就是选的那个（随布局存着，重启后还在）。
+    /// 不知道为 nil：起始页里选一个就能开。
     var newSessionDirectory: String?
+    /// 起始页「选择文件夹…」怎么选：本机用系统的文件夹面板，SSH 主机输入路径。
+    let directoryChooser: CodeTabDirectoryChooser
+    /// 本机终端最近待过的目录（起始页的候选，接在记录的项目目录后面）。SSH 主机没有。
+    @ObservationIgnored var recentDirectories: @MainActor () -> [String]
     private(set) var connection: AgentHistoryConnection?
     private(set) var runs: [Run] = []
     /// 选中的是一个还没对上记录的新会话（它在列表里没有行）。选中有记录的会话走 `AgentHistoryModel.selectedFile`。
@@ -118,10 +124,13 @@ final class CodeTabModel {
     @ObservationIgnored private var watcher: Task<Void, Never>?
     @ObservationIgnored private var isClosed = false
 
-    init(hostName: String, directory: String?,
+    init(hostName: String, directory: String?, directoryChooser: CodeTabDirectoryChooser = .typedPath,
+         recentDirectories: @escaping @MainActor () -> [String] = { [] },
          makeTerminal: @escaping @MainActor (_ directory: String) -> (any CodeTabTerminal)?) {
         self.hostName = hostName
         newSessionDirectory = directory
+        self.directoryChooser = directoryChooser
+        self.recentDirectories = recentDirectories
         self.makeTerminal = makeTerminal
     }
 
@@ -250,7 +259,35 @@ final class CodeTabModel {
         return run
     }
 
-    /// 「＋」新会话：在右边起一个终端跑新会话的命令。它在列表里还没有行，单独选中，等对上记录（`matchNewSessions`）。
+    /// 侧栏顶上的「＋」：不直接起，右边换成起始页（清掉列表的选中；窄的时候盖着的侧栏收回去）。正跑着的会话不受影响。
+    func showNewSessionPage() {
+        restoredSelection = nil
+        selectedRunID = nil
+        history?.select(nil)
+        sidebarOverlayShown = false
+    }
+
+    /// 起始页上选了一个目录：之后新开的会话都开在这里（写回 `newSessionDirectory`）。
+    func chooseNewSessionDirectory(_ directory: String) {
+        newSessionDirectory = ClaudeProjectPath.normalized(directory) ?? directory
+    }
+
+    /// 起始页目录菜单里的候选（见 `AgentHistoryNewSessionPlaces.candidates`）：现算，不存。
+    var newSessionDirectoryChoices: [String] {
+        AgentHistoryNewSessionPlaces.candidates(current: newSessionDirectory, files: history?.files ?? [],
+                                                metadata: history?.metadata ?? [:], recent: recentDirectories(),
+                                                home: connection?.homeDirectory)
+    }
+
+    /// 起始页「开始」：在选的目录里起选的工具。这台主机上这种工具在这个目录里新开不了时为 nil。
+    @discardableResult
+    func startNewSession(tool: AgentHistoryTool, in directory: String) -> Run? {
+        guard let command = history?.newSessionCommand(tool: tool, directory: directory) else { return nil }
+        chooseNewSessionDirectory(directory)
+        return startNewSession(tool: tool, command: command, directory: directory)
+    }
+
+    /// 新会话：在右边起一个终端跑新会话的命令。它在列表里还没有行，单独选中，等对上记录（`matchNewSessions`）。
     @discardableResult
     func startNewSession(tool: AgentHistoryTool, command: String, directory: String) -> Run? {
         guard let run = start(command, tool: tool, directory: directory, path: nil, title: nil, key: nil) else { return nil }
@@ -529,4 +566,13 @@ final class CodeTabModel {
         if let key = run.key { return String(localized: "（无标题）\(String(key.sessionID.prefix(8)))") }
         return AgentHistoryText.newSession
     }
+}
+
+/// Code 标签页起始页上「选择文件夹…」怎么选。
+enum CodeTabDirectoryChooser {
+    /// 这台 Mac：系统的文件夹面板（App 带沙盒，但这里只要路径字符串：shell 由辅助程序在沙盒外起，`cd` 进去不需要
+    /// 安全书签）。
+    case localFolder
+    /// SSH 主机：输入一个路径，经这个标签页的文件通道核对它存在、是目录。
+    case typedPath
 }

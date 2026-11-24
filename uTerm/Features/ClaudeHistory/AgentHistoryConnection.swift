@@ -94,6 +94,8 @@ final class AgentHistoryConnection {
     /// 打开时终端所在的目录；拿不到为 nil（列全部项目）。
     let preferredDirectory: String?
     private(set) var phase: Phase = .connecting
+    /// 那台主机上的主目录（新会话选目录时缩写成 `~`、展开手输的 `~`）。连上之后问一次；问不到为 nil。
+    private(set) var homeDirectory: String?
     @ObservationIgnored private let connect: AgentHistoryAccess.Connect?
     @ObservationIgnored private let home: String?
     @ObservationIgnored private var provider: (any SFTPProviding)?
@@ -130,10 +132,12 @@ final class AgentHistoryConnection {
         self.connect = connect
     }
 
-    /// 界面画廊、测试用：直接给一个已经接好假数据的模型。
-    init(history: AgentHistoryModel) {
+    /// 界面画廊、测试用：直接给一个已经接好假数据的模型。`provider` 给了就能核对手输的目录（`checkDirectory`）。
+    init(history: AgentHistoryModel, provider: (any SFTPProviding)? = nil, home: String? = nil) {
         preferredDirectory = history.preferredDirectory
-        home = nil
+        self.home = home
+        homeDirectory = home
+        self.provider = provider
         allowsCommands = { true }
         tools = history.configuredTools
         followsCurrentProject = history.followsCurrentProject
@@ -168,6 +172,14 @@ final class AgentHistoryConnection {
                 return
             }
             self.provider = provider
+            // 不挡着列表：和列项目同时问。SFTP 的 `.` 是登录目录，远控与辅助程序的文件服务也把它当主目录。
+            if homeDirectory == nil {
+                Task { [weak self] in
+                    let resolved = try? await provider.realPath(".")
+                    guard let self, self.homeDirectory == nil else { return }
+                    self.homeDirectory = resolved.flatMap(ClaudeProjectPath.normalized)
+                }
+            }
             let history = AgentHistoryModel(source: makeSource(provider, home), preferredDirectory: preferredDirectory,
                                             allowsSearch: allowsCommands(), followsCurrentProject: followsCurrentProject)
             history.pins = pinHost().map { AgentHistoryPins(host: $0, defaults: pinDefaults) }
@@ -177,6 +189,16 @@ final class AgentHistoryConnection {
             guard !isClosed else { return }
             phase = .failed(hostKeys.failureMessage(for: error))
         }
+    }
+
+    /// 新会话里手输的目录：展开 `~`，经这条文件通道核对它存在、是目录（`AgentHistoryDirectoryInput.check`）。
+    /// 通道还没建好（或已经关了）时说不知道主目录 / 找不到。
+    func checkDirectory(_ input: String) async -> Result<String, AgentHistoryDirectoryInput.Problem> {
+        guard let provider else {
+            return AgentHistoryDirectoryInput.resolve(input, home: homeDirectory).flatMap { .failure(.missing($0)) }
+        }
+        let result = await AgentHistoryDirectoryInput.check(input, home: homeDirectory, provider: provider)
+        return result
     }
 
     /// 关窗口 / 关标签：放掉文件通道（SFTP 会话还给连接池，远控的通道本来就和终端共用）。

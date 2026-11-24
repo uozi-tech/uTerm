@@ -206,8 +206,25 @@ struct AgentHistorySessionList: View {
     /// 列表顶部那一行的高度（不算分隔线）。Code 标签页右边跑着的会话顶上那一条与它等高，中间的竖线上下贯通。
     static let headerHeight: CGFloat = controlRowHeight + headerVerticalPadding * 2
 
-    /// 「＋」：能新开的工具不止一种时先选工具，只有一种就直接开。
+    /// 「＋」：Code 标签页里叫出右边的起始页（在那里选目录、选工具）；独立的历史窗口里能新开的工具不止一种时先选工具，
+    /// 只有一种就直接开。
     @ViewBuilder private func newSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
+        if let present = newSession.present {
+            Button(action: present) {
+                Image(systemName: "plus")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.udPlain)
+            .iconButtonHover(cornerRadius: 6)
+            .help(AgentHistoryText.newSession)
+            .accessibilityLabel(Text(AgentHistoryText.newSession))
+        } else {
+            directNewSessionButton(newSession)
+        }
+    }
+
+    @ViewBuilder private func directNewSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
         let tools = history.newSessionTools(directory: newSession.directory)
         let help = tools.isEmpty && newSession.directory != nil
             ? String(localized: "这台主机上的编码工具都不能在终端里新开会话")

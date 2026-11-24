@@ -2385,6 +2385,34 @@
         }
       }
     },
+    "%@ 不是目录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is not a directory"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はディレクトリではありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@은(는) 디렉터리가 아닙니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不是目錄"
+          }
+        }
+      }
+    },
     "%@ 个文件夹 · %@ 个文件" : {
       "localizations" : {
         "en" : {
@@ -8356,6 +8384,35 @@
         }
       }
     },
+    "~ 开头的按这台主机上的主目录展开。" : {
+      "comment" : "新会话：输入目录时的说明",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A leading ~ expands to the home folder on this host."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~ で始まるパスは、このホストのホームフォルダとして展開されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~로 시작하는 경로는 이 호스트의 홈 폴더로 펼쳐집니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以 ~ 開頭的路徑會依這台主機上的個人專屬檔案夾展開。"
+          }
+        }
+      }
+    },
     "~/.local/bin/%@ 已被别的文件占用（非 uTerm 创建）" : {
       "localizations" : {
         "en" : {
@@ -8436,6 +8493,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "~/.ssh/config"
+          }
+        }
+      }
+    },
+    "~/project 或 /srv/app" : {
+      "comment" : "新会话：输入目录的占位提示，路径照原样不翻译",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/project or /srv/app"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/project または /srv/app"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/project 또는 /srv/app"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/project 或 /srv/app"
           }
         }
       }
@@ -21710,6 +21796,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "先說方案，別改程式碼"
+          }
+        }
+      }
+    },
+    "先选一个目录" : {
+      "comment" : "新会话：还没选目录时开始按钮下的说明",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a directory first"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にディレクトリを選んでください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 디렉터리를 선택하세요"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請先選一個目錄"
           }
         }
       }
@@ -43987,6 +44102,34 @@
         }
       }
     },
+    "找不到 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't find %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ が見つかりません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@을(를) 찾을 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到 %@"
+          }
+        }
+      }
+    },
     "找不到 Mac 的显示器" : {
       "localizations" : {
         "en" : {
@@ -61804,6 +61947,35 @@
         }
       }
     },
+    "用 %@ 开始" : {
+      "comment" : "新会话：只有一种工具时的开始按钮",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start with %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ で開始"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@(으)로 시작"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 %@ 開始"
+          }
+        }
+      }
+    },
     "用 uterm 技能更新%@ uTerm 中继，按技能里 references/relay.md 的「更新」一节做。" : {
       "localizations" : {
         "en" : {
@@ -62531,6 +62703,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "監聽連接埠需在 1–65535 之間"
+          }
+        }
+      }
+    },
+    "目录" : {
+      "comment" : "新会话：在哪个目录里开",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Directory"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ディレクトリ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "디렉터리"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目錄"
           }
         }
       }
@@ -71323,6 +71524,62 @@
         }
       }
     },
+    "请输入一个目录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a directory"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ディレクトリを入力してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "디렉터리를 입력하세요"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入一個目錄"
+          }
+        }
+      }
+    },
+    "请输入以 / 或 ~ 开头的完整路径" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a full path starting with / or ~"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/ または ~ で始まるフルパスを入力してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/ 또는 ~로 시작하는 전체 경로를 입력하세요"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入以 / 或 ~ 開頭的完整路徑"
+          }
+        }
+      }
+    },
     "读" : {
       "comment" : "文件权限",
       "localizations" : {
@@ -72808,6 +73065,64 @@
         }
       }
     },
+    "输入路径" : {
+      "comment" : "新会话：手动输入目录的面板标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter Path"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスを入力"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "경로 입력"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入路徑"
+          }
+        }
+      }
+    },
+    "输入路径…" : {
+      "comment" : "新会话：手动输入一个目录",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter Path…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスを入力…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "경로 입력…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入路徑…"
+          }
+        }
+      }
+    },
     "输入这台 Mac 的登录密码。解锁后 Mac 屏幕会变黑，Mac 本机的键盘和鼠标暂停使用。密码只保存在这台手机上。" : {
       "localizations" : {
         "en" : {
@@ -73603,6 +73918,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "返回終端機"
+          }
+        }
+      }
+    },
+    "还不知道这台主机的主目录，请输入以 / 开头的完整路径" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host's home folder isn't known yet. Enter a full path starting with /"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストのホームフォルダがまだわかりません。/ で始まるフルパスを入力してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 홈 폴더를 아직 알 수 없습니다. /로 시작하는 전체 경로를 입력하세요"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還不知道這台主機的個人專屬檔案夾，請輸入以 / 開頭的完整路徑"
           }
         }
       }
@@ -79121,6 +79464,7 @@
       }
     },
     "选择" : {
+      "comment" : "新会话：选好目录后确认的按钮",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -79256,6 +79600,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇一個工作階段"
+          }
+        }
+      }
+    },
+    "选择一个目录" : {
+      "comment" : "新会话：还没选目录时目录选择器上的字",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a Directory"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ディレクトリを選択"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "디렉터리 선택"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇一個目錄"
           }
         }
       }
@@ -79538,6 +79911,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇檔案"
+          }
+        }
+      }
+    },
+    "选择文件夹…" : {
+      "comment" : "新会话：目录菜单的最后一项",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Folder…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダを選択…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "폴더 선택…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇檔案夾…"
           }
         }
       }

@@ -64,6 +64,8 @@ nonisolated enum DefaultsKey {
     /// 历史会话列表里置顶的会话：主机 → 有序的（工具 + 会话 ID、置顶时间），JSON（`AgentHistoryPins`）。
     /// 不存标题、路径、对话内容。只存本机，不进同步。
     static let agentHistoryPinnedSessions = "agentHistory.pinnedSessions"
+    /// Code 标签页新开会话上一次用的编码工具（`AgentHistoryTool` 的原始值）。只存本机，不进同步。
+    static let codeNewSessionTool = "code.newSessionTool"
     /// iOS 键盘条面板里的启动命令 / 提示词 / 斜杠命令（`TerminalPhrases` 的 JSON，空串 = 默认值）。
     static let terminalKeyBarPhrases = "terminalKeyBar.phrases"
 

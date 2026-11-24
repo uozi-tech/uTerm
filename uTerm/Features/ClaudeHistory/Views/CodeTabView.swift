@@ -109,10 +109,8 @@ private struct CodeTabBrowser: View {
     private func sessionList(onCollapse: @escaping () -> Void) -> some View {
         AgentHistorySessionList(
             history: history,
-            newSession: AgentHistoryNewSession(directory: code.newSessionDirectory) { tool, command, directory in
-                code.startNewSession(tool: tool, command: command, directory: directory)
-                code.sidebarOverlayShown = false
-            },
+            // 「＋」不直接开：右边换成起始页，在那里选目录和工具。
+            newSession: AgentHistoryNewSession(presenting: { code.showNewSessionPage() }),
             reveal: code.reveal,
             running: AgentHistoryRunning(paths: Set(code.runs.compactMap(\.path)), unlisted: { shown in
                 let selected = code.displayedRun?.id
@@ -132,7 +130,8 @@ private struct CodeTabBrowser: View {
     @ViewBuilder private var detail: some View {
         switch code.detail {
         case .empty:
-            AgentHistorySelectPrompt(history: history)
+            // 什么都没选（刚打开、点了「＋」、跑着的会话结束了）：起始页。
+            CodeTabNewSessionPage(code: code, history: history)
         case .transcript:
             // 看着一个仍在跑的会话的记录：不另加一条，记录标题行上「继续这个会话」换成「返回终端」。
             AgentHistoryTranscriptStack(history: history, onResume: { file in code.resume(file) },
