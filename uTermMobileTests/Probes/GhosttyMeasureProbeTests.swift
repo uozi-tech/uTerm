@@ -207,10 +207,15 @@ final class GhosttyMeasureProbeTests: XCTestCase {
 
     // MARK: - M6 打字回显
 
-    /// 真输入路径：`insertText`（软键盘落字的公开入口，视图是 UIKeyInput）→ 终端把字节交给宿主 →
+    /// 真输入路径：系统键盘落字（`UIKeyboardImpl.addInputString:`，由它调视图的 `insertText`）→ 终端把字节交给宿主 →
     /// `TerminalInputChannel` → 假后端原样回显（`MobileFakeTerminalTransport.echoesInput`）→ 输出路径 → 出帧。
     /// 后端接在 `GhosttyTerminalBridge.bind` 上（生产的 `MobileTerminalController` 接后端调的同一个入口）。
-    /// 计时：调 `insertText` 之前到这个终端交出下一帧（`setContents:`）。
+    /// 计时：落字调用之前到这个终端交出回显之后的下一帧（`setContents:`），按段拆开打印；键盘路径另量系统 `UITextView`
+    /// 走同一条路的读数作底数（UIKit 处理一次按键本身的开销，任何文本视图都要付）。键盘进程里那一段（按下到送进 App）量不到。
+    /// 开关：`UTERM_M6_VIA=insertText` 改成直接调 `insertText`（会误导，见下面的注释）；`UTERM_M6_STALLS=1` 抄主线程的栈。
+    ///
+    /// 2026-11-25 Duo（120 Hz）：回显 p50 16.4 ms = 键盘到调进 `insertText` 8.3 + 交出字节 0.35 + 等主线程做完键盘的后半段
+    /// 3.9 + 进后端回显进泵 1.4 + 出帧 2.7；`UITextView` 从落字到报文字变了 12.4 ms。
     /// 硬件键 `pressesBegan` 要真 `UIPress`，XCTest 造不出来（spike 已记），这里不量，留给 M16 手感。
     func testM6TypingEcho() async throws {
         let screen = sceneSize
@@ -226,23 +231,112 @@ final class GhosttyMeasureProbeTests: XCTestCase {
         gh.bind(transport)
         gh.feed(Data("$ ".utf8))
 
+        // 拆段：落字 → 调进 insertText → IO 线程交出字节 → 主线程拿到（`input→mainWrite`）→ 回显进输出泵（`mainWrite→echoPumped`）→ 出帧。
+        let writeTime = M6TimeBox(), echoTime = M6TimeBox()
+        let previousInput = gh.link.onSurfaceInput
+        gh.link.onSurfaceInput = { data in
+            writeTime.setIfEmpty(CACurrentMediaTime())
+            previousInput(data)
+        }
+        let previousFed = gh.outputPump.onFed
+        gh.outputPump.onFed = { bytes in
+            echoTime.setIfEmpty(CACurrentMediaTime())
+            previousFed?(bytes)
+        }
+        // 引擎写回调（IO 线程上）的时刻：借调试日志的 `host <- terminal` 那一行，分出「按键到 IO 线程」和「跳回主线程」。
+        let ioTime = M6TimeBox()
+        let previousSink = TerminalDebugLog.sink, previousCategories = TerminalDebugLog.categories
+        TerminalDebugLog.categories = [.input]
+        let enterTime = M6TimeBox()
+        TerminalDebugLog.sink = { message in
+            if message.contains("host <- terminal") { ioTime.setIfEmpty(CACurrentMediaTime()) }
+            if message.hasPrefix("insertText text=") || message.contains("] insertText text=") { enterTime.setIfEmpty(CACurrentMediaTime()) }
+        }
+        TerminalDebugLog.isEnabled = true
+        defer {
+            gh.link.onSurfaceInput = previousInput
+            gh.outputPump.onFed = previousFed
+            TerminalDebugLog.isEnabled = false
+            TerminalDebugLog.sink = previousSink
+            TerminalDebugLog.categories = previousCategories
+        }
+        var parts: [String: [Double]] = [:]
+
+        // 落字入口（`UTERM_M6_VIA`）：默认走系统键盘自己的落字路径（`UIKeyboardImpl.addInputString:`，键盘进程送来的
+        // 一个字在 App 里走的那一段，由它再调 `insertText`）；`insertText` = 绕过键盘直接调。后者会误导：从键盘以外调
+        // `insertText`，里面那几句 `inputDelegate.textWillChange / textDidChange` 让系统输入法当成外部改动、整个重同步，
+        // 主线程被占 25 ms（2026-11-25 Duo），回显 p50 32 ms；真按键时 UIKit 自己在落字，这几句几乎不花时间。
+        let viaKeyboard = ProcessInfo.processInfo.environment["UTERM_M6_VIA"] != "insertText"
+        var keyboardImpl: NSObject?
+        let addInput = NSSelectorFromString("addInputString:")
+        print("MEASURE m6 via=\(viaKeyboard ? "keyboard" : "insertText")")
+
+        // 主线程被占住时它在干什么（`UTERM_M6_STALLS=1`；只在第一轮的前 10 下抄，抄栈会停一下主线程，那几下的读数偏大）。
+        let sampleStalls = ProcessInfo.processInfo.environment["UTERM_M6_STALLS"] == "1"
+        let stallSampler = MainThreadStallSampler(threshold: 0.008, interval: 0.004)
+        var stallOrigin = 0.0
+
         var results: [Double] = []
         var lost: [String] = []
         for round in 0..<2 {
             window.makeKey()
             XCTAssertTrue(gh.view.becomeFirstResponder(), "终端拿不到键盘")
             try await Task.sleep(for: .milliseconds(600))
+            if viaKeyboard {
+                // 键盘当前可能是拼音（字母进组字、不提交）：切到英文。
+                if let english = UITextInputMode.activeInputModes.first(where: { $0.primaryLanguage?.hasPrefix("en") == true }),
+                   let cls = NSClassFromString("UIKeyboardInputModeController") as AnyObject as? NSObject,
+                   let controller = cls.perform(NSSelectorFromString("sharedInputModeController"))?.takeUnretainedValue() as? NSObject {
+                    controller.setValue(english, forKey: "currentInputMode")
+                    try await Task.sleep(for: .milliseconds(400))
+                }
+                print("MEASURE m6 keyboard=\(gh.view.textInputMode?.primaryLanguage ?? "-")")
+                let implClass = try XCTUnwrap(NSClassFromString("UIKeyboardImpl") as AnyObject as? NSObject)
+                keyboardImpl = implClass.perform(NSSelectorFromString("activeInstance"))?.takeUnretainedValue() as? NSObject
+                try XCTSkipUnless(keyboardImpl?.responds(to: addInput) == true, "这个系统版本没有 addInputString:")
+            }
             for index in 0..<40 {
                 try await Task.sleep(for: .milliseconds(70 + index % 7 * 3))
                 resetFrames()
                 let char = String(UnicodeScalar(UInt8(97 + (index + round * 7) % 26)))
+                writeTime.reset(); echoTime.reset(); ioTime.reset(); enterTime.reset()
+                if sampleStalls, round == 0, index == 0 { stallSampler.start(); stallOrigin = CACurrentMediaTime() }
+                if sampleStalls, round == 0, index == 10 {
+                    stallSampler.stop()
+                    for line in stallSampler.report(stallSampler.drain(), origin: stallOrigin, depth: 30, limit: 3) {
+                        print("MEASURE m6 stall \(line)")
+                    }
+                }
                 let t0 = CACurrentMediaTime()
-                gh.view.insertText(char)
-                func frameAt() -> Double? { GhosttyPresentLog.read().times.first(where: { $0 >= t0 }) }
+                if let keyboardImpl { keyboardImpl.perform(addInput, with: char) } else { gh.view.insertText(char) }
+                parts["input call returns", default: []].append((CACurrentMediaTime() - t0) * 1000)
+                // 主线程什么时候空出来：紧跟着排一个空块。
+                let pingTime = M6TimeBox()
+                DispatchQueue.main.async { pingTime.setIfEmpty(CACurrentMediaTime()) }
+                defer { if let p = pingTime.value { parts["main free (ping)", default: []].append((p - t0) * 1000) } }
+                // 出帧要在回显进泵之后才算（之前的那一帧画的还不是这个字）。
+                func frameAt() -> Double? {
+                    let after = echoTime.value ?? .infinity
+                    return GhosttyPresentLog.read().times.first(where: { $0 >= after })
+                }
                 while frameAt() == nil, CACurrentMediaTime() - t0 < 0.5 {
                     try await Task.sleep(for: .microseconds(300))
                 }
-                if let at = frameAt() { results.append((at - t0) * 1000) }
+                if let at = frameAt() {
+                    results.append((at - t0) * 1000)
+                    let w = writeTime.value, e = echoTime.value
+                    if let w { parts["input→mainWrite", default: []].append((w - t0) * 1000) }
+                    if let enter = enterTime.value {
+                        parts["input→insertText entered", default: []].append((enter - t0) * 1000)
+                        if let io = ioTime.value { parts["insertText entered→ioWrite", default: []].append((io - enter) * 1000) }
+                    }
+                    if let io = ioTime.value {
+                        parts["input→ioWrite", default: []].append((io - t0) * 1000)
+                        if let w { parts["ioWrite→mainWrite", default: []].append((w - io) * 1000) }
+                    }
+                    if let w, let e { parts["mainWrite→echoPumped", default: []].append((e - w) * 1000) }
+                    if let e { parts["echoPumped→frame", default: []].append((at - e) * 1000) }
+                }
                 // 这一下到后端没有（有丢键就记下是第几下、什么字）。
                 try await Task.sleep(for: .milliseconds(30))
                 let written = await transport.writtenBytes
@@ -250,10 +344,55 @@ final class GhosttyMeasureProbeTests: XCTestCase {
                 if written < expected - lost.count { lost.append("#\(round)/\(index)'\(char)'") }
             }
         }
+        // 对照（键盘路径时）：系统自己的 UITextView 走同一条落字路径，从 `addInputString:` 到它报文字变了、到主线程空出来。
+        // 这是 UIKit 处理一次按键的底数，任何文本视图都要付；终端比它多出来的才是我们的。
+        if viaKeyboard, let keyboardImpl {
+            let oracle = UITextView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+            window.addSubview(oracle)
+            XCTAssertTrue(oracle.becomeFirstResponder())
+            try await Task.sleep(for: .milliseconds(600))
+            let impl = (NSClassFromString("UIKeyboardImpl") as AnyObject as? NSObject)?
+                .perform(NSSelectorFromString("activeInstance"))?.takeUnretainedValue() as? NSObject ?? keyboardImpl
+            let changed = M6TimeBox()
+            let token = NotificationCenter.default.addObserver(forName: UITextView.textDidChangeNotification, object: oracle,
+                                                               queue: nil) { _ in changed.setIfEmpty(CACurrentMediaTime()) }
+            var oracleChanged: [Double] = [], oracleFree: [Double] = []
+            for index in 0..<40 {
+                try await Task.sleep(for: .milliseconds(70 + index % 7 * 3))
+                changed.reset()
+                let char = String(UnicodeScalar(UInt8(97 + index % 26)))
+                let t0 = CACurrentMediaTime()
+                impl.perform(addInput, with: char)
+                let ping = M6TimeBox()
+                DispatchQueue.main.async { ping.setIfEmpty(CACurrentMediaTime()) }
+                while changed.value == nil || ping.value == nil, CACurrentMediaTime() - t0 < 0.5 {
+                    try await Task.sleep(for: .microseconds(300))
+                }
+                // ping 排在 addInputString 返回之后；文字改动可能更晚（键盘的任务队列），主线程空出来取两者中晚的那次之后的第一个空档。
+                if let c = changed.value { oracleChanged.append((c - t0) * 1000) }
+                let free = M6TimeBox()
+                DispatchQueue.main.async { free.setIfEmpty(CACurrentMediaTime()) }
+                while free.value == nil { try await Task.sleep(for: .microseconds(300)) }
+                if let f = free.value { oracleFree.append((f - t0) * 1000) }
+            }
+            NotificationCenter.default.removeObserver(token)
+            print(String(format: "MEASURE m6 oracle UITextView start→textDidChange n=%d p50=%.2fms p95=%.2fms",
+                         oracleChanged.count, ProbeMetrics.percentile(oracleChanged, 0.5), ProbeMetrics.percentile(oracleChanged, 0.95)))
+            print(String(format: "MEASURE m6 oracle UITextView start→main free (upper bound, includes poll) n=%d p50=%.2fms p95=%.2fms",
+                         oracleFree.count, ProbeMetrics.percentile(oracleFree, 0.5), ProbeMetrics.percentile(oracleFree, 0.95)))
+            print("MEASURE m6 oracle text=\(oracle.text.prefix(40))")
+            oracle.removeFromSuperview()
+        }
+
         let echoed = await transport.writtenBytes
         print(String(format: "MEASURE m6 %@ typing-echo n=%d p50=%.2fms p95=%.2fms max=%.2fms",
                      engine, results.count, ProbeMetrics.percentile(results, 0.5),
                      ProbeMetrics.percentile(results, 0.95), results.max() ?? 0))
+        for key in ["input call returns", "main free (ping)", "input→insertText entered", "insertText entered→ioWrite", "input→ioWrite", "ioWrite→mainWrite", "input→mainWrite", "mainWrite→echoPumped", "echoPumped→frame"] {
+            let values = parts[key] ?? []
+            print(String(format: "MEASURE m6 %@ part %@ n=%d p50=%.2fms p95=%.2fms max=%.2fms", engine, key, values.count,
+                         ProbeMetrics.percentile(values, 0.5), ProbeMetrics.percentile(values, 0.95), values.max() ?? 0))
+        }
         print("MEASURE m6 bytes-reached-backend \(engine)=\(echoed) lost=\(lost) writes=\(await transport.writes.map { String(decoding: $0, as: UTF8.self) }.joined(separator: "|"))")
         XCTAssertEqual(results.count, 80)
         XCTAssertEqual(echoed, 80, "按键没全到后端")
@@ -762,4 +901,13 @@ actor ScriptedBackend: TerminalBackend {
     func write(_ data: Data) async {}
     func resize(cols: UInt16, rows: UInt16) async {}
     func close() async { output.finish(); exit.finish() }
+}
+
+/// 回调线程上记下第一次的时刻（M6 拆段用）。
+private nonisolated final class M6TimeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: CFTimeInterval?
+    var value: CFTimeInterval? { lock.withLock { stored } }
+    func setIfEmpty(_ t: CFTimeInterval) { lock.withLock { if stored == nil { stored = t } } }
+    func reset() { lock.withLock { stored = nil } }
 }
