@@ -18,7 +18,7 @@ uTerm 以 AGPL-3.0 发布，使用了下列第三方组件，各自保留原许�
 
 | 包 | 上游 | 许可证 |
 |---|---|---|
-| uAppKit（含 Citadel、swift-nio-ssh 源码） | github.com/uozi-tech/uAppKit | AGPL-3.0（其中 Citadel MIT、swift-nio-ssh Apache-2.0，见其 `THIRD_PARTY_NOTICES.md`） |
+| uAppKit（含 swift-nio-ssh 源码、OpenBSD 的 bcrypt_pbkdf） | github.com/uozi-tech/uAppKit | AGPL-3.0（其中 swift-nio-ssh Apache-2.0、bcrypt_pbkdf BSD，见其 `THIRD_PARTY_NOTICES.md` 与 `ThirdParty/`） |
 | swift-nio、swift-crypto、swift-asn1、swift-log、swift-atomics、swift-collections、swift-system | github.com/apple | Apache-2.0 |
 | swift-markdown、swift-cmark | github.com/swiftlang | Apache-2.0；cmark 部分为 BSD-2-Clause |
 | Sparkle | github.com/sparkle-project/Sparkle | MIT |

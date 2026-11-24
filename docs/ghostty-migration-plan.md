@@ -108,7 +108,7 @@ M16 需要在评估分支上临时挂一个能连主机的入口（不进 main�
 | M17 | 过 | 干净目录从 tag `2.2.2026110702` 一次通过：GhosttyKit 973 s，vt 43 s + 预链接 2 s；`build/cache` 4 GB。 |
 
 没验证的（实施中补）：真上屏延迟、真拼音输入法、真退后台与 `BGContinuedProcessingTask`（M10 的修法也只在模拟的后台里验过）、
-压到 SSH 窗口的背压（要改 Citadel）、焦耳数、快照跨版本、
+压到 SSH 窗口的背压（要让后端的输出流有界；USSHCore 的 PTY 输出本身带背压）、焦耳数、快照跨版本、
 一致性只比了文字没比样式光标、对比度没在真实渲染循环里量 GPU 与 iOS。
 
 ## 4. 实施（测量门过了之后）
@@ -157,7 +157,7 @@ M16 需要在评估分支上临时挂一个能连主机的入口（不进 main�
   验收（2026-11-10，读数见 §3.1 M10 与 `docs/ghostty-eval/measure-ios.md`）：`ShadowTerminal` 在共享目录
   `uTerm/Features/Terminal/Shadow/`，分流 `GhosttyOutputRouter` 先放在 `uTermMobile/Screens/Terminal/Ghostty/`、第 2 步并进
   共享的输出泵。还差两件：真退后台（含 `BGContinuedProcessingTask`）没验；
-  背压现在只到终端这一层，压不到 SSH 窗口（Citadel 的 PTY 输出流不限长，要改 Citadel）。
+  背压现在只到终端这一层，压不到 SSH 窗口（当时 Citadel 的 PTY 输出流不限长；USSHCore 的带背压，还要让后端的输出流有界）。
 - 字体传 `.AppleSystemUIFontMonospaced`，取不到用 Menlo。
 - 远控镜像接收端：解二进制快照。
 

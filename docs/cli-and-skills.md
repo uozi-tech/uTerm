@@ -20,7 +20,7 @@
 | `uTerm/Core/Control/ControlHandler+SFTP.swift` | 文件组十个 `sftp-*` 动作 | ✅ |
 | `uTerm/Core/Control/ControlHandler+Forward.swift` | 转发组（`forward-list` / `-start` / `-stop` / `-add` / `-remove`） | ✅ |
 | `uTerm/Core/Control/ControlHandler+Terminal.swift` | 终端组（`terminals` / `terminal-read` / `-send` / `-open`） | ✅ |
-| `uTerm/Core/Control/ControlFilePayloadBuilder.swift` | 文件组纯逻辑：线上形状、SFTP 错误归类（见 §8 的 Citadel 抛错形状）、mode 解析 | ✅ |
+| `uTerm/Core/Control/ControlFilePayloadBuilder.swift` | 文件组纯逻辑：线上形状、SFTP 错误归类（见 §7.1）、mode 解析 | ✅ |
 | `uTerm/Core/Control/ControlForwardSnapshotBuilder.swift` | 转发规则 → 线上快照的纯函数 + 本机端口占用探测（规则名解析复用 `HostResolver`） | ✅ |
 | `uTerm/Core/Control/ControlConnectionPooling.swift` | `HostConnectionSpec` / `ControlConnectError` / `ControlExecChannel` / 连接池协议 | ✅ |
 | `uTerm/Core/Control/ControlConnectionPool.swift` | `actor`：按 hostID 持有 exec 连接 + **每主机最多 4 条**借还制 SFTP 会话；主机密钥质询缓存 + `trustHostKey` | ✅ |
@@ -262,7 +262,7 @@ accept 时按总数 16 收）：读完请求、知道是 `sftp-get` / `sftp-put`
 - `timeoutSeconds` 是静默超时（默认 60 s / 封顶 1800 s）：连续这么久没有任何输出才判定卡住；
   `maxDurationSeconds` 是总时长上限（默认 3600 s / 封顶 21600 s），只防 `tail -f` 这类永不
   静默的命令一直占着名额。
-- 执行走 Citadel `executeCommandStream`（原来的 `executeCommand(maxResponseSize: 64_000)`
+- 执行走 `executeCommandStream`（原来的 `executeCommand(maxResponseSize: 64_000)`
   超过 64 KB 输出整条抛错），只留头部（裁剪）与尾部（退出码哨兵）。
 - 包装时首行打印 `$$`：sshd 给每个 exec 会话 `setsid()`，它就是进程组号。超时后另开一条
   exec 对整组 `kill -TERM -<pid>`，宽限 5 s 再 `-KILL`（ash / bash / zsh 实测过，`&`
@@ -353,14 +353,14 @@ accept 时按总数 16 收）：读完请求、知道是 `sftp-get` / `sftp-put`
 
 ### SFTP 流水线读写（`SFTPPipeline`，GUI 传输一并受益）
 
-瓶颈从来不是带宽，是**串行往返**：Citadel 的 `SFTPFile.write(_:at:)` 内部按 32 000 B
-「发一片 → 等 ack → 再发下一片」，8 MiB = 262 个往返，13 ms RTT 就是 3.9 s。
+瓶颈从来不是带宽，是**串行往返**：「发一片 → 等 ack → 再发下一片」，8 MiB / 32 KB = 262 个往返，
+13 ms RTT 就是 3.9 s（Citadel 时代的 `SFTPFile.write(_:at:)` 就是这样）。
 
-但 `SFTPClient.sendRequest` 是按 requestId → promise 映射的，同一条 SFTP 通道天生允许
-多请求并发。于是 `SFTPPipeline` 把切片摊进 TaskGroup：最多 `inFlight`（默认 **64**，
-≈2 MiB 在途）个 32 000 B 请求同时压在通道上，耗时退化成 `总片数 / inFlight × RTT` +
-带宽时间。两个常量不要乱调 —— 32 000 B 是 Citadel 照 swift-nio-ssh #99 定的单请求上限，
-64 再往上只是压通道窗口。
+SFTP 按请求号配对应答，同一条通道天生允许多请求并发。于是 `SFTPPipeline` 把切片摊进 TaskGroup，
+耗时退化成 `总片数 / 在途请求数 × RTT` + 带宽时间。片长跟服务器走：单个请求最多
+`maximumReadLength` / `maximumWriteLength`（OpenSSH 用 `limits@openssh.com` 宣告 255 KiB，没宣告的按 32 KiB），
+绝不超过（USSHCore 对超长的 WRITE 直接拒绝）。在途量 `inFlight`（默认 **64**）按 32 000 B 一片计，约 2 MiB，
+正好一个终端连接的通道窗口；片变大时请求数相应变少，在途字节不变（`SFTPPipeline.requestWindow`）。
 
 `SFTPSession` 的**所有**读写路径都走它：`upload(data:)` / `upload(localURL:)` /
 `write` / `writeRange` / `download(remotePath:)` / `download(toLocalURL:)` /
@@ -789,7 +789,7 @@ utermctl disconnect [-H H]
 | `Core/Control/ControlHandlerTests.swift` | 门禁矩阵（两开关 × sftpOnly × 各动作）、host-key 三态、超时语义、run-many 顺序 / 去重 / 三态成败 / 逐条 hostKey、quick-run 写日志 | ✅ 40 例 |
 | `Core/Control/ControlConnectionPoolTests.swift` | 懒建 / 复用 / **exec 并发冷启动只建一条** / 失败清占位 / 空闲回收 / disconnect / disconnectAll / 质询缓存与 trust 配对；**SFTP 多通道**：4 并发 → 4 条会话、第 5 个等待并复用归还那条、顺序借还只用一条、`withSFTP` 抛错也归还、`disconnectAll` 关全部、借出中的不被空闲回收、建连失败还名额 | ✅ 19 例 |
 | `Services/SSH/SFTPSessionPipelineTests.swift` | 流水线的**并发形状**（可注入的假文件计数）：切片恰好覆盖不重叠、每片 ≤ 32 000 B、base offset、在途数 ≤ inFlight 且真用满、`inFlight: 1` 退化成串行、某片失败抛原错误并取消其余、空写不发请求；读的分段拼装、offset/length、短读补发、EOF 短返回、越 EOF 空、取消即停 | ✅ 14 例 |
-| `Services/SSH/SFTPSessionServerIntegrationTests.swift` | 对**进程内 Citadel SFTP server**（真 TCP + 真 SSH 握手 + 真 SFTP 线格式，内核分配端口）：20 MiB 上传→下载 sha256 一致、本地文件流式往返、8 段并行 `writeRange(.write)` 拼成整文件、`readRange` 精确切片 + 越 EOF 短读 | ✅ 4 例（20 MiB 往返 0.5 s） |
+| `Services/SSH/SFTPSessionServerIntegrationTests.swift` | 对**进程内的 `USSHTestServer`**（uAppKit；真 TCP + 真 SSH 握手 + 真 SFTP 线格式，内核分配端口）：20 MiB 上传→下载 sha256 一致、本地文件流式往返、8 段并行 `writeRange(.write)` 拼成整文件、`readRange` 精确切片 + 越 EOF 短读 | ✅ 4 例（20 MiB 往返 0.5 s） |
 | `Core/Control/BoundedExecTests.swift` | 不可取消任务下超时能返回、结果晚到不崩不泄漏 | ✅ 5 例 |
 | `Core/Control/ControlSFTPHandlerTests.swift` | 十个 `sftp-*` 的正常路径、上限、错误映射、门禁；**传输**（fd 挂进 `ControlRequestContext`，引擎跑在 `MockSFTP` 上）：`get` 整份写进 fd 且进度账覆盖全文件、`ranges` 只补那段且区间外不动、越界区间被拒、没交 fd / `parallel` 超范围是 `invalid_request`、远端不存在是 `file_not_found`；`put` 经 fd 读进远端（首次 `create`、之后一律 `write`）、默认不覆盖、`force` 覆盖并截断、续传只写区间不截断、写阶段失败不误报 `file_exists`、打开阶段失败仍兜底成 `file_exists`；传输借几条会话就还几条 | ✅ |
 | `Core/Control/ControlServerTests.swift`（传输相关） | `SCM_RIGHTS` 交来的 fd 到得了 handler 且是同一个文件；进度行排在响应前、一行一个 JSON、收尾时攒着的最后几段不丢；传输槽位满时新传输 `server_busy` 而 `ping` 照进 | ✅ |
@@ -824,24 +824,14 @@ xcodebuild test-without-building -project uTerm.xcodeproj -scheme uTerm \
 **不要**给这两条加 `CODE_SIGNING_ALLOWED=NO`（测试宿主要签名才跑得起来）。
 测试期的 CloudKit「Service Unavailable」是常态噪声，不是失败。
 
-## 7.1 Citadel 的 SFTP 抛错形状
+## 7.1 SFTP 抛错形状
 
-归类 SFTP 失败时**只认 `SFTPError.errorStatus` 是不够的**，真机上一条都命中不了：
+USSHCore 的服务端状态只有一种装法：`SFTPError.status(code:message:languageTag:)`，每个操作、每条路径都一样，
+按 `statusCode`（`.noSuchFile`、`.permissionDenied`、`.fileAlreadyExists`……）判。
+`ControlFilePayloadBuilder.sftpStatus(of:)` 取出它，`errorDetail(for:)` 优先给服务端自带的 message + `SSH_FX` 码。
 
-- `SFTPClientInboundHandler.channelRead` 对一切非 `ok` / `eof` 的响应直接
-  `promise.fail(status)`，抛出来的是**裸的 `SFTPMessage.Status`**；
-- 全库只有 `SFTPClient.setAttributes`（与 `openFile` 的一处）显式包成
-  `SFTPError.errorStatus(_:)`。`remove` / `rmdir` / `rename` / `createDirectory`
-  甚至**根本不检查响应**（`let _ = try await sendRequest(...)`），失败完全靠上面
-  那条 promise 失败传出来；
-- `SFTPMessage.Status` 是 `Error` 但**不是** `LocalizedError`，它自己声明的
-  `localizedDescription` 只在静态类型是 `Status` 时可见。经 `any Error` 拿到的是
-  NSError 桥接的「操作未能完成」，所以文本兜底匹配也救不了。
-
-结论：`ControlFilePayloadBuilder.sftpStatus(of:)` 两种装法都认，`errorDetail(for:)`
-优先给服务端自带的 message + `SSH_FX` 码。`SFTPMessage.Status` 的 memberwise init
-是 internal，测试构造不出来 —— `ControlSFTPHandlerTests` 用 `@testable import Citadel`
-拿到它。
+（Citadel 时代有两种装法——裸的 `SFTPMessage.Status` 与 `SFTPError.errorStatus`——而且前者不是 `LocalizedError`，
+只认一种时 `sftp rm` 一个不存在的文件会回 `operation_failed`。）
 
 ## 8. 已知限制
 
@@ -856,16 +846,13 @@ xcodebuild test-without-building -project uTerm.xcodeproj -scheme uTerm \
   `file_too_large`，让模型改用 `sftp-get`（不限大小）或 `run -- tail`。`ControlFilePayload.truncated` 只在「stat 之后文件又长大了」
   的竞态里才为 true。（`SFTPProviding` 现在**有**部分读原语 `readRange`，`cat` 只是
   刻意不用它做截断 —— 半截文本比明确的拒绝更容易误导模型。）
-- **1 MiB 的子通道窗口是**每条 SSH 连接**级别的，PTY 与端口转发通道一并吃到。**
-  `SSHClientFactory.channelWindowOptions` 把 `maximumPacketSize` 提到 1 MiB，是为了
-  让 SFTP 的读流水线（64 × 32 000 B ≈ 2 MiB 在途）不被 NIOSSH 默认的 128 KiB 入站窗口
-  卡住（否则只放得下 4 个在途读，吞吐砍到 1/16）。代价是**同一连接上的每条子通道**
-  最多能多缓冲约 1 MiB 还没被读走的数据：终端 PTY 上一条 runaway 的输出（`yes`、
-  `cat 大文件`）在按下 Ctrl-C 之后，还得先把已经在窗口里的这最多 1 MiB 吐完才停，
-  比 128 KiB 窗口时慢一截；端口转发通道同理，慢消费者那侧的内存峰值也高一些。
-  纯粹是缓冲变大，没有行为变化，所以有意留着 —— SFTP 的吞吐收益（同一台机器
-  8 MiB put 从 3.9 s 降到亚秒级）远大于这点滞后。要单独给 PTY 调小得让
-  NIOSSH 支持 per-channel 窗口，它现在把窗口钉死成连接级的 `maximumPacketSize`。
+- **2 MiB 的子通道窗口是**每条 SSH 连接**级别的，PTY 与端口转发通道一并吃到。**
+  NIOSSH 0.15 的子通道窗口 = 最大包长 × 64，包长最小 32 KiB，所以窗口最小 2 MiB
+  （`SSHClientFactory.channelMaximumPacketSize`；Citadel 时代是 1 MiB）。它让 SFTP 的读流水线
+  （约 2 MiB 在途）不被窗口卡住。代价是**同一连接上的每条子通道**最多能多缓冲约 2 MiB 还没被读走的数据：
+  终端 PTY 上一条 runaway 的输出（`yes`、`cat 大文件`）在按下 Ctrl-C 之后，还得先把已经在窗口里的这些吐完才停；
+  端口转发通道同理，慢消费者那侧的内存峰值也高一些。纯粹是缓冲变大，没有行为变化。要单独给 PTY 调小得让
+  NIOSSH 支持 per-channel 窗口，它现在把窗口钉死成连接级的包长 × 64。
 - **`terminal-open` 可能回空 `terminals`。** 开窗是同步返回的，会话是异步注册的：
   6 秒内没等到就仍回 `ok` + 空数组 + 一句解释（窗口确实开了）。客户端此时打
   `message` 而不是空表。
@@ -880,21 +867,13 @@ xcodebuild test-without-building -project uTerm.xcodeproj -scheme uTerm \
   这是既有会话复用的语义，不是转发这条路上少做了校验。要让它重新校验，得先让
   该主机的转发会话真正断掉（关掉全部规则并等回收，或重启 uTerm）。
 
-- **Citadel 自带的 SFTP *server* 会吞掉 delegate 抛的错。**
-  `SFTPServerInboundHandler.openFile` 只 `map` 成功路径，没有 `whenFailure` ——
-  delegate 一抛错，服务端什么都不回，客户端的 promise 永远不完成（整条用例挂死）。
-  只影响**测试用的**进程内服务端（`SFTPSessionServerIntegrationTests`），生产从不
-  跑 Citadel 的 server 侧。所以那套集成用例的假服务端**不能靠抛错**模拟 EXCL 冲突，
-  `create` 撞已存在文件的语义只在 `ControlSFTPHandlerTests`（MockSFTP）里验。
-  不改 Citadel（vendored 的理由只有 manifest，见 `CLAUDE.md`）。
-
 - **技能直链 app 包内（§5.1）之后还没在真实分发形态下走过**：DMG 下载安装的 Release 版
   升级后首次启动的自动改指、以及真实的 Codex / Claude Code 进程（责任进程可能是终端 app）
   读包内技能，目前只有 launchd 无授权探针的实测。
 
 - **真机联调（1.12.0 后）已做，发现的问题在 1.12.1 修掉：** 当时 app 写出的 `utermctl` 带
   `com.apple.quarantine` 导致直接执行 EPERM（1.12.1 改成链到包内脚本，见 §5.1）、顶层
-  `exit N` 被误报成 `connect_failed`、SFTP 错误码没认出 Citadel 抛的裸
+  `exit N` 被误报成 `connect_failed`、SFTP 错误码没认出当时 Citadel 抛的裸
   `SFTPMessage.Status`、`sftp stat` 缺权限位、`--format table` 里布尔 `false`
   是空白。仍未在真环境走过的只剩 `terminal-open` 的端到端开窗。
 

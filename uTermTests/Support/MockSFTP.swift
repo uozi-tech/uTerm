@@ -221,7 +221,7 @@ actor MockSFTP: SFTPProviding {
         statPermissions[path] = mode
     }
 
-    /// 让 `stat` 抛出指定错误（用真实的 Citadel 错误值构造错误映射用例）。
+    /// 让 `stat` 抛出指定错误（用真实的 SFTP 错误值构造错误映射用例）。
     var statError: Error?
 
     func setStatError(_ error: Error?) { statError = error }
@@ -304,7 +304,7 @@ actor MockSFTP: SFTPProviding {
     private var failingRemovePaths: Set<String> = []
 
     /// 指定路径的 remove 抛出**给定的错误对象**（`failingRemovePaths` 只会抛
-    /// NSError；错误映射用例要拿真实的 Citadel 错误值来试）。
+    /// NSError；错误映射用例要拿真实的 SFTP 错误值来试）。
     private var removeErrors: [String: Error] = [:]
 
     func setRemoveError(_ path: String, _ error: Error) { removeErrors[path] = error }

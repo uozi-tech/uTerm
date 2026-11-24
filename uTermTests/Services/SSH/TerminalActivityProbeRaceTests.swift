@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// 关标签前的探测不能把用户挂住：Citadel 的 exec 不响应取消，通道卡住时只能靠超时。
+/// 关标签前的探测不能把用户挂住：通道卡住时只能靠超时（Citadel 时代 exec 还不响应取消）。
 final class TerminalActivityProbeRaceTests: XCTestCase {
 
     /// 不响应取消、由测试放行的探测。

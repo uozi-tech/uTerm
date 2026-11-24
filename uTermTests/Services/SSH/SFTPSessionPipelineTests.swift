@@ -6,7 +6,7 @@ import XCTest
 ///
 /// 被测的是**并发形状**，不是网络：`RecordingFile` 是一个可注入的假文件，
 /// 记录每个请求的 offset / 长度、峰值在途数、以及是否被取消。真实的
-/// `Citadel.SFTPFile` 只能靠一条活着的 SSH 通道拿到，单测造不出来 —— 这也是
+/// `SFTPFile` 只能靠一条活着的 SSH 通道拿到，单测造不出来 —— 这也是
 /// `SFTPPipelineFile` 这层协议存在的理由。
 final class SFTPSessionPipelineTests: XCTestCase {
 
