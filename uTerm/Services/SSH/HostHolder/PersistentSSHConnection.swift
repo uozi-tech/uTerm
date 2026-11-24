@@ -123,7 +123,13 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
 
     private enum InitialOutcome {
         case attached, usePlainConnection, closed
+        /// 第一次接入时连接一再断开：报连接失败，**不**退到普通连接、**不**当成主机上的会话没了。
+        case lostBeforeAttach
     }
+
+    /// 第一次接入（回放还没收完）就断了的话，再连几次。不退到普通连接：那会悄悄换成一个不保持的 shell，主机上那个
+    /// 还在跑的会话也就没人接了。
+    static let firstAttachAttempts = 3
 
     private static let initialReconnectDelay = Duration.milliseconds(500)
     private static let maxReconnectDelay = Duration.seconds(15)
@@ -223,6 +229,10 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             try await connectPlain()
         case .closed:
             throw SSHConnection.SSHConnectionError.alreadyClosed
+        case .lostBeforeAttach:
+            isClosed = true
+            finishStreams()
+            throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "SSH 连接已断开"))
         }
     }
 
@@ -243,6 +253,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     private func supervise(startingWith first: ConnectedClient) async {
         var connected = first
         var installTried = false
+        var lostBeforeAttach = 0
         while true {
             let end = await runLink(on: connected)
             if isClosed {
@@ -271,10 +282,19 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
                 return
             case .notInstalled, .unsupported, .transport:
                 await connected.close()
-                guard hasAttached else {
-                    // 还没接上过：这台主机用不了保持进程，或者连接刚建好就断了。交给普通连接，报错也由它报。
+                guard hasAttached || end == .transport else {
+                    // 还没接上过、这台主机用不了保持进程：交给普通连接，报错也由它报。
                     resolveFirstAttach(.usePlainConnection)
                     return
+                }
+                if !hasAttached {
+                    // 第一次接入时连接断了（回放到一半）：主机上的会话多半还在。再试几次，不行就报连接失败——
+                    // 不退到普通连接，也不说会话没了（界面留着这个会话 id，下次接着接）。
+                    lostBeforeAttach += 1
+                    guard lostBeforeAttach < Self.firstAttachAttempts else {
+                        resolveFirstAttach(.lostBeforeAttach)
+                        return
+                    }
                 }
                 if end != .transport {
                     // 接回时发现二进制没了：会话也跟着没了。
@@ -497,9 +517,18 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             for await item in plain.outputItems { items.yield(item) }
             items.finish()
         }
+        didFinishStreams = true
+        do {
+            try await plain.connect()
+        } catch {
+            // 普通连接没连上：这里从没有过会话，主机上的（如果有）也没动——不说「会话没了」。
+            exit.yield(())
+            exit.finish()
+            throw error
+        }
         let ended = sessionEnded
         Task {
-            // 普通连接没有留在主机上的会话：它结束了，之后再连就是新会话。
+            // 普通连接没有留在主机上的会话：它结束了，之后再连就是新会话。连上之后才挂这一条。
             for await _ in plain.exitStream {
                 ended.set()
                 exit.yield(())
@@ -507,8 +536,6 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             ended.set()
             exit.finish()
         }
-        didFinishStreams = true
-        try await plain.connect()
     }
 
     // MARK: - write / resize / close

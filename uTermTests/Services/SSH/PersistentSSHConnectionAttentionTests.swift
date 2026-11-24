@@ -19,6 +19,8 @@ final class PersistentSSHConnectionAttentionTests: XCTestCase {
         let attachPayloads = Mutex<[[UInt8]]>([])
         /// 接入时先回放的输出（在 replayEnd 之前）。新建的会话这就是 shell 刚启动时打的东西。
         let replay = Mutex<[UInt8]>([])
+        /// 接下来这么多次接入在回放到一半时把整条 SSH 连接掐掉（replayEnd 之前）。
+        let dropDuringReplay = Mutex(0)
     }
 
     /// 保持进程的替身：回 helloReply、接入后回 replayEnd、输入原样回显成 output；terminate 时报 exited(0)。
@@ -40,6 +42,16 @@ final class PersistentSSHConnectionAttentionTests: XCTestCase {
                         switches.attachPayloads.withLock { $0.append(frame.payload) }
                         let replay = switches.replay.withLock { $0 }
                         if !replay.isEmpty { try await send(HolderFrame(.output, payload: replay)) }
+                        let drop = switches.dropDuringReplay.withLock { value -> Bool in
+                            guard value > 0 else { return false }
+                            value -= 1
+                            return true
+                        }
+                        if drop {
+                            try await send(HolderFrame(.output, payload: Array("half a replay".utf8)))
+                            context.channel.parent?.close(promise: nil)
+                            return .noStatus
+                        }
                         var end = HolderByteWriter()
                         end.u64(0)
                         try await send(HolderFrame(.replayEnd, payload: end.bytes))
@@ -435,6 +447,74 @@ final class PersistentSSHConnectionAttentionTests: XCTestCase {
         await backend.close()
         try await Task.sleep(for: .seconds(1))
         XCTAssertEqual(prompts.count, promptsBeforeClose, "标签关了之后不能再弹信任框")
+    }
+
+    // MARK: - 第一次接入时连接断了
+
+    private func makeBackend(_ server: SSHTestServer, resumes: Bool) throws -> PersistentSSHConnection {
+        PersistentSSHConnection(
+            sessionID: UUID(), resumesSession: resumes,
+            profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: server.port, jumpHost: nil),
+            auth: .password(username: "tester", password: "x"), jumpHostAuth: nil,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: try makeContainer()), hostKeyApprover: { _ in true })
+    }
+
+    /// 回放到一半连接断了：重连接着接，不退到普通连接（那会悄悄换成一个不保持的 shell），也不说会话没了。
+    func testDropDuringFirstReplayRetriesInsteadOfFallingBackToAPlainShell() async throws {
+        let switches = Switches()
+        switches.dropDuringReplay.withLock { $0 = 1 }
+        let server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: Self.fakeHolder(switches)))
+        defer { Task { await server.stop() } }
+        let backend = try makeBackend(server, resumes: true)
+
+        try await backend.connect()
+
+        XCTAssertEqual(switches.attachPayloads.withLock { $0.count }, 2, "断了之后又接了一次")
+        XCTAssertTrue(server.events.ptyRequests.isEmpty, "没有退到普通连接（普通连接会请求伪终端）")
+        XCTAssertFalse(backend.hostSessionHasEnded)
+        XCTAssertTrue(backend.hasAttachedToHostSession)
+        await backend.close()
+    }
+
+    /// 一直在回放时断：报连接失败，会话没被当成结束（界面留着 id，下次接着接），也没有开普通 shell。
+    func testRepeatedDropsDuringFirstReplayFailWithoutEndingTheSession() async throws {
+        let switches = Switches()
+        switches.dropDuringReplay.withLock { $0 = 100 }
+        let server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: Self.fakeHolder(switches)))
+        defer { Task { await server.stop() } }
+        let backend = try makeBackend(server, resumes: true)
+
+        do {
+            try await backend.connect()
+            XCTFail("一直断应当报错")
+        } catch {}
+
+        XCTAssertEqual(switches.attachPayloads.withLock { $0.count }, PersistentSSHConnection.firstAttachAttempts)
+        XCTAssertTrue(server.events.ptyRequests.isEmpty, "没有退到普通连接")
+        XCTAssertFalse(backend.hostSessionHasEnded, "主机上的会话没被当成结束")
+        XCTAssertFalse(backend.hasAttachedToHostSession)
+        var sawExit = false
+        for await _ in backend.exitStream { sawExit = true; break }
+        XCTAssertTrue(sawExit, "界面要知道这个后端结束了")
+    }
+
+    /// 普通连接（主机用不了保持进程）没连上：不说「会话没了」——从来就没有过。
+    func testPlainFallbackThatFailsToConnectDoesNotClaimTheSessionEnded() async throws {
+        let attempts = PromptCounter()
+        let server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: SSHTestAuthentication(custom: { _ in attempts.next() == 1 }),
+            exec: SSHTestExecHandler { _ in .status(127) }))   // 没有 uterm-holder：安装失败 → 普通连接
+        defer { Task { await server.stop() } }
+        let backend = try makeBackend(server, resumes: false)
+
+        do {
+            try await backend.connect()
+            XCTFail("普通连接登录被拒，应当报错")
+        } catch {}
+
+        XCTAssertFalse(backend.hostSessionHasEnded)
     }
 }
 
