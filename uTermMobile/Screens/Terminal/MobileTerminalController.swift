@@ -456,11 +456,13 @@ final class MobileTerminalController {
             for await _ in exitStream {
                 // 主机上的会话没了（保持进程说的：shell 退出、被接走、主机上没有了）：之后重新连接开的是新会话。
                 // 连不上、被关掉之类的结束，shell 还在主机上，留着这个 id，下次接回它。
-                if (conn as? any HostSessionOwning)?.hostSessionHasEnded ?? true {
+                // 连不上、被关掉之类的结束，shell 还在主机上——前提是这个后端真的接上过它（或者本来就是接回上次的）：
+                // 第一次连接就失败的话主机上还没有这个会话，重试时是新建，新 shell 的启动输出与终端查询要照常处理。
+                if let owner = conn as? any HostSessionOwning, !owner.hostSessionHasEnded {
+                    self?.resumesHostSession = (self?.resumesHostSession ?? false) || owner.hasAttachedToHostSession
+                } else {
                     self?.hostSessionID = UUID()
                     self?.resumesHostSession = false
-                } else {
-                    self?.resumesHostSession = true
                 }
                 if case .failed = self?.state { } else { self?.state = .disconnected }
                 break

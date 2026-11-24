@@ -183,6 +183,48 @@ final class MobileTerminalHostSessionTests: XCTestCase {
         controller.close()
     }
 
+    /// 新开的标签第一次就没连上（还没接上过主机上的会话）：重试用同一个 id，但**不是接回**——主机上还没有这个会话，
+    /// 新 shell 的启动输出要照常处理、终端查询要回答（当成接回的话 fish 等 10 秒报错，提示符卡住）。
+    func testFirstConnectThatNeverAttachedRetriesAsANewSession() async {
+        let first = AttentiveBackend(sessionEnded: false, attached: false)
+        let factory = AttentiveFactory(first)
+        let controller = MobileTerminalController(transportFactory: factory.transportFactory)
+        start(controller)
+        var connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        let id = controller.hostSessionID
+
+        first.end()
+        let disconnected = await MobileFakeTerminal.waitUntil { controller.state == .disconnected }
+        XCTAssertTrue(disconnected)
+
+        controller.restart()
+        connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        XCTAssertEqual(factory.requests.map(\.sessionID), [id, id])
+        XCTAssertEqual(factory.requests.map(\.resumes), [false, false], "没接上过就不是接回")
+        controller.close()
+    }
+
+    /// 恢复的标签（带着上次的 id）第一次没连上：主机上多半还有那个会话，重试仍然是接回。
+    func testRestoredTabThatFailsFirstStillResumes() async {
+        let saved = UUID()
+        let first = AttentiveBackend(sessionEnded: false, attached: false)
+        let factory = AttentiveFactory(first)
+        let controller = MobileTerminalController(transportFactory: factory.transportFactory, hostSessionID: saved)
+        start(controller)
+        var connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        first.end()
+        _ = await MobileFakeTerminal.waitUntil { controller.state == .disconnected }
+
+        controller.restart()
+        connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        XCTAssertEqual(factory.requests.map(\.resumes), [true, true])
+        controller.close()
+    }
+
     /// 后端停下来等用户（凭据被拒之类）：标签上显示原因；点重试交给后端，原因随之清掉。会话 id 不动。
     func testAttentionIsShownAndRetryIsForwardedToTheBackend() async {
         let saved = UUID()
@@ -399,10 +441,12 @@ actor AttentiveBackend: ReconnectingTerminalBackend, HostSessionOwning {
     private nonisolated let reconnectingContinuation: AsyncStream<Bool>.Continuation
     private nonisolated let attentionContinuation: AsyncStream<String?>.Continuation
     nonisolated let hostSessionHasEnded: Bool
+    nonisolated let hasAttachedToHostSession: Bool
     private(set) var retries = 0
 
-    init(sessionEnded: Bool) {
+    init(sessionEnded: Bool, attached: Bool = true) {
         hostSessionHasEnded = sessionEnded
+        hasAttachedToHostSession = attached
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream()
         (attention, attentionContinuation) = AsyncStream<String?>.makeStream()

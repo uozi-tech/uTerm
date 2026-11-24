@@ -76105,6 +76105,34 @@
         }
       }
     },
+    "这台主机已被删除。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host has been deleted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストは削除されました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트는 삭제되었습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機已被刪除。"
+          }
+        }
+      }
+    },
     "这台主机的 sudo 需要密码，在终端里运行：\n%@" : {
       "localizations" : {
         "en" : {
@@ -76157,6 +76185,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這台主機的 sudo 需要密碼，已開啟終端機視窗執行更新指令，請在那裡輸入密碼。"
+          }
+        }
+      }
+    },
+    "这台主机的地址或端口改了，原来的会话在另一台机器上。关掉这个标签页，再重新打开主机。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This host's address or port has changed, so the original session is on a different machine. Close this tab and open the host again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストのアドレスまたはポートが変更されたため、元のセッションは別のマシン上にあります。このタブを閉じて、ホストを開き直してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 주소 또는 포트가 바뀌어 원래 세션은 다른 컴퓨터에 있습니다. 이 탭을 닫고 호스트를 다시 여세요."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機的位址或連接埠改了，原來的工作階段在另一台機器上。關閉這個分頁，再重新開啟主機。"
           }
         }
       }
