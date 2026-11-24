@@ -207,10 +207,13 @@ enum MobileAgentHistoryFixture {
     }
 
     /// 接着假数据源的历史标签（还没开始读），建连接的参数同 App（四种工具、一直列全部项目）。
-    static func tab(host: ServerProfile, source: any AgentHistorySource, directory: String? = shop) -> ClaudeHistoryTab {
+    /// `pinDefaults`：给了就能置顶（按这台主机记，存在这份一次性的偏好里）；不给不能置顶，也不碰标准偏好。
+    static func tab(host: ServerProfile, source: any AgentHistorySource, directory: String? = shop,
+                    pinDefaults: UserDefaults? = nil) -> ClaudeHistoryTab {
         ClaudeHistoryTab(host: host, connection: AgentHistoryConnection(
             preferredDirectory: directory, tools: AgentHistoryTool.allCases, followsCurrentProject: false,
             makeSource: { _, _ in source },
+            pinHost: { [id = host.id] in pinDefaults == nil ? nil : .server(id) }, pinDefaults: pinDefaults ?? .standard,
             connect: { _ in MobileFakeClaudeTree(home: MobileClaudeFixture.home, files: []) }))
     }
 

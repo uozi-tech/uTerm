@@ -44605,6 +44605,35 @@
         }
       }
     },
+    "拖到这里置顶" : {
+      "comment" : "历史会话列表：拖动一个会话时列表顶上的落点",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag here to pin"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここにドラッグしてピン留め"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여기로 드래그하여 고정"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖到這裡釘選"
+          }
+        }
+      }
+    },
     "拖放文件上传到 %@" : {
       "localizations" : {
         "en" : {
@@ -57972,35 +58001,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在讀取視窗…"
-          }
-        }
-      }
-    },
-    "正在运行" : {
-      "comment" : "Code 标签页列表顶上：在这个标签页里继续着的会话",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Running"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "実行中"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "실행 중"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在執行"
           }
         }
       }

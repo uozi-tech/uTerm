@@ -62,7 +62,8 @@ final class ClaudeHistoryTab: Identifiable {
     convenience init(server host: ServerProfile, directory: String?, container: ModelContainer) {
         self.init(host: host, connection: AgentHistoryConnection(
             preferredDirectory: directory, allowsCommands: { !host.sftpOnly }, tools: AgentHistoryTool.allCases,
-            followsCurrentProject: false, connect: AgentHistoryAccess.server(host, container: container)))
+            followsCurrentProject: false, pinHost: { [id = host.id] in .server(id) },
+            connect: AgentHistoryAccess.server(host, container: container)))
     }
 
     /// 配对过的 Mac：读它上面的记录。远控协议里没有终端的当前目录，不定位。
@@ -70,6 +71,8 @@ final class ClaudeHistoryTab: Identifiable {
         self.init(host: client.filesTabHost,
                   connection: AgentHistoryConnection(preferredDirectory: nil, tools: AgentHistoryTool.allCases,
                                                      followsCurrentProject: false,
+                                                     // 握手后才知道那台 Mac 的设备 ID（同 Mac 那头按它记置顶）。
+                                                     pinHost: { client.macDeviceID.map(AgentHistoryPinHost.pairedMac) },
                                                      connect: AgentHistoryAccess.pairedMac(client)),
                   remoteMac: client)
     }
@@ -325,7 +328,8 @@ private struct ClaudeHistoryList: View {
     let history: AgentHistoryModel
     let newSession: AgentHistoryNewSession?
     @Binding var reveal: AgentHistoryReveal?
-    /// Code 标签页里跑着的会话：列表顶上「正在运行」，行上标「运行中」，点一行按它走（见 `ClaudeHistoryTab.select`）。
+    /// Code 标签页里跑着的会话：行上标「运行中」，点一行按它走（见 `ClaudeHistoryTab.select`）；列表里没有行的
+    /// （还没对上记录的新会话）放在列表最顶上。不另起一组「正在运行」：一个会话只出现一次（同 Mac）。
     var code: CodeTabRuns? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
@@ -340,11 +344,6 @@ private struct ClaudeHistoryList: View {
             header
             searchBar
             Rectangle().fill(M.divider).frame(height: 1)
-            // 一眼看到有几个在跑：列表顶上一组「正在运行」（新会话还没有记录，也在这里）。搜索时也留着。
-            if let code, !code.board.runs.isEmpty {
-                CodeRunningSection(code: code)
-                Rectangle().fill(M.divider).frame(height: 1)
-            }
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
                 content
@@ -364,6 +363,7 @@ private struct ClaudeHistoryList: View {
         }
         .onAppear { history.setShownTools(AgentHistoryListPreferences.decodeTools(shownToolsRaw)) }
         .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
+        .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
     }
 
     private var searchBar: some View {
@@ -428,6 +428,7 @@ private struct ClaudeHistoryList: View {
                 }
             }
             Section {
+                // 只管分组方式与「显示」，不清置顶。
                 Button(String(localized: "恢复默认")) {
                     groupingRaw = AgentHistoryGrouping.default.rawValue
                     shownToolsRaw = ""
@@ -497,42 +498,45 @@ private struct ClaudeHistoryList: View {
             }
         case .ready:
             let files = history.visibleFiles
+            let pinned = history.pinnedFiles
             // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
-            if files.isEmpty && (history.isListing || history.hasMore) {
+            if files.isEmpty && pinned.isEmpty && (history.isListing || history.hasMore) {
                 ClaudeHistoryProgress(text: String(localized: "正在读取会话列表…"))
-            } else if files.isEmpty {
+            } else if files.isEmpty && pinned.isEmpty && (code?.board.runs.isEmpty ?? true) {
                 ClaudeHistoryState(icon: "clock", title: String(localized: "没有命令行会话"),
                                    message: AgentHistoryText.emptyListDetail(hidden: history.hiddenCount))
             } else {
-                list(files)
+                list(files, pinned: pinned)
             }
         }
     }
 
-    private func list(_ files: [AgentHistorySessionFile]) -> some View {
-        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata,
+    private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
+        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
-        let showsTool = history.isMultiTool
+        let unlisted = code?.board.unlistedRuns(shown: Set(files.map(\.path)).union(pinned.map(\.path))) ?? []
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    if let code {
+                        ForEach(unlisted) { run in
+                            Button { code.tab.focusRun(run.id) } label: {
+                                CodeUnlistedRunRow(code: code, run: run, showsTool: history.isMultiTool,
+                                                   selected: code.board.focusedID == run.id && run.showsTerminal)
+                            }
+                            .buttonStyle(MPressStyle())
+                        }
+                    }
                     ForEach(groups) { group in
                         let collapsed = history.collapsedGroups.contains(group.id)
-                        if group.kind != .all {
+                        if AgentHistoryListing.showsHeader(group, in: groups) {
                             ClaudeHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
                                 .id(group.id)
                         }
                         if !collapsed {
+                            let showsTool = group.mixesTools
                             ForEach(group.files) { file in
-                                Button {
-                                    if let code { code.tab.select(file) } else { history.select(file) }
-                                } label: {
-                                    ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
-                                                     showsProject: grouping != .project, showsTool: showsTool,
-                                                     isRunning: code?.tab.isRunning(file) ?? false,
-                                                     isSelected: history.selectedFile?.path == file.path)
-                                }
-                                .buttonStyle(MPressStyle())
+                                row(file, in: group, showsTool: showsTool)
                             }
                         }
                     }
@@ -547,6 +551,20 @@ private struct ClaudeHistoryList: View {
             .onChange(of: reveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
             .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
         }
+    }
+
+    /// 一行会话：点一下看它；长按菜单「置顶」/「取消置顶」（iOS 不做拖动排序：会和滚动、标签拖动抢手势）。
+    private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool) -> some View {
+        Button {
+            if let code { code.tab.select(file) } else { history.select(file) }
+        } label: {
+            ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
+                             showsProject: grouping != .project || group.kind == .pinned, showsTool: showsTool,
+                             isRunning: code?.tab.isRunning(file) ?? false,
+                             isSelected: history.selectedFile?.path == file.path)
+        }
+        .buttonStyle(MPressStyle())
+        .modifier(ClaudeHistoryPinMenu(pins: history.pins, file: file))
     }
 
     /// 定位到终端当前目录那一组：展开它并滚过去。还没列到它就等列表变了再试；不按项目分组时不动（同 Mac）。
@@ -585,6 +603,25 @@ private struct ClaudeHistoryList: View {
         // 某种工具的记录读不出来：别的照常列着，底下说一句。
         ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
             ClaudeHistoryWarningNote(text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
+        }
+    }
+}
+
+/// 行的长按菜单：「置顶」/「取消置顶」。这个列表不能置顶（没有主机标识）时没有菜单。
+private struct ClaudeHistoryPinMenu: ViewModifier {
+    let pins: AgentHistoryPins?
+    let file: AgentHistorySessionFile
+
+    func body(content: Content) -> some View {
+        if let pins {
+            let pinned = pins.isPinned(file)
+            content.mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
+                Button { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } } label: {
+                    Label(AgentHistoryText.pinAction(isPinned: pinned), systemImage: pinned ? "pin.slash" : "pin")
+                }
+            }
+        } else {
+            content
         }
     }
 }
@@ -736,17 +773,18 @@ private struct ClaudeHistorySearchResults: View {
             .padding(.horizontal, 12).padding(.vertical, 4)
     }
 
+    /// 结果里不止一种工具：每个会话的第二行最前面写工具名（同列表的行）。
+    private var showsTool: Bool { AgentHistoryListing.mixesTools(search.sessions.map(\.file)) }
+
     private func group(_ session: AgentHistorySearchSession) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    if history.isMultiTool { AgentHistoryToolBadge(tool: session.file.tool, size: 17) }
-                    Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
-                        .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
-                        .lineLimit(1)
-                }
+                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
+                    .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
+                    .lineLimit(1)
                 AgentSessionTimeText(history: history, file: session.file) { activity in
-                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all, activity: activity)
+                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all,
+                                                         showsTool: showsTool, activity: activity)
                 }
                 .font(M.sans(12.5)).foregroundStyle(M.text3)
                 .lineLimit(1)
@@ -801,12 +839,13 @@ private struct ClaudeHistorySearchHitRow: View {
     }
 }
 
+/// 会话一行：标题，第二行（组里不止一种工具时）工具名 · 时间 · 大小 · 分支 ·（不按项目分组时）项目。行前不画工具标记（同 Mac）。
 private struct ClaudeHistoryRow: View {
     let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     let showsProject: Bool
-    /// 不止一种工具时行首带工具标记（共享的 `AgentHistoryToolMark`）。
+    /// 组里不止一种工具：第二行最前面写工具名。
     var showsTool = false
     /// 在 Code 标签页里继续着：第二行前面一个绿点「运行中」。
     var isRunning = false
@@ -814,10 +853,6 @@ private struct ClaudeHistoryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            if showsTool {
-                AgentHistoryToolBadge(tool: file.tool, size: 18)
-                    .padding(.top, 1)
-            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(AgentHistoryText.sessionTitle(file, metadata: metadata))
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
@@ -826,7 +861,8 @@ private struct ClaudeHistoryRow: View {
                 HStack(spacing: 6) {
                     if isRunning { CodeRunningMark() }
                     AgentSessionTimeText(history: history, file: file) { activity in
-                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
+                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
+                                                         showsTool: showsTool, activity: activity)
                     }
                     .font(M.sans(12.5)).foregroundStyle(M.text3)
                     .lineLimit(1)

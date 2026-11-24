@@ -117,6 +117,7 @@ struct TerminalArea: View {
                 // 列表按项目分组、一直列全部项目；几种编码工具的记录都读。主机密钥不弹确认（终端已经连过）。
                 AgentHistoryConnection(preferredDirectory: code.newSessionDirectory, allowsCommands: { !sftpOnly },
                                        tools: AgentHistoryTool.allCases, followsCurrentProject: false,
+                                       pinHost: { .server(serverID) },
                                        connect: AgentHistoryAccess.server(id: serverID, container: container) { _ in })
             },
             terminal: { terminal in
@@ -156,8 +157,8 @@ struct TerminalArea: View {
                 ? "\(codeTabTitle(hostName: hostName, showsHost: true))\n"
                     + String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")
                 : codeTabTitle(hostName: hostName, showsHost: true)
+            // 不放图标（同终端标签）：「Code」这个名字已经说明了，图标只占地方。
             return UPaneTabDescriptor(title: codeTabTitle(hostName: hostName, showsHost: showsHost),
-                                      icon: .system(CodeTabButton.icon),
                                       leadingDot: running > 0 ? UD.success : nil,
                                       help: help)
         }

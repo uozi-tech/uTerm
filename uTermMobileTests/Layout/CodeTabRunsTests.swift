@@ -107,6 +107,24 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(board.run(forSession: "/x2")?.id, second.id, "认下来之后再「继续」那份记录回到它")
     }
 
+    /// 列表里没有行的 run 放在列表最顶上：没对上记录的新会话、对上了但列表里还没那一行的；列表里有行的不再出（不重复）。
+    func testUnlistedRunsStayOnTopUntilTheirRecordIsListed() {
+        let board = CodeRunBoard<FakeTerminal>()
+        let start = Date(timeIntervalSince1970: 20_000)
+        let fresh = board.startNew(tool: .codex, directory: "/w/shop", now: start, terminal: FakeTerminal())
+        let resumed = board.resume(sessionPath: "/p/a.jsonl", sessionID: "a", tool: .claude, directory: "/w",
+                                   now: start) { FakeTerminal() }!
+        XCTAssertEqual(board.unlistedRuns(shown: ["/p/a.jsonl"]).map(\.id), [fresh.id], "新会话在顶上；继续的在它自己那一行")
+
+        typealias C = CodeRunBoard<FakeTerminal>.Candidate
+        board.reconcile([C(path: "/x1", sessionID: "x1", tool: .codex, directory: "/w/shop",
+                           modifiedAt: start.addingTimeInterval(10))])
+        XCTAssertEqual(board.unlistedRuns(shown: ["/p/a.jsonl"]).map(\.id), [fresh.id],
+                       "对上了、但列表还没列出那份记录：留在顶上，不丢")
+        XCTAssertTrue(board.unlistedRuns(shown: ["/p/a.jsonl", "/x1"]).isEmpty, "列出来了：回到那份记录平常的那一行")
+        XCTAssertEqual(board.unlistedRuns(shown: []).map(\.id), [fresh.id, resumed.id])
+    }
+
     // MARK: - 接到真终端
 
     private func container() throws -> (ModelContainer, ServerProfile) {
@@ -243,6 +261,42 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(matched.sessionID, "x-new")
         XCTAssertEqual(tab.title(of: matched), "刚开的这个")
         XCTAssertFalse(tab.runs.hasUnmatchedNewSessions)
+        tab.close()
+    }
+
+    /// 长按菜单的「置顶」/「取消置顶」：置顶的会话进最上面一组「置顶」，原来那一组里不再出现；取消后回去。按主机记、存本机偏好。
+    func testLongPressMenuPinsAndUnpins() async throws {
+        // 容器要活到用例结束：主机是它里面的模型。
+        let (container, host) = try container()
+        defer { withExtendedLifetime(container) {} }
+        let suite = "CodeTabRunsTests.pins.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tab = MobileAgentHistoryFixture.tab(host: host, source: MobileAgentHistoryFixture.source(), pinDefaults: defaults)
+        tab.start()
+        let settled = await MobileFakeClaudeHistory.settle(tab)
+        XCTAssertTrue(settled)
+        let model = try XCTUnwrap(tab.connection.history)
+        let pins = try XCTUnwrap(model.pins, "直连的主机能置顶")
+        XCTAssertEqual(pins.host, .server(host.id))
+        XCTAssertNil(MobileAgentHistoryFixture.tab(host: host, source: MobileAgentHistoryFixture.source()).connection.history?.pins)
+
+        let codex = try XCTUnwrap(model.visibleFiles.first { $0.tool == .codex })
+        let claude = try XCTUnwrap(model.visibleFiles.first { $0.tool == .claude })
+        XCTAssertEqual(AgentHistoryText.pinAction(isPinned: pins.isPinned(codex)), AgentHistoryText.pinAction(isPinned: false))
+        pins.toggle(codex)
+        pins.toggle(claude)
+        XCTAssertEqual(model.pinnedFiles.map(\.path), [codex.path, claude.path], "置顶的先后：新置顶的排最后（同 Mac 的菜单）")
+        let groups = AgentHistoryListing.groups(model.visibleFiles, by: .project, metadata: model.metadata,
+                                                pinned: model.pinnedFiles)
+        XCTAssertEqual(groups.first?.kind, .pinned)
+        XCTAssertTrue(groups.first?.mixesTools == true, "「置顶」里混着两种工具：行上写工具名")
+        XCTAssertFalse(groups.dropFirst().flatMap(\.files).contains { $0.path == codex.path }, "原来那一组里不再出现")
+        XCTAssertEqual(AgentHistoryText.pinAction(isPinned: pins.isPinned(codex)), AgentHistoryText.pinAction(isPinned: true))
+
+        pins.toggle(codex)
+        XCTAssertEqual(model.pinnedFiles.map(\.path), [claude.path], "取消置顶")
+        XCTAssertNotNil(defaults.data(forKey: DefaultsKey.agentHistoryPinnedSessions), "存在本机偏好（这里是一次性的）")
         tab.close()
     }
 

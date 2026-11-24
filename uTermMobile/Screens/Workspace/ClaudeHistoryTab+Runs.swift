@@ -45,7 +45,7 @@ extension ClaudeHistoryTab {
         launch(run, command: command, container: container, relay: relay)
     }
 
-    /// 「＋」新会话：在这个标签页里起一个终端跑它。还没有记录，列表顶上「正在运行」里先放一行「新会话」占位。
+    /// 「＋」新会话：在这个标签页里起一个终端跑它。还没有记录，列表最顶上先放一行「新会话」占位。
     func startNewInPlace(tool: AgentHistoryTool, command: String, directory: String,
                          container: ModelContainer, relay: HostKeyChallengeRelay) {
         let run = runs.startNew(tool: tool, directory: directory, terminal: runTerminalFactory(host))
@@ -113,7 +113,7 @@ extension ClaudeHistoryTab {
         history.select(file)
     }
 
-    /// 点了「正在运行」里的一行：看它的终端。对上了记录的，记录那边也选上（「记录」切换要用）。
+    /// 点了列表最顶上那一行（列表里没有它的记录）：看它的终端。对上了记录的，记录那边也选上（「记录」切换要用）。
     func focusRun(_ id: UUID) {
         guard let run = runs.run(id: id), let history = connection.history else { return }
         runs.focus(id)
@@ -252,7 +252,8 @@ extension ClaudeHistoryTab {
     }
 
     /// 去主机上看新会话的记录写出来没有：只看对应工具最近的几个项目里、比 run 起来晚的那些（读它们的末尾拿工作目录），
-    /// 交给 `CodeRunBoard.reconcile` 认领。不碰列表本身（列表重读会闪），认下来后读一下标题给「正在运行」那一行。
+    /// 交给 `CodeRunBoard.reconcile` 认领。不碰列表本身（列表重读会闪），认下来后读一下标题（列表还没列出那份记录时，
+    /// 顶上那一行用它）。
     func matchNewSessions() async {
         guard let history = connection.history else { return }
         let waiting = runs.runs.filter { $0.isNewSession && $0.isRunning }

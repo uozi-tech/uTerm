@@ -11,7 +11,7 @@ enum CodeTabLayout {
     static let railWidth: CGFloat = 36
 }
 
-/// 一个 Code 标签页的内容：左边会话侧栏（分组、工具标记、筛选、搜索、顶上「正在运行」），右边看选中那份记录，
+/// 一个 Code 标签页的内容：左边会话侧栏（置顶、分组、筛选、搜索；跑着的会话行上标「运行中」），右边看选中那份记录，
 /// 或者那个会话在这个标签页里跑着的终端。SSH 的终端区（`TerminalArea`）和本机终端窗口都用它，各自给终端面板怎么画。
 struct CodeTabView: View {
     let code: CodeTabModel
@@ -114,7 +114,13 @@ private struct CodeTabBrowser: View {
                 code.sidebarOverlayShown = false
             },
             reveal: code.reveal,
-            running: AgentHistoryRunning(rows: code.runningRows(), paths: Set(code.runs.compactMap(\.path))) { id in
+            running: AgentHistoryRunning(paths: Set(code.runs.compactMap(\.path)), unlisted: { shown in
+                let selected = code.displayedRun?.id
+                return code.unlistedRuns(shown: shown).map { run in
+                    AgentHistoryRunRow(id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
+                                       isSelected: run.id == selected)
+                }
+            }) { id in
                 code.selectRun(id)
                 code.sidebarOverlayShown = false
             },
@@ -146,7 +152,7 @@ private struct CodeTabBrowser: View {
     /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页）。
     /// 右边显示着终端本身就说明在跑，不再写「运行中」。与侧栏顶部那一行等高，中间的竖线上下贯通。
     private func runHeader(_ run: CodeTabModel.Run) -> some View {
-        let title = code.runningRows().first { $0.id == run.id }?.title ?? AgentHistoryText.newSession
+        let title = code.title(of: run)
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 AgentHistoryToolBadge(tool: run.tool, size: 15)

@@ -47,6 +47,16 @@
 		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
+			<string>com.uozi.uterm.agent-history-pin</string>
+			<key>UTTypeDescription</key>
+			<string>uTerm pinned session drag marker</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
 			<string>com.uozi.uterm.tab-id</string>
 			<key>UTTypeDescription</key>
 			<string>uTerm tab drag identifier</string>

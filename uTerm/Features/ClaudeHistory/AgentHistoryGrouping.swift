@@ -43,24 +43,59 @@ nonisolated struct AgentHistoryGroup: Identifiable, Equatable, Sendable {
         case noDirectory(AgentHistoryTool)
         case date(AgentHistoryDateBucket)
         case tool(AgentHistoryTool)
-        /// 不分组：只有一组，不画组标题。
+        /// 不分组：只有一组（前面没有「置顶」一组时不画组标题，见 `AgentHistoryListing.showsHeader`）。
         case all
+        /// 用户置顶的会话（`AgentHistoryPins`）：总在最上面，组里按用户排的顺序。
+        case pinned
     }
 
     /// 在同一种分组方式里唯一且稳定（折叠状态按它记）。
     let id: String
     let kind: Kind
     var files: [AgentHistorySessionFile]
+
+    /// 「置顶」一组的 ID。
+    static let pinnedID = "pinned"
+
+    /// 组里不止一种工具：行上要写出是哪种（行前不画工具标记，写在第二行小字的最前面）。
+    var mixesTools: Bool { AgentHistoryListing.mixesTools(files) }
 }
 
 /// 分组、筛选、定位的纯函数。两端共用，界面只画。
 nonisolated enum AgentHistoryListing {
     /// 把（已经按时间新的在前排好的）会话分组。组按其中最新那个会话的先后排；日期、工具按固定的先后。
     /// `date`：这一行用哪个时间（列表上显示的那个，看过的会话可能比修改时间新）。
+    /// `pinned`：置顶的会话（已按用户排的顺序，见 `AgentHistoryPinning.resolved`）：放在最上面一组「置顶」，
+    /// 不再出现在原来那一组里（原组的个数跟着少，少到 0 的组不出）。
     static func groups(_ files: [AgentHistorySessionFile], by grouping: AgentHistoryGrouping,
                        metadata: [String: AgentHistorySessionMetadata],
+                       pinned: [AgentHistorySessionFile] = [],
                        date: (AgentHistorySessionFile) -> Date = \.modifiedAt,
                        now: Date = Date(), calendar: Calendar = .current) -> [AgentHistoryGroup] {
+        guard !pinned.isEmpty else {
+            return unpinnedGroups(files, by: grouping, metadata: metadata, date: date, now: now, calendar: calendar)
+        }
+        let pinnedPaths = Set(pinned.map(\.path))
+        let rest = unpinnedGroups(files.filter { !pinnedPaths.contains($0.path) }, by: grouping, metadata: metadata,
+                                  date: date, now: now, calendar: calendar)
+        return [AgentHistoryGroup(id: AgentHistoryGroup.pinnedID, kind: .pinned, files: pinned)] + rest
+    }
+
+    /// 组标题画不画：只有「不分组」那一组、前面也没有「置顶」时不画。
+    static func showsHeader(_ group: AgentHistoryGroup, in groups: [AgentHistoryGroup]) -> Bool {
+        group.kind != .all || groups.count > 1
+    }
+
+    /// 这些行里不止一种工具。
+    static func mixesTools(_ files: [AgentHistorySessionFile]) -> Bool {
+        guard let first = files.first?.tool else { return false }
+        return files.contains { $0.tool != first }
+    }
+
+    private static func unpinnedGroups(_ files: [AgentHistorySessionFile], by grouping: AgentHistoryGrouping,
+                                       metadata: [String: AgentHistorySessionMetadata],
+                                       date: (AgentHistorySessionFile) -> Date,
+                                       now: Date, calendar: Calendar) -> [AgentHistoryGroup] {
         switch grouping {
         case .none:
             return files.isEmpty ? [] : [AgentHistoryGroup(id: "all", kind: .all, files: files)]

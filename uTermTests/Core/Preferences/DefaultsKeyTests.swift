@@ -44,6 +44,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.localShellRecentDirectories, "localShell.recentDirectories"),
         (DefaultsKey.agentHistoryGrouping, "agentHistory.grouping"),
         (DefaultsKey.agentHistoryShownTools, "agentHistory.shownTools"),
+        (DefaultsKey.agentHistoryPinnedSessions, "agentHistory.pinnedSessions"),
         (DefaultsKey.terminalKeyBarPhrases, "terminalKeyBar.phrases"),
         (DefaultsKey.controlEnabled, "control.enabled"),
         (DefaultsKey.controlAllowMutations, "control.allowMutations"),

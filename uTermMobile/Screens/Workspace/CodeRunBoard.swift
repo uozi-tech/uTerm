@@ -11,10 +11,10 @@ import Observation
 /// 规则：
 /// - 一份记录（`AgentHistorySessionFile.path`）至多一个活终端：再「继续」同一份就回到它，不另起。
 /// - 点别的会话不打断正在跑的：每个 run 各留各的终端，`focused` 只是换详情看哪个。
-/// - 新会话（「＋」）一开始没有记录，`sessionPath` 为 nil，列表顶上「正在运行」里显示成「新会话」。
+/// - 新会话（「＋」）一开始没有记录，`sessionPath` 为 nil，列表最顶上单独一行「新会话」（`unlistedRuns`）。
 ///   之后外面拿主机上的会话列表来 `reconcile`：同一种工具、工作目录相同、修改时间不早于这个 run 起来之前
 ///   `matchSlack` 秒、还没被别的 run 认领的记录里，取修改时间最新的那份认下来（多个新会话按起来的先后依次认）。
-///   认下来之后它就是那份记录的 run（再「继续」那份记录回到它），「正在运行」里显示那份记录的标题；
+///   认下来之后它就是那份记录的 run（再「继续」那份记录回到它），顶上那一行拿掉，回到那份记录平常的那一行（不自动置顶）；
 ///   对不上的一直留着占位（不丢），同一份记录不会被两个 run 认领（不重复）。
 /// - 程序退出（`ended`）：跑了不到 `quickExit` 的留着终端给人看报错（命令没找到、目录不在了），标成已退出，
 ///   由用户「回到记录」或关掉；跑得够久的直接拿掉，详情回到那份记录（外面负责重新读到最新）。
@@ -63,6 +63,12 @@ final class CodeRunBoard<Terminal: AnyObject> {
     func run(id: UUID) -> Run? { runs.first { $0.id == id } }
     func run(forSession path: String) -> Run? { runs.first { $0.sessionPath == path } }
     func run(for terminal: Terminal) -> Run? { runs.first { $0.terminal === terminal } }
+
+    /// 列表里没有行的 run：还没对上记录的新会话，或者对上了但那份记录列表里还没列出来（还没重列、被「显示」筛掉、
+    /// 还没翻到）。列表把它们放在最顶上，一个都不丢；列表里有行的不在这里（不重复）。`shown`：列表里显示着的记录。
+    func unlistedRuns(shown: Set<String>) -> [Run] {
+        runs.filter { run in run.sessionPath.map { !shown.contains($0) } ?? true }
+    }
 
     // MARK: 起
 

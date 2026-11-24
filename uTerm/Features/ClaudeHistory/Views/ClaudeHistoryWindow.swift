@@ -132,6 +132,17 @@ final class ClaudeHistoryWindowModel {
     @ObservationIgnored private var sftpOnly = false
     /// 向 `RemoteMacDirectory` 借的那台 Mac 的连接（关窗口时还回去）。
     @ObservationIgnored private var borrowedMac: (id: String, directory: RemoteMacDirectory)?
+    /// 配对的 Mac 的连接（握手后才知道它的设备 ID，置顶按它记）。
+    @ObservationIgnored private weak var pairedClient: RemoteMacClient?
+
+    /// 置顶按哪台主机记（同 Code 标签页：本机、SSH 主机、配对的 Mac 的设备 ID）。
+    private var pinHost: AgentHistoryPinHost? {
+        switch windowID.host {
+        case .local: return .local
+        case .server(let id): return .server(id)
+        case .pairedMac: return pairedClient?.macDeviceID.map(AgentHistoryPinHost.pairedMac)
+        }
+    }
 
     init(windowID: ClaudeHistoryWindowID) {
         self.windowID = windowID
@@ -153,6 +164,7 @@ final class ClaudeHistoryWindowModel {
             connection = AgentHistoryConnection(preferredDirectory: windowID.directory,
                                                 allowsCommands: { [weak self] in self?.sftpOnly != true },
                                                 tools: AgentHistoryTool.allCases, followsCurrentProject: false,
+                                                pinHost: { [weak self] in self?.pinHost },
                                                 connect: makeConnect(container: container, macs: macs))
         }
         await connection?.open()
@@ -177,6 +189,7 @@ final class ClaudeHistoryWindowModel {
                 if let self {
                     if self.borrowedMac == nil { self.borrowedMac = (macID, macs) } else { macs.releaseClient(macID: macID) }
                     self.hostName = client.macName
+                    self.pairedClient = client
                 }
                 return try await AgentHistoryAccess.pairedMac(client)(gate)
             }

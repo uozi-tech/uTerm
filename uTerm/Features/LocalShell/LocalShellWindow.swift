@@ -694,7 +694,7 @@ struct LocalShellTerminalArea: View {
             code: code,
             makeConnection: {
                 AgentHistoryConnection(preferredDirectory: code.newSessionDirectory, tools: AgentHistoryTool.allCases,
-                                       followsCurrentProject: false,
+                                       followsCurrentProject: false, pinHost: { .local },
                                        connect: { _ in RemoteMacFileProvider.localShellAgent() })
             },
             terminal: { terminal in
@@ -708,8 +708,9 @@ struct LocalShellTerminalArea: View {
     static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
         if let code = pane.codeTab {
             let running = code.runs.count
+            // 不放图标（同 SSH 终端区的 Code 标签）。
             return UPaneTabDescriptor(
-                title: TerminalArea.codeTabBaseTitle, icon: .system(CodeTabButton.icon),
+                title: TerminalArea.codeTabBaseTitle,
                 leadingDot: running > 0 ? UD.success : nil,
                 help: running > 0
                     ? String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")

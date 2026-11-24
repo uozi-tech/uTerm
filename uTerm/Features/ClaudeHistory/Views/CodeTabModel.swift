@@ -16,15 +16,6 @@ protocol CodeTabTerminal: AnyObject {
     func dispose()
 }
 
-/// 侧栏「正在运行」里的一行（`CodeTabModel.runningRows`）。
-struct CodeTabRunRow: Identifiable, Equatable {
-    let id: UUID
-    let title: String
-    let tool: AgentHistoryTool
-    let directory: String
-    let isSelected: Bool
-}
-
 /// 一个 Code 标签页：左边这台主机上编码工具的历史会话，右边看选中那份记录，或者就在右边接着聊（一个跑着继续命令的终端）。
 ///
 /// 被「继续」过的会话各自留着自己的终端（`runs`）：点侧栏里别的会话不打断正在跑的，点回去就回到它的终端。
@@ -156,7 +147,7 @@ final class CodeTabModel {
 
     // MARK: 选择
 
-    /// 侧栏「正在运行」里点了一个：有记录的选中那份记录（右边是它的终端），没有记录的新会话单独选中。
+    /// 点了侧栏顶上一个列表里没有行的会话（`unlistedRuns`）：有记录的选中那份记录（右边是它的终端），没有记录的新会话单独选中。
     func selectRun(_ id: UUID) {
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
         runs[index].showsTranscript = false
@@ -307,7 +298,8 @@ final class CodeTabModel {
         matchNewSessions()
     }
 
-    /// 把还没对上记录的新会话对上列表里的真实记录（规则见 `match`）。对上了：「正在运行」里那一行换成记录的标题，列表里那一行标成在跑；
+    /// 把还没对上记录的新会话对上列表里的真实记录（规则见 `match`）。对上了：侧栏顶上那一行「新会话」拿掉，
+    /// 列表里那份记录平常的那一行标成在跑（不自动置顶）；
     /// 右边正看着它的继续看它的终端（改由列表选中那份记录）。
     func matchNewSessions() {
         guard let history, runs.contains(where: { $0.path == nil }) else { return }
@@ -329,7 +321,7 @@ final class CodeTabModel {
     /// 1. 候选：同一种工具、起的时候还不在列表里（`knownPaths`）、没被别的会话占着、修改时间不早于起的时候（留一分钟误差）、
     ///    目录对得上（项目的目录；Claude 的项目名是目录换出来的；或者记录里的工作目录）。
     /// 2. 同一种工具、同一个目录只有一个新会话在等时才对：有候选就取最近改过的那份（正跑着的那个一直在写）。
-    ///    同时等着好几个时分不清谁是谁，都不对，各自留在「正在运行」里当「新会话」（不丢、不重复）；跑完一个、剩下一个时再对。
+    ///    同时等着好几个时分不清谁是谁，都不对，各自留在侧栏顶上当「新会话」（不丢、不重复）；跑完一个、剩下一个时再对。
     static func match(_ pending: [Run], files: [AgentHistorySessionFile],
                       metadata: [String: AgentHistorySessionMetadata], claimed: Set<String>) -> [UUID: String] {
         var result: [UUID: String] = [:]
@@ -358,15 +350,16 @@ final class CodeTabModel {
         return file.tool == .claude && file.project.id == ClaudeProjectPath.encode(wanted)
     }
 
-    /// 侧栏「正在运行」那一组的行。
-    func runningRows() -> [CodeTabRunRow] {
-        let selected = displayedRun?.id
-        return runs.map { run in
-            let file = run.path.flatMap { path in history?.files.first { $0.path == path } }
-            let title = file.map { AgentHistoryText.sessionTitle($0, metadata: history?.metadata[$0.path]) }
-                ?? run.title ?? AgentHistoryText.newSession
-            return CodeTabRunRow(id: run.id, title: title, tool: run.tool, directory: run.directory,
-                                           isSelected: run.id == selected)
-        }
+    /// 列表里没有行的会话：还没对上记录的新会话，或者对上了但那份记录列表里还没列出来（还没重列、被「显示」筛掉了、
+    /// 还没翻到）。侧栏把它们放在最顶上，一个都不丢；列表里有行的不在这里（不重复）。`shown`：列表里显示着的记录。
+    func unlistedRuns(shown: Set<String>) -> [Run] {
+        runs.filter { run in run.path.map { !shown.contains($0) } ?? true }
+    }
+
+    /// 一个跑着的会话叫什么：对上了记录用记录的标题，继续的会话用起的时候的标题，新会话叫「新会话」。
+    func title(of run: Run) -> String {
+        let file = run.path.flatMap { path in history?.files.first { $0.path == path } }
+        return file.map { AgentHistoryText.sessionTitle($0, metadata: history?.metadata[$0.path]) }
+            ?? run.title ?? AgentHistoryText.newSession
     }
 }

@@ -56,6 +56,10 @@ final class AgentHistoryModel {
     private(set) var transcript: AgentTranscriptModel?
     /// 从主对话一层层点进去的子代理记录，最里面的在最后。
     private(set) var subagentStack: [AgentTranscriptModel] = []
+    /// 这台主机上置顶的会话；nil = 这个列表不能置顶（没有主机标识）。换了就把置顶的记录先读出来。
+    var pins: AgentHistoryPins? {
+        didSet { readPinnedMetadata() }
+    }
 
     /// 同时读几份记录的末尾。
     @ObservationIgnored private let metadataConcurrency = 4
@@ -102,6 +106,26 @@ final class AgentHistoryModel {
     /// 列表里显示的：已经读过的那一段里要列出来的。
     var visibleFiles: [AgentHistorySessionFile] {
         files.prefix(resolvedCount).filter { metadata[$0.path]?.isListed ?? true }
+    }
+
+    /// 列表最上面「置顶」一组的行（按用户排的顺序；已经按「显示」筛过，还没读到信息的、找不到的不在里面）。
+    var pinnedFiles: [AgentHistorySessionFile] {
+        guard let pins else { return [] }
+        return AgentHistoryPinning.resolved(pins.keys, in: files, metadata: metadata)
+    }
+
+    /// 置顶的会话可能排在很后面（很久没动过）：不等列表翻到它，先把它们的信息读出来，「置顶」一组一打开就是齐的。
+    /// 范围换了、筛选换了、置顶变了（别的窗口改的）时调。
+    func readPinnedMetadata() {
+        guard let pins, !pins.keys.isEmpty, !files.isEmpty else { return }
+        let wanted = Set(pins.keys)
+        let pinned = files.filter { wanted.contains(AgentHistoryPinKey($0)) && metadata[$0.path] == nil }
+        guard !pinned.isEmpty else { return }
+        for file in pinned.reversed() where !inFlight.contains(file.path) && !failed.contains(file.path) {
+            queued.removeAll { $0.path == file.path }
+            queued.insert(file, at: 0)
+        }
+        pump()
     }
 
     /// 读过信息、不列出来的（桌面版等）有几个。
@@ -152,6 +176,7 @@ final class AgentHistoryModel {
         resolvedCount = 0
         advanceResolved()
         targetRows = max(targetRows, pageRows)
+        readPinnedMetadata()
         fill()
     }
 
@@ -259,6 +284,7 @@ final class AgentHistoryModel {
         resolvedCount = 0
         advanceResolved()
         targetRows = pageRows
+        readPinnedMetadata()
         fill()
         if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) {
             select(nil)

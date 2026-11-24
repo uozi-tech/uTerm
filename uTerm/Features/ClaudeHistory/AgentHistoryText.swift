@@ -36,9 +36,12 @@ enum AgentHistoryText {
 
     /// 列表一行的第二行：多久以前 · 大小 · 分支 ·（全部项目时）项目。`activity` 是看这个会话时读到的更新的时间
     /// （`AgentHistoryModel.liveActivity`），比文件的修改时间新就用它。
+    /// `showsTool`：组里不止一种工具时，最前面写工具名（行前不画工具标记）。整行一行、放不下截掉尾巴：
+    /// 工具名与时间在前，先被截掉的是后面的分支、项目。
     static func sessionSubtitle(_ file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?,
-                                showsProject: Bool, activity: Date? = nil) -> String {
-        var parts = [relative(later(file.modifiedAt, activity)), file.size.formatted(.byteCount(style: .file))]
+                                showsProject: Bool, showsTool: Bool = false, activity: Date? = nil) -> String {
+        var parts = showsTool ? [file.tool.displayName] : []
+        parts += [relative(later(file.modifiedAt, activity)), file.size.formatted(.byteCount(style: .file))]
         if let branch = metadata?.gitBranch { parts.append(branch) }
         if showsProject {
             parts.append(metadata?.lastDirectory.map { ($0 as NSString).lastPathComponent } ?? projectName(file.project))
@@ -165,9 +168,11 @@ enum AgentHistoryText {
     }
 
     /// 结果里一个会话那一组的第二行：多久以前 ·（全部项目时）项目。`activity` 同 `sessionSubtitle`。
-    static func searchSessionDetail(_ session: AgentHistorySearchSession, showsProject: Bool,
+    /// `showsTool`：结果里不止一种工具时，最前面写工具名（同列表的行）。
+    static func searchSessionDetail(_ session: AgentHistorySearchSession, showsProject: Bool, showsTool: Bool = false,
                                     activity: Date? = nil) -> String {
-        var parts = [relative(later(session.metadata.lastActivity ?? session.file.modifiedAt, activity))]
+        var parts = showsTool ? [session.file.tool.displayName] : []
+        parts.append(relative(later(session.metadata.lastActivity ?? session.file.modifiedAt, activity)))
         if showsProject {
             parts.append(session.metadata.lastDirectory.map { ($0 as NSString).lastPathComponent }
                          ?? projectName(session.file.project))
@@ -261,7 +266,23 @@ enum AgentHistoryText {
         case .date(let bucket): return dateBucket(bucket)
         case .tool(let tool): return tool.displayName
         case .all: return String(localized: "全部会话")
+        case .pinned: return pinnedTitle
         }
+    }
+
+    /// 「置顶」一组的标题（同欢迎窗口侧栏的「置顶」，是组名不是动作）。
+    static var pinnedTitle: String {
+        String(localized: "sidebar.pinned", defaultValue: "置顶", comment: "侧栏：置顶的主机（列表名，不是动作）")
+    }
+
+    /// 行的菜单：置顶 / 取消置顶（同主机列表的那两项）。
+    static func pinAction(isPinned: Bool) -> String {
+        isPinned ? String(localized: "取消置顶") : String(localized: "置顶")
+    }
+
+    /// Mac 侧栏：拖动一个会话、还没有置顶的会话时，列表顶上出的那个落点。
+    static var dropToPin: String {
+        String(localized: "拖到这里置顶", comment: "历史会话列表：拖动一个会话时列表顶上的落点")
     }
 
     /// 组标题的悬停：项目组是完整路径，对不上路径的说明一句。
@@ -271,7 +292,7 @@ enum AgentHistoryText {
             return directory ?? String(localized: "记录目录 \(name)（对不上工作目录）")
         case .noDirectory(let tool):
             return String(localized: "\(tool.displayName) 没有记下这些会话的工作目录")
-        case .date, .tool, .all:
+        case .date, .tool, .all, .pinned:
             return nil
         }
     }

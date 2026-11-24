@@ -3,7 +3,7 @@ import SwiftUI
 import UPaneGroups
 @testable import uTerm
 
-/// Code 标签页：左边一直在的会话侧栏（分组、工具标记、顶上「正在运行」），右边看记录或者跑着的那个会话的终端。
+/// Code 标签页：左边一直在的会话侧栏（置顶、分组；一组里混着几种工具时行上写工具名），右边看记录或者跑着的那个会话的终端。
 /// 数据是内存里的假数据源（`AgentHistoryFakeSource`），Claude Code 与 Codex 混排，内容全是手写的；终端接假后端，喂写好的输出。
 @MainActor
 extension UICatalog {
@@ -13,8 +13,8 @@ extension UICatalog {
         let size = CGSize(width: 1180, height: 740)
         let localSize = CGSize(width: 1100, height: 700)
         return [
-            // 按项目分组：同一个目录下 Claude Code 与 Codex 的会话在一组里，每一行前面是工具标记。
-            // 另一个会话在这个标签页里跑着：侧栏顶上「正在运行」一组，列表里那一行标着「运行中」。
+            // 按项目分组：同一个目录下 Claude Code 与 Codex 的会话在一组里，行上第二行最前面写工具名；只有一种工具的组不写。
+            // 另一个会话在这个标签页里跑着：列表里那一行标着「运行中」，顶上没有单独一组。没有置顶：顶上不多出东西。
             UICatalogEntry("终端窗口/Code 标签页", source: src, symbol: "CodeTabView", size: size) { stage in
                 try await codeTabRender(stage, .init(running: ["x-tests"]))
             },
@@ -28,10 +28,24 @@ extension UICatalog {
                            size: size) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login"], showsRun: "c-login", showsRecord: true))
             },
-            // 还没对上记录的新会话：「正在运行」里一行「新会话」，右边是它的终端。
+            // 还没对上记录的新会话：列表最顶上一行「新会话」（带「运行中」），右边是它的终端。
             UICatalogEntry("终端窗口/Code 标签页_新会话", source: src, symbol: "CodeTabModel", size: size,
                            live: true) { stage in
                 try await codeTabRender(stage, .init(selects: false, newSession: true))
+            },
+            // 置顶了两个（一个 Codex、一个 Claude Code）：最上面一组「置顶」，原来那几组里不再出现；组里混着两种工具，写工具名。
+            UICatalogEntry("终端窗口/Code 标签页_置顶", source: src, symbol: "AgentHistorySessionList", size: size) { stage in
+                try await codeTabRender(stage, .init(fixtures: .init(pinned: ["x-502", "c-nginx"]), running: ["x-tests"]))
+            },
+            // 拖动中（拍成静态）：还没有置顶的会话时，列表顶上出一条「拖到这里置顶」，悬在上面时高亮。
+            UICatalogEntry("终端窗口/Code 标签页_拖到置顶", source: src, symbol: "AgentHistoryPinDropStrip", size: size) { stage in
+                try await codeTabRender(stage, .init(pinDrag: ("c-blog", .pin(index: 0))))
+            },
+            // 拖动中（拍成静态）：在「置顶」一组里把第一个往下拖，落点那里一条强调色的线，被拖的那一行变淡。
+            UICatalogEntry("终端窗口/Code 标签页_置顶组内拖动", source: src, symbol: "AgentHistoryPinInsertionLine",
+                           size: size) { stage in
+                try await codeTabRender(stage, .init(fixtures: .init(pinned: ["c-page", "x-502", "c-nginx"]),
+                                                     pinDrag: ("c-page", .pin(index: 2))))
             },
             UICatalogEntry("终端窗口/Code 标签页_按工具分组", source: src, symbol: "AgentHistorySessionList", size: size) { stage in
                 try await codeTabRender(stage, .init(grouping: .tool))
@@ -62,6 +76,9 @@ extension UICatalog {
             UICatalogEntry("本机终端/Code 标签页_活终端", source: local, symbol: "LocalShellTerminalArea", size: localSize,
                            live: true) { stage in
                 try await localCodeTabRender(stage, .init(running: ["c-login"], showsRun: "c-login"))
+            },
+            UICatalogEntry("本机终端/Code 标签页_置顶", source: local, symbol: "LocalShellTerminalArea", size: localSize) { stage in
+                try await localCodeTabRender(stage, .init(fixtures: .init(pinned: ["c-login", "c-dots"]), running: ["x-tests"]))
             },
             UICatalogEntry("本机终端/Code 标签页_没选会话", source: local, symbol: "LocalShellTerminalArea", size: localSize) { stage in
                 try await localCodeTabRender(stage, .init(selects: false))
@@ -102,6 +119,8 @@ extension UICatalog {
         var overlay = false
         /// 跑着的那个会话切到「查看记录」。
         var showsRecord = false
+        /// 摆成「正拖着这个会话（会话 ID）、落在这里」的样子。
+        var pinDrag: (session: String, target: AgentHistoryPinDrop)?
     }
 
     /// SSH 终端窗口：一个终端标签页 + 一个 Code 标签页（前台）。
@@ -118,12 +137,15 @@ extension UICatalog {
         }
         let codeID = workspace.openCodeTab(serverID: server.id, hostName: server.name, directory: UICatalogCodeMode.shop)
         guard let code = workspace.terminalGroups.tab(codeID)?.payload.codeTab else { throw CancellationError() }
-        let terminals = await prepare(code, setup, fixtures: setup.fixtures)
+        var fixtures = setup.fixtures
+        fixtures.pinDefaults = s.defaults
+        let terminals = await prepare(code, setup, fixtures: fixtures)
         let view = s.wrap(TerminalWindowView(windowID: TerminalWindowID(id: UUID(), serverID: server.id),
                                              catalogModel: workspace))
         return UICatalogRender(view, after: { _ in
             await feed(terminals)
         }, cleanup: {
+            AgentHistoryPinDragModel.catalogPreset = nil
             workspace.dispose()
         })
     }
@@ -142,11 +164,13 @@ extension UICatalog {
         guard let code = model.groups.tab(codeID)?.payload.codeTab else { throw CancellationError() }
         var fixtures = setup.fixtures
         fixtures.root = UICatalogCodeMode.localRoot
+        fixtures.pinDefaults = s.defaults
         let terminals = await prepare(code, setup, fixtures: fixtures)
         let view = s.wrap(LocalShellWindowView(windowID: LocalShellWindowID(id: UUID()), catalogModel: model))
         return UICatalogRender(view, after: { _ in
             await feed(terminals)
         }, cleanup: {
+            AgentHistoryPinDragModel.catalogPreset = nil
             model.disposeAll()
         })
     }
@@ -158,6 +182,9 @@ extension UICatalog {
         fixtures.selects = setup.selects && setup.showsRun == nil && !setup.newSession
         let history = await UICatalogCodeMode.model(fixtures)
         code.install(AgentHistoryConnection(history: history))
+        AgentHistoryPinDragModel.catalogPreset = setup.pinDrag.flatMap { drag in
+            history.files.first { $0.sessionID == drag.session }.map { (AgentHistoryPinKey($0), drag.target) }
+        }
         code.sidebarHidden = setup.sidebarHidden
         code.sidebarOverlayShown = setup.overlay
         var terminals: [(TerminalSession, String)] = []
@@ -214,6 +241,10 @@ enum UICatalogCodeMode {
         var codexSearches = true
         /// 记录里的项目都在这个目录下（SSH 主机是 `/home/deploy`，本机是一个假的用户目录）。
         var root = UICatalogCodeMode.sshRoot
+        /// 置顶的会话（会话 ID，按这个顺序）。
+        var pinned: [String] = []
+        /// 置顶存在哪（画廊那一次的一次性设置）；nil = 这个列表不能置顶。
+        var pinDefaults: UserDefaults?
     }
 
     nonisolated static let sshRoot = "/home/deploy"
@@ -266,6 +297,13 @@ enum UICatalogCodeMode {
         await history.start()
         for _ in 0..<100 where history.hasMore || history.isListing {
             try? await Task.sleep(for: .milliseconds(10))
+        }
+        if let defaults = setup.pinDefaults {
+            let pins = AgentHistoryPins(host: .local, defaults: defaults)
+            for id in setup.pinned {
+                if let file = history.files.first(where: { $0.sessionID == id }) { pins.pin(AgentHistoryPinKey(file)) }
+            }
+            history.pins = pins
         }
         if let query = setup.search {
             history.searchText = query

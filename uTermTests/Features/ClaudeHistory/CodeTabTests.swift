@@ -166,7 +166,9 @@ final class CodeTabTests: XCTestCase {
         XCTAssertNil(run.path)
         XCTAssertEqual(code.detail, .terminal(run.id), "新会话直接在右边跑")
         XCTAssertNil(history.selectedFile)
-        XCTAssertEqual(code.runningRows().map(\.title), [AgentHistoryText.newSession], "「正在运行」里先是一行「新会话」")
+        let listed = Set(history.visibleFiles.map(\.path))
+        XCTAssertEqual(code.unlistedRuns(shown: listed).map(\.id), [run.id], "列表最顶上先是一行「新会话」")
+        XCTAssertEqual(code.title(of: run), AgentHistoryText.newSession)
 
         await code.refreshList()
         XCTAssertNil(code.runs.first?.path, "记录还没写出来：对不上，留着")
@@ -180,8 +182,21 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(merged.path, try file(history, "fresh").path, "对上了起之后才出现的那一份")
         XCTAssertEqual(history.selectedFile?.sessionID, "fresh", "右边看着它的继续看着它：改由列表选中那份记录")
         XCTAssertEqual(code.detail, .terminal(run.id))
-        XCTAssertEqual(code.runningRows().map(\.title), ["给订单接口加分页"], "换成记录的标题，不重复")
+        XCTAssertEqual(code.title(of: merged), "给订单接口加分页", "换成记录的标题")
+        XCTAssertTrue(code.unlistedRuns(shown: Set(history.visibleFiles.map(\.path))).isEmpty,
+                      "对上之后顶上那一行消失，回到那份记录平常的那一行（不重复）")
+        XCTAssertFalse(history.pins?.isPinned(try file(history, "fresh")) ?? false, "不自动置顶")
         XCTAssertEqual(code.runs.count, 1)
+    }
+
+    /// 对上了记录、但列表里还没有那一行（还没重列、被「显示」筛掉）：照样留在顶上，不丢。
+    func testRunWhoseRecordIsNotListedStaysOnTop() async throws {
+        let (code, history, _) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 60)])
+        let a = try file(history, "a")
+        let run = try XCTUnwrap(code.resume(a))
+        XCTAssertTrue(code.unlistedRuns(shown: [a.path]).isEmpty, "列表里有它的行：顶上不再出")
+        XCTAssertEqual(code.unlistedRuns(shown: []).map(\.id), [run.id], "列表里没有它的行：顶上出")
+        XCTAssertEqual(code.title(of: run), "t")
     }
 
     func testMatchRules() {
@@ -415,6 +430,26 @@ final class CodeTabTests: XCTestCase {
         var closedWindow = false
         model.handleCloseShortcut { closedWindow = true }
         XCTAssertFalse(closedWindow)
+        model.disposeAll()
+    }
+
+    // MARK: 标签条
+
+    /// 标签条上 Code 标签页那一格不画图标：「● Code ×」（带主机名时「● Code · 主机名 ×」）。
+    func testCodeTabChipHasNoIcon() throws {
+        let workspace = WorkspaceModel()
+        let codeID = workspace.openCodeTab(serverID: UUID(), hostName: "prod-web-01", directory: Self.shop)
+        let tab = try XCTUnwrap(workspace.terminalGroups.tab(codeID))
+        let descriptor = TerminalArea.descriptor(for: tab, profiles: [:], showsHost: true)
+        XCTAssertEqual(descriptor.icon, .none)
+        XCTAssertEqual(descriptor.title, "Code · prod-web-01")
+        workspace.dispose()
+
+        let model = LocalShellWindowModel(startShell: { _ in })
+        let localID = model.openCodeTab(in: model.groups.activeGroupID)
+        let pane = try XCTUnwrap(model.groups.tab(localID)?.payload)
+        XCTAssertEqual(LocalShellTerminalArea.descriptor(for: pane).icon, .none)
+        XCTAssertEqual(LocalShellTerminalArea.descriptor(for: pane).title, "Code")
         model.disposeAll()
     }
 

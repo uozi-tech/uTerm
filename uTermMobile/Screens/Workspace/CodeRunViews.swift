@@ -117,65 +117,33 @@ struct CodeRunHeader: View {
     }
 }
 
-/// 列表顶上一组「正在运行」：在这个标签页里继续着的会话（含还没有记录的新会话），一眼看到有几个在跑，点一行回到它的终端。
-struct CodeRunningSection: View {
+/// 列表最顶上的一行：跑着、但列表里没有它那份记录的会话（多半是还没写出记录的新会话，见 `CodeRunBoard.unlistedRuns`）。
+/// 标题（新会话就是「新会话」），第二行「运行中」+ 目录名（连接中、已退出时换成那句状态）。点一下回到它的终端。
+struct CodeUnlistedRunRow: View {
     let code: CodeTabRuns
-
-    /// 多过这几个就在这一块里滚，别把下面的列表挤没了。
-    private static let visibleRows = 3
+    let run: CodeRunBoard<TermTab>.Run
+    /// 这台主机上不止一种工具：写出是哪种（「新会话」本身看不出来）。
+    let showsTool: Bool
+    let selected: Bool
 
     var body: some View {
-        let runs = code.board.runs
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 7) {
-                Circle().fill(M.success).frame(width: 7, height: 7)
-                Text("正在运行", comment: "Code 标签页列表顶上：在这个标签页里继续着的会话")
-                    .font(M.sans(13.5, weight: .semibold)).foregroundStyle(M.text2)
-                Spacer(minLength: 6)
-                Text(verbatim: "\(runs.count)")
-                    .font(M.mono(12)).foregroundStyle(M.text4)
-            }
-            .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 4)
-            .accessibilityElement(children: .combine)
-            if runs.count > Self.visibleRows {
-                ScrollView { rows(runs) }
-                    .frame(height: CGFloat(Self.visibleRows) * 60)
-                    .mKeepsScrollContentInSafeArea()
-            } else {
-                rows(runs)
-            }
-        }
-        .padding(.bottom, 6)
-    }
-
-    private func rows(_ runs: [CodeRunBoard<TermTab>.Run]) -> some View {
-        VStack(spacing: 2) {
-            ForEach(runs) { run in
-                Button { code.tab.focusRun(run.id) } label: {
-                    row(run, selected: code.board.focusedID == run.id && run.showsTerminal)
-                }
-                .buttonStyle(MPressStyle())
-            }
-        }
-        .padding(.horizontal, 8)
-    }
-
-    private func row(_ run: CodeRunBoard<TermTab>.Run, selected: Bool) -> some View {
-        HStack(spacing: 9) {
-            AgentHistoryToolBadge(tool: run.tool, size: 18)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .top, spacing: 9) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(code.tab.title(of: run))
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
                     .lineLimit(1)
-                Text(verbatim: CodeRunText.state(of: run, controller: run.terminal.controller))
-                    .font(M.sans(12.5)).foregroundStyle(run.isRunning ? M.text3 : M.warning)
-                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 6) {
+                    let state = CodeRunText.listDetail(of: run, controller: run.terminal.controller)
+                    if run.isRunning, state.isConnected { CodeRunningMark() }
+                    Text(verbatim: showsTool ? "\(run.tool.displayName) · \(state.text)" : state.text)
+                        .font(M.sans(12.5)).foregroundStyle(run.isRunning ? M.text3 : M.warning)
+                        .lineLimit(1).truncationMode(.middle)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .frame(minHeight: M.minTarget)
+        .padding(.horizontal, 12).padding(.vertical, 10)
         .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
             .fill(selected ? M.rowSelected : Color.clear))
         .contentShape(Rectangle())
@@ -198,6 +166,16 @@ struct CodeRunningMark: View {
 
 /// 跑着的会话的状态那一行。
 enum CodeRunText {
+    /// 列表顶上那一行的小字：连着时是目录名（前面另有「运行中」标记），否则是状态（正在连接、已退出……）。
+    @MainActor
+    static func listDetail(of run: CodeRunBoard<TermTab>.Run,
+                           controller: MobileTerminalController) -> (text: String, isConnected: Bool) {
+        if run.isRunning, controller.state == .connected, !controller.isReconnecting {
+            return ((run.directory as NSString).lastPathComponent, true)
+        }
+        return (state(of: run, controller: controller), false)
+    }
+
     @MainActor
     static func state(of run: CodeRunBoard<TermTab>.Run, controller: MobileTerminalController) -> String {
         if !run.isRunning { return String(localized: "程序已退出") }

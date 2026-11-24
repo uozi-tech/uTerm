@@ -108,13 +108,20 @@ final class AgentHistoryConnection {
     @ObservationIgnored private let followsCurrentProject: Bool
     /// 文件通道建好之后怎么建数据源（测试换成假的）。
     @ObservationIgnored private let makeSource: (any SFTPProviding, String?) -> any AgentHistorySource
+    /// 置顶按哪台主机记：连上之后才问（配对的 Mac 握手后才知道设备 ID）。nil = 这个列表不能置顶。
+    @ObservationIgnored private let pinHost: @MainActor () -> AgentHistoryPinHost?
+    /// 置顶存在哪（测试换成一次性的）。
+    @ObservationIgnored private let pinDefaults: UserDefaults
 
     /// `home`：主目录，不给就问那台主机（见 `ClaudeHistorySource.init`）。
     init(preferredDirectory: String?, home: String? = nil, allowsCommands: @escaping @MainActor () -> Bool = { true },
          tools: [AgentHistoryTool] = [.claude], followsCurrentProject: Bool = true,
          makeSource: ((any SFTPProviding, String?) -> any AgentHistorySource)? = nil,
+         pinHost: @escaping @MainActor () -> AgentHistoryPinHost? = { nil }, pinDefaults: UserDefaults = .standard,
          connect: @escaping AgentHistoryAccess.Connect) {
         self.preferredDirectory = preferredDirectory
+        self.pinHost = pinHost
+        self.pinDefaults = pinDefaults
         self.home = home
         self.allowsCommands = allowsCommands
         self.tools = tools
@@ -131,6 +138,8 @@ final class AgentHistoryConnection {
         tools = history.configuredTools
         followsCurrentProject = history.followsCurrentProject
         makeSource = { _, _ in history.source }
+        pinHost = { nil }
+        pinDefaults = .standard
         connect = nil
         phase = .ready(history)
     }
@@ -161,6 +170,7 @@ final class AgentHistoryConnection {
             self.provider = provider
             let history = AgentHistoryModel(source: makeSource(provider, home), preferredDirectory: preferredDirectory,
                                             allowsSearch: allowsCommands(), followsCurrentProject: followsCurrentProject)
+            history.pins = pinHost().map { AgentHistoryPins(host: $0, defaults: pinDefaults) }
             phase = .ready(history)
             await history.start()
         } catch {

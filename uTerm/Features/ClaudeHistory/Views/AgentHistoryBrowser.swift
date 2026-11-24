@@ -1,13 +1,25 @@
 import AppKit
 import SwiftUI
 import UDesignKit
+import UniformTypeIdentifiers
 
-/// 侧栏顶上「正在运行」那一组：在 Code 标签页里跑着的会话（`CodeTabModel.runs`）。独立的历史窗口没有。
+/// 在 Code 标签页里跑着的会话（`CodeTabModel.runs`）：列表里对应的行标成「运行中」；列表里没有行的（还没对上记录的
+/// 新会话）放在列表最顶上。不另起一组「正在运行」：一个会话只出现一次。独立的历史窗口没有。
 struct AgentHistoryRunning {
-    let rows: [CodeTabRunRow]
     /// 跑着的会话对应的记录文件：列表里这些行标成「运行中」。
     let paths: Set<String>
+    /// 列表里没有行的那几个（`CodeTabModel.unlistedRuns`）；参数是列表里显示着的记录。
+    let unlisted: (_ shown: Set<String>) -> [AgentHistoryRunRow]
     let onSelect: (UUID) -> Void
+}
+
+/// 列表最顶上的一行：跑着、但列表里没有它那份记录的会话（多半是还没写出记录的新会话）。
+struct AgentHistoryRunRow: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+    let tool: AgentHistoryTool
+    let directory: String
+    let isSelected: Bool
 }
 
 /// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口用它；Code 标签页另摆（`CodeTabView`），
@@ -120,7 +132,7 @@ struct AgentHistorySessionList: View {
     let history: AgentHistoryModel
     var newSession: AgentHistoryNewSession? = nil
     var reveal: AgentHistoryReveal? = nil
-    /// Code 标签页里跑着的会话：列在顶上，列表里对应的行标成「运行中」。
+    /// Code 标签页里跑着的会话：列表里对应的行标成「运行中」，列表里没有行的放在最顶上。
     var running: AgentHistoryRunning? = nil
     /// 收起侧栏（Code 标签页，放在菜单里）；nil = 菜单里不出这一项。
     var onCollapse: (() -> Void)? = nil
@@ -129,6 +141,8 @@ struct AgentHistorySessionList: View {
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
     /// 还没定位成功的那一次请求（组还没列出来）：列表有了变化再试。
     @State private var pendingReveal: AgentHistoryReveal?
+    /// 拖动置顶的状态（只在这个列表里认）。
+    @State private var pinDrag = AgentHistoryPinDragModel.forList()
 
     /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
     private var grouping: AgentHistoryGrouping {
@@ -143,11 +157,6 @@ struct AgentHistorySessionList: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(UD.border).frame(height: 1)
-            // 搜索时也露着：一眼看得到有几个在跑。
-            if let running, !running.rows.isEmpty {
-                AgentHistoryRunningGroup(running: running, showsTool: history.isMultiTool)
-                Rectangle().fill(UD.border).frame(height: 1)
-            }
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
                 content
@@ -162,6 +171,8 @@ struct AgentHistorySessionList: View {
         }
         .onAppear { history.setShownTools(AgentHistoryListPreferences.decodeTools(shownToolsRaw)) }
         .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
+        // 别的窗口改了置顶：新置顶的那几个先读出来。
+        .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
     }
 
     private var header: some View {
@@ -266,6 +277,7 @@ struct AgentHistorySessionList: View {
                 }
             }
             Divider()
+            // 只管分组方式与「显示」，不清置顶。
             Button(String(localized: "恢复默认")) {
                 groupingRaw = AgentHistoryGrouping.default.rawValue
                 shownToolsRaw = ""
@@ -301,51 +313,104 @@ struct AgentHistorySessionList: View {
             }
         case .ready:
             let files = history.visibleFiles
+            let pinned = history.pinnedFiles
             // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
-            if files.isEmpty && (history.isListing || history.hasMore) {
+            if files.isEmpty && pinned.isEmpty && (history.isListing || history.hasMore) {
                 RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
-            } else if files.isEmpty {
+            } else if files.isEmpty && pinned.isEmpty && (running?.unlisted([]).isEmpty ?? true) {
                 RemoteMacStateView(systemImage: "tray", title: String(localized: "没有命令行会话"),
                                    detail: emptyDetail)
             } else {
-                list(files)
+                list(files, pinned: pinned)
             }
         }
     }
 
     private var emptyDetail: String { AgentHistoryText.emptyListDetail(hidden: history.hiddenCount) }
 
-    private func list(_ files: [AgentHistorySessionFile]) -> some View {
-        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata,
+    private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
+        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
-        let showsTool = history.isMultiTool
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(groups) { group in
-                        let collapsed = history.collapsedGroups.contains(group.id)
-                        if group.kind != .all {
-                            AgentHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
-                                .id(group.id)
+        let unlisted = running?.unlisted(Set(files.map(\.path)).union(pinned.map(\.path))) ?? []
+        let pins = history.pins
+        // 拖动中、还没有置顶的会话：列表顶上出一条落点（不拖的时候不占地方）。
+        let showsDropStrip = pins != nil && pinned.isEmpty && pinDrag.isOver
+        return GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(unlisted) { row in
+                            AgentHistoryUnlistedRunRow(row: row, showsTool: history.isMultiTool)
+                                .onTapGesture { running?.onSelect(row.id) }
                         }
-                        if !collapsed {
-                            ForEach(group.files) { file in
-                                AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                                                       showsProject: grouping != .project, showsTool: showsTool,
-                                                       isSelected: history.selectedFile?.path == file.path,
-                                                       isRunning: running?.paths.contains(file.path) == true)
-                                    .onTapGesture { history.select(file) }
+                        if showsDropStrip {
+                            AgentHistoryPinDropStrip(isTargeted: pinDrag.target == .pin(index: 0))
+                                .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: .strip))
+                        }
+                        ForEach(groups) { group in
+                            let collapsed = history.collapsedGroups.contains(group.id)
+                            if AgentHistoryListing.showsHeader(group, in: groups) {
+                                AgentHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
+                                    .id(group.id)
+                                    .modifier(AgentHistoryPinFrameProbe(drag: pinDrag,
+                                                                        slot: group.kind == .pinned ? .pinnedHeader : nil))
+                            }
+                            if !collapsed {
+                                let showsTool = group.mixesTools
+                                ForEach(group.files) { file in
+                                    row(file, in: group, showsTool: showsTool, pins: pins, pinned: pinned)
+                                }
                             }
                         }
+                        footer(files)
                     }
-                    footer(files)
+                    .padding(6)
+                    // 落点在列表的空白处也认（列表短、往下拖出「置顶」时）。
+                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
+                    .contentShape(Rectangle())
+                    .coordinateSpace(.named(AgentHistoryPinDragModel.space))
+                    .modifier(AgentHistoryPinDropTarget(drag: pinDrag, pins: pins, pinned: pinned,
+                                                        pinnedCollapsed: history.collapsedGroups.contains(AgentHistoryGroup.pinnedID)))
                 }
-                .padding(6)
+                .onAppear { pendingReveal = reveal }
+                .onChange(of: reveal) { _, request in pendingReveal = request }
+                .onChange(of: pendingReveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
+                .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
             }
-            .onAppear { pendingReveal = reveal }
-            .onChange(of: reveal) { _, request in pendingReveal = request }
-            .onChange(of: pendingReveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
-            .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
+        }
+    }
+
+    /// 一行会话：点一下选中；Mac 上能拖进 / 拖出「置顶」，右键「置顶」/「取消置顶」（同一件事，菜单好找）。
+    @ViewBuilder
+    private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
+                     pins: AgentHistoryPins?, pinned: [AgentHistorySessionFile]) -> some View {
+        let key = AgentHistoryPinKey(file)
+        let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
+                                          showsProject: grouping != .project || group.kind == .pinned,
+                                          showsTool: showsTool,
+                                          isSelected: history.selectedFile?.path == file.path,
+                                          isRunning: running?.paths.contains(file.path) == true)
+            .onTapGesture { history.select(file) }
+        if let pins {
+            let isPinned = group.kind == .pinned
+            base
+                .opacity(pinDrag.isOver && pinDrag.dragging == key ? 0.4 : 1)
+                .overlay(alignment: .top) {
+                    if isPinned, pinDrag.indicator(before: key, pinned: pinned) { AgentHistoryPinInsertionLine().offset(y: -2) }
+                }
+                .overlay(alignment: .bottom) {
+                    if isPinned, pinDrag.indicatorAfter(key, pinned: pinned) { AgentHistoryPinInsertionLine().offset(y: 2) }
+                }
+                .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: isPinned ? .pinnedRow(key) : nil))
+                .onDrag {
+                    pinDrag.begin(key)
+                    return AgentHistoryPinDragPayload.itemProvider()
+                }
+                .contextMenu {
+                    Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(key))) { pins.toggle(file) }
+                }
+        } else {
+            base
         }
     }
 
@@ -433,7 +498,7 @@ private struct AgentHistoryGroupHeader: View {
     }
 }
 
-// MARK: - 正在运行
+// MARK: - 运行中
 
 /// 「运行中」小标记：绿点 + 字。
 struct AgentHistoryRunningTag: View {
@@ -448,64 +513,266 @@ struct AgentHistoryRunningTag: View {
     }
 }
 
-/// 侧栏顶上「正在运行」一组：标题带个数，下面每个跑着的会话一行。行多了在组里滚，不把列表挤没。
-private struct AgentHistoryRunningGroup: View {
-    let running: AgentHistoryRunning
+/// 列表最顶上那一行（`AgentHistoryRunRow`）：标题（新会话就是「新会话」），第二行「运行中」+ 目录名。点一下回到它的终端。
+private struct AgentHistoryUnlistedRunRow: View {
+    let row: AgentHistoryRunRow
+    /// 这台主机上不止一种工具：写出是哪种（「新会话」本身看不出来）。
     let showsTool: Bool
 
-    /// 超过这么多行就在组里滚。
-    private static let visibleRows = 4
-    private static let rowHeight: CGFloat = 30
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Circle().fill(UD.success).frame(width: 6, height: 6)
-                Text("正在运行", comment: "Code 标签页侧栏顶上：在这个标签页里跑着的会话")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(UD.text2)
-                Spacer(minLength: 4)
-                Text(verbatim: "\(running.rows.count)")
+        VStack(alignment: .leading, spacing: 3) {
+            Text(row.title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(UD.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 5) {
+                AgentHistoryRunningTag()
+                Text(verbatim: detail)
                     .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundStyle(UD.text4)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .accessibilityElement(children: .combine)
-            if running.rows.count > Self.visibleRows {
-                ScrollView { rows }
-                    .frame(height: Self.rowHeight * CGFloat(Self.visibleRows) + 8)
-            } else {
-                rows
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 6).fill(row.isSelected ? UD.rowSelected : Color.clear))
+        .contentShape(Rectangle())
+        .help(Text(verbatim: row.directory))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(row.isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
-    private var rows: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(running.rows) { row in
-                HStack(spacing: 7) {
-                    if showsTool { AgentHistoryToolBadge(tool: row.tool, size: 14) }
-                    Text(row.title)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(UD.text)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+    private var detail: String {
+        let place = (row.directory as NSString).lastPathComponent
+        return showsTool ? "\(row.tool.displayName) · \(place)" : place
+    }
+}
+
+// MARK: - 拖动置顶
+
+extension UTType {
+    /// 拖动置顶的载荷类型：只是个标记，里面没有任何东西（拖的是哪一个记在进程里的 `AgentHistoryPinDragModel`）。
+    /// 只对本进程可见，拖到别的 App、终端、标签条上都不认。需在 `Info.plist` 的 `UTExportedTypeDeclarations` 里登记。
+    nonisolated static let utermAgentHistoryPin = UTType(exportedAs: "com.uozi.uterm.agent-history-pin")
+}
+
+nonisolated enum AgentHistoryPinDragPayload {
+    /// 不带对话内容、标题、路径、会话 ID：一个空的标记。
+    static func itemProvider() -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: UTType.utermAgentHistoryPin.identifier,
+                                            visibility: .ownProcess) { completion in
+            completion(Data(), nil)
+            return nil
+        }
+        return provider
+    }
+}
+
+/// 一个列表的拖动置顶状态：拖的是哪一个、此刻落在哪、各行在列表里的位置。
+///
+/// `.onDrag` 没有结束回调：拖到别处松手、按 Esc 取消，`dragging` 都还留着。所以只在拖动正悬在这个列表上
+/// （`isOver`，由系统的进出回调维护，会自己复位）时才画被拖的行、落点；落下时还要核对这次拖动确实是从这个列表起的
+/// （`active`：最近一次开始拖动的那个列表），别的窗口的列表、上一次没落下的拖动都不算。
+@MainActor
+@Observable
+final class AgentHistoryPinDragModel {
+    nonisolated static let space = "agentHistoryPinList"
+    /// 最近一次开始拖动的那个列表。
+    private static weak var active: AgentHistoryPinDragModel?
+
+    enum Slot: Hashable {
+        case strip
+        case pinnedHeader
+        case pinnedRow(AgentHistoryPinKey)
+    }
+
+    private(set) var dragging: AgentHistoryPinKey?
+    /// 此刻落在哪；nil = 拖动不在这个列表上。
+    private(set) var target: AgentHistoryPinDrop?
+    var isOver: Bool { target != nil }
+    /// 各个落点相关的行在列表内容里的位置（随布局变，不随滚动变）。不参与观察：只在拖动时读。
+    @ObservationIgnored var frames: [Slot: CGRect] = [:]
+
+    /// 界面画廊用：下一个建出来的列表摆成「正拖着 `dragging`、落在 `target`」的样子（拖动中的样子拍不到）。App 里始终为 nil。
+    static var catalogPreset: (dragging: AgentHistoryPinKey, target: AgentHistoryPinDrop)?
+
+    static func forList() -> AgentHistoryPinDragModel {
+        let model = AgentHistoryPinDragModel()
+        if let preset = catalogPreset {
+            model.dragging = preset.dragging
+            model.target = preset.target
+        }
+        return model
+    }
+
+    func begin(_ key: AgentHistoryPinKey) {
+        dragging = key
+        target = nil
+        Self.active = self
+    }
+
+    /// 这次拖动是这个列表起的。
+    var ownsCurrentDrag: Bool { Self.active === self && dragging != nil }
+
+    func setTarget(_ drop: AgentHistoryPinDrop?) {
+        if target != drop { target = drop }
+    }
+
+    func end() {
+        dragging = nil
+        target = nil
+        if Self.active === self { Self.active = nil }
+    }
+
+    /// 按此刻的位置算落在哪（见 `AgentHistoryPinning.drop`）。
+    func drop(at location: CGPoint, pinned: [AgentHistorySessionFile], pinnedCollapsed: Bool) -> AgentHistoryPinDrop {
+        guard let dragging else { return .none }
+        let keys = pinned.map(AgentHistoryPinKey.init)
+        let others = keys.filter { $0 != dragging }
+        let bottom: CGFloat?
+        if keys.isEmpty {
+            bottom = frames[.strip]?.maxY
+        } else if !pinnedCollapsed, let last = keys.last, let frame = frames[.pinnedRow(last)] {
+            bottom = frame.maxY + 3
+        } else {
+            bottom = frames[.pinnedHeader]?.maxY
+        }
+        // 组折起来了、或者行还没排出来：都算在上面（落在组里就排到最后）。
+        let mids = others.map { pinnedCollapsed ? -CGFloat.infinity : (frames[.pinnedRow($0)]?.midY ?? -CGFloat.infinity) }
+        return AgentHistoryPinning.drop(at: location.y, pinnedBottom: bottom, otherRowMidYs: mids,
+                                        draggedIsPinned: keys.contains(dragging))
+    }
+
+    /// 插入线画在这一行的上沿：落点是它前面。
+    func indicator(before key: AgentHistoryPinKey, pinned: [AgentHistorySessionFile]) -> Bool {
+        guard case .pin(let index) = target, key != dragging else { return false }
+        let others = pinned.map(AgentHistoryPinKey.init).filter { $0 != dragging }
+        return others.firstIndex(of: key) == index
+    }
+
+    /// 插入线画在这一行的下沿：落点是组的最后，它是（不算被拖的）最后一行。
+    func indicatorAfter(_ key: AgentHistoryPinKey, pinned: [AgentHistorySessionFile]) -> Bool {
+        guard case .pin(let index) = target, key != dragging else { return false }
+        let others = pinned.map(AgentHistoryPinKey.init).filter { $0 != dragging }
+        return index == others.count && others.last == key
+    }
+}
+
+/// 把一个落点相关的行的位置记进 `AgentHistoryPinDragModel.frames`（列表内容的坐标）。`slot` 为 nil 不记。
+private struct AgentHistoryPinFrameProbe: ViewModifier {
+    let drag: AgentHistoryPinDragModel
+    let slot: AgentHistoryPinDragModel.Slot?
+
+    func body(content: Content) -> some View {
+        if let slot {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentHistoryPinDragModel.space)) } action: {
+                drag.frames[slot] = $0
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// 整个列表一个落点：按位置算是进「置顶」（第几个）、拖出去（取消置顶）还是什么都不做。
+/// 只认这个列表自己起的拖动（`ownsCurrentDrag`）；文件、标签页、别的列表拖过来的都不接。
+private struct AgentHistoryPinDropTarget: ViewModifier {
+    let drag: AgentHistoryPinDragModel
+    let pins: AgentHistoryPins?
+    let pinned: [AgentHistorySessionFile]
+    let pinnedCollapsed: Bool
+
+    func body(content: Content) -> some View {
+        if let pins {
+            content.onDrop(of: [.utermAgentHistoryPin],
+                           delegate: Delegate(drag: drag, pins: pins, pinned: pinned, pinnedCollapsed: pinnedCollapsed))
+        } else {
+            content
+        }
+    }
+
+    private struct Delegate: DropDelegate {
+        let drag: AgentHistoryPinDragModel
+        let pins: AgentHistoryPins
+        let pinned: [AgentHistorySessionFile]
+        let pinnedCollapsed: Bool
+
+        func validateDrop(info: DropInfo) -> Bool {
+            drag.ownsCurrentDrag && info.hasItemsConforming(to: [.utermAgentHistoryPin])
+        }
+
+        func dropEntered(info: DropInfo) { update(info) }
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            DropProposal(operation: update(info) == .none ? .forbidden : .move)
+        }
+
+        func dropExited(info: DropInfo) { drag.setTarget(nil) }
+
+        func performDrop(info: DropInfo) -> Bool {
+            guard drag.ownsCurrentDrag, let key = drag.dragging else { return false }
+            let drop = drag.drop(at: info.location, pinned: pinned, pinnedCollapsed: pinnedCollapsed)
+            drag.end()
+            switch drop {
+            case .pin(let index):
+                withAnimation(.easeOut(duration: 0.15)) {
+                    pins.place(key, at: index, visible: pinned.map(AgentHistoryPinKey.init))
                 }
-                .padding(.horizontal, 10)
-                .frame(height: Self.rowHeight)
-                .background(RoundedRectangle(cornerRadius: 6).fill(row.isSelected ? UD.rowSelected : Color.clear))
-                .contentShape(Rectangle())
-                .onTapGesture { running.onSelect(row.id) }
-                .help(Text(verbatim: row.directory))
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(row.isSelected ? [.isButton, .isSelected] : .isButton)
+                return true
+            case .unpin:
+                withAnimation(.easeOut(duration: 0.15)) { pins.unpin(key) }
+                return true
+            case .none:
+                return false
             }
         }
+
+        @discardableResult
+        private func update(_ info: DropInfo) -> AgentHistoryPinDrop {
+            guard drag.ownsCurrentDrag else {
+                drag.setTarget(nil)
+                return .none
+            }
+            let drop = drag.drop(at: info.location, pinned: pinned, pinnedCollapsed: pinnedCollapsed)
+            drag.setTarget(drop)
+            return drop
+        }
+    }
+}
+
+/// 还没有置顶的会话、正拖着一个会话时列表顶上那一条：「拖到这里置顶」，拖到上面时高亮。
+private struct AgentHistoryPinDropStrip: View {
+    let isTargeted: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pin")
+                .font(.system(size: 11, weight: .medium))
+            Text(AgentHistoryText.dropToPin)
+                .font(.system(size: 11.5, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(isTargeted ? UD.accent : UD.text3)
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 6).fill(isTargeted ? UD.accentSoft : UD.fillSoft))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(isTargeted ? UD.accent : UD.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 拖进「置顶」时落在哪的那条线。
+private struct AgentHistoryPinInsertionLine: View {
+    var body: some View {
+        Capsule().fill(UD.accent)
+            .frame(height: 2)
+            .padding(.horizontal, 4)
+            .allowsHitTesting(false)
     }
 }
 
@@ -608,18 +875,19 @@ struct AgentHistorySearchResults: View {
             .padding(.vertical, 4)
     }
 
+    /// 结果里不止一种工具：每个会话的第二行最前面写工具名（同列表的行）。
+    private var showsTool: Bool { AgentHistoryListing.mixesTools(search.sessions.map(\.file)) }
+
     private func group(_ session: AgentHistorySearchSession) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if history.isMultiTool { AgentHistoryToolBadge(tool: session.file.tool, size: 14) }
-                    Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(UD.text)
-                        .lineLimit(1)
-                }
+                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
                 AgentSessionTimeText(history: history, file: session.file) { activity in
-                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all, activity: activity)
+                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all,
+                                                         showsTool: showsTool, activity: activity)
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(UD.text3)
@@ -669,38 +937,35 @@ private struct AgentHistorySearchHitRow: View {
     }
 }
 
-/// 会话一行：（几种工具时）工具标记 + 标题，第二行 时间 · 大小 · 分支 ·（不按项目分组时）项目。
+/// 会话一行：标题，第二行（组里不止一种工具时）工具名 · 时间 · 大小 · 分支 ·（不按项目分组时）项目。
+/// 行前不画工具标记：一组里只有一种工具时它是噪音，混着的时候第二行的字说得清。
 private struct AgentHistorySessionRow: View {
     let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     let showsProject: Bool
+    /// 组里不止一种工具：第二行最前面写工具名。
     var showsTool = false
     let isSelected: Bool
     /// 在 Code 标签页里跑着（`AgentHistoryRunning`）。
     var isRunning = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            if showsTool {
-                AgentHistoryToolBadge(tool: file.tool, size: 15)
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 5) {
-                    if isRunning { AgentHistoryRunningTag() }
-                    AgentSessionTimeText(history: history, file: file) { activity in
-                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject, activity: activity)
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(UD.text3)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(UD.text)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 5) {
+                if isRunning { AgentHistoryRunningTag() }
+                AgentSessionTimeText(history: history, file: file) { activity in
+                    AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
+                                                     showsTool: showsTool, activity: activity)
                 }
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
             }
         }
         .padding(.horizontal, 10)
