@@ -70,6 +70,13 @@ final class SSHTransportFailureTests: XCTestCase {
             SSHConnection.SSHConnectionError.connectFailed("无法连接")))
         XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(
             SSHConnection.SSHConnectionError.jumpHostFailed("跳板机断了")))
+        // 经跳板机时，哪一跳的认证 / 主机密钥 / 握手失败都和直连一样不重试。
+        for cause in [JumpHostFailureCause.authentication, .hostKey, .handshake] {
+            XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(
+                SSHConnection.SSHConnectionError.jumpHostFailed("跳板机拒绝了密码", cause: cause)))
+            XCTAssertFalse(SSHTransportFailure.isTransportFailure(
+                SSHConnection.SSHConnectionError.jumpHostFailed("connection closed", cause: cause)))
+        }
         XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(SSHClientError.connectTimeout(.seconds(1))))
         XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(CancellationError()))
     }

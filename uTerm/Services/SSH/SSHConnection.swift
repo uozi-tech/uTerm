@@ -42,7 +42,9 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
         /// 主机密钥被拒绝（用户拒绝、严格模式下不认识、等确认超时）。显示同以前的
         /// `connectFailed("主机密钥被拒绝：…")`；单列是为了重连逻辑不在它上面打转。
         case hostKeyRejected(String)
-        case jumpHostFailed(String)
+        /// 经跳板机没连上。`cause` 说是哪一跳、哪一类的问题：不是网络问题时（认证、主机密钥、握手）和直连一样
+        /// 「重试也不会好」，重连逻辑不在它上面打转。
+        case jumpHostFailed(String, cause: JumpHostFailureCause = .unreachable)
 
         var errorDescription: String? {
             switch self {
@@ -56,7 +58,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                 return String(localized: "SSH 连接失败：\(String(localized: "主机密钥被拒绝：\(message)"))")
             case .authenticationFailed(let message):
                 return String(localized: "SSH 连接失败：认证失败：\(message)")
-            case .jumpHostFailed(let message):
+            case .jumpHostFailed(let message, _):
                 return String(localized: "跳板机连接失败：\(message)")
             }
         }
@@ -491,11 +493,20 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
     }
 }
 
+/// 跳板机那一路失败的类别（哪一跳都算）：只有 `.unreachable`（网络、对端关了、超时）值得自动重试。
+nonisolated enum JumpHostFailureCause: Sendable, Equatable {
+    case unreachable
+    case authentication
+    case hostKey
+    case handshake
+}
+
 nonisolated extension SSHConnection.SSHConnectionError: SSHFailureClassifying {
     var isPermanentConnectFailure: Bool {
         switch self {
         case .authenticationFailed, .handshakeFailed, .hostKeyRejected: return true
-        case .notConnected, .alreadyClosed, .connectFailed, .jumpHostFailed: return false
+        case .jumpHostFailed(_, let cause): return cause != .unreachable
+        case .notConnected, .alreadyClosed, .connectFailed: return false
         }
     }
 

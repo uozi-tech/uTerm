@@ -153,7 +153,8 @@ nonisolated enum SSHClientFactory {
         let jumpHost: USSHKit.SSHJumpHost?
         if let jump = profile.jumpHost {
             guard let jumpHostAuth else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"))
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"),
+                                                                      cause: .authentication)
             }
             let jumpMaterial = packageAuth(jumpHostAuth)
             jumpHost = USSHKit.SSHJumpHost(
@@ -196,7 +197,9 @@ nonisolated enum SSHClientFactory {
             // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
             switch error {
             case .jumpHostFailed(let message):
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(message)
+                // USSHKit 还没把跳板机那一路的失败类别带出来，先按网络问题算（照旧自动重试）；
+                // 带出来之后在这里按类别填 `cause`，其余重连逻辑都已经认它。
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(message, cause: .unreachable)
             case .connectFailed(let message):
                 throw SSHConnection.SSHConnectionError.connectFailed(message)
             case .authenticationFailed(let message):

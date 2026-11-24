@@ -726,6 +726,9 @@ extension ControlConnectionPool {
         }
         if let already = error as? ControlConnectError { return already }
         let text = FriendlyError.describe(error)
+        if case SSHConnection.SSHConnectionError.jumpHostFailed(_, .authentication) = error {
+            return .authFailed(text)
+        }
         if case SSHConnection.SSHConnectionError.authenticationFailed = error {
             return .authFailed(text)
         }
