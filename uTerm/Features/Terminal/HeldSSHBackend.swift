@@ -114,7 +114,9 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         case .failed(let failure):
             failedOnLocalNetwork = failure.localNetworkUnreachable == true
             switch failure.kind {
-            case .jumpHost: throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message)
+            case .jumpHost:
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message,
+                                                                      cause: failure.jumpHostCause ?? .unreachable)
             case .connect: throw SSHConnection.SSHConnectionError.connectFailed(failure.message)
             }
         case .disconnected:

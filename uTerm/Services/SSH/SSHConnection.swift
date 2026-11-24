@@ -512,13 +512,6 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
 }
 
 /// 跳板机那一路失败的类别（哪一跳都算）：只有 `.unreachable`（网络、对端关了、超时）值得自动重试。
-nonisolated enum JumpHostFailureCause: Sendable, Equatable {
-    case unreachable
-    case authentication
-    case hostKey
-    case handshake
-}
-
 nonisolated extension SSHConnection.SSHConnectionError: SSHFailureClassifying {
     var isPermanentConnectFailure: Bool {
         switch self {

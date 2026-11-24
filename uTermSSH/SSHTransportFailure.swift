@@ -11,6 +11,26 @@ nonisolated protocol SSHFailureClassifying: Error {
     var transportFailureVerdict: Bool? { get }
 }
 
+/// 经跳板机没连上是哪一类问题。USSHKit 在 `jumpHostFailed(_, cause:)` 里按直连的规则归好了类，这里收窄成重连
+/// 逻辑关心的四种：只有 `unreachable`（网络问题）值得自动重试，其余是配置问题，等用户处理。
+/// 线上（`SSHBridgeFailure.jumpHostCause`）按 rawValue 传，**已有的值不改**。
+nonisolated enum JumpHostFailureCause: String, Codable, Sendable, Equatable {
+    case unreachable
+    case authentication
+    case hostKey
+    case handshake
+
+    init(_ cause: USSHKit.SSHConnectionError?) {
+        switch cause {
+        case .authenticationFailed?, .unsupportedAgentAuthentication?: self = .authentication
+        case .hostKeyRejected?: self = .hostKey
+        case .handshakeFailed?: self = .handshake
+        case .jumpHostFailed(_, let inner)?: self.init(inner)
+        default: self = .unreachable
+        }
+    }
+}
+
 /// 判定一个错误是否「SSH 传输层已断」—— 底层 TCP/通道已关闭、被重置或网络中断。
 /// 供 SFTP / 终端层区分「该自动重连」与「该把错误原样报给用户」（权限、路径
 /// 不存在等应用层错误绝不能触发重连，否则会丢掉用户该看到的真实信息）。
@@ -50,6 +70,8 @@ nonisolated enum SSHTransportFailure {
             switch error {
             case .authenticationFailed, .handshakeFailed, .hostKeyRejected, .unsupportedAgentAuthentication:
                 return true
+            case .jumpHostFailed(_, let cause):
+                return JumpHostFailureCause(cause) != .unreachable
             default:
                 return false
             }

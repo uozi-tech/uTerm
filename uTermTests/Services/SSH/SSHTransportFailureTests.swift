@@ -81,6 +81,34 @@ final class SSHTransportFailureTests: XCTestCase {
         XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(CancellationError()))
     }
 
+    /// USSHKit 经跳板机的失败带着那一跳按直连规则归的类（`cause`）：只看它，不看文案。
+    func testUSSHKitJumpHostFailureIsClassifiedByItsCause() {
+        typealias Kit = USSHKit.SSHConnectionError
+        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(Kit.jumpHostFailed("跳板机拒绝了密码")))
+        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(
+            Kit.jumpHostFailed("x", cause: .connectFailed("拒绝开 direct-tcpip"))))
+        for cause: Kit in [.authenticationFailed("x"), .hostKeyRejected("x"), .handshakeFailed("x"),
+                           .unsupportedAgentAuthentication] {
+            XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(Kit.jumpHostFailed("x", cause: cause)), "\(cause)")
+        }
+
+        XCTAssertEqual(JumpHostFailureCause(nil), .unreachable)
+        XCTAssertEqual(JumpHostFailureCause(.connectFailed("x")), .unreachable)
+        XCTAssertEqual(JumpHostFailureCause(.authenticationFailed("x")), .authentication)
+        XCTAssertEqual(JumpHostFailureCause(.unsupportedAgentAuthentication), .authentication)
+        XCTAssertEqual(JumpHostFailureCause(.hostKeyRejected("x")), .hostKey)
+        XCTAssertEqual(JumpHostFailureCause(.handshakeFailed("x")), .handshake)
+    }
+
+    /// 辅助进程把类别经 `SSHBridgeFailure.jumpHostCause` 交回 App；旧的辅助进程不带这个字段，按网络问题算。
+    func testBridgeFailureCarriesTheJumpHostCause() throws {
+        let failure = SSHBridgeFailure(kind: .jumpHost, message: "m", jumpHostCause: .hostKey)
+        let decoded = try JSONDecoder().decode(SSHBridgeFailure.self, from: JSONEncoder().encode(failure))
+        XCTAssertEqual(decoded.jumpHostCause, .hostKey)
+        let old = try JSONDecoder().decode(SSHBridgeFailure.self, from: Data(#"{"kind":"jumpHost","message":"m"}"#.utf8))
+        XCTAssertNil(old.jumpHostCause)
+    }
+
     /// 认证 / 主机密钥 / 握手失败时服务器在应答：不是传输层断了。
     func testPermanentConnectFailuresAreNotTransportFailures() {
         XCTAssertFalse(SSHTransportFailure.isTransportFailure(

@@ -83,6 +83,8 @@ nonisolated struct SSHBridgeFailure: Codable, Sendable, LocalizedError {
     /// 重试完仍是 EHOSTUNREACH：多半是这个进程的局域网权限被拒了（或用户一直没回答权限框）。
     /// App 据此退回进程内连接——App 自己的权限通常早就有了。可选字段，新旧两端互相解码都不受影响。
     var localNetworkUnreachable: Bool? = nil
+    /// `kind == .jumpHost` 时是哪一类问题（见 `JumpHostFailureCause`）。可选字段：旧的辅助进程不带，按网络问题算。
+    var jumpHostCause: JumpHostFailureCause? = nil
 
     var errorDescription: String? { message }
 }

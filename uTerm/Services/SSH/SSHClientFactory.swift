@@ -196,10 +196,9 @@ nonisolated enum SSHClientFactory {
             // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
             // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
             switch error {
-            case .jumpHostFailed(let message):
-                // USSHKit 还没把跳板机那一路的失败类别带出来，先按网络问题算（照旧自动重试）；
-                // 带出来之后在这里按类别填 `cause`，其余重连逻辑都已经认它。
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(message, cause: .unreachable)
+            case .jumpHostFailed(let message, let cause):
+                // `cause` 是那一跳按直连规则归的类：认证 / 主机密钥 / 握手是配置问题，重连逻辑不在它上面打转。
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(message, cause: JumpHostFailureCause(cause))
             case .connectFailed(let message):
                 throw SSHConnection.SSHConnectionError.connectFailed(message)
             case .authenticationFailed(let message):

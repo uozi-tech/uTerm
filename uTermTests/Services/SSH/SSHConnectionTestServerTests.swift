@@ -167,6 +167,72 @@ final class SSHConnectionTestServerTests: XCTestCase {
     }
 
     /// 服务器掐断 TCP：不等输出流自己察觉，断开回调立刻让会话结束（界面翻到「已断开」）。
+    // MARK: - 跳板机：失败类别决定重不重连
+
+    /// 经 `bastion` 连本测试的目标；`password` 是给跳板机的口令。
+    private func makeJumpConnection(bastion: SSHTestServer, password: String) throws -> SSHConnection {
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
+        return SSHConnection(
+            profile: SSHConnection.ProfileSnapshot(
+                host: "127.0.0.1", port: server.port,
+                jumpHost: .init(host: "127.0.0.1", port: bastion.port)),
+            auth: .password(username: "tester", password: "unused"),
+            jumpHostAuth: .password(username: "jumper", password: password),
+            hostKeyVerifier: verifier, hostKeyApprover: { _ in true })
+    }
+
+    private func jumpFailure(of connection: SSHConnection) async -> (cause: JumpHostFailureCause, error: Error)? {
+        do {
+            try await connection.connect()
+            await connection.close()
+            return nil
+        } catch {
+            guard case SSHConnection.SSHConnectionError.jumpHostFailed(_, let cause) = error else {
+                XCTFail("应当是跳板机失败：\(error)")
+                return nil
+            }
+            return (cause, error)
+        }
+    }
+
+    /// 跳板机拒绝了口令：配置问题，不能当成网络问题自动重连（反复认证会触发锁号）。
+    func testJumpHostRejectingTheCredentialIsAPermanentFailure() async throws {
+        let bastion = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: SSHTestAuthentication(passwords: ["jumper": "right"])))
+        defer { Task { await bastion.stop() } }
+
+        let failure = await jumpFailure(of: try makeJumpConnection(bastion: bastion, password: "wrong"))
+        XCTAssertEqual(failure?.cause, .authentication)
+        if let failure {
+            XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(failure.error))
+        }
+    }
+
+    /// 跳板机登录成功、但不肯开到目标的通道：网络这一类，照旧自动重试。
+    func testJumpHostRefusingTheTunnelIsRetryable() async throws {
+        let bastion = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone, allowsDirectTCPIP: false))
+        defer { Task { await bastion.stop() } }
+
+        let failure = await jumpFailure(of: try makeJumpConnection(bastion: bastion, password: "any"))
+        XCTAssertEqual(failure?.cause, .unreachable)
+        if let failure {
+            XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(failure.error))
+        }
+    }
+
+    /// 两跳都通时照常连上（跳板机的口令对了）。
+    func testJumpHostWithTheRightCredentialConnects() async throws {
+        let bastion = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: SSHTestAuthentication(passwords: ["jumper": "right"])))
+        defer { Task { await bastion.stop() } }
+
+        let failure = await jumpFailure(of: try makeJumpConnection(bastion: bastion, password: "right"))
+        XCTAssertNil(failure)
+    }
+
     func testTransportDropEndsSession() async throws {
         let connection = try makeConnection()
         try await connection.connect()

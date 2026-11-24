@@ -125,8 +125,8 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     private static func failure(for error: Error, hasJumpHost: Bool) -> SSHBridgeFailure {
         if let error = error as? USSHKit.SSHConnectionError {
             switch error {
-            case .jumpHostFailed(let message):
-                return SSHBridgeFailure(kind: .jumpHost, message: message)
+            case .jumpHostFailed(let message, let cause):
+                return SSHBridgeFailure(kind: .jumpHost, message: message, jumpHostCause: JumpHostFailureCause(cause))
             case .connectFailed(let message):
                 return SSHBridgeFailure(kind: .connect, message: message)
             case .handshakeFailed(let message):
