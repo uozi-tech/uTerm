@@ -28,6 +28,9 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     /// 能不能在终端里继续 / 新开（不能的工具数据源返回 nil）。
     nonisolated let resumable: Bool
     nonisolated let startsSessions: Bool
+    /// 继续 / 新开时 `cd` 之后跑的命令；nil = 工具名（`claude resume a` 这种，只是字符串）。起真 shell 的用例换成一条
+    /// 不需要装任何编码工具的命令。
+    nonisolated let command: String?
 
     private var sessionList: [Session]
     private var projectsError: (any Error)?
@@ -37,7 +40,9 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     private(set) var metadataReads = 0
 
     init(tool: AgentHistoryTool, sessions: [Session], supportsSearch: Bool = true, resumable: Bool = true,
-         startsSessions: Bool = true, projectsError: (any Error)? = nil, searchError: (any Error)? = nil) {
+         startsSessions: Bool = true, projectsError: (any Error)? = nil, searchError: (any Error)? = nil,
+         command: String? = nil) {
+        self.command = command
         self.tool = tool
         sessionList = sessions
         self.supportsSearch = supportsSearch
@@ -144,12 +149,12 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {
         guard resumable, directory.hasPrefix("/") else { return nil }
-        return "cd -- '\(directory)' && \(tool.rawValue) resume \(sessionID)"
+        return "cd -- '\(directory)' && " + (command ?? "\(tool.rawValue) resume \(sessionID)")
     }
 
     nonisolated func newSessionCommand(directory: String) -> String? {
         guard startsSessions, directory.hasPrefix("/") else { return nil }
-        return "cd -- '\(directory)' && \(tool.rawValue)"
+        return "cd -- '\(directory)' && " + (command ?? tool.rawValue)
     }
 
     // MARK: 手写的条目
