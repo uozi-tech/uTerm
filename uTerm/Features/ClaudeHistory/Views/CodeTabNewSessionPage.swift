@@ -43,7 +43,8 @@ struct CodeTabNewSessionPage: View {
                      fillsWidth: true) {
                 start(tool, in: directory)
             }
-            .keyboardShortcut(.defaultAction)
+            // 不绑回车：这一页和终端同在一个窗口里（别的标签页、别的分屏、侧栏的搜索框），整窗的默认按钮会把
+            // 打给它们的回车截走。
             .disabled(tool == nil || directory == nil)
             .frame(width: Self.formWidth)
             .padding(.top, 18)
