@@ -334,8 +334,8 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertFalse(response.ok)
         XCTAssertEqual(response.code, ControlErrorCode.auth_failed.rawValue)
         let attempts = await pool.attempts
-        // 先借一次读大小（成功），之后每个工作者至多借一次；以前每个工作者还会重试两次（1 + 4 × 3 = 13）。
-        XCTAssertLessThanOrEqual(attempts, 1 + 4)
+        // 先借一次读大小（成功），然后工作者一个一个借：第一个失败判了致命，后面的不再借（以前 1 + 4 × 3 = 13）。
+        XCTAssertEqual(attempts, 2)
         XCTAssertTrue(ParallelTransfer.stopsAllWorkers(ControlConnectError.authFailed("x")))
         XCTAssertFalse(ParallelTransfer.stopsAllWorkers(ControlConnectError.connectFailed("x")))
     }

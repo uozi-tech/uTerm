@@ -166,11 +166,12 @@ nonisolated enum ParallelTransfer {
         let queue = SegmentQueue(segments)
         let workers = max(1, min(tuning.channels, segments.count))
         let window = max(1, tuning.inFlight)
+        let turn = BorrowTurn()
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<workers {
                 group.addTask {
                     await worker(host: host, pool: pool, remotePath: remotePath, writeMode: writeMode,
-                                 queue: queue, window: window, onSegment: onSegment, operation: operation)
+                                 queue: queue, turn: turn, window: window, onSegment: onSegment, operation: operation)
                 }
             }
         }
@@ -186,18 +187,12 @@ nonisolated enum ParallelTransfer {
         remotePath: String,
         writeMode: SFTPWriteMode?,
         queue: SegmentQueue,
+        turn: BorrowTurn,
         window: Int,
         onSegment: @escaping @Sendable (ByteRange) -> Void,
         operation: @escaping ChunkOperation
     ) async {
-        guard queue.hasWork else { return }
-        let session: any SFTPProviding
-        do {
-            session = try await borrow(host: host, pool: pool)
-        } catch {
-            queue.workerFailed(holding: [], error: error)
-            return
-        }
+        guard let session = await borrow(host: host, pool: pool, queue: queue, turn: turn) else { return }
         var held: [Int: Int64] = [:]   // 段号 → 还差多少字节
         var opened: SFTPTransferHandle?
         do {
@@ -254,16 +249,38 @@ nonisolated enum ParallelTransfer {
         }
     }
 
-    /// 借会话：建连失败（sshd 忙着丢连接、网络抖一下）退避再试两次；认证失败、主机密钥问题不重试
+    /// 借会话。失败时记进 `queue`、返回 nil（工作者就此退出）。
+    ///
+    /// **一次传输里，工作者一个一个地借**（`turn`）：凭据错了的话，第一个去登录的失败、判成致命，排在后面的看到
+    /// 致命就不再去连——整次传输只多一次失败的登录（8 个工作者同时去借就是 8 次，超过 fail2ban 默认的 5 次）。
+    /// 不能只靠「第一个借到了再放其余的」：第一个借到的常常是池里空闲的旧会话，证明不了现在的凭据还对
+    /// （服务器上改了密码）。代价是建连按顺序来，第一个借到就开始传，后面的陆续加入。
+    ///
+    /// 建连失败（sshd 忙着丢连接、网络抖一下）退避再试两次；认证失败、主机密钥、握手问题不重试
     /// （重试只会再登录失败几次，可能触发服务器的 fail2ban / pam_faillock）。
-    private static func borrow(host: HostConnectionSpec, pool: any ControlConnectionPooling) async throws -> any SFTPProviding {
+    private static func borrow(host: HostConnectionSpec, pool: any ControlConnectionPooling,
+                               queue: SegmentQueue, turn: BorrowTurn) async -> (any SFTPProviding)? {
         var attempt = 0
         while true {
+            await turn.acquire()
+            // 排队期间别的工作者可能已经判了致命（认证失败），或者活已经分完了：都不再去登录。
+            guard queue.hasWork, !Task.isCancelled else {
+                await turn.release()
+                return nil
+            }
             do {
-                return try await pool.borrowSFTP(for: host)
+                let session = try await pool.borrowSFTP(for: host)
+                await turn.release()
+                return session
             } catch let error as ControlConnectError where error.isRetryableBorrowFailure && attempt < 2 {
+                await turn.release()
                 attempt += 1
-                try await Task.sleep(for: .milliseconds(500 * attempt))
+                try? await Task.sleep(for: .milliseconds(500 * attempt))
+            } catch {
+                // 先记下（致命的话立刻生效），再放下一个工作者进来：它一进来就看得到。
+                queue.workerFailed(holding: [], error: error)
+                await turn.release()
+                return nil
             }
         }
     }
@@ -359,6 +376,28 @@ nonisolated enum ParallelTransfer {
 }
 
 /// 待传段的共享队列。工作者在各自的 Task 里同步领 / 交，所以是带锁的类。
+/// 一次传输里借会话的先后：同一时刻只有一个工作者在借（见 `ParallelTransfer.borrow`）。
+private actor BorrowTurn {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        guard busy else {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            busy = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 private nonisolated final class SegmentQueue: @unchecked Sendable {
     private let lock = NSLock()
     private let segments: [ParallelTransfer.ByteRange]
