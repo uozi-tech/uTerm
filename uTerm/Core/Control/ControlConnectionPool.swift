@@ -629,6 +629,9 @@ extension ControlConnectionPool.Connector {
                     // 急切握手：`:` 是 shell 的 no-op，只为把建连（含主机密钥审批）做掉，
                     // 好让失败在这里就带着指纹上抛。连接随后被复用，不会白建。
                     _ = try await reusable.exec(":")
+                } catch is CancellationError {
+                    await reusable.close()
+                    throw CancellationError()
                 } catch {
                     await reusable.close()
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
@@ -642,6 +645,8 @@ extension ControlConnectionPool.Connector {
                         spec, sink: sink, windowBytes: transferWindowBytes)()
                     // 命令行自己的连接，上面没有终端：上传不按节奏，跑满速。
                     return try await SFTPSession(connected: connected, pacesUploads: false)
+                } catch is CancellationError {
+                    throw CancellationError()   // 命令行断开了：不是连接失败
                 } catch {
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
                 }
@@ -657,6 +662,8 @@ extension ControlConnectionPool.Connector {
                     // 握手成功即说明服务器出示的指纹与钉住的一致，`HostKeyVerifier` 已经
                     // 沿 TOFU 路径写好 `KnownHost`。这条连接只为信任而建，随手关掉。
                     await connected.close()
+                } catch is CancellationError {
+                    throw CancellationError()   // 命令行断开了：不是连接失败
                 } catch {
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
                 }

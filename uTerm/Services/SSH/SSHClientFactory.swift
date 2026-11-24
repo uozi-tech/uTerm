@@ -212,6 +212,9 @@ nonisolated enum SSHClientFactory {
                     error.errorDescription ?? FriendlyError.describe(error)
                 )
             }
+        } catch let error as CancellationError {
+            // 取消（关窗口、关标签页）不是连接失败：原样交出去，调用方据此什么都不报。
+            throw error
         } catch {
             let message = FriendlyError.describe(error)
             if profile.jumpHost != nil {

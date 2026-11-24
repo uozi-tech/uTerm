@@ -130,8 +130,11 @@ final class ForwardingCoordinator {
         Task { @MainActor in
             do {
                 try await self.ensureConnected(server.id)
+                guard self.sessions[server.id] === session else { return }
                 for rule in autostart { await session.start(rule) }
             } catch {
+                // 窗口关了（teardown 取消了建连）或会话已经换成了新的：这批状态不归它管了，什么都不写。
+                guard !(error is CancellationError), self.sessions[server.id] === session else { return }
                 let e = error
                 for rule in autostart {
                     self.runtime[rule.id] = .error(ForwardingError.classify(e, rule: rule))
@@ -162,8 +165,10 @@ final class ForwardingCoordinator {
         Task { @MainActor in
             do {
                 try await self.ensureConnected(server.id)
+                guard self.sessions[server.id] === session else { return }
                 await session.start(rule)
             } catch {
+                guard !(error is CancellationError), self.sessions[server.id] === session else { return }
                 self.runtime[rule.id] = .error(ForwardingError.classify(error, rule: rule))
                 self.stopAutoReconnectIfPermanent(error, ruleID: rule.id, serverID: server.id)
                 self.evictSession(server.id)
@@ -361,6 +366,8 @@ final class ForwardingCoordinator {
         connectTasks[server.id] = Task {
             do {
                 try await session.connect()
+            } catch is CancellationError {
+                throw CancellationError()          // 窗口关了：不是失败，不记错误
             } catch {
                 AppLogger.error("转发会话连接失败 \(server.host)：\(error.localizedDescription)",
                                 category: ForwardingLog.category)
@@ -371,6 +378,11 @@ final class ForwardingCoordinator {
     }
 
     // MARK: - 测试 seam
+
+    /// 仅测试用：把建连屏障换成给定的任务（模拟还在握手的连接）。
+    func injectConnectTaskForTesting(_ task: Task<Void, Error>, serverID: UUID) {
+        connectTasks[serverID] = task
+    }
 
     /// 仅测试用：绕过认证解析 / SwiftData，直接把现成会话挂到指定主机名下。
     func injectSessionForTesting(_ session: ForwardingSession, serverID: UUID) {

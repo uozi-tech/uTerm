@@ -86,6 +86,43 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
         XCTAssertNil(relay.pendingChallenge)
     }
 
+    /// 握手还没完窗口就关了（teardown 取消建连）：被取消的建连不是失败，规则不能在拆完之后又被写成 `.error`。
+    func testTeardownDuringConnectLeavesNoErrorBehind() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        coordinator.injectConnectTaskForTesting(Task { try await Task.sleep(for: .seconds(30)) }, serverID: server.id)
+        let pg = rule("pg")
+
+        coordinator.start(pg, on: server, relay: HostKeyChallengeRelay(), modelContainer: container)
+        XCTAssertEqual(coordinator.status(pg.id), .starting)
+        coordinator.teardown(serverID: server.id)
+        try await Task.sleep(for: .milliseconds(300))
+
+        XCTAssertEqual(coordinator.status(pg.id), .inactive, "拆掉之后又被写成了错误")
+    }
+
+    /// 等建连期间会话被换掉了（拆了又开）：旧的那次建连失败不能把新会话下的规则写成错误。
+    func testFailureOfAReplacedSessionDoesNotTouchTheNewOne() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let failing = Task<Void, Error> {
+            try await Task.sleep(for: .milliseconds(200))
+            throw SSHConnection.SSHConnectionError.connectFailed("old")
+        }
+        coordinator.injectConnectTaskForTesting(failing, serverID: server.id)
+        let pg = rule("pg")
+        coordinator.start(pg, on: server, relay: HostKeyChallengeRelay(), modelContainer: container)
+
+        // 换上一个新会话（还在握手）。
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        coordinator.injectConnectTaskForTesting(Task { try await Task.sleep(for: .seconds(30)) }, serverID: server.id)
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(coordinator.status(pg.id), .starting, "旧会话的失败写到了新会话的规则上")
+        XCTAssertTrue(coordinator.hasSessionForTesting(serverID: server.id), "旧会话的失败把新会话驱逐了")
+        coordinator.teardown(serverID: server.id)
+    }
+
     /// 从没 `start` 过的主机同理。
     func testApproverRefusesUnknownServer() async {
         let coordinator = ForwardingCoordinator()

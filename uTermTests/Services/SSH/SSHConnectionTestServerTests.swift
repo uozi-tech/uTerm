@@ -230,6 +230,32 @@ final class SSHConnectionTestServerTests: XCTestCase {
         await connection.close()
     }
 
+    /// 握手期间被取消（关窗口、关标签页）：交出去的是 `CancellationError`，不是「连接失败」。
+    func testCancelledConnectThrowsCancellationNotAConnectFailure() async throws {
+        await server.stop()
+        server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone, faults: SSHTestFaults(authenticationDelay: .seconds(10))))
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
+        let port = server.port
+        let attempt = Task {
+            try await SSHClientFactory.connect(
+                profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: port, jumpHost: nil),
+                auth: .password(username: "tester", password: "x"), jumpHostAuth: nil,
+                hostKeyVerifier: verifier, hostKeyApprover: { _ in true })
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        attempt.cancel()
+        do {
+            let connected = try await attempt.value
+            await connected.close()
+            XCTFail("取消之后不该连上")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "实得 \(error)")
+        }
+    }
+
     // MARK: - 跳板机：失败类别决定重不重连
 
     /// 经 `bastion` 连本测试的目标；`password` 是给跳板机的口令。
