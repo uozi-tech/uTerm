@@ -585,19 +585,30 @@ enum RemoteWindowStage {
     private static var staged: Set<UInt32> = []
     private static var releaseTask: Task<Void, Never>?
 
+    /// 原地调大小时窗口该放在哪儿：左上角不动；按这个大小会伸出可用范围（下边过了程序坞、右边出了屏幕）就往上 / 往左
+    /// 挪到刚好放得下。左上角不动地调，系统会把窗口截在可用范围的下沿：2026-11-24 Duo 横握要 1426×1003 点，
+    /// 窗口上沿在 y=354，得到的是 1426×880，手机上画面上下各留一条黑边。都是全局坐标（左上角原点，点）。
+    nonisolated static func inPlaceFrame(window: CGRect, fit: CGSize, visible: CGRect) -> CGRect {
+        let width = fit.width.rounded(), height = fit.height.rounded()
+        var x = window.minX, y = window.minY
+        if x + width > visible.maxX { x = max(visible.minX, visible.maxX - width) }
+        if y + height > visible.maxY { y = max(visible.minY, visible.maxY - height) }
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
     /// 把窗口调成 `fit`（点）：屏幕放得下就原地调；放不下就挪到虚拟屏上再调。返回动它之前的位置，没动返回 nil。
     static func fit(id: UInt32, size fit: CGSize) async -> CGRect? {
         guard let entry = RemoteDesktopWindows.entry(id: id) else { return nil }
         if !(staged.contains(id) && display != nil) {
-            guard !RemoteHeadlessDisplay.ownsVirtualDisplay, let visible = visibleSize(around: entry.bounds),
-                  needsStage(fit: fit, visible: visible) else {
-                return await Task.detached { RemoteDesktopWindows.resize(id: id, to: fit) }.value
+            let visible = visibleFrame(around: entry.bounds)
+            guard !RemoteHeadlessDisplay.ownsVirtualDisplay, let visible, needsStage(fit: fit, visible: visible.size) else {
+                return await fitInPlace(entry, size: fit, visible: visible)
             }
         }
         guard await ensure(for: fit), let area = usableArea() else {
             AppLogger.notice("远程桌面：屏幕放不下 \(Int(fit.width))×\(Int(fit.height)) 点的窗口，虚拟屏又没建成，只能在原来的屏幕上尽量调",
                              category: RemoteLog.category)
-            return await Task.detached { RemoteDesktopWindows.resize(id: id, to: fit) }.value
+            return await fitInPlace(entry, size: fit, visible: visibleFrame(around: entry.bounds))
         }
         releaseTask?.cancel()
         releaseTask = nil
@@ -628,16 +639,41 @@ enum RemoteWindowStage {
         AppLogger.notice("远程桌面：窗口模式用的虚拟屏拆掉了", category: RemoteLog.category)
     }
 
-    /// 窗口所在那块屏幕的可用范围（去掉菜单栏和程序坞）有多大。
-    private static func visibleSize(around bounds: CGRect) -> CGSize? {
-        var best: (area: CGFloat, size: CGSize)?
+    /// 在窗口所在的屏幕上把它调成 `fit`：伸出可用范围时连位置一起改（`inPlaceFrame`），否则左上角不动。
+    /// 返回动它之前的位置，没动返回 nil。
+    private static func fitInPlace(_ entry: RemoteDesktopWindows.Entry, size fit: CGSize, visible: CGRect?) async -> CGRect? {
+        let id = entry.id
+        let original: CGRect?
+        let target = visible.map { inPlaceFrame(window: entry.bounds, fit: fit, visible: $0) }
+        if let target, target.origin != entry.bounds.origin {
+            let placed = await Task.detached { RemoteDesktopWindows.place(id: id, frame: target) }.value
+            original = placed ? entry.bounds : nil
+        } else {
+            original = await Task.detached { RemoteDesktopWindows.resize(id: id, to: fit) }.value
+        }
+        // 没调成要的大小（App 的最小 / 最大尺寸、系统截掉）记一笔：手机上画面会留黑边，排查时先看这一行。
+        if let after = RemoteDesktopWindows.entry(id: id)?.bounds,
+           abs(after.width - fit.width.rounded()) > 1 || abs(after.height - fit.height.rounded()) > 1 {
+            AppLogger.notice("远程桌面：窗口要调成 \(Int(fit.width))×\(Int(fit.height)) 点，实际 \(Int(after.width))×\(Int(after.height))，"
+                             + "在 (\(Int(after.minX)), \(Int(after.minY)))", category: RemoteLog.category)
+        }
+        return original
+    }
+
+    /// 窗口所在那块屏幕的可用范围（去掉菜单栏和程序坞），全局坐标（左上角原点，点）。
+    private static func visibleFrame(around bounds: CGRect) -> CGRect? {
+        // AppKit 的坐标以主屏左下角为原点、向上为正，换成和 `CGWindowList` 一样的左上角原点。
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        var best: (area: CGFloat, frame: CGRect)?
         for screen in NSScreen.screens {
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
             let overlap = CGDisplayBounds(number.uint32Value).intersection(bounds)
             let area = overlap.isNull ? 0 : overlap.width * overlap.height
-            if best == nil || area > best!.area { best = (area, screen.visibleFrame.size) }
+            let visible = screen.visibleFrame
+            let frame = CGRect(x: visible.minX, y: primaryHeight - visible.maxY, width: visible.width, height: visible.height)
+            if best == nil || area > best!.area { best = (area, frame) }
         }
-        return best?.size
+        return best?.frame
     }
 
     /// 虚拟屏上能放窗口的范围（全局坐标，左上角原点）。系统还没把它报成 `NSScreen` 时按预留的菜单栏高度估。

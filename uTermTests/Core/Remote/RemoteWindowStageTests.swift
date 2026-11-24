@@ -16,6 +16,32 @@ final class RemoteWindowStageTests: XCTestCase {
         XCTAssertFalse(RemoteWindowStage.needsStage(fit: CGSize(width: 1512.4, height: 900), visible: builtin), "差不到一个点不算")
     }
 
+    func test_in_place_fit_moves_the_window_up_only_when_it_would_run_past_the_visible_area() {
+        // 2026-11-24 的现场：27 寸外接屏去掉菜单栏和程序坞是 y 30…1234，窗口上沿在 354，Duo 横握要 1426×1003。
+        let visible = CGRect(x: 0, y: 30, width: 2304, height: 1204)
+        let low = CGRect(x: 200, y: 354, width: 1200, height: 800)
+        let moved = RemoteWindowStage.inPlaceFrame(window: low, fit: CGSize(width: 1426, height: 1003), visible: visible)
+        XCTAssertEqual(moved, CGRect(x: 200, y: 231, width: 1426, height: 1003), "往上挪到下沿刚好贴着可用范围，左边不动")
+
+        let high = CGRect(x: 200, y: 100, width: 1200, height: 800)
+        XCTAssertEqual(RemoteWindowStage.inPlaceFrame(window: high, fit: CGSize(width: 1426, height: 1003), visible: visible).origin,
+                       high.origin, "放得下就不挪")
+
+        let right = CGRect(x: 1500, y: 100, width: 600, height: 400)
+        XCTAssertEqual(RemoteWindowStage.inPlaceFrame(window: right, fit: CGSize(width: 1426, height: 1003), visible: visible).minX,
+                       2304 - 1426, "右边伸出屏幕：往左挪")
+
+        // 副屏在主屏左边（x 为负），菜单栏不在它上面。
+        let side = CGRect(x: -2304, y: 0, width: 2304, height: 1296)
+        let onSide = RemoteWindowStage.inPlaceFrame(window: CGRect(x: -900, y: 600, width: 800, height: 600),
+                                                    fit: CGSize(width: 1426, height: 1003), visible: side)
+        XCTAssertEqual(onSide, CGRect(x: -1426, y: 293, width: 1426, height: 1003))
+
+        let tall = RemoteWindowStage.inPlaceFrame(window: low, fit: CGSize(width: 1426.4, height: 1500), visible: visible)
+        XCTAssertEqual(tall.minY, visible.minY, "比可用范围还高（要建虚拟屏却没建成）：顶到上沿，尽量多露")
+        XCTAssertEqual(tall.width, 1426, "大小按点取整")
+    }
+
     func test_stage_holds_both_orientations_of_the_same_canvas() {
         let size = RemoteWindowStage.stageSize(for: CGSize(width: 1426, height: 1003))
         XCTAssertEqual(size.width, 1426)
