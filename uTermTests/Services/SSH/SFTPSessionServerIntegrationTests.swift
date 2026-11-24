@@ -34,10 +34,11 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
 
     /// 谁来都放行的服务端（只活在本用例里，端口由内核分配）。`maximumPacketSize` 决定它通告的通道窗口（× 64）。
     private static func startServer(fs: SFTPMemoryFileSystem,
-                                    maximumPacketSize: Int = 1 << 17) async throws -> SSHTestServer {
+                                    maximumPacketSize: Int = 1 << 17,
+                                    sftp: SFTPServer.Configuration = SFTPServer.Configuration()) async throws -> SSHTestServer {
         var configuration = SSHTestServer.Configuration(
             authentication: .acceptAnyone, maximumPacketSize: maximumPacketSize)
-        configuration.serveSFTP(fileSystem: fs)
+        configuration.serveSFTP(fileSystem: fs, configuration: sftp)
         return try await SSHTestServer.start(configuration)
     }
 
@@ -363,13 +364,18 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
 
     /// 通道窗口开到 2 MiB（OpenSSH 的默认值：NIOSSH 的窗口 = 包长 × 64，包长 32 KiB）的服务端，
     /// 文件表与默认的那台共用。
-    private func startWideWindowServer() async throws -> SSHTestServer {
-        try await Self.startServer(fs: fs, maximumPacketSize: 32_768)
+    private func startWideWindowServer(sftp: SFTPServer.Configuration = SFTPServer.Configuration()) async throws -> SSHTestServer {
+        try await Self.startServer(fs: fs, maximumPacketSize: 32_768, sftp: sftp)
     }
 
     /// 快网（本机回环，没有瓶颈）上按节奏传不能比不按节奏慢多少：预算要涨到吃满。
+    ///
+    /// 两边片长一样（服务器宣告 32 000 B 的上限）：比的是节奏本身的开销。按节奏传的片长本来就压在 32 000 B 以内
+    /// （按键不排在大片后面），不按节奏的在 OpenSSH 上会用到 255 KiB 一片，那是片长的差别，不是节奏的。
     func testPacedUploadKeepsUpOnAFastLink() async throws {
-        let wideServer = try await startWideWindowServer()
+        let wideServer = try await startWideWindowServer(sftp: SFTPServer.Configuration(
+            limits: SFTPServerLimits(maximumPacketLength: 256 * 1024, maximumReadLength: UInt64(SFTPPipeline.chunkSize),
+                                     maximumWriteLength: UInt64(SFTPPipeline.chunkSize), maximumOpenHandles: 0)))
         let port = wideServer.port
         let data = payload(64 * 1_048_576)
         let clock = ContinuousClock()
@@ -519,5 +525,23 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
         let name = try XCTUnwrap(entries.first?.name)
         let size = try await session.stat(RemotePath.join(RemotePath.normalized("/home/test/"), name)).size
         XCTAssertEqual(size, 1)
+    }
+
+    // MARK: - 服务器宣告的单请求上限
+
+    /// 宣告离谱的大上限（64 MiB）与很小的上限（1 KiB）：往返都完整，前者不会退化成停等、后者每片不超。
+    func testHugeAndTinyAdvertisedLimitsRoundTrip() async throws {
+        for limit: UInt64 in [64 << 20, 1024] {
+            let server = try await Self.startServer(fs: fs, sftp: SFTPServer.Configuration(
+                limits: SFTPServerLimits(maximumPacketLength: 256 * 1024, maximumReadLength: limit,
+                                         maximumWriteLength: limit, maximumOpenHandles: 0)))
+            let limited = try await SFTPSession(connected: try await connect(port: server.port), pacesUploads: false)
+            let source = payload(limit > 1 << 20 ? 3 << 20 : 64 * 1024)
+            try await limited.upload(data: source, toRemotePath: "/home/test/limit-\(limit).bin")
+            let fetched = try await limited.download(remotePath: "/home/test/limit-\(limit).bin")
+            XCTAssertEqual(sha256(fetched), sha256(source), "上限 \(limit)")
+            await limited.close()
+            await server.stop()
+        }
     }
 }

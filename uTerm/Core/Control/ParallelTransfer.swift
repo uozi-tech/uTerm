@@ -204,7 +204,8 @@ nonisolated enum ParallelTransfer {
             let handle = try await session.openTransferHandle(remotePath, writeMode: writeMode)
             opened = handle
             // 片长跟服务器走（下载按单次读的上限、上传按单次写的上限），在途字节照 `window` 不变。
-            let chunkLength = max(1, writeMode == nil ? handle.file.maximumReadLength : handle.file.maximumWriteLength)
+            let chunkLength = SFTPPipeline.chunkLength(
+                serverLimit: writeMode == nil ? handle.file.maximumReadLength : handle.file.maximumWriteLength)
             let window = SFTPPipeline.requestWindow(inFlight: window, chunk: chunkLength)
             try await withThrowingTaskGroup(of: (Int, Int).self) { group in
                 var running = 0

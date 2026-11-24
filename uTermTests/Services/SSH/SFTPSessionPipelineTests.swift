@@ -399,4 +399,91 @@ final class SFTPSessionPipelineTests: XCTestCase {
         let writes = await file.writes
         XCTAssertLessThan(writes.count, 60, "取消后不该把剩下的片全发完")
     }
+
+    // MARK: - 服务器宣告的单请求上限
+
+    /// 宣告了自定义上限的假文件：记下每片多长、峰值在途多少。
+    private final class LimitedFile: SFTPPipelineFile, @unchecked Sendable {
+        let maximumReadLength: Int
+        let maximumWriteLength: Int
+        private let lock = NSLock()
+        private var storage: [UInt8]
+        private var inFlight = 0
+        private(set) var peakInFlight = 0
+        private(set) var writeLengths: [Int] = []
+        private(set) var readLengths: [Int] = []
+
+        init(limit: Int, contents: [UInt8] = []) {
+            maximumReadLength = limit
+            maximumWriteLength = limit
+            storage = contents
+        }
+
+        var bytes: [UInt8] { lock.withLock { storage } }
+
+        private func enter() { lock.withLock { inFlight += 1; peakInFlight = max(peakInFlight, inFlight) } }
+        private func leave() { lock.withLock { inFlight -= 1 } }
+
+        func writeChunk(_ data: ByteBuffer, at offset: UInt64) async throws {
+            enter(); defer { leave() }
+            try await Task.sleep(for: .milliseconds(1))
+            lock.withLock {
+                writeLengths.append(data.readableBytes)
+                let end = Int(offset) + data.readableBytes
+                if storage.count < end { storage += [UInt8](repeating: 0, count: end - storage.count) }
+                storage.replaceSubrange(Int(offset)..<end, with: data.readableBytesView)
+            }
+        }
+
+        func readChunk(from offset: UInt64, length: UInt32) async throws -> ByteBuffer {
+            enter(); defer { leave() }
+            try await Task.sleep(for: .milliseconds(1))
+            return lock.withLock {
+                readLengths.append(Int(length))
+                let start = min(Int(offset), storage.count)
+                let end = min(start + min(Int(length), maximumReadLength), storage.count)
+                return ByteBuffer(bytes: storage[start..<end])
+            }
+        }
+    }
+
+    /// 服务器宣告几十 MiB 一片：片长收在 256 KiB 以内，在途不退化成一个请求（停等）。
+    func testHugeAdvertisedLimitIsCappedAndKeepsSeveralRequestsInFlight() async throws {
+        let file = LimitedFile(limit: 64 << 20)
+        let data = (0..<(4 << 20)).map { UInt8(truncatingIfNeeded: $0 &* 31) }
+        try await SFTPPipeline.write(file, data: buffer(data), at: 0)
+        XCTAssertEqual(file.bytes, data)
+        XCTAssertLessThanOrEqual(file.writeLengths.max() ?? 0, SFTPPipeline.maximumChunkSize)
+        XCTAssertGreaterThanOrEqual(file.peakInFlight, SFTPPipeline.minimumRequestWindow)
+
+        let read = try await SFTPPipeline.read(file, offset: 0, length: data.count, requireFullLength: true)
+        XCTAssertEqual(Array(read.readableBytesView), data)
+        XCTAssertLessThanOrEqual(file.readLengths.max() ?? 0, SFTPPipeline.maximumChunkSize)
+        XCTAssertEqual(SFTPPipeline.requestWindow(inFlight: 64, chunk: SFTPPipeline.chunkLength(serverLimit: .max)),
+                       8)
+        XCTAssertEqual(SFTPPipeline.requestWindow(inFlight: 1, chunk: SFTPPipeline.maximumChunkSize), 1,
+                       "调用方要求串行时听它的")
+    }
+
+    /// 服务器只给很小的上限（512 B）：每片都不超过它，读写照样完整。
+    func testTinyAdvertisedLimitIsRespected() async throws {
+        let file = LimitedFile(limit: 512)
+        let data = (0..<10_000).map { UInt8(truncatingIfNeeded: $0) }
+        try await SFTPPipeline.write(file, data: buffer(data), at: 0)
+        XCTAssertEqual(file.bytes, data)
+        XCTAssertLessThanOrEqual(file.writeLengths.max() ?? 0, 512)
+        let read = try await SFTPPipeline.read(file, offset: 0, length: data.count, requireFullLength: true)
+        XCTAssertEqual(Array(read.readableBytesView), data)
+        XCTAssertLessThanOrEqual(file.readLengths.max() ?? 0, 512)
+        XCTAssertEqual(SFTPPipeline.chunkLength(serverLimit: 0), 1, "宣告 0 也不会除零")
+    }
+
+    /// 和交互终端共用连接、按节奏传：服务器允许 255 KiB 一片，片长仍压在 32 000 B 以内（按键不排在大片后面）。
+    func testPacedUploadKeepsTheSmallChunkCap() async throws {
+        let file = LimitedFile(limit: 255 * 1024)
+        let data = [UInt8](repeating: 7, count: 3 << 20)
+        try await SFTPPipeline.write(file, data: buffer(data), at: 0, paced: true)
+        XCTAssertEqual(file.bytes, data)
+        XCTAssertLessThanOrEqual(file.writeLengths.max() ?? 0, SFTPPipeline.chunkSize)
+    }
 }

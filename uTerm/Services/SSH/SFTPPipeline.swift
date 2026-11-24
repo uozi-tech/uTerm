@@ -32,7 +32,11 @@ nonisolated struct USSHPipelineFile: SFTPPipelineFile {
     init(_ file: SFTPFile) { self.file = file }
 
     var maximumReadLength: Int { file.client.maximumReadLength }
-    var maximumWriteLength: Int { file.client.maximumWriteLength }
+    /// 一个 WRITE 整帧（类型、请求号、句柄、offset、长度 + 数据）还不能超过服务器的包长上限：
+    /// 宣告的写上限比包长还大时（不守规矩的服务器）按包长扣掉帧头算。句柄最长 256 字节，留 512。
+    var maximumWriteLength: Int {
+        min(file.client.maximumWriteLength, max(1, file.client.maximumPacketLength - 512))
+    }
 
     func writeChunk(_ data: ByteBuffer, at offset: UInt64) async throws {
         // 调用方按 `maximumWriteLength` 切，一片就是一个 WRITE 请求。
@@ -84,9 +88,10 @@ nonisolated struct SFTPShortReadError: Error, Sendable, Equatable {
 /// 「发一片 → 等 ack → 再发下一片」的串行循环（8 MiB / 32 KB = 262 个往返，13 ms RTT
 /// 就是 3.9 s）。把切片摊到 TaskGroup 里并发发，耗时退化成 `总片数 / inFlight × RTT` + 带宽时间。
 ///
-/// 片长跟服务器走：单个请求最多 `file.maximumReadLength` / `maximumWriteLength`（OpenSSH 宣告 255 KiB，
-/// 没宣告的服务器按 32 KiB），绝不超过——超过的 WRITE 会被拒绝。`inFlight` = 64 在 LAN 与广域网都够吃满；
-/// 片长变大之后在途的字节随之变多，但真正在链路上的量仍被通道窗口限住。
+/// 片长跟服务器走，但有自己的上下限（`chunkLength(serverLimit:)`）：不超过服务器的
+/// `maximumReadLength` / `maximumWriteLength`（OpenSSH 宣告 255 KiB，没宣告的按 32 KiB；超过的 WRITE 会被拒绝），
+/// 也不超过 `maximumChunkSize`——服务器宣告多大都一样，免得几 MiB 一片、在途只剩一个请求（停等）。
+/// 在途字节按 `inFlight` 定，片变大时请求数相应变少，但至少 `minimumRequestWindow` 个。
 nonisolated enum SFTPPipeline {
 
     /// 服务器没给上限时（测试里的假文件）的单请求净荷。也是终端上传节奏（`SFTPUploadPacer`）的片长上限：
@@ -96,15 +101,28 @@ nonisolated enum SFTPPipeline {
     /// 默认在途量（以 `chunkSize` 为单位，≈ 64 × 32 000 B = 2 MiB，正好一个终端连接的通道窗口）。
     static let defaultInFlight = 64
 
+    /// 单个请求最多多大，不论服务器宣告多少（app 自己的上限，和 USSHCore 的无关）。
+    static let maximumChunkSize = 256 * 1024
+
+    /// 片长按服务器上限走、收进 `1...maximumChunkSize`（服务器宣告 0、负数或离谱的大数都不会出事）。
+    static func chunkLength(serverLimit: Int) -> Int {
+        min(max(1, serverLimit), maximumChunkSize)
+    }
+
+    /// 片变大时在途请求数的下限：再大的片也保持几个请求同时在途，不退化成停等。
+    static let minimumRequestWindow = 4
+
     /// 在途量 `inFlight`（以 `chunkSize` 为单位）折成片长为 `chunk` 时的在途请求数：片变大了请求就少发几个，
-    /// 在途的**字节**和以前一样（各处的 `inFlight` 都是按 32 000 B 一片量出来、对着窗口定的）。至少 1 个。
+    /// 在途的**字节**和以前一样（各处的 `inFlight` 都是按 32 000 B 一片量出来、对着窗口定的）。
+    /// 片比 `chunkSize` 大时至少 `minimumRequestWindow` 个（调用方给的 `inFlight` 更小时听它的）。
     static func requestWindow(inFlight: Int, chunk: Int) -> Int {
         let units = max(1, inFlight)
         let chunk = max(1, chunk)
         guard chunk > chunkSize else { return units }
         let bytes = units.multipliedReportingOverflow(by: chunkSize)
         guard !bytes.overflow else { return units }
-        return max(1, (bytes.partialValue + chunk - 1) / chunk)
+        let scaled = (bytes.partialValue + chunk - 1) / chunk
+        return max(min(units, minimumRequestWindow), scaled)
     }
 
     // MARK: - 写
@@ -153,11 +171,11 @@ nonisolated enum SFTPPipeline {
     ) async throws {
         let total = data.readableBytes
         guard total > 0 else { return }
-        let writeLength = max(1, file.maximumWriteLength)
-        // 按节奏传时在途字节由节奏的预算管，在途个数照旧；片长上限跟服务器走（慢网上预算小，片自然小）。
+        let writeLength = chunkLength(serverLimit: file.maximumWriteLength)
+        // 按节奏传（连接上有交互终端）时片长压在 `chunkSize` 以内：按键不排在大片后面。在途个数照旧，字节由节奏的预算管。
         let window = pacer == nil ? requestWindow(inFlight: inFlight, chunk: writeLength) : max(1, inFlight)
         var pace = pacer
-        pace?.maximumChunk = writeLength
+        pace?.maximumChunk = min(writeLength, chunkSize)
         defer { pacer = pace }
         try await withThrowingTaskGroup(of: Acknowledgement.self) { group in
             // 捕获 `isolation`，闭包才跑在调用方的隔离上（SE-0420），`progress` 才在那里被调。
@@ -258,7 +276,7 @@ nonisolated enum SFTPPipeline {
         requireFullLength: Bool = false
     ) async throws -> ByteBuffer {
         guard length > 0 else { return ByteBuffer() }
-        let chunkSize = max(1, file.maximumReadLength)
+        let chunkSize = chunkLength(serverLimit: file.maximumReadLength)
         let window = requestWindow(inFlight: inFlight, chunk: chunkSize)
         let segments = (length + chunkSize - 1) / chunkSize
         var collected: [Int: ByteBuffer] = [:]
@@ -384,7 +402,7 @@ nonisolated struct SFTPUploadPacer: Sendable {
 
     let config: Config
 
-    /// 一片最多多大：一个 SFTP WRITE 请求的上限（`SFTPPipeline.write` 按服务器给的设）。
+    /// 一片最多多大：`chunkSize`，服务器上限更小时取它（`SFTPPipeline.write` 设）。
     var maximumChunk = SFTPPipeline.chunkSize
 
     init(config: Config = .standard) {

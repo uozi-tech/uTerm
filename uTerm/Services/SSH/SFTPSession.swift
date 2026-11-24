@@ -413,7 +413,7 @@ actor SFTPSession: SFTPProviding {
         // stat 之后还在长（日志文件之类）：非严格地续读，读不满才是真的到头。
         // 第一发只探一个请求那么长 —— 绝大多数文件没在长，拿整段 4 MiB 去探
         // 等于每次下载白发几十上百个必然落空的并发 READ。确认在长了再切回整段。
-        var want = max(1, file.maximumReadLength)
+        var want = SFTPPipeline.chunkLength(serverLimit: file.maximumReadLength)
         while true {
             try Task.checkCancellation()
             let buffer = try await SFTPPipeline.read(file, offset: offset, length: want)
