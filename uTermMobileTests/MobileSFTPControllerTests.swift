@@ -123,7 +123,8 @@ final class MobileSFTPControllerTests: XCTestCase {
 
         controller.delete(d1)
         controller.delete(d2)
-        XCTAssertEqual(controller.transientError?.contains("正在删除「d1」"), true,
+        // 句子里的远端名字包在 FSI … PDI 里（`RemoteName.isolated`）。
+        XCTAssertEqual(controller.transientError?.contains("正在删除「\(RemoteName.isolated("d1"))」"), true,
                        "第二次删除要明确告诉用户在排队，而不是静默吞掉")
 
         let finished = await wait { controller.deletion == nil && controller.entries.count == 1 }
