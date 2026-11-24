@@ -235,6 +235,9 @@ final class FileBrowserModel {
     private var didEverBrowse = false
     private let sftpConnector: SFTPConnector
     @ObservationIgnored private var lastConnectionRequest: ConnectionRequest?
+    /// 失败态是建连时「重试也不会好」的那种（凭据被拒、主机密钥被拒、握手不成——`SSHTransportFailure.isPermanentConnectFailure`）：
+    /// 看门狗不再自动重试（否则每次心跳都再登录失败一次，可能触发服务器的 fail2ban / pam_faillock），等用户自己点重试。
+    @ObservationIgnored private(set) var failureNeedsUser = false
 
     private struct ConnectionRequest {
         let profile: ServerProfile
@@ -319,6 +322,7 @@ final class FileBrowserModel {
         connectGeneration &+= 1
         let attempt = connectGeneration
         state = .connecting
+        failureNeedsUser = false
         // 任务被取消（如 sidebar 折叠 / 窗口关闭）时把 .connecting 重置回 .idle，
         // 否则下一次 connect 被 guard 直接跳过、永远停在 spinner 上（Fix #7）。
         defer {
@@ -358,6 +362,7 @@ final class FileBrowserModel {
                 timeline.finish("failed")
                 guard connectGeneration == attempt else { return }
                 provider = nil
+                failureNeedsUser = SSHTransportFailure.isPermanentConnectFailure(error)
                 state = .failed(FriendlyError.describe(error))
             }
         }
@@ -1098,7 +1103,8 @@ extension FileBrowserModel: ConnectionHealthProbing {
             guard provider === self.provider else { return }
             await refresh()
         case .failed:
-            guard lastConnectionRequest != nil else { return }
+            // 凭据 / 主机密钥 / 握手的问题不自动重试，等用户处理后自己点重试。
+            guard lastConnectionRequest != nil, !failureNeedsUser else { return }
             await refresh()
         case .idle, .connecting:
             return

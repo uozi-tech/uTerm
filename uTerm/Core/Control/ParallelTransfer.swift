@@ -254,17 +254,24 @@ nonisolated enum ParallelTransfer {
         }
     }
 
-    /// 借会话：建连失败（sshd 忙着丢连接、网络抖一下）退避再试两次；主机密钥问题不重试。
+    /// 借会话：建连失败（sshd 忙着丢连接、网络抖一下）退避再试两次；认证失败、主机密钥问题不重试
+    /// （重试只会再登录失败几次，可能触发服务器的 fail2ban / pam_faillock）。
     private static func borrow(host: HostConnectionSpec, pool: any ControlConnectionPooling) async throws -> any SFTPProviding {
         var attempt = 0
         while true {
             do {
                 return try await pool.borrowSFTP(for: host)
-            } catch let error as ControlConnectError where error.fingerprint == nil && attempt < 2 {
+            } catch let error as ControlConnectError where error.isRetryableBorrowFailure && attempt < 2 {
                 attempt += 1
                 try await Task.sleep(for: .milliseconds(500 * attempt))
             }
         }
+    }
+
+    /// 这个错误一旦出现，别的工作者再去借会话也只会同样失败：整次传输就此失败，其余工作者不再借。
+    static func stopsAllWorkers(_ error: any Error) -> Bool {
+        if let error = error as? ControlConnectError { return !error.isRetryableBorrowFailure }
+        return SSHTransportFailure.isPermanentConnectFailure(error)
     }
 
     // MARK: - 单块搬运
@@ -387,7 +394,7 @@ private nonisolated final class SegmentQueue: @unchecked Sendable {
     func workerFailed(holding indices: [Int], error: any Error) {
         lock.withLock {
             lastError = error
-            if error is CancellationError { fatal = error; return }
+            if error is CancellationError || ParallelTransfer.stopsAllWorkers(error) { fatal = error; return }
             for index in indices {
                 let tried = (attempts[index] ?? 1) + 1
                 attempts[index] = tried

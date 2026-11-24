@@ -123,6 +123,14 @@ extension ControlConnectError {
         }
     }
 
+    /// 换一条连接再试可能就好了（网络抖动、sshd 忙、建连期间被释放）。认证失败、主机密钥问题不在此列。
+    var isRetryableBorrowFailure: Bool {
+        switch self {
+        case .connectFailed, .released: return true
+        case .authFailed, .hostKeyUnknown, .hostKeyChanged: return false
+        }
+    }
+
     /// 主机密钥两态里的指纹（其余为 nil）。
     var fingerprint: String? {
         switch self {

@@ -26,6 +26,11 @@ final class ControlSFTPHandlerTests: XCTestCase {
         init(session: any SFTPProviding) { self.session = session }
 
         func failNext(_ error: Error) { failure = error }
+        /// 借成功这么多次之后一律抛 `error`（传输中途换不了新会话）。
+        private var failAfter: (successes: Int, error: Error)?
+        /// 借的次数（含失败的）。
+        private(set) var attempts = 0
+        func failAfter(successes: Int, with error: Error) { failAfter = (successes, error) }
 
         func executor(
             for host: HostConnectionSpec,
@@ -36,7 +41,9 @@ final class ControlSFTPHandlerTests: XCTestCase {
         }
 
         func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+            attempts += 1
             if let failure { throw failure }
+            if let failAfter, borrowed >= failAfter.successes { throw failAfter.error }
             sftpRequests.append(host.id)
             borrowed += 1
             return session
@@ -313,6 +320,24 @@ final class ControlSFTPHandlerTests: XCTestCase {
         let event = try JSONDecoder().decode(ControlProgressEvent.self, from: progress)
         XCTAssertEqual(event.totalBytes, 150_000)
         XCTAssertEqual(event.done.reduce(0) { $0 + $1.length }, 150_000, "进度账覆盖整个文件")
+    }
+
+    /// 传输中途借不到新会话、原因是认证失败：不重试（每次重试都是一次失败的登录），也不让别的工作者接着去借。
+    func testTransferStopsAllWorkersOnPermanentBorrowFailure() async throws {
+        let remote = Data(repeating: 0x5A, count: 25 << 20)    // 4 段（每段 8 MiB）→ 4 个工作者
+        await sftp.setFile("/srv/big.bin", data: remote, mtime: Date())
+        await pool.failAfter(successes: 1, with: ControlConnectError.authFailed("服务器拒绝了密码"))
+        let local = try localFile(Data())
+
+        let (response, _) = await transfer(request(.sftpGet, path: "/srv/big.bin", parallel: 4), fd: local.fd)
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.code, ControlErrorCode.auth_failed.rawValue)
+        let attempts = await pool.attempts
+        // 先借一次读大小（成功），之后每个工作者至多借一次；以前每个工作者还会重试两次（1 + 4 × 3 = 13）。
+        XCTAssertLessThanOrEqual(attempts, 1 + 4)
+        XCTAssertTrue(ParallelTransfer.stopsAllWorkers(ControlConnectError.authFailed("x")))
+        XCTAssertFalse(ParallelTransfer.stopsAllWorkers(ControlConnectError.connectFailed("x")))
     }
 
     /// 续传：只补给定的区间，别处一个字节都不动。
