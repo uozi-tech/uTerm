@@ -26,8 +26,6 @@
 		4A55494345000000000000A4 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A2 /* CJuice */; };
 		4B43500000000000000000A3 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A1 /* CKCP */; };
 		4B43500000000000000000A4 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A2 /* CKCP */; };
-		5A53544400000000000000A3 /* CZstd in Frameworks */ = {isa = PBXBuildFile; productRef = 5A53544400000000000000A1 /* CZstd */; };
-		5A53544400000000000000A4 /* CZstd in Frameworks */ = {isa = PBXBuildFile; productRef = 5A53544400000000000000A2 /* CZstd */; };
 		4C495645414354000000000E /* uTermLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4C4956454143540000000001 /* uTermLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		52484F535400000000000015 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000012 /* CJuice */; };
 		52484F535400000000000016 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 52484F535400000000000013 /* CKCP */; };
@@ -41,6 +39,8 @@
 		55535348535441434B000012 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000002 /* USSHStack */; };
 		55535348535441434B000013 /* USSHStack in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000001 /* USSHStack */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		55535348535441434B000014 /* USSHStack in Frameworks */ = {isa = PBXBuildFile; productRef = 55535348535441434B000003 /* USSHStack */; };
+		5A53544400000000000000A3 /* CZstd in Frameworks */ = {isa = PBXBuildFile; productRef = 5A53544400000000000000A1 /* CZstd */; };
+		5A53544400000000000000A4 /* CZstd in Frameworks */ = {isa = PBXBuildFile; productRef = 5A53544400000000000000A2 /* CZstd */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		851030E33047167600A370DF /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000002 /* UDesignKit */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
@@ -2492,13 +2492,13 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/kcp;
 		};
-		5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/zstd;
-		};
 		55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/USSHStack;
+		};
+		5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/zstd;
 		};
 		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -2691,16 +2691,6 @@
 			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
 			productName = CKCP;
 		};
-		5A53544400000000000000A1 /* CZstd */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */;
-			productName = CZstd;
-		};
-		5A53544400000000000000A2 /* CZstd */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */;
-			productName = CZstd;
-		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
@@ -2765,6 +2755,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */;
 			productName = USSHStack;
+		};
+		5A53544400000000000000A1 /* CZstd */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */;
+			productName = CZstd;
+		};
+		5A53544400000000000000A2 /* CZstd */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */;
+			productName = CZstd;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
