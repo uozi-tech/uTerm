@@ -78,6 +78,15 @@ final class RemoteNameNormalizationTests: XCTestCase {
         XCTAssertEqual(preview.buffers.count, 2)
     }
 
+    /// 上传前的覆盖检查：从 Mac 拖进来的 NFD 名字和远端 NFC 的同名文件不冲突（覆盖也碰不到那一个），只有逐字节相同才算。
+    func testUploadConflictCheckComparesBytes() async {
+        let mock = MockSFTP(tree: ["/srv": [entry(nfc)]])
+        let clash = await RemoteFileOperations.existingNames([nfd], in: "/srv", provider: mock)
+        XCTAssertTrue(clash.isEmpty, "NFD 的名字被当成了 NFC 那个文件")
+        let same = await RemoteFileOperations.existingNames([nfc], in: "/srv", provider: mock)
+        XCTAssertEqual(same.map(bytes), [bytes(nfc)])
+    }
+
     /// 最近打开的文件：两个都记着，不会互相顶掉。
     func testRecentFilesKeepBothSpellings() throws {
         let store = RecentFilesStore(rootDirectory: FileManager.default.temporaryDirectory

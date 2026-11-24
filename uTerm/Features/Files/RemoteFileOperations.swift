@@ -250,8 +250,9 @@ nonisolated enum RemoteFileOperations {
     ) async -> [String] {
         guard !names.isEmpty,
               let listed = try? await provider.list(path: directory) else { return [] }
-        let existing = Set(listed.map(\.name))
-        return names.filter { existing.contains($0) }
+        // 逐字节比：本机拖进来的 NFD 名字和远端 NFC 的同名文件是两个文件，不算冲突（覆盖了也碰不到那一个）。
+        let existing = Set(listed.map(\.id))
+        return names.filter { existing.contains($0.remoteKey) }
     }
 
     // MARK: - 属主名补全

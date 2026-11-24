@@ -13,7 +13,7 @@ final class RemoteNameIdentityLintTests: XCTestCase {
 
     private static let roots = [
         "uTerm/Features/Files", "uTerm/Features/Preview", "uTerm/Features/ExternalOpen", "uTerm/Features/SFTP",
-        "uTermMobile/Screens/SFTP",
+        "uTermMobile/Screens/SFTP", "uTerm/Features/Workspace",
     ]
 
     func testRemotePathsAndNamesAreComparedByBytes() throws {
@@ -25,6 +25,11 @@ final class RemoteNameIdentityLintTests: XCTestCase {
             for case let file as URL in walker where file.pathExtension == "swift" { files.append(file) }
         }
         XCTAssertGreaterThan(files.count, 20, "夹具失效：没扫到源码")
+        // 名字 / 路径攒成 `Set<String>`（`Set(xs.map(\.name))`、`var seen: Set<String>` 这一类）同样按标准等价去重。
+        let setPatterns = [
+            /Set\([^)]*\\\.(name|remotePath|currentPath|path)\)/,
+            /(name|path|Path)\w*\s*[:=]\s*Set<String>/,
+        ]
         let pattern = /(\bremotePath|\bcurrentPath|\w\.name)\s*(==|!=)\s*([^\s]+)|([^\s]+)\s*(==|!=)\s*[\w$.]*\w\.(remotePath|currentPath|name)\b|([^\s]+)\s*(==|!=)\s*\b(remotePath|currentPath)\b/
         var offenders: [String] = []
         for file in files {
@@ -32,6 +37,10 @@ final class RemoteNameIdentityLintTests: XCTestCase {
             for (index, line) in lines.enumerated() {
                 let code = line.trimmingCharacters(in: .whitespaces)
                 if code.hasPrefix("//") || line.contains("remoteKey") { continue }
+                if setPatterns.contains(where: { line.contains($0) }) {
+                    offenders.append("\(file.lastPathComponent):\(index + 1): \(code)")
+                    continue
+                }
                 guard let match = line.firstMatch(of: pattern) else { continue }
                 if let rhs = match.output.3, rhs.hasPrefix("\"") { continue }
                 if let lhs = match.output.4, lhs.hasSuffix("\"") { continue }

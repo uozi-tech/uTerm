@@ -556,7 +556,7 @@ final class WorkspaceModel {
 
         // 已经开着：带到它那一组的前台并重读（程序刚改过它）。
         if let existing = terminalGroups.allTabs.first(where: {
-            $0.payload.serverProfileID == serverID && $0.payload.fileBuffer?.remotePath == path
+            $0.payload.serverProfileID == serverID && $0.payload.fileBuffer?.remotePath.remoteKey == path.remoteKey
         }), let at = terminalGroups.locateTab(existing.id), let buffer = existing.payload.fileBuffer {
             terminalGroups.activateTab(groupID: at.groupID, index: at.index)
             restoreFocus(to: sourceTabID)
