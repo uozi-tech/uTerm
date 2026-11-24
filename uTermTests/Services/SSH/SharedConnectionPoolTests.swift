@@ -251,6 +251,38 @@ private struct FakeConnectError: Error {}
 extension SharedConnectionPoolTests {
     /// 判死一条共享连接：断开要好几秒才完成（这期间 `isAlive` 还是真），但从判死那一刻起就不能再借给别人，
     /// 上面的租约立刻收到断开通知。
+    /// 经跳板机时只断了目标那一跳：池子摘掉这条连接之后还要把它关掉，跳板机那一跳（socket + sshd 会话）才会断，
+    /// 不然表里没有它了，谁也不会再关，挂到 App 退出。
+    func testConnectionDroppedByThePeerIsClosedAfterEviction() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let first = try await pool.acquire("host") { await counter.makeConnection() }
+
+        first.connection.simulateRemoteClose()
+
+        try await waitUntil { first.connection.closeCount == 1 }
+        let open = await pool.connectionCount(for: "host")
+        XCTAssertEqual(open, 0)
+        // 之后照常归还 / 判死都不会再关一次（幂等，也不碰新连接）。
+        await pool.release(first.lease)
+        await pool.invalidate(first.lease)
+        XCTAssertEqual(first.connection.closeCount, 1)
+    }
+
+    /// 借之前才发现已经不活（`isAlive` 变假但没收到回调）：同样摘掉并关掉。
+    func testConnectionFoundDeadOnAcquireIsClosed() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let first = try await pool.acquire("host") { await counter.makeConnection() }
+        first.connection.markDeadSilently()
+
+        let second = try await pool.acquire("host") { await counter.makeConnection() }
+
+        XCTAssertFalse(first.connection === second.connection)
+        try await waitUntil { first.connection.closeCount == 1 }
+        XCTAssertEqual(second.connection.closeCount, 0)
+    }
+
     func testInvalidatedConnectionIsNeverHandedOutWhileItCloses() async throws {
         let pool = SharedConnectionPool<String, SlowClosingConnection>(maxLeasesPerConnection: 6)
         let first = try await pool.acquire("host") { SlowClosingConnection() }

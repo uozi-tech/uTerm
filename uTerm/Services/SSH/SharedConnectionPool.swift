@@ -115,8 +115,7 @@ actor SharedConnectionPool<Key: Hashable & Sendable, Connection: PooledConnectio
     /// 先断后摘的话，这段时间里新开的标签会借到这条正在关的连接，开通道失败报 `.localClose`（不算网络断开，
     /// 不会自动重连），用户看到的是一个错误而不是重连。
     func invalidate(_ lease: PooledLease) async {
-        guard let entry = entries[lease.connectionID] else { return }
-        handleClosed(lease.connectionID)
+        guard let entry = evict(lease.connectionID) else { return }
         await entry.connection.closeTransport()
     }
 
@@ -176,11 +175,22 @@ actor SharedConnectionPool<Key: Hashable & Sendable, Connection: PooledConnectio
         }
     }
 
+    /// 一条连接断了（或被发现已经不活）：摘出表、通知租约，并把它彻底关掉。
+    ///
+    /// 关掉这一步不能省：经跳板机时断的常常只是目标那一跳，跳板机的 `SSHClient`（socket + 那边的 sshd 会话）
+    /// 还连着；表里已经没有它，之后谁也不会再 `release` / `invalidate` 它，不关就挂到 App 退出。`closeTransport`
+    /// 是幂等的，已经断了的那一跳关一次没有代价。
     private func handleClosed(_ id: UUID) {
-        guard let entry = entries.removeValue(forKey: id) else { return }
+        guard let entry = evict(id) else { return }
+        Task { await entry.connection.closeTransport() }
+    }
+
+    private func evict(_ id: UUID) -> Entry? {
+        guard let entry = entries.removeValue(forKey: id) else { return nil }
         for handler in entry.closeHandlers.values {
             handler()
         }
+        return entry
     }
 }
 
