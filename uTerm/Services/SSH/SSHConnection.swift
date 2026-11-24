@@ -271,6 +271,9 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                         }
                         // 任一子任务结束（shell 退出 或 本地 close）即返回。
                         await group.next()
+                        // 等关闭信号的那个子任务不响应取消：shell 自己退出时要叫醒它，任务组才收得了尾、
+                        // 会话才结束（以前漏了这一步，远端 `exit` 之后要等下一次按键写失败才翻到「已断开」）。
+                        state.signalClose()
                         group.cancelAll()
                     }
                 }
