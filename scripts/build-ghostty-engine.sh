@@ -149,7 +149,7 @@ if [ "$DRY_RUN" = 1 ]; then
 	echo "engine_version=$ENGINE_VERSION"
 	echo "libghostty-spm=$SPM_TAG ($SPM_COMMIT)"
 	echo "ghostty=$GHOSTTY_COMMIT"
-	echo "zig=${ZIG:-（要下载 $ZIG_VERSION）}"
+	echo "zig=${ZIG:-（要下载 ${ZIG_VERSION}）}"
 	echo "platforms=$PLATFORMS"
 	echo "patches=$(cd "$OUR_PATCHES" && ls | tr '\n' ' ')"
 	echo "work=$WORK"
@@ -164,14 +164,14 @@ if [ -z "$ZIG" ]; then
 	say "下载 Zig $ZIG_VERSION"
 	/usr/bin/curl -fL --retry 3 -o "$WORK/$tarball.part" "https://ziglang.org/download/$ZIG_VERSION/$tarball"
 	actual="$(/usr/bin/shasum -a 256 "$WORK/$tarball.part" | awk '{print $1}')"
-	[ "$actual" = "$ZIG_SHA256" ] || { rm -f "$WORK/$tarball.part"; die "$tarball 的 sha256 对不上（清单 $ZIG_SHA256，实际 $actual）"; }
+	[ "$actual" = "$ZIG_SHA256" ] || { rm -f "$WORK/$tarball.part"; die "$tarball 的 sha256 对不上（清单 ${ZIG_SHA256}，实际 ${actual}）"; }
 	rm -rf "$WORK/zig-aarch64-macos-$ZIG_VERSION"
 	/usr/bin/tar -xJf "$WORK/$tarball.part" -C "$WORK"
 	rm -f "$WORK/$tarball.part"
 	ZIG="$WORK/zig-aarch64-macos-$ZIG_VERSION/zig"
 	zig_ok "$ZIG" || die "解出来的 Zig 跑不起来：$ZIG"
 fi
-say "Zig $ZIG_VERSION：$ZIG"
+say "Zig ${ZIG_VERSION}：$ZIG"
 
 # ---------- 源码 ----------
 
@@ -189,16 +189,16 @@ export ZIG_GLOBAL_CACHE_DIR="$WORK/zig-cache"
 say "克隆 libghostty-spm $SPM_TAG"
 git clone -q --depth 1 --branch "$SPM_TAG" "$SPM_REPO_URL" "$SRC"
 head="$(git -C "$SRC" rev-parse HEAD)"
-case "$head" in "$SPM_COMMIT"*) ;; *) die "tag $SPM_TAG 现在指向 $head，清单记的是 $SPM_COMMIT（上游移动过 tag？）" ;; esac
+case "$head" in "$SPM_COMMIT"*) ;; *) die "tag $SPM_TAG 现在指向 ${head}，清单记的是 ${SPM_COMMIT}（上游移动过 tag？）" ;; esac
 ref="$(tr -d '[:space:]' < "$SRC/Ghostty.ref")"
-[ "$ref" = "$GHOSTTY_COMMIT" ] || die "$SPM_TAG 的 Ghostty.ref 是 $ref，清单记的是 $GHOSTTY_COMMIT"
+[ "$ref" = "$GHOSTTY_COMMIT" ] || die "$SPM_TAG 的 Ghostty.ref 是 ${ref}，清单记的是 $GHOSTTY_COMMIT"
 
 say "接上我们的引擎补丁"
 stage_patches "$SRC/Patches/ghostty"
 
 # ---------- GhosttyKit ----------
 
-say "编 GhosttyKit（$PLATFORMS；整套约 10–20 分钟）"
+say "编 GhosttyKit（${PLATFORMS}；整套约 10–20 分钟）"
 # 不传 --ref：源码树不存在时 build.sh 自己完整克隆 Ghostty 并检出 Ghostty.ref（上面核过等于清单）。完整克隆才有
 # 9 位短哈希的版本串。
 (cd "$SRC" && ./build.sh --platforms "$PLATFORMS" --skip-tests)
@@ -220,7 +220,7 @@ short9="${GHOSTTY_COMMIT:0:9}"
 macos_kit="$(find "$KIT_OUT" -path '*macos-*' -name '*.a' | head -n1)"
 [ -n "$macos_kit" ] || die "GhosttyKit 里没有 macOS slice"
 # 不用 grep -q：它找到就退出，strings 吃 SIGPIPE，pipefail 下整条管道算失败。
-strings -a "$macos_kit" | grep -F "+$short9" >/dev/null || die "GhosttyKit 的版本串里没有 +$short9（Ghostty 没有完整克隆、或检出的不是钉住的提交）"
+strings -a "$macos_kit" | grep -F "+$short9" >/dev/null || die "GhosttyKit 的版本串里没有 +${short9}（Ghostty 没有完整克隆、或检出的不是钉住的提交）"
 for slice in "$KIT_OUT" "$VT_OUT"; do
 	for want in 'macos-*' 'ios-arm64' 'ios-*simulator'; do
 		compgen -G "$slice/$want" >/dev/null || die "$(basename "$slice") 缺 $want slice"
@@ -231,7 +231,7 @@ for a in $(find "$VT_OUT" -name '*.a'); do
 	[ -z "$extra" ] || die "$a 导出了 ghostty_* 以外的符号：$extra"
 	[ "$(nm -gU "$a" | grep -c ' _ghostty_')" -gt 0 ] || die "$a 一个 ghostty_* 都没导出"
 done
-echo "  版本串 +$short9、slice 齐全、vt 只导出 ghostty_*"
+echo "  版本串 +${short9}、slice 齐全、vt 只导出 ghostty_*"
 
 # ---------- 打包 / 装进去 ----------
 
@@ -242,7 +242,7 @@ if [ -n "$PACK_DIR" ]; then
 	(cd "$stage" && /usr/bin/ditto -c -k --keepParent "$KIT_DIR" "$PACK_DIR/$KIT_ZIP")
 	(cd "$WORK/out" && /usr/bin/ditto -c -k --keepParent "$(basename "$VT_OUT")" "$PACK_DIR/$VT_ZIP")
 	rm -rf "$stage"
-	say "打包到 $PACK_DIR（清单的 sha256 要改成下面这两个；平台组是 $PLATFORMS）"
+	say "打包到 ${PACK_DIR}（清单的 sha256 要改成下面这两个；平台组是 ${PLATFORMS}）"
 	(cd "$PACK_DIR" && /usr/bin/shasum -a 256 "$KIT_ZIP" "$VT_ZIP")
 fi
 
@@ -255,7 +255,7 @@ if [ "$INSTALL" = 1 ]; then
 		mv "$from" "$DEST/$dir"
 		printf 'local-build %s\n' "$ENGINE_VERSION" > "$DEST/$dir.stamp"
 	done
-	say "装进 $DEST（stamp：local-build $ENGINE_VERSION）"
+	say "装进 ${DEST}（stamp：local-build ${ENGINE_VERSION}）"
 fi
 
 if [ "$KEEP_SOURCE" = 0 ]; then
