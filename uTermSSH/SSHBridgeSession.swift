@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import NIOCore
+import os
 @_spi(uTermIntegration) import USSHKit
 
 /// 一次连接的全过程：从控制通道收参数、握手（主机密钥问 App）、开 PTY、桥接到 stdin/stdout，结束就退出进程。
@@ -94,7 +95,8 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                     isMismatch: challenge.kind == .mismatch,
                     previousFingerprint: challenge.previousFingerprint))
             },
-            maximumPacketSize: Self.maximumPacketSize)
+            maximumPacketSize: Self.maximumPacketSize,
+            logger: SSHBridgeLogger())
     }
 
     private func fail(_ request: SSHBridgeConnectRequest, _ error: Error) async {
@@ -302,6 +304,20 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
         switch credential {
         case .password(let password): return .password(password)
         case .privateKey(let pem, let passphrase): return .privateKey(pem: pem, passphrase: passphrase)
+        }
+    }
+}
+
+/// USSHKit 的日志（比如「这台主机只能用旧算法」）写进系统日志，和 App 同一个 subsystem。
+nonisolated private struct SSHBridgeLogger: USSHKit.SSHLogger {
+    private static let logger = Logger(subsystem: "com.uozi.uTerm", category: "ssh")
+
+    func log(_ event: USSHKit.SSHLogEvent) {
+        let details = event.metadata.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        let text = details.isEmpty ? event.message : "\(event.message) \(details)"
+        switch event.level {
+        case .trace, .debug, .info: Self.logger.info("\(text, privacy: .public)")
+        case .warning, .error: Self.logger.error("\(text, privacy: .public)")
         }
     }
 }

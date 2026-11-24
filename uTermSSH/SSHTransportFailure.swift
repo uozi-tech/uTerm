@@ -39,7 +39,8 @@ nonisolated enum SSHTransportFailure {
         return Self.transportMessageFragments.contains { message.contains($0) }
     }
 
-    /// 建连失败是不是「重试也不会好」的那种：服务器拒绝了凭据、主机密钥被拒绝、握手协商不成。
+    /// 建连失败是不是「重试也不会好」的那种：服务器拒绝了凭据、主机密钥被拒绝、握手失败或与服务器没有共同算法
+    /// （USSHKit 默认已经自动退过一次旧算法，再失败就是真的连不了）。
     /// 重连逻辑碰到它就停下，等用户处理（改凭据、确认密钥）后手动重试，不在后台一遍遍地连。
     static func isPermanentConnectFailure(_ error: Error) -> Bool {
         switch error {
@@ -55,7 +56,7 @@ nonisolated enum SSHTransportFailure {
         case let error as SSHClientError:
             switch error {
             case .authenticationFailed, .authenticationDelegateFailed, .hostKeyRejected,
-                 .hostKeyValidationTimeout, .handshakeFailed:
+                 .hostKeyValidationTimeout, .handshakeFailed, .noCommonAlgorithm:
                 return true
             case .connectTimeout, .connectFailed, .handshakeTimeout, .connectionClosed:
                 return false
@@ -85,7 +86,7 @@ nonisolated enum SSHTransportFailure {
                 return isNetworkLoss(reason)
             case .connectTimeout, .connectFailed, .handshakeTimeout:
                 return true
-            case .handshakeFailed, .authenticationFailed, .authenticationDelegateFailed,
+            case .handshakeFailed, .noCommonAlgorithm, .authenticationFailed, .authenticationDelegateFailed,
                  .hostKeyRejected, .hostKeyValidationTimeout:
                 return false
             }

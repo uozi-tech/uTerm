@@ -62,6 +62,9 @@ final class SSHTransportFailureTests: XCTestCase {
             SSHConnection.SSHConnectionError.hostKeyRejected("用户拒绝")))
         XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(USSHKit.SSHConnectionError.handshakeFailed("x")))
         XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(SSHClientError.handshakeFailed(ChannelError.eof)))
+        let noCommon = SSHAlgorithmNegotiationFailure(category: .hostKey, clientOffer: ["ssh-ed25519"], serverOffer: ["ssh-dss"])
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(SSHClientError.noCommonAlgorithm(noCommon)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHClientError.noCommonAlgorithm(noCommon)))
 
         XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(
             SSHConnection.SSHConnectionError.connectFailed("无法连接")))

@@ -84,6 +84,23 @@ nonisolated extension ConnectedClient: PooledConnection {
     }
 }
 
+/// USSHKit 的日志 → App 的日志（`ssh` 类别）。建连时交给它：比如「这台主机只能用旧算法」那一条警告
+/// （metadata 里有 host、port、用上的旧算法）。
+nonisolated struct AppSSHLogger: USSHKit.SSHLogger {
+    func log(_ event: USSHKit.SSHLogEvent) {
+        let details = event.metadata.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        let text = details.isEmpty ? event.message : "\(event.message) \(details)"
+        switch event.level {
+        case .trace, .debug, .info:
+            AppLogger.info(text, category: "ssh")
+        case .warning:
+            AppLogger.warn(text, category: "ssh")
+        case .error:
+            AppLogger.error(text, category: "ssh")
+        }
+    }
+}
+
 /// uTerm's model/UI adapter around the shared connection engine.
 nonisolated enum SSHClientFactory {
     /// SSH 子通道（PTY / SFTP / direct-tcpip）的最大包长，决定每条子通道的入站窗口。
@@ -165,7 +182,8 @@ nonisolated enum SSHClientFactory {
                 hostKeyPolicy: packageHostKeyPolicy(),
                 connectTimeout: .seconds(connectTimeoutSeconds()),
                 approver: packageApprover(hostKeyApprover),
-                maximumPacketSize: maximumPacketSize
+                maximumPacketSize: maximumPacketSize,
+                logger: AppSSHLogger()
             )
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {

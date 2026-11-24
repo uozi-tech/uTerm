@@ -56,7 +56,8 @@ final class RSASHA512AuthDelegateTests: XCTestCase {
             }
             XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(error))
         }
-        XCTAssertLessThanOrEqual(server.events.authAttempts.count, 2, "rsa-sha2-512 / 256 各最多一次")
+        // 服务器没宣告 server-sig-algs：rsa-sha2-512、rsa-sha2-256，最后在同一条连接上试一次 SHA-1 的 ssh-rsa。
+        XCTAssertLessThanOrEqual(server.events.authAttempts.count, 3, "每种签名算法最多一次")
     }
 
     /// 服务器只收密码：不发公钥，报认证失败。
