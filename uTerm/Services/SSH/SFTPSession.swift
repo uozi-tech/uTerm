@@ -55,37 +55,21 @@ actor SFTPSession: SFTPProviding {
         }
     }
 
-    /// 列目录时见过的、名字不是合法 UTF-8 的条目：显示用的路径（非法字节换成 U+FFFD 的 `String`，界面和
-    /// `RemoteEntry.name` 拿的就是它）→ 服务器上的原样字节。之后拿这个路径（或它下面的路径）来操作时换回原样字节，
-    /// 非 UTF-8 的文件名才能打开、改名、删除，而不是「找不到」或打到别的文件上。见 `sftpPath(_:)`。
-    private var rawPaths: [String: SFTPPath] = [:]
-
-    /// 界面 / 调用方给的路径 → 发给服务器的路径。落在某个非 UTF-8 条目上或它下面时换回原样字节；
-    /// 其余照 UTF-8 编码（和以前一样）。
-    func sftpPath(_ path: String) -> SFTPPath {
-        guard !rawPaths.isEmpty else { return SFTPPath(path) }
-        if let exact = rawPaths[path] { return exact }
-        var best: (display: String, raw: SFTPPath)?
-        for (display, raw) in rawPaths where path.hasPrefix(display.hasSuffix("/") ? display : display + "/") {
-            if display.utf8.count > (best?.display.utf8.count ?? -1) { best = (display, raw) }
-        }
-        guard let best else { return SFTPPath(path) }
-        var rest = Array(path.utf8.dropFirst(best.display.utf8.count))
-        if best.raw.bytes.last == UInt8(ascii: "/"), rest.first == UInt8(ascii: "/") { rest.removeFirst() }
-        return SFTPPath(bytes: best.raw.bytes + rest)
+    /// 界面 / 调用方给的路径 → 发给服务器的字节。路径里的名字用的是 `RemoteName` 的无损写法：
+    /// 不是 UTF-8 的名字显示成带转义的字符串，这里原样还原成服务器上的字节；其余路径（包括用户手打、
+    /// 命令行传来的）就是它的 UTF-8，和以前一样。
+    nonisolated func sftpPath(_ path: String) -> SFTPPath {
+        SFTPPath(bytes: RemoteName.bytes(path))
     }
 
     func list(path: String) async throws -> [RemoteEntry] {
         // 不带 "." / ".."（`includingDotEntries` 默认 false）。
-        let directory = sftpPath(path)
-        let listed = try await sftp.listDirectory(directory)
-        for entry in listed where !entry.name.isLosslessUTF8 {
-            rawPaths[RemotePath.join(path, entry.filename)] = directory.appending(entry.name)
-        }
+        let listed = try await sftp.listDirectory(sftpPath(path))
         return listed.map { entry in
             let attributes = entry.attributes
             return RemoteEntry(
-                name: entry.filename,
+                // 无损写法：不是 UTF-8 的名字各显示各的（不会几个都成了 `����.txt`），拿回来还原得出原样字节。
+                name: RemoteName.display(entry.name.bytes),
                 posixPermissions: attributes.permissions,
                 size: attributes.size,
                 modifiedAt: attributes.modificationDate,
@@ -96,7 +80,7 @@ actor SFTPSession: SFTPProviding {
     }
 
     func realPath(_ path: String) async throws -> String {
-        try await sftp.realPath(sftpPath(path)).string
+        RemoteName.display(try await sftp.realPath(sftpPath(path)).bytes)
     }
 
     func download(remotePath: String) async throws -> Data {

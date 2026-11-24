@@ -19,174 +19,21 @@ import USSHTestServer
 /// 不依赖任何外部 sshd，也不读钥匙串；端口是内核分配的（bind 0）。
 final class SFTPSessionServerIntegrationTests: XCTestCase {
 
-    // MARK: - 进程内 SFTP 服务端
-
-    /// 内存文件表，按路径的**原样字节**存（非 UTF-8 的名字也能放）。服务端的请求与测试都经它读写，故用锁保护。
-    private final class MemoryFileSystem: SFTPServerFileSystem, @unchecked Sendable {
-        private let lock = NSLock()
-        private var files: [SFTPPath: [UInt8]] = [:]
-        private var directories: Set<SFTPPath> = ["/home/test"]
-        /// 还要短给几次（SFTP 允许服务端少给，客户端必须补发）。
-        private var shortReadBudget = 0
-        /// 从这个 offset 起一律回空 —— 模拟服务端在文件中途谎报 EOF。
-        private var lieAboutEOFFrom: Int?
-
-        func setShortReadBudget(_ count: Int) {
-            lock.withLock { shortReadBudget = count }
-        }
-
-        func setLieAboutEOF(from offset: Int?) {
-            lock.withLock { lieAboutEOFFrom = offset }
-        }
-
-        func read(_ path: SFTPPath, at offset: Int, length: Int) -> [UInt8] {
-            lock.lock(); defer { lock.unlock() }
-            guard let bytes = files[path], offset < bytes.count else { return [] }
-            if let lieAboutEOFFrom, offset >= lieAboutEOFFrom { return [] }
-            var end = min(offset + length, bytes.count)
-            if shortReadBudget > 0, end - offset > 1 {
-                shortReadBudget -= 1
-                end = offset + (end - offset) / 2   // 只给一半
-            }
-            return Array(bytes[offset..<end])
-        }
-
-        func write(_ path: SFTPPath, at offset: Int, bytes: [UInt8]) {
-            lock.lock(); defer { lock.unlock() }
-            var existing = files[path] ?? []
-            let end = offset + bytes.count
-            if existing.count < end {
-                existing.append(contentsOf: [UInt8](repeating: 0, count: end - existing.count))
-            }
-            existing.replaceSubrange(offset..<end, with: bytes)
-            files[path] = existing
-        }
-
-        func size(_ path: String) -> Int? { size(SFTPPath(path)) }
-        func size(_ path: SFTPPath) -> Int? { lock.withLock { files[path]?.count } }
-        func contents(_ path: String) -> [UInt8]? { contents(SFTPPath(path)) }
-        func contents(_ path: SFTPPath) -> [UInt8]? { lock.withLock { files[path] } }
-        func put(_ path: String, _ bytes: [UInt8]) { put(SFTPPath(path), bytes) }
-        func put(_ path: SFTPPath, _ bytes: [UInt8]) { lock.withLock { files[path] = bytes } }
-        func exists(_ path: SFTPPath) -> Bool { lock.withLock { files[path] != nil } }
-
-        // MARK: SFTPServerFileSystem
-
-        func realPath(_ path: SFTPPath) async throws -> SFTPPath {
-            path.bytes.first == UInt8(ascii: "/") ? path : SFTPPath("/home/test").appending(path)
-        }
-
-        func attributes(at path: SFTPPath, followingSymlinks: Bool) async throws -> SFTPFileAttributes {
-            try lock.withLock {
-                if let bytes = files[path] {
-                    return SFTPFileAttributes(size: UInt64(bytes.count), permissions: 0o100644)
-                }
-                if directories.contains(path) { return SFTPFileAttributes(permissions: 0o040755) }
-                throw SFTPServerStatusError.noSuchFile()
-            }
-        }
-
-        func openFile(_ path: SFTPPath, flags: SFTPOpenFlags,
-                      attributes: SFTPFileAttributes) async throws -> any SFTPServerFile {
-            try lock.withLock {
-                let exists = files[path] != nil
-                if flags.contains(.exclusive), exists {
-                    throw SFTPServerStatusError(.fileAlreadyExists, "File exists")
-                }
-                if !exists, !flags.contains(.create) { throw SFTPServerStatusError.noSuchFile() }
-                if flags.contains(.truncate) || !exists { files[path] = [] }
-            }
-            return MemoryFile(path: path, fs: self)
-        }
-
-        func openDirectory(_ path: SFTPPath) async throws -> any SFTPServerDirectory {
-            let prefix = path.bytes.last == UInt8(ascii: "/") ? path.bytes : path.bytes + [UInt8(ascii: "/")]
-            let entries: [SFTPDirectoryEntry] = lock.withLock {
-                files.compactMap { file, bytes in
-                    guard file.bytes.starts(with: prefix) else { return nil }
-                    let name = Array(file.bytes.dropFirst(prefix.count))
-                    guard !name.isEmpty, !name.contains(UInt8(ascii: "/")) else { return nil }
-                    return SFTPDirectoryEntry(name: SFTPPath(bytes: name), longname: "",
-                                              attributes: SFTPFileAttributes(size: UInt64(bytes.count),
-                                                                             permissions: 0o100644))
-                }
-            }
-            return MemoryDirectory(entries: entries)
-        }
-
-        func removeFile(_ path: SFTPPath) async throws {
-            try lock.withLock {
-                guard files.removeValue(forKey: path) != nil else { throw SFTPServerStatusError.noSuchFile() }
-            }
-        }
-
-        func createDirectory(_ path: SFTPPath, attributes: SFTPFileAttributes) async throws {
-            _ = lock.withLock { directories.insert(path) }
-        }
-
-        func removeDirectory(_ path: SFTPPath) async throws {
-            _ = lock.withLock { directories.remove(path) }
-        }
-
-        func rename(_ oldPath: SFTPPath, to newPath: SFTPPath, replacingExisting: Bool) async throws {
-            try lock.withLock {
-                guard let bytes = files[oldPath] else { throw SFTPServerStatusError.noSuchFile() }
-                if files[newPath] != nil, !replacingExisting { throw SFTPServerStatusError.failure("File exists") }
-                files[oldPath] = nil
-                files[newPath] = bytes
-            }
-        }
-    }
-
-    private struct MemoryFile: SFTPServerFile {
-        let path: SFTPPath
-        let fs: MemoryFileSystem
-
-        func read(at offset: UInt64, length: Int) async throws -> ByteBuffer? {
-            let bytes = fs.read(path, at: Int(offset), length: length)
-            return bytes.isEmpty ? nil : ByteBuffer(bytes: bytes)
-        }
-
-        func write(_ data: ByteBuffer, at offset: UInt64) async throws {
-            fs.write(path, at: Int(offset), bytes: Array(data.readableBytesView))
-        }
-
-        func attributes() async throws -> SFTPFileAttributes {
-            SFTPFileAttributes(size: UInt64(fs.size(path) ?? 0))
-        }
-
-        func close() async throws {}
-    }
-
-    private final class MemoryDirectory: SFTPServerDirectory, @unchecked Sendable {
-        private let lock = NSLock()
-        private var pending: [SFTPDirectoryEntry]?
-
-        init(entries: [SFTPDirectoryEntry]) { pending = entries }
-
-        func nextBatch() async throws -> [SFTPDirectoryEntry]? {
-            lock.withLock {
-                defer { pending = nil }
-                return pending
-            }
-        }
-    }
-
     // MARK: - 夹具
 
     private var server: SSHTestServer!
-    private var fs: MemoryFileSystem!
+    private var fs: SFTPMemoryFileSystem!
     private var session: SFTPSession!
 
     override func setUp() async throws {
         try await super.setUp()
-        fs = MemoryFileSystem()
+        fs = SFTPMemoryFileSystem()
         server = try await Self.startServer(fs: fs)
         session = try await SFTPSession(connected: try await connect(port: server.port))
     }
 
     /// 谁来都放行的服务端（只活在本用例里，端口由内核分配）。`maximumPacketSize` 决定它通告的通道窗口（× 64）。
-    private static func startServer(fs: MemoryFileSystem,
+    private static func startServer(fs: SFTPMemoryFileSystem,
                                     maximumPacketSize: Int = 1 << 17) async throws -> SSHTestServer {
         var configuration = SSHTestServer.Configuration(
             authentication: .acceptAnyone, maximumPacketSize: maximumPacketSize)
@@ -570,26 +417,107 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
         XCTAssertEqual(fs.contents("/home/test/taken.bin"), [1, 2, 3], "既有文件不能被截断")
     }
 
-    /// 服务器上的文件名不是合法 UTF-8：界面显示替换过的名字，拿这个名字回去操作（读、改名、删除）时
-    /// 换回原样字节，打到的是那个文件本身。
-    func testNonUTF8NamesRoundTripThroughListedEntries() async throws {
-        let rawName: [UInt8] = Array("报告-".utf8) + [0xB1, 0xA8, 0xB8, 0xE6] + Array(".txt".utf8)   // GBK 残片
-        let rawPath = SFTPPath(bytes: Array("/home/test/".utf8) + rawName)
-        XCTAssertFalse(rawPath.isLosslessUTF8)
-        fs.put(rawPath, Array("hello".utf8))
+    // MARK: - 不是 UTF-8 的文件名（`RemoteName` 的无损写法）
 
-        let entries = try await session.list(path: "/home/test")
-        let entry = try XCTUnwrap(entries.first { $0.name.hasPrefix("报告-") })
-        XCTAssertTrue(entry.name.contains("\u{FFFD}"), "显示用的名字里非法字节被替换：\(entry.name)")
-        let displayPath = RemotePath.join("/home/test", entry.name)
+    /// GBK 编码的「测试」「报告」「附件」：按 UTF-8 有损解码全都成了 `����.txt`。
+    private static let gbkNames: [(label: String, bytes: [UInt8])] = [
+        ("测试", [0xB2, 0xE2, 0xCA, 0xD4] + Array(".txt".utf8)),
+        ("报告", [0xB1, 0xA8, 0xB8, 0xE6] + Array(".txt".utf8)),
+        ("附件", [0xB8, 0xBD, 0xBC, 0xFE] + Array(".txt".utf8)),
+    ]
 
-        let downloaded = try await session.download(remotePath: displayPath)
-        XCTAssertEqual(downloaded, Data("hello".utf8))
-        let size = try await session.stat(displayPath).size
-        XCTAssertEqual(size, 5)
+    private func path(_ directory: String, _ raw: [UInt8]) -> SFTPPath {
+        SFTPPath(bytes: Array(directory.utf8) + [UInt8(ascii: "/")] + raw)
+    }
 
-        try await session.rename(displayPath, to: "/home/test/renamed.txt")
-        XCTAssertFalse(fs.exists(rawPath))
-        XCTAssertEqual(fs.contents("/home/test/renamed.txt"), Array("hello".utf8))
+    /// 列出来的名字（显示用的那个）→ 它对应的服务器路径（显示用的写法）。
+    private func listed(_ directory: String) async throws -> [String: String] {
+        let entries = try await session.list(path: directory)
+        XCTAssertEqual(Set(entries.map(\.id)).count, entries.count, "列表的标识不能重复")
+        return Dictionary(uniqueKeysWithValues: entries.map { ($0.name, RemotePath.join(directory, $0.name)) })
+    }
+
+    /// 几个有损解码后一模一样的名字：各显示各的；读、删、改名、覆盖上传都打到对的那个文件上。
+    func testCollidingNonUTF8NamesEachResolveToTheirOwnFile() async throws {
+        for (label, raw) in Self.gbkNames {
+            fs.put(path("/home/test", raw), Array(label.utf8))
+        }
+        let names = try await listed("/home/test")
+        XCTAssertEqual(names.count, 3)
+        for (label, raw) in Self.gbkNames {
+            let display = RemoteName.display(raw)
+            let remote = try XCTUnwrap(names[display], "\(label) 应列成 \(display)")
+            let downloaded = try await session.download(remotePath: remote)
+            XCTAssertEqual(downloaded, Data(label.utf8), "\(label) 读到了别的文件")
+        }
+
+        // 删掉「报告」：只少它一个，重新列出来另外两个照旧。
+        let report = RemotePath.join("/home/test", RemoteName.display(Self.gbkNames[1].bytes))
+        try await session.removeFile(report)
+        XCTAssertNil(fs.contents(path("/home/test", Self.gbkNames[1].bytes)))
+        XCTAssertNotNil(fs.contents(path("/home/test", Self.gbkNames[0].bytes)))
+        XCTAssertNotNil(fs.contents(path("/home/test", Self.gbkNames[2].bytes)))
+        let afterDelete = try await listed("/home/test")
+        XCTAssertEqual(Set(afterDelete.keys), [RemoteName.display(Self.gbkNames[0].bytes),
+                                               RemoteName.display(Self.gbkNames[2].bytes)])
+
+        // 覆盖上传「附件」：只有它变了。
+        let attachment = RemotePath.join("/home/test", RemoteName.display(Self.gbkNames[2].bytes))
+        try await session.upload(data: Data("new".utf8), toRemotePath: attachment)
+        XCTAssertEqual(fs.contents(path("/home/test", Self.gbkNames[2].bytes)), Array("new".utf8))
+        XCTAssertEqual(fs.contents(path("/home/test", Self.gbkNames[0].bytes)), Array("测试".utf8))
+
+        // 「测试」改名成一个正常的名字：原样字节的那个文件被改了名，重新列出来对得上。
+        let test = RemotePath.join("/home/test", RemoteName.display(Self.gbkNames[0].bytes))
+        try await session.rename(test, to: "/home/test/renamed.txt")
+        XCTAssertNil(fs.contents(path("/home/test", Self.gbkNames[0].bytes)))
+        XCTAssertEqual(fs.contents("/home/test/renamed.txt"), Array("测试".utf8))
+        let afterRename = try await listed("/home/test")
+        XCTAssertEqual(Set(afterRename.keys), ["renamed.txt", RemoteName.display(Self.gbkNames[2].bytes)])
+    }
+
+    /// 不是 UTF-8 的目录套着不是 UTF-8 的文件：一层层进得去，读得到。
+    func testNestedNonUTF8DirectoriesResolve() async throws {
+        let outer = path("/home/test", [0xC4, 0xBF, 0xC2, 0xBC])                 // GBK「目录」
+        let inner = SFTPPath(bytes: outer.bytes + [UInt8(ascii: "/"), 0xD7, 0xD3])  // GBK「子」
+        fs.makeDirectory(outer)
+        fs.makeDirectory(inner)
+        fs.put(SFTPPath(bytes: inner.bytes + [UInt8(ascii: "/")] + Self.gbkNames[0].bytes), Array("deep".utf8))
+
+        let top = try await session.list(path: "/home/test")
+        let outerName = try XCTUnwrap(top.first { $0.isDirectory }?.name)
+        XCTAssertEqual(outerName, RemoteName.display(outer.bytes.suffix(4)))
+        let level1 = RemotePath.join("/home/test", outerName)
+        let level1Entries = try await session.list(path: level1)
+        let innerName = try XCTUnwrap(level1Entries.first { $0.isDirectory }?.name)
+        let level2 = RemotePath.join(level1, innerName)
+        let level2Entries = try await session.list(path: level2)
+        let fileName = try XCTUnwrap(level2Entries.first?.name)
+        let downloaded = try await session.download(remotePath: RemotePath.join(level2, fileName))
+        XCTAssertEqual(downloaded, Data("deep".utf8))
+    }
+
+    /// 名字里真有 U+FFFD（合法 UTF-8）和一个非法字节的名字放在一起：两个都分得清。
+    func testRealReplacementCharacterNameIsDistinctFromInvalidBytes() async throws {
+        let literal = Array("a\u{FFFD}.txt".utf8)
+        let invalid: [UInt8] = [UInt8(ascii: "a"), 0xFF] + Array(".txt".utf8)
+        fs.put(path("/home/test", literal), Array("literal".utf8))
+        fs.put(path("/home/test", invalid), Array("invalid".utf8))
+        let names = try await listed("/home/test")
+        XCTAssertEqual(names.count, 2)
+        XCTAssertNotNil(names["a\u{FFFD}.txt"], "合法的名字原样显示")
+        let literalData = try await session.download(remotePath: "/home/test/a\u{FFFD}.txt")
+        XCTAssertEqual(literalData, Data("literal".utf8))
+        let invalidData = try await session.download(remotePath: try XCTUnwrap(names[RemoteName.display(invalid)]))
+        XCTAssertEqual(invalidData, Data("invalid".utf8))
+    }
+
+    /// 末尾带斜杠的目录照样列得出、拼得回去（转义不碰斜杠）。
+    func testTrailingSlashDirectoryListsAndResolves() async throws {
+        fs.put(path("/home/test", Self.gbkNames[0].bytes), [1])
+        let entries = try await session.list(path: "/home/test/")
+        let name = try XCTUnwrap(entries.first?.name)
+        let size = try await session.stat(RemotePath.join(RemotePath.normalized("/home/test/"), name)).size
+        XCTAssertEqual(size, 1)
     }
 }

@@ -36,7 +36,7 @@ nonisolated enum RemoteFileSearch {
     /// find <root> -maxdepth N \( -type f -o -type d \) -iname '*<pat>*' -printf '%y\t%p\n' 2>/dev/null | head -n L
     static func buildFindCommand(root: String, pattern: String,
                                  maxDepth: Int = 8, limit: Int = 200) -> String {
-        let rootQ = shSingleQuote(root)
+        let rootQ = RemotePath.shellQuotePath(root)
         let pat = pattern.isEmpty ? "*" : "*\(pattern)*"
         let patQ = shSingleQuote(pat)
         return "find \(rootQ) -maxdepth \(maxDepth) \\( -type f -o -type d \\) "

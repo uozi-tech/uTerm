@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import USSHTestServer
 @testable import uTerm
 @testable import USSHKit
 
@@ -609,6 +610,45 @@ final class ControlSFTPHandlerTests: XCTestCase {
         ]))
         let response = await handler.handle(request(.sftpLs, path: "/root"))
         XCTAssertEqual(response.code, ControlErrorCode.permission_denied.rawValue)
+    }
+
+    // MARK: - 不是 UTF-8 的文件名（命令行经真实 SFTP 会话）
+
+    /// 命令行的 `ls` 回的是无损写法；把它原样传回 `cat` / `rm`，操作的是那一个文件——几个 GBK 名字有损解码后
+    /// 一模一样也不会弄混。用真的 `SFTPSession` 对着进程内测试服务端（内存文件表，能放非 UTF-8 的名字）。
+    func testCLIRoundTripsNonUTF8NamesThroughARealSession() async throws {
+        let fs = SFTPMemoryFileSystem()
+        let first: [UInt8] = [0xB2, 0xE2, 0xCA, 0xD4] + Array(".txt".utf8)
+        let second: [UInt8] = [0xB1, 0xA8, 0xB8, 0xE6] + Array(".txt".utf8)
+        fs.put(SFTPPath(bytes: Array("/home/test/".utf8) + first), Array("first".utf8))
+        fs.put(SFTPPath(bytes: Array("/home/test/".utf8) + second), Array("second".utf8))
+        var configuration = SSHTestServer.Configuration(authentication: .acceptAnyone)
+        configuration.serveSFTP(fileSystem: fs)
+        let server = try await SSHTestServer.start(configuration)
+        let verifier = HostKeyVerifier(modelContainer: container)
+        let connected = try await SSHClientFactory.connect(
+            profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: server.port, jumpHost: nil),
+            auth: .password(username: "tester", password: "unused"), jumpHostAuth: nil,
+            hostKeyVerifier: verifier, hostKeyApprover: { _ in true })
+        let session = try await SFTPSession(connected: connected, pacesUploads: false)
+        let realHandler = ControlHandler(
+            settings: settings, modelContainer: container, forwardingCoordinator: ForwardingCoordinator(),
+            pool: FakePool(session: session), registry: TerminalSessionRegistry())
+        defer { Task { await session.close(); await server.stop() } }
+
+        let ls = await realHandler.handle(request(.sftpLs, path: "/home/test"))
+        XCTAssertTrue(ls.ok, ls.message)
+        let names = try XCTUnwrap(ls.entries?.map(\.name))
+        XCTAssertEqual(Set(names), [RemoteName.display(first), RemoteName.display(second)])
+
+        let cat = await realHandler.handle(request(.sftpCat, path: "/home/test/" + RemoteName.display(second)))
+        XCTAssertTrue(cat.ok, cat.message)
+        XCTAssertEqual(cat.file?.text, "second")
+
+        let rm = await realHandler.handle(request(.sftpRm, path: "/home/test/" + RemoteName.display(first)))
+        XCTAssertTrue(rm.ok, rm.message)
+        XCTAssertNil(fs.contents(SFTPPath(bytes: Array("/home/test/".utf8) + first)))
+        XCTAssertEqual(fs.contents(SFTPPath(bytes: Array("/home/test/".utf8) + second)), Array("second".utf8))
     }
 
     // MARK: - 服务端状态（`SFTPError.status`）

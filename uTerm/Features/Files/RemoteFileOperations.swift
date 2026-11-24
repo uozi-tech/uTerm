@@ -182,7 +182,7 @@ nonisolated enum RemoteFileOperations {
 
     /// `chmod -R <八进制> '<path>'`。
     static func chmodRecursiveCommand(path: String, mode: UInt32) -> String {
-        "chmod -R \(String(mode & 0o777, radix: 8)) \(RemotePath.shellQuote(path))"
+        "chmod -R \(String(mode & 0o777, radix: 8)) \(RemotePath.shellQuotePath(path))"
     }
 
     // MARK: - 重命名
@@ -294,7 +294,7 @@ nonisolated enum RemoteFileOperations {
 
     /// GNU `stat -c` 优先，失败回退 BSD `stat -f`；输出每行 `uid\tgid\tuser\tgroup`。
     static func ownerStatCommand(paths: [String]) -> String {
-        let quotedPaths = paths.map(RemotePath.shellQuote).joined(separator: " ")
+        let quotedPaths = paths.map(RemotePath.shellQuotePath).joined(separator: " ")
         let gnuFormat = RemotePath.shellQuote("%u\t%g\t%U\t%G")
         let bsdFormat = RemotePath.shellQuote("%u\t%g\t%Su\t%Sg")
         return "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || " +

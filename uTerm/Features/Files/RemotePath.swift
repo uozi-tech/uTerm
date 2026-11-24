@@ -47,4 +47,27 @@ nonisolated enum RemotePath {
     static func shellQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
+
+    /// 远程**路径**交给 shell：同 `shellQuote`，但路径里有不是 UTF-8 的名字（`RemoteName` 的转义）时，
+    /// 还原成服务器上的原样字节——用 `printf` 的八进制转义造出来（`"$(printf '\262\342…')"`，POSIX sh 都认），
+    /// 否则 `chmod -R`、`stat`、`find` 拿到的是转义后的字符串，找不到那个文件。
+    static func shellQuotePath(_ path: String) -> String {
+        let bytes = RemoteName.bytes(path)
+        guard bytes != Array(path.utf8) else { return shellQuote(path) }
+        var format = ""
+        for byte in bytes {
+            switch byte {
+            case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                 UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "/"), UInt8(ascii: "."),
+                 UInt8(ascii: "_"):
+                format.append(Character(Unicode.Scalar(byte)))
+            default:
+                // 其余一律八进制：`%`、`\`、`'`、`-`（开头的 `-` 会被当成选项）、空白与所有非 ASCII 字节
+                // 都不会被 printf / shell 另作解释。
+                let octal = String(byte, radix: 8)
+                format += "\\" + String(repeating: "0", count: 3 - octal.count) + octal
+            }
+        }
+        return "\"$(printf '" + format + "')\""
+    }
 }
