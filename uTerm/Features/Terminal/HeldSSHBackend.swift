@@ -116,7 +116,7 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             switch failure.kind {
             case .jumpHost:
                 throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message,
-                                                                      cause: failure.jumpHostCause ?? .unreachable)
+                                                                      cause: failure.jumpHostCause)
             case .connect: throw SSHConnection.SSHConnectionError.connectFailed(failure.message)
             }
         case .disconnected:

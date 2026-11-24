@@ -106,7 +106,13 @@ final class SSHTransportFailureTests: XCTestCase {
         let decoded = try JSONDecoder().decode(SSHBridgeFailure.self, from: JSONEncoder().encode(failure))
         XCTAssertEqual(decoded.jumpHostCause, .hostKey)
         let old = try JSONDecoder().decode(SSHBridgeFailure.self, from: Data(#"{"kind":"jumpHost","message":"m"}"#.utf8))
-        XCTAssertNil(old.jumpHostCause)
+        XCTAssertEqual(old.jumpHostCause, .unreachable)
+        // 更新的辅助进程报了一个这版 App 还不认识的类别：整条失败照样解得开，按网络问题算。
+        let newer = try JSONDecoder().decode(SSHBridgeFailure.self, from: Data(
+            #"{"kind":"jumpHost","message":"m","jumpHostCause":"quantumEntanglement","localNetworkUnreachable":true}"#.utf8))
+        XCTAssertEqual(newer.jumpHostCause, .unreachable)
+        XCTAssertEqual(newer.message, "m")
+        XCTAssertEqual(newer.localNetworkUnreachable, true)
     }
 
     /// 认证 / 主机密钥 / 握手失败时服务器在应答：不是传输层断了。

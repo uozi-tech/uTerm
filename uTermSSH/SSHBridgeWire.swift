@@ -83,8 +83,26 @@ nonisolated struct SSHBridgeFailure: Codable, Sendable, LocalizedError {
     /// 重试完仍是 EHOSTUNREACH：多半是这个进程的局域网权限被拒了（或用户一直没回答权限框）。
     /// App 据此退回进程内连接——App 自己的权限通常早就有了。可选字段，新旧两端互相解码都不受影响。
     var localNetworkUnreachable: Bool? = nil
-    /// `kind == .jumpHost` 时是哪一类问题（见 `JumpHostFailureCause`）。可选字段：旧的辅助进程不带，按网络问题算。
-    var jumpHostCause: JumpHostFailureCause? = nil
+    /// `kind == .jumpHost` 时是哪一类问题，线上是 `JumpHostFailureCause` 的 rawValue。按**字符串**收：以后加了新的
+    /// 类别，还在跑的新辅助进程发给旧 App 的值它不认识，整条失败也照样解得开（不认识的按网络问题算）。
+    /// 旧的辅助进程不带这个字段，同样按网络问题算。
+    var jumpHostCauseRaw: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case kind, message, localNetworkUnreachable
+        case jumpHostCauseRaw = "jumpHostCause"
+    }
+
+    init(kind: Kind, message: String, localNetworkUnreachable: Bool? = nil, jumpHostCause: JumpHostFailureCause? = nil) {
+        self.kind = kind
+        self.message = message
+        self.localNetworkUnreachable = localNetworkUnreachable
+        self.jumpHostCauseRaw = jumpHostCause?.rawValue
+    }
+
+    var jumpHostCause: JumpHostFailureCause {
+        jumpHostCauseRaw.flatMap(JumpHostFailureCause.init(rawValue:)) ?? .unreachable
+    }
 
     var errorDescription: String? { message }
 }
