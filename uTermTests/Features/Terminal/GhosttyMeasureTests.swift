@@ -1,4 +1,6 @@
 import AppKit
+import SwiftUI
+import SwiftData
 import Carbon.HIToolbox
 import CoreText
 import IOSurface
@@ -227,8 +229,14 @@ final class GhosttyMeasureTests: XCTestCase {
     /// - bare：没有 `TerminalSession`。Ghostty 的 write 回调里直接 `receive`。
     /// - session：真 `TerminalSession` + `EchoBackend`：输入走 `TerminalInputChannel`，回显走输出泵
     ///   （先喂影子终端，再转给 surface）。
+    /// - local-shell / local-window[-zsh] / ssh-held / ssh-inproc / ssh-persistent：真 PTY，见 `runShellEcho`。
     ///
-    /// 出帧：以 IOSurface 设成图层 contents、且光标已经移到下一格为准。
+    /// 出帧：以 IOSurface 设成图层 contents、且光标已经移到下一格为准。每个配置开测前先记 1 秒空闲时交了几帧（应为 0）。
+    ///
+    /// 开关（`TEST_RUNNER_` 前缀）：`M6_CONFIGS`、`M6_SAMPLES`、`M6_ROUNDS`；`M6_GAP_MS` 按键间隔（默认 30，再加 0–30 ms 抖动）；
+    /// `M6_CURSOR=steady|blink` 用 DECSCUSR 钉光标样式；`M6_SSH_PORT` / `M6_SSH_PASSWORD` 测试 sshd。
+    /// 2026-11-24 读数（120 Hz 屏）：引擎补丁 0025 之前开着 vsync 时按键到交帧 p50 约 10 ms，之后约 2 ms（本机 shell 2.4、
+    /// SSH 进程内 2.9、经 `uterm-ssh` 4.8、经主机上的保持进程 4.4），见 `vendor/libghostty-spm/UTERM-PATCHES.md` 的 0025。
     func testM6EchoLatency() async throws {
         let samples = MeasureEnv.int("M6_SAMPLES", 60)
         let rounds = MeasureEnv.int("M6_ROUNDS", 3)
@@ -281,6 +289,9 @@ final class GhosttyMeasureTests: XCTestCase {
     private func runEcho(_ config: String, samples: Int, cell: (w: Int, h: Int)) async throws
         -> (latencies: [Double], parts: [String: [Double]], misses: Int) {
         let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
+        if config.hasPrefix("local-") || config.hasPrefix("ssh-") {
+            return try await runShellEcho(config, samples: samples, cell: cell)
+        }
         guard config.hasPrefix("ghostty") else {
             throw XCTSkip("配置 \(config) 是旧引擎对照，已随旧引擎移除")
         }
@@ -348,6 +359,13 @@ final class GhosttyMeasureTests: XCTestCase {
             if let backend { backend.emit(Data(bytes)) } else { bareIO?.receive(Data(bytes)) }
         }
 
+        do {
+            emit("\u{1B}[2J\u{1B}[H$ ")
+            await sleep(0.5)
+            let before = watch.count
+            await sleep(1.0)
+            log("M6 \(config) idle frames/s=\(watch.count - before)")
+        }
         let letters: [Character] = Array("asdfghjkl")
         var latencies: [Double] = []
         var parts: [String: [Double]] = [:]
@@ -379,8 +397,162 @@ final class GhosttyMeasureTests: XCTestCase {
                 misses += 1
             }
             // 30–60 ms 的随机间隔：不与显示器节拍锁相。
-            await sleep(0.03 + Double((i * 7919) % 31) / 1000)
+            await sleep(Double(MeasureEnv.int("M6_GAP_MS", 30)) / 1000 + Double((i * 7919) % 31) / 1000)
         }
+        return (latencies, parts, misses)
+    }
+
+    /// M6 的 SSH 配置连的测试 sshd（同 `HeldSSHIntegrationTests`：`TEST_RUNNER_M6_SSH_PORT`，默认 2277，root / `s6-test-pass`）。
+    /// - `ssh-held`：Mac 的正式路径（`uterm-holder` + `uterm-ssh`）；
+    /// - `ssh-inproc`：App 进程内直连（Mac 的后备路径）；
+    /// - `ssh-persistent`：iOS 的正式路径（主机上的保持进程，经 exec 通道收发帧）。
+    private func makeMeasureSSHBackend(_ config: String, cols: Int, rows: Int) throws -> any TerminalBackend {
+        let container = try ModelContainer(for: KnownHost.self,
+                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
+        let profile = SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: MeasureEnv.int("M6_SSH_PORT", 2277), jumpHost: nil)
+        let auth = ResolvedAuth.password(username: "root", password: MeasureEnv.string("M6_SSH_PASSWORD", "s6-test-pass"))
+        let verifier = HostKeyVerifier(modelContainer: container)
+        switch config {
+        case "ssh-held":
+            return HeldSSHBackend(
+                client: LocalShellService.shared.client, namespace: "measure-ssh", sessionID: UUID(), columns: cols, rows: rows,
+                target: HeldSSHBackend.Target(profile: profile, resolveAuth: { (auth, nil) },
+                                              hostKeyVerifier: verifier, hostKeyApprover: { _ in true }),
+                attributes: nil)
+        case "ssh-persistent":
+            return PersistentSSHConnection(sessionID: UUID(), resumesSession: false, profile: profile, auth: auth, jumpHostAuth: nil,
+                                           hostKeyVerifier: verifier, hostKeyApprover: { _ in true })
+        default:
+            return SSHConnection(profile: profile, auth: auth, jumpHostAuth: nil, hostKeyVerifier: verifier,
+                                 hostKeyApprover: { _ in true })
+        }
+    }
+
+    /// M6 的真 shell 配置：真 PTY 上跑 `exec cat`（回显由 tty 当场做，不掺 zsh 插件的耗时），或者在 zsh 提示符里打字。
+    /// - `local-shell`：本机 shell（经内嵌 XPC 服务开的 `uterm-holder`），裸容器；
+    /// - `local-window`：同上，挂真窗口内容（`LocalShellTerminalArea`，SwiftUI 包着）；后缀 `-zsh` 在提示符里打字；
+    /// - `ssh-held` / `ssh-inproc` / `ssh-persistent`：见 `makeMeasureSSHBackend`。
+    ///
+    /// 出帧判定同其余配置（光标挪到下一格的那一帧交到图层），位置读影子终端的光标（`cat` 会换行、滚屏）。
+    /// 拆分：按键 → 主线程交出字节（`event→mainWrite`）→ 回显进输出泵（`mainWrite→echoPumped`）→ 出帧（`echoPumped→frame`）。
+    /// 按键直接交给窗口（测试宿主当不了 key，`NSApp.sendEvent` 送不过来；App 里的本地按键监听器都很轻）。
+    private func runShellEcho(_ config: String, samples: Int, cell: (w: Int, h: Int)) async throws
+        -> (latencies: [Double], parts: [String: [Double]], misses: Int) {
+        let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let inWindow = config.hasPrefix("local-window")
+        let atPrompt = config.hasSuffix("-zsh")
+        let session: TerminalSession
+        let window: NSWindow
+        var model: LocalShellWindowModel?
+        if inWindow {
+            let m = LocalShellWindowModel()
+            model = m
+            window = ProbeWindow.make(contentRect: rect, placement: .transparentOnScreen)
+            let host = NSHostingView(rootView: LocalShellTerminalArea(model: m))
+            host.frame = NSRect(origin: .zero, size: rect.size)
+            window.contentView = host
+            let tab = m.addTab()
+            session = try XCTUnwrap(m.groups.tab(tab)?.payload).session
+        } else {
+            session = TerminalSession()
+            let container = GhosttyContainerView(surface: session.ghostty.view)
+            container.isActive = true
+            window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+            container.frame = window.contentView?.bounds ?? rect
+            container.layoutSubtreeIfNeeded()
+        }
+        session.attentionSink = { _ in }
+        let bridge = session.ghostty
+        defer {
+            model?.disposeAll()
+            if model == nil { session.dispose() }
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+        _ = await waitUntil(10) { bridge.isLive && bridge.grid != nil }
+        if !inWindow {
+            let size = session.currentProcessSize
+            let backend: any TerminalBackend
+            if config.hasPrefix("ssh-") {
+                backend = try makeMeasureSSHBackend(config, cols: Int(size.cols), rows: Int(size.rows))
+            } else {
+                backend = LocalShellBackend(client: LocalShellService.shared.client, columns: Int(size.cols), rows: Int(size.rows))
+            }
+            await session.connect(using: backend)
+        }
+        let connected = await waitUntil(30) { session.connectionState == .connected }
+        guard connected else { throw XCTSkip("\(config) 连不上（\(session.connectionState)）") }
+        window.makeFirstResponder(bridge.view)
+        await sleep(1.5)
+        session.writeRemoteInput(Data((atPrompt ? "clear\r" : "clear; exec /bin/cat\r").utf8))
+        await sleep(1.5)
+        // 光标样式（`TEST_RUNNER_M6_CURSOR`）：steady / blink 时用 DECSCUSR 钉死（用户的 zshrc 可能改过），默认不动。
+        switch MeasureEnv.string("M6_CURSOR", "") {
+        case "steady": session.feedOutput(text: "\u{1B}[2 q")
+        case "blink": session.feedOutput(text: "\u{1B}[1 q")
+        default: break
+        }
+        await sleep(0.2)
+
+        let writeTime = TimeBox(), echoTime = TimeBox()
+        bridge.onWriteForTesting = { _ in writeTime.setIfEmpty(CACurrentMediaTime()) }
+        let pump = session.outputPump
+        let previousFed = pump.onFed
+        pump.onFed = { bytes in
+            echoTime.setIfEmpty(CACurrentMediaTime())
+            previousFed?(bytes)
+        }
+        defer { pump.onFed = previousFed }
+
+        _ = await waitUntil(5) { GhosttyFrameWatch.contentLayer(of: bridge.view) != nil }
+        let watch = GhosttyFrameWatch(layer: try XCTUnwrap(GhosttyFrameWatch.contentLayer(of: bridge.view)))
+        let letters: [Character] = Array("asdfghjkl")
+        var latencies: [Double] = []
+        var parts: [String: [Double]] = [:]
+        var misses = 0
+        var i = 0
+        let perLine = 30
+        while latencies.count + misses < samples {
+            if i > 0, i % perLine == 0 {
+                session.writeRemoteInput(Data((atPrompt ? "\u{15}" : "\r").utf8))
+                _ = await waitUntil(2) { atPrompt || session.shadow.cursor.x == 0 }
+                await sleep(0.2)
+            }
+            let ch = letters[i % letters.count]
+            i += 1
+            let cursor = session.shadow.cursor
+            writeTime.reset(); echoTime.reset()
+            let x = (cursor.x + 1) * cell.w, y = cursor.y * cell.h, w = cell.w, h = cell.h
+            watch.arm { surface in SurfacePixels.inkFraction(surface, x: x, y: y, width: w, height: h) > 0.03 }
+            let t0 = CACurrentMediaTime()
+            let code = RealEvents.keyCode(for: ch)
+            window.sendEvent(RealEvents.key(.keyDown, window: window, characters: String(ch), keyCode: code))
+            window.sendEvent(RealEvents.key(.keyUp, window: window, characters: String(ch), keyCode: code))
+            let hit = await waitUntil(1.0) { watch.hitTime != nil }
+            watch.disarm()
+            if hit, let t1 = watch.hitTime {
+                latencies.append((t1 - t0) * 1000)
+                let w = writeTime.value, e = echoTime.value
+                if let w { parts["event→mainWrite", default: []].append((w - t0) * 1000) }
+                if let w, let e { parts["mainWrite→echoPumped", default: []].append((e - w) * 1000) }
+                if let e { parts["echoPumped→frame", default: []].append((t1 - e) * 1000) }
+                if (t1 - t0) > 0.05 { log("M6 \(config) slow sample=\(i) \(String(format: "%.1f", (t1 - t0) * 1000))ms cursor=\(cursor)") }
+            } else {
+                misses += 1
+                var inks = "n/a"
+                if let layer = GhosttyFrameWatch.contentLayer(of: bridge.view), let contents = layer.contents,
+                   CFGetTypeID(contents as CFTypeRef) == IOSurfaceGetTypeID() {
+                    let surface = contents as! IOSurfaceRef
+                    let char = SurfacePixels.inkFraction(surface, x: cursor.x * cell.w, y: y, width: w, height: h)
+                    let next = SurfacePixels.inkFraction(surface, x: x, y: y, width: w, height: h)
+                    inks = String(format: "char=%.3f next=%.3f", char, next)
+                }
+                log("M6 \(config) miss sample=\(i) cursor=\(cursor) now=\(session.shadow.cursor) frames=\(watch.count) \(inks)")
+            }
+            await sleep(Double(MeasureEnv.int("M6_GAP_MS", 30)) / 1000 + Double((i * 7919) % 31) / 1000)
+        }
+        // 先关后端再放：`HolderConnection` 没 close 就释放会在 deinit 里撞 libdispatch 的断言（已知问题）。
+        if model == nil { await session.close() }
         return (latencies, parts, misses)
     }
 
