@@ -161,10 +161,16 @@ final class MGhosttyTerminalView: UITerminalView {
     // MARK: 选中路径 / 网址时的「打开」
 
     /// 手机上没有 ⌘ 点：双击（或长按、三击）选中路径或网址，菜单第一项是「打开」。
+    /// 网址另外可以直接点开（libghostty-spm 2.2.2026112401 起：单指点 http / https 链接就交给 `terminalDidRequestOpenURL`，
+    /// 不弹键盘）；路径仍然只走这里。
     override func touchSelectionMenuItems(for context: TerminalTouchSelectionMenuContext) -> [UIMenuElement] {
-        let items = super.touchSelectionMenuItems(for: context)
-        guard let onOpenLink, let link = TerminalLinkDetector.link(inSelection: context.selectedText),
-              canOpenLink?(link) ?? true else { return items }
+        let upstream = super.touchSelectionMenuItems(for: context)
+        guard let onOpenLink, let link = TerminalLinkDetector.link(inSelection: context.selectedText) else { return upstream }
+        // 引擎认出手指下是链接时，上游自己也放一项「Open Link」（`terminal.openLink`，libghostty-spm 2.2.2026112401 起）。
+        // 选中的就是一条链接时由我们说了算：能开就放我们带名字的那项（判断规则两端共用），不能开（远控镜像里的路径、
+        // 不认的 scheme）就两项都不放——上游那项点了也是交给 `openTerminalLink`，什么都不会发生。
+        let items = upstream.filter { ($0 as? UIAction)?.identifier.rawValue != "terminal.openLink" }
+        guard canOpenLink?(link) ?? true else { return items }
         let title: String
         if case .web = TerminalLink.classify(link) {
             title = String(localized: "打开「\(TerminalLinkDetector.displayName(of: link))」",

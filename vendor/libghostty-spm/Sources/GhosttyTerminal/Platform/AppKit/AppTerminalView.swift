@@ -96,6 +96,13 @@
                 return window != nil && !uTermSurfaceReleased
             }
             core.displayLinkContext = .view(self)
+            // uTerm 本地补丁：上游这里设的是它那份协调器的 `wakeupSkipsDraw`。我们的协调器（补丁第 2、20 条）里同一件事叫
+            // `wakeupDefersSyncDraw`：手指在触控屏上拖着或滑行时，引擎 wakeup 的 tick 不 refresh（欠着，停下后补）。
+            // Mac 上 wakeup 本来就不同步重画（`wakeupDrawsSynchronously`），所以这里多出来的只有「不 refresh」；
+            // 没有触控屏的 Mac 上 `directTouchIsScrolling` 恒为 false，行为不变。
+            core.wakeupDefersSyncDraw = { [weak self] in
+                self?.directTouchIsScrolling ?? false
+            }
             core.scaleFactor = { [weak self] in
                 self?.currentScaleFactor() ?? 2.0
             }
