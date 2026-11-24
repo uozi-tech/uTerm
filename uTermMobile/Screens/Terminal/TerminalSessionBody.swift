@@ -181,7 +181,9 @@ struct TerminalSessionBody: View {
     /// 终端顶上的一条状态：正在重连、已断开（可以点重新连接）、正在连接（没有连接中页盖着时，例如 App 重新打开后恢复的标签）。
     @ViewBuilder private var statusBanner: some View {
         let controller = tab.controller
-        if controller.isReconnecting {
+        if let message = controller.attentionMessage {
+            MTerminalAttentionBanner(message: message) { controller.retryAfterAttention() }
+        } else if controller.isReconnecting {
             MTerminalReconnectBanner(notice: controller.reconnectNotice)
         } else if tab.remote == nil, offersReconnect, controller.canReconnect {
             MTerminalDisconnectedBanner { controller.restart() }

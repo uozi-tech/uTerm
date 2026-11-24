@@ -6717,6 +6717,7 @@
       }
     },
     "%lld 台 · 成功 %lld%@ · %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13248,6 +13249,7 @@
       }
     },
     "SSH 连接已断开" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -28292,6 +28294,7 @@
       }
     },
     "各路径的失败原因见下方。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -39527,6 +39530,7 @@
       }
     },
     "已连接 · 正在打开%@…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -46936,6 +46940,7 @@
       }
     },
     "操作未能完成（系统错误码 %d）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -54054,6 +54059,7 @@
       }
     },
     "本地端口 %lld 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -62480,6 +62486,7 @@
       }
     },
     "监听端口 %lld 已被占用" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -66147,6 +66154,7 @@
       }
     },
     "粘贴剪贴板里的图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -66175,6 +66183,7 @@
       }
     },
     "粘贴剪贴板里的图片或视频" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -66203,6 +66212,7 @@
       }
     },
     "粘贴图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -66231,6 +66241,7 @@
       }
     },
     "粘贴图片或视频" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -77312,6 +77323,7 @@
       }
     },
     "远程控制的 Mac 终端还不能贴视频，只能贴图片" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -78345,6 +78357,7 @@
       }
     },
     "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，%@。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -78452,6 +78465,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "連線時自動啟動"
+          }
+        }
+      }
+    },
+    "连接没能恢复：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't restore the connection: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続を復旧できませんでした：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결을 복구하지 못했습니다: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線未能恢復：%@"
           }
         }
       }
@@ -78947,6 +78988,7 @@
       }
     },
     "退出码 %lld" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
