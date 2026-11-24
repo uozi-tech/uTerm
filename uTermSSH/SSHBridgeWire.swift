@@ -87,17 +87,34 @@ nonisolated struct SSHBridgeFailure: Codable, Sendable, LocalizedError {
     /// 类别，还在跑的新辅助进程发给旧 App 的值它不认识，整条失败也照样解得开（不认识的按网络问题算）。
     /// 旧的辅助进程不带这个字段，同样按网络问题算。
     var jumpHostCauseRaw: String? = nil
+    /// `kind == .connect`（直连目标）时是哪一类问题，同样是 `JumpHostFailureCause` 的 rawValue、按字符串收。
+    /// 有了它 App 才能把服务器拒绝了密码、主机密钥被拒、握手不成认成「重试也不会好」的失败；旧的辅助进程不带，
+    /// 认不出的值按网络问题算。只加不改。
+    var connectCauseRaw: String? = nil
+    /// 与 `connectCauseRaw` 一起：不带「认证失败：」之类前缀的原话（`message` 带前缀，给旧 App 显示用）。
+    /// App 用它组出和进程内建连一模一样的错误文案。
+    var connectDetail: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case kind, message, localNetworkUnreachable
         case jumpHostCauseRaw = "jumpHostCause"
+        case connectCauseRaw = "connectCause"
+        case connectDetail
     }
 
-    init(kind: Kind, message: String, localNetworkUnreachable: Bool? = nil, jumpHostCause: JumpHostFailureCause? = nil) {
+    init(kind: Kind, message: String, localNetworkUnreachable: Bool? = nil, jumpHostCause: JumpHostFailureCause? = nil,
+         connectCause: JumpHostFailureCause? = nil, connectDetail: String? = nil) {
         self.kind = kind
         self.message = message
         self.localNetworkUnreachable = localNetworkUnreachable
         self.jumpHostCauseRaw = jumpHostCause?.rawValue
+        self.connectCauseRaw = connectCause?.rawValue
+        self.connectDetail = connectDetail
+    }
+
+    /// 直连失败的类别；旧辅助进程不带、或带了这版 App 不认识的值时是 nil（按网络问题处理）。
+    var connectCause: JumpHostFailureCause? {
+        connectCauseRaw.flatMap(JumpHostFailureCause.init(rawValue:))
     }
 
     var jumpHostCause: JumpHostFailureCause {

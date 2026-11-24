@@ -117,12 +117,23 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             case .jumpHost:
                 throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message,
                                                                       cause: failure.jumpHostCause)
-            case .connect: throw SSHConnection.SSHConnectionError.connectFailed(failure.message)
+            case .connect: throw Self.connectError(failure)
             }
         case .disconnected:
             // 本端要结束时对面也就退出了，这不算失败。
             guard await !core.finished else { throw SSHConnection.SSHConnectionError.alreadyClosed }
             throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "终端的辅助进程意外退出"))
+        }
+    }
+
+    /// 直连失败 → 和进程内建连（`SSHClientFactory.connect`）同样的错误类型：认证 / 主机密钥 / 握手失败是「重试也不会好」
+    /// 的那类（`SSHTransportFailure.isPermanentConnectFailure`）。旧辅助进程不带类别时照旧是 connectFailed，文案不变。
+    nonisolated static func connectError(_ failure: SSHBridgeFailure) -> SSHConnection.SSHConnectionError {
+        switch (failure.connectCause, failure.connectDetail) {
+        case (.authentication?, let detail?): return .authenticationFailed(detail)
+        case (.hostKey?, let detail?): return .hostKeyRejected(detail)
+        case (.handshake?, let detail?): return .handshakeFailed(detail)
+        default: return .connectFailed(failure.message)
         }
     }
 

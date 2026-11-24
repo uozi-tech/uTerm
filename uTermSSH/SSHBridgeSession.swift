@@ -126,11 +126,13 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
             case .connectFailed(let message):
                 return SSHBridgeFailure(kind: .connect, message: message)
             case .handshakeFailed(let message):
-                return SSHBridgeFailure(kind: .connect, message: message)
+                return SSHBridgeFailure(kind: .connect, message: message, connectCause: .handshake, connectDetail: message)
             case .authenticationFailed(let message):
-                return SSHBridgeFailure(kind: .connect, message: String(localized: "认证失败：\(message)", bundle: SSHHelperBundle.localization))
+                return SSHBridgeFailure(kind: .connect, message: String(localized: "认证失败：\(message)", bundle: SSHHelperBundle.localization),
+                                        connectCause: .authentication, connectDetail: message)
             case .hostKeyRejected(let message):
-                return SSHBridgeFailure(kind: .connect, message: String(localized: "主机密钥被拒绝：\(message)", bundle: SSHHelperBundle.localization))
+                return SSHBridgeFailure(kind: .connect, message: String(localized: "主机密钥被拒绝：\(message)", bundle: SSHHelperBundle.localization),
+                                        connectCause: .hostKey, connectDetail: message)
             default:
                 return SSHBridgeFailure(kind: .connect, message: error.errorDescription ?? FriendlyError.describe(error))
             }

@@ -115,6 +115,46 @@ final class SSHTransportFailureTests: XCTestCase {
         XCTAssertEqual(newer.localNetworkUnreachable, true)
     }
 
+    /// 直连目标经 uterm-ssh 失败：类别经 `connectCause` 交回，App 认得出「重试也不会好」；文案与以前一字不差。
+    func testDirectBridgeFailureCarriesItsCauseBothWaysAcrossVersions() throws {
+        let decoder = JSONDecoder()
+        // 新辅助进程 → 新 App。
+        let fresh = SSHBridgeFailure(kind: .connect, message: "认证失败：服务器拒绝了密码",
+                                     connectCause: .authentication, connectDetail: "服务器拒绝了密码")
+        let decoded = try decoder.decode(SSHBridgeFailure.self, from: JSONEncoder().encode(fresh))
+        let error = HeldSSHBackend.connectError(decoded)
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(error))
+        XCTAssertEqual(error.errorDescription,
+                       SSHConnection.SSHConnectionError.connectFailed("认证失败：服务器拒绝了密码").errorDescription,
+                       "文案和以前（connectFailed 带前缀）一样")
+        for (cause, permanent) in [(JumpHostFailureCause.hostKey, true), (.handshake, true), (.unreachable, false)] {
+            let failure = SSHBridgeFailure(kind: .connect, message: "m", connectCause: cause, connectDetail: "m")
+            XCTAssertEqual(SSHTransportFailure.isPermanentConnectFailure(HeldSSHBackend.connectError(failure)), permanent,
+                           "\(cause)")
+        }
+
+        // 旧辅助进程（不带这两个字段）→ 新 App：照旧 connectFailed、不算永久。
+        let old = try decoder.decode(SSHBridgeFailure.self, from: Data(#"{"kind":"connect","message":"认证失败：x"}"#.utf8))
+        XCTAssertNil(old.connectCause)
+        guard case .connectFailed("认证失败：x") = HeldSSHBackend.connectError(old) else { return XCTFail() }
+
+        // 更新的辅助进程报了这版不认识的类别：照旧 connectFailed。
+        let newer = try decoder.decode(SSHBridgeFailure.self, from: Data(
+            #"{"kind":"connect","message":"m","connectCause":"somethingNew","connectDetail":"d"}"#.utf8))
+        guard case .connectFailed("m") = HeldSSHBackend.connectError(newer) else { return XCTFail() }
+
+        // 新辅助进程 → 旧 App：旧 App 的结构只认这几个字段，多出来的照样解得开。
+        struct OldAppFailure: Decodable {
+            enum Kind: String, Decodable { case jumpHost, connect }
+            var kind: Kind
+            var message: String
+            var localNetworkUnreachable: Bool?
+            var jumpHostCause: String?
+        }
+        let seenByOldApp = try decoder.decode(OldAppFailure.self, from: JSONEncoder().encode(fresh))
+        XCTAssertEqual(seenByOldApp.message, "认证失败：服务器拒绝了密码")
+    }
+
     /// 认证 / 主机密钥 / 握手失败时服务器在应答：不是传输层断了。
     func testPermanentConnectFailuresAreNotTransportFailures() {
         XCTAssertFalse(SSHTransportFailure.isTransportFailure(
