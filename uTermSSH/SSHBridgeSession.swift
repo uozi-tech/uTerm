@@ -56,7 +56,19 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                 let input = startInputPump(outbound)
                 installSignalHandlers(client: client, input: input)
                 startRelay(client: client, environment: environment)
-                await pumpOutput(inbound)
+                // shell 报了退出、但后台进程还占着伪终端时通道不关：再给输出一点时间就结束这个进程（holder 上报断开）。
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await self.pumpOutput(inbound) }
+                    group.addTask {
+                        if await outbound.exitStatusReported() != nil {
+                            try? await Task.sleep(for: .milliseconds(500))
+                        } else {
+                            while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
+                        }
+                    }
+                    await group.next()
+                    group.cancelAll()
+                }
             }
         } catch {
             // 没走到闭包：开通道失败，App 还在等结果。走到过的话这条发不出去，也不需要。

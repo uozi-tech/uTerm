@@ -271,6 +271,12 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                         group.addTask {
                             await state.waitForClose()
                         }
+                        group.addTask {
+                            // shell 报了退出，但后台进程还占着伪终端（`sleep 1000 &` 再 `exit`）时通道不关、
+                            // 输出也不结束：再给输出 `remoteExitGrace` 把最后几行送完，然后收尾。
+                            // 通道直接关了（正常退出）就不用它：输出泵自己结束。
+                            await Self.waitAfterRemoteExit(outbound)
+                        }
                         // 任一子任务结束（shell 退出 或 本地 close）即返回。
                         await group.next()
                         // 等关闭信号的那个子任务不响应取消：shell 自己退出时要叫醒它，任务组才收得了尾、
@@ -293,6 +299,18 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
             // 触碰 actor 状态的收尾（exitStream 产元素、结束流、置 isClosed）
             // 仍走 `self?.` —— 若 `self` 已不在，deinit 已结束流。
             await self?.handleSessionEnded()
+        }
+    }
+
+    /// shell 报告退出之后最多再等这么久的输出（见 `waitAfterRemoteExit`）。
+    nonisolated static let remoteExitGrace = Duration.milliseconds(500)
+
+    /// 远端报告退出后过 `remoteExitGrace` 返回；没报告就通道关了的话一直等到被取消（让输出泵先收完）。
+    nonisolated static func waitAfterRemoteExit(_ shell: SSHShellHandle) async {
+        if await shell.exitStatusReported() != nil {
+            try? await Task.sleep(for: remoteExitGrace)
+        } else {
+            while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
         }
     }
 

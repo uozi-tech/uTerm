@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 import NIOCore
+import NIOSSH
 import USSHTestServer
 @testable import uTerm
 @testable import USSHKit
@@ -125,6 +126,43 @@ final class SSHConnectionTestServerTests: XCTestCase {
         await connection.write(Data([0x04]))
         let ended = await waitForExit(connection)
         XCTAssertTrue(ended)
+        await connection.close()
+    }
+
+    /// shell 退出了但后台进程还占着伪终端（`sleep 1000 &` 再 `exit`）：sshd 先报退出状态、通道不关。
+    /// 会话在退出状态到了之后很快结束（不等那个进程），最后的输出照样送到。
+    func testRemoteExitWithABackgroundJobHoldingThePTYEndsSession() async throws {
+        await server.stop()
+        server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone,
+            shell: SSHTestExecHandler { context in
+                for await chunk in context.stdin where chunk.readableBytesView.contains(0x04) {
+                    try await context.write("logout\r\n")
+                    context.channel.triggerUserOutboundEvent(
+                        SSHChannelRequestEvent.ExitStatus(exitStatus: 0), promise: nil)
+                    break
+                }
+                for await _ in context.stdin {}      // 后台进程占着，直到客户端关通道
+                return .noStatus
+            }))
+        let connection = try makeConnection()
+        try await connection.connect()
+        let items = connection.outputItems
+        let output = Task { () -> String in
+            var collected = Data()
+            for await item in items {
+                guard case .bytes(let chunk) = item else { continue }
+                collected.append(chunk)
+            }
+            return String(decoding: collected, as: UTF8.self)
+        }
+        await connection.write(Data([0x04]))
+        let started = ContinuousClock.now
+        let ended = await waitForExit(connection, timeout: .seconds(5))
+        XCTAssertTrue(ended, "退出状态到了之后会话就该结束")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
+        let collected = await output.value
+        XCTAssertTrue(collected.contains("logout"), collected)
         await connection.close()
     }
 
