@@ -210,7 +210,11 @@ actor ForwardingSession {
         let listener = SOCKS5ForwardListener(
             connected: connected,
             listenHost: rule.listenHost, listenPort: rule.listenPort,
-            counter: counter)
+            counter: counter,
+            // 同 -L：开通道超时 / 传输层错误说明转发平面死了，拆掉整条会话重建（控制面的探活可能还通）。
+            onChannelFailure: { [weak self] error in
+                Task { await self?.handleForwardChannelFailure(rule, error: error) }
+            })
         let onStatus = self.onStatus
         let task = Task {
             do {
