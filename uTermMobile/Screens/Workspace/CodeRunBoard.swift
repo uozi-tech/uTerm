@@ -36,7 +36,9 @@ final class CodeRunBoard<Terminal: AnyObject> {
         var endedAt: Date?
         let terminal: Terminal
 
-        var isNewSession: Bool { sessionPath == nil }
+        /// 还没对上记录的新会话。App 重新打开后接回的会话先只有会话 ID（`sessionID`），列表读出来之后再找回记录
+        ///（`resolveRestored`），这期间不算新会话、不去认别的记录。
+        var isNewSession: Bool { sessionPath == nil && sessionID == nil }
         var isRunning: Bool { endedAt == nil }
     }
 
@@ -86,6 +88,33 @@ final class CodeRunBoard<Terminal: AnyObject> {
         runs.append(run)
         focusedID = run.id
         return run
+    }
+
+    /// App 被系统结束后重新打开：把记下来的会话放回来（终端由外面带着原来的会话 id 去接回）。对上了记录的先只有
+    /// 会话 ID（`sessionID`），记录等列表读出来再找回（`resolveRestored`）。
+    @discardableResult
+    func restore(tool: AgentHistoryTool, directory: String, startedAt: Date, sessionID: String?,
+                 showsTerminal: Bool, terminal: Terminal) -> Run {
+        let run = Run(id: UUID(), tool: tool, directory: directory, startedAt: startedAt, sessionID: sessionID,
+                      showsTerminal: showsTerminal || sessionID == nil, terminal: terminal)
+        runs.append(run)
+        return run
+    }
+
+    /// 接回的会话按工具 + 会话 ID 找回记录。`find` 给出列表里那份记录的路径（找不到为 nil，留着下次再找）。
+    /// 已经被别的会话占着的记录不要（不重复）。返回这一轮找回来的。
+    @discardableResult
+    func resolveRestored(_ find: (_ tool: AgentHistoryTool, _ sessionID: String) -> String?) -> [UUID] {
+        var claimed = Set(runs.compactMap(\.sessionPath))
+        var resolved: [UUID] = []
+        for index in runs.indices where runs[index].sessionPath == nil {
+            guard let sessionID = runs[index].sessionID, let path = find(runs[index].tool, sessionID),
+                  !claimed.contains(path) else { continue }
+            runs[index].sessionPath = path
+            claimed.insert(path)
+            resolved.append(runs[index].id)
+        }
+        return resolved
     }
 
     /// 「＋」新会话：总是新起一个（还没有记录可对）。
@@ -167,7 +196,7 @@ final class CodeRunBoard<Terminal: AnyObject> {
     func reconcile(_ candidates: [Candidate]) -> [UUID] {
         var claimed = Set(runs.compactMap(\.sessionPath))
         var matched: [UUID] = []
-        for index in runs.indices where runs[index].sessionPath == nil {
+        for index in runs.indices where runs[index].isNewSession {
             let run = runs[index]
             let pick = candidates
                 .filter { candidate in

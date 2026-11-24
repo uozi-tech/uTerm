@@ -90,10 +90,19 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertTrue(closed, "关标签放掉文件通道")
     }
 
-    func testHistoryTabsAreNotArchived() async throws {
+    /// Code 标签页不当终端标签页记；只有已保存的直连主机的记进归档（`CodeTabArchiveTests`），配对的 Mac 的不记。
+    func testHistoryTabsAreArchivedOnlyForSavedDirectHosts() async throws {
         let ws = MobileWorkspace()
-        ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: MobileClaudeFixture.standard()))
-        XCTAssertTrue(ws.terminalTabs.isEmpty, "标签归档只看终端标签，历史标签重启不恢复")
+        let unsaved = ws.openHistory(MobileFakeClaudeHistory.tab(host: host(), tree: MobileClaudeFixture.standard()))
+        let client = unreachableMac()
+        let mac = ws.openHistory(ClaudeHistoryTab(pairedMac: client))
+        XCTAssertTrue(ws.terminalTabs.isEmpty)
+        let archive = ws.terminalTabArchive(showsWorkspace: true)
+        XCTAssertTrue(archive.tabs.isEmpty, "Code 标签页不当终端标签页记")
+        XCTAssertNil(archive.codeTabs, "没入库的主机、配对的 Mac 都不记（归档只管已保存的直连主机）")
+        XCTAssertFalse(archive.showsWorkspace)
+        unsaved.close()
+        mac.close()
     }
 
     // MARK: - 子代理

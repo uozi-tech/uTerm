@@ -11,8 +11,9 @@ import UIKit
 /// 直连的主机上「继续这个会话」「＋新会话」就在这个标签页里起一个活终端（`runs`，见 `ClaudeHistoryTab+Runs`）；
 /// 配对的 Mac 照旧经接管开终端标签页（接管会把那台 Mac 的终端都镜像成标签页，放进这里会重复）。
 ///
-/// 列表与记录只在内存里：不落盘、不进 iCloud。标签页本身重启不恢复；里面跑着的直连会话按终端标签页记进归档
-/// （`MobileTerminalTabArchive`），App 被系统结束后以普通终端标签页接回。一台主机（一台 Mac）至多一个，再开就带到前台。
+/// 列表与记录只在内存里：不落盘、不进 iCloud。直连主机的 Code 标签页连同里面跑着的会话记进归档
+/// （`MobileTerminalTabArchive`，只记是哪台主机、哪些会话、看着哪一个），App 被系统结束后照原样开回来、会话接回它里面
+/// （`restoreRuns`）；配对的 Mac 的不记（归档只管直连主机）。一台主机（一台 Mac）至多一个，再开就带到前台。
 @MainActor
 @Observable
 final class ClaudeHistoryTab: Identifiable {
@@ -48,6 +49,8 @@ final class ClaudeHistoryTab: Identifiable {
     /// 建 run 连接用的容器与主机密钥裁决（第一次起 run 时由界面交进来，重试沿用）。
     @ObservationIgnored var runContainer: ModelContainer?
     @ObservationIgnored var runRelay: HostKeyChallengeRelay?
+    /// App 重新打开后要还原的「详情看的是哪一个」：列表读出来之后还原（`applyRestoredState`），用户先点了别的就作废。
+    var restoredSelection: CodeRestoredSelection?
 
     init(host: ServerProfile, connection: AgentHistoryConnection, remoteMac: RemoteMacClient? = nil) {
         self.host = host
@@ -105,7 +108,10 @@ final class ClaudeHistoryTab: Identifiable {
     }
 
     func start() {
-        Task { await connection.open() }
+        Task {
+            await connection.open()
+            applyRestoredState()
+        }
     }
 
     func close() {
@@ -1422,4 +1428,12 @@ private struct ClaudeHistoryState: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+/// App 重新打开后 Code 标签页详情要还原的那一个（`ClaudeHistoryTab.restoredSelection`）。
+nonisolated enum CodeRestoredSelection: Equatable, Sendable {
+    /// 一个跑着的会话（`CodeRunBoard.Run.id`）；`showsTranscript`：看的是它的记录。
+    case run(UUID, showsTranscript: Bool)
+    /// 一份只读记录。
+    case record(AgentHistoryPinKey)
 }

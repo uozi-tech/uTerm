@@ -29,7 +29,7 @@ extension ClaudeHistoryTab {
         if let title = runTitles[run.id] { return title }
         if let path = run.sessionPath, let history = connection.history,
            let title = history.metadata[path]?.title { return title }
-        if run.sessionPath == nil { return AgentHistoryText.newSession }
+        if run.isNewSession { return AgentHistoryText.newSession }
         return String(localized: "（无标题）\(String((run.sessionID ?? "").prefix(8)))")
     }
 
@@ -38,6 +38,7 @@ extension ClaudeHistoryTab {
     /// 「继续这个会话」：这份记录已经在跑就回到它的终端，没有就起一个。
     func resumeInPlace(_ file: AgentHistorySessionFile, command: String, directory: String,
                        container: ModelContainer, relay: HostKeyChallengeRelay) {
+        restoredSelection = nil
         let factory = runTerminalFactory
         let host = self.host
         guard let run = runs.resume(sessionPath: file.path, sessionID: file.sessionID, tool: file.tool,
@@ -48,6 +49,7 @@ extension ClaudeHistoryTab {
     /// 「＋」新会话：在这个标签页里起一个终端跑它。还没有记录，列表最顶上先放一行「新会话」占位。
     func startNewInPlace(tool: AgentHistoryTool, command: String, directory: String,
                          container: ModelContainer, relay: HostKeyChallengeRelay) {
+        restoredSelection = nil
         let run = runs.startNew(tool: tool, directory: directory, terminal: runTerminalFactory(host))
         launch(run, command: command, container: container, relay: relay)
         pollNewSessionsIfNeeded()
@@ -109,6 +111,7 @@ extension ClaudeHistoryTab {
     /// 列表里点了一份记录：它在跑就看它的 run（停在它上次看的那一面），否则看它的记录。
     func select(_ file: AgentHistorySessionFile) {
         guard let history = connection.history else { return }
+        restoredSelection = nil
         runs.focus(runs.run(forSession: file.path)?.id)
         history.select(file)
     }
@@ -116,6 +119,7 @@ extension ClaudeHistoryTab {
     /// 点了列表最顶上那一行（列表里没有它的记录）：看它的终端。对上了记录的，记录那边也选上（「记录」切换要用）。
     func focusRun(_ id: UUID) {
         guard let run = runs.run(id: id), let history = connection.history else { return }
+        restoredSelection = nil
         runs.focus(id)
         runs.setShowsTerminal(id, true)
         if let path = run.sessionPath, let file = history.files.first(where: { $0.path == path }) {
@@ -127,12 +131,14 @@ extension ClaudeHistoryTab {
 
     /// 窄屏左上角返回列表。
     func backToList() {
+        restoredSelection = nil
         runs.focus(nil)
         connection.history?.select(nil)
     }
 
     /// 「终端 / 记录」切换。
     func setShowsTerminal(_ id: UUID, _ shows: Bool) {
+        restoredSelection = nil
         runs.focus(id)
         runs.setShowsTerminal(id, shows)
         guard !shows, let path = runs.run(id: id)?.sessionPath, let history = connection.history,
@@ -160,8 +166,13 @@ extension ClaudeHistoryTab {
 
     /// 程序退出了：很快就退出的留着给人看（标成已退出）；否则拿掉、关掉终端，记录重新读到最新、详情回到它。
     func runEnded(_ id: UUID) {
-        guard let term = runs.run(id: id)?.terminal else { return }
+        guard let run = runs.run(id: id) else { return }
+        let term = run.terminal
         runCovers[id] = nil
+        // App 重新打开后接回、列表还没读出来就结束了的：要还原的选中改成它的记录（列表读出来之后选上）。
+        if case .run(id, _)? = restoredSelection {
+            restoredSelection = run.sessionID.map { .record(AgentHistoryPinKey(tool: run.tool, sessionID: $0)) }
+        }
         switch runs.ended(id) {
         case .removed(let path, let wasFocused):
             dispose(id, term)
@@ -231,6 +242,125 @@ extension ClaudeHistoryTab {
             if activity != .idle { return activity }
         }
         return .idle
+    }
+
+    // MARK: App 重新打开后接回
+
+    /// 记进归档的样子（`MobileTerminalTabArchive.codeTabs`）：哪台主机、「＋」的目录、要接回的会话（`included`：
+    /// 还没断开、能接回的那些，键是 run 的 id）、详情看的是哪一个。配对的 Mac、主机已经删了的不记（nil）。
+    func archiveRecord(including included: [CodeRunBoard<TermTab>.Run]) -> CodeTabRecord? {
+        guard remoteMac == nil, !host.isDeleted, host.modelContext != nil else { return nil }
+        var record = CodeTabRecord(id: id, host: host.id, directory: directory)
+        record.runs = included.map { run in
+            CodeRunRecord(session: run.terminal.controller.hostSessionID, tool: run.tool, sessionID: run.sessionID,
+                          directory: run.directory, startedAt: run.startedAt,
+                          showsTranscript: run.showsTerminal ? nil : true)
+        }
+        switch restoredSelection {
+        case .run(let id, _):
+            record.selectedRun = included.first { $0.id == id }?.terminal.controller.hostSessionID
+        case .record(let key):
+            record.selectedRecord = key.stored
+        case nil:
+            if let focused = runs.focused {
+                record.selectedRun = included.first { $0.id == focused.id }?.terminal.controller.hostSessionID
+            } else if let file = connection.history?.selectedFile {
+                record.selectedRecord = AgentHistoryPinKey(file).stored
+            }
+        }
+        return record
+    }
+
+    /// 把归档里的会话放回这个标签页：`terminals` 是带着原来会话 id 的终端（键是 `CodeRunRecord.session`），交给 `start`
+    /// 去连（走普通终端标签页那条接回路径）。认不出工具的、没有终端的不放（外面照普通终端标签页开）。返回放进来的会话 id。
+    ///
+    /// 程序退出照旧靠命令后面接的 `; exit`（会话跟着结束，连接收尾 → `watch`）。但 App 不在时会话已经结束了的，
+    /// 接回时主机上的保持进程会用同一个 id 新开一个 shell（`PersistentSSHConnection` 第一次接入带 `--create`），连接不会断，
+    /// 所以连上之后再问一次前台进程（`checkRestored`）：停在提示符上 = 那个程序已经不在了，照程序退出处理、回到记录。
+    /// 前台还有程序、判断不了（主机上没有 `ps`、超时）都当它还在跑：宁可留着让用户看见，也不能把还在跑的会话关掉。
+    @discardableResult
+    func restoreRuns(_ record: CodeTabRecord, terminals: [UUID: TermTab], start: (TermTab) -> Void) -> [UUID] {
+        var adopted: [UUID] = []
+        var focusID: UUID?
+        var focusShowsTranscript = false
+        for saved in record.runs {
+            guard let tool = saved.agentTool, let term = terminals[saved.session],
+                  runs.run(for: term) == nil else { continue }
+            let run = runs.restore(tool: tool, directory: saved.directory, startedAt: saved.startedAt,
+                                   sessionID: saved.sessionID, showsTerminal: saved.showsTranscript != true,
+                                   terminal: term)
+            start(term)
+            watch(run.id)
+            checkRestored(run.id)
+            adopted.append(saved.session)
+            if saved.session == record.selectedRun {
+                focusID = run.id
+                focusShowsTranscript = saved.showsTranscript == true
+            }
+        }
+        if let focusID {
+            // 先看它的终端（不等列表）；看的是记录的，列表读出来之后切过去。
+            runs.focus(focusID)
+            restoredSelection = .run(focusID, showsTranscript: focusShowsTranscript)
+        } else if let stored = record.selectedRecord, let key = AgentHistoryPinKey(stored: stored) {
+            restoredSelection = .record(key)
+        } else if record.selectedRun != nil, let first = runs.runs.first {
+            // 看着的那个会话没接回来：退到第一个跑着的。
+            runs.focus(first.id)
+            restoredSelection = .run(first.id, showsTranscript: false)
+        }
+        applyRestoredState()
+        return adopted
+    }
+
+    /// 列表读出来之后：接回的会话找回记录，再还原详情看的那一个。那份记录找不到就退到第一个跑着的会话，没有就回到列表。
+    /// 列表还没读出来时什么都不做（`start` 读完之后再来）。
+    func applyRestoredState() {
+        guard let history = connection.history, history.phase == .ready || history.phase == .empty else { return }
+        var byKey: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
+        for file in history.files where byKey[AgentHistoryPinKey(file)] == nil { byKey[AgentHistoryPinKey(file)] = file }
+        runs.resolveRestored { tool, sessionID in byKey[AgentHistoryPinKey(tool: tool, sessionID: sessionID)]?.path }
+        guard let wanted = restoredSelection else { return }
+        restoredSelection = nil
+        switch wanted {
+        case .run(let id, let showsTranscript):
+            guard let run = runs.run(id: id) else { return }
+            if let path = run.sessionPath, let file = history.files.first(where: { $0.path == path }) {
+                history.select(file)
+                runs.setShowsTerminal(id, !showsTranscript)
+            } else {
+                // 记录没找到：只能看终端。
+                runs.setShowsTerminal(id, true)
+            }
+        case .record(let key):
+            if let file = byKey[key] {
+                runs.focus(runs.run(forSession: file.path)?.id)
+                history.select(file)
+            } else if let first = runs.runs.first {
+                focusRun(first.id)
+            }
+        }
+    }
+
+    /// 接回的会话连上之后问一次前台进程（规则见 `restoreRuns`）。一直没连上（`waitLimit` 内）就不再问，当它在跑。
+    private func checkRestored(_ id: UUID, waitLimit: Duration = .seconds(120)) {
+        guard let controller = runs.run(id: id)?.terminal.controller else { return }
+        Task { [weak self, weak controller] in
+            let deadline = ContinuousClock.now + waitLimit
+            while ContinuousClock.now < deadline {
+                guard let self, let controller, self.runs.run(id: id)?.isRunning == true else { return }
+                switch controller.state {
+                case .connected:
+                    let activity = await controller.foregroundActivity()
+                    if activity == .idle, self.runs.run(id: id)?.isRunning == true { self.runEnded(id) }
+                    return
+                case .disconnected:
+                    return   // `watch` 管。
+                default:
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+            }
+        }
     }
 
     // MARK: 新会话对上记录

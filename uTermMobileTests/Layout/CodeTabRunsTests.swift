@@ -364,7 +364,7 @@ final class CodeTabRunsTests: XCTestCase {
 
         let archive = ws.terminalTabArchive(showsWorkspace: true)
         XCTAssertEqual(archive.tabs.map(\.sessionID), [shell.controller.hostSessionID, run.terminal.controller.hostSessionID],
-                       "按终端标签页记下会话 id，重新打开后以普通终端标签页接回")
+                       "仍按终端标签页记下会话 id（旧版读得懂），新版另记它属于哪个 Code 标签页（`CodeTabArchiveTests`）")
         XCTAssertEqual(archive.activeIndex, 1, "前台是 Code 标签页里看着的那个会话")
 
         ws.activate(shell.id)
