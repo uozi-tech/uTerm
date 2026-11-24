@@ -109,6 +109,17 @@ actor SharedConnectionPool<Key: Hashable & Sendable, Connection: PooledConnectio
         await entry.connection.closeTransport()
     }
 
+    /// 判死这份租约所在的连接（看门狗 / 探活判定传输已死）：**先**摘出表、通知上面的全部租约，**再**断开传输。
+    ///
+    /// 顺序要紧：断开不是立刻完成的（经跳板机的内层连接最多等 5 秒），这期间连接的 `isAlive` 仍是真；
+    /// 先断后摘的话，这段时间里新开的标签会借到这条正在关的连接，开通道失败报 `.localClose`（不算网络断开，
+    /// 不会自动重连），用户看到的是一个错误而不是重连。
+    func invalidate(_ lease: PooledLease) async {
+        guard let entry = entries[lease.connectionID] else { return }
+        handleClosed(lease.connectionID)
+        await entry.connection.closeTransport()
+    }
+
     /// 订阅这份租约所在连接的断开。连接已经断了就立即回调。
     ///
     /// 不会因为归还而回调：`release` 会先摘掉这份租约的订阅。

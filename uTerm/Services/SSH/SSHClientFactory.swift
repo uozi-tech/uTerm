@@ -78,9 +78,14 @@ nonisolated extension ConnectedClient: PooledConnection {
     }
 
     /// 不管有几个共享者，直接断开底层传输。看门狗判死时用：连接死了对谁都是死的，
-    /// 断开后池子会通知这条连接上的所有使用方，各自走重连。
+    /// 池子通知这条连接上的所有使用方，各自走重连。共享连接先从池里摘掉再断开（`SharedConnectionPool.invalidate`），
+    /// 断开还没完成的那几秒里新来的借用者拿到的是新连接，不是这条正在关的。
     func closeTransport() async {
-        await shared.close()
+        if let lease {
+            await SharedSSHConnections.pool.invalidate(lease)
+        } else {
+            await shared.close()
+        }
     }
 }
 

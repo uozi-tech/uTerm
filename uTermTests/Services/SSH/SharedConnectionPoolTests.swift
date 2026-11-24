@@ -248,6 +248,71 @@ final class SharedConnectionPoolTests: XCTestCase {
 
 private struct FakeConnectError: Error {}
 
+extension SharedConnectionPoolTests {
+    /// 判死一条共享连接：断开要好几秒才完成（这期间 `isAlive` 还是真），但从判死那一刻起就不能再借给别人，
+    /// 上面的租约立刻收到断开通知。
+    func testInvalidatedConnectionIsNeverHandedOutWhileItCloses() async throws {
+        let pool = SharedConnectionPool<String, SlowClosingConnection>(maxLeasesPerConnection: 6)
+        let first = try await pool.acquire("host") { SlowClosingConnection() }
+        let notified = Flag()
+        await pool.onClosed(first.lease) { notified.raise() }
+
+        let closing = Task { await pool.invalidate(first.lease) }
+        try await waitUntil { first.connection.closeStarted }
+        XCTAssertTrue(first.connection.isAlive, "前提：断开还没完成")
+        XCTAssertTrue(notified.isRaised, "判死时就通知租约，不等断开完成")
+
+        let next = try await pool.acquire("host") { SlowClosingConnection() }
+        XCTAssertEqual(next.origin, .created, "正在关的连接不能再借出去")
+        XCTAssertFalse(next.connection === first.connection)
+        first.connection.finishClose()
+        await closing.value
+    }
+}
+
+/// 断开要等 `finishClose()` 才完成的假连接（模拟经跳板机的内层连接最多等 5 秒）。
+private final class SlowClosingConnection: PooledConnection, @unchecked Sendable {
+    private let lock = NSLock()
+    private var alive = true
+    private var started = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var finished = false
+
+    var isAlive: Bool { lock.withLock { alive } }
+    var closeStarted: Bool { lock.withLock { started } }
+
+    func onTransportClosed(_ handler: @escaping @Sendable () -> Void) {}
+
+    func closeTransport() async {
+        await withCheckedContinuation { continuation in
+            let done = lock.withLock { () -> Bool in
+                started = true
+                if finished { return true }
+                waiter = continuation
+                return false
+            }
+            if done { continuation.resume() }
+        }
+        lock.withLock { alive = false }
+    }
+
+    func finishClose() {
+        let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            finished = true
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume()
+    }
+}
+
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised = false
+    var isRaised: Bool { lock.withLock { raised } }
+    func raise() { lock.withLock { raised = true } }
+}
+
 private final class FakeConnection: PooledConnection, @unchecked Sendable {
     private let lock = NSLock()
     private var alive = true
