@@ -299,9 +299,8 @@ nonisolated enum RemoteFileOperations {
     /// GNU `stat -c` 优先，失败回退 BSD `stat -f`；输出每行 `uid\tgid\tuser\tgroup`。
     static func ownerStatCommand(paths: [String], escapedNames: Bool) -> String {
         let quotedPaths = paths.indices.map { "\"$a\($0)\"" }.joined(separator: " ")
-        // 格式串里的制表符写成 printf 能认的 `\t` 交给 sh，命令行上不出现真的制表符。
-        let gnuFormat = "\"$(printf '%%u\\t%%g\\t%%U\\t%%G')\""
-        let bsdFormat = "\"$(printf '%%u\\t%%g\\t%%Su\\t%%Sg')\""
+        let gnuFormat = RemotePath.shellQuote("%u\t%g\t%U\t%G")
+        let bsdFormat = RemotePath.shellQuote("%u\t%g\t%Su\t%Sg")
         return RemotePath.shScript(
             "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null",
             arguments: paths, escapedNames: escapedNames)

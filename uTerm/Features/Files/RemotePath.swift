@@ -59,7 +59,19 @@ nonisolated enum RemotePath {
     ///
     /// `escapedNames`：参数是不是 `RemoteName.display` 写法（`SFTPProviding.escapesRawNames`）。配对过的 Mac 一类
     /// 名字本来就是合法 UTF-8 的 provider 传 false，名字里碰巧有转义的样子也原样传过去。
+    ///
+    /// 所有参数都是「直接写进单引号也不会出事」的文字（没有控制字符、换行、`!`，也不是要还原的转义）时，照旧直接写成
+    /// `body`（`"$a<i>"` 换成单引号串），不套 `sh -c`：命令和以前一模一样，演示主机的假 shell 也认得。
     static func shScript(_ body: String, arguments: [String], escapedNames: Bool) -> String {
+        let raw = arguments.map { escapedNames ? RemoteName.bytes($0) : Array($0.utf8) }
+        if zip(arguments, raw).allSatisfy({ Array($0.utf8) == $1 && $1.allSatisfy(isQuotableByte) }) {
+            var direct = body
+            // 倒着换：`$a10` 先于 `$a1`。
+            for (index, argument) in arguments.enumerated().reversed() {
+                direct = direct.replacingOccurrences(of: "\"$a\(index)\"", with: shellQuote(argument))
+            }
+            return direct
+        }
         var script = ""
         for (index, argument) in arguments.enumerated() {
             let bytes = escapedNames ? RemoteName.bytes(argument) : Array(argument.utf8)
@@ -71,6 +83,12 @@ nonisolated enum RemotePath {
             }
         }
         return "sh -c " + shellQuote(script + body)
+    }
+
+    /// 写进单引号串（`shellQuote`）后，sh / bash / zsh / csh / tcsh / fish 都原样当字面值的字节：除了控制字符、DEL、
+    /// `!`（csh 在单引号里也做历史展开）之外都行；单引号本身由 `shellQuote` 写成 `'\\''`。合法 UTF-8 的多字节字符也行。
+    private static func isQuotableByte(_ byte: UInt8) -> Bool {
+        byte >= 0x20 && byte != 0x7F && byte != UInt8(ascii: "!")
     }
 
     /// 不用转义、写进单引号也不会被任何一层 shell 解释的字节。

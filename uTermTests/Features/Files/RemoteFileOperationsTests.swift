@@ -88,10 +88,8 @@ final class RemoteFileOperationsTests: XCTestCase {
         try await RemoteFileOperations.setPermissions(dirEntry("it's dir"), in: "/srv", mode: 0o750,
                                                       recursive: true, provider: mock)
         let commands = await mock.execCommands
-        XCTAssertEqual(commands, [RemoteFileOperations.chmodRecursiveCommand(path: "/srv/it's dir", mode: 0o750,
-                                                                             escapedNames: false)])
-        XCTAssertTrue(commands.first?.hasPrefix("sh -c ") ?? false)
-        XCTAssertTrue(commands.first?.contains("chmod -R 750 \"$a0\"") ?? false)
+        // 普通路径：命令和以前一模一样（不套 sh -c）。
+        XCTAssertEqual(commands, ["chmod -R 750 '/srv/it'\\''s dir'"])
         let changes = await mock.permissionChanges
         XCTAssertTrue(changes.isEmpty)
     }
@@ -178,11 +176,14 @@ final class RemoteFileOperationsTests: XCTestCase {
 
     func testOwnerStatCommandQuotesPaths() {
         let command = RemoteFileOperations.ownerStatCommand(paths: ["/a b", "/it's"], escapedNames: true)
-        XCTAssertTrue(command.hasPrefix("sh -c "), command)
-        XCTAssertTrue(command.contains("(stat -c "))
+        XCTAssertTrue(command.contains("'/a b' '/it'\\''s'"), command)
+        XCTAssertTrue(command.hasPrefix("(stat -c "))
         XCTAssertTrue(command.contains("|| stat -f "))
-        XCTAssertTrue(command.contains("-- \"$a0\" \"$a1\""), command)
-        XCTAssertFalse(command.contains("\t"), "制表符交给 printf 生成，命令行上没有真的制表符")
+
+        // 名字里有不是 UTF-8 的字节（转义）或换行：整段交给 sh -c，参数按字节造出来。
+        let raw = RemoteFileOperations.ownerStatCommand(paths: ["/a\n", RemoteName.display([0xB2])], escapedNames: true)
+        XCTAssertTrue(raw.hasPrefix("sh -c "), raw)
+        XCTAssertTrue(raw.contains("-- \"$a0\" \"$a1\""), raw)
     }
 
     func testParseOwnerStatOutputDropsNumericAndUnknownNames() {

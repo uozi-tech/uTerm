@@ -35,15 +35,30 @@ final class RemoteFileSearchTests: XCTestCase {
     }
 
     // buildFindCommand
-    func testBuildFindCommandStructure() {
+    func testBuildFindCommandStructureAndEscaping() {
         let cmd = RemoteFileSearch.buildFindCommand(root: "/home/u", pattern: "ma'in", maxDepth: 8, limit: 200)
-        XCTAssertTrue(cmd.hasPrefix("sh -c '"), cmd)
-        XCTAssertTrue(cmd.contains("find \"$a0\" -maxdepth 8"))
-        XCTAssertTrue(cmd.contains("-iname \"$a1\""))
+        XCTAssertTrue(cmd.contains("find '/home/u'"))
+        XCTAssertTrue(cmd.contains("-maxdepth 8"))
+        XCTAssertTrue(cmd.contains("-iname '*ma'\\''in*'"))
         XCTAssertTrue(cmd.contains("head -n 200"))
         XCTAssertTrue(cmd.contains("2>/dev/null"))
         XCTAssertFalse(cmd.contains("\n"))
-        XCTAssertTrue(cmd.contains("a0='\\''/home/u'\\''"), "普通路径原样（外层单引号里的单引号写成 '\\''）")
+    }
+
+    func testBuildFindCommandEmptyPatternUsesStar() {
+        let cmd = RemoteFileSearch.buildFindCommand(root: "/var", pattern: "")
+        XCTAssertTrue(cmd.contains("-iname '*'"))
+    }
+
+    /// 根目录里有不是 UTF-8 的字节、模式里有 `!`：整段交给 sh -c，命令行上没有 `!` 与换行。
+    func testBuildFindCommandWrapsUnusualArgumentsInSh() {
+        let cmd = RemoteFileSearch.buildFindCommand(root: "/srv/" + RemoteName.display([0xB2]), pattern: "a!b",
+                                                    escapedNames: true)
+        XCTAssertTrue(cmd.hasPrefix("sh -c '"), cmd)
+        XCTAssertTrue(cmd.contains("find \"$a0\" -maxdepth 8"))
+        XCTAssertTrue(cmd.contains("-iname \"$a1\""))
+        XCTAssertFalse(cmd.contains("!"))
+        XCTAssertFalse(cmd.contains("\n"))
     }
 
     /// 根目录与模式都按字节传进 sh 的变量：在本机真的跑一遍，模式里的引号、分号、命令替换都只是字面值，什么都不执行。

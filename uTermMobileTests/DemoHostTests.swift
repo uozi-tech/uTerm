@@ -78,7 +78,8 @@ final class DemoShellTests: XCTestCase {
     }
 
     func testRecursiveChmodFromFileBrowser() {
-        _ = shell.run(RemoteFileOperations.chmodRecursiveCommand(path: "/home/demo/projects", mode: 0o700))
+        _ = shell.run(RemoteFileOperations.chmodRecursiveCommand(path: "/home/demo/projects", mode: 0o700,
+                                                                     escapedNames: false))
         XCTAssertEqual(fs.node(at: "/home/demo/projects/api/main.go")?.mode, 0o700)
         XCTAssertEqual(DemoShell.parseMode("u+x", current: 0o644), 0o744)
         XCTAssertEqual(DemoShell.parseMode("go-r", current: 0o644), 0o600)
