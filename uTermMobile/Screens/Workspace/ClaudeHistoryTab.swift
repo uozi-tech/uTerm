@@ -31,6 +31,8 @@ final class ClaudeHistoryTab: Identifiable {
     /// Plus / Max 横竖屏切换会换外壳、重建视图，请求不能跟着丢。
     var pendingReveal: AgentHistoryReveal?
     @ObservationIgnored private var revealGeneration = 0
+    /// 「＋」弹出的新会话面板（选目录、选工具）。开着时不为 nil。放在标签上：横竖屏切换换外壳时面板不跟着丢。
+    var newSessionDraft: CodeNewSessionDraft?
 
     // 在标签页里跑着的会话（`ClaudeHistoryTab+Runs`）。扩展里存不了属性，放在这里。
     /// 哪些会话正跑着活终端、详情看哪个（状态机，不沾界面）。
@@ -94,6 +96,32 @@ final class ClaudeHistoryTab: Identifiable {
         pendingReveal = AgentHistoryReveal(directory: directory, generation: revealGeneration)
     }
 
+    /// 「＋」：弹出新会话面板。候选目录现算（`AgentHistoryNewSessionPlaces.candidates`：这个标签页的目录、记录的项目目录、
+    /// 主目录）；配对的 Mac 再问它最近的工作区（老 Mac 不认就没有），问回来补进去。
+    func presentNewSession() {
+        let draft = CodeNewSessionDraft(directory: directory, choices: newSessionChoices(recent: []),
+                                        home: connection.homeDirectory)
+        newSessionDraft = draft
+        guard let remoteMac, remoteMac.supportsLocalShell else { return }
+        Task { [weak self, weak draft] in
+            guard let workspaces = await remoteMac.localWorkspaces(), let self, let draft,
+                  self.newSessionDraft === draft else { return }
+            draft.home = draft.home ?? workspaces.home
+            draft.choices = self.newSessionChoices(recent: workspaces.directories, home: draft.home)
+        }
+    }
+
+    func newSessionChoices(recent: [String], home: String? = nil) -> [String] {
+        AgentHistoryNewSessionPlaces.candidates(current: directory, files: connection.history?.files ?? [],
+                                                metadata: connection.history?.metadata ?? [:], recent: recent,
+                                                home: home ?? connection.homeDirectory)
+    }
+
+    /// 面板里选好、点了「开始」：之后「＋」默认开在这个目录（写回 `directory`，随归档存着）。不改列表的定位。
+    func chooseNewSessionDirectory(_ directory: String) {
+        self.directory = ClaudeProjectPath.normalized(directory) ?? directory
+    }
+
     /// 在这台主机上新开一个终端标签页，连上、行编辑器起来之后打进 `command`（「继续这个会话」「＋新会话」）。
     /// 直连主机走连接中页（同「新建终端」，主机密钥要确认也在那里）；配对的 Mac 先请它开一个本机终端（开在 `directory`），
     /// 再整台接管、把那个终端放到前台。开不成（那台 Mac 不能新建终端等）抛出来，由界面提示。
@@ -150,11 +178,8 @@ struct ClaudeHistorySessionBody: View {
             case .ready(let history):
                 ClaudeHistoryBrowser(
                     history: history, canResume: tab.canResume, isActive: isActive,
-                    newSession: tab.canResume
-                        ? AgentHistoryNewSession(directory: tab.directory) { tool, command, directory in
-                            startNew(tool, command: command, directory: directory)
-                        }
-                        : nil,
+                    // 「＋」不直接开：弹出新会话面板选目录、选工具（见 `CodeNewSessionPanel`）。
+                    newSession: tab.canResume ? AgentHistoryNewSession(presenting: { tab.presentNewSession() }) : nil,
                     reveal: Binding(get: { tab.pendingReveal }, set: { tab.pendingReveal = $0 }),
                     code: CodeTabRuns(tab: tab, isFocused: isFocused, onInteract: onInteract,
                                       onMoveToTab: workspace.map { workspace in { id in
@@ -166,6 +191,22 @@ struct ClaudeHistorySessionBody: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
+        .mBottomPanel(item: Binding(get: { tab.newSessionDraft }, set: { tab.newSessionDraft = $0 })) { draft in
+            if let history = tab.connection.history {
+                CodeNewSessionPanel(draft: draft, history: history, connection: tab.connection, hostName: tab.hostName) {
+                    tool, directory in
+                    startNewSession(tool, in: directory, history: history)
+                }
+            }
+        }
+    }
+
+    /// 面板里点了「开始」：收起面板，在选的目录里起选的工具（直连主机在这个标签页里，配对的 Mac 开终端标签页）。
+    private func startNewSession(_ tool: AgentHistoryTool, in directory: String, history: AgentHistoryModel) {
+        guard let command = history.newSessionCommand(tool: tool, directory: directory) else { return }
+        tab.chooseNewSessionDirectory(directory)
+        tab.newSessionDraft = nil
+        startNew(tool, command: command, directory: directory)
     }
 
     /// 直连主机：就在这个标签页里起终端；配对的 Mac（或者没注入主机密钥裁决的用例）：交给 `onRun` 开终端标签页。
@@ -463,9 +504,23 @@ private struct ClaudeHistoryList: View {
         .accessibilityValue(Text(AgentHistoryText.groupingName(grouping)))
     }
 
-    /// 「＋」：一律是菜单——能开的工具在里面选；开不了（不知道目录、这台主机上的工具都不能新开）时菜单里说明原因，
-    /// 手机上没有悬停提示，灰掉的按钮说不清为什么。
-    private func newSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
+    /// 「＋」：Code 标签页里弹出新会话面板（在那里选目录、选工具）；只挂列表的地方照旧是菜单——能开的工具在里面选，
+    /// 开不了（不知道目录、这台主机上的工具都不能新开）时菜单里说明原因，手机上没有悬停提示，灰掉的按钮说不清为什么。
+    @ViewBuilder private func newSessionButton(_ newSession: AgentHistoryNewSession) -> some View {
+        if let present = newSession.present {
+            Button(action: present) {
+                MIcon(name: "plus", size: 15, color: M.text2, weight: .semibold)
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MPressStyle())
+            .accessibilityLabel(Text(AgentHistoryText.newSession))
+        } else {
+            newSessionMenu(newSession)
+        }
+    }
+
+    private func newSessionMenu(_ newSession: AgentHistoryNewSession) -> some View {
         let tools = history.newSessionTools(directory: newSession.directory)
         return MMenu {
             if let directory = newSession.directory, !tools.isEmpty {
