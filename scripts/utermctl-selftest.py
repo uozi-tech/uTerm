@@ -1431,22 +1431,34 @@ def exercise_localization():
 
 
 def exercise_peer_text():
-    """服务器给的文字（文件名、SFTP 报错原话）打到终端之前去掉控制字符与双向覆盖符；JSON 里一字不差。"""
+    """服务器给的文字（文件名、SFTP 报错原话）打到终端之前：控制字符与双向覆盖符写成看得见的 `<U+XXXX>`、
+    换行变空格；名字里正常的格式字符（ZWJ、ZWNJ、软连字符、U+2060）原样留着；截断不切开转义；JSON 一字不差。"""
     print("服务器原话")
     client = load_client_module()
     hostile = "a\x1b]0;pwned\x07b\u009b2J\u202ec\U000e0041d\nnext"
-    equal(client.terminal_safe(hostile), "a]0;pwnedb2Jcd next", "terminal_safe 去掉 ESC / C1 / 双向覆盖，换行变空格")
-    escaped_name = "caf\ufffdE9\u2060.txt"
-    equal(client.terminal_safe(escaped_name), escaped_name, "非 UTF-8 名字的转义结束符 U+2060 留着")
+    equal(client.terminal_safe(hostile), "a<U+001B>]0;pwned<U+0007>b<U+009B>2J<U+202E>c<U+E0041>d next",
+          "terminal_safe 把 ESC / C1 / 双向覆盖 / 标签字符写成看得见的转义，换行变空格")
+    for name, label in (("caf\ufffdE9\u2060.txt", "非 UTF-8 名字的转义结束符 U+2060"),
+                        ("\U0001F468\u200d\U0001F469\u200d\U0001F467.png", "emoji 的 ZWJ 组合"),
+                        ("\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.txt", "波斯文里的 ZWNJ"),
+                        ("hyphen\u00adated.md", "软连字符")):
+        equal(client.terminal_safe(name), name, label + "原样留着")
+    clipped = client.clip_safe("x" * 8 + "\u202e" + "y" * 20, 12)
+    check("<U+202E>" in clipped or "<U" not in clipped, "截断不把 <U+XXXX> 切开（实得 %r）" % clipped)
+    check(clipped.endswith("…") and len(clipped) <= 12, "截断后不超过上限并补「…」")
     response = {"ok": False, "code": "operation_failed", "message": hostile}
     text = client.as_json(response)
     check(all(not (0x7F <= ord(c) <= 0x9F) and c not in "\u202e\U000e0041" for c in text),
           "as_json 把 C1 / Cf 写成 \\u 转义")
     equal(json.loads(text), response, "as_json 解析回来一字不差")
+    zwj = {"name": "\U0001F468\u200d\U0001F469"}
+    equal(client.as_json(zwj), json.dumps(zwj, ensure_ascii=False, indent=2, sort_keys=True),
+          "正常的格式字符在 JSON 里也原样")
     table = client.render_table(["name"], [[hostile]])
-    check("\x1b" not in table and "\u202e" not in table, "表格里的远端文字去掉了控制字符")
+    check("\x1b" not in table and "\u202e" not in table and "<U+202E>" in table,
+          "表格里的远端文字转义成看得见的样子")
     csv_text = client.render_csv(["name"], [[hostile]])
-    check("\x1b" not in csv_text and "\u009b" not in csv_text, "CSV 里的远端文字去掉了控制字符")
+    check("\x1b" not in csv_text and "\u009b" not in csv_text, "CSV 里的远端文字转义成看得见的样子")
 
 
 def help_in_languages(client):

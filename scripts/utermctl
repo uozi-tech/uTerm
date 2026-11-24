@@ -2146,28 +2146,56 @@ def make_request(args):
     return request
 
 
+# 名字里正常会有、打到终端里也无害的格式字符（Unicode Cf）：ZWNJ（波斯文、印度诸文字）、ZWJ（emoji 组合）、
+# 软连字符，以及 uTerm 给非 UTF-8 文件名转义时的结束符 WORD JOINER（`RemoteName`，去掉了那个名字就对不上了）。
+_BENIGN_FORMAT = {0x200C, 0x200D, 0x00AD, 0x2060}
+
+
 def _is_unsafe_char(char):
-    """C0 / C1 控制字符、DEL 与 Unicode Cf（双向覆盖 / 隔离符、零宽字符……）：打到终端里会被当成
-    控制命令或把文字显示成别的样子。规则同 USSHKit 的 `SSHPeerText.sanitize`。"""
+    """C0 / C1 控制字符、DEL 与其余 Unicode Cf（双向覆盖 / 隔离符、标签字符……）：打到终端里会被当成
+    控制命令，或者把文字显示成别的样子、藏进看不见的字。规则同 USSHKit 的 `SSHPeerText.sanitize`，
+    只是放过上面那几个正常名字里会有的格式字符。"""
     code = ord(char)
-    if code == 0x2060:
-        # WORD JOINER 是 uTerm 给非 UTF-8 文件名转义时的结束符（`RemoteName`），去掉了那个名字就对不上了；它本身不可见、不改显示。
+    if code in _BENIGN_FORMAT:
         return False
     return code < 0x20 or 0x7F <= code <= 0x9F or unicodedata.category(char) == "Cf"
 
 
-def terminal_safe(text):
-    """服务器给的文字（远端文件名、SFTP 的报错原话）直接打到终端之前过一遍：空白类控制字符换成空格，
-    其余控制字符与不可见格式字符去掉。只用于给人看的表格与提示；JSON 走 `as_json`，那里不丢字。"""
+def _safe_units(text, whitespace_as_space):
+    """把文字拆成显示单位：安全的字符原样；不安全的写成看得见的 `<U+202E>`（一个单位，截断时不会从中间切开）。
+    `whitespace_as_space`：给人读的提示把换行、制表换成空格；表格里的名字也一样（一格一行）。"""
     if not isinstance(text, str):
         text = str(text)
-    out = []
+    units = []
     for char in text:
-        if char in "\t\n\r\v\f\x85\u2028\u2029":
-            out.append(" ")
-        elif not _is_unsafe_char(char):
-            out.append(char)
-    return "".join(out)
+        if whitespace_as_space and char in "\t\n\r\v\f\x85\u2028\u2029":
+            units.append(" ")
+        elif _is_unsafe_char(char):
+            units.append("<U+%04X>" % ord(char))
+        else:
+            units.append(char)
+    return units
+
+
+def terminal_safe(text):
+    """服务器给的文字（远端文件名、SFTP 的报错原话）直接打到终端之前过一遍：空白类控制字符换成空格，
+    其余控制字符与双向覆盖之类的格式字符写成看得见的 `<U+XXXX>`（不丢，也不起作用）。
+    只用于给人看的表格与提示；JSON 走 `as_json`，那里一字不差。"""
+    return "".join(_safe_units(text, whitespace_as_space=True))
+
+
+def clip_safe(text, limit):
+    """`terminal_safe` 之后最多 `limit` 个字符，超出的截掉、补「…」；不会把 `<U+XXXX>` 切成两半。"""
+    units = _safe_units(text, whitespace_as_space=True)
+    if sum(len(unit) for unit in units) <= limit:
+        return "".join(units)
+    kept, used = [], 0
+    for unit in units:
+        if used + len(unit) > limit - 1:
+            break
+        kept.append(unit)
+        used += len(unit)
+    return "".join(kept) + "…"
 
 
 def fail(message):
@@ -3603,9 +3631,7 @@ def render_table(header, rows, limit=60):
     for row in rows:
         cells = []
         for index, value in enumerate(row):
-            text = terminal_safe(value)
-            if len(text) > limit:
-                text = text[: limit - 1] + "…"
+            text = clip_safe(value, limit)
             cells.append(text)
             widths[index] = max(widths[index], len(text))
         clipped.append(cells)
