@@ -203,7 +203,7 @@ final class SFTPSessionAtomicUploadTests: XCTestCase {
         let task = Task { try await session.upload(data: big, toRemotePath: "/fresh.bin", onProgress: nil) }
         try await Task.sleep(for: .milliseconds(150))
         task.cancel()
-        _ = try? await task.value
+        _ = try? await bounded("取消之后的上传任务结束") { try await task.value }
         faults.delayResponses(of: .write, by: nil)
 
         try assertOnly([])

@@ -12,6 +12,9 @@ final class DynamicForwardChannelFailureTests: XCTestCase {
     private nonisolated static func socksConnect(port: Int) throws -> UInt8 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         defer { Darwin.close(fd) }
+        // 收不到应答时 read 最多等 5 秒，不让一个卡住的转发把线程永远占着。
+        var limit = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = in_port_t(UInt16(port).bigEndian)
@@ -59,20 +62,20 @@ final class DynamicForwardChannelFailureTests: XCTestCase {
             hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in true },
             onStatus: { _, _ in },
             onConnectionIssue: { _, reason in issues.add(reason) })
-        try await session.connect()
+        try await bounded("connect() 返回", within: 20) { try await session.connect() }
         let port = Int.random(in: 41_000...49_000)
         let rule = ForwardingRuleSnapshot(
             id: UUID(), serverID: UUID(), name: "socks", kind: .dynamic,
             listenHost: "127.0.0.1", listenPort: port, destHost: nil, destPort: 0, autostart: false)
-        await session.start(rule)
+        try await bounded("start(rule) 返回") { await session.start(rule) }
         try await Task.sleep(for: .milliseconds(300))
 
-        let reply = try await Task.detached { try Self.socksConnect(port: port) }.value
+        let reply = try await bounded("SOCKS 应答") { try await Task.detached { try Self.socksConnect(port: port) }.value }
         XCTAssertNotEqual(reply, 0, "服务器拒绝了开通道，SOCKS 应答应当是失败")
 
         let deadline = ContinuousClock.now + .seconds(5)
         while issues.count == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertEqual(issues.count, 1, "开通道失败要交给会话（以前 -D 只记日志）")
-        await session.close()
+        _ = try? await bounded("close() 返回") { await session.close() }
     }
 }

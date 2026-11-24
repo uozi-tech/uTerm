@@ -78,7 +78,7 @@ final class SSHConnectionTestServerTests: XCTestCase {
     func testOpensPTYWithTermAndEnvironmentAndEchoesInput() async throws {
         let connection = try makeConnection()
         await connection.resize(cols: 132, rows: 40)
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
 
         let events = try await server.waitForEvents { $0.shellRequests == 1 }
         XCTAssertEqual(events.ptyRequests.first?.term, "xterm-256color")
@@ -89,13 +89,13 @@ final class SSHConnectionTestServerTests: XCTestCase {
         await connection.write(Data("hello-uterm".utf8))
         let echoed = try await collect(connection, until: "hello-uterm")
         XCTAssertTrue(echoed.contains("hello-uterm"))
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// 写入与改尺寸走同一条 FIFO：按调用顺序到达远端，不乱序。
     func testWritesArriveInOrderAndResizeIsSent() async throws {
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         for index in 0..<200 {
             await connection.write(Data("<\(index)>".utf8))
         }
@@ -106,15 +106,15 @@ final class SSHConnectionTestServerTests: XCTestCase {
         let events = try await server.waitForEvents { !$0.windowChanges.isEmpty }
         XCTAssertEqual(events.windowChanges.last?.columns, 100)
         XCTAssertEqual(events.windowChanges.last?.rows, 30)
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// 本端关闭：会话结束（exitStream 出元素），服务端看到连接断开（共享连接上最后一个租约还掉了）。
     func testLocalCloseEndsSessionAndReleasesTheConnection() async throws {
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         _ = try await server.waitForEvents { $0.shellRequests == 1 }
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
         let ended = await waitForExit(connection)
         XCTAssertTrue(ended)
         _ = try await server.waitForEvents { $0.closedConnections >= 1 }
@@ -123,11 +123,11 @@ final class SSHConnectionTestServerTests: XCTestCase {
     /// 远端 shell 退出（Ctrl-D）：会话自己结束。
     func testRemoteShellExitEndsSession() async throws {
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         await connection.write(Data([0x04]))
         let ended = await waitForExit(connection)
         XCTAssertTrue(ended)
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// shell 退出了但后台进程还占着伪终端（`sleep 1000 &` 再 `exit`）：sshd 先报退出状态、通道不关。
@@ -147,7 +147,7 @@ final class SSHConnectionTestServerTests: XCTestCase {
                 return .noStatus
             }))
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         let items = connection.outputItems
         let output = Task { () -> String in
             var collected = Data()
@@ -162,9 +162,9 @@ final class SSHConnectionTestServerTests: XCTestCase {
         let ended = await waitForExit(connection, timeout: .seconds(5))
         XCTAssertTrue(ended, "退出状态到了之后会话就该结束")
         XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
-        let collected = await output.value
+        let collected = try await bounded("会话结束后输出流收尾") { await output.value }
         XCTAssertTrue(collected.contains("logout"), collected)
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// 服务器掐断 TCP：不等输出流自己察觉，断开回调立刻让会话结束（界面翻到「已断开」）。
@@ -188,7 +188,7 @@ final class SSHConnectionTestServerTests: XCTestCase {
                 return .noStatus
             }))
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         let items = connection.outputItems
         let output = Task { () -> String in
             var collected = Data()
@@ -201,9 +201,9 @@ final class SSHConnectionTestServerTests: XCTestCase {
         await connection.write(Data([0x04]))
         let ended = await waitForExit(connection, timeout: .seconds(10))
         XCTAssertTrue(ended)
-        let collected = await output.value
+        let collected = try await bounded("会话结束后输出流收尾") { await output.value }
         XCTAssertTrue(collected.contains("END-OF-TAIL"), "退出状态之后的输出丢了：\(collected)")
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// 后台进程占着伪终端、退出之后还一直在打字：会话照样在几秒内结束（上限），不会被它拖住。
@@ -222,13 +222,13 @@ final class SSHConnectionTestServerTests: XCTestCase {
                 return .noStatus
             }))
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         await connection.write(Data([0x04]))
         let started = ContinuousClock.now
         let ended = await waitForExit(connection, timeout: .seconds(15))
         XCTAssertTrue(ended, "一直有输出也要在上限内结束")
         XCTAssertLessThan(ContinuousClock.now - started, RemoteExitDrain.cap + .seconds(3))
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// 握手期间被取消（关窗口、关标签页）：交出去的是 `CancellationError`，不是「连接失败」。
@@ -249,8 +249,8 @@ final class SSHConnectionTestServerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         attempt.cancel()
         do {
-            let connected = try await attempt.value
-            await connected.close()
+            let connected = try await bounded("取消之后的连接任务结束") { try await attempt.value }
+            _ = try? await bounded("close() 返回") { await connected.close() }
             XCTFail("取消之后不该连上")
         } catch {
             XCTAssertTrue(error is CancellationError, "实得 \(error)")
@@ -275,8 +275,8 @@ final class SSHConnectionTestServerTests: XCTestCase {
 
     private func jumpFailure(of connection: SSHConnection) async -> (cause: JumpHostFailureCause, error: Error)? {
         do {
-            try await connection.connect()
-            await connection.close()
+            try await bounded("connect() 返回", within: 20) { try await connection.connect() }
+            _ = try? await bounded("close() 返回") { await connection.close() }
             return nil
         } catch {
             guard case SSHConnection.SSHConnectionError.jumpHostFailed(_, let cause) = error else {
@@ -325,18 +325,18 @@ final class SSHConnectionTestServerTests: XCTestCase {
 
     func testTransportDropEndsSession() async throws {
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         _ = try await server.waitForEvents { $0.shellRequests == 1 }
         await server.dropAllConnections()
         let ended = await waitForExit(connection)
         XCTAssertTrue(ended)
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 
     /// 探活：连接活着时为真；链路卡死（不读不写、TCP 还在）时按时限判死并关掉连接，会话随之结束。
     func testVerifyConnectionAliveDetectsAFrozenLink() async throws {
         let connection = try makeConnection()
-        try await connection.connect()
+        try await bounded("connect() 返回", within: 20) { try await connection.connect() }
         let alive = await connection.verifyConnectionAlive(timeout: .seconds(5))
         XCTAssertTrue(alive)
 
@@ -347,6 +347,6 @@ final class SSHConnectionTestServerTests: XCTestCase {
         XCTAssertLessThan(ContinuousClock.now - started, .seconds(5), "超时就返回，不等卡住的探测")
         let ended = await waitForExit(connection)
         XCTAssertTrue(ended)
-        await connection.close()
+        _ = try? await bounded("close() 返回") { await connection.close() }
     }
 }

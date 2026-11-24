@@ -4,16 +4,16 @@ import XCTest
 /// 退出状态之后：输出安静 `idle` 才结束，每块输出重新计时，最多等 `cap`。
 final class RemoteExitDrainTests: XCTestCase {
 
-    func testQuietOutputEndsAfterTheIdlePeriod() async {
+    func testQuietOutputEndsAfterTheIdlePeriod() async throws {
         let drain = RemoteExitDrain(idle: .milliseconds(100), cap: .seconds(5))
         let started = ContinuousClock.now
-        await drain.waitForQuiet(since: started)
+        try await bounded("waitForQuiet 返回") { await drain.waitForQuiet(since: started) }
         let elapsed = ContinuousClock.now - started
         XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(100))
         XCTAssertLessThan(elapsed, .seconds(1))
     }
 
-    func testEveryChunkRestartsTheIdleTimer() async {
+    func testEveryChunkRestartsTheIdleTimer() async throws {
         let drain = RemoteExitDrain(idle: .milliseconds(200), cap: .seconds(5))
         let started = ContinuousClock.now
         let feeder = Task {
@@ -22,13 +22,13 @@ final class RemoteExitDrainTests: XCTestCase {
                 drain.noteChunk()
             }
         }
-        await drain.waitForQuiet(since: started)
+        try await bounded("waitForQuiet 返回") { await drain.waitForQuiet(since: started) }
         feeder.cancel()
         XCTAssertGreaterThanOrEqual(ContinuousClock.now - started, .milliseconds(700),
                                     "还在来输出时不该结束")
     }
 
-    func testTheCapEndsEvenWhenOutputNeverStops() async {
+    func testTheCapEndsEvenWhenOutputNeverStops() async throws {
         let drain = RemoteExitDrain(idle: .milliseconds(200), cap: .milliseconds(600))
         let started = ContinuousClock.now
         let feeder = Task {
@@ -37,7 +37,7 @@ final class RemoteExitDrainTests: XCTestCase {
                 try? await Task.sleep(for: .milliseconds(50))
             }
         }
-        await drain.waitForQuiet(since: started)
+        try await bounded("waitForQuiet 返回") { await drain.waitForQuiet(since: started) }
         feeder.cancel()
         let elapsed = ContinuousClock.now - started
         XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(600))

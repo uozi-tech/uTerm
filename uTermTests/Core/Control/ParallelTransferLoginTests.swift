@@ -77,9 +77,12 @@ final class ParallelTransferLoginTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let handle = try FileHandle(forUpdating: url)
         defer { try? handle.close() }
-        _ = try await ParallelTransfer.download(
-            host: host, pool: pool, remotePath: "/big.bin", fd: handle.fileDescriptor, ranges: nil,
-            tuning: ParallelTransfer.Tuning.download.with(channels: 8), onSegment: { _ in })
+        let fd = handle.fileDescriptor
+        _ = try await bounded("并行下载结束", within: 30) {
+            try await ParallelTransfer.download(
+                host: host, pool: pool, remotePath: "/big.bin", fd: fd, ranges: nil,
+                tuning: ParallelTransfer.Tuning.download.with(channels: 8), onSegment: { _ in })
+        }
     }
 
     /// 读大小那一次用的是唯一一次能登录成功的会话；之后的工作者第一个去建新连接就被拒，其余的不再去登录。
@@ -95,7 +98,7 @@ final class ParallelTransferLoginTests: XCTestCase {
         }
 
         XCTAssertEqual(rejectedLogins(), 1, "整次传输只该有一次失败的登录")
-        await pool.disconnectAll()
+        _ = try? await bounded("disconnectAll() 返回") { await pool.disconnectAll() }
     }
 
     /// 一开始就登不上：读大小那一步就失败，同样只有一次。
@@ -109,7 +112,7 @@ final class ParallelTransferLoginTests: XCTestCase {
         } catch {}
 
         XCTAssertEqual(rejectedLogins(), 1)
-        await pool.disconnectAll()
+        _ = try? await bounded("disconnectAll() 返回") { await pool.disconnectAll() }
     }
 
     /// 凭据对的时候照常并行：8 个通道都建起来（借会话只是排队，不是只用一条）。
@@ -121,7 +124,7 @@ final class ParallelTransferLoginTests: XCTestCase {
 
         XCTAssertEqual(rejectedLogins(), 0)
         XCTAssertGreaterThan(server.events.authAttempts.count, 1, "应当并行开了不止一条会话")
-        await pool.disconnectAll()
+        _ = try? await bounded("disconnectAll() 返回") { await pool.disconnectAll() }
     }
 }
 
