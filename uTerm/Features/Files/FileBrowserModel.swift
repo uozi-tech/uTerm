@@ -418,7 +418,7 @@ final class FileBrowserModel {
         ownerEnrichmentTask = nil
         pendingPath = target
         isLoading = true
-        isNavigating = target != currentPath
+        isNavigating = target.remoteKey != currentPath.remoteKey
         do {
             let listed = try await provider.list(path: target)
             let sorted = await sortedForDisplay(listed)
@@ -482,9 +482,9 @@ final class FileBrowserModel {
     private func publishOwnerEnrichment(_ enriched: [RemoteEntry],
                                         generation: Int,
                                         directoryPath: String) async {
-        guard generation == loadGeneration, currentPath == directoryPath else { return }
+        guard generation == loadGeneration, currentPath.remoteKey == directoryPath.remoteKey else { return }
         let sorted = await sortedForDisplay(enriched)
-        guard generation == loadGeneration, currentPath == directoryPath else { return }
+        guard generation == loadGeneration, currentPath.remoteKey == directoryPath.remoteKey else { return }
         entries = enriched
         sortedEntries = sorted
     }
@@ -518,7 +518,7 @@ final class FileBrowserModel {
     /// 由视图在调用前移动，放行第二次会让下标与 `currentPath` 脱钩。`isNavigating` 同时驱动
     /// 视图加载态，让单击立刻有反馈。
     func navigate(toPath path: String) async {
-        guard path != currentPath, !isNavigating else { return }
+        guard path.remoteKey != currentPath.remoteKey, !isNavigating else { return }
         await load(path)
     }
 

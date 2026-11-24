@@ -168,7 +168,7 @@ final class ExternalOpenCoordinator {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var toastDismissTasks: [UUID: Task<Void, Never>] = [:]
     /// 正在下载的远端路径：连点两下不下两份。
-    @ObservationIgnored private var inFlight: Set<String> = []
+    @ObservationIgnored private var inFlight: Set<RemoteNameKey> = []
 
     static let toastLifetime: Duration = .seconds(4)
     /// SFTP 的 mtime 只到秒，比对时留一秒余量。
@@ -301,7 +301,7 @@ final class ExternalOpenCoordinator {
         let name = (remotePath as NSString).lastPathComponent
 
         // 已经在外部编辑：直接再打开那份本地副本。重新下载会盖掉还没传上去的改动。
-        if let existing = sessions.first(where: { $0.remotePath == remotePath }) {
+        if let existing = sessions.first(where: { $0.remotePath.remoteKey == remotePath.remoteKey }) {
             guard let application = resolve(request, forPath: remotePath) else { return }
             _ = await system.launch(existing.localURL, application)
             return
@@ -314,8 +314,8 @@ final class ExternalOpenCoordinator {
         }
         // 先挑应用再下载：用户在选择框里点了取消，就不白下一趟。
         guard let application = resolve(request, forPath: remotePath) else { return }
-        guard inFlight.insert(remotePath).inserted else { return }
-        defer { inFlight.remove(remotePath) }
+        guard inFlight.insert(remotePath.remoteKey).inserted else { return }
+        defer { inFlight.remove(remotePath.remoteKey) }
 
         let progress = showToast(.progress, String(localized: "正在打开 \(name)…"), autoDismiss: false)
         defer { dismissToast(progress) }

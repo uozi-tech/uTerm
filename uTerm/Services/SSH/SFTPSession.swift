@@ -55,6 +55,8 @@ actor SFTPSession: SFTPProviding {
         }
     }
 
+    nonisolated var escapesRawNames: Bool { true }
+
     /// 界面 / 调用方给的路径 → 发给服务器的字节。路径里的名字用的是 `RemoteName` 的无损写法：
     /// 不是 UTF-8 的名字显示成带转义的字符串，这里原样还原成服务器上的字节；其余路径（包括用户手打、
     /// 命令行传来的）就是它的 UTF-8，和以前一样。

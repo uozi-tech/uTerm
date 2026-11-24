@@ -101,6 +101,11 @@ nonisolated struct TransferProgressEmitter: Sendable {
 
 /// `FileBrowserModel` 和文件预览层依赖的 SFTP 抽象 —— 便于用 `MockSFTP` 单测。
 protocol SFTPProviding: Actor {
+    /// 这个 provider 给出的名字 / 路径是不是 `RemoteName.display` 写法（不是 UTF-8 的字节写成转义）。SSH 上的
+    /// `SFTPSession` 是；配对过的 Mac 等名字本来就是合法 UTF-8 的不是——拼 shell 命令时就不去「还原」转义
+    /// （名字里碰巧有转义的样子也原样传）。默认 false。
+    nonisolated var escapesRawNames: Bool { get }
+
     func list(path: String) async throws -> [RemoteEntry]
     func realPath(_ path: String) async throws -> String
 
@@ -173,6 +178,8 @@ protocol SFTPProviding: Actor {
 }
 
 extension SFTPProviding {
+    nonisolated var escapesRawNames: Bool { false }
+
     /// 通用实现先 stat 拦截已知超限文件，再对返回值复核。真实 `SFTPSession`
     /// 另有流式实现，可覆盖 stat 竞态/未知大小；测试 mock 复用这里即可。
     func download(remotePath: String, maximumBytes: Int) async throws -> Data {

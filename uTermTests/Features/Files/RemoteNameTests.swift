@@ -81,13 +81,62 @@ final class RemoteNameTests: XCTestCase {
 
     // MARK: - 交给 shell 的路径
 
-    func testShellQuotePathLeavesPlainPathsAlone() {
-        XCTAssertEqual(RemotePath.shellQuotePath("/home/it's"), RemotePath.shellQuote("/home/it's"))
+    /// 在本机用登录 shell `shell` 跑生成的命令，取 stdout 的原样字节（远端 exec 也是交给登录 shell 跑这一串）。
+    private func run(_ command: String, in shell: String) throws -> [UInt8] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return Array(data)
     }
 
-    /// 带转义的路径交给 shell 时还原成原样字节：`printf` 的八进制转义，`%`、引号、`-` 都不会被另作解释。
-    func testShellQuotePathRebuildsRawBytes() {
-        let shown = RemoteName.display([UInt8(ascii: "-"), 0xB2, UInt8(ascii: "%"), UInt8(ascii: "'")])
-        XCTAssertEqual(RemotePath.shellQuotePath("/x/" + shown), "\"$(printf '/x/\\055\\262\\045\\047')\"")
+    /// 参数原样回显出来：`printf '%s' "$a0"`。
+    private func echoed(_ path: String, escaped: Bool = true, shell: String = "/bin/sh") throws -> [UInt8] {
+        try run(RemotePath.shScript("printf '%s|' \"$a0\"", arguments: [path], escapedNames: escaped), in: shell)
+    }
+
+    func testPlainPathsArriveUnchanged() throws {
+        XCTAssertEqual(try echoed("/home/it's here"), Array("/home/it's here|".utf8))
+        XCTAssertEqual(try echoed("/srv/-rf"), Array("/srv/-rf|".utf8))
+    }
+
+    /// 带转义的路径交给 shell 时还原成原样字节，`%`、引号、`-`、`!` 都不会被另作解释。
+    func testEscapedPathsArriveAsTheirRawBytes() throws {
+        let raw: [UInt8] = Array("/x/".utf8) + [UInt8(ascii: "-"), 0xB2, 0xE2, UInt8(ascii: "%"), UInt8(ascii: "'"),
+                                                 UInt8(ascii: "!"), UInt8(ascii: "$")]
+        XCTAssertEqual(try echoed(RemoteName.display(raw)), raw + Array("|".utf8))
+    }
+
+    /// 以换行结尾的名字：命令替换会吃掉结尾的换行，垫了哨兵 `x` 再去掉，名字一个字节都不少（否则就成了它的兄弟）。
+    func testANameEndingInANewlineKeepsIt() throws {
+        XCTAssertEqual(try echoed("/tmp/report\n"), Array("/tmp/report\n|".utf8))
+        XCTAssertEqual(try echoed("/tmp/two\n\n"), Array("/tmp/two\n\n|".utf8))
+        let raw: [UInt8] = Array("/tmp/".utf8) + [0xB2, 0x0A]
+        XCTAssertEqual(try echoed(RemoteName.display(raw)), raw + Array("|".utf8))
+    }
+
+    /// 登录 shell 是 csh / tcsh、zsh 时一样：外层只是 `sh -c '…'`，里面没有换行、`!` 这类会被它们另作解释的字符。
+    func testTheCommandWorksUnderCshAndZshLoginShells() throws {
+        let raw: [UInt8] = Array("/x/a!b\n".utf8) + [0xB2]
+        let path = RemoteName.display(raw)
+        for shell in ["/bin/csh", "/bin/tcsh", "/bin/zsh", "/bin/bash"] where FileManager.default.isExecutableFile(atPath: shell) {
+            XCTAssertEqual(try echoed(path, shell: shell), raw + Array("|".utf8), shell)
+        }
+        let command = RemotePath.shScript("printf '%s|' \"$a0\"", arguments: [path], escapedNames: true)
+        XCTAssertTrue(command.hasPrefix("sh -c '"), command)
+        XCTAssertFalse(command.contains("\n"), "命令行上不能有真的换行（csh 不认单引号里的换行）")
+        XCTAssertFalse(command.contains("!"), "命令行上不能有 !（csh 单引号里也做历史展开）")
+    }
+
+    /// 名字本来就是合法 UTF-8 的 provider（配对过的 Mac）：长得像转义的名字原样传，不「还原」成别的字节。
+    func testUnescapedProvidersPassNamesThatLookEscapedUnchanged() throws {
+        let literal = "/Users/me/\u{FFFD}B2\u{2060}.txt"
+        XCTAssertEqual(try echoed(literal, escaped: false), Array(literal.utf8) + Array("|".utf8))
+        XCTAssertNotEqual(try echoed(literal, escaped: true), Array(literal.utf8) + Array("|".utf8))
     }
 }

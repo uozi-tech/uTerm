@@ -174,15 +174,17 @@ nonisolated enum RemoteFileOperations {
         let path = RemotePath.join(directory, entry.name)
         let perm = mode & 0o777
         if recursive && entry.isDirectory {
-            _ = try await provider.exec(chmodRecursiveCommand(path: path, mode: perm))
+            _ = try await provider.exec(chmodRecursiveCommand(path: path, mode: perm,
+                                                              escapedNames: provider.escapesRawNames))
         } else {
             try await provider.setPermissions(path: path, mode: perm)
         }
     }
 
-    /// `chmod -R <八进制> '<path>'`。
-    static func chmodRecursiveCommand(path: String, mode: UInt32) -> String {
-        "chmod -R \(String(mode & 0o777, radix: 8)) \(RemotePath.shellQuotePath(path))"
+    /// `sh -c '…chmod -R <八进制> "$a0"'`（路径按字节传，见 `RemotePath.shScript`）。
+    static func chmodRecursiveCommand(path: String, mode: UInt32, escapedNames: Bool) -> String {
+        RemotePath.shScript("chmod -R \(String(mode & 0o777, radix: 8)) \"$a0\"",
+                            arguments: [path], escapedNames: escapedNames)
     }
 
     // MARK: - 重命名
@@ -190,7 +192,8 @@ nonisolated enum RemoteFileOperations {
     /// 校验并规范新名字：去首尾空白；空名或与原名相同返回 nil（调用方不发请求）。
     static func validatedNewName(_ newName: String, for entry: RemoteEntry) -> String? {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != entry.name else { return nil }
+        // 逐字节比：把 NFD 的名字改成 NFC 写法（或反过来）也是一次真改名。
+        guard !trimmed.isEmpty, trimmed.remoteKey != entry.name.remoteKey else { return nil }
         return trimmed
     }
 
@@ -274,7 +277,8 @@ nonisolated enum RemoteFileOperations {
             let end = min(start + ownerStatChunkSize, indexedEntries.count)
             let chunk = Array(indexedEntries[start..<end])
             let paths = chunk.map { RemotePath.join(directory, $0.entry.name) }
-            guard let output = try? await provider.exec(ownerStatCommand(paths: paths)) else { continue }
+            guard let output = try? await provider.exec(
+                ownerStatCommand(paths: paths, escapedNames: provider.escapesRawNames)) else { continue }
             let rows = parseOwnerStatOutput(output)
             guard rows.count == chunk.count else { continue }
             for (indexed, row) in zip(chunk, rows) {
@@ -293,12 +297,14 @@ nonisolated enum RemoteFileOperations {
     }
 
     /// GNU `stat -c` 优先，失败回退 BSD `stat -f`；输出每行 `uid\tgid\tuser\tgroup`。
-    static func ownerStatCommand(paths: [String]) -> String {
-        let quotedPaths = paths.map(RemotePath.shellQuotePath).joined(separator: " ")
-        let gnuFormat = RemotePath.shellQuote("%u\t%g\t%U\t%G")
-        let bsdFormat = RemotePath.shellQuote("%u\t%g\t%Su\t%Sg")
-        return "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || " +
-            "stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null"
+    static func ownerStatCommand(paths: [String], escapedNames: Bool) -> String {
+        let quotedPaths = paths.indices.map { "\"$a\($0)\"" }.joined(separator: " ")
+        // 格式串里的制表符写成 printf 能认的 `\t` 交给 sh，命令行上不出现真的制表符。
+        let gnuFormat = "\"$(printf '%%u\\t%%g\\t%%U\\t%%G')\""
+        let bsdFormat = "\"$(printf '%%u\\t%%g\\t%%Su\\t%%Sg')\""
+        return RemotePath.shScript(
+            "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null",
+            arguments: paths, escapedNames: escapedNames)
     }
 
     static func parseOwnerStatOutput(_ output: String) -> [OwnerStatRow] {

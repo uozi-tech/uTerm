@@ -23,7 +23,8 @@ actor MockSFTP: SFTPProviding {
     private var execStarted = false
 
     /// 内存 blob 存储：path → (data, mtime)。write / read / stat 均走此存储。
-    private var blobStore: [String: (Data, Date)] = [:]
+    /// 按逐字节的路径存（`RemoteNameKey`）：NFC 与 NFD 写法的同名文件是两个文件，和 Linux 上一样。
+    private var blobStore: [RemoteNameKey: (Data, Date)] = [:]
 
     /// 当为 true 时，带进度的 upload/download 会挂起直到 `release()`，并在挂起期间
     /// 响应 Task 取消（用于测试并发上限 / 取消 / 完成时机）。默认 false = 立即完成。
@@ -49,7 +50,11 @@ actor MockSFTP: SFTPProviding {
         }
     }
 
-    init(tree: [String: [RemoteEntry]] = [:]) {
+    /// 当成会还原 `RemoteName` 转义的 provider（同 `SFTPSession`）。默认不是。
+    nonisolated let escapesRawNames: Bool
+
+    init(tree: [String: [RemoteEntry]] = [:], escapesRawNames: Bool = false) {
+        self.escapesRawNames = escapesRawNames
         self.tree = tree
     }
 
@@ -83,7 +88,7 @@ actor MockSFTP: SFTPProviding {
     /// `download` 先查 blobStore，找不到则回落旧行为（path 拼字符串）。
     func download(remotePath: String) async throws -> Data {
         downloads.append(remotePath)
-        if let entry = blobStore[remotePath] {
+        if let entry = blobStore[remotePath.remoteKey] {
             return entry.0
         }
         return Data("file:\(remotePath)".utf8)
@@ -115,7 +120,7 @@ actor MockSFTP: SFTPProviding {
             await withCheckedContinuation { heldWholeWrites.append($0) }
         }
         if let wholeWriteError { throw wholeWriteError }
-        blobStore[path] = (data, Date())
+        blobStore[path.remoteKey] = (data, Date())
     }
 
     /// `write`（整文件写，编辑器保存走这条）被调了几次。
@@ -165,38 +170,38 @@ actor MockSFTP: SFTPProviding {
         }
         if let openStageError {
             // 打开就没成；路径照样落一份，好验证 handler 的 stat 兜底确实在这一档生效。
-            if blobStore[path] == nil { blobStore[path] = (Data(), Date()) }
+            if blobStore[path.remoteKey] == nil { blobStore[path.remoteKey] = (Data(), Date()) }
             throw SFTPWriteStageError(stage: .open, underlying: openStageError)
         }
         if let writeStageError {
             // EXCL 打开成功 → 文件已经存在 → 兜底 stat 必然命中。写失败原样抛，
             // handler 若还做那次兜底就会把「磁盘满」报成 file_exists。
-            if blobStore[path] == nil { blobStore[path] = (Data(), Date()) }
+            if blobStore[path.remoteKey] == nil { blobStore[path.remoteKey] = (Data(), Date()) }
             throw writeStageError
         }
         var base: Data
         switch mode {
         case .create:
-            if blobStore[path] != nil { throw SFTPFileExistsError(path: path) }
+            if blobStore[path.remoteKey] != nil { throw SFTPFileExistsError(path: path) }
             base = Data()
         case .overwrite:
             base = Data()
         case .write:
-            base = blobStore[path]?.0 ?? Data()
+            base = blobStore[path.remoteKey]?.0 ?? Data()
         }
         let start = Int(clamping: offset)
         if base.count < start { base.append(Data(count: start - base.count)) }
         let end = start + data.count
         if base.count < end { base.append(Data(count: end - base.count)) }
         if !data.isEmpty { base.replaceSubrange(start..<end, with: data) }
-        blobStore[path] = (base, Date())
+        blobStore[path.remoteKey] = (base, Date())
         rangeWrites.append((path, offset, data.count, mode))
     }
 
     /// 内存版区间读：到 EOF 会短。
     func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data {
         rangeReads.append((path, offset, length))
-        guard let all = blobStore[path]?.0 else {
+        guard let all = blobStore[path.remoteKey]?.0 else {
             throw NSError(domain: "MockSFTP", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "no such file: \(path)"
             ])
@@ -210,7 +215,7 @@ actor MockSFTP: SFTPProviding {
 
     /// 用指定 mtime 写入测试文件，覆盖“同一秒、等长改写”这类仅靠 stat 无法识别的场景。
     func setFile(_ path: String, data: Data, mtime: Date) {
-        blobStore[path] = (data, mtime)
+        blobStore[path.remoteKey] = (data, mtime)
     }
 
     /// `stat` 要回的权限位（原始 POSIX mode，含类型位）。没登记就是 nil，
@@ -232,7 +237,7 @@ actor MockSFTP: SFTPProviding {
     func stat(_ path: String) async throws -> RemoteStat {
         statCalls.append(path)
         if let statError { throw statError }
-        guard let entry = blobStore[path] else {
+        guard let entry = blobStore[path.remoteKey] else {
             throw NSError(domain: "MockSFTP", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "no such file: \(path)"
             ])
@@ -272,7 +277,7 @@ actor MockSFTP: SFTPProviding {
     }
 
     /// 内存里某个文件的内容（假主机照它答搜索命令）。
-    func fileData(_ path: String) -> Data? { blobStore[path]?.0 }
+    func fileData(_ path: String) -> Data? { blobStore[path.remoteKey]?.0 }
     func setExecOutput(_ s: String) { execOutput = s }
     func setBlockExec(_ value: Bool) {
         blockExec = value
@@ -328,12 +333,12 @@ actor MockSFTP: SFTPProviding {
     /// 新建空文件：记录路径供断言，并把空 blob 落库（mirror 真实 EXCL：路径
     /// 已存在则抛错，不覆盖）。
     func createFile(_ path: String) async throws {
-        if blobStore[path] != nil {
+        if blobStore[path.remoteKey] != nil {
             throw NSError(domain: "MockSFTP", code: 17,
                           userInfo: [NSLocalizedDescriptionKey: "file exists: \(path)"])
         }
         createdFiles.append(path)
-        blobStore[path] = (Data(), Date())
+        blobStore[path.remoteKey] = (Data(), Date())
     }
     func setPermissions(path: String, mode: UInt32) async throws {
         permissionChanges.append((path, mode & 0o777))

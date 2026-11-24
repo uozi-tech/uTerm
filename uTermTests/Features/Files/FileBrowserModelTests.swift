@@ -798,7 +798,8 @@ final class FileBrowserModelTests: XCTestCase {
         let folder = model.entries[0]
         await model.setPermissions(entry: folder, mode: 0o750, recursive: true)
         let execs = await mock.execCommands
-        XCTAssertEqual(execs, ["chmod -R 750 '/home/user/etc'"])
+        XCTAssertEqual(execs, [RemoteFileOperations.chmodRecursiveCommand(path: "/home/user/etc", mode: 0o750,
+                                                                          escapedNames: false)])
         let changes = await mock.permissionChanges
         XCTAssertTrue(changes.isEmpty, "递归走 exec，不走 setstat")
     }

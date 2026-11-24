@@ -115,10 +115,10 @@ actor SQLiteRemoteReader {
             if (try? await provider.stat(path)) == nil { throw SQLiteRemoteReadError.missing }
             throw error
         }
-        guard let main = entries.first(where: { $0.name == fileName && !$0.isDirectory }) else {
+        guard let main = entries.first(where: { $0.name.remoteKey == fileName.remoteKey && !$0.isDirectory }) else {
             throw SQLiteRemoteReadError.missing
         }
-        let wal = entries.first(where: { $0.name == fileName + "-wal" && !$0.isDirectory })
+        let wal = entries.first(where: { $0.name.remoteKey == (fileName + "-wal").remoteKey && !$0.isDirectory })
         let mainState = try await state(of: main, at: path)
         var walState: SQLiteFileState?
         if let wal { walState = try await state(of: wal, at: walPath) }

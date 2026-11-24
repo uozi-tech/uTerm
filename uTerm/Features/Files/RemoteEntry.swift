@@ -15,7 +15,8 @@ nonisolated struct RemoteEntry: Equatable, Sendable, Identifiable {
     let ownerName: String?
     let groupName: String?
 
-    var id: String { name }
+    /// 逐字节的身份：NFC 与 NFD 写法的同名文件是两个 id（见 `RemoteNameKey`）。
+    var id: RemoteNameKey { name.remoteKey }
     var ownerDisplayText: String {
         "\(Self.ownerLabel(name: ownerName, id: uid)) · \(Self.ownerLabel(name: groupName, id: gid))"
     }

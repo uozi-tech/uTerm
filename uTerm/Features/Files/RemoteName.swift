@@ -135,3 +135,27 @@ nonisolated enum RemoteName {
         }
     }
 }
+
+/// 远端名字 / 路径的**身份**：按字符串的 UTF-8 字节比较、哈希、排序。
+///
+/// Swift 的 `String ==`、`Set<String>`、`[String: …]` 按「标准等价」比较：NFC 的 `café`（`63 61 66 C3 A9`）和
+/// NFD 的 `café`（`63 61 66 65 CC 81`）是同一个串。可 Linux 的文件系统不做归一化，它们是两个文件（从 Mac 拷过去的
+/// 目录里常见）；拿 `String` 当身份，列表里两行 id 一样，选中第二个、动的是第一个。凡是「这是哪个远端文件」的判断
+/// ——列表项的 id、选中、按路径找已打开的标签 / 外部打开的会话 / 缓存——都用这个类型，不用 `String`。
+nonisolated struct RemoteNameKey: Hashable, Sendable, Comparable, CustomStringConvertible, ExpressibleByStringLiteral {
+    let utf8: [UInt8]
+
+    init(_ text: String) { utf8 = Array(text.utf8) }
+    init(stringLiteral value: String) { self.init(value) }
+
+    static func < (lhs: RemoteNameKey, rhs: RemoteNameKey) -> Bool {
+        lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
+    }
+
+    var description: String { String(decoding: utf8, as: UTF8.self) }
+}
+
+nonisolated extension String {
+    /// 远端名字 / 路径的逐字节身份（见 `RemoteNameKey`）。比较两个远端路径是不是同一个文件用 `a.remoteKey == b.remoteKey`。
+    var remoteKey: RemoteNameKey { RemoteNameKey(self) }
+}

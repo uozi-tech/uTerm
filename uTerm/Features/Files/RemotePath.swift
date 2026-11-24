@@ -48,26 +48,57 @@ nonisolated enum RemotePath {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// 远程**路径**交给 shell：同 `shellQuote`，但路径里有不是 UTF-8 的名字（`RemoteName` 的转义）时，
-    /// 还原成服务器上的原样字节——用 `printf` 的八进制转义造出来（`"$(printf '\262\342…')"`，POSIX sh 都认），
-    /// 否则 `chmod -R`、`stat`、`find` 拿到的是转义后的字符串，找不到那个文件。
-    static func shellQuotePath(_ path: String) -> String {
-        let bytes = RemoteName.bytes(path)
-        guard bytes != Array(path.utf8) else { return shellQuote(path) }
+    /// 在远端用 POSIX `sh` 跑一段脚本，脚本里的第 i 个参数是 `"$a<i>"`（按字节原样传进去）。
+    ///
+    /// 整段包成 `sh -c '…'`：exec 通道交给用户的登录 shell，它可能是 csh / tcsh（单引号里的 `!` 照样做历史展开、
+    /// 不认单引号里的换行）或老的 fish；外层只剩一个单引号串，里面没有 `!`、换行这类字符。参数不直接写进命令行，
+    /// 而是在脚本开头用 `printf` 的八进制转义造出来（`a0="$(printf '\057…'; printf x)"; a0="${a0%x}"`）：
+    /// - 名字里不是 UTF-8 的字节（`RemoteName` 的转义，`escapedNames` 为真时还原）、换行、`!`、引号都不会被哪一层
+    ///   shell 另作解释；
+    /// - 命令替换会吃掉结尾的换行，末尾垫一个 `x` 再用参数展开去掉，以换行结尾的名字不会变成它的兄弟。
+    ///
+    /// `escapedNames`：参数是不是 `RemoteName.display` 写法（`SFTPProviding.escapesRawNames`）。配对过的 Mac 一类
+    /// 名字本来就是合法 UTF-8 的 provider 传 false，名字里碰巧有转义的样子也原样传过去。
+    static func shScript(_ body: String, arguments: [String], escapedNames: Bool) -> String {
+        var script = ""
+        for (index, argument) in arguments.enumerated() {
+            let bytes = escapedNames ? RemoteName.bytes(argument) : Array(argument.utf8)
+            let name = "a\(index)"
+            if bytes.allSatisfy(isPlainShellByte), !bytes.isEmpty {
+                script += "\(name)='\(String(decoding: bytes, as: UTF8.self))'; "
+            } else {
+                script += "\(name)=\"$(printf '\(octalFormat(bytes))'; printf x)\"; \(name)=\"${\(name)%x}\"; "
+            }
+        }
+        return "sh -c " + shellQuote(script + body)
+    }
+
+    /// 不用转义、写进单引号也不会被任何一层 shell 解释的字节。
+    private static func isPlainShellByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+             UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "/"), UInt8(ascii: "."), UInt8(ascii: "_"),
+             UInt8(ascii: "-"), UInt8(ascii: "+"), UInt8(ascii: ","), UInt8(ascii: "@"), UInt8(ascii: ":"):
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// `printf` 的格式串：字母数字与 `/._` 原样，其余字节一律三位八进制（`%`、`\`、`'`、`-`、`!`、空白与所有
+    /// 非 ASCII 字节都不会被 printf / 任何 shell 另作解释）。
+    private static func octalFormat(_ bytes: [UInt8]) -> String {
         var format = ""
         for byte in bytes {
             switch byte {
             case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
-                 UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "/"), UInt8(ascii: "."),
-                 UInt8(ascii: "_"):
+                 UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "/"), UInt8(ascii: "."), UInt8(ascii: "_"):
                 format.append(Character(Unicode.Scalar(byte)))
             default:
-                // 其余一律八进制：`%`、`\`、`'`、`-`（开头的 `-` 会被当成选项）、空白与所有非 ASCII 字节
-                // 都不会被 printf / shell 另作解释。
                 let octal = String(byte, radix: 8)
                 format += "\\" + String(repeating: "0", count: 3 - octal.count) + octal
             }
         }
-        return "\"$(printf '" + format + "')\""
+        return format
     }
 }

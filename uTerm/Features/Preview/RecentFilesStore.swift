@@ -41,7 +41,7 @@ nonisolated final class RecentFilesStore {
 
     /// 添加或更新一个条目：去重后加到队头，截断 maxEntries。
     func touch(_ entry: RecentFileEntry) {
-        var entries = load().filter { $0.remotePath != entry.remotePath }
+        var entries = load().filter { $0.remotePath.remoteKey != entry.remotePath.remoteKey }
         entries.insert(entry, at: 0)
         if entries.count > Self.maxEntries {
             entries.removeLast(entries.count - Self.maxEntries)

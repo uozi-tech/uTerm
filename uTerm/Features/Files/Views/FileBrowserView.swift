@@ -34,7 +34,7 @@ struct FileBrowserContent: View {
     @State private var rowHover = RowHoverState()
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
-    private static let upRowID = ".."
+    private static let upRowID: RemoteEntry.ID = ".."
     /// 行高（`..` 行与条目行同高）。**整表一个拖放目标**靠它把落点换算成行号
     /// （见 `RemoteRowDropTargeting`），所以这个常量与 `upRow` / `entryRow` 的
     /// `.frame(height:)` 必须同源。

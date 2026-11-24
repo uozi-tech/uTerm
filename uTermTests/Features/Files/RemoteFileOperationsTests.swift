@@ -88,7 +88,10 @@ final class RemoteFileOperationsTests: XCTestCase {
         try await RemoteFileOperations.setPermissions(dirEntry("it's dir"), in: "/srv", mode: 0o750,
                                                       recursive: true, provider: mock)
         let commands = await mock.execCommands
-        XCTAssertEqual(commands, ["chmod -R 750 '/srv/it'\\''s dir'"])
+        XCTAssertEqual(commands, [RemoteFileOperations.chmodRecursiveCommand(path: "/srv/it's dir", mode: 0o750,
+                                                                             escapedNames: false)])
+        XCTAssertTrue(commands.first?.hasPrefix("sh -c ") ?? false)
+        XCTAssertTrue(commands.first?.contains("chmod -R 750 \"$a0\"") ?? false)
         let changes = await mock.permissionChanges
         XCTAssertTrue(changes.isEmpty)
     }
@@ -174,10 +177,12 @@ final class RemoteFileOperationsTests: XCTestCase {
     // MARK: 属主名
 
     func testOwnerStatCommandQuotesPaths() {
-        let command = RemoteFileOperations.ownerStatCommand(paths: ["/a b", "/it's"])
-        XCTAssertTrue(command.contains("'/a b' '/it'\\''s'"))
-        XCTAssertTrue(command.hasPrefix("(stat -c "))
+        let command = RemoteFileOperations.ownerStatCommand(paths: ["/a b", "/it's"], escapedNames: true)
+        XCTAssertTrue(command.hasPrefix("sh -c "), command)
+        XCTAssertTrue(command.contains("(stat -c "))
         XCTAssertTrue(command.contains("|| stat -f "))
+        XCTAssertTrue(command.contains("-- \"$a0\" \"$a1\""), command)
+        XCTAssertFalse(command.contains("\t"), "制表符交给 printf 生成，命令行上没有真的制表符")
     }
 
     func testParseOwnerStatOutputDropsNumericAndUnknownNames() {
