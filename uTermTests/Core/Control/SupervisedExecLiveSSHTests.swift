@@ -4,9 +4,9 @@ import XCTest
 @testable import uTerm
 
 /// `SupervisedExec` 对着**真 sshd** 端到端跑：生产连接池 → `ReusableSSHConnection` →
-/// Citadel `executeCommandStream` → 远端 shell → 杀进程组。
+/// `executeCommandStream` → 远端 shell → 杀进程组。
 ///
-/// 进程内的 Citadel 测试服务端没有 shell，这几条只能靠外部 sshd，所以**默认跳过**。
+/// 进程内的测试服务端（USSHTestServer）只有脚本化的 exec、没有真 shell 与进程组，这几条只能靠外部 sshd，所以**默认跳过**。
 /// 跑法（用完 `docker rm -f uterm-live-ssh`）：
 ///
 /// ```
