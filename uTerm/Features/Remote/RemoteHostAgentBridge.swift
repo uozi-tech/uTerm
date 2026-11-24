@@ -393,7 +393,9 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         Task { [weak self] in
             let result = await sessions.attach(RemoteHostAttachRequest(
                 sessionID: request.sessionID, cols: request.cols, rows: request.rows, controller: request.controller,
-                settleTimeout: request.settleTimeout, onReadable: { pump.drain() }))
+                settleTimeout: request.settleTimeout,
+                snapshotFormat: request.snapshotFormat.flatMap(RemoteTerminalSnapshotFormat.init(rawValue:)) ?? .binary,
+                onReadable: { pump.drain() }))
             switch result {
             case .failure(let error):
                 agent.terminalAttached(id, error: error.message)

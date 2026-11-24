@@ -100,7 +100,7 @@ ghosttyvt_zip=ghostty-vt-5ebe501a-2026112301-0024.xcframework.zip      sha256 ef
 ## 引擎版本串
 
 `engine_version` 和 `uTerm/Features/Terminal/Shadow/TerminalEngineVersion.swift` 的 `TerminalEngineVersion.current` 是同一个串：
-Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控握手带着它，两端不同就拒绝镜像终端；holder 检查点的版本头里也有它，
+Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控握手带着它，两端快照格式不互认时镜像改发回放流（两端都声明 `terminal-replay` 才行，否则拒绝镜像终端）；holder 检查点的版本头里也有它，
 对不上就丢弃检查点。vt 自己报的版本只有 `0.1.0-dev`，区分不了提交和补丁，所以手写。
 
 两处必须一字不差，两端各有一条单测拦着：`uTermTests/Features/Terminal/TerminalEngineLockTests.swift`、
@@ -112,8 +112,8 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
   远控照常镜像，旧版本存的 holder 检查点照常接回。`TerminalEngineLockTests.testSnapshotCompatibilityTableOnlyBridgesPatchLevels`
   核每一条只差补丁编号、走得到 `current`。0024 就是这样记的（2026-11-23，p0023 → p0024）。
   同一天换到上游 `2.2.2026112301` 时补丁只是换了编号和出处（上游的 0023 + 我们的 0024，内容就是原来的 0024 + 0023），版本串没动，表也不用加。
-- 快照格式可能变了（换 Ghostty 提交、动了 `src/terminal`、快照修订号加一）：不记表，表清空。新旧版本之间远控接不上终端
-  （会提示两端更新到同一版本）；Mac 本机终端重启后二进制快照解不开，改用检查点里退出时另存的回放流（`TerminalCheckpointBlob`
+- 快照格式可能变了（换 Ghostty 提交、动了 `src/terminal`、快照修订号加一）：不记表，表清空。新旧版本之间远控镜像改发回放流
+  （`RemoteTerminalReplay`：设备按本机引擎重画；两端都要是认得 `terminal-replay` 的版本，否则接不上终端、提示两端更新到同一版本）；Mac 本机终端重启后二进制快照解不开，改用检查点里退出时另存的回放流（`TerminalCheckpointBlob`
   第 3 版，VT 字节、最近 2000 行回滚）重画那一屏；iOS 经主机上的保持进程接回同理（那边每张检查点都带回放流）。
   只有回放流本身也没有的（这个机制上线之前存的、Mac 上退出前就崩溃了的）才只剩 holder 里那段字节。
 

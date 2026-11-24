@@ -58,6 +58,8 @@ nonisolated struct RemoteHostAttachRequest: Sendable {
     var controller: String
     /// 首张快照等终端按对端尺寸钉好的时限。
     var settleTimeout: TimeInterval
+    /// 镜像快照发哪种（`RemoteTerminalEngine.snapshotFormat`）。
+    var snapshotFormat: RemoteTerminalSnapshotFormat = .binary
     /// 有数据可取（在任意线程上调）。
     var onReadable: @Sendable () -> Void
 }

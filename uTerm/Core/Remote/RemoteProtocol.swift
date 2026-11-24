@@ -49,7 +49,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopRegion, RemoteFeature.desktopPasteFiles,
                                           RemoteFeature.desktopWindowFront, RemoteFeature.desktopWindowRefit,
                                           RemoteFeature.desktopWindowInput, RemoteFeature.desktopAuthPrompt,
-                                          RemoteFeature.arrangeSessions]
+                                          RemoteFeature.arrangeSessions, RemoteFeature.terminalReplay]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -127,6 +127,9 @@ nonisolated enum RemoteFeature {
     /// 终端里程序（Claude Code、Codex……）的状态：认得 `programStatus`。Mac 只给声明了的设备推；
     /// 老 Mac 不推，设备上的标签照旧只显示连接状态。
     static let programStatus = "program-status"
+    /// 两端终端引擎的快照格式不互认时，镜像快照改成回放流（`RemoteTerminalReplay`）：设备认得它、按本机引擎重画；
+    /// Mac 会对这样的设备改发。两端都要声明，缺一边就照旧拒绝镜像（老设备收到回放流会当二进制快照，解不开）。
+    static let terminalReplay = "terminal-replay"
     /// 链路层的端到端计量与分片（见 `RemoteLinkFlow`）：认得 `linkAck` / `linkFragment`。两端都声明才启用，
     /// 否则照旧整条消息直接交给 TCP。
     static let linkFlow = "link-flow"
@@ -301,7 +304,8 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case programStatus = 46
         /// 终端画面的整屏快照（终端通道，Mac → 设备）：接入时、改尺寸后、对端积压过多时发，之后的 `output` 接着它。
         /// 负载 = 1 字节标志（`RemoteTerminalSnapshotPiece`）+ 影子终端二进制快照的一段。快照可以很大，切成多条发。
-        /// 只有两端终端引擎版本相同（握手里的 `terminalEngine`）才会接入成功，所以设备一定解得开。
+        /// 两端引擎的快照格式互认（握手里的 `terminalEngine`）时发二进制快照；不互认、两端又都声明了 `terminal-replay`
+        /// 时，拼齐的那一张换成回放流（`RemoteTerminalReplay`，开头有自己的标记）。别的情况不接入。
         case terminalSnapshot = 47
         /// 反方向也用这一对：被控的 Mac → 声明了 `file-sharing` 的主控端发请求，主控端回应答。
         /// 主控端 → Mac：一条文件请求（`RemoteConstants.fileChannel`）。负载是 `RemoteFileCodec` 打包的
@@ -629,7 +633,8 @@ nonisolated enum RemoteTerminalSnapshotPiece {
     }
 }
 
-/// 两端终端引擎不是同一个版本时拒绝镜像：快照是引擎的二进制格式，画面也要同一个引擎才一致。
+/// 两端终端引擎版本不同时怎么镜像：快照格式互认就照常发二进制快照；不互认但两端都认得回放流，就改发回放流；
+/// 都不行才拒绝。
 nonisolated enum RemoteTerminalEngine {
     static var mismatchMessage: String { String(localized: "两端的终端引擎版本不同，没法镜像终端。把两端的 uTerm 更新到同一版本") }
 
@@ -638,6 +643,48 @@ nonisolated enum RemoteTerminalEngine {
     static func matches(_ remote: String?, local: String = TerminalEngineVersion.current) -> Bool {
         guard let remote else { return false }
         return TerminalEngineVersion.snapshotsCompatible(remote, local)
+    }
+
+    /// 接入这台对端时快照用哪种格式；nil = 不能接入。`replayBothWays`：两端都声明了 `terminal-replay`。
+    static func snapshotFormat(peer remote: String?, replayBothWays: Bool,
+                               local: String = TerminalEngineVersion.current) -> RemoteTerminalSnapshotFormat? {
+        if matches(remote, local: local) { return .binary }
+        return replayBothWays ? .replay : nil
+    }
+}
+
+/// 镜像快照的两种格式。原始值走 XPC（`RemoteHostAgentAttach.snapshotFormat`），已有的值不改。
+nonisolated enum RemoteTerminalSnapshotFormat: String, Codable, Sendable {
+    /// 影子终端的二进制快照（`ShadowTerminal.snapshot`），对端引擎的快照格式和本机互认才解得开。
+    case binary
+    /// 回放流（`RemoteTerminalReplay`）：哪个版本的引擎都吃得下。
+    case replay
+}
+
+/// 快照格式不互认时代替二进制快照发的那一张：`[标记][u16 列][u16 行][回放流]`，回放流是按这个网格重画这一屏的 VT 字节
+/// （`ShadowTerminal.replayStream`，最近 `RemoteConstants.snapshotScrollback` 行回滚）。设备收齐后按带来的尺寸在本机
+/// 引擎里重画、再拍一张自己的快照，之后照常还原。代价同 holder 检查点的回放流：命令标记这类引擎内部的状态不在里面；
+/// 二进制快照能带着没走完的半个转义序列，回放流不能，快照恰好拍在序列中间时接下来几个字节可能显示成乱码。
+/// 远控进程不链接引擎，这里只有编解码。
+nonisolated enum RemoteTerminalReplay {
+    /// 二进制快照的开头是引擎自己的标记，不会是这一串。
+    private static let magic = Array("uTermRP\u{1}".utf8)
+
+    static func encode(cols: UInt16, rows: UInt16, stream: Data) -> Data {
+        var data = Data(capacity: magic.count + 4 + stream.count)
+        data.append(contentsOf: magic)
+        data.append(contentsOf: [UInt8(cols >> 8), UInt8(cols & 0xFF), UInt8(rows >> 8), UInt8(rows & 0xFF)])
+        data.append(stream)
+        return data
+    }
+
+    /// 不是回放流（二进制快照）返回 nil。
+    static func decode(_ data: Data) -> (cols: UInt16, rows: UInt16, stream: Data)? {
+        guard data.count >= magic.count + 4, data.starts(with: magic) else { return nil }
+        let start = data.startIndex + magic.count
+        let cols = UInt16(data[start]) << 8 | UInt16(data[start + 1])
+        let rows = UInt16(data[start + 2]) << 8 | UInt16(data[start + 3])
+        return (cols, rows, Data(data[(start + 4)...]))
     }
 }
 

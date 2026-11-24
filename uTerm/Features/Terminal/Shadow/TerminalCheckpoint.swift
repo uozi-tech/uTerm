@@ -110,10 +110,8 @@ nonisolated extension TerminalCheckpointBlob {
     /// `cols` / `rows`：检查点记的网格（回放流是按它生成的）。任何线程可调。
     static func restorableSnapshot(_ blob: [UInt8], cols: UInt16, rows: UInt16) -> Data? {
         if let snapshot = decode(blob) { return snapshot }
-        guard let replay = decodeReplay(blob), cols > 0, rows > 0 else { return nil }
-        let terminal = ShadowTerminal(cols: cols, rows: rows, options: TerminalScrollbackLimits(lines: replayRedrawScrollback).shadowOptions)
-        terminal.feed(replay, asHistory: true)
-        return try? terminal.snapshot()
+        guard let replay = decodeReplay(blob) else { return nil }
+        return ShadowTerminal.snapshot(redrawing: replay, cols: cols, rows: rows, scrollbackLines: replayRedrawScrollback)
     }
 
     /// 重画回放流的临时终端的回滚上限：回放流只带最近两千行（`TerminalHeldCheckpoints.replayScrollbackLines`、

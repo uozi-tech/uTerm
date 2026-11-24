@@ -65,8 +65,8 @@ final class RemoteHostServerTests: XCTestCase {
     }
 
     /// `terminalEngine`：握手里报的终端引擎版本；真手机报 `TerminalEngineVersion.current`，报别的（或不报）接不了终端。
-    private func connect(_ phone: Phone, port: UInt16,
-                         terminalEngine: String? = TerminalEngineVersion.current) async throws -> (RemoteLink, Inbox, String) {
+    private func connect(_ phone: Phone, port: UInt16, terminalEngine: String? = TerminalEngineVersion.current,
+                         features: [String] = [RemoteFeature.keyConfirmation]) async throws -> (RemoteLink, Inbox, String) {
         let inbox = Inbox()
         let link = RemoteLink(connection: NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!,
                                                        using: RemoteLink.parameters()))
@@ -75,7 +75,7 @@ final class RemoteHostServerTests: XCTestCase {
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: phone.name,
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                 staticKey: phone.staticKey.publicKey.rawRepresentation,
-                                features: [RemoteFeature.keyConfirmation], terminalEngine: terminalEngine)
+                                features: features, terminalEngine: terminalEngine)
         let established = try await link.establish(role: .initiator, hello: hello, staticKey: phone.staticKey,
                                                    ephemeralKey: ephemeral)
         // 与真手机一样握手后先证明持有私钥：Mac 不接受不做这一步的连接。
@@ -371,8 +371,8 @@ final class RemoteHostServerTests: XCTestCase {
         revoked.close()
     }
 
-    /// 终端镜像的快照是引擎的二进制格式：对端握手里报的引擎版本和本机不同（或老版本根本不报）就不接入终端，
-    /// 回一条说得清原因的失败；终端不被接管、尺寸不动。配对、会话列表不受影响。
+    /// 终端镜像的快照是引擎的二进制格式：对端握手里报的引擎版本和本机不同（或老版本根本不报）、又不认回放流
+    /// （没声明 `terminal-replay`）就不接入终端，回一条说得清原因的失败；终端不被接管、尺寸不动。配对、会话列表不受影响。
     func test_attach_is_refused_when_the_terminal_engine_differs() async throws {
         let (server, session, _, sessionID, port) = try await makeServer()
         defer { server.stop(); session.dispose() }
@@ -400,6 +400,44 @@ final class RemoteHostServerTests: XCTestCase {
             link.close()
             _ = await waitUntil { server.connectedDevices.isEmpty }
         }
+    }
+
+    /// 引擎快照格式不互认、但对端声明了 `terminal-replay`：照常接入，快照换成回放流，设备在本机重画得出同样的画面。
+    func test_attach_with_a_different_engine_gets_a_replay_when_the_peer_takes_it() async throws {
+        let (server, session, _, sessionID, port) = try await makeServer()
+        defer { server.stop(); session.dispose() }
+        session.feedOutput(text: "replay me\r\n$ ")
+        let phone = Phone()
+        try server.trust(RemotePeer(id: phone.id, name: phone.name,
+                                    publicKey: phone.staticKey.publicKey.rawRepresentation, pairedAt: Date()))
+        let (link, inbox, _) = try await connect(phone, port: port, terminalEngine: "ghostty-ffffffff+p0000/snapshot-9",
+                                                 features: [RemoteFeature.keyConfirmation, RemoteFeature.terminalReplay])
+        defer { link.close() }
+        let trusted = await waitUntil { self.pairingStates(inbox).contains(.trusted) }
+        XCTAssertTrue(trusted)
+
+        link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(RemoteAttachRequest(sessionID: sessionID, cols: 71, rows: 22))))
+        let answered = await waitUntil { inbox.first(.attached) != nil }
+        XCTAssertTrue(answered)
+        let result = try RemoteJSON.decode(RemoteAttachResult.self, from: try XCTUnwrap(inbox.first(.attached)).payload)
+        XCTAssertNil(result.error)
+        let gotSnapshot = await waitUntil {
+            inbox.of(.terminalSnapshot).contains { RemoteTerminalSnapshotPiece.decode($0.payload)?.isLast == true }
+        }
+        XCTAssertTrue(gotSnapshot)
+        let assembly = SnapshotAssembly()
+        var whole: Data?
+        for message in inbox.of(.terminalSnapshot) {
+            let piece = try XCTUnwrap(RemoteTerminalSnapshotPiece.decode(message.payload))
+            whole = assembly.append(piece.data, isFirst: piece.isFirst, isLast: piece.isLast) ?? whole
+        }
+        let replay = try XCTUnwrap(RemoteTerminalReplay.decode(try XCTUnwrap(whole)), "发的是回放流")
+        XCTAssertEqual(replay.cols, 71)
+        XCTAssertEqual(replay.rows, 22)
+        let redrawn = try XCTUnwrap(RemoteTerminalReplay.restorable(try XCTUnwrap(whole)))
+        let phoneShadow = try ShadowTerminal(snapshot: redrawn, options: TerminalScrollbackLimits(lines: 1000).shadowOptions)
+        XCTAssertEqual(phoneShadow.viewportText(), session.shadow.viewportText())
+        XCTAssertEqual(phoneShadow.cursor, session.shadow.cursor)
     }
 
     /// 同一台设备换了长期密钥（冒充或重装）：不能直接放行，必须重新审批。

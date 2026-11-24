@@ -6,6 +6,7 @@ import Foundation
 /// 画面），之后把这条会话吃进去的每一批字节原样转给它。接入点是输出泵的 tap（`TerminalOutputPump.onFed`）：
 /// 字节刚喂进影子终端、泵的锁还在手上，这时拍的快照正好对应「到这批字节为止」，快照与之后的字节之间不会插进或漏掉字节。
 /// 二进制快照带着没走完的半个转义序列，所以任何字节位置上都能拍，不用等解析边界。
+/// 对端引擎的快照格式和本机不互认时，订阅者改收同一张快照生成的回放流（`RemoteTerminalReplay`，在连接队列上生成）。
 ///
 /// 这里是热路径：没有订阅者时只做一次判空；有订阅者时也只是加锁追加一份字节，编码、加密、发送都交给连接自己的
 /// 队列去做。积压超过上限（对端太慢，或在 `cat` 大文件）就丢弃积压、改发快照，所以带宽有上限，也绝不反压 Mac
@@ -44,11 +45,29 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         var estimatedCount: Int {
             lock.withLock { source?.full.count ?? result.count }
         }
+
+        /// 快照格式和对端不互认时发的回放流（`RemoteTerminalReplay`）：从裁好的快照生成，同一张给几个这样的订阅者共用。
+        /// 生成失败（极少）时是空的，接收端收到空的一张不还原，画面从之后的字节接着画。
+        var replay: Data {
+            if let replayResult = lock.withLock({ replayResult }) { return replayResult }
+            let snapshot = data
+            var encoded = Data()
+            if let replay = try? ShadowTerminal.replay(fromSnapshot: snapshot) {
+                encoded = RemoteTerminalReplay.encode(cols: replay.cols, rows: replay.rows, stream: replay.stream)
+            }
+            return lock.withLock {
+                if replayResult == nil { replayResult = encoded }
+                return replayResult ?? encoded
+            }
+        }
+        private var replayResult: Data?
     }
 
     /// 一个镜像订阅者：Mac 端替它攒着还没发出去的数据。`take` 由连接队列调用。
     nonisolated final class Subscriber: RemoteTerminalFeed, @unchecked Sendable {
         let id: UUID
+        /// 发二进制快照还是回放流（对端引擎的快照格式和本机不互认时）。
+        let format: RemoteTerminalSnapshotFormat
         private let lock = NSLock()
         private var snapshot: PendingSnapshot?
         /// `snapshot` 裁好之后的字节（开始发它的时候才裁）。
@@ -62,8 +81,9 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
         private var firstSnapshotReady: (@Sendable () -> Bool)?
         private var readyDeadline: UInt64 = 0
 
-        init(id: UUID, limit: Int, onReadable: @escaping @Sendable () -> Void) {
+        init(id: UUID, format: RemoteTerminalSnapshotFormat = .binary, limit: Int, onReadable: @escaping @Sendable () -> Void) {
             self.id = id
+            self.format = format
             self.limit = limit
             self.onReadable = onReadable
         }
@@ -93,9 +113,9 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
 
         /// 取走最多 `maxBytes` 字节；没有则 nil。快照没发完之前先发快照。
         func take(maxBytes: Int) -> Chunk? {
-            // 快照第一次发之前先裁回滚：不拿着订阅者的锁裁（泵那头追加字节要拿这把锁）。
+            // 快照第一次发之前先裁回滚（要回放流的再生成回放流）：不拿着订阅者的锁做（泵那头追加字节要拿这把锁）。
             if let unresolved = lock.withLock({ snapshotBytes == nil ? snapshot : nil }) {
-                let bytes = unresolved.data
+                let bytes = format == .replay ? unresolved.replay : unresolved.data
                 lock.withLock { if snapshot === unresolved, snapshotBytes == nil { snapshotBytes = bytes } }
             }
             lock.lock()
@@ -193,16 +213,16 @@ nonisolated final class TerminalMirrorTap: @unchecked Sendable {
 
     var hasSubscribers: Bool { lock.withLock { !subscribers.isEmpty } }
 
-    /// 新订阅者从一张快照开始。
+    /// 新订阅者从一张快照开始。`format`：发二进制快照还是回放流（`RemoteTerminalEngine.snapshotFormat`）。
     ///
     /// `firstSnapshotWhen`：第一张快照等它成立才拍（远控接入：终端按对端的尺寸钉好、影子终端报出那个网格之后），
     /// 最多等 `timeout`。这期间的字节不攒（第一张快照里都有）。钉尺寸是异步的（视图改尺寸 → 引擎在 IO 线程上改网格），
     /// 不等的话第一张快照是旧网格的，紧接着因为网格变了再发一张，对端先按错的网格画一下。
     @discardableResult
-    func subscribe(id: UUID, limit: Int = RemoteConstants.maxPendingOutputBytes,
+    func subscribe(id: UUID, format: RemoteTerminalSnapshotFormat = .binary, limit: Int = RemoteConstants.maxPendingOutputBytes,
                    firstSnapshotWhen ready: (@Sendable () -> Bool)? = nil, timeout: TimeInterval = 1,
                    onReadable: @escaping @Sendable () -> Void) -> Subscriber {
-        let subscriber = Subscriber(id: id, limit: limit, onReadable: onReadable)
+        let subscriber = Subscriber(id: id, format: format, limit: limit, onReadable: onReadable)
         if let ready {
             subscriber.waitForFirstSnapshot(until: ready, timeout: timeout)
             // 等到超时也没成立（也没有字节、没有网格变化来叫醒）：到点自己拍。

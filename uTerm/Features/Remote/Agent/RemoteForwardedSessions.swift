@@ -229,7 +229,8 @@ private final class ForwardedAttachment: RemoteHostTerminalAttachment {
     init(id: String, request: RemoteHostAttachRequest, owner: RemoteForwardedSessions) {
         self.id = id
         wire = RemoteHostAgentAttach(sessionID: request.sessionID, cols: request.cols, rows: request.rows,
-                                     controller: request.controller, settleTimeout: request.settleTimeout)
+                                     controller: request.controller, settleTimeout: request.settleTimeout,
+                                     snapshotFormat: request.snapshotFormat.rawValue)
         self.owner = owner
         buffer = ForwardedFeed(onReadable: request.onReadable)
         buffer.grant = { [weak owner, id] bytes in
@@ -337,6 +338,9 @@ nonisolated struct RemoteHostAgentAttach: Codable, Equatable, Sendable {
     var rows: Int
     var controller: String
     var settleTimeout: TimeInterval
+    /// `RemoteTerminalSnapshotFormat` 的原始值。老远控进程不带（nil = 二进制快照）；用字符串不用枚举：以后多一种取值，
+    /// 老 App 不至于整条请求解不开。
+    var snapshotFormat: String? = nil
 }
 
 /// 只恢复一次的续体（XPC 的回复与超时谁先到用谁）。

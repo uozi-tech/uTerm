@@ -539,6 +539,9 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         var verified: Bool
         /// 中间那张二进制快照的字节数。
         var snapshotBytes: Int
+        /// 流是按这个网格生成的（灌回去的终端要同样大）。
+        var cols: UInt16 = 0
+        var rows: UInt16 = 0
         /// 各步用时（秒）：拍快照（只有 `makeReplay` 计）、生成流、自查。
         var encodeSeconds = 0.0
         var buildSeconds = 0.0
@@ -576,12 +579,24 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         let built = now()
         if reproduces(preferred, source, graphemeClusters: graphemeClusters) {
             return Replay(stream: preferred, unwrapped: true, verified: true, snapshotBytes: snapshot.count,
+                          cols: cols(source), rows: rows(source),
                           buildSeconds: built - started, verifySeconds: now() - built)
         }
         let fallback = try buildReplay(source, snapshot: snapshot, continuationBytes: continuationBytes, unwrap: false)
         let verified = reproduces(fallback, source, graphemeClusters: graphemeClusters)
         return Replay(stream: fallback, unwrapped: false, verified: verified, snapshotBytes: snapshot.count,
+                      cols: cols(source), rows: rows(source),
                       buildSeconds: built - started, verifySeconds: now() - built)
+    }
+
+    /// 把一段回放流（别处、可能是别的引擎版本生成的）按生成时的网格灌进一个临时终端，拍成本机引擎的快照：之后照常按快照
+    /// 还原，尺寸、两个屏都由快照带着。`scrollbackLines`：临时终端的回滚上限（还原进影子时再按影子自己的上限裁）。
+    /// 任何线程可调。
+    static func snapshot(redrawing stream: Data, cols: UInt16, rows: UInt16, scrollbackLines: Int) -> Data? {
+        guard cols > 0, rows > 0 else { return nil }
+        let terminal = ShadowTerminal(cols: cols, rows: rows, options: TerminalScrollbackLimits(lines: scrollbackLines).shadowOptions)
+        terminal.feed(stream, asHistory: true)
+        return try? terminal.snapshot()
     }
 
     /// 只解到快照的 READY 标记：模式、光标、存的光标、当前屏都在，回滚不解（探针用完就扔，省掉整份历史）。

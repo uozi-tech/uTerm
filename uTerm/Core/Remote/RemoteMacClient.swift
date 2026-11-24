@@ -836,8 +836,11 @@ final class RemoteMacClient: Identifiable {
         guard state == .connected, let link else {
             throw connectionFailure
         }
-        // 那台 Mac 的终端引擎和本机不是同一个版本：它发来的快照解不开，不接入（Mac 那边也会拒绝）。
-        guard RemoteTerminalEngine.matches(peer?.terminalEngine) else {
+        // 那台 Mac 的终端引擎和本机快照格式不互认：两边都认得回放流就由 Mac 改发回放流（收到时在本机重画，见
+        // `RemoteTerminalReplay.restorable`），否则它发来的快照解不开，不接入（Mac 那边也会拒绝）。
+        let replayBothWays = peer?.supports(RemoteFeature.terminalReplay) == true
+            && RemoteConstants.localFeatures.contains(RemoteFeature.terminalReplay)
+        guard RemoteTerminalEngine.snapshotFormat(peer: peer?.terminalEngine, replayBothWays: replayBothWays) != nil else {
             throw RemoteAttachError.rejected(RemoteTerminalEngine.mismatchMessage)
         }
         table.expect(sessionID: sessionID, sink: sink)

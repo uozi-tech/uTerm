@@ -56,6 +56,7 @@ final class RemoteRegistrySessions: RemoteHostSessions {
         let target = (cols: request.cols, rows: request.rows)
         attachment.subscriber = session.mirrorTap.subscribe(
             id: attachment.subscriberID,
+            format: request.snapshotFormat,
             firstSnapshotWhen: { shadow.size == target },
             timeout: request.settleTimeout,
             onReadable: request.onReadable)

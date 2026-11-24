@@ -64,8 +64,9 @@ actor RemoteTerminalBackend: TerminalImageReceiving, TerminalVideoReceiving {
         let sink = RemoteChannelSink(
             onOutput: { output.yield(.bytes($0)) },
             onSnapshot: { piece, isFirst, isLast in
-                if let snapshot = assembly.append(piece, isFirst: isFirst, isLast: isLast) {
-                    output.yield(.snapshot(snapshot))
+                if let snapshot = assembly.append(piece, isFirst: isFirst, isLast: isLast),
+                   let restorable = RemoteTerminalReplay.restorable(snapshot) {
+                    output.yield(.snapshot(restorable))
                 }
             },
             onClosed: { [weak self] reason, ended in
@@ -219,6 +220,21 @@ actor RemoteTerminalBackend: TerminalImageReceiving, TerminalVideoReceiving {
         exitContinuation.finish()
         outputContinuation.finish()
     }
+}
+
+nonisolated extension RemoteTerminalReplay {
+    /// 收齐的一张交给输出泵之前：二进制快照原样；回放流（Mac 的引擎快照格式和本机不互认）按带来的网格在本机引擎里重画，
+    /// 拍成本机格式的快照。重画失败、或 Mac 生成回放流失败发来的空的一张，返回 nil（不还原，画面从之后的字节接着画）。
+    /// 在连接队列上调，重画一张几毫秒到几十毫秒。
+    static func restorable(_ snapshot: Data) -> Data? {
+        guard !snapshot.isEmpty else { return nil }
+        guard let replay = decode(snapshot) else { return snapshot }
+        return ShadowTerminal.snapshot(redrawing: replay.stream, cols: replay.cols, rows: replay.rows,
+                                       scrollbackLines: redrawScrollback)
+    }
+
+    /// 重画用的临时终端的回滚上限：回放流只带 `RemoteConstants.snapshotScrollback` 行（引擎按页裁，实际略少），留足余量。
+    private static let redrawScrollback = RemoteConstants.snapshotScrollback * 4
 }
 
 /// 把分段到达的快照拼起来。回调都在同一条连接队列上，按顺序来；换了连接（重连）时新快照的第一段会把旧的顶掉。

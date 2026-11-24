@@ -6,7 +6,7 @@ import os
 /// 接回留在主机上的会话时还原检查点）。
 nonisolated enum TerminalOutputItem: Sendable {
     case bytes(Data)
-    /// `ShadowTerminal.snapshot()` 的产物。两端引擎版本一致才会发（握手时核过）。
+    /// `ShadowTerminal.snapshot()` 的产物，本机引擎解得开（远控收到的回放流已在 `RemoteTerminalReplay.restorable` 里重画成本机格式）。
     case snapshot(Data)
     /// 过去的输出（接回留在主机上的会话时，客户端不在期间的那段）。照常解析进影子和画面，但里面的查询当时已经
     /// 没人答或者答过了：不应答、不写剪贴板、不发通知（`ShadowTerminal.feed(_:asHistory:)`），否则回答会打进

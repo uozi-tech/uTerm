@@ -33,8 +33,10 @@ final class RemoteHostConnection {
     private var peerSupportsAudioLossless = false
     /// 对端认得 `programStatus`（老设备收到会当未知消息断开整条连接）。本机也要声明过才推。
     private var peerTakesProgramStatus = false
-    /// 对端握手里报的终端引擎版本；和本机不同就不让它接入终端。
+    /// 对端握手里报的终端引擎版本；快照格式和本机不互认时改发回放流，对端不认回放流就不让它接入终端。
     private var peerTerminalEngine: String?
+    /// 两端都声明了 `terminal-replay`（对端认得回放流，本机会发）。
+    private var peerTakesTerminalReplay = false
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -193,6 +195,8 @@ final class RemoteHostConnection {
             peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
                 && server.localFeatures.contains(RemoteFeature.programStatus)
             peerTerminalEngine = peer.terminalEngine
+            peerTakesTerminalReplay = peer.supports(RemoteFeature.terminalReplay)
+                && server.localFeatures.contains(RemoteFeature.terminalReplay)
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
             peerSharesFilesFeature = peer.supports(RemoteFeature.fileSharing)
             if case .internet(let expected, _, _) = origin {
@@ -519,8 +523,9 @@ final class RemoteHostConnection {
     }
 
     private func attach(_ request: RemoteAttachRequest, channel: UInt32) async {
-        // 快照是引擎的二进制格式：对端不是同一个引擎版本就解不开，不接入。
-        guard RemoteTerminalEngine.matches(peerTerminalEngine, local: server.sessions.terminalEngine) else {
+        // 快照是引擎的二进制格式：对端的快照格式和本机不互认就改发回放流，对端连回放流也不认就不接入。
+        guard let format = RemoteTerminalEngine.snapshotFormat(peer: peerTerminalEngine, replayBothWays: peerTakesTerminalReplay,
+                                                               local: server.sessions.terminalEngine) else {
             sendAttachResult(channel, request.sessionID, error: RemoteTerminalEngine.mismatchMessage)
             return
         }
@@ -528,7 +533,8 @@ final class RemoteHostConnection {
         // 先钉尺寸再订阅：第一份快照就是手机的行列数（订阅里等钉好）。
         let result = await server.sessions.attach(RemoteHostAttachRequest(
             sessionID: request.sessionID, cols: Int(request.cols), rows: Int(request.rows), controller: peerName,
-            settleTimeout: RemoteConstants.attachGridSettleTimeout, onReadable: { pump.requestDrain() }))
+            settleTimeout: RemoteConstants.attachGridSettleTimeout, snapshotFormat: format,
+            onReadable: { pump.requestDrain() }))
         let attachment: any RemoteHostTerminalAttachment
         switch result {
         case .failure(let error):

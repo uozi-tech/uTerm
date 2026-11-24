@@ -13,6 +13,8 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
         let shadow = ShadowTerminal(cols: 80, rows: 24, options: TerminalScrollbackLimits(lines: 3_000).shadowOptions)
         let assembly = SnapshotAssembly()
         private(set) var snapshots = 0
+        /// 收到的快照里有几张是回放流（Mac 对快照格式不互认的设备改发的）。
+        private(set) var replays = 0
         private(set) var outputBytes = 0
         private lazy var pump = TerminalOutputPump(shadow: shadow, surface: NullSurface())
 
@@ -26,7 +28,10 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
                     guard let decoded = RemoteTerminalSnapshotPiece.decode(wire) else { return XCTFail("快照段解不开") }
                     if let snapshot = assembly.append(decoded.data, isFirst: decoded.isFirst, isLast: decoded.isLast) {
                         snapshots += 1
-                        pump.applySnapshot(snapshot)
+                        if RemoteTerminalReplay.decode(snapshot) != nil { replays += 1 }
+                        // 和 `RemoteTerminalBackend` 一样：回放流先在本机重画成快照。
+                        guard let restorable = RemoteTerminalReplay.restorable(snapshot) else { return XCTFail("回放流重画不出来") }
+                        pump.applySnapshot(restorable)
                     }
                 case .output(let bytes):
                     outputBytes += bytes.count
@@ -55,7 +60,9 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
         session = nil
     }
 
-    private func assertMirrored(_ receiver: Receiver, file: StaticString = #filePath, line: UInt = #line) {
+    /// `checksTitle`：回放流不带标题（标题由之后的字节或程序状态带），走回放流的用例不核。
+    private func assertMirrored(_ receiver: Receiver, checksTitle: Bool = true,
+                                file: StaticString = #filePath, line: UInt = #line) {
         let mac = session.shadow
         XCTAssertEqual(receiver.shadow.viewportText(), mac.viewportText(), "视口不同", file: file, line: line)
         if mac.totalRows - mac.size.rows <= RemoteConstants.snapshotScrollback {
@@ -71,7 +78,7 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
         XCTAssertEqual(receiver.shadow.isOnAlternateScreen, mac.isOnAlternateScreen, file: file, line: line)
         XCTAssertEqual(receiver.shadow.size.cols, mac.size.cols, file: file, line: line)
         XCTAssertEqual(receiver.shadow.size.rows, mac.size.rows, file: file, line: line)
-        XCTAssertEqual(receiver.shadow.title, mac.title, file: file, line: line)
+        if checksTitle { XCTAssertEqual(receiver.shadow.title, mac.title, file: file, line: line) }
     }
 
     private func history(_ range: Range<Int>) -> String {
@@ -239,7 +246,92 @@ final class TerminalMirrorSnapshotTests: XCTestCase {
         XCTAssertFalse(session.mirrorTap.hasSubscribers)
     }
 
+    /// 设备的引擎快照格式和 Mac 不互认（`RemoteFeature.terminalReplay`）：快照换成回放流，设备按本机引擎重画；
+    /// 画面照样一致，之后的原样字节接着画，改尺寸、积压溢出后补发的也是回放流。
+    func test_replay_subscriber_mirrors_through_a_redrawn_snapshot() {
+        session.feedOutput(text: history(0..<200) + "\u{1B}[3;7H")
+        let receiver = Receiver()
+        let subscriber = session.mirrorTap.subscribe(id: UUID(), format: .replay) {}
+
+        receiver.drain(subscriber, pieceBytes: 4 * 1024)
+        XCTAssertEqual(receiver.snapshots, 1)
+        XCTAssertEqual(receiver.replays, 1, "发的是回放流，不是二进制快照")
+        assertMirrored(receiver, checksTitle: false)
+
+        session.feedOutput(text: history(200..<230) + "\u{1B}[?1049h\u{1B}[3;5Hfull screen")
+        receiver.drain(subscriber)
+        XCTAssertEqual(receiver.snapshots, 1, "之后是原样字节")
+        assertMirrored(receiver, checksTitle: false)
+
+        // 全屏程序里改尺寸：补发的那张也是回放流，备用屏、光标都在。
+        session.shadow.resize(cols: 64, rows: 18)
+        session.shadowGridDidChange()
+        receiver.drain(subscriber)
+        XCTAssertEqual(receiver.replays, receiver.snapshots)
+        XCTAssertGreaterThanOrEqual(receiver.snapshots, 2, "尺寸变了要补发")
+        assertMirrored(receiver, checksTitle: false)
+    }
+
+    /// 同一刻要快照的有发二进制的、也有发回放流的：各拿各的。
+    func test_binary_and_replay_subscribers_share_one_capture() {
+        session.feedOutput(text: history(0..<50))
+        let binary = Receiver(), replay = Receiver()
+        let binarySubscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        let replaySubscriber = session.mirrorTap.subscribe(id: UUID(), format: .replay) {}
+        binary.drain(binarySubscriber)
+        replay.drain(replaySubscriber)
+        XCTAssertEqual(binary.replays, 0)
+        XCTAssertEqual(replay.replays, 1)
+        assertMirrored(binary)
+        assertMirrored(replay, checksTitle: false)
+    }
+
     // MARK: 协议的小件
+
+    /// 快照格式互认就发二进制；不互认时两端都认得回放流才改发回放流，否则不接入。
+    func test_snapshot_format_falls_back_to_replay_only_when_both_sides_take_it() {
+        let other = "ghostty-ffffffff+p0000/snapshot-9"
+        XCTAssertEqual(RemoteTerminalEngine.snapshotFormat(peer: TerminalEngineVersion.current, replayBothWays: true), .binary,
+                       "互认时仍发二进制（不多花生成回放流的时间）")
+        XCTAssertEqual(RemoteTerminalEngine.snapshotFormat(peer: TerminalEngineVersion.current, replayBothWays: false), .binary)
+        XCTAssertEqual(RemoteTerminalEngine.snapshotFormat(peer: other, replayBothWays: true), .replay)
+        XCTAssertEqual(RemoteTerminalEngine.snapshotFormat(peer: nil, replayBothWays: true), .replay)
+        XCTAssertNil(RemoteTerminalEngine.snapshotFormat(peer: other, replayBothWays: false))
+        XCTAssertNil(RemoteTerminalEngine.snapshotFormat(peer: nil, replayBothWays: false))
+        XCTAssertTrue(RemoteConstants.localFeatures.contains(RemoteFeature.terminalReplay))
+    }
+
+    /// 回放流的外包装；二进制快照认不成回放流，原样交给泵；空的一张（Mac 生成失败）不还原。
+    func test_replay_payload_round_trip_and_binary_snapshots_pass_through() throws {
+        let stream = Data("\u{1B}[31mred\u{1B}[0m\r\n".utf8)
+        let wire = RemoteTerminalReplay.encode(cols: 300, rows: 2, stream: stream)
+        let decoded = try XCTUnwrap(RemoteTerminalReplay.decode(wire))
+        XCTAssertEqual(decoded.cols, 300)
+        XCTAssertEqual(decoded.rows, 2)
+        XCTAssertEqual(decoded.stream, stream)
+        XCTAssertNil(RemoteTerminalReplay.decode(wire.dropLast(stream.count + 1)), "头不全")
+
+        session.feedOutput(text: "hello")
+        let binary = try session.shadow.snapshot()
+        XCTAssertNil(RemoteTerminalReplay.decode(binary))
+        XCTAssertEqual(RemoteTerminalReplay.restorable(binary), binary)
+        XCTAssertNil(RemoteTerminalReplay.restorable(Data()))
+
+        let redrawn = try XCTUnwrap(RemoteTerminalReplay.restorable(RemoteTerminalReplay.encode(cols: 20, rows: 3, stream: stream)))
+        let terminal = try ShadowTerminal(snapshot: redrawn, options: TerminalScrollbackLimits(lines: 100).shadowOptions)
+        XCTAssertEqual(terminal.size.cols, 20)
+        XCTAssertEqual(terminal.size.rows, 3)
+        XCTAssertEqual(terminal.recentLines(3).lines.first, "red")
+    }
+
+    /// XPC 上的接入请求加了可选的 `snapshotFormat`：老远控进程不带，App 当二进制快照。
+    func test_agent_attach_request_snapshot_format_is_optional() throws {
+        let old = #"{"sessionID":"\#(UUID().uuidString)","cols":80,"rows":24,"controller":"手机","settleTimeout":1}"#
+        XCTAssertNil(try JSONDecoder().decode(RemoteHostAgentAttach.self, from: Data(old.utf8)).snapshotFormat)
+        let new = RemoteHostAgentAttach(sessionID: UUID(), cols: 80, rows: 24, controller: "手机", settleTimeout: 1,
+                                        snapshotFormat: RemoteTerminalSnapshotFormat.replay.rawValue)
+        XCTAssertEqual(try JSONDecoder().decode(RemoteHostAgentAttach.self, from: JSONEncoder().encode(new)).snapshotFormat, "replay")
+    }
 
     func test_snapshot_piece_flags_round_trip() {
         for (isFirst, isLast) in [(true, false), (false, false), (false, true), (true, true)] {
