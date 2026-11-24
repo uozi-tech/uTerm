@@ -40,8 +40,8 @@ nonisolated enum RemoteFileSearch {
                                  maxDepth: Int = 8, limit: Int = 200) -> String {
         let pat = pattern.isEmpty ? "*" : "*\(pattern)*"
         return RemotePath.shScript(
-            "find \"$a0\" -maxdepth \(maxDepth) \\( -type f -o -type d \\) "
-                + "-iname \"$a1\" -printf '%y\\t%p\\n' 2>/dev/null | head -n \(limit)",
+            "find \(argument: 0) -maxdepth \(maxDepth) \\( -type f -o -type d \\) "
+                + "-iname \(argument: 1) -printf '%y\\t%p\\n' 2>/dev/null | head -n \(limit)",
             arguments: [root, pat], escapedNames: escapedNames)
     }
 

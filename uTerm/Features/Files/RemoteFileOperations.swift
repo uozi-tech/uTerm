@@ -183,7 +183,7 @@ nonisolated enum RemoteFileOperations {
 
     /// `sh -c '…chmod -R <八进制> "$a0"'`（路径按字节传，见 `RemotePath.shScript`）。
     static func chmodRecursiveCommand(path: String, mode: UInt32, escapedNames: Bool) -> String {
-        RemotePath.shScript("chmod -R \(String(mode & 0o777, radix: 8)) \"$a0\"",
+        RemotePath.shScript("chmod -R \(octal: mode & 0o777) \(argument: 0)",
                             arguments: [path], escapedNames: escapedNames)
     }
 
@@ -298,11 +298,9 @@ nonisolated enum RemoteFileOperations {
 
     /// GNU `stat -c` 优先，失败回退 BSD `stat -f`；输出每行 `uid\tgid\tuser\tgroup`。
     static func ownerStatCommand(paths: [String], escapedNames: Bool) -> String {
-        let quotedPaths = paths.indices.map { "\"$a\($0)\"" }.joined(separator: " ")
-        let gnuFormat = RemotePath.shellQuote("%u\t%g\t%U\t%G")
-        let bsdFormat = RemotePath.shellQuote("%u\t%g\t%Su\t%Sg")
+        let all = 0..<paths.count
         return RemotePath.shScript(
-            "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null",
+            "(stat -c '%u\t%g\t%U\t%G' -- \(arguments: all) 2>/dev/null) || stat -f '%u\t%g\t%Su\t%Sg' \(arguments: all) 2>/dev/null",
             arguments: paths, escapedNames: escapedNames)
     }
 

@@ -97,7 +97,7 @@ final class RemoteNameTests: XCTestCase {
 
     /// 参数原样回显出来：`printf '%s' "$a0"`。
     private func echoed(_ path: String, escaped: Bool = true, shell: String = "/bin/sh") throws -> [UInt8] {
-        try run(RemotePath.shScript("printf '%s|' \"$a0\"", arguments: [path], escapedNames: escaped), in: shell)
+        try run(RemotePath.shScript("printf '%s|' \(argument: 0)", arguments: [path], escapedNames: escaped), in: shell)
     }
 
     func testPlainPathsArriveUnchanged() throws {
@@ -127,7 +127,7 @@ final class RemoteNameTests: XCTestCase {
         for shell in ["/bin/csh", "/bin/tcsh", "/bin/zsh", "/bin/bash"] where FileManager.default.isExecutableFile(atPath: shell) {
             XCTAssertEqual(try echoed(path, shell: shell), raw + Array("|".utf8), shell)
         }
-        let command = RemotePath.shScript("printf '%s|' \"$a0\"", arguments: [path], escapedNames: true)
+        let command = RemotePath.shScript("printf '%s|' \(argument: 0)", arguments: [path], escapedNames: true)
         XCTAssertTrue(command.hasPrefix("sh -c '"), command)
         XCTAssertFalse(command.contains("\n"), "命令行上不能有真的换行（csh 不认单引号里的换行）")
         XCTAssertFalse(command.contains("!"), "命令行上不能有 !（csh 单引号里也做历史展开）")
