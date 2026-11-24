@@ -4,9 +4,10 @@ import USSHTestServer
 @testable import uTerm
 @testable import USSHKit
 
-/// 上传与编辑器保存「整份替换」远端文件：失败时原来的文件不动、不留半截，成功时换过去的文件保留原来的权限。
-/// 目标的身份换不过去时（符号链接、服务器没有 posix-rename、属主不同）照旧原地写。
-/// 服务端是进程内的测试服务端，背后是本机临时目录（`SFTPLocalFileSystem`），权限、符号链接都是真的。
+/// 上传与编辑器保存怎么写远端文件：
+/// - 目标已经在：原地写，和迁移之前一样（同一个 inode，硬链接、单文件挂载看得到改动；只读文件写不进去）；
+/// - 新建文件：先写临时文件再改名，失败、取消、断线时目标位置上什么都不留。
+/// 服务端是进程内的测试服务端，背后是本机临时目录（`SFTPLocalFileSystem`），权限、inode、链接都是真的。
 final class SFTPSessionAtomicUploadTests: XCTestCase {
 
     private var fileSystem: SFTPLocalFileSystem!
@@ -73,19 +74,83 @@ final class SFTPSessionAtomicUploadTests: XCTestCase {
     /// 比一个 WRITE 大得多，第二个 WRITE 失败时一定已经写了一部分。
     private let big = Data(repeating: 0x61, count: 2 * 1_048_576)
 
-    func testOverwriteReplacesTheContentAndKeepsThePermissions() async throws {
+    private func inode(_ name: String) throws -> Int {
+        try FileManager.default.attributesOfItem(atPath: local(name).path)[.systemFileNumber] as? Int ?? -1
+    }
+
+    private func temporaryName(_ name: String) -> String { ".\(name).uterm-upload.tmp" }
+
+    // MARK: - 目标已经在：原地写
+
+    func testOverwriteWritesInPlaceAndKeepsTheInode() async throws {
         try put("app.conf", "old", mode: 0o640)
+        let before = try inode("app.conf")
 
         try await session.upload(data: Data("new".utf8), toRemotePath: "/app.conf", onProgress: nil)
 
         XCTAssertEqual(try text("app.conf"), "new")
-        XCTAssertEqual(try mode("app.conf"), 0o640, "换过去的文件保留原来的权限")
+        XCTAssertEqual(try inode("app.conf"), before, "同一个 inode：单文件挂载、开着它的进程看得到改动")
+        XCTAssertEqual(try mode("app.conf"), 0o640)
+        XCTAssertEqual(faults.requestCount(of: .rename), 0)
+        XCTAssertEqual(faults.requestCount(of: .extended(SFTPExtensionName.posixRename)), 0)
         try assertOnly(["app.conf"])
-        XCTAssertGreaterThan(faults.requestCount(of: .extended(SFTPExtensionName.posixRename)), 0,
-                             "走的是临时文件 + posix-rename")
     }
 
-    func testFailedOverwriteLeavesTheOriginalUntouched() async throws {
+    func testEditorSaveWritesInPlace() async throws {
+        try put("notes.md", "draft", mode: 0o600)
+        let before = try inode("notes.md")
+
+        try await session.write("/notes.md", data: Data("final".utf8))
+
+        XCTAssertEqual(try text("notes.md"), "final")
+        XCTAssertEqual(try inode("notes.md"), before)
+        XCTAssertEqual(try mode("notes.md"), 0o600)
+        try assertOnly(["notes.md"])
+    }
+
+    /// 只读文件和迁移之前一样写不进去（换 inode 的做法只要目录可写就能把它盖掉）。
+    func testReadOnlyTargetIsRefusedAsBefore() async throws {
+        try put("locked.conf", "keep", mode: 0o444)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: local("locked.conf").path) }
+
+        do {
+            try await session.upload(data: Data("new".utf8), toRemotePath: "/locked.conf", onProgress: nil)
+            XCTFail("只读文件不该被改")
+        } catch {}
+        do {
+            try await session.write("/locked.conf", data: Data("new".utf8))
+            XCTFail("只读文件不该被改")
+        } catch {}
+
+        XCTAssertEqual(try text("locked.conf"), "keep")
+        try assertOnly(["locked.conf"])
+    }
+
+    func testHardLinkStillSharesTheContent() async throws {
+        try put("a.conf", "old")
+        try FileManager.default.linkItem(at: local("a.conf"), to: local("b.conf"))
+
+        try await session.upload(data: Data("new".utf8), toRemotePath: "/a.conf", onProgress: nil)
+
+        XCTAssertEqual(try text("b.conf"), "new", "硬链接的另一个名字看得到改动")
+        XCTAssertEqual(try inode("a.conf"), try inode("b.conf"))
+    }
+
+    /// 符号链接：写进它指向的文件，链接还是链接。
+    func testSymlinkTargetIsWrittenThroughTheLink() async throws {
+        try put("real.conf", "old")
+        try FileManager.default.createSymbolicLink(atPath: local("link.conf").path, withDestinationPath: "real.conf")
+
+        try await session.upload(data: Data("new".utf8), toRemotePath: "/link.conf", onProgress: nil)
+
+        XCTAssertEqual(try text("real.conf"), "new")
+        let type = try FileManager.default.attributesOfItem(atPath: local("link.conf").path)[.type] as? FileAttributeType
+        XCTAssertEqual(type, .typeSymbolicLink, "链接还是链接")
+        try assertOnly(["real.conf", "link.conf"])
+    }
+
+    /// 已经在的目标写到一半失败：和迁移之前一样是半截的（有意如此，换来的是不换 inode），但不留临时文件。
+    func testFailedOverwriteBehavesAsBeforeAndLeavesNoTemporaryFile() async throws {
         try put("app.conf", "precious")
         faults.fail(.write, occurrence: 2, with: .failure, message: "disk full")
 
@@ -94,8 +159,30 @@ final class SFTPSessionAtomicUploadTests: XCTestCase {
             XCTFail("写到一半失败应当报错")
         } catch {}
 
-        XCTAssertEqual(try text("app.conf"), "precious", "目标没被截断")
+        XCTAssertEqual(faults.requestCount(of: .open), 1, "失败之后不再自己重写一遍")
         try assertOnly(["app.conf"])
+    }
+
+    // MARK: - 新建文件：临时文件 + 改名
+
+    func testNewFileUploadIsMovedIntoPlace() async throws {
+        try await session.upload(data: Data("hello".utf8), toRemotePath: "/fresh.txt", onProgress: nil)
+
+        XCTAssertEqual(try text("fresh.txt"), "hello")
+        XCTAssertEqual(faults.requestCount(of: .rename), 1)
+        try assertOnly(["fresh.txt"])
+    }
+
+    /// 没有 posix-rename 也行：新文件用的是普通 rename（目标本来就不在）。
+    func testNewFileWorksWithoutPosixRename() async throws {
+        var extensions = SFTPServer.defaultExtensions
+        extensions[SFTPExtensionName.posixRename] = nil
+        try await start(extensions: extensions)
+
+        try await session.upload(data: Data("hello".utf8), toRemotePath: "/fresh.txt", onProgress: nil)
+
+        XCTAssertEqual(try text("fresh.txt"), "hello")
+        try assertOnly(["fresh.txt"])
     }
 
     func testFailedNewUploadLeavesNothingBehind() async throws {
@@ -109,97 +196,54 @@ final class SFTPSessionAtomicUploadTests: XCTestCase {
         try assertOnly([])
     }
 
-    func testCancelledUploadRemovesTheTemporaryFile() async throws {
-        try put("app.conf", "precious")
+    func testCancelledNewUploadLeavesNothingBehind() async throws {
         faults.delayResponses(of: .write, by: .milliseconds(400))
         let session = session!
         let big = big
-        let task = Task { try await session.upload(data: big, toRemotePath: "/app.conf", onProgress: nil) }
+        let task = Task { try await session.upload(data: big, toRemotePath: "/fresh.bin", onProgress: nil) }
         try await Task.sleep(for: .milliseconds(150))
         task.cancel()
         _ = try? await task.value
         faults.delayResponses(of: .write, by: nil)
 
-        XCTAssertEqual(try text("app.conf"), "precious")
-        // 删临时文件的请求在不继承取消的任务里，等它落地。
-        let deadline = ContinuousClock.now + .seconds(5)
-        while ContinuousClock.now < deadline,
-              (try FileManager.default.contentsOfDirectory(atPath: fileSystem.rootPath)).count > 1 {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        try assertOnly(["app.conf"])
+        try assertOnly([])
     }
 
-    func testEditorSaveGoesThroughTheSameReplacement() async throws {
-        try put("notes.md", "draft", mode: 0o600)
+    /// 断线：临时文件删不掉（没有连接了），但目标位置上没有半截文件；下一次往同一个名字上传时把它清掉。
+    func testConnectionLossLeavesOnlyTheTemporaryFileAndTheNextUploadCleansItUp() async throws {
+        faults.dropConnection(on: .write, occurrence: 2)
 
-        try await session.write("/notes.md", data: Data("final".utf8))
+        do {
+            try await session.upload(data: big, toRemotePath: "/fresh.bin", onProgress: nil)
+            XCTFail("断线应当报错")
+        } catch {}
+        try assertOnly([temporaryName("fresh.bin")])
 
-        XCTAssertEqual(try text("notes.md"), "final")
-        XCTAssertEqual(try mode("notes.md"), 0o600)
-        try assertOnly(["notes.md"])
+        try await start()
+        try await session.upload(data: Data("ok".utf8), toRemotePath: "/fresh.bin", onProgress: nil)
+
+        XCTAssertEqual(try text("fresh.bin"), "ok")
+        try assertOnly(["fresh.bin"])
     }
 
-    /// 临时文件的权限改不过去（服务器不让 fsetstat）：不换，免得 0600 的文件换完成了默认权限。照旧原地写。
-    func testPermissionsThatCannotBeCopiedFallBackToInPlace() async throws {
-        try put("secret.key", "old", mode: 0o600)
-        faults.fail(.fsetstat, with: .permissionDenied, message: "nope")
+    /// 临时文件的位置上有人放了符号链接：不跟着它写、也不删它，直接独占地建目标。
+    func testPlantedSymlinkAtTheTemporaryPathIsNeitherFollowedNorRemoved() async throws {
+        try put("elsewhere", "untouched")
+        try FileManager.default.createSymbolicLink(atPath: local(temporaryName("fresh.txt")).path,
+                                                   withDestinationPath: "elsewhere")
 
-        try await session.upload(data: Data("new".utf8), toRemotePath: "/secret.key", onProgress: nil)
-
-        XCTAssertEqual(try text("secret.key"), "new")
-        XCTAssertEqual(try mode("secret.key"), 0o600)
-        try assertOnly(["secret.key"])
-    }
-
-    /// 符号链接：换掉链接本身会把它变成普通文件。原地写，写进它指向的文件。
-    func testSymlinkTargetIsWrittenThroughTheLink() async throws {
-        try put("real.conf", "old")
-        try FileManager.default.createSymbolicLink(atPath: local("link.conf").path, withDestinationPath: "real.conf")
-
-        try await session.upload(data: Data("new".utf8), toRemotePath: "/link.conf", onProgress: nil)
-
-        XCTAssertEqual(try text("real.conf"), "new")
-        let type = try FileManager.default.attributesOfItem(atPath: local("link.conf").path)[.type] as? FileAttributeType
-        XCTAssertEqual(type, .typeSymbolicLink, "链接还是链接")
-        try assertOnly(["real.conf", "link.conf"])
-    }
-
-    /// 没有 posix-rename 时绝不先删目标再改名（最后一步失败就两份都没了）：照旧原地写。
-    func testWithoutPosixRenameTheTargetIsOverwrittenInPlace() async throws {
-        var extensions = SFTPServer.defaultExtensions
-        extensions[SFTPExtensionName.posixRename] = nil
-        try await start(extensions: extensions)
-        try put("app.conf", "old")
-
-        try await session.upload(data: Data("new".utf8), toRemotePath: "/app.conf", onProgress: nil)
-
-        XCTAssertEqual(try text("app.conf"), "new")
-        XCTAssertEqual(faults.requestCount(of: .rename), 0)
-        XCTAssertEqual(faults.requestCount(of: .remove), 0, "没有删过目标")
-        try assertOnly(["app.conf"])
-    }
-
-    /// 新文件没有可保留的身份，有没有 posix-rename 都走临时文件：失败时目标位置上什么都不留。
-    func testNewFileUploadIsMovedIntoPlace() async throws {
         try await session.upload(data: Data("hello".utf8), toRemotePath: "/fresh.txt", onProgress: nil)
 
         XCTAssertEqual(try text("fresh.txt"), "hello")
-        XCTAssertEqual(faults.requestCount(of: .rename), 1)
-        try assertOnly(["fresh.txt"])
+        XCTAssertEqual(try text("elsewhere"), "untouched")
+        try assertOnly(["fresh.txt", "elsewhere", temporaryName("fresh.txt")])
     }
 
     /// 临时文件名按字节拼在目标旁边：不是 UTF-8 的名字也落在同一个目录、同一个名字上。
     /// （APFS 只收合法 UTF-8 的文件名，真文件试不了，这里核拼出来的字节。）
     func testTemporaryPathSitsNextToTheTargetAndIsHidden() {
         let path = SFTPSession.temporaryUploadPath(for: SFTPPath(bytes: Array("/srv/www/".utf8) + [0xFF] + Array("x".utf8)))
-        let bytes = Array(path.bytes)
-        XCTAssertEqual(Array(bytes.prefix(10)), Array("/srv/www/.".utf8))
-        XCTAssertEqual(bytes[10], 0xFF)
-        let tail = String(decoding: bytes.suffix(from: 11), as: UTF8.self)
-        XCTAssertTrue(tail.hasPrefix("x.uterm-upload-") && tail.hasSuffix(".tmp"), tail)
-        XCTAssertNotEqual(SFTPSession.temporaryUploadPath(for: "/a").bytes,
-                          SFTPSession.temporaryUploadPath(for: "/a").bytes, "每次随机")
-        XCTAssertEqual(Array(SFTPSession.temporaryUploadPath(for: "bare").bytes.prefix(5)), Array(".bare".utf8))
+        XCTAssertEqual(Array(path.bytes), Array("/srv/www/.".utf8) + [0xFF] + Array("x.uterm-upload.tmp".utf8))
+        XCTAssertEqual(Array(SFTPSession.temporaryUploadPath(for: "bare").bytes), Array(".bare.uterm-upload.tmp".utf8))
     }
 }

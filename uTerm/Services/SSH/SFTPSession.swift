@@ -96,9 +96,9 @@ actor SFTPSession: SFTPProviding {
         try await upload(data: data, toRemotePath: toRemotePath, onProgress: nil)
     }
 
-    /// 编辑器保存：整份换掉。和 `upload` 一样先写临时文件再换过去，保存失败时远端还是原来那份。
+    /// 编辑器保存：原地写（不换 inode，挂载进容器的单个文件、硬链接照样看得到改动）。
     func write(_ path: String, data: Data) async throws {
-        try await upload(data: data, toRemotePath: path, onProgress: nil)
+        try await writeRange(path, offset: 0, data: data, mode: .overwrite)
     }
 
     // MARK: - 区间读写（分片 / 断点续传的基础原语）
@@ -262,74 +262,83 @@ actor SFTPSession: SFTPProviding {
         }
     }
 
-    // MARK: 整份替换（上传、保存）
+    // MARK: 整份写（上传、保存）
 
-    /// 把 `remotePath` 整份换成 `write` 写出的内容，失败时（断线、磁盘满、被取消）远端原来的文件不动、也不留半截。
+    /// 把 `remotePath` 整份写成 `write` 写出的内容。
     ///
-    /// 做法同 USSHKit 的 `SSHFileTransferSession.uploadAtomically`：写进同目录的临时文件（随机名、独占创建，不会写穿
-    /// 别人预先放好的文件或符号链接），写完再 `posix-rename` 原子地换过去。但目标已存在时这样换会改掉它的身份
-    /// （属主、属组、权限、硬链接、符号链接），编辑服务器上的配置文件时这比失败还糟，所以下面几种情况**照旧原地写**
-    /// （`[.write, .create, .truncate]`，失败时目标是半截的，和以前一样）：
-    /// - 目标是符号链接或不是普通文件（原地写是写进链接指向的文件）；
-    /// - 服务器没有 `posix-rename@openssh.com`（绝不先删目标再改名：最后一步失败就两份都没了）；
-    /// - 临时文件建不出来（目录不可写、名字太长……）；
-    /// - 临时文件的属主 / 属组和目标的不一样（目标是别人的、只是我们有写权限）。
-    /// 换过去之前把目标的权限位抄到临时文件上。
+    /// - **目标已经在**（任何类型，或者说不清在不在）：原地写（`[.write, .create, .truncate]`），和迁移之前一模一样。
+    ///   不换 inode：Docker / Kubernetes 单文件挂载、硬链接、开着它的进程与文件监听看到的都是同一个文件，属主、
+    ///   权限、ACL、扩展属性、SELinux 标签不动，只读文件照样写不进去；代价也和以前一样，写到一半失败时目标是半截的。
+    /// - **新建文件**：先写同目录的临时文件 `.<名字>.uterm-upload.tmp`（独占创建），写完再改名到目标；失败、取消、
+    ///   断线时目标位置上什么都没有，临时文件就地删掉（关句柄和删文件在同一个不继承取消、有时限的任务里）。
+    ///
+    /// 临时文件名是固定的：断线时删不掉的那一个，下次往同一个名字上传时发现它（普通文件）就先删掉再用，
+    /// 所以每个名字最多残留一个，直到下一次上传同名文件。见 `claimTemporary`。
     private func replacing(_ remotePath: String,
                            write: (SFTPFile) async throws -> Void) async throws {
         let target = sftpPath(remotePath)
-        let existing: SFTPFileAttributes?
+        let isNew: Bool
         do {
-            existing = try await sftp.lstat(target)
+            _ = try await sftp.lstat(target)
+            isNew = false
         } catch let error as SFTPError where error.statusCode == .noSuchFile || error.statusCode == .noSuchPath {
-            existing = nil
+            isNew = true
         } catch {
             // 说不清目标在不在（权限之类）：交给原地写，让真正的错误在打开时报出来。
-            return try await writeInPlace(target, write: write)
+            try Task.checkCancellation()
+            isNew = false
         }
-        if let existing {
-            let type = (existing.permissions ?? 0) & 0o170000
-            guard type == 0o100000, sftp.supportsExtension(SFTPExtensionName.posixRename) else {
-                return try await writeInPlace(target, write: write)
-            }
-        }
+        guard isNew else { return try await writeInPlace(target, write: write) }
 
         let temporary = Self.temporaryUploadPath(for: target)
-        let file: SFTPFile
-        do {
-            file = try await sftp.openFile(temporary, flags: [.write, .create, .exclusive])
-        } catch {
-            try Task.checkCancellation()
-            return try await writeInPlace(target, write: write)
+        guard let file = try await claimTemporary(temporary) else {
+            // 临时文件建不出来（名字太长、有人在那儿放了别的东西……）：独占地直接建目标，失败时删掉的也只是自己建的。
+            return try await writeNewFileDirectly(target, write: write)
         }
         do {
-            if let existing, try await !adoptsIdentity(of: existing, file) {
-                try? await file.close()
-                await removeIgnoringCancellation(temporary)
-                return try await writeInPlace(target, write: write)
-            }
             try await write(file)
             try await file.close()
-            // 新文件用 `.standard`：这期间别人在同一个名字上建了文件，就报错而不是盖掉它。
-            try await sftp.rename(temporary, to: target, mode: existing == nil ? .standard : .posix)
+            // `.standard`：这期间别人在同一个名字上建了文件，就报错而不是盖掉它。
+            try await sftp.rename(temporary, to: target, mode: .standard)
         } catch {
-            try? await file.close()
-            await removeIgnoringCancellation(temporary)
+            await discard(file, at: temporary)
             throw error
         }
     }
 
-    /// 临时文件能不能顶替 `existing`：属主 / 属组一样，权限位抄得过去（写内容之前抄，私有文件的内容不会有一刻
-    /// 是别人读得到的）。抄不过去（服务器不支持 fsetstat、不让改）就不换，免得 0600 的文件换完成了 0644。
-    private func adoptsIdentity(of existing: SFTPFileAttributes, _ file: SFTPFile) async throws -> Bool {
-        if let owner = existing.owner, let mine = try? await file.stat().owner, owner != mine { return false }
-        guard let permissions = existing.permissions else { return true }
+    /// 独占地建临时文件。已经有一个普通文件（上次断线留下的）就删掉再建一次；是别的东西（符号链接、目录）就不碰，
+    /// 返回 nil。建不出来也返回 nil。
+    private func claimTemporary(_ temporary: SFTPPath) async throws -> SFTPFile? {
+        for attempt in 0..<2 {
+            do {
+                return try await sftp.openFile(temporary, flags: [.write, .create, .exclusive])
+            } catch {
+                try Task.checkCancellation()
+                guard attempt == 0,
+                      let stale = try? await sftp.lstat(temporary),
+                      (stale.permissions ?? 0) & 0o170000 == 0o100000,
+                      (try? await sftp.remove(temporary)) != nil
+                else { return nil }
+            }
+        }
+        return nil
+    }
+
+    private func writeNewFileDirectly(_ target: SFTPPath, write: (SFTPFile) async throws -> Void) async throws {
+        let file: SFTPFile
         do {
-            try await file.setAttributes(SFTPFileAttributes(permissions: permissions & 0o7777))
-            return true
+            file = try await sftp.openFile(target, flags: [.write, .create, .exclusive])
         } catch {
+            // 期间有人建了它：退回原地写。
             try Task.checkCancellation()
-            return false
+            return try await writeInPlace(target, write: write)
+        }
+        do {
+            try await write(file)
+            try await file.close()
+        } catch {
+            await discard(file, at: target)
+            throw error
         }
     }
 
@@ -339,25 +348,37 @@ actor SFTPSession: SFTPProviding {
             try await write(file)
             try await file.close()
         } catch {
-            try? await file.close()
+            await discard(file, at: nil)
             throw error
         }
     }
 
-    /// 取消之后也要把临时文件删掉：在不继承取消的任务里删。
-    private func removeIgnoringCancellation(_ path: SFTPPath) async {
+    /// 失败、取消之后的收尾：关句柄、删掉自己建的文件。在不继承取消的任务里做，最多等 `cleanupDeadline`
+    /// （连接已经断了时两个请求都不会有回音，不能让调用方一直等）。
+    static let cleanupDeadline: Duration = .seconds(3)
+
+    private func discard(_ file: SFTPFile, at path: SFTPPath?) async {
         let sftp = sftp
-        await Task { try? await sftp.remove(path) }.value
+        await Task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try? await file.close()
+                    if let path { try? await sftp.remove(path) }
+                }
+                group.addTask { try? await Task.sleep(for: Self.cleanupDeadline) }
+                await group.next()
+                group.cancelAll()
+            }
+        }.value
     }
 
-    /// 目标旁边的隐藏临时文件：`<目录>/.<名字>.uterm-upload-<16 位十六进制>.tmp`（按字节拼，不是 UTF-8 的名字照样对）。
+    /// 目标旁边的隐藏临时文件：`<目录>/.<名字>.uterm-upload.tmp`（按字节拼，不是 UTF-8 的名字照样对）。
     nonisolated static func temporaryUploadPath(for target: SFTPPath) -> SFTPPath {
         let bytes = Array(target.bytes)
         let slash = bytes.lastIndex(of: UInt8(ascii: "/"))
         let directory = slash.map { Array(bytes[...$0]) } ?? []
         let name = slash.map { Array(bytes[($0 + 1)...]) } ?? bytes
-        let suffix = String(format: "%016llx", UInt64.random(in: .min ... .max))
-        return SFTPPath(bytes: directory + Array(".".utf8) + name + Array(".uterm-upload-\(suffix).tmp".utf8))
+        return SFTPPath(bytes: directory + Array(".".utf8) + name + Array(".uterm-upload.tmp".utf8))
     }
 
     func download(remotePath: String,
