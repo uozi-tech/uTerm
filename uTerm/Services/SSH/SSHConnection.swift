@@ -244,6 +244,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                     // 1. 发布 stdin writer 并启动单一有序 drain 任务，使 write()/resize() 生效。
                     state.attach(writer: outbound)
                     // 2. 并发：泵出站输出 + 等待 close 信号。
+                    let exitDrain = RemoteExitDrain()
                     await withTaskGroup(of: Void.self) { group in
                         group.addTask {
                             // 首字节 = shell 回复 + 远端 shell 启动到第一次输出（如 prompt）。
@@ -257,6 +258,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                                         timeline.finish()
                                         pendingTimeline = nil
                                     }
+                                    exitDrain.noteChunk()
                                     switch chunk {
                                     case .stdout(let buffer), .stderr(let buffer):
                                         let data = Data(buffer.readableBytesView)
@@ -273,9 +275,9 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                         }
                         group.addTask {
                             // shell 报了退出，但后台进程还占着伪终端（`sleep 1000 &` 再 `exit`）时通道不关、
-                            // 输出也不结束：再给输出 `remoteExitGrace` 把最后几行送完，然后收尾。
+                            // 输出也不结束：等输出安静下来（最多几秒）再收尾，见 `RemoteExitDrain`。
                             // 通道直接关了（正常退出）就不用它：输出泵自己结束。
-                            await Self.waitAfterRemoteExit(outbound)
+                            await exitDrain.waitForQuietAfterExit(of: outbound)
                         }
                         // 任一子任务结束（shell 退出 或 本地 close）即返回。
                         await group.next()
@@ -299,18 +301,6 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
             // 触碰 actor 状态的收尾（exitStream 产元素、结束流、置 isClosed）
             // 仍走 `self?.` —— 若 `self` 已不在，deinit 已结束流。
             await self?.handleSessionEnded()
-        }
-    }
-
-    /// shell 报告退出之后最多再等这么久的输出（见 `waitAfterRemoteExit`）。
-    nonisolated static let remoteExitGrace = Duration.milliseconds(500)
-
-    /// 远端报告退出后过 `remoteExitGrace` 返回；没报告就通道关了的话一直等到被取消（让输出泵先收完）。
-    nonisolated static func waitAfterRemoteExit(_ shell: SSHShellHandle) async {
-        if await shell.exitStatusReported() != nil {
-            try? await Task.sleep(for: remoteExitGrace)
-        } else {
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
         }
     }
 

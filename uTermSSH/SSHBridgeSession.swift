@@ -56,16 +56,12 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                 let input = startInputPump(outbound)
                 installSignalHandlers(client: client, input: input)
                 startRelay(client: client, environment: environment)
-                // shell 报了退出、但后台进程还占着伪终端时通道不关：再给输出一点时间就结束这个进程（holder 上报断开）。
+                // shell 报了退出、但后台进程还占着伪终端时通道不关：等输出安静下来（最多几秒）就结束这个进程
+                // （holder 上报断开），见 `RemoteExitDrain`。
+                let exitDrain = RemoteExitDrain()
                 await withTaskGroup(of: Void.self) { group in
-                    group.addTask { await self.pumpOutput(inbound) }
-                    group.addTask {
-                        if await outbound.exitStatusReported() != nil {
-                            try? await Task.sleep(for: .milliseconds(500))
-                        } else {
-                            while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
-                        }
-                    }
+                    group.addTask { await self.pumpOutput(inbound, exitDrain: exitDrain) }
+                    group.addTask { await exitDrain.waitForQuietAfterExit(of: outbound) }
                     await group.next()
                     group.cancelAll()
                 }
@@ -147,7 +143,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     /// 单独一个线程写 stdout，读 SSH 输出的这一头只管往队列里放：stdout（holder 的 PTY，约 70 MB/s）比网络慢时
     /// 不让 SSH 通道被它拖住，来不及写的超过上限就丢最旧的，和 `TerminalOutputBuffer` 对洪水输出的处理一样。
     /// 丢掉的只是用户本来也看不过来的部分，`cat` 大文件时 ^C 还能很快生效。
-    private func pumpOutput(_ inbound: SSHChannelOutput) async {
+    private func pumpOutput(_ inbound: SSHChannelOutput, exitDrain: RemoteExitDrain) async {
         let backlog = SSHOutputBacklog(capacityBytes: Self.maxOutputBacklogBytes)
         Thread.detachNewThread {
             while let chunk = backlog.next() {
@@ -156,6 +152,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
         }
         do {
             for try await chunk in inbound {
+                exitDrain.noteChunk()
                 switch chunk {
                 case .stdout(let buffer), .stderr(let buffer): backlog.append(buffer)
                 }

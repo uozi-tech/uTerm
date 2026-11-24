@@ -167,6 +167,69 @@ final class SSHConnectionTestServerTests: XCTestCase {
     }
 
     /// 服务器掐断 TCP：不等输出流自己察觉，断开回调立刻让会话结束（界面翻到「已断开」）。
+    /// 慢链路：退出状态先到，最后一段输出（`cat big.log; exit` 的尾巴）还在路上。输出一直有新的就一直收，
+    /// 安静下来才结束，一个字节都不丢。
+    func testOutputArrivingAfterTheExitStatusIsNotDropped() async throws {
+        await server.stop()
+        server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone,
+            shell: SSHTestExecHandler { context in
+                for await chunk in context.stdin where chunk.readableBytesView.contains(0x04) { break }
+                context.channel.triggerUserOutboundEvent(
+                    SSHChannelRequestEvent.ExitStatus(exitStatus: 0), promise: nil)
+                // 退出状态之后 2 秒里每 300 ms 一行（每段间隔都短于 500 ms 的安静期），最后一行是标记。
+                for index in 0..<7 {
+                    try await Task.sleep(for: .milliseconds(300))
+                    try await context.write("tail-line-\(index)\r\n")
+                }
+                try await context.write("END-OF-TAIL\r\n")
+                for await _ in context.stdin {}
+                return .noStatus
+            }))
+        let connection = try makeConnection()
+        try await connection.connect()
+        let items = connection.outputItems
+        let output = Task { () -> String in
+            var collected = Data()
+            for await item in items {
+                guard case .bytes(let chunk) = item else { continue }
+                collected.append(chunk)
+            }
+            return String(decoding: collected, as: UTF8.self)
+        }
+        await connection.write(Data([0x04]))
+        let ended = await waitForExit(connection, timeout: .seconds(10))
+        XCTAssertTrue(ended)
+        let collected = await output.value
+        XCTAssertTrue(collected.contains("END-OF-TAIL"), "退出状态之后的输出丢了：\(collected)")
+        await connection.close()
+    }
+
+    /// 后台进程占着伪终端、退出之后还一直在打字：会话照样在几秒内结束（上限），不会被它拖住。
+    func testChattyBackgroundJobAfterExitCannotKeepTheSessionAlive() async throws {
+        await server.stop()
+        server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone,
+            shell: SSHTestExecHandler { context in
+                for await chunk in context.stdin where chunk.readableBytesView.contains(0x04) { break }
+                context.channel.triggerUserOutboundEvent(
+                    SSHChannelRequestEvent.ExitStatus(exitStatus: 0), promise: nil)
+                while !Task.isCancelled && context.channel.isActive {
+                    try? await context.write("y\r\n")
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                return .noStatus
+            }))
+        let connection = try makeConnection()
+        try await connection.connect()
+        await connection.write(Data([0x04]))
+        let started = ContinuousClock.now
+        let ended = await waitForExit(connection, timeout: .seconds(15))
+        XCTAssertTrue(ended, "一直有输出也要在上限内结束")
+        XCTAssertLessThan(ContinuousClock.now - started, RemoteExitDrain.cap + .seconds(3))
+        await connection.close()
+    }
+
     // MARK: - 跳板机：失败类别决定重不重连
 
     /// 经 `bastion` 连本测试的目标；`password` 是给跳板机的口令。
