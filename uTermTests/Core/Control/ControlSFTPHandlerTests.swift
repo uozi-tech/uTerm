@@ -392,6 +392,20 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(response.code, ControlErrorCode.file_not_found.rawValue)
     }
 
+    /// 报错里的远端路径是用户传进来的 `RemoteName` 写法：原样带回（不经 `SSHPeerText.sanitize`，那一步会去掉 U+2060，
+    /// 模型拿报错里的路径再试时就对不上了）。
+    func testErrorMessageKeepsAnEscapedPathVerbatim() async throws {
+        let escaped = "/srv/" + RemoteName.display([0xB2, 0xE2]) + ".bin"
+        XCTAssertTrue(escaped.unicodeScalars.contains("\u{2060}"))
+        let local = try localFile(Data())
+        let (response, _) = await transfer(request(.sftpGet, path: escaped), fd: local.fd)
+        XCTAssertFalse(response.ok)
+        let message = response.message ?? ""
+        XCTAssertTrue(message.utf8.starts(with: escaped.utf8), "实得 \(message.debugDescription)")
+        // 对照：消毒会去掉转义的收尾，所以文件名绝不能经过它。
+        XCTAssertFalse(SSHPeerText.sanitize(escaped).unicodeScalars.contains("\u{2060}"))
+    }
+
     func testPutReadsThePassedFDIntoTheRemoteFile() async throws {
         let content = Self.randomData(70_000)
         let local = try localFile(content)

@@ -954,7 +954,7 @@ extension FilePreviewModel {
             return
         }
         let alert = NSAlert()
-        alert.messageText = String(localized: "是否保存对「\(buf.displayName)」的更改？")
+        alert.messageText = String(localized: "是否保存对「\(RemoteName.isolated(buf.displayName))」的更改？")
         alert.informativeText = String(localized: "如果不保存，你的更改将丢失。")
         alert.addButton(withTitle: String(localized: "保存"))
         alert.addButton(withTitle: String(localized: "不保存"))

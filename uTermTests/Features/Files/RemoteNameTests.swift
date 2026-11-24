@@ -139,4 +139,19 @@ final class RemoteNameTests: XCTestCase {
         XCTAssertEqual(try echoed(literal, escaped: false), Array(literal.utf8) + Array("|".utf8))
         XCTAssertNotEqual(try echoed(literal, escaped: true), Array(literal.utf8) + Array("|".utf8))
     }
+
+    // MARK: - 插进句子里
+
+    /// 句子里的名字包在 FSI … PDI 里，名字本身一个字符都不动（转义的 U+2060 留着，和列表里显示的一样）。
+    func testIsolatedWrapsWithoutAlteringTheName() {
+        let escaped = RemoteName.display([0xB2, 0xE2] + Array(".txt".utf8))
+        let isolated = RemoteName.isolated(escaped)
+        XCTAssertEqual(Array(isolated.unicodeScalars.first.map { [$0] } ?? []), ["\u{2068}"])
+        XCTAssertEqual(isolated.unicodeScalars.last, "\u{2069}")
+        XCTAssertEqual(Array(isolated.unicodeScalars.dropFirst().dropLast()), Array(escaped.unicodeScalars))
+        // 名字里有从右往左的覆盖符：被关在隔离区里，句子后面的字不受影响。
+        let hostile = RemoteName.isolated("evil\u{202E}gpj.exe")
+        XCTAssertTrue(hostile.hasSuffix("\u{2069}"))
+    }
 }
+

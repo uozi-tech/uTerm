@@ -634,7 +634,7 @@ final class FileBrowserModel {
         // 同一条 SFTP 通道上一次只跑一个删除任务。静默吞掉第二次请求会让用户
         // 以为点击没生效（他刚在确认框上按了「删除」），故明确说一声。
         if let running = deletion {
-            transientError = String(localized: "正在删除「\(running.name)」，等它结束后再删下一项。")
+            transientError = String(localized: "正在删除「\(RemoteName.isolated(running.name))」，等它结束后再删下一项。")
             return nil
         }
         let dir = directory ?? currentPath

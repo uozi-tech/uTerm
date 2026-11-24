@@ -64,7 +64,7 @@ struct ExternalOpenSystem {
         confirmOpenWhileInUse: { fileName, companions in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = String(localized: "\(fileName) 可能正被远端程序使用")
+            alert.messageText = String(localized: "\(RemoteName.isolated(fileName)) 可能正被远端程序使用")
             alert.informativeText = String(localized: """
                 远端存在 \(companions.joined(separator: String(localized: "、", comment: "并列项之间的分隔符")))，说明有程序正在写这个数据库（或上次异常退出）。\
                 uTable 会把整个库下载到本地，改动后再整体传回；如果远端程序同时在写，双方的改动会互相覆盖，\
@@ -77,7 +77,7 @@ struct ExternalOpenSystem {
         askConflict: { fileName in
             let alert = NSAlert()
             alert.messageText = String(localized: "远程文件已变化")
-            alert.informativeText = String(localized: "\(fileName) 在你打开之后被别处改过。上传会覆盖远程的这些改动。")
+            alert.informativeText = String(localized: "\(RemoteName.isolated(fileName)) 在你打开之后被别处改过。上传会覆盖远程的这些改动。")
             alert.addButton(withTitle: String(localized: "覆盖远程文件"))
             alert.addButton(withTitle: String(localized: "放弃本地改动"))
             alert.addButton(withTitle: String(localized: "暂不上传"))
@@ -90,7 +90,7 @@ struct ExternalOpenSystem {
         confirmStopSync: { fileName in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = String(localized: "停止同步 \(fileName)？")
+            alert.messageText = String(localized: "停止同步 \(RemoteName.isolated(fileName))？")
             alert.informativeText = String(localized: "本地副本还有未上传到主机的改动，停止后不会再上传。")
             alert.addButton(withTitle: String(localized: "停止同步"))
             alert.addButton(withTitle: String(localized: "取消"))
@@ -231,7 +231,7 @@ final class ExternalOpenCoordinator {
         }
         guard let host = host(), let sftp = provider() else {
             showToast(.failure, String(localized: "SFTP 尚未连接"),
-                      detail: String(localized: "连接建立后再打开 \(name)。"))
+                      detail: String(localized: "连接建立后再打开 \(RemoteName.isolated(name))。"))
             return true
         }
         guard !host.usesJumpHost else {
@@ -245,12 +245,12 @@ final class ExternalOpenCoordinator {
             prefix = try await sftp.readRange(remotePath, offset: 0,
                                               length: SQLiteFileDetector.header.count)
         } catch {
-            showToast(.failure, String(localized: "打开失败：\(name)"), detail: FriendlyError.describe(error))
+            showToast(.failure, String(localized: "打开失败：\(RemoteName.isolated(name))"), detail: FriendlyError.describe(error))
             return true
         }
         guard SQLiteFileDetector.hasSQLiteHeader(prefix) else {
             if explicit {
-                showToast(.info, String(localized: "\(name) 不是 SQLite 数据库"),
+                showToast(.info, String(localized: "\(RemoteName.isolated(name)) 不是 SQLite 数据库"),
                           detail: String(localized: "已改为下载到本地打开。"))
             }
             return false
@@ -309,7 +309,7 @@ final class ExternalOpenCoordinator {
 
         guard let sftp = provider() else {
             showToast(.failure, String(localized: "SFTP 尚未连接"),
-                      detail: String(localized: "连接建立后再打开 \(name)。"))
+                      detail: String(localized: "连接建立后再打开 \(RemoteName.isolated(name))。"))
             return
         }
         // 先挑应用再下载：用户在选择框里点了取消，就不白下一趟。
@@ -317,7 +317,7 @@ final class ExternalOpenCoordinator {
         guard inFlight.insert(remotePath.remoteKey).inserted else { return }
         defer { inFlight.remove(remotePath.remoteKey) }
 
-        let progress = showToast(.progress, String(localized: "正在打开 \(name)…"), autoDismiss: false)
+        let progress = showToast(.progress, String(localized: "正在打开 \(RemoteName.isolated(name))…"), autoDismiss: false)
         defer { dismissToast(progress) }
 
         let destination: URL
@@ -330,14 +330,14 @@ final class ExternalOpenCoordinator {
             try await sftp.download(remotePath: remotePath, toLocalURL: destination, onProgress: nil)
             try ExternalFileStager.restrictPermissions(at: destination)
         } catch {
-            showToast(.failure, String(localized: "打开失败：\(name)"), detail: FriendlyError.describe(error))
+            showToast(.failure, String(localized: "打开失败：\(RemoteName.isolated(name))"), detail: FriendlyError.describe(error))
             return
         }
 
         // 基线在启动应用**之前**取：打开即改写文件的应用（格式化、补换行）那一下也算改动。
         let baseline = LocalFileFingerprint.read(destination)
         guard await system.launch(destination, application) else {
-            showToast(.failure, String(localized: "打开失败：\(name)"),
+            showToast(.failure, String(localized: "打开失败：\(RemoteName.isolated(name))"),
                       detail: String(localized: "没有应用能打开这个文件。"))
             return
         }
@@ -347,7 +347,7 @@ final class ExternalOpenCoordinator {
             remoteModificationDate: remoteStat.mtime,
             detector: ExternalEditChangeDetector(synced: baseline)))
         startPolling()
-        showToast(.info, String(localized: "已打开 \(name)"),
+        showToast(.info, String(localized: "已打开 \(RemoteName.isolated(name))"),
                   detail: String(localized: "保存后自动上传回主机。"))
     }
 

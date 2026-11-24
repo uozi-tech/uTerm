@@ -159,3 +159,14 @@ nonisolated extension String {
     /// 远端名字 / 路径的逐字节身份（见 `RemoteNameKey`）。比较两个远端路径是不是同一个文件用 `a.remoteKey == b.remoteKey`。
     var remoteKey: RemoteNameKey { RemoteNameKey(self) }
 }
+
+nonisolated extension RemoteName {
+    /// 把远端的名字 / 路径插进一句本地化的话里时用：包在 FSI … PDI（U+2068 … U+2069）里，从右往左的名字、名字里的
+    /// 双向覆盖符都不会搅乱整句话的顺序（隔离区结束时里面没收尾的覆盖也跟着结束）。
+    ///
+    /// 和 `SSHPeerText.isolated` 的区别：这里**不消毒**——那一步会去掉 U+2060 之类的格式字符，转义过的名字（见上）
+    /// 显示出来就和列表里的对不上了。只用于给人看的句子；日志与命令行接口给程序读的输出里别用。
+    static func isolated(_ name: String) -> String {
+        "\u{2068}" + name + "\u{2069}"
+    }
+}

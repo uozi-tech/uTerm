@@ -443,14 +443,14 @@ struct SFTPBrowserView: View {
 
     private var overwriteDialogTitle: String {
         overwriteConflictNames.count == 1
-            ? String(localized: "「\(overwriteConflictNames[0])」已存在，覆盖？")
+            ? String(localized: "「\(RemoteName.isolated(overwriteConflictNames[0]))」已存在，覆盖？")
             : String(localized: "\(overwriteConflictNames.count) 个文件已存在，覆盖？")
     }
 
     private var overwriteDialogMessage: String {
         overwriteConflictNames.count == 1
             ? String(localized: "该远程文件将被覆盖。")
-            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
+            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.map(RemoteName.isolated).joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {
