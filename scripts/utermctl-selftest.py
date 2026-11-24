@@ -9,6 +9,7 @@
 import array
 import base64
 import hashlib
+import io
 import json
 import os
 import shlex
@@ -535,6 +536,7 @@ def main():
         exercise_socket_path_too_long()
         exercise_localization()
         exercise_peer_text()
+        exercise_output_boundary()
         print("")
         if FAILURES:
             print("%d 项失败：" % len(FAILURES))
@@ -1459,6 +1461,52 @@ def exercise_peer_text():
           "表格里的远端文字转义成看得见的样子")
     csv_text = client.render_csv(["name"], [[hostile]])
     check("\x1b" not in csv_text and "\u009b" not in csv_text, "CSV 里的远端文字转义成看得见的样子")
+
+
+def exercise_output_boundary():
+    """stdout / stderr 的出口：给人看的文字（空表时的说明、对面报的名字、进度行）在出口统一消毒；
+    JSON、命令输出、文件正文原样。"""
+    print("输出出口")
+    client = load_client_module()
+    hostile = "dir\x1b]52;c;cGF5bG9hZA==\x07\u202e/x"
+
+    def emitted(text):
+        buffer = io.StringIO()
+        client.emit(text, stream=buffer)
+        return buffer.getvalue()
+
+    args = client.build_parser().parse_args(["sftp", "ls", "-H", "prod-web", "--format", "table"])
+    empty = {"ok": True, "entries": [], "message": hostile + "：0 项"}
+    out = emitted(client.render(empty, "table", args))
+    check("\x1b" not in out and "\u202e" not in out and "<U+001B>" in out, "空表时的说明在出口消毒（实得 %r）" % out)
+
+    as_json = client.as_json(empty)
+    equal(emitted(as_json), as_json + "\n", "JSON 在出口一字不动")
+    equal(json.loads(emitted(as_json)), empty, "JSON 解析回来一字不差")
+
+    run = {"ok": True, "result": {"host": "prod-web", "exitCode": 1, "durationMs": 3,
+                                  "errorCode": "x", "errorMessage": hostile, "output": "raw\x1b[31mred\n"}}
+    run_args = client.build_parser().parse_args(["run", "-H", "prod-web", "--format", "table", "--", "true"])
+    out = emitted(client.render(run, "table", run_args))
+    check("raw\x1b[31mred" in out, "命令的输出原样（和 ssh 一样）")
+    check("\u202e" not in out.split("raw")[0], "主机行里的报错原话消毒")
+
+    cat_args = client.build_parser().parse_args(["sftp", "cat", "-H", "prod-web", "/x", "--format", "table"])
+    binary = {"ok": True, "file": {"path": hostile, "bytes": 3, "text": None}}
+    out = emitted(client.render(binary, "table", cat_args))
+    check("\x1b" not in out and "\u202e" not in out, "「不是文本」提示里的远端路径消毒")
+    text = {"ok": True, "file": {"path": "/x", "bytes": 3, "text": "a\x1bb"}}
+    equal(emitted(client.render(text, "table", cat_args)), "a\x1bb\n", "文件正文原样（同 cat）")
+
+    saved = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        progress = client.Progress(hostile, 10, live=False)
+        progress.finish(hostile + " 完成")
+        written = sys.stderr.getvalue()
+    finally:
+        sys.stderr = saved
+    check("\x1b" not in written and "\u202e" not in written, "进度汇总行消毒（实得 %r）" % written)
 
 
 def help_in_languages(client):
