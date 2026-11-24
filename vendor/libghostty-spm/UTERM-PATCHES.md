@@ -37,8 +37,11 @@
     `GhosttyFontRenderingTests`、`GhosttyMacScrollTests`、`GhosttyMacHostTests`、`TerminalEngineLockTests` 全过、没有被跳过的。
   - `make test-mobile-fast`（模拟器）785 条：并行 714 过、2 条失败（订阅、常驻会话的性能探针），串行复核都过。新加的
     `uTermMobileTests/GhosttyOpenLinkMenuTests`（菜单里的「打开」只有一项）3 条过。
-  - **iPhone Duo 真机上的滚动回归这次没跑成**（跑的时候手机锁着，xcodebuild 起不了测试宿主；真机版编过了）。iOS 滚动的 Swift 代码这次上游没动，
-    Ghostty 渲染那边只动了排版。触控屏 Mac 的那部分没有设备可验。
+  - iPhone Duo 真机：`GhosttyScrollEdgeTests`、`GhosttySystemScrollJitterTests`、`GhosttyCapturedMomentumTests`、`GhosttyScrollFeelTests`、
+    `GhosttySmoothScrollPixelTests`、`GhosttyOpenLinkMenuTests` 共 31 条，30 过、1 条按设计跳过，没有失败。
+  - 变基到 `b6a6f79b`（远控镜像改发回放流）之后，在新引擎上重跑它涉及的用例：Mac 的 `TerminalMirrorSnapshotTests`、`RemoteHostServerTests`、
+    `TerminalMirrorTapTests`、`HolderProtocolTests`、`RemoteHostAgentTests` 和几类引擎用例共 130 条，iOS 模拟器 34 条，没有失败。全量没有重跑。
+  - 触控屏 Mac 的那部分没有设备可验；iOS 的「点开网址」「长按选词」只有上游自己的用例和我们的菜单用例，没有人手试过。
 
 再上一个基线是 `2.2.2026111701`（`b9694b50`，同一个 Ghostty 提交 `5ebe501a`）。2026-11-23 换到 `2.2.2026112301`，上游这两个 tag 之间的变化：
 - [#123](https://github.com/Lakr233/libghostty-spm/pull/123)：我们提的滚动修复。Swift 层第 18、19 条整条进了上游，第 20、21 条进了一部分（见各条）；
