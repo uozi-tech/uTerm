@@ -1,14 +1,13 @@
-@preconcurrency import Citadel
 import Darwin
 import Foundation
 import NIOCore
-import NIOSSH
 @_spi(uTermIntegration) import USSHKit
 
 /// 一次连接的全过程：从控制通道收参数、握手（主机密钥问 App）、开 PTY、桥接到 stdin/stdout，结束就退出进程。
 nonisolated final class SSHBridgeSession: @unchecked Sendable {
-    /// 与 `SSHClientFactory.channelWindowOptions` 取值和理由相同。这里没有 SFTP，但输出快的程序一样受窗口限制。
-    private static let channelWindowBytes = 1 << 20
+    /// 与 `SSHClientFactory.channelMaximumPacketSize` 取值和理由相同（最小包长 32 KiB → 每条子通道 2 MiB 窗口）。
+    /// 这里没有 SFTP，但输出快的程序一样受窗口限制。
+    static let maximumPacketSize = SSHClient.maximumPacketSizeRange.lowerBound
     private static let probeTimeout = Duration.seconds(10)
     private static let maxOutputBacklogBytes = 16 * 1024 * 1024
     private static let maxExecOutputBytes = 8 * 1024 * 1024
@@ -42,17 +41,13 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
             await fail(request, error)
             exit(1)
         }
-        client.target.onDisconnect { Self.exitSoon() }
-        client.bastion?.onDisconnect { Self.exitSoon() }
+        _ = client.target.onDisconnect { _ in Self.exitSoon() }
+        _ = client.bastion?.onDisconnect { _ in Self.exitSoon() }
 
         let size = Self.windowSize()
-        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
-            wantReply: true, term: "xterm-256color",
-            terminalCharacterWidth: Int(size.ws_col), terminalRowHeight: Int(size.ws_row),
-            terminalPixelWidth: 0, terminalPixelHeight: 0, terminalModes: SSHTerminalModes([:]))
-        let environment = request.environment.map {
-            SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: $0.name, value: $0.value)
-        }
+        let pty = SSHPseudoTerminal(term: "xterm-256color", columns: Int(size.ws_col), rows: Int(size.ws_row))
+        let environment = Dictionary(request.environment.map { ($0.name, $0.value) },
+                                     uniquingKeysWith: { _, last in last })
         do {
             try await client.target.withPTY(pty, environment: environment) { inbound, outbound in
                 await control.send(.connected)
@@ -99,7 +94,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                     isMismatch: challenge.kind == .mismatch,
                     previousFingerprint: challenge.previousFingerprint))
             },
-            protocolOptions: [.maximumPacketSize(Self.channelWindowBytes)])
+            maximumPacketSize: Self.maximumPacketSize)
     }
 
     private func fail(_ request: SSHBridgeConnectRequest, _ error: Error) async {
@@ -120,6 +115,8 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                 return SSHBridgeFailure(kind: .jumpHost, message: message)
             case .connectFailed(let message):
                 return SSHBridgeFailure(kind: .connect, message: message)
+            case .handshakeFailed(let message):
+                return SSHBridgeFailure(kind: .connect, message: message)
             case .authenticationFailed(let message):
                 return SSHBridgeFailure(kind: .connect, message: String(localized: "认证失败：\(message)", bundle: SSHHelperBundle.localization))
             case .hostKeyRejected(let message):
@@ -133,10 +130,10 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
 
     // MARK: - 桥接
 
-    /// Citadel 的输出流没有上限也没有背压：网络比 PTY 快时（PTY 约 70 MB/s）不能让它一直堆。这里单独一个线程
-    /// 写 stdout，来不及写的超过上限就丢最旧的，和 `TerminalOutputBuffer` 对洪水输出的处理一样。
+    /// 单独一个线程写 stdout，读 SSH 输出的这一头只管往队列里放：stdout（holder 的 PTY，约 70 MB/s）比网络慢时
+    /// 不让 SSH 通道被它拖住，来不及写的超过上限就丢最旧的，和 `TerminalOutputBuffer` 对洪水输出的处理一样。
     /// 丢掉的只是用户本来也看不过来的部分，`cat` 大文件时 ^C 还能很快生效。
-    private func pumpOutput(_ inbound: TTYOutput) async {
+    private func pumpOutput(_ inbound: SSHChannelOutput) async {
         let backlog = SSHOutputBacklog(capacityBytes: Self.maxOutputBacklogBytes)
         Thread.detachNewThread {
             while let chunk = backlog.next() {
@@ -150,13 +147,13 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                 }
             }
         } catch {
-            // 远端 shell 以非零状态退出会抛错，当正常结束。
+            // 通道 / 连接出错，当结束。
         }
         await backlog.drained()
     }
 
     /// 读 stdin 和发窗口变化走同一个有序队列，同一个写协程消费，不会乱序。
-    private func startInputPump(_ writer: TTYStdinWriter) -> AsyncStream<InputOp>.Continuation {
+    private func startInputPump(_ writer: SSHShellHandle) -> AsyncStream<InputOp>.Continuation {
         let (stream, continuation) = AsyncStream.makeStream(of: InputOp.self)
         let drained = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
@@ -180,7 +177,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                     try? await writer.write(out)
                     done.signal()
                 case .resize(let cols, let rows):
-                    try? await writer.changeSize(cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+                    try? await writer.resize(columns: cols, rows: rows)
                 }
             }
         }
@@ -205,8 +202,8 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     }
 
     /// App 经 holder 发来的命令，在这条连接上另开 exec 通道跑（前台进程探测、真彩）。
-    /// Citadel 的 exec 不响应取消，超时由 App 那边判，这边跑完就回，没人等了也无妨。
-    private func startRelay(client: ConnectedClient, environment: [SSHChannelRequestEvent.EnvironmentRequest]) {
+    /// 超时由 App 那边判，这边跑完就回，没人等了也无妨。
+    private func startRelay(client: ConnectedClient, environment: [String: String]) {
         let relay = SSHBridgeControl(fd: HolderProtocol.childRelayFD)
         relay.onExec = { id, command in
             Task {
@@ -220,7 +217,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
 
     /// 只收 stdout：登录 shell 的 rc 打到 stderr 的东西会干扰解析。出错、输出超限都返回 nil。
     private static func runCollecting(_ command: String, client: ConnectedClient,
-                                      environment: [SSHChannelRequestEvent.EnvironmentRequest]) async -> String? {
+                                      environment: [String: String]) async -> String? {
         do {
             var output = Data()
             for try await chunk in try await client.target.executeCommandStream(command, environment: environment) {

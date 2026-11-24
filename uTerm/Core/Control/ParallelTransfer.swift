@@ -23,7 +23,8 @@ nonisolated enum ParallelTransfer {
     struct Tuning: Sendable, Equatable {
         /// 这次传输最多用几条 SFTP 会话（还受池子的每主机上限约束）。
         var channels: Int
-        /// 每条会话的在途请求数（× 32 000 B = 这条会话的在途字节）。
+        /// 每条会话的在途量，以 `SFTPPipeline.chunkSize`（32 000 B）为单位（× 32 000 B = 这条会话的在途字节）。
+        /// 服务器允许更大的单次读写时片长跟着变大、请求数相应变少，在途字节不变（`SFTPPipeline.requestWindow`）。
         var inFlight: Int
         /// 传输用 SSH 连接的通道窗口（字节）。每条会话的在途字节被它封顶。
         var windowBytes: Int
@@ -202,6 +203,9 @@ nonisolated enum ParallelTransfer {
         do {
             let handle = try await session.openTransferHandle(remotePath, writeMode: writeMode)
             opened = handle
+            // 片长跟服务器走（下载按单次读的上限、上传按单次写的上限），在途字节照 `window` 不变。
+            let chunkLength = max(1, writeMode == nil ? handle.file.maximumReadLength : handle.file.maximumWriteLength)
+            let window = SFTPPipeline.requestWindow(inFlight: window, chunk: chunkLength)
             try await withThrowingTaskGroup(of: (Int, Int).self) { group in
                 var running = 0
                 var cursor: (index: Int, range: ByteRange, next: Int64)?
@@ -212,7 +216,7 @@ nonisolated enum ParallelTransfer {
                         cursor = (index, range, range.offset)
                         held[index] = range.length
                     }
-                    let length = Int(min(Int64(SFTPPipeline.chunkSize), cursor!.range.end - cursor!.next))
+                    let length = Int(min(Int64(chunkLength), cursor!.range.end - cursor!.next))
                     defer { cursor!.next += Int64(length) }
                     return (cursor!.index, cursor!.next, length)
                 }

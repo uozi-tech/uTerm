@@ -3,21 +3,22 @@ import NIOCore
 import NIOEmbedded
 import NIOPosix
 @preconcurrency import NIOSSH
+import USSHKit
 @testable import uTerm
 
-/// `-R` 入站连接的两块：`ForwardedChannelCodec`（forwarded-tcpip 通道上 `SSHChannelData` ⇄
-/// `ByteBuffer`）与 `RemoteForwardBridge.serve`（连本机目标 + 双向泵）。
+/// `-R` 入站连接的两块：forwarded-tcpip 通道上的编解码（`SSHChannelData` ⇄ `ByteBuffer`，现在由 USSHCore 的
+/// `SSHChannelDataCodec` 装在每条入站通道上）与 `RemoteForwardBridge.serve`（连本机目标 + 双向泵）。
 ///
 /// 回归背景：2.1.2 之前 `-R` 用的是 Citadel 的 `runRemotePortForward`，它不加编解码，
 /// 服务器上有人一连、第一份数据进 `NIOAsyncChannel<ByteBuffer, …>` 就在 `forceAsByteBuffer`
-/// 断言，整个 App 崩掉。编解码那半用 `EmbeddedChannel` 测；泵那半用 loopback 上的真 socket
-/// 冒充 forwarded-tcpip 通道（不需要 sshd）。
+/// 断言，整个 App 崩掉。编解码那半用 `EmbeddedChannel` 测（钉住 app 依赖的契约）；泵那半用
+/// loopback 上的真 socket 冒充 forwarded-tcpip 通道（不需要 sshd）。
 final class RemoteForwardBridgeTests: XCTestCase {
 
     // MARK: - 编解码
 
     func testCodecTurnsChannelDataIntoBytesAndBack() throws {
-        let channel = EmbeddedChannel(handler: ForwardedChannelCodec())
+        let channel = EmbeddedChannel(handler: SSHChannelDataCodec())
         defer { _ = try? channel.finish() }
 
         try channel.writeInbound(SSHChannelData(type: .channel, data: .byteBuffer(ByteBuffer(string: "GET /"))))
@@ -30,7 +31,7 @@ final class RemoteForwardBridgeTests: XCTestCase {
     }
 
     func testCodecDropsExtendedData() throws {
-        let channel = EmbeddedChannel(handler: ForwardedChannelCodec())
+        let channel = EmbeddedChannel(handler: SSHChannelDataCodec())
         defer { _ = try? channel.finish() }
 
         try channel.writeInbound(SSHChannelData(type: .stdErr, data: .byteBuffer(ByteBuffer(string: "noise"))))

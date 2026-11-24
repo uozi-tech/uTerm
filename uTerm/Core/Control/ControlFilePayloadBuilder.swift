@@ -1,5 +1,5 @@
 import Foundation
-@preconcurrency import Citadel
+import USSHKit
 
 /// 文件组（`sftp-*`）的纯逻辑：线上形状构造、SFTP 错误归类、权限串解析。
 ///
@@ -96,17 +96,8 @@ nonisolated enum ControlFilePayloadBuilder {
     /// 服务端状态码（最可靠）→ POSIX errno → 最后才退到大小写无关的文本匹配
     /// （覆盖被包成文本的底层错误）。
     ///
-    /// ⚠️ 服务端状态码有**两种**装法，都要认（真机上命中的是第二种）：
-    /// - `SFTPError.errorStatus(status)`：Citadel 里只有 `setAttributes` 这一条
-    ///   路径显式包过（`SFTPClient.setAttributes`）；
-    /// - **裸的 `SFTPMessage.Status`**：`SFTPClientInboundHandler.channelRead` 对
-    ///   一切非 `ok`/`eof` 的响应直接 `promise.fail(status)` —— `remove` / `rmdir` /
-    ///   `rename` / `mkdir` / `getAttributes` / `open` 全走这条，抛出来的就是
-    ///   `SFTPMessage.Status` 本身，`as? SFTPError` 永远匹配不上。
-    ///   （`SFTPMessage.Status` 只是 `Error`、不是 `LocalizedError`，所以它的
-    ///   `localizedDescription` 经 `any Error` 走的是 NSError 桥接的那句
-    ///   「操作未能完成」，文本兜底也匹配不到 —— `sftp rm` 一个不存在的文件
-    ///   于是回了 `operation_failed`。）
+    /// 服务端状态码只有一种装法：`SFTPError.status(code:message:languageTag:)`，按 `statusCode` 判
+    /// （USSHCore 对每个操作、每条路径都这样抛）。
     ///
     /// 「文件已存在」有专码 `file_exists`（`sftp-put` 的 `create` 默认档要用），
     /// 它有三条来源：内存替身的 `SFTPFileExistsError`、errno `EEXIST`、以及
@@ -122,14 +113,16 @@ nonisolated enum ControlFilePayloadBuilder {
         let error = SFTPWriteStageError.unwrap(rawError)
         if error is SFTPDownloadLimitExceeded { return .file_too_large }
         if error is SFTPShortReadError { return .operation_failed }
+        if case SFTPError.shortRead = error { return .operation_failed }
         if error is SFTPFileExistsError { return .file_exists }
 
         if let status = sftpStatus(of: error) {
-            switch status.errorCode {
-            case .noSuchFile: return .file_not_found
+            switch status.code {
+            case .noSuchFile, .noSuchPath: return .file_not_found
             case .permissionDenied: return .permission_denied
             // SSH_FX_FILE_ALREADY_EXISTS（v4+，v3 只会回 failure + 文案）。
-            case .unknown(11): return .file_exists
+            case .fileAlreadyExists: return .file_exists
+            case .fileIsADirectory: return .is_directory
             default:
                 // 服务端把 EISDIR 之类塞在 failure 的文本里，再过一遍文本匹配。
                 return errorCode(forText: status.message) ?? .operation_failed
@@ -149,11 +142,10 @@ nonisolated enum ControlFilePayloadBuilder {
         return errorCode(forText: error.localizedDescription) ?? .operation_failed
     }
 
-    /// 取出 Citadel 的服务端状态（两种装法都认，见 `errorCode(for:)`）。
-    static func sftpStatus(of error: Error) -> SFTPMessage.Status? {
-        if let status = error as? SFTPMessage.Status { return status }
-        if let sftp = error as? SFTPError, case .errorStatus(let status) = sftp { return status }
-        return nil
+    /// 取出服务端状态（`SFTPError.status`），不是服务端状态时为 nil。
+    static func sftpStatus(of error: Error) -> (code: SFTPStatusCode, message: String)? {
+        guard case .status(let code, let message, _)? = error as? SFTPError else { return nil }
+        return (code, message)
     }
 
     /// 失败的**原话**，给 CLI 的 `message` 用。
@@ -165,7 +157,7 @@ nonisolated enum ControlFilePayloadBuilder {
         let error = SFTPWriteStageError.unwrap(rawError)
         if let status = sftpStatus(of: error) {
             let text = status.message.trimmingCharacters(in: .whitespacesAndNewlines)
-            let code = "SSH_FX \(status.errorCode.rawValue)"
+            let code = "SSH_FX \(status.code.rawValue)"
             return text.isEmpty ? code : "\(text)（\(code)）"
         }
         if let limit = error as? SFTPDownloadLimitExceeded {

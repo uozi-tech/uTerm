@@ -265,7 +265,7 @@ nonisolated struct RemoteForegroundDirectories: Equatable, Sendable {
 }
 
 extension RemoteForegroundDirectories {
-    /// 先到先得，同 `TerminalActivity.probed`：Citadel 的 exec 不响应取消，超时了就不等它。
+    /// 先到先得，同 `TerminalActivity.probed`：超时了就不等它（探测随之被取消）。
     static func probed(
         timeout: Duration,
         probe: @escaping @Sendable () async -> RemoteForegroundDirectories?

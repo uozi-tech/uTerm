@@ -1,25 +1,23 @@
 import Foundation
 import Synchronization
-@preconcurrency import Citadel
 import Crypto
 import NIOCore
-import NIOSSH
+import USSHKit
 
-/// `TerminalBackend` 的 SSH 实现 —— 基于 Citadel 0.12.1。
+/// `TerminalBackend` 的 SSH 实现 —— 基于 USSHCore（经 USSHKit）。
 ///
 /// 直连路径（本任务）：连接 `profile.host:profile.port`，开启交互式 PTY shell，
 /// 把 stdout/stderr 泵入 `outputItems`，shell 结束时在 `exitStream` 产出一个元素。
 ///
-/// 跳板机路径（Task 9）：`profile.jumpHost != nil` 时先连跳板机，再用 Citadel 原生
+/// 跳板机路径（Task 9）：`profile.jumpHost != nil` 时先连跳板机，再用
 /// `jump(to:)` 在跳板机连接上开 `direct-tcpip` 通道并完成第二次握手得到目标客户端，
 /// 在目标上开 PTY shell。teardown 先关目标、再关跳板机。`jumpHost` 已配置但缺少
 /// `jumpHostAuth` 时抛 `jumpHostFailed`，绝不静默回退到直连。
 ///
 /// ## withPTY 作用域闭包的接线方式
-/// Citadel 的 `withPTY` 不返回句柄 —— 它在闭包返回时就关闭通道。所以会话期间
-/// 必须把闭包"挂起"。做法：在一个独立 `Task`（`sessionTask`）里调用 `withPTY`，
-/// 闭包内：
-///   1. 把 `TTYStdinWriter` 写入 `SessionState`（线程安全盒子），并启动单一 drain 任务，
+/// `withPTY` 在闭包返回时就关闭通道，所以会话期间必须把闭包"挂起"。做法：在一个独立
+/// `Task`（`sessionTask`）里调用 `withPTY`，闭包内：
+///   1. 把 shell 句柄写入 `SessionState`（线程安全盒子），并启动单一 drain 任务，
 ///      使 `write`/`resize` 生效；
 ///   2. 用 `TaskGroup` 跑两个子任务：一个泵出站输出，一个 `await` close 信号；
 ///   3. `group.next()` 在任一子任务结束时返回 —— 远端 shell 退出（输出泵结束）
@@ -39,6 +37,11 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
         case connectFailed(String)
         /// 服务端拒绝了凭据。单独成一种，命令行据此报 `auth_failed`，不靠匹配消息文字。
         case authenticationFailed(String)
+        /// 握手没成（协议错误、与服务器没有共同支持的算法）：配置问题，重连不会好。显示同 `connectFailed`。
+        case handshakeFailed(String)
+        /// 主机密钥被拒绝（用户拒绝、严格模式下不认识、等确认超时）。显示同以前的
+        /// `connectFailed("主机密钥被拒绝：…")`；单列是为了重连逻辑不在它上面打转。
+        case hostKeyRejected(String)
         case jumpHostFailed(String)
 
         var errorDescription: String? {
@@ -47,8 +50,10 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                 return String(localized: "SSH 连接尚未建立")
             case .alreadyClosed:
                 return String(localized: "SSH 连接已关闭，无法再次连接")
-            case .connectFailed(let message):
+            case .connectFailed(let message), .handshakeFailed(let message):
                 return String(localized: "SSH 连接失败：\(message)")
+            case .hostKeyRejected(let message):
+                return String(localized: "SSH 连接失败：\(String(localized: "主机密钥被拒绝：\(message)"))")
             case .authenticationFailed(let message):
                 return String(localized: "SSH 连接失败：认证失败：\(message)")
             case .jumpHostFailed(let message):
@@ -147,12 +152,8 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
     /// macOS 与主流发行版上都存在。只发 `LANG`（不发 `LC_ALL`），远端 rc 里
     /// 自己设的 `LC_*` 仍然优先。
     ///
-    /// `wantReply: false` 是必须的：Citadel 对每个 env 请求 `try await`
-    /// `triggerUserOutboundEvent`，服务端没配 `AcceptEnv` 而拒绝时，带 reply
-    /// 的请求会把错误抛出去、整条连接建不起来。不要 reply 就退化成"收不到就忽略"。
-    nonisolated private static let ptyEnvironment = RemoteTrueColor.terminalEnvironment.map {
-        SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: $0.name, value: $0.value)
-    }
+    /// env 请求不要回应（USSHCore 一律这样发）：服务端没配 `AcceptEnv` 时默默忽略，不算失败。
+    nonisolated private static let ptyEnvironment = RemoteTrueColor.terminalEnvironmentDictionary
 
     /// 构造器只接受 `Sendable` 的 `ProfileSnapshot` —— 调用方须在自身隔离域内
     /// 先把非 `Sendable` 的 `@Model` `ServerProfile` 摘成快照（`ProfileSnapshot(_:)`），
@@ -233,15 +234,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
 
         // 在独立 Task 里把 withPTY 闭包挂起整个会话生命周期。
         sessionTask = Task { [weak self] in
-            let request = SSHChannelRequestEvent.PseudoTerminalRequest(
-                wantReply: true,
-                term: "xterm-256color",
-                terminalCharacterWidth: cols,
-                terminalRowHeight: rows,
-                terminalPixelWidth: 0,
-                terminalPixelHeight: 0,
-                terminalModes: SSHTerminalModes([:])
-            )
+            let request = SSHPseudoTerminal(term: "xterm-256color", columns: cols, rows: rows)
             do {
                 try await targetClient.withPTY(request, environment: Self.ptyEnvironment) { inbound, outbound in
                     // 通道已开、pty-req / env / shell 已发出（不等回复）。
@@ -270,7 +263,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                                     }
                                 }
                             } catch {
-                                // 远端 shell 以非零状态退出会抛错 —— 视作正常 EOF。
+                                // 通道 / 连接出错 —— 当作结束，下面照常收尾。
                             }
                         }
                         group.addTask {
@@ -337,8 +330,8 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
     ///
     /// 长时间待机断网形成的半死 TCP：对端没发过 FIN/RST，NIO 通道看起来仍
     /// active，inbound 永不结束、写入只进内核缓冲 —— 唯一可靠的判定是发一笔
-    /// 需要对端应答的流量。Citadel 0.12.1 没有 SSH 层 keepalive，这里在既有
-    /// 连接上开一次性 exec channel 跑 `true`：
+    /// 需要对端应答的流量。这里在既有连接上开一次性 exec channel 跑 `true`
+    /// （USSHCore 的 `ping` / keepalive 也能判，但 exec 同时证明了「还能开通道」）：
     /// - 任何应答都证明传输活着 —— 包括服务器拒绝开 channel（MaxSessions=1
     ///   之类的应用层失败），只有传输层错误才判死；
     /// - 超时 / 传输层错误 → 强制关闭底层通道（本地操作、立即完成），由此
@@ -417,9 +410,7 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
         await foregroundActivity(timeout: .milliseconds(1500))
     }
 
-    /// 在这条连接上另开 exec 通道读进程表。关标签的路上等着它，所以限时。
-    ///
-    /// Citadel 的 exec 不响应取消，不能用 TaskGroup 等（超时了也会跟着挂住），超时后让它自己跑完。
+    /// 在这条连接上另开 exec 通道读进程表。关标签的路上等着它，所以限时（`TerminalActivity.probed`）。
     func foregroundActivity(timeout: Duration) async -> TerminalActivity {
         guard !isClosed, let connected = connectedClient else { return .unknown }
         return await TerminalActivity.probed(timeout: timeout) {
@@ -497,6 +488,20 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
     }
 }
 
+nonisolated extension SSHConnection.SSHConnectionError: SSHFailureClassifying {
+    var isPermanentConnectFailure: Bool {
+        switch self {
+        case .authenticationFailed, .handshakeFailed, .hostKeyRejected: return true
+        case .notConnected, .alreadyClosed, .connectFailed, .jumpHostFailed: return false
+        }
+    }
+
+    /// 认证 / 主机密钥 / 握手失败时服务器在应答，传输是好的。其余（连不上、跳板机）看文案兜底。
+    var transportFailureVerdict: Bool? {
+        isPermanentConnectFailure ? false : nil
+    }
+}
+
 nonisolated extension ConnectedClient {
     /// 跑一条命令并取全部输出。`exec` 的输出上限是 64 000 字节，进程多的机器上 `ps -A` 会超，所以走流式的。
     func collectOutput(of command: String) async throws -> String {
@@ -511,9 +516,7 @@ nonisolated extension ConnectedClient {
     /// 登录 shell 的 rc 可能卡住，所以限时；超时后连接不受影响。
     func runTerminalSetupCommand(_ command: String) async throws -> String {
         let client = target
-        let environment = RemoteTrueColor.terminalEnvironment.map {
-            SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: $0.name, value: $0.value)
-        }
+        let environment = RemoteTrueColor.terminalEnvironmentDictionary
         return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
                 var output = Data()
@@ -561,38 +564,38 @@ nonisolated extension ConnectedClient {
     /// 在这条连接上开 SFTP，新建一个只有自己能读写的文件（/tmp 在共享服务器上大家都能读，截图、视频只给自己看），
     /// 交给 `write` 写内容，最后关文件、关 SFTP。
     private func uploadPrivateFile(to path: String,
-                                   write: (CitadelPipelineFile) async throws -> Void) async throws {
+                                   write: (USSHPipelineFile) async throws -> Void) async throws {
         let sftp = try await target.openSFTP()
         do {
             var attributes = SFTPFileAttributes()
             attributes.permissions = 0o600
-            let file = try await sftp.openFile(filePath: path,
+            let file = try await sftp.openFile(path,
                                                flags: [.write, .create, .truncate],
                                                attributes: attributes)
             do {
-                try await write(CitadelPipelineFile(file))
+                try await write(USSHPipelineFile(file))
                 try await file.close()
             } catch {
                 try? await file.close()
                 throw error
             }
         } catch {
-            try? await sftp.close()
+            await sftp.close()
             throw error
         }
-        try? await sftp.close()
+        await sftp.close()
     }
 }
 
 // MARK: - SessionState
 
-/// 跨 actor 与 `withPTY` 非隔离闭包共享的会话状态。自带 `Mutex`，是 `Sendable`。
+/// 跨 actor 与 `withPTY` 闭包共享的会话状态。自带 `Mutex`，是 `Sendable`。
 ///
 /// 这是一个 **`nonisolated`** 的跨 actor 锁盒 —— 绝不能被推断为 `@MainActor`：
 /// 它要同时被 `SSHConnection`（actor 隔离域）与 `withPTY` 的非隔离闭包、NIO 上下文
 /// 触碰。`withPTY` 的 `perform` 闭包不在 actor 隔离域内执行，无法直接触碰 actor 状态；
 /// 这个盒子作为安全的交汇点：actor 端入队写入/resize、写入 close 信号；闭包端发布
-/// `TTYStdinWriter`、启动 drain 任务、等待 close。
+/// shell 句柄（`SSHShellHandle`）、启动 drain 任务、等待 close。
 ///
 /// 全部可变字段收进 `Storage`，由 `Mutex<Storage>` 守护。每个临界区是一个同步、
 /// 非逃逸的 `withLock` 闭包 —— 语义与原 `NSLock.lock()/unlock()` 区段完全一致，
@@ -602,7 +605,7 @@ nonisolated extension ConnectedClient {
 /// 所有 `Op` 进同一个 FIFO `pendingOps`。writer 发布前入队的 Op 留在队列里，writer
 /// 发布后 `attach` 启动唯一一个 drain 任务，从队头开始逐个 `await` 应用到 writer。
 /// `enqueue` 用 `opSignal` 这个 `AsyncStream` 唤醒 drain 任务。因此从"调用
-/// write/resize"到"writer.write/changeSize"只有一条有序路径，不会乱序、不会并发。
+/// write/resize"到"writer.write/resize"只有一条有序路径，不会乱序、不会并发。
 private nonisolated final class SessionState: Sendable {
 
     /// stdin 操作：写入字节或改窗口尺寸。FIFO 顺序应用。
@@ -613,8 +616,8 @@ private nonisolated final class SessionState: Sendable {
 
     /// `Mutex` 守护的全部可变状态 —— 原先由 `NSLock` 保护的字段集合。
     private struct Storage {
-        /// PTY stdin writer，由 withPTY 闭包发布。
-        var writer: TTYStdinWriter?
+        /// PTY 的 shell 句柄（写 stdin、改尺寸），由 withPTY 闭包发布。
+        var writer: SSHShellHandle?
         /// 单一有序 stdin 操作 FIFO（C1）。writer 就绪前后入队的 Op 都在这里排队。
         var pendingOps: [Op] = []
         /// drain 任务被请求停止（close 或会话结束）。
@@ -657,7 +660,7 @@ private nonisolated final class SessionState: Sendable {
     // MARK: writer 发布 + drain 启动（withPTY 闭包端调用）
 
     /// 发布 writer 并启动唯一一个有序 drain 任务。
-    func attach(writer: TTYStdinWriter) {
+    func attach(writer: SSHShellHandle) {
         let alreadyStopped = mutex.withLock { storage -> Bool in
             storage.writer = writer
             return storage.drainStopped
@@ -676,7 +679,7 @@ private nonisolated final class SessionState: Sendable {
 
     /// 单一 drain 循环：从 FIFO 队头逐个取 Op，`await` 应用到 writer，再取下一个。
     /// 严格串行 —— 保证 stdin 字节 FIFO 顺序（C1）。
-    private func drainLoop(writer: TTYStdinWriter) async {
+    private func drainLoop(writer: SSHShellHandle) async {
         for await _ in opSignal {
             // 每次信号尽量排空当前队列。
             while true {
@@ -699,8 +702,7 @@ private nonisolated final class SessionState: Sendable {
                     case .write(let data):
                         try await writer.write(ByteBuffer(bytes: data))
                     case .resize(let cols, let rows):
-                        try await writer.changeSize(
-                            cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+                        try await writer.resize(columns: cols, rows: rows)
                     }
                 } catch {
                     // 写入 / 改尺寸失败 = stdin 通道已坏（典型：断网后第一笔写

@@ -1,9 +1,7 @@
 import Foundation
 import Synchronization
 import SwiftData
-@preconcurrency import Citadel
 import NIOCore
-import NIOSSH
 
 /// 连接断了自己重连、不结束会话的后端。重连期间在 `reconnecting` 上报 true，接回后报 false。
 protocol ReconnectingTerminalBackend: TerminalBackend {
@@ -306,16 +304,26 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     }
 
     /// 一直试到连上，或者这个后端被关掉（返回 nil）。
+    ///
+    /// 重试也不会好的失败（服务器拒绝了凭据、主机密钥被拒绝、握手协商不成——见
+    /// `SSHTransportFailure.isPermanentConnectFailure`）不再试：会话就此结束（返回 nil 前结束输出流），
+    /// 界面翻到「已断开」，用户处理好之后手动重连。
     private func reconnect() async -> ConnectedClient? {
         while !isClosed {
-            if let connected = try? await openConnection() {
+            do {
+                let connected = try await openConnection()
                 if isClosed {
                     await connected.close()
                     return nil
                 }
                 return connected
+            } catch where SSHTransportFailure.isPermanentConnectFailure(error) {
+                AppLogger.error("保持会话重连放弃：\(FriendlyError.describe(error))")
+                finishStreams()
+                return nil
+            } catch {
+                await backOff()
             }
-            await backOff()
         }
         return nil
     }

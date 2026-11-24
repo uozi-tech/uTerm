@@ -21,8 +21,8 @@ extension SSHAuthError: LocalizedError {
     }
 }
 
-/// 解析后的认证材料 —— 纯数据，不含 Citadel 类型，便于单测。
-/// `SSHConnection` 据此构造实际的 Citadel `SSHAuthenticationMethod`。
+/// 解析后的认证材料 —— 纯数据，不含 SSH 栈的类型，便于单测。
+/// `SSHClientFactory` 据此交给 USSHKit 构造实际的认证配置（`SSHAuthentication`）。
 nonisolated enum ResolvedAuth: Equatable, Sendable {
     case password(username: String, password: String)
     case privateKey(username: String, pem: String, passphrase: String?)

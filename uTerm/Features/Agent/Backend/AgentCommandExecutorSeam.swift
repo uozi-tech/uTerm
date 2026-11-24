@@ -46,7 +46,7 @@ extension SSHCommandExecutor: AgentCommandExecuting {}
 /// 一刻自己套（`AssistantModel.supervised`），工作区 / 终端窗口 / iOS 三处入口照旧只给
 /// 裸的 `SSHCommandExecutor`，哪一处都漏不掉。
 ///
-/// 裸的 `SSHCommandExecutor.run` 没有任何超时 —— Citadel 的 exec 等不到 EOF 就永远不
+/// 裸的 `SSHCommandExecutor.run` 没有任何超时 —— exec 等不到 EOF 就永远不
 /// 返回。远端磁盘 I/O 卡死时一条 `ps aux` 就能把工具卡片永久钉在「执行中」，而
 /// `AssistantModel` 的状态由卡片推出来：停止对话之后仍是 `.running`，这个会话里之后发的
 /// 每条消息都只会进待发队列。CLI / 快捷命令 / 并行窗口早就走看门狗了，对话这条路是漏的。

@@ -135,6 +135,7 @@ final class ForwardingCoordinator {
                 let e = error
                 for rule in autostart {
                     self.runtime[rule.id] = .error(ForwardingError.classify(e, rule: rule))
+                    self.stopAutoReconnectIfPermanent(e, ruleID: rule.id, serverID: server.id)
                 }
                 self.evictSession(server.id)
             }
@@ -164,6 +165,7 @@ final class ForwardingCoordinator {
                 await session.start(rule)
             } catch {
                 self.runtime[rule.id] = .error(ForwardingError.classify(error, rule: rule))
+                self.stopAutoReconnectIfPermanent(error, ruleID: rule.id, serverID: server.id)
                 self.evictSession(server.id)
             }
         }
@@ -255,6 +257,13 @@ final class ForwardingCoordinator {
         for rule in ctx.rules.values {
             start(rule, on: ctx.server, relay: ctx.relay, modelContainer: ctx.modelContainer)
         }
+    }
+
+    /// 建连失败是重试也不会好的那种（凭据被拒、主机密钥被拒、握手协商不成）：这条规则不再跟着看门狗每 30 秒
+    /// 自动重连，停在 `.error` 等用户处理后点「重试」（`retry` → `start` 会重新登记）。
+    private func stopAutoReconnectIfPermanent(_ error: Error, ruleID: UUID, serverID: UUID) {
+        guard SSHTransportFailure.isPermanentConnectFailure(error) else { return }
+        reconnectContexts[serverID]?.rules[ruleID] = nil
     }
 
     /// 记住一条「期望运行」的规则 + 其重建上下文，供看门狗判死后自动重连。

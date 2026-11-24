@@ -1,16 +1,15 @@
 import Foundation
-@preconcurrency import Citadel
 import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
-import NIOSSH
+import USSHKit
 
 /// `-D` 动态转发监听器（自实现 SOCKS5 服务）。
 ///
 /// 在 `client.eventLoop` 上 `ServerBootstrap` 绑 `listenHost:listenPort`。每个连接：
 ///   1. 读字节直到 `SOCKS5Handshake.parseGreeting` 成功 → 回 `greetingReply`；
 ///   2. 读字节直到 `parseConnect` 成功 → 得目标 `host:port`；
-///   3. `createDirectTCPIPChannel` 经 SSH 连到目标；成功回 `connectReply(success:true)`、
+///   3. `ConnectedClient.openDirectTCPIP` 经 SSH 连到目标；成功回 `connectReply(success:true)`、
 ///      失败回 `connectReply(success:false)` 并关闭；
 ///   4. `TunnelGlue.pipe` 双向泵（剩余已读但未消费的字节先 flush 给目标）。
 ///

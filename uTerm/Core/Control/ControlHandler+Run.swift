@@ -522,7 +522,7 @@ extension ControlHandler {
             // 建连早在 `pool.executor(for:)` 就做完了（那里失败走上面的 catch），
             // 所以这里已经是**执行阶段**。把它一律映射成 `connect_failed` 是谎报：
             // 真机上 `run -c 'exit 3'` 就落在这里（顶层 `exit` 退掉整个 shell、
-            // 哨兵没打印、Citadel 对非零退出抛错），CLI 得到的却是「连接失败：
+            // 哨兵没打印、`exec` 对非零退出抛错），CLI 得到的却是「连接失败：
             // 操作未能完成，请稍后重试」，3 ms 就返回，完全指错方向。
             //
             // 只有真是 `ControlConnectError`（比如复用连接时才暴露的主机密钥变更）

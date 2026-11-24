@@ -1,13 +1,85 @@
 import XCTest
 import NIOCore
-import Citadel
+import NIOSSH
 @testable import uTerm
 @testable import USSHKit
 
 /// `SSHTransportFailure` 分类器：传输层失败（该重连）vs 应用层错误（该报错）。
 final class SSHTransportFailureTests: XCTestCase {
 
-    // MARK: 类型精确匹配
+    // MARK: USSHCore 的类型（迁移指南 7.1 那张表）
+
+    func testDisconnectReasonsDecideNetworkLoss() {
+        let reset = IOError(errnoCode: ECONNRESET, reason: "read")
+        XCTAssertTrue(SSHTransportFailure.isTransportFailure(SSHChannelError.connectionClosed(.transportError(reset))))
+        XCTAssertTrue(SSHTransportFailure.isTransportFailure(SSHChannelError.connectionClosed(.remoteClosed)))
+        XCTAssertTrue(SSHTransportFailure.isTransportFailure(
+            SSHChannelError.connectionClosed(.keepAliveTimeout(unansweredProbes: 3))))
+        XCTAssertTrue(SSHTransportFailure.isTransportFailure(SSHClientError.connectionClosed(.remoteClosed)))
+    }
+
+    /// 本端关的（用户关了标签、App 主动断开）绝不能当成网络断了去重连。
+    func testLocalCloseIsNotANetworkFailure() {
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHChannelError.connectionClosed(.localClose)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHClientError.connectionClosed(.localClose)))
+    }
+
+    /// 重新交换密钥时对端换了主机密钥：要用户看，不能自动重连。
+    func testHostKeyChangedDuringRekeyIsNotANetworkFailure() throws {
+        let first = NIOSSHPrivateKey(ed25519Key: .init()).publicKey
+        let second = NIOSSHPrivateKey(ed25519Key: .init()).publicKey
+        let changed = SSHHostKeyChangedDuringRekey(previous: first, offered: second)
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHChannelError.connectionClosed(.transportError(changed))))
+    }
+
+    /// 只坏了一条通道、服务器拒绝了请求：连接本身没事（存活探测靠这个区分，误判会杀掉健康连接）。
+    func testChannelLevelErrorsAreNotTransportFailures() {
+        let rejected = SSHChannelOpenFailure(reasonCode: 4, description: "too many sessions")
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHChannelError.openRejected(rejected)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHChannelError.channelFailed(ChannelError.eof)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHChannelError.requestRejected(.exec)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHChannelError.channelClosed))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(
+            SSHCommandError.nonZeroExit(.exited(1), output: ByteBuffer())))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(CancellationError()))
+    }
+
+    func testConnectPhaseErrors() {
+        XCTAssertTrue(SSHTransportFailure.isTransportFailure(SSHClientError.connectTimeout(.seconds(1))))
+        XCTAssertTrue(SSHTransportFailure.isTransportFailure(SSHClientError.handshakeTimeout(.seconds(1))))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHClientError.handshakeFailed(ChannelError.eof)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SSHClientError.hostKeyValidationTimeout(.seconds(1))))
+    }
+
+    // MARK: 重试不会好的建连失败
+
+    func testPermanentConnectFailuresStopReconnecting() {
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(
+            SSHConnection.SSHConnectionError.authenticationFailed("服务器拒绝了密码")))
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(
+            SSHConnection.SSHConnectionError.handshakeFailed("no common algorithm")))
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(
+            SSHConnection.SSHConnectionError.hostKeyRejected("用户拒绝")))
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(USSHKit.SSHConnectionError.handshakeFailed("x")))
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(SSHClientError.handshakeFailed(ChannelError.eof)))
+
+        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(
+            SSHConnection.SSHConnectionError.connectFailed("无法连接")))
+        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(
+            SSHConnection.SSHConnectionError.jumpHostFailed("跳板机断了")))
+        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(SSHClientError.connectTimeout(.seconds(1))))
+        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(CancellationError()))
+    }
+
+    /// 认证 / 主机密钥 / 握手失败时服务器在应答：不是传输层断了。
+    func testPermanentConnectFailuresAreNotTransportFailures() {
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(
+            SSHConnection.SSHConnectionError.authenticationFailed("connection closed")))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(
+            SSHConnection.SSHConnectionError.handshakeFailed("connection closed")))
+    }
+
+    // MARK: NIO / errno
 
     func testNIOClosedChannelErrorsAreTransportFailures() {
         XCTAssertTrue(SSHTransportFailure.isTransportFailure(ChannelError.ioOnClosedChannel))
@@ -23,7 +95,10 @@ final class SSHTransportFailureTests: XCTestCase {
 
     func testSFTPConnectionClosedIsTransportFailureButProtocolErrorsAreNot() {
         XCTAssertTrue(SSHTransportFailure.isTransportFailure(SFTPError.connectionClosed))
-        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SFTPError.invalidResponse))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SFTPError.invalidResponse("bad")))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(
+            SFTPError.status(code: .noSuchFile, message: "No such file", languageTag: "")))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(SFTPError.shortRead(expected: 10, actual: 5)))
     }
 
     func testPosixTransportErrnosMatch() {
@@ -54,9 +129,5 @@ final class SSHTransportFailureTests: XCTestCase {
         XCTAssertFalse(SSHTransportFailure.isTransportFailure(NSError(
             domain: "uTerm", code: 1,
             userInfo: [NSLocalizedDescriptionKey: "permission denied"])))
-        // channel 开不出来（如 MaxSessions 限制）= 对端在应答 = 传输活着；
-        // 存活探测依赖这个区分，误判会杀掉健康连接。
-        XCTAssertFalse(SSHTransportFailure.isTransportFailure(
-            CitadelError.channelCreationFailed))
     }
 }

@@ -14,8 +14,8 @@ nonisolated enum TerminalActivity: Equatable, Sendable {
         self == .unknown && alternateScreen ? .running(nil) : self
     }
 
-    /// 先到先得：`probe` 没在 `timeout` 内回来就算判断不了。不能等它响应取消——Citadel 的 exec
-    /// 不响应取消，卡住的通道会一直挂着，而用户正等着关标签。
+    /// 先到先得：`probe` 没在 `timeout` 内回来就算判断不了。不等它响应取消：用户正等着关标签，
+    /// 卡住的通道（半死的连接上开通道）收尾也要时间。
     static func probed(
         timeout: Duration,
         probe: @escaping @Sendable () async -> TerminalActivity

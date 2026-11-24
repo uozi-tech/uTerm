@@ -1,6 +1,5 @@
 import XCTest
 import SwiftData
-@testable import Citadel
 @testable import uTerm
 @testable import USSHKit
 
@@ -612,13 +611,11 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(response.code, ControlErrorCode.permission_denied.rawValue)
     }
 
-    // MARK: - Citadel 真实抛错
+    // MARK: - 服务端状态（`SFTPError.status`）
 
-    /// Citadel 的 `SFTPClientInboundHandler` 对非 ok/eof 的响应直接
-    /// `promise.fail(status)` —— 抛出来的是**裸的 `SFTPMessage.Status`**，
-    /// 不是 `SFTPError.errorStatus(_:)`。只认后者时，`sftp rm` 一个不存在的文件
-    /// 会落到兜底的 `operation_failed`（真机实测）。
-    func testBareSFTPStatusMapsToFileNotFound() async throws {
+    /// 服务端状态一律是 `SFTPError.status`。Citadel 时代有的路径抛裸的状态消息、有的包一层，
+    /// 只认一种时 `sftp rm` 一个不存在的文件会落到兜底的 `operation_failed`（真机实测）。
+    func testSFTPStatusMapsToFileNotFound() async throws {
         await sftp.setRemoveError("/tmp/gone", Self.status(.noSuchFile, "No such file"))
 
         let response = await handler.handle(request(.sftpRm, path: "/tmp/gone"))
@@ -630,7 +627,7 @@ final class ControlSFTPHandlerTests: XCTestCase {
                        "CLI 的 message 不该被 FriendlyError 洗过")
     }
 
-    func testBareSFTPStatusMapsPermissionDenied() {
+    func testSFTPStatusMapsPermissionDenied() {
         XCTAssertEqual(
             ControlFilePayloadBuilder.errorCode(
                 for: Self.status(.permissionDenied, "Permission denied")),
@@ -647,11 +644,18 @@ final class ControlSFTPHandlerTests: XCTestCase {
             .operation_failed)
     }
 
-    /// 包过一层的那条路径（`SFTPClient.setAttributes`）也要照旧认。
-    func testWrappedSFTPErrorStatusStillMaps() {
-        let wrapped = SFTPError.errorStatus(Self.status(.noSuchFile, "No such file"))
-        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: wrapped), .file_not_found)
-        XCTAssertTrue(ControlFilePayloadBuilder.errorDetail(for: wrapped).contains("No such file"))
+    /// 「文件已存在」按状态码认（SSH_FX_FILE_ALREADY_EXISTS = 11），不再比原始数字。
+    func testFileAlreadyExistsStatusMapsToFileExists() {
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: Self.status(.fileAlreadyExists, "")), .file_exists)
+        // 写阶段包的那层先剥掉再认。
+        let staged = SFTPWriteStageError(stage: .open, underlying: Self.status(.fileAlreadyExists, "exists"))
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: staged), .file_exists)
+    }
+
+    /// 下载中途文件变短：USSHCore 报 `shortRead`，不当成功、也不归成「找不到」。
+    func testShortReadMapsToOperationFailed() {
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: SFTPError.shortRead(expected: 10, actual: 3)),
+                       .operation_failed)
     }
 
     func testErrorDetailCarriesServerMessageAndCode() {
@@ -661,12 +665,8 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertTrue(detail.contains("SSH_FX 2"), detail)
     }
 
-    /// `SFTPMessage.Status` 的 memberwise init 是 internal，只有 `@testable import`
-    /// 拿得到 —— 这也是本文件 `@testable import Citadel` 的唯一理由。
-    private static func status(
-        _ code: SFTPStatusCode, _ message: String
-    ) -> SFTPMessage.Status {
-        SFTPMessage.Status(requestId: 1, errorCode: code, message: message, languageTag: "en")
+    private static func status(_ code: SFTPStatusCode, _ message: String) -> SFTPError {
+        .status(code: code, message: message, languageTag: "en")
     }
 
     func testErrorCodeMapping() {

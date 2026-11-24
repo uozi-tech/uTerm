@@ -1,5 +1,4 @@
 import Foundation
-@preconcurrency import Citadel
 import NIOCore
 @_spi(uTermIntegration) import USSHKit
 
@@ -7,7 +6,7 @@ import NIOCore
 ///
 /// 来自 `SSHClientFactory.connectShared` 的实例是共享连接上的一份租约（`lease` 非 nil）：
 /// `close()` 只归还租约，同一连接上的其他使用方不受影响；要判死整条连接用 `closeTransport()`。
-nonisolated struct ConnectedClient: @unchecked Sendable {
+nonisolated struct ConnectedClient: Sendable {
     let shared: USSHKit.ConnectedClient
     let lease: PooledLease?
 
@@ -28,8 +27,7 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
         }
     }
 
-    /// 传输断开（含别的共享者判死后断开）时回调。共享连接走池子分发 ——
-    /// Citadel 的 `onDisconnect` 只存一个回调，直接挂会顶掉别人的。
+    /// 传输断开（含别的共享者判死后断开）时回调。共享连接走池子分发（池子按租约登记、归还时一起撤掉）。
     func onDisconnect(_ handler: @escaping @Sendable () -> Void) async {
         if let lease {
             await SharedSSHConnections.pool.onClosed(lease, handler)
@@ -46,7 +44,7 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
     ///
     /// 与 `exec` 的两处不同，都是 CLI 的静默看门狗要的：
     /// - 能**边跑边**看到输出，于是能按「多久没动静」而不是「跑了多久」判超时；
-    /// - 没有 `exec` 那道 64 000 字节的总量闸（超了整条抛 `commandOutputTooLarge`，
+    /// - 没有 `exec` 那道 64 000 字节的总量闸（超了整条抛 `SSHCommandError.outputTooLarge`，
     ///   输出多一点的命令直接失败），留多少由调用方自己裁。
     func execStreaming(
         _ command: String,
@@ -75,8 +73,8 @@ nonisolated extension ConnectedClient: PooledConnection {
     }
 
     func onTransportClosed(_ handler: @escaping @Sendable () -> Void) {
-        target.onDisconnect(perform: handler)
-        bastion?.onDisconnect(perform: handler)
+        _ = target.onDisconnect { _ in handler() }
+        _ = bastion?.onDisconnect { _ in handler() }
     }
 
     /// 不管有几个共享者，直接断开底层传输。看门狗判死时用：连接死了对谁都是死的，
@@ -88,38 +86,32 @@ nonisolated extension ConnectedClient: PooledConnection {
 
 /// uTerm's model/UI adapter around the shared connection engine.
 nonisolated enum SSHClientFactory {
-    /// SSH 子通道（PTY / SFTP / direct-tcpip）的入站窗口大小。
+    /// SSH 子通道（PTY / SFTP / direct-tcpip）的最大包长，决定每条子通道的入站窗口。
     ///
-    /// NIOSSH 把每条子通道的入站窗口钉死成 `SSHClientConfiguration.maximumPacketSize`
-    /// （`SSHChannelMultiplexer.createChildChannel` 里 `targetWindowSize:
-    /// Int32(self.maximumPacketSize)`），默认 `SSHPacketParser.defaultMaximumPacketSize`
-    /// = 128 KiB。SFTP 下载走 64 × 32 000 B 的读流水线，128 KiB 的窗口只放得下 4 个
-    /// 在途读请求 —— 流水线深度被窗口而不是被我们的并发度限制住，吞吐直接砍到 1/16。
+    /// NIOSSH 0.15 把每条子通道的入站窗口定为「最大包长 × 64」（`windowBytesPerPacket`），USSHCore 再把包长
+    /// 夹进 `SSHClient.maximumPacketSizeRange`（32 KiB…512 KiB，即窗口 2 MiB…32 MiB）。所以要某个窗口就传
+    /// 「窗口 ÷ 64」，见 `maximumPacketSize(forWindowBytes:)`。
     ///
-    /// 取 1 MiB 的理由：满流水线在途约 64 × 32 000 B ≈ 2 MiB，取其一半即可让窗口不再
-    /// 是瓶颈（窗口在消费一半时就会补发 window-adjust，1 MiB 足以覆盖一个 RTT 内的在
-    /// 途量）；再往上只是让慢消费者（例如 UI 还没读走的终端输出）在内存里多攒几倍数据，
-    /// 收益却已经饱和。NIOSSH 对这个值的硬约束是 `>= 32768 && <= (1 << 24)`
-    /// （`SSHPacketParser.init` 的两条 precondition），1 << 20 稳在区间内。
+    /// 终端、转发、共享连接原来要的是 1 MiB 窗口（SFTP 下载走 64 个在途 READ，128 KiB 的窗口只放得下 4 个，
+    /// 流水线被窗口卡住；再往上只是让慢消费者——例如 UI 还没读走的终端输出——在内存里多攒数据，收益已饱和）。
+    /// 1 MiB 低于现在能拿到的下限，取最接近的 2 MiB（包长 32 KiB）：每条子通道最多多压 1 MiB 内存，不会更慢。
     ///
-    /// 这个设置是**每条 SSH 连接**级别的，所以同一连接上的终端 PTY 通道与端口转发通道
-    /// 也会拿到 1 MiB 窗口 —— 纯粹是缓冲变大，没有行为变化。跳板机那一跳必须一起设，
-    /// 否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的 128 KiB 窗口里；
-    /// `USSHKitIntegration.connect`（uAppKit ≥ 1.4.6）内部对直连与跳板机两跳一并应用。
-    static let channelWindowOptions: Set<SSHProtocolOption> = windowOptions(bytes: 1 << 20)
+    /// 这个设置是**每条 SSH 连接**级别的，同一连接上的终端 PTY 与端口转发通道拿到同一个窗口。跳板机那一跳
+    /// 必须一起设，否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的窗口里；`USSHKitIntegration.connect`
+    /// 对直连与跳板机两跳一并应用。
+    static let channelMaximumPacketSize = maximumPacketSize(forWindowBytes: 1 << 20)
 
-    /// 指定窗口大小的协议选项（越界夹回 `maximumPacketSizeRange`）。大文件传输的专用连接
-    /// 用更大的窗口（见 `ParallelTransfer`），终端 / 转发连接仍用上面的 1 MiB。
-    static func windowOptions(bytes: Int) -> Set<SSHProtocolOption> {
-        [.maximumPacketSize(clampedMaximumPacketSize(bytes))]
+    /// NIOSSH：每条子通道的入站窗口 = 最大包长 × 64。
+    static let windowBytesPerPacket = 64
+
+    /// 要 `bytes` 大小的子通道窗口时该传的最大包长（越界夹回 `maximumPacketSizeRange`）。大文件传输的专用连接
+    /// 用更大的窗口（见 `ParallelTransfer`），终端 / 转发连接用上面那个。
+    static func maximumPacketSize(forWindowBytes bytes: Int) -> Int {
+        clampedMaximumPacketSize(bytes / windowBytesPerPacket)
     }
 
-    /// NIOSSH 允许的最大包长区间。
-    ///
-    /// `SSHPacketParser.init` 用两条 **precondition** 卡这个值 —— 越界不是抛错、不是
-    /// 回退默认值，而是直接 `abort()` 掐掉整个进程。所以宁可在这里把值夹回区间里也不
-    /// 能把越界值递下去：常量写错顶多是窗口没调成预期大小，传下去就是启动即崩。
-    static let maximumPacketSizeRange: ClosedRange<Int> = 32_768...(1 << 24)
+    /// USSHCore 允许的最大包长区间（它自己也会夹，这里先夹是为了让 app 里的数和真正生效的一致）。
+    static let maximumPacketSizeRange: ClosedRange<Int> = SSHClient.maximumPacketSizeRange
 
     /// 把包长夹进 `maximumPacketSizeRange`。
     static func clampedMaximumPacketSize(_ raw: Int) -> Int {
@@ -132,7 +124,7 @@ nonisolated enum SSHClientFactory {
         jumpHostAuth: ResolvedAuth?,
         hostKeyVerifier: HostKeyVerifier,
         hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
-        protocolOptions: Set<SSHProtocolOption> = SSHClientFactory.channelWindowOptions
+        maximumPacketSize: Int = SSHClientFactory.channelMaximumPacketSize
     ) async throws -> ConnectedClient {
         LocalNetworkUse.markUsed()
         let target = packageAuth(auth)
@@ -173,7 +165,7 @@ nonisolated enum SSHClientFactory {
                 hostKeyPolicy: packageHostKeyPolicy(),
                 connectTimeout: .seconds(connectTimeoutSeconds()),
                 approver: packageApprover(hostKeyApprover),
-                protocolOptions: protocolOptions
+                maximumPacketSize: maximumPacketSize
             )
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
@@ -186,8 +178,10 @@ nonisolated enum SSHClientFactory {
                 throw SSHConnection.SSHConnectionError.connectFailed(message)
             case .authenticationFailed(let message):
                 throw SSHConnection.SSHConnectionError.authenticationFailed(message)
+            case .handshakeFailed(let message):
+                throw SSHConnection.SSHConnectionError.handshakeFailed(message)
             case .hostKeyRejected(let message):
-                throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "主机密钥被拒绝：\(message)"))
+                throw SSHConnection.SSHConnectionError.hostKeyRejected(message)
             default:
                 throw SSHConnection.SSHConnectionError.connectFailed(
                     error.errorDescription ?? FriendlyError.describe(error)
@@ -206,7 +200,7 @@ nonisolated enum SSHClientFactory {
     /// `SharedConnectionPool`。返回的是一份租约，`close()` 只归还租约。
     ///
     /// 同时到来的建连只握一次手，用的是第一个建连者的主机密钥审批回调；后来者直接复用
-    /// 已经校验过主机密钥的连接。子通道窗口固定用 `channelWindowOptions` —— 要更大窗口的
+    /// 已经校验过主机密钥的连接。子通道窗口固定用 `channelMaximumPacketSize` —— 要更大窗口的
     /// 大文件传输走 `connect` 自己开专用连接。
     static func connectShared(
         profile: SSHConnection.ProfileSnapshot,
@@ -251,12 +245,11 @@ nonisolated enum SSHClientFactory {
         timeline.exclude()
     }
 
-    /// Kept as a narrow compatibility entry point for callers/tests that need
-    /// a Citadel authentication method without owning key parsing.
-    static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthenticationMethod {
+    /// 凭据 → USSHCore 的认证配置（私钥在这里解析）。给建连前单独量私钥解析耗时的探针与测试用。
+    static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthentication {
         let material = packageAuth(auth)
         do {
-            return try USSHKitIntegration.makeAuthenticationMethod(
+            return try USSHKitIntegration.makeAuthentication(
                 username: material.username,
                 credential: material.credential
             )

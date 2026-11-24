@@ -81,7 +81,6 @@ final class SSHKeyGeneratorTests: XCTestCase {
     private func caseName(_ key: ParsedPrivateKey) -> String {
         switch key {
         case .rsa: return "rsa"
-        case .legacyOpenSSHRSA: return "rsa"
         case .ed25519: return "ed25519"
         case .p256: return "p256"
         case .p384: return "p384"

@@ -124,8 +124,8 @@ final class QuickCommandRunner {
 
     /// 在看门狗下执行命令：静默超时 / 总时长超限都返回 nil（记失败），让本次 run 能收尾。
     ///
-    /// `SupervisedExec` 内部用**非结构化** `Task` 跑 exec —— Citadel 的 exec 流不可取消，结构化
-    /// 任务组会在作用域退出时强制 await 子任务，会被挂死命令永久阻塞。超时时它会先终止远端
+    /// `SupervisedExec` 内部用**非结构化** `Task` 跑 exec —— 写的时候（Citadel）exec 流不可取消，结构化
+    /// 任务组会在作用域退出时强制 await 子任务，会被挂死命令永久阻塞。现在 exec 响应取消，这个形态仍然成立。超时时它会先终止远端
     /// 进程组，exec 随之收到 EOF，那条 SSH 连接也就跟着释放。
     private nonisolated static func runBounded(executor: SSHCommandExecutor, shell: String) async -> CommandResult? {
         if case .completed(let result) = await SupervisedExec.runInteractive(shell, on: executor) {

@@ -160,7 +160,7 @@ struct GlobalForwardRow: View {
     // MARK: - 流量
 
     /// 实时速率 ↑/↓（每秒刷新），仅在已连接且可统计（非 `-R`）时显示；累计总量放 tooltip。
-    /// `-R` 走 Citadel 内部转发、不经粘合点 → 不显示（hover 状态徽标可知已连接）。
+    /// `-R` 不显示（hover 状态徽标可知已连接）。
     private var trafficView: some View {
         // 固定列宽常驻：未连接 / 连接中 / -R 时留空但保宽，避免隧道一连上 flow 文本被挤、列错位跳动。
         Group {

@@ -1,6 +1,5 @@
 import XCTest
 import Crypto
-@preconcurrency import Citadel
 @testable import uTerm
 @testable import USSHKit
 
@@ -12,7 +11,7 @@ final class PrivateKeyImporterTests: XCTestCase {
         guard case .ed25519 = key else { return XCTFail("应为 ed25519，得 \(key)") }
     }
 
-    /// 未加密容器要走 `.rsa`（rsa-sha2-512）。落回 `.legacyOpenSSHRSA` 就是 SHA-1 签名，
+    /// 未加密容器要走 `.rsa`（USSHCore 用 rsa-sha2-512 / 256 签）。以前落回 Citadel 的 SHA-1 签名时，
     /// OpenSSH 8.8+ 服务端默认拒收 —— 表现为「ssh 连得上、uTerm 报 allAuthentication…」。
     func testOpenSSHRSAResolvesToSHA2Path() throws {
         let key = try PrivateKeyImporter.resolve(
@@ -154,7 +153,6 @@ final class PrivateKeyImporterTests: XCTestCase {
     private func caseName(_ key: ParsedPrivateKey) -> String {
         switch key {
         case .rsa: return "rsa"
-        case .legacyOpenSSHRSA: return "rsa"
         case .ed25519: return "ed25519"
         case .p256: return "p256"; case .p384: return "p384"; case .p521: return "p521"
         }

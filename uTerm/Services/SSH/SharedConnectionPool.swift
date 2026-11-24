@@ -5,8 +5,7 @@ import Foundation
 nonisolated protocol PooledConnection: Sendable {
     /// 传输是否还活着。已断开的连接不会再借出去。
     var isAlive: Bool { get }
-    /// 挂传输断开回调。池子每条连接只挂一次，再自己分发给各租约 —— Citadel 的
-    /// `onDisconnect` 只存一个回调，后挂的会覆盖先挂的。
+    /// 挂传输断开回调。池子每条连接只挂一次，再自己分发给各租约（归还租约时连同回调一起撤掉）。
     func onTransportClosed(_ handler: @escaping @Sendable () -> Void)
     /// 真正断开底层传输。
     func closeTransport() async

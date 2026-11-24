@@ -1,43 +1,47 @@
-import Citadel
+import USSHKit
 import XCTest
 @testable import uTerm
 
 /// `SSHClientFactory` 里唯一能脱离真连接单测的东西：SSH 子通道窗口的取值。
 ///
-/// 建连本身要真的握手（`USSHKitIntegration.connect` 不构造也不返回 settings，全在
-/// uAppKit 内部拼），所以这里只钉住常量本身 —— 它是 SFTP 并行下载能不能跑满流水线
-/// 的唯一旋钮，改错了不会编译失败，只会悄悄退化成 128 KiB 默认窗口。
+/// 建连本身要真的握手（配置全在 uAppKit 内部拼），所以这里只钉住数字本身 —— 它是 SFTP 并行下载能不能跑满
+/// 流水线的唯一旋钮，改错了不会编译失败，只会悄悄变成别的窗口。NIOSSH 0.15 的窗口 = 最大包长 × 64。
 final class SSHClientFactoryTests: XCTestCase {
 
-    func testChannelWindowOptionsRequestOneMebibytePackets() {
-        XCTAssertEqual(
-            SSHClientFactory.channelWindowOptions,
-            [.maximumPacketSize(1 << 20)],
-            "子通道入站窗口 = maximumPacketSize；掉回默认 128 KiB 会把 SFTP 下载卡在 4 个在途读请求"
-        )
+    /// 终端 / 转发 / 共享连接原来要 1 MiB 窗口，现在拿不到（下限 2 MiB），取最小的包长 32 KiB → 2 MiB。
+    /// 照搬旧的 `1 << 20` 当包长会被夹成 512 KiB → 32 MiB 窗口，每条通道最坏压 64 MiB 内存。
+    func testChannelMaximumPacketSizeIsTheSmallestAvailable() {
+        XCTAssertEqual(SSHClientFactory.channelMaximumPacketSize, 32_768)
+        XCTAssertEqual(SSHClientFactory.channelMaximumPacketSize * SSHClientFactory.windowBytesPerPacket, 2 << 20)
     }
 
-    /// NIOSSH 的 `SSHPacketParser.init` 有两条 precondition：`>= 32768` 与
-    /// `<= (1 << 24)`，越界不是报错而是**进程 abort**。把边界也钉在测试里，免得
-    /// 以后有人「顺手调大一点」调到 32 MiB。
-    func testChannelWindowSizeStaysInsideNIOSSHPreconditions() {
-        let size = 1 << 20
-        XCTAssertGreaterThanOrEqual(size, 32_768, "低于 RFC 4254 最小包长，NIOSSH 会 precondition 失败")
-        XCTAssertLessThanOrEqual(size, 1 << 24, "超过 NIOSSH 上限，NIOSSH 会 precondition 失败")
-        XCTAssertEqual(SSHClientFactory.maximumPacketSizeRange, 32_768...(1 << 24))
+    /// 并行传输的专用连接要 16 MiB 窗口：包长 256 KiB。
+    func testTransferWindowMapsToPacketSize() {
+        XCTAssertEqual(SSHClientFactory.maximumPacketSize(forWindowBytes: ParallelTransfer.Tuning.standard.windowBytes),
+                       256 << 10)
+        XCTAssertEqual(SSHClientFactory.maximumPacketSize(forWindowBytes: 16 << 20) * SSHClientFactory.windowBytesPerPacket,
+                       16 << 20)
     }
 
-    /// 越界值必须被夹回区间：precondition 越界是**进程 abort**，捕获不到。
+    /// 区间与 USSHCore 的一致（它自己也会夹；这里先夹，app 里算出来的数才和真正生效的一样）。
+    func testMaximumPacketSizeRangeMatchesUSSHCore() {
+        XCTAssertEqual(SSHClientFactory.maximumPacketSizeRange, 32_768...(1 << 19))
+        XCTAssertEqual(SSHClientFactory.maximumPacketSizeRange, SSHClient.maximumPacketSizeRange)
+    }
+
+    /// 越界值夹回区间。
     func testClampedMaximumPacketSizePinsOutOfRangeValues() {
         XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(0), 32_768)
         XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(-1), 32_768)
-        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(1 << 25), 1 << 24)
-        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(.max), 1 << 24)
+        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(1 << 25), 1 << 19)
+        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(.max), 1 << 19)
+        XCTAssertEqual(SSHClientFactory.maximumPacketSize(forWindowBytes: 1 << 30), 1 << 19)
+        XCTAssertEqual(SSHClientFactory.maximumPacketSize(forWindowBytes: 0), 32_768)
     }
 
     /// 区间内的值原样通过 —— 夹钳不能顺手改动正常取值。
     func testClampedMaximumPacketSizePassesInRangeValues() {
-        for size in [32_768, 1 << 17, 1 << 20, 1 << 24] {
+        for size in [32_768, 1 << 17, 1 << 18, 1 << 19] {
             XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(size), size)
         }
     }

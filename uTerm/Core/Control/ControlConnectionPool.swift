@@ -679,7 +679,7 @@ extension ControlConnectionPool {
         pinnedFingerprint: String? = nil,
         windowBytes: Int = 1 << 20
     ) -> @Sendable () async throws -> ConnectedClient {
-        let options = SSHClientFactory.windowOptions(bytes: windowBytes)
+        let maximumPacketSize = SSHClientFactory.maximumPacketSize(forWindowBytes: windowBytes)
         let snapshot = spec.profile
         let auth = spec.auth
         let jumpAuth = spec.jumpAuth
@@ -705,7 +705,7 @@ extension ControlConnectionPool {
                     }
                     return true
                 },
-                protocolOptions: options
+                maximumPacketSize: maximumPacketSize
             )
         }
     }
