@@ -62,7 +62,8 @@ final class SSHConnectionTestServerTests: XCTestCase {
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 for await _ in exit { return true }
-                return true
+                // 流结束了却没给过一个元素：界面（TerminalSession / iOS 控制器）只在循环体里翻到「已断开」，不算结束。
+                return false
             }
             group.addTask {
                 try? await Task.sleep(for: timeout)

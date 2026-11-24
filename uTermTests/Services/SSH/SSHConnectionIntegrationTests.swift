@@ -66,7 +66,8 @@ final class SSHConnectionIntegrationTests: XCTestCase {
         let exit = conn.exitStream
         let ended = Task { () -> Bool in
             for await _ in exit { return true }
-            return true
+            // 流结束了却没给过一个元素：界面（TerminalSession / iOS 控制器）只在循环体里翻到「已断开」，不算结束。
+            return false
         }
         await conn.write(Data("sleep 1000 &\nexit\n".utf8))
         let finished = try await withTimeout(seconds: 8) { await ended.value }
