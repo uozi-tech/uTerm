@@ -228,9 +228,10 @@ final class LocalShellWindowModel {
     }) {
         self.startShell = startShell
         groups.onTabRemoved = { removed, _ in removed.payload.dispose() }
-        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个；Code 标签页再开一个空的。
+        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个；Code 标签页不克隆
+        //（这台 Mac 只开一个，`openCodeTab`），拖到本组边缘不分屏。
         groups.cloneTab = { [weak self] tab in
-            if let code = tab.payload.codeTab { return self?.makeCodeTab(directory: code.newSessionDirectory) }
+            if tab.payload.codeTab != nil { return nil }
             return self?.makeTab()
         }
         // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
@@ -249,6 +250,15 @@ final class LocalShellWindowModel {
     func attach(_ registrar: TerminalSessionRegistrar) {
         self.registrar = registrar
         for pane in panes { pane.attach(registrar) }
+        // 这台 Mac 只开一个 Code 标签页：别的窗口（另一个本机终端窗口）要开的时候切到这里的那个。
+        let windowID = registrar.windowID
+        registrar.registry.setCodeTabFocuser(forWindow: windowID) { [weak self] host, directory in
+            guard host == LocalShellIdentity.serverID, let self,
+                  let id = self.focusCodeTab(directory: directory) else { return nil }
+            (LocalShellWindowRouter.shared.window(forWindow: windowID)
+                ?? self.panes.lazy.compactMap { $0.session.ghostty.view.window }.first)?.bringToFront()
+            return id
+        }
         syncFocus()
     }
 
@@ -378,10 +388,17 @@ final class LocalShellWindowModel {
 
     // MARK: Code 标签页
 
-    /// 在 `groupID`（默认活动组）开一个这台 Mac 的 Code 标签页并设为前台。`directory` 是「＋」新会话默认的目录。
+    /// 打开这台 Mac 的 Code 标签页并设为前台。这台 Mac 只开一个（所有本机终端窗口算一台，同 iOS）：本窗口或别的本机终端窗口
+    /// 里已经有了就切过去（`focusCodeTab`），没有才在 `groupID`（默认活动组）新开。`directory` 是「＋」新会话默认的目录。
+    /// 返回那个标签页的 id。
     @discardableResult
     func openCodeTab(directory: String?, in groupID: UUID? = nil) -> UUID {
-        groups.openTab({ makeCodeTab(directory: directory) }, in: groupID)
+        if let id = focusCodeTab(directory: directory) { return id }
+        if let registrar, let id = registrar.registry.focusCodeTab(host: LocalShellIdentity.serverID, directory: directory,
+                                                                  notInWindow: registrar.windowID) {
+            return id
+        }
+        return groups.openTab({ makeCodeTab(directory: directory) }, in: groupID)
     }
 
     /// 标签条上的 Code 按钮：目录取那个组前台 shell 的当前目录。
@@ -391,19 +408,28 @@ final class LocalShellWindowModel {
         return openCodeTab(directory: front.flatMap(Self.codeDirectory), in: groupID)
     }
 
-    /// 标签页右键「历史会话…」：这个组里已经有 Code 标签页就切过去，没有就新开；列表定位到这个 shell 所在目录的那一组。
+    /// 本窗口里的 Code 标签页（这条规则之前存下的布局里可能有几个，取第一个）：切过去；`directory` 同新开时，记成「新会话」
+    /// 的目录、列表定位到它（右边正看的会话不动）。返回它的 id，本窗口没有为 nil。
+    @discardableResult
+    func focusCodeTab(directory: String?) -> UUID? {
+        guard let tab = groups.allTabs.first(where: { $0.payload.codeTab != nil }), let code = tab.payload.codeTab,
+              let at = groups.locateTab(tab.id) else { return nil }
+        if let directory {
+            code.newSessionDirectory = directory
+            code.requestReveal(directory: directory)
+        }
+        groups.activateTab(groupID: at.groupID, index: at.index)
+        return tab.id
+    }
+
+    /// 标签页右键「历史会话…」：已经有 Code 标签页就切过去，没有就在这个组新开；列表定位到这个 shell 所在目录的那一组。
     func showCodeTab(for pane: LocalShellPane) {
         guard let at = groups.locateTab(pane.id) else { return }
         let directory = Self.codeDirectory(pane)
-        if let existing = groups.groups[at.groupID]?.tabs.first(where: { $0.payload.codeTab != nil }),
-           let code = existing.payload.codeTab, let target = groups.locateTab(existing.id) {
-            if let directory { code.newSessionDirectory = directory }
-            code.requestReveal(directory: directory)
-            groups.activateTab(groupID: target.groupID, index: target.index)
-            return
-        }
+        let existed = groups.allTabs.contains { $0.payload.codeTab != nil }
         let id = openCodeTab(directory: directory, in: at.groupID)
-        groups.tab(id)?.payload.codeTab?.requestReveal(directory: directory)
+        // 新开的：起始目录已经是它，列表照样定位过去（切过去的那个 `focusCodeTab` 已经定位过）。
+        if !existed { groups.tab(id)?.payload.codeTab?.requestReveal(directory: directory) }
     }
 
     /// 「移到新标签页」：把 Code 标签页里跑着的一个 shell 开成同一组里的普通标签（同一个 shell，不重开）。
@@ -456,9 +482,9 @@ final class LocalShellWindowModel {
         return pane
     }
 
-    /// shell 的当前目录（Code 标签页取它记着的）。还没问到时为 nil。
+    /// shell 的当前目录。还没问到时、Code 标签页为 nil（前台就是 Code 标签页时只切过去，不拿它记着的目录再定位一次列表）。
     private static func codeDirectory(_ pane: LocalShellPane) -> String? {
-        if let code = pane.codeTab { return code.newSessionDirectory }
+        guard pane.codeTab == nil else { return nil }
         return pane.workingDirectory.flatMap(ClaudeProjectPath.normalized)
     }
 
@@ -506,6 +532,10 @@ final class LocalShellWindowRouter {
 
     func model(forWindow windowID: UUID) -> LocalShellWindowModel? {
         entries[windowID]?.model
+    }
+
+    func window(forWindow windowID: UUID) -> NSWindow? {
+        entries[windowID]?.window
     }
 
     /// 所有本机终端窗口里的会话，退出流程用。

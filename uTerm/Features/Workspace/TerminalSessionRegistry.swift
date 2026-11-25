@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -112,6 +113,18 @@ final class TerminalSessionRegistry {
     /// 每个窗口此刻的标签顺序（会话 id），按窗口第一次登记的先后排。可观察：远控在顺序变了时重推会话列表。
     private var tabOrders: [WindowTabOrder] = []
 
+    /// 每个窗口「这台主机的 Code 标签页在我这里就切过去、带出窗口」的入口，按窗口第一次登记的先后排
+    ///（一台主机只开一个 Code 标签页，跨窗口，见 `focusCodeTab(host:directory:notInWindow:)`）。
+    @ObservationIgnored private var codeTabFocusers: [CodeTabFocuser] = []
+
+    /// 参数是主机 id（本机是 `LocalShellIdentity.serverID`）和要记成「新会话」目录的目录；返回切到的标签页 id，没有这台主机的为 nil。
+    typealias CodeTabFocus = @MainActor (_ host: UUID, _ directory: String?) -> UUID?
+
+    private struct CodeTabFocuser {
+        let windowID: UUID
+        let focus: CodeTabFocus
+    }
+
     private struct WindowTabOrder {
         let windowID: UUID
         let read: @MainActor () -> [UUID]
@@ -195,6 +208,27 @@ final class TerminalSessionRegistry {
         arrangers[windowID] = arranger
     }
 
+    /// 窗口登记（或用 nil 撤掉）「找这台主机的 Code 标签页」的入口。再次登记只换入口，不改这个窗口排在第几。
+    func setCodeTabFocuser(forWindow windowID: UUID, _ focus: CodeTabFocus?) {
+        let index = codeTabFocusers.firstIndex { $0.windowID == windowID }
+        switch (focus, index) {
+        case let (focus?, index?): codeTabFocusers[index] = CodeTabFocuser(windowID: windowID, focus: focus)
+        case let (focus?, nil): codeTabFocusers.append(CodeTabFocuser(windowID: windowID, focus: focus))
+        case let (nil, index?): codeTabFocusers.remove(at: index)
+        case (nil, nil): break
+        }
+    }
+
+    /// 一台主机只开一个 Code 标签页（整个 App；本机所有本机终端窗口算一台）：别的窗口里已经有 `host` 的就切过去、
+    /// 把那个窗口带到前台，`directory` 同新开时一样记成「新会话」的目录。返回那个标签页的 id；哪个窗口都没有为 nil。
+    /// 这条规则之前存下的布局里一台主机可能有几个，取先登记的窗口里的第一个。
+    func focusCodeTab(host: UUID, directory: String?, notInWindow windowID: UUID?) -> UUID? {
+        for focuser in codeTabFocusers where focuser.windowID != windowID {
+            if let id = focuser.focus(host, directory) { return id }
+        }
+        return nil
+    }
+
     /// 设备上亲手排过这台 Mac 的标签：每个窗口的每个标签组照 `order` 排，只在组里这些标签原来的位置之间换
     ///（`UPaneGroupsModel.arrangeTabs`），不跨组、不跨窗口、不换前台。顺序一变，远控照常把新列表推回去。
     func arrangeTabs(by order: [UUID]) {
@@ -257,6 +291,7 @@ final class TerminalSessionRegistry {
         revealers.removeValue(forKey: windowID)
         arrangers.removeValue(forKey: windowID)
         setTabOrder(forWindow: windowID, nil)
+        setCodeTabFocuser(forWindow: windowID, nil)
     }
 
     /// 某条会话此刻是不是「key window 的前台终端标签」。**读取时现算**，
@@ -469,5 +504,32 @@ struct TerminalRegistryBinding: ViewModifier {
             .onChange(of: workspace.focusedTerminalSessionID) { _, _ in
                 workspace.syncFocusedTerminalSession()
             }
+            // 别的窗口要切到这里的 Code 标签页时得把窗口带到前台（它里面可能一个终端都没有，从终端找不到窗口）。
+            .background(HostWindowProbe { [weak workspace] window in workspace?.hostWindow = window })
+    }
+}
+
+/// 把所在的 NSWindow 交出去（挂上、换窗口、摘下都报一次）。
+private struct HostWindowProbe: NSViewRepresentable {
+    let report: @MainActor (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> ProbeView { ProbeView(report: report) }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {}
+
+    final class ProbeView: NSView {
+        let report: @MainActor (NSWindow?) -> Void
+
+        init(report: @escaping @MainActor (NSWindow?) -> Void) {
+            self.report = report
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            report(window)
+        }
     }
 }

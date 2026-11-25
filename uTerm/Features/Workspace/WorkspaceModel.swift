@@ -155,11 +155,8 @@ final class WorkspaceModel {
         // 组内唯一标签拖到本组边缘 → 克隆。终端标签克隆 = 同服务器新开一条会话；
         // 文件标签克隆 = 同一个 buffer 再挂一份（对齐旧 `insertPane(copying:)`）。
         terminalGroups.cloneTab = { [weak self] tab in
-            // Code 标签页克隆 = 同一台主机再开一个（空的，各自独立）。
-            if let code = tab.payload.codeTab {
-                return self?.makeCodeTab(serverID: tab.payload.serverProfileID, hostName: code.hostName,
-                                         directory: code.newSessionDirectory)
-            }
+            // Code 标签页不克隆：一台主机只开一个（`openCodeTab`），拖到本组边缘不分屏。
+            if tab.payload.codeTab != nil { return nil }
             if let buffer = tab.payload.fileBuffer {
                 let pane = PaneModel(serverProfileID: tab.payload.serverProfileID, fileBuffer: buffer)
                 self?.stamp(pane)
@@ -375,6 +372,13 @@ final class WorkspaceModel {
         // 手机远控上亲手排过 Mac 的标签：这个窗口跟着排。
         registry.setArranger(forWindow: windowID) { [weak self] order in
             self?.terminalGroups.arrangeTabs(by: order, id: Self.heldSessionID)
+        }
+        // 一台主机只开一个 Code 标签页：别的窗口要开这台主机的，切到这里的那个。
+        registry.setCodeTabFocuser(forWindow: windowID) { [weak self] host, directory in
+            guard let self, let id = self.focusCodeTab(host: host, directory: directory) else { return nil }
+            (self.hostWindow ?? self.terminalPanes.lazy.compactMap { $0.session.ghostty.view.window }.first)?
+                .bringToFront()
+            return id
         }
         syncTerminalTitles()
     }
@@ -849,11 +853,34 @@ final class WorkspaceModel {
     /// Code 标签页里的会话连主机（窗口视图注入：要 ModelContainer）。没注入（测试、画廊）时由右边的面板显示出来时去连。
     @ObservationIgnored var connectCodeRun: ((PaneModel) -> Void)?
 
-    /// 在 `groupID`（默认活动组）开一个 `serverID` 的 Code 标签页并设为前台。`directory` 是「＋」新会话默认的目录。
+    /// 本窗口（`TerminalRegistryBinding` 交进来）：别的窗口切到这里的 Code 标签页时带到前台。
+    @ObservationIgnored weak var hostWindow: NSWindow?
+
+    /// 打开 `serverID` 的 Code 标签页并设为前台。一台主机只开一个（整个 App，同 iOS）：本窗口或别的窗口里已经有了就切过去
+    /// （`focusCodeTab`），没有才在 `groupID`（默认活动组）新开。`directory` 是「＋」新会话默认的目录。返回那个标签页的 id。
     @discardableResult
     func openCodeTab(serverID: UUID, hostName: String, directory: String?, in groupID: UUID? = nil) -> UUID {
-        terminalGroups.openTab({ self.makeCodeTab(serverID: serverID, hostName: hostName, directory: directory) },
-                               in: groupID)
+        if let id = focusCodeTab(host: serverID, directory: directory) { return id }
+        if let registrar = sessionRegistrar,
+           let id = registrar.registry.focusCodeTab(host: serverID, directory: directory, notInWindow: registrar.windowID) {
+            return id
+        }
+        return terminalGroups.openTab({ self.makeCodeTab(serverID: serverID, hostName: hostName, directory: directory) },
+                                      in: groupID)
+    }
+
+    /// 本窗口里 `host` 的 Code 标签页（这条规则之前存下的布局里可能有几个，取第一个）：切过去；`directory` 同新开时，
+    /// 记成「新会话」的目录、列表定位到它（右边正看的会话不动）。返回它的 id，本窗口没有为 nil。
+    @discardableResult
+    func focusCodeTab(host: UUID, directory: String?) -> UUID? {
+        guard let tab = terminalGroups.allTabs.first(where: { Self.isCodeTab($0, of: host) }),
+              let code = tab.payload.codeTab, let at = terminalGroups.locateTab(tab.id) else { return nil }
+        if let directory {
+            code.newSessionDirectory = directory
+            code.requestReveal(directory: directory)
+        }
+        terminalGroups.activateTab(groupID: at.groupID, index: at.index)
+        return tab.id
     }
 
     /// 标签条上的 Code 按钮 / ⌘K：开那个组（默认活动组）前台标签页所在主机的 Code 标签页；组里一个标签页都没有时开
@@ -867,21 +894,19 @@ final class WorkspaceModel {
                            directory: front.flatMap { Self.codeDirectory(of: $0) }, in: group)
     }
 
-    /// 终端标签页右键「历史会话…」：这个组里已经有同一台主机的 Code 标签页就切过去，没有就新开一个；列表定位到那个终端所在目录的那一组。
+    /// 终端标签页右键「历史会话…」：这台主机已经有 Code 标签页就切过去，没有就在这个组新开一个；列表定位到那个终端所在目录的那一组。
     func showCodeTab(for pane: PaneModel, hostName: String) {
         guard let tab = terminalGroups.allTabs.first(where: { $0.payload === pane }),
               let at = terminalGroups.locateTab(tab.id) else { return }
         let directory = Self.codeDirectory(of: pane)
-        if let existing = terminalGroups.groups[at.groupID]?.tabs.first(where: {
-            $0.payload.codeTab != nil && $0.payload.serverProfileID == pane.serverProfileID
-        }), let code = existing.payload.codeTab, let target = terminalGroups.locateTab(existing.id) {
-            if let directory { code.newSessionDirectory = directory }
-            code.requestReveal(directory: directory)
-            terminalGroups.activateTab(groupID: target.groupID, index: target.index)
-            return
-        }
+        let existed = terminalGroups.allTabs.contains { Self.isCodeTab($0, of: pane.serverProfileID) }
         let id = openCodeTab(serverID: pane.serverProfileID, hostName: hostName, directory: directory, in: at.groupID)
-        terminalGroups.tab(id)?.payload.codeTab?.requestReveal(directory: directory)
+        // 新开的：起始目录已经是它，列表照样定位过去（切过去的那个 `focusCodeTab` 已经定位过）。
+        if !existed { terminalGroups.tab(id)?.payload.codeTab?.requestReveal(directory: directory) }
+    }
+
+    private static func isCodeTab(_ tab: TerminalTab, of host: UUID) -> Bool {
+        tab.payload.codeTab != nil && tab.payload.serverProfileID == host
     }
 
     /// 「移到新标签页」：把 Code 标签页里跑着的一个会话开成同一组里的普通终端标签页（同一条会话，不重开）。
@@ -923,9 +948,9 @@ final class WorkspaceModel {
         return pane
     }
 
-    /// 终端标签页的当前目录（Code 标签页取它记着的）。shell 没报过（没有 OSC 7）为 nil。
+    /// 终端标签页的当前目录。shell 没报过（没有 OSC 7）、不是终端标签页为 nil（前台就是 Code 标签页时只切过去，
+    /// 不拿它记着的目录再定位一次列表）。
     private static func codeDirectory(of pane: PaneModel) -> String? {
-        if let code = pane.codeTab { return code.newSessionDirectory }
         guard pane.isTerminal else { return nil }
         return ClaudeProjectPath.directory(fromOSC7: pane.session.shadow.workingDirectory)
     }
