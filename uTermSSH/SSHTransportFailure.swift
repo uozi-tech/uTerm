@@ -23,14 +23,16 @@ nonisolated enum JumpHostFailureCause: String, Codable, Sendable, Equatable {
     /// 这一跳只肯用 SHA-1 时代的旧算法，没有同意（`SSHConnectionError.legacyFallbackDeclined`）。重连只会再问一遍。
     case weakAlgorithms
 
+    /// 值不值得重试只看 USSHKit 的 `isRetryable`，这里只是细分出给人看的类别；`cause` 为 nil（旧辅助进程不带）按网络问题算。
     init(_ cause: USSHKit.SSHConnectionError?) {
+        guard let cause else { self = .unreachable; return }
         switch cause {
-        case .authenticationFailed?, .unsupportedAgentAuthentication?: self = .authentication
-        case .hostKeyRejected?: self = .hostKey
-        case .handshakeFailed?: self = .handshake
-        case .legacyFallbackDeclined?: self = .weakAlgorithms
-        case .jumpHostFailed(_, let inner)?: self.init(inner)
-        default: self = .unreachable
+        case .authenticationFailed, .unsupportedAgentAuthentication: self = .authentication
+        case .hostKeyRejected: self = .hostKey
+        case .legacyFallbackDeclined: self = .weakAlgorithms
+        case .jumpHostFailed(_, let inner?): self.init(inner)
+        case .connectFailed, .handshakeFailed, .jumpHostFailed(_, nil), .alreadyOpen, .closed, .bindFailed:
+            self = cause.isRetryable ? .unreachable : .handshake
         }
     }
 }
@@ -71,15 +73,8 @@ nonisolated enum SSHTransportFailure {
         case let error as any SSHFailureClassifying:
             return error.isPermanentConnectFailure
         case let error as USSHKit.SSHConnectionError:
-            switch error {
-            case .authenticationFailed, .handshakeFailed, .hostKeyRejected, .unsupportedAgentAuthentication,
-                 .legacyFallbackDeclined:
-                return true
-            case .jumpHostFailed(_, let cause):
-                return JumpHostFailureCause(cause) != .unreachable
-            default:
-                return false
-            }
+            // USSHKit 自己的判定（不带 `default`、递归看跳板机那一跳的 `cause`）。
+            return !error.isRetryable
         case let error as SSHClientError:
             switch error {
             case .authenticationFailed, .authenticationDelegateFailed, .hostKeyRejected,

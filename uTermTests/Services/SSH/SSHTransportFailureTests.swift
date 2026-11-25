@@ -84,7 +84,8 @@ final class SSHTransportFailureTests: XCTestCase {
     /// USSHKit 经跳板机的失败带着那一跳按直连规则归的类（`cause`）：只看它，不看文案。
     func testUSSHKitJumpHostFailureIsClassifiedByItsCause() {
         typealias Kit = USSHKit.SSHConnectionError
-        XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(Kit.jumpHostFailed("跳板机拒绝了密码")))
+        // 不带 `cause` 的（USSHKit 自己不会这样抛）照 `isRetryable` 按不可重试算。
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(Kit.jumpHostFailed("跳板机拒绝了密码")))
         XCTAssertFalse(SSHTransportFailure.isPermanentConnectFailure(
             Kit.jumpHostFailed("x", cause: .connectFailed("拒绝开 direct-tcpip"))))
         for cause: Kit in [.authenticationFailed("x"), .hostKeyRejected("x"), .handshakeFailed("x"),
@@ -98,6 +99,10 @@ final class SSHTransportFailureTests: XCTestCase {
         XCTAssertEqual(JumpHostFailureCause(.unsupportedAgentAuthentication), .authentication)
         XCTAssertEqual(JumpHostFailureCause(.hostKeyRejected("x")), .hostKey)
         XCTAssertEqual(JumpHostFailureCause(.handshakeFailed("x")), .handshake)
+        // 隧道才有的那几个也是不可重试的，别被归成网络问题。
+        XCTAssertEqual(JumpHostFailureCause(.bindFailed("x")), .handshake)
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(Kit.bindFailed("x")))
+        XCTAssertEqual(JumpHostFailureCause(.jumpHostFailed("x", cause: .connectFailed("y"))), .unreachable)
     }
 
     /// 辅助进程把类别经 `SSHBridgeFailure.jumpHostCause` 交回 App；旧的辅助进程不带这个字段，按网络问题算。
