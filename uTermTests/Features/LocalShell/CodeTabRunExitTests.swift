@@ -431,36 +431,95 @@ final class CodeTabRunExitTests: XCTestCase {
         XCTAssertNil(code.reveal, "也不去定位到那个目录")
     }
 
-    // MARK: ⌘W（记下现在的行为，不是要求）
+    // MARK: ⌘W
 
-    /// Code 标签页在前台时按 ⌘W：关的是整个 Code 标签页（连同里面所有会话），不是右边那一个会话。
-    /// 这里走的是右边那个会话已经结束、回到空态之后的那一下：没有在跑的会话，不问，直接关，露出旁边的普通标签页。
-    /// 还有会话的前台在跑程序时会先问一次（`TerminalCloseGuard`，弹的是模态确认，测试里不走那条）。
-    func test_command_w_on_the_code_tab_closes_the_whole_tab() async throws {
+    /// 挂整个本机终端窗口（⌘W 监听在里面），一个普通标签页 + 一个 Code 标签页（前台），Code 标签页里起一个会话。
+    private func windowWithCodeRun(command: String) async throws
+        -> (model: LocalShellWindowModel, window: NSWindow, shellID: UUID, codeID: UUID, code: CodeTabModel,
+            run: LocalShellPane, directory: String) {
         let model = localModel()
         let window = window(LocalShellWindowView(windowID: LocalShellWindowID(id: UUID()), catalogModel: model)
             .environment(TerminalSessionRegistry()))
-        defer {
-            model.disposeAll()
-            close(window)
-        }
         let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
         let shellID = model.addTab(directory: directory)
         let codeID = model.openCodeTab(directory: directory)
         let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
         code.install(await fakeConnection(directory: directory, command: Self.fakeTool))
-        let started = try XCTUnwrap(code.startNewSession(tool: .claude, command: Self.fakeTool, directory: directory))
+        let started = try XCTUnwrap(code.startNewSession(tool: .claude, command: command, directory: directory))
         let run = try XCTUnwrap(model.pane(started.id))
+        return (model, window, shellID, codeID, code, run, directory)
+    }
+
+    /// Code 标签页右边是会话的终端（焦点在终端里）时按 ⌘W：同 Claude Code Desktop 的「关闭会话」，结束的是这个会话，
+    /// 不是整个标签页。前台还有程序在跑（`sleep`）先问，确认按钮是「结束会话」（不是「关闭标签页」）；取消不动，确认才结束。
+    func test_command_w_ends_the_displayed_running_session_and_keeps_the_tab() async throws {
+        let (model, window, shellID, codeID, code, run, _) = try await windowWithCodeRun(command: "sleep 600")
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        await wait("sleep 跑起来") { await run.session.foregroundActivity() == .running("sleep") }
+        try await focus(run.session, in: window)
+        XCTAssertEqual(code.detail, .terminal(run.id))
+
+        try commandW(window)
+        await wait("问一下") { window.attachedSheet != nil }
+        try click(String(localized: "取消"), in: window)
+        await wait("收起确认") { window.attachedSheet == nil }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(run.isDisposed, "取消：不动")
+        XCTAssertEqual(code.runs.map(\.id), [run.id])
+
+        try commandW(window)
+        await wait("再问一下") { window.attachedSheet != nil }
+        try click(AgentHistoryText.endSession, in: window)
+        await wait("会话结束") { run.isDisposed }
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .empty, "没有记录的新会话：回到起始页")
+        XCTAssertEqual(model.groups.allTabs.map(\.id), [shellID, codeID], "Code 标签页还在")
+        XCTAssertEqual(model.active?.id, codeID)
+
+        // 起始页上再按：照旧关 Code 标签页，露出旁边的普通标签页。
+        try commandW(window)
+        await wait("Code 标签页关掉") { model.groups.tab(codeID) == nil }
+        XCTAssertEqual(model.groups.allTabs.map(\.id), [shellID])
+        XCTAssertEqual(model.active?.id, shellID)
+    }
+
+    /// 右边是已经结束、留着画面的会话：⌘W 同「关闭」（不问），回到起始页；再按一下才关整个 Code 标签页。
+    func test_command_w_on_an_ended_session_closes_it_then_the_tab() async throws {
+        let (model, window, shellID, codeID, code, run, _) = try await windowWithCodeRun(command: Self.fakeTool)
+        defer {
+            model.disposeAll()
+            close(window)
+        }
         await wait("会话里的命令跑起来") { await run.session.foregroundActivity() == .running("head") }
         try await focus(run.session, in: window)
         run.session.writeRemoteInput(Data("bye\n".utf8))
         await wait("会话收尾") { code.runs.allSatisfy(\.isEnded) }
         XCTAssertEqual(model.groups.allTabs.map(\.id), [shellID, codeID], "会话退出本身不关标签页")
+        XCTAssertEqual(code.detail, .terminal(run.id))
+
+        try commandW(window)
+        await wait("已结束的会话关掉") { run.isDisposed }
+        XCTAssertNil(window.attachedSheet, "不问")
+        XCTAssertEqual(code.detail, .empty, "回到起始页")
+        XCTAssertEqual(model.groups.allTabs.map(\.id), [shellID, codeID], "Code 标签页还在")
 
         try commandW(window)
         await wait("Code 标签页关掉") { model.groups.tab(codeID) == nil }
         XCTAssertEqual(model.groups.allTabs.map(\.id), [shellID])
         XCTAssertEqual(model.active?.id, shellID, "露出旁边的普通标签页")
+    }
+
+    private func click(_ title: String, in window: NSWindow, file: StaticString = #filePath, line: UInt = #line) throws {
+        func find(_ view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == title { return button }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        let button = try XCTUnwrap(window.attachedSheet?.contentView.flatMap(find), "找不到按钮「\(title)」",
+                                   file: file, line: line)
+        button.performClick(nil)
     }
 
     private func commandW(_ window: NSWindow) throws {

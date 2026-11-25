@@ -292,6 +292,114 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(code.detail, .terminal(run.id), "「返回终端」")
     }
 
+    // MARK: ⌘W
+
+    /// ⌘W 在 Code 标签页上（同 Claude Code Desktop 的「关闭会话」）：右边显示着这个标签页里的会话（它的终端，或者还在跑时
+    /// 它的记录）就结束那个会话；起始页、看的是没在这里跑的会话的记录时关整个标签页。
+    func testCloseShortcutEndsTheDisplayedSessionOtherwiseClosesTheTab() async throws {
+        let (code, history, _) = await makeCode(sessions: [
+            session("a", in: Self.shop, title: "a", ago: 60),
+            session("b", in: Self.infra, title: "b", ago: 120),
+        ])
+        XCTAssertEqual(code.closeShortcut, .closeTab, "起始页")
+
+        let a = try file(history, "a"), b = try file(history, "b")
+        history.select(b)
+        code.historySelectionChanged()
+        XCTAssertEqual(code.closeShortcut, .closeTab, "看一份没在跑的记录")
+
+        let run = try XCTUnwrap(code.resume(a))
+        XCTAssertEqual(code.detail, .terminal(run.id))
+        XCTAssertEqual(code.closeShortcut, .endSession(run.id), "右边是它的终端")
+
+        code.setShowsTranscript(true, for: run.id)
+        XCTAssertEqual(code.detail, .transcript)
+        XCTAssertEqual(code.closeShortcut, .endSession(run.id), "还在跑时看它的记录也算")
+
+        history.select(b)
+        code.historySelectionChanged()
+        XCTAssertEqual(code.closeShortcut, .closeTab, "切去看别的会话的记录：右边不是它了")
+        XCTAssertEqual(code.runs.map(\.id), [run.id])
+
+        let fresh = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
+        XCTAssertEqual(code.closeShortcut, .endSession(fresh.id), "没对上记录的新会话")
+
+        made[1].codeCommandHasEnded = true
+        code.checkRuns()
+        for _ in 0..<50 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(code.runs.first { $0.id == fresh.id }?.isEnded, true)
+        XCTAssertEqual(code.closeShortcut, .endSession(fresh.id), "已结束、留着画面的：⌘W 同「关闭」")
+
+        code.endSession(fresh.id)
+        XCTAssertEqual(code.closeShortcut, .closeTab, "回到起始页")
+    }
+
+    /// 本机终端窗口里按 ⌘W：Code 标签页右边是跑着的会话时只结束它，标签页留着（哪怕它是窗口里唯一的标签页）；
+    /// 回到起始页之后再按才照旧（唯一的标签页时关窗口，否则关标签页）。
+    func testLocalShellCloseShortcutEndsTheDisplayedSessionFirst() async throws {
+        let model = LocalShellWindowModel(startShell: { _ in })
+        let codeID = model.openCodeTab(in: model.groups.activeGroupID)
+        let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
+        let pane = try XCTUnwrap(run.terminal as? LocalShellPane)
+        defer { model.disposeAll() }
+
+        var windowCloses = 0
+        model.handleCloseShortcut { windowCloses += 1 }
+        for _ in 0..<200 where !pane.isDisposed { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(pane.isDisposed, "结束右边那个会话（没连上：没有前台程序，不问）")
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .empty)
+        XCTAssertEqual(model.groups.allTabs.map(\.id), [codeID], "Code 标签页还在")
+        XCTAssertEqual(windowCloses, 0)
+
+        model.handleCloseShortcut { windowCloses += 1 }
+        XCTAssertEqual(windowCloses, 1, "起始页：照旧，唯一的标签页时关窗口")
+
+        let shell = model.addTab(directory: Self.shop)
+        model.groups.activateTab(groupID: try XCTUnwrap(model.groups.activeGroupID), index: 0)
+        XCTAssertEqual(model.active?.id, codeID)
+        model.handleCloseShortcut { windowCloses += 1 }
+        for _ in 0..<200 where model.groups.tab(codeID) != nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.groups.allTabs.map(\.id), [shell], "起始页：关 Code 标签页")
+        XCTAssertEqual(windowCloses, 1)
+    }
+
+    /// SSH 的两种窗口（工作区窗口的终端区、终端窗口）里按 ⌘W：同上。
+    func testWorkspaceCloseShortcutEndsTheDisplayedSessionFirst() async throws {
+        let workspace = WorkspaceModel()
+        let host = UUID()
+        defer { workspace.dispose() }
+        let codeID = workspace.openCodeTab(serverID: host, hostName: "h", directory: Self.shop)
+        let code = try XCTUnwrap(workspace.terminalGroups.tab(codeID)?.payload.codeTab)
+
+        // 终端窗口：Code 标签页是唯一的标签页。
+        var windowCloses = 0
+        _ = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
+        workspace.handleTerminalWindowCloseShortcut { windowCloses += 1 }
+        for _ in 0..<200 where !code.runs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(code.runs.isEmpty, "结束右边那个会话")
+        XCTAssertTrue(workspace.terminalPanes.isEmpty, "它的终端结束了")
+        XCTAssertEqual(workspace.terminalGroups.allTabs.map(\.id), [codeID], "Code 标签页还在")
+        XCTAssertEqual(windowCloses, 0)
+        workspace.handleTerminalWindowCloseShortcut { windowCloses += 1 }
+        XCTAssertEqual(windowCloses, 1, "起始页：照旧，唯一的标签页时关窗口")
+
+        // 工作区窗口的终端区：先结束会话，再按一次关 Code 标签页（终端区空着也不关窗口）。
+        let terminalID = workspace.openServer(profileID: host, title: "h")
+        workspace.terminalGroups.activateTab(groupID: try XCTUnwrap(workspace.terminalGroups.activeGroupID), index: 0)
+        XCTAssertEqual(workspace.terminalGroups.activeTab?.id, codeID)
+        let second = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
+        workspace.handleTerminalCloseShortcut()
+        for _ in 0..<200 where !code.runs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(code.runs.contains { $0.id == second.id })
+        XCTAssertEqual(workspace.terminalGroups.allTabs.map(\.id), [codeID, terminalID])
+
+        workspace.handleTerminalCloseShortcut()
+        for _ in 0..<200 where workspace.terminalGroups.tab(codeID) != nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(workspace.terminalGroups.allTabs.map(\.id), [terminalID], "起始页：关 Code 标签页")
+    }
+
     /// 结束会话前的确认：标题同关终端标签页（说在跑的是哪个程序），正文说结束会话。
     func testEndSessionPromptKeepsTheCloseTitle() throws {
         let close = try XCTUnwrap(TerminalActivity.running("claude").closePrompt())

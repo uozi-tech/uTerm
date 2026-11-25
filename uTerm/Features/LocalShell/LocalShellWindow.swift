@@ -270,28 +270,35 @@ final class LocalShellWindowModel {
     }
 
     /// 用户要关一个标签：前台还有程序在跑时先确认。手机远控关闭走 `close(_:)`，手机上已经确认过。
-    func requestClose(_ id: UUID) {
+    func requestClose(_ id: UUID, window: NSWindow? = NSApp.keyWindow) {
         if let code = groups.tab(id)?.payload.codeTab {
             // Code 标签页：里面跑着的会话有前台程序时问一次，确认后一起结束（`onTabRemoved` → `dispose`）。
-            TerminalCloseGuard.requestClose(code.terminals.compactMap { ($0 as? LocalShellPane)?.session }, tabName: TerminalArea.codeTabBaseTitle) { [weak self] in
+            TerminalCloseGuard.requestClose(code.terminals.compactMap { ($0 as? LocalShellPane)?.session },
+                                            tabName: TerminalArea.codeTabBaseTitle, window: window) { [weak self] in
                 self?.close(id)
             }
             return
         }
         guard let pane = groups.tab(id)?.payload else { return }
-        TerminalCloseGuard.requestClose(pane.session, tabName: pane.session.shellTitle ?? pane.defaultTitle) { [weak self] in
+        TerminalCloseGuard.requestClose(pane.session, tabName: pane.session.shellTitle ?? pane.defaultTitle,
+                                        window: window) { [weak self] in
             self?.close(id)
         }
     }
 
-    /// ⌘W：只剩一个标签时关窗口，否则只关活动标签（同 SSH 终端窗口）。
-    func handleCloseShortcut(closeWindow: () -> Void) {
+    /// ⌘W：前台是 Code 标签页、右边显示着它里面的会话时只结束那个会话（`CodeTabModel.closeShortcut`）；
+    /// 否则只剩一个标签时关窗口，再否则只关活动标签（同 SSH 终端窗口）。`window` 是按 ⌘W 的那个窗口（确认框落在它上面）。
+    func handleCloseShortcut(window: NSWindow? = NSApp.keyWindow, closeWindow: () -> Void) {
+        if TerminalCloseGuard.endDisplayedSession(of: active?.codeTab, window: window,
+                                                  session: { ($0 as? LocalShellPane)?.session }) {
+            return
+        }
         guard groups.allTabs.count > 1 else {
             closeWindow()
             return
         }
         if let active {
-            requestClose(active.id)
+            requestClose(active.id, window: window)
         } else {
             groups.closeActiveTab()   // 活动组是空的：收掉空组。
         }
@@ -614,7 +621,7 @@ struct LocalShellWindowView: View {
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
         .background(HeldWindowTrackerBinding(tracker: model.windowTracker))
         .background(WorkspaceCloseShortcutInstaller { window in
-            model.handleCloseShortcut { window.performClose(nil) }
+            model.handleCloseShortcut(window: window) { window.performClose(nil) }
         })
         .background(TerminalWindowCloseGuardInstaller(sessions: { model.panes.map(\.session) }))
         .frame(minWidth: 560, minHeight: 360)

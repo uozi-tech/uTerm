@@ -203,25 +203,15 @@ struct TerminalWindowView: View {
         mode = .terminal
     }
 
-    /// ⌘W：终端模式按「关活动标签 → 最后一个标签关窗口」；Agent 模式关窗口。
+    /// ⌘W：终端模式按「Code 标签页右边的会话 → 关活动标签 → 最后一个标签关窗口」
+    /// （`WorkspaceModel.handleTerminalWindowCloseShortcut`）；Agent 模式关窗口。
     @MainActor
     private func handleCloseShortcut(window: NSWindow) {
         guard mode == .terminal else {
             window.performClose(nil)
             return
         }
-        let groups = workspace.terminalGroups
-        // 纯终端窗口没有「空终端区」这个有意义的状态：只剩一个组一个标签时
-        // ⌘W 关窗口（对齐旧的「最后一个窗格 / 最后一个标签 → 关窗口」）。
-        guard groups.groupCount > 1 || groups.allTabs.count > 1 else {
-            window.performClose(nil)
-            return
-        }
-        if let tab = groups.activeTab {
-            workspace.requestCloseTerminalTab(tab.id)
-        } else if !workspace.closeActiveTerminalTab() {
-            window.performClose(nil)
-        }
+        workspace.handleTerminalWindowCloseShortcut(window: window) { window.performClose(nil) }
     }
 
     /// ⌘K 命令面板：终端布局相关命令（对齐设计稿 terminal.jsx 的命令面板）。

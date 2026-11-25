@@ -663,6 +663,34 @@ final class WorkspaceModel {
         }
     }
 
+    /// ⌘W 落在工作区窗口的终端区：前台是 Code 标签页、右边显示着它里面的会话时只结束那个会话
+    /// （`CodeTabModel.closeShortcut`），否则关活动标签页（终端区空掉也不关窗口）。
+    func handleTerminalCloseShortcut(window: NSWindow? = NSApp.keyWindow) {
+        if endDisplayedCodeSession(window: window) { return }
+        requestCloseActiveTerminalTab()
+    }
+
+    /// ⌘W 落在终端窗口（终端模式）：同上，只是只剩一个组一个标签时关窗口（纯终端窗口没有「空终端区」这个有意义的状态，
+    /// 对齐旧的「最后一个窗格 / 最后一个标签 → 关窗口」）。
+    func handleTerminalWindowCloseShortcut(window: NSWindow? = NSApp.keyWindow, closeWindow: () -> Void) {
+        if endDisplayedCodeSession(window: window) { return }
+        guard terminalGroups.groupCount > 1 || terminalGroups.allTabs.count > 1 else {
+            closeWindow()
+            return
+        }
+        if let tab = terminalGroups.activeTab {
+            requestCloseTerminalTab(tab.id)
+        } else if !closeActiveTerminalTab() {
+            closeWindow()
+        }
+    }
+
+    private func endDisplayedCodeSession(window: NSWindow?) -> Bool {
+        TerminalCloseGuard.endDisplayedSession(of: terminalGroups.activeTab?.payload.codeTab, window: window) {
+            ($0 as? PaneModel)?.session
+        }
+    }
+
     /// 记录一次 workspace 内拖拽源。`.onDrag` 没有结束回调，因此与 pane
     /// drag state 一样轮询鼠标释放兜底清理。
     func beginDrag(_ source: WorkspaceDragSource) {

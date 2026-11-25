@@ -382,9 +382,9 @@ struct WorkspaceWindowView: View {
             guard let tabID = workspace.filePreviewModel.activeTabID else { return }
             requestCloseTab(tabID)
         case .closeTerminalActiveTab:
-            // 关活动组的前台标签；组因此空掉就塌缩，最后一个组留着显示空态
-            // （工作区窗口不会因为终端区空掉而关闭）。
-            workspace.requestCloseActiveTerminalTab()
+            // 前台是 Code 标签页、右边显示着它里面的会话时只结束那个会话；否则关活动组的前台标签，
+            // 组因此空掉就塌缩，最后一个组留着显示空态（工作区窗口不会因为终端区空掉而关闭）。
+            workspace.handleTerminalCloseShortcut(window: window)
         case .closeWindow:
             window.performClose(nil)
         }

@@ -85,6 +85,19 @@ enum TerminalCloseGuard {
         }
     }
 
+    /// ⌘W 落在 Code 标签页上（`CodeTabModel.closeShortcut`）：右边显示着它里面的会话就结束那个会话（同「结束会话」，
+    /// 见 `requestEndSession`），返回 true。不是 Code 标签页、或者该关标签页时返回 false，调用方照旧关标签页 / 窗口。
+    @discardableResult
+    static func endDisplayedSession(
+        of code: CodeTabModel?,
+        window: NSWindow? = NSApp.keyWindow,
+        session: (any CodeTabTerminal) -> TerminalSession?
+    ) -> Bool {
+        guard let code, case .endSession(let runID) = code.closeShortcut else { return false }
+        requestEndSession(runID, in: code, session: session, window: window)
+        return true
+    }
+
     /// 关窗前问一遍窗口里的所有终端。逐个探测：一条连接上最多 6 个 shell，同时再各开一个 exec
     /// 通道会撞上 sshd 默认的 `MaxSessions 10`，开不了的就成了「判断不了」。
     static func confirmClosingWindow(_ window: NSWindow, sessions: [TerminalSession]) async -> Bool {

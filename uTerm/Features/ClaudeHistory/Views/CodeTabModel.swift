@@ -213,6 +213,20 @@ final class CodeTabModel {
         return runs.first { $0.path == path }
     }
 
+    /// ⌘W 在这个标签页上做什么。
+    enum CloseShortcut: Equatable {
+        /// 结束右边那个会话（「结束会话」，宿主先问前台程序；已结束、留着画面的同「关闭」）。标签页留着。
+        case endSession(UUID)
+        /// 照旧关整个标签页。
+        case closeTab
+    }
+
+    /// ⌘W（同 Claude Code Desktop 的「关闭会话」）：右边显示着这个标签页里的会话（它的终端，或者还在跑时切到的它的记录）
+    /// 就结束那个会话；起始页、看的是没在这里跑的会话的记录时关标签页。两种宿主都按它分派（`TerminalCloseGuard.endDisplayedSession`）。
+    var closeShortcut: CloseShortcut {
+        displayedRun.map { .endSession($0.id) } ?? .closeTab
+    }
+
     /// 右边正显示的终端（标题栏、状态栏、注册表的前台会话跟着它）。看记录时为 nil。
     var displayedTerminal: (any CodeTabTerminal)? {
         guard case .terminal(let id) = detail else { return nil }
