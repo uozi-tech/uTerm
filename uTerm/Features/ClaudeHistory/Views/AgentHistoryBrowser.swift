@@ -4,18 +4,18 @@ import UAppKitBridge
 import UDesignKit
 import UniformTypeIdentifiers
 
-/// 在 Code 标签页里跑着的会话（`CodeTabModel.runs`）：都放在列表最顶上（列表里没有行的、还没对上记录的新会话也在），
-/// 行上是它此刻的状态（`CodeRunStatus`）。不另起一组「正在运行」：一个会话只出现一次。独立的历史窗口没有。
+/// 在 Code 标签页里跑着的会话（`CodeTabModel.runs`）：不另起一块「正在运行」，列表里有它那份记录的就在那份记录平常的
+/// 位置（置顶了在「置顶」，否则在它那一组），行上是它此刻的状态（`CodeRunStatus`）；列表里没有记录的（还没对上记录的
+/// 新会话等）没有组可放，在列表最顶上。规则见 `AgentHistoryRunPlacement`。独立的历史窗口没有。
 struct AgentHistoryRunning {
-    /// 在 Code 标签页里跑着（或已结束、留着画面）的会话，按起来的先后。列表把它们都放在最顶上，置顶与下面的分组里
-    /// 不再出现（一个会话只出现一次）；结束、拿掉之后回到它的记录平常的位置。
+    /// 在 Code 标签页里跑着（或已结束、留着画面）的会话，按起来的先后。
     let rows: () -> [AgentHistoryRunRow]
     let onSelect: (UUID) -> Void
     /// 行上的操作（右键菜单、悬停的 ×）。nil = 没有（只能点一下回到它）。
     var actions: AgentHistoryRunActions? = nil
 }
 
-/// 顶上跑着的会话那一行的操作，同终端顶上「⋯」菜单里的那几样。
+/// 跑着的会话那一行的操作，同终端顶上「⋯」菜单里的那几样。
 struct AgentHistoryRunActions {
     /// 「结束会话」（右键菜单与悬停的 ×）。前台还有程序在跑时先问，由宿主管。
     let end: (UUID) -> Void
@@ -27,8 +27,8 @@ struct AgentHistoryRunActions {
     let moveToTab: ((UUID) -> Void)?
 }
 
-/// 列表最顶上的一行：一个跑着的会话。有记录、列表里有那份记录的，画成那份记录平常的样子；没有的（还没写出记录的新会话）
-/// 写标题与目录。行上的状态见 `AgentHistoryRunStatus`。
+/// 一个跑着的会话。列表里有它那份记录的，那一行（在置顶或它那一组里）画成跑着的样子；没有的（还没写出记录的新会话）
+/// 在列表最顶上，写标题与目录。行上的状态见 `AgentHistoryRunStatus`。
 struct AgentHistoryRunRow: Identifiable {
     let id: UUID
     let title: String
@@ -158,7 +158,7 @@ struct AgentHistorySessionList: View {
     let history: AgentHistoryModel
     var newSession: AgentHistoryNewSession? = nil
     var reveal: AgentHistoryReveal? = nil
-    /// Code 标签页里跑着的会话：放在最顶上，行上是它此刻的状态。
+    /// Code 标签页里跑着的会话：在它那份记录平常的那一行上（没有记录的在最顶上），行上是它此刻的状态。
     var running: AgentHistoryRunning? = nil
     /// 收起侧栏（Code 标签页，放在菜单里）；nil = 菜单里不出这一项。
     var onCollapse: (() -> Void)? = nil
@@ -169,6 +169,8 @@ struct AgentHistorySessionList: View {
     @State private var pendingReveal: AgentHistoryReveal?
     /// 拖动置顶的状态（只在这个列表里认）。
     @State private var pinDrag = AgentHistoryPinDragModel.forList()
+    /// 选中的跑着的会话那份记录还没露出来（它那一组收着、还没列到）：列表变了再试，见 `tryRevealRun`。
+    @State private var pendingRunReveal: String?
 
     /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
     private var grouping: AgentHistoryGrouping {
@@ -373,14 +375,13 @@ struct AgentHistorySessionList: View {
 
     private var emptyDetail: String { AgentHistoryText.emptyListDetail(hidden: history.hiddenCount) }
 
-    private func list(_ allFiles: [AgentHistorySessionFile], pinned allPinned: [AgentHistorySessionFile],
+    private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile],
                       runs: [AgentHistoryRunRow]) -> some View {
-        // 跑着的都在最顶上，下面（置顶、分组）不再出现。
-        let runPaths = Set(runs.compactMap(\.path))
-        let (files, pinned) = AgentHistoryListing.excludingRunning(allFiles, pinned: allPinned, running: runPaths)
-        let byPath = Dictionary((allFiles + allPinned).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
+        // 跑着的会话不另起一块：有记录的在那一行上（置顶或它那一组），只有没记录的在最顶上。
+        let placement = AgentHistoryRunPlacement(runs: runs, path: \.path, groups: groups)
+        let selectedRunPath = runs.first(where: \.isSelected)?.path
         let pins = history.pins
         // 拖动中、还没有置顶的会话：分组最上面盖一条落点。盖在上面、不占位置：出现消失都不推动列表，拖着的落点不跟着跳。
         let showsDropStrip = pins != nil && pinned.isEmpty && pinDrag.isOver
@@ -388,17 +389,11 @@ struct AgentHistorySessionList: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(runs) { row in
-                            let file = row.path.flatMap { byPath[$0] }
-                            runRow(row, file: file)
-                                .modifier(AgentHistoryRunRowActions(row: row, file: file, pins: pins,
+                        ForEach(placement.top) { row in
+                            AgentHistoryUnlistedRunRow(row: row, showsTool: history.isMultiTool)
+                                .modifier(AgentHistoryRunRowActions(row: row, file: nil, pins: pins,
                                                                     actions: running?.actions))
                                 .onTapGesture { running?.onSelect(row.id) }
-                        }
-                        if !runs.isEmpty, !groups.isEmpty {
-                            Rectangle().fill(UD.border).frame(height: 1)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
                         }
                         if pins != nil, pinned.isEmpty {
                             // 落点的锚：零高度，一直在（拖动开始时不插进新的一行）。落点画在它下面、盖住接下来的那一截。
@@ -422,7 +417,8 @@ struct AgentHistorySessionList: View {
                             if !collapsed {
                                 let showsTool = group.mixesTools
                                 ForEach(group.files) { file in
-                                    row(file, in: group, showsTool: showsTool, pins: pins, pinned: pinned)
+                                    row(file, in: group, showsTool: showsTool, pins: pins, pinned: pinned,
+                                        run: placement.inList[file.path])
                                 }
                             }
                         }
@@ -441,33 +437,34 @@ struct AgentHistorySessionList: View {
                 .onAppear { pendingReveal = reveal }
                 .onChange(of: reveal) { _, request in pendingReveal = request }
                 .onChange(of: pendingReveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
-                .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
+                // 选中了一个跑着的会话（侧栏收起时从窄轨展开、重启后还原、新会话对上了记录……）：它那一组收着就打开。
+                .onChange(of: selectedRunPath, initial: true) { _, path in
+                    pendingRunReveal = path
+                    tryRevealRun(groups, proxy: proxy)
+                }
+                .onChange(of: groups.map(\.id)) { _, _ in
+                    tryReveal(groups, proxy: proxy)
+                    tryRevealRun(groups, proxy: proxy)
+                }
             }
         }
     }
 
-    /// 顶上一个跑着的会话：列表里有它那份记录的画成记录平常的那一行，没有的写标题与目录。行上的状态是它此刻的状态。
-    @ViewBuilder
-    private func runRow(_ row: AgentHistoryRunRow, file: AgentHistorySessionFile?) -> some View {
-        if let file {
-            AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                                   showsProject: true, showsTool: history.isMultiTool, isSelected: row.isSelected,
-                                   runStatus: row.status)
-        } else {
-            AgentHistoryUnlistedRunRow(row: row, showsTool: history.isMultiTool)
-        }
-    }
-
     /// 一行会话：点一下选中；Mac 上能拖进 / 拖出「置顶」，右键「置顶」/「取消置顶」（同一件事，菜单好找）。
+    /// `run`：这份记录正在 Code 标签页里跑着——行上写它此刻的状态，点一下回到它的终端，右键是跑着的会话那几样操作
+    ///（含置顶），悬停出 ×。照样能拖进 / 拖出「置顶」。
     @ViewBuilder
     private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
-                     pins: AgentHistoryPins?, pinned: [AgentHistorySessionFile]) -> some View {
+                     pins: AgentHistoryPins?, pinned: [AgentHistorySessionFile], run: AgentHistoryRunRow?) -> some View {
         let key = AgentHistoryPinKey(file)
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                           showsProject: grouping != .project || group.kind == .pinned,
                                           showsTool: showsTool,
-                                          isSelected: history.selectedFile?.path == file.path)
-            .onTapGesture { history.select(file) }
+                                          isSelected: history.selectedFile?.path == file.path || run?.isSelected == true,
+                                          runStatus: run?.status)
+            .onTapGesture {
+                if let run, let running { running.onSelect(run.id) } else { history.select(file) }
+            }
         if let pins {
             let isPinned = group.kind == .pinned
             base
@@ -485,12 +482,21 @@ struct AgentHistorySessionList: View {
                 } preview: {
                     AgentHistorySessionRowPreview(history: history, file: file, showsTool: showsTool)
                 }
-                .contextMenu {
-                    Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(key))) { pins.toggle(file) }
-                }
+                .modifier(AgentHistoryRowMenu(file: file, pins: pins, run: run, actions: running?.actions))
         } else {
-            base
+            base.modifier(AgentHistoryRowMenu(file: file, pins: nil, run: run, actions: running?.actions))
         }
+    }
+
+    /// 选中的跑着的会话那一行在一个收着的组里：打开那一组、滚到它那一行（不收着就不动，免得点一下列表就跳）。
+    /// 那份记录还没列到的，等列表变了再试。
+    private func tryRevealRun(_ groups: [AgentHistoryGroup], proxy: ScrollViewProxy) {
+        guard let path = pendingRunReveal, let id = AgentHistoryListing.groupID(ofRecord: path, in: groups) else { return }
+        pendingRunReveal = nil
+        guard history.collapsedGroups.contains(id) else { return }
+        history.collapsedGroups.remove(id)
+        // 行的 id 就是记录的路径（`AgentHistorySessionFile.id`）。
+        Task { @MainActor in proxy.scrollTo(path) }
     }
 
     /// 定位到终端当前目录那一组：展开它并滚过去。还没列到它就等列表变了再试。
@@ -609,7 +615,8 @@ struct AgentHistoryRunStatusTag: View {
     }
 }
 
-/// 列表最顶上那一行（`AgentHistoryRunRow`）：标题（新会话就是「新会话」），第二行状态（程序报过的话）+ 目录名。点一下回到它的终端。
+/// 列表最顶上那一行：跑着、但列表里没有它那份记录的会话（多半是还没写出记录的新会话，见 `AgentHistoryRunPlacement`）。
+/// 标题（新会话就是「新会话」），第二行状态（程序报过的话）+ 目录名。点一下回到它的终端。
 private struct AgentHistoryUnlistedRunRow: View {
     let row: AgentHistoryRunRow
     /// 这台主机上不止一种工具：写出是哪种（「新会话」本身看不出来）。
@@ -646,8 +653,9 @@ private struct AgentHistoryUnlistedRunRow: View {
     }
 }
 
-/// 顶上跑着的会话那一行的操作：右键菜单（「查看记录」/「返回终端」、「移到新标签页」、有记录的「置顶」、「结束会话」），
-/// 悬停时右端一个 ×（结束会话），上下居中。× 盖在行上、不占位置：出现消失这一行的字不挪。这几行不能拖（跑着的不进「置顶」那一套拖动）。
+/// 跑着的会话那一行的操作：右键菜单（「查看记录」/「返回终端」、「移到新标签页」、有记录的「置顶」、「结束会话」），
+/// 悬停时右端一个 ×（结束会话），上下居中。× 盖在行上、不占位置：出现消失这一行的字不挪。
+/// 有记录的那一行在置顶或它那一组里，照样能拖进 / 拖出「置顶」；最顶上没有记录的那几行不能置顶。
 struct AgentHistoryRunRowActions: ViewModifier {
     let row: AgentHistoryRunRow
     let file: AgentHistorySessionFile?
@@ -694,6 +702,27 @@ struct AgentHistoryRunRowActions: ViewModifier {
         }
         Divider()
         Button(AgentHistoryText.endSession, role: .destructive) { actions.end(row.id) }
+    }
+}
+
+/// 列表里一行记录的右键菜单：在跑的（`run`）是跑着的会话那几样操作（含「置顶」，悬停出 ×），否则只有「置顶」/「取消置顶」。
+/// 不能置顶（`pins` 为 nil）又不在跑的没有菜单。
+private struct AgentHistoryRowMenu: ViewModifier {
+    let file: AgentHistorySessionFile
+    let pins: AgentHistoryPins?
+    let run: AgentHistoryRunRow?
+    let actions: AgentHistoryRunActions?
+
+    func body(content: Content) -> some View {
+        if let run, actions != nil {
+            content.modifier(AgentHistoryRunRowActions(row: run, file: file, pins: pins, actions: actions))
+        } else if let pins {
+            content.contextMenu {
+                Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(AgentHistoryPinKey(file)))) { pins.toggle(file) }
+            }
+        } else {
+            content
+        }
     }
 }
 

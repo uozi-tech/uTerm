@@ -240,7 +240,8 @@ final class CodeTabModel {
 
     // MARK: 选择
 
-    /// 点了侧栏顶上一个列表里没有行的会话（`unlistedRuns`）：有记录的选中那份记录（右边是它的终端），没有记录的新会话单独选中。
+    /// 点了侧栏里一个跑着的会话（它那份记录的那一行，或者顶上列表里没有行的那几个，见 `unlistedRuns`）：回到它的终端。
+    /// 有记录的选中那份记录（右边是它的终端），没有记录的新会话单独选中。
     func selectRun(_ id: UUID) {
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
         restoredSelection = nil
@@ -713,9 +714,10 @@ final class CodeTabModel {
     }
 
     /// 列表里没有行的会话：还没对上记录的新会话，或者对上了但那份记录列表里还没列出来（还没重列、被「显示」筛掉了、
-    /// 还没翻到）。侧栏把它们放在最顶上，一个都不丢；列表里有行的不在这里（不重复）。`shown`：列表里显示着的记录。
+    /// 还没翻到）。侧栏把它们放在最顶上，一个都不丢；列表里有行的在那一行上（置顶或它那一组），不在这里、也不重复。
+    /// `shown`：列表里显示着的记录。规则见 `AgentHistoryRunPlacement`（侧栏画的时候用的同一个）。
     func unlistedRuns(shown: Set<String>) -> [Run] {
-        runs.filter { run in run.path.map { !shown.contains($0) } ?? true }
+        AgentHistoryRunPlacement(runs: runs, path: \.path, listed: shown).top
     }
 
     /// 一个跑着的会话叫什么：对上了记录、读到了信息的用记录的标题（Claude Code 起的名字，跟着它变），继续的会话
