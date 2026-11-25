@@ -78,9 +78,12 @@ struct ColumnResizer: View {
     @State private var startWidth: Double?
     @State private var hovering = false
 
+    /// 画廊 / 测试用：非 nil 时分隔条一律按这个悬停状态画（合成鼠标事件点不稳 SwiftUI 的悬停）。App 里恒为 nil。
+    static var catalogHot: Bool?
+
     @ViewBuilder
     private var indicator: some View {
-        let hot = hovering || startWidth != nil
+        let hot = Self.catalogHot ?? (hovering || startWidth != nil)
         switch appearance {
         case .line:
             PaneDividerLine(axis: .vertical, hot: hot)
@@ -121,6 +124,10 @@ struct ColumnResizer: View {
                     .accessibilityLabel(Text("调整列宽"))
                     .accessibilityAddTraits(.allowsDirectInteraction)
             )
+            // 悬停时的 3pt 线与 7pt 命中区都伸出布局的 1pt、压到两侧的栏上。排在它后面的栏（Code 标签页右边的终端、
+            // 带底色的面板）会把伸过去那半边盖掉：标题行旁边 3pt、往下只剩 2pt，在标题行底下错一个台阶。
+            // 提到兄弟视图之上，线从上到下一样宽（`CodeTabDividerTests`）。
+            .zIndex(1)
     }
 }
 

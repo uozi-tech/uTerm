@@ -310,7 +310,7 @@ enum UICatalogRenderer {
 
     // MARK: 出图
 
-    private static func snapshot(_ view: NSView, overlays: [NSWindow], windowCorners: Bool) -> Data? {
+    static func snapshot(_ view: NSView, overlays: [NSWindow], windowCorners: Bool) -> Data? {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
         // 离屏的 cacheDisplay 画 CALayer 投影和屏幕上的合成器不一样：模糊约大 1.7 倍、偏移方向反了而且偏小
         // （主按钮的柔光在画廊里比 App 里散得多，对着 App 真窗口量的）。拍的那一下按比例改回去，拍完还原。
