@@ -190,6 +190,19 @@ final class ClaudeTranscriptScrollProbeTests: XCTestCase {
             // 真用户 16ms 一个事件；这段时间里 onAppear 之类的下一拍工作跑完。
             try? await Task.sleep(for: .milliseconds(16))
             window.contentView?.layoutSubtreeIfNeeded()
+            // 再等坐标真的挪到这个事件要去的地方（最多 250ms）才截：SwiftUI 的滚动视图按显示节拍把滚轮的位移交给 clip view，
+            // 机器一忙，这个事件的位移常常要到下一拍才落下，16ms 后截到的是「这一拍没动、下一拍动了两个事件」——
+            // 画面与坐标一起走、内容在文档里没挪，不是这里要抓的跳（2026-11-25 负载 35 时每轮假红 1～4 次）。
+            // 文档改高时 SwiftUI 会把坐标补一大截、坐标永远到不了这里，等满 250ms 照常截，画面判据照旧。
+            let wanted = previousTop - CGFloat(delta)
+            let deadline = CACurrentMediaTime() + 0.25
+            while delta != 0, abs(topOffset(scroll) - wanted) > 0.5, CACurrentMediaTime() < deadline {
+                let edge = topOffset(scroll) < 1
+                    || (scroll.documentView?.bounds.height ?? 0) - topOffset(scroll) - scroll.documentVisibleRect.height < 1
+                if edge { break }
+                try? await Task.sleep(for: .milliseconds(4))
+                window.contentView?.layoutSubtreeIfNeeded()
+            }
             let rows = rowSignature(scroll)
             let top = topOffset(scroll)
             let height = scroll.documentView?.bounds.height ?? 0
