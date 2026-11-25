@@ -1244,13 +1244,13 @@ private struct ClaudeTranscriptRow: View {
     @ViewBuilder private var content: some View {
         switch item.kind {
         case .userText(let text):
-            MStreamingMarkdown(text: text, isStreaming: false)
+            MTranscriptMarkdown(text: text)
                 .textSelection(.enabled)
                 .padding(.horizontal, 12).padding(.vertical, 9)
                 .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous).fill(M.fillFaint))
                 .modifier(CopyMenu(text: item.plainText))
         case .assistantText(let text):
-            MStreamingMarkdown(text: text, isStreaming: false)
+            MTranscriptMarkdown(text: text)
                 .textSelection(.enabled)
         case .command(let command):
             Text(verbatim: command)
@@ -1330,6 +1330,19 @@ private struct ClaudeTranscriptRow: View {
 }
 
 /// 派子代理的调用下面的入口：点进去看那个子代理自己的记录。同 Mac。
+/// 记录里的一段 Markdown：第一次排版就是解析好的样子（同 Mac 的 `AgentTranscriptMarkdown`）。
+///
+/// 不用 `MStreamingMarkdown`：它在 `onAppear` 里才解析，没出现过的行懒栈都按空文档量高（120 条：内容高 5471pt，实际一万五以上）。
+/// 往回翻时一行行出现、一行行长到真实高度，内容总高度在滚动中一次变上万点，偏移被拽到别处、画面整屏换掉
+/// （`ClaudeTranscriptScrollProbeTests`）。记录里的文字是落定的，这里在 body 里同步取解析结果；两端共用一份缓存。
+private struct MTranscriptMarkdown: View {
+    let text: String
+
+    var body: some View {
+        MMarkdownBlocks(document: MarkdownDocumentCache.transcript.document(for: text))
+    }
+}
+
 private struct ClaudeSubagentEntry: View {
     let link: AgentSubagentLink
     let action: () -> Void

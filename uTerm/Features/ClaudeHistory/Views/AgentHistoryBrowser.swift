@@ -1628,11 +1628,6 @@ private struct AgentTranscriptMarkdown: View {
     }
 }
 
-extension MarkdownDocumentCache {
-    /// 对话记录（历史窗口 / Code 标签页）用的一份，和聊天那份分开：记录一页就有几十段，按全文为键。
-    static let transcript = MarkdownDocumentCache(capacity: 512)
-}
-
 /// 派子代理的调用下面的入口：点进去看那个子代理自己的记录。
 private struct AgentSubagentEntry: View {
     let link: AgentSubagentLink

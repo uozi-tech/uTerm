@@ -38,7 +38,7 @@
 | SSH config 导入复核表 | `Import/Views/SSHConfigImportView.swift` | B | 2000 行：挂载 432.1 → 4.6ms、hitTest 5566 → 260µs | 同上 | `50e7b533` |
 | **滚动期间的 hover（跨视图）** | `UAppKitBridge/ScrollHoverGate.swift` + 6 处接入 | B | 光标压在列表上滚：全局转发 1000 行 p50 10.00 → 3.74ms、超预算 73.5% → 5.5%、NSView 波动 46 → 2；欢迎页 2000 台 5.24 → 3.29ms、超预算 14.5% → 0.0% | `ScrollHoverGateProbeTests`（4 个类） | `18d48893`（+ `b959982f`） |
 | **行悬停：整表一个跟踪层（跨视图）** | `UAppKitBridge/RowHoverTracker.swift` + 5 处接入 | B | 光标压在列表上滚，**in/out 单帧 p50 比值** 欢迎页 1.15 → 1.01×、SFTP 1.32 → 1.01×、全局转发 2.27 → 0.98×（p50 −22% / −23% / −57%）；滚动期间行级 hover 事件 280~320 → 0 | `RowHoverTrackerProbeTests`（5 个类） | 本轮 |
-| **对话记录正文（Code 标签页 / 历史窗口）** | `ClaudeHistory/Views/AgentHistoryBrowser.swift`（`AgentTranscriptMarkdown`） | B | 120 条往回翻 4860pt：画面跳 16 次（单次最大 317pt）+ 整屏换 13 次 → 0 / 0；滚动中文档高变 11 次共 10437pt → 0；打开时文档高 4957 → 22751pt（改前是按空文档量的）；帧耗时两臂都在 0.4ms 以内（不是掉帧） | `ClaudeTranscriptScrollProbeTests` | 本轮 |
+| **对话记录正文（Mac 的 Code 标签页 / 历史窗口，iOS 的历史会话标签）** | `ClaudeHistory/Views/AgentHistoryBrowser.swift`（`AgentTranscriptMarkdown`）、`uTermMobile/Screens/Workspace/ClaudeHistoryTab.swift`（`MTranscriptMarkdown`） | B | 120 条往回翻 4860pt：画面跳 16 次（单次最大 317pt）+ 整屏换 13 次 → 0 / 0；滚动中文档高变 11 次共 10437pt → 0；打开时文档高 4957 → 22751pt（改前是按空文档量的）；帧耗时两臂都在 0.4ms 以内（不是掉帧）；iOS 120 条往回翻跳 8 + 整屏换 13 → 0 / 0 | `ClaudeTranscriptScrollProbeTests`（Mac、iOS 各一个） | 本轮 |
 | **uTermMobile 全端（iOS）** | `uTermMobile/**` + `Core/Models/ServerGrouping.swift` | B（10 处），**但只有一处有读数** | 2000 台 / 60 组「组名→台数」：47.882 → 0.852ms（56×）；其余 9 处是形态归因，iOS 无可用模拟器 runtime、平台组件未装，一条真窗口读数都没有 | `ServerGroupingTests` + `MobileRenderLintTests`（文本 lint） | 本轮 |
 | **终端屏 · 单会话输出压力（iOS）** | `uTermMobile/Screens/Terminal/*` | **A** | 1 会话 × 2000 行/秒 × 10s：单帧 p50 0.050ms、p95 5.751ms、超 8.33ms 0.0%、display 拍 599/600 | `TerminalScreenProbeTests` | 本轮 |
 | **终端屏 · 非活动会话仍全量渲染（iOS）** | 同上 | B | 4 会话各 2000 行/秒：单帧 p50 3.855 → 0.041ms、超 8.33ms 15.2% → 0.0%、主线程 CPU 6.771 → 5.910s，四片消费计数不变（不丢字节） | 同上 | 本轮 |
@@ -1825,7 +1825,21 @@ false），把「新建一行」的账又抬回来 —— 实测 200 步滚动�
   - 只看 clip view 的偏移量不到抖：文档改高时 SwiftUI 有时把坐标补一大截（画面照旧跟手），有时不补（画面跳），
     所以判据是截图位移，坐标只打印。按 `.textSelection` 的交互层视图位置对位移也不行：短行一样高，投票会投错。
   - 生成的假对话每轮结构一样，截图签名（每行墨量）分不清只差数字的两屏，比对只用在相邻两次采样之间。
-- **没做的**：iOS 的 `ClaudeHistoryTab`（`MStreamingMarkdown`，同样 `onAppear` 才解析）大概率同病，没量没改。
+- **iOS 同病**（`uTermMobile/Screens/Workspace/ClaudeHistoryTab.swift`，`MStreamingMarkdown` 也在 `onAppear` 才解析）：
+  `uTermMobileTests/Probes/ClaudeTranscriptScrollProbeTests`，390×760、120 条、每 16ms 把 `contentOffset` 往回挪 60pt
+  共 100 步再往下 100 步，每步截图比对（不走手势）。真机 iPhone 18 Pro Max（改后 / 改前 / 改后）与 iPhone 18 Pro 模拟器
+  （改后 / 改前交替两轮）：
+
+  | 臂 | 打开时内容高 | 往回翻：跳 / 整屏换 | 滚动中内容高变 | 打开到停稳主线程 CPU |
+  |---|---|---|---|---|
+  | 改前 · 真机 | 5471pt | 5 次（最大 372pt）/ 13 | 7 次共 18943pt | 193.4ms |
+  | 改后 · 真机 | 26906pt | 0 / 0 | 0 | 143.0 / 188.6ms |
+  | 改前 · 模拟器 | 5471pt | 8 次（最大 375pt）/ 13；5 次（最大 101pt）/ 6 | 7 次共 15659pt；8 次共 4423pt | 358.1 / 410.8ms |
+  | 改后 · 模拟器 | 27083pt | 0 / 0；0 / 0 | 0 | 319.0 / 281.9ms |
+
+  往下翻改后两处都是 0 / 0（改前往回翻时内容长高、偏移被拽到靠底，往下翻只走得动几百点，不可比）。
+  改前偏移会被一下拽走一万多点（3496 → 14992），画面整屏换掉。改法同 Mac：`MTranscriptMarkdown` 在 body 里同步取
+  `MarkdownDocumentCache.transcript`（缓存挪到了两端共享的 `StreamingMarkdownRenderer.swift`，两端用同一份）。
 
 ## uTermMobile（iOS 端，2026-09-08）
 
