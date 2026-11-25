@@ -110,8 +110,11 @@ struct ConnectingCoverView: View {
     @Environment(\.mAccent) private var accent
     @Environment(\.mChrome) private var chrome
     @State private var height: CGFloat = 0
-    /// 格内且高度不够完整排版（进度环 + 名字 + 底部区约 420pt）：收紧上下留白、底部区不占固定高度。
+    /// 格内且高度不够完整排版（进度环 + 名字 + 底部区约 420pt）：收紧上下留白。
     private var compact: Bool { !fillsScreen && height > 0 && height < 420 }
+    private var bottomPadding: CGFloat { compact ? 14 : 30 }
+    /// 给底部区留的高度：最长的那一态（失败文案三行 + 一排按钮）。主体按它避让，与此刻底部区有没有内容无关。
+    static let bottomReserve: CGFloat = 124
     /// 已连接即闩锁（提交成功）：避免「连上即被服务器立刻断开」把状态翻回连接中导致卡死；
     /// 同时一旦提交即隐藏取消按钮，规避「已连上又被取消」竞态。
     @State private var finishing = false
@@ -166,25 +169,27 @@ struct ConnectingCoverView: View {
         let statusRow = chipStatusRow
         ZStack {
             M.canvas.ignoresSafeArea()
-            VStack(spacing: 0) {
-                if let statusRow {
-                    // 与状态栏同一行、行内竖直居中（对齐时间 / 电量的中线）。
-                    topChip.frame(height: statusRow)
-                } else if !fillsScreen {
-                    // 格内：上面就是标签条，不需要顶边净空。
-                    topChip.padding(.top, compact ? 10 : 16)
-                } else {
-                    // 状态栏不在顶边时（iPhone Duo 折叠 / 横屏）chip 别贴着屏幕顶。
-                    topChip.mTopClearance()
+            // 主体（进度环 + 主机名）的位置只看容器大小，不看各阶段的内容：底部区（失败文案 + 按钮、「连接耗时较长」）
+            // 出现、变长都往下长，不把主体顶上去（见 `ConnectingCoverLayout`）。
+            ConnectingCoverLayout(bottomReserve: Self.bottomReserve + bottomPadding) {
+                VStack(spacing: 0) {
+                    if let statusRow {
+                        // 与状态栏同一行、行内竖直居中（对齐时间 / 电量的中线）。
+                        topChip.frame(height: statusRow)
+                    } else if !fillsScreen {
+                        // 格内：上面就是标签条，不需要顶边净空。
+                        topChip.padding(.top, compact ? 10 : 16)
+                    } else {
+                        // 状态栏不在顶边时（iPhone Duo 折叠 / 横屏）chip 别贴着屏幕顶。
+                        topChip.mTopClearance()
+                    }
                 }
-                Spacer(minLength: 8)
                 centerStack
-                Spacer(minLength: 8)
-                // 底部区固定高度：连接 / 成功 / 失败三态高度一致，切换时中部进度环不位移。
-                bottomArea
-                    .frame(maxWidth: .infinity, minHeight: compact ? 0 : 112, alignment: .bottom)
+                // 套一层：底部区在连接中是空的，裸的空视图在 Layout 里不算一个子视图，三块就对不上了。
+                VStack(spacing: 0) { bottomArea }
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 24)
-                    .padding(.bottom, compact ? 14 : 30)
+                    .padding(.bottom, bottomPadding)
             }
             .opacity(revealed || failureMessage != nil ? 1 : 0)
             // Duo 展开竖屏：整条顶行都算安全区，chip 伸进去与状态栏同行（见 chipStatusRow）。
@@ -427,5 +432,51 @@ private struct CoverScreenCentering: ViewModifier {
 
     func body(content: Content) -> some View {
         if enabled { content.mCentersOnScreen() } else { content }
+    }
+}
+
+/// 连接中页的三块：顶部 chip、主体、底部区。
+///
+/// 主体的竖直位置只由容器大小、chip 的高度与**固定的**底部预留决定：放在容器正中，放不下时才往上 / 往下让开
+///（让开的量也只看预留，不看此刻底部区的实际内容）。底部区贴底、按自己的内容高度往上长。
+/// 以前是一列竖排（chip / Spacer / 主体 / Spacer / 底部区），主体居中在 chip 与底部区之间：底部区一出现
+///（5 秒后的「返回」、失败文案与按钮）主体就被往上推七十多点，实机上看是「连接中」的居中位置在变。
+struct ConnectingCoverLayout: Layout {
+    /// 底部区（含底边留白）最高会占多少：主体避开这么高，不管底部区此刻是空的还是满的。
+    var bottomReserve: CGFloat
+    /// 主体与 chip / 底部预留之间至少留的空。
+    var gap: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        // 顶部 chip、主体、底部区：调用方保证三块都在（空的底部区也包成一个视图）。
+        guard subviews.count == 3 else {
+            assertionFailure("ConnectingCoverLayout 需要三个子视图，实际 \(subviews.count)")
+            return
+        }
+        let width = ProposedViewSize(width: bounds.width, height: nil)
+        let chip = subviews[0], body = subviews[1], bottom = subviews[2]
+        let chipHeight = chip.sizeThatFits(width).height
+        chip.place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top,
+                   proposal: ProposedViewSize(width: bounds.width, height: chipHeight))
+        let bottomHeight = bottom.sizeThatFits(width).height
+        bottom.place(at: CGPoint(x: bounds.midX, y: bounds.maxY), anchor: .bottom,
+                     proposal: ProposedViewSize(width: bounds.width, height: bottomHeight))
+        let bodyHeight = body.sizeThatFits(width).height
+        let y = Self.bodyCenterY(in: bounds, chipHeight: chipHeight, bodyHeight: bodyHeight,
+                                 bottomReserve: bottomReserve, gap: gap)
+        body.place(at: CGPoint(x: bounds.midX, y: y), anchor: .center,
+                   proposal: ProposedViewSize(width: bounds.width, height: bodyHeight))
+    }
+
+    /// 主体中线：容器正中；碰到 chip 往下让、碰到底部预留往上让（两头都放不下时先保证不压到底部区）。
+    nonisolated static func bodyCenterY(in bounds: CGRect, chipHeight: CGFloat, bodyHeight: CGFloat,
+                                        bottomReserve: CGFloat, gap: CGFloat) -> CGFloat {
+        let lowest = bounds.maxY - bottomReserve - gap - bodyHeight / 2
+        let highest = bounds.minY + chipHeight + gap + bodyHeight / 2
+        return min(max(bounds.midY, highest), lowest)
     }
 }
