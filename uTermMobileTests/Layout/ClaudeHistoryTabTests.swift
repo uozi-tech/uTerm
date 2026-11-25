@@ -408,7 +408,11 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertTrue(finished)
         XCTAssertEqual(model.search?.sessions.map(\.metadata.title), ["登录接口偶发 500", "订单服务测试与慢查询", "给订单接口加分页"],
                        "按会话的新旧排，Claude Code 与 Codex 的混在一起")
-        XCTAssertEqual(AgentHistoryText.searchUnsupported(model.searchExcludedTools), "Cursor 的会话不参与搜索")
+        // 不拿中文字面量比文案（换了界面语言就红）：比结构化的字段，文案只核点到了那种工具。
+        XCTAssertEqual(model.searchExcludedTools, [.cursor])
+        let note = AgentHistoryText.searchUnsupported(model.searchExcludedTools)
+        XCTAssertTrue(note.contains(AgentHistoryTool.cursor.displayName), note)
+        XCTAssertFalse(note.contains(AgentHistoryTool.claude.displayName), note)
     }
 
     /// 「继续这个会话」按工具出命令、「＋新会话」先选工具，都在这台主机上开一个新的终端标签页跑；

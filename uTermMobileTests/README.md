@@ -817,6 +817,13 @@ caffeinate -dimsu xcodebuild test-without-building \
    hitTest 比值、`ink > 0.005`），**绝对毫秒只打印**。
 6. 判定与读数写进 `docs/scroll-perf-findings.md`「各视图判定」一节。
 
+### ⑩ 测试语言钉在简体中文（`uTermMobile.xcscheme` 的 TestAction `language = "zh-Hans"` / `region = "CN"`）
+
+不少用例拿简体中文字面量比文案（`"45 秒"`、`"等待确认"`、`"在哪个目录打开？"`、`hasPrefix("删除失败")`……），
+设备界面是英文时 `String(localized:)` 取到的是译文，这些用例必红（2026-11-25 在英文界面的 iPhone 18 Pro Max 上
+一次红了 12 个类里的 22 条）。宿主按测试动作的语言起，与设备语言无关。新用例能比结构化字段（错误类型、枚举、
+`displayName` 这类不翻译的名字）就别比文案；要核文案时照旧写简体中文原文。命令行传 `-testLanguage` 会盖掉这里的设置。
+
 耗时参考（同上机器，Debug）：
 
 | | 墙钟 | 测试时间 |
