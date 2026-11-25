@@ -235,6 +235,9 @@ final class FileBrowserModel {
     private var didEverBrowse = false
     private let sftpConnector: SFTPConnector
     @ObservationIgnored private var lastConnectionRequest: ConnectionRequest?
+    /// 失败态是建连时「重试也不会好」的那种（凭据被拒、主机密钥被拒、握手不成——`SSHTransportFailure.isPermanentConnectFailure`）：
+    /// 看门狗不再自动重试（否则每次心跳都再登录失败一次，可能触发服务器的 fail2ban / pam_faillock），等用户自己点重试。
+    @ObservationIgnored private(set) var failureNeedsUser = false
 
     private struct ConnectionRequest {
         let profile: ServerProfile
@@ -319,6 +322,7 @@ final class FileBrowserModel {
         connectGeneration &+= 1
         let attempt = connectGeneration
         state = .connecting
+        failureNeedsUser = false
         // 任务被取消（如 sidebar 折叠 / 窗口关闭）时把 .connecting 重置回 .idle，
         // 否则下一次 connect 被 guard 直接跳过、永远停在 spinner 上（Fix #7）。
         defer {
@@ -358,6 +362,7 @@ final class FileBrowserModel {
                 timeline.finish("failed")
                 guard connectGeneration == attempt else { return }
                 provider = nil
+                failureNeedsUser = SSHTransportFailure.isPermanentConnectFailure(error)
                 state = .failed(FriendlyError.describe(error))
             }
         }
@@ -413,7 +418,7 @@ final class FileBrowserModel {
         ownerEnrichmentTask = nil
         pendingPath = target
         isLoading = true
-        isNavigating = target != currentPath
+        isNavigating = target.remoteKey != currentPath.remoteKey
         do {
             let listed = try await provider.list(path: target)
             let sorted = await sortedForDisplay(listed)
@@ -477,9 +482,9 @@ final class FileBrowserModel {
     private func publishOwnerEnrichment(_ enriched: [RemoteEntry],
                                         generation: Int,
                                         directoryPath: String) async {
-        guard generation == loadGeneration, currentPath == directoryPath else { return }
+        guard generation == loadGeneration, currentPath.remoteKey == directoryPath.remoteKey else { return }
         let sorted = await sortedForDisplay(enriched)
-        guard generation == loadGeneration, currentPath == directoryPath else { return }
+        guard generation == loadGeneration, currentPath.remoteKey == directoryPath.remoteKey else { return }
         entries = enriched
         sortedEntries = sorted
     }
@@ -513,7 +518,7 @@ final class FileBrowserModel {
     /// 由视图在调用前移动，放行第二次会让下标与 `currentPath` 脱钩。`isNavigating` 同时驱动
     /// 视图加载态，让单击立刻有反馈。
     func navigate(toPath path: String) async {
-        guard path != currentPath, !isNavigating else { return }
+        guard path.remoteKey != currentPath.remoteKey, !isNavigating else { return }
         await load(path)
     }
 
@@ -629,7 +634,7 @@ final class FileBrowserModel {
         // 同一条 SFTP 通道上一次只跑一个删除任务。静默吞掉第二次请求会让用户
         // 以为点击没生效（他刚在确认框上按了「删除」），故明确说一声。
         if let running = deletion {
-            transientError = String(localized: "正在删除「\(running.name)」，等它结束后再删下一项。")
+            transientError = String(localized: "正在删除「\(RemoteName.isolated(running.name))」，等它结束后再删下一项。")
             return nil
         }
         let dir = directory ?? currentPath
@@ -1098,7 +1103,8 @@ extension FileBrowserModel: ConnectionHealthProbing {
             guard provider === self.provider else { return }
             await refresh()
         case .failed:
-            guard lastConnectionRequest != nil else { return }
+            // 凭据 / 主机密钥 / 握手的问题不自动重试，等用户处理后自己点重试。
+            guard lastConnectionRequest != nil, !failureNeedsUser else { return }
             await refresh()
         case .idle, .connecting:
             return

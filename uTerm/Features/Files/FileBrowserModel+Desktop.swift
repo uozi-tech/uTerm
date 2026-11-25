@@ -99,10 +99,11 @@ extension FileBrowserModel {
                                               targetDirectoryPath: String) -> Bool {
         guard !itemName.isEmpty, sourcePath != "/" else { return false }
         let destination = join(targetDirectoryPath, itemName)
-        guard destination != sourcePath else { return false }
+        guard destination.remoteKey != sourcePath.remoteKey else { return false }
         if isDirectory {
-            guard targetDirectoryPath != sourcePath else { return false }
-            guard !targetDirectoryPath.hasPrefix(sourcePath + "/") else { return false }
+            guard targetDirectoryPath.remoteKey != sourcePath.remoteKey else { return false }
+            // 逐字节的前缀（`hasPrefix` 按字符比，NFC / NFD 的同名目录会被当成彼此的子目录）。
+            guard !targetDirectoryPath.utf8.starts(with: (sourcePath + "/").utf8) else { return false }
         }
         return true
     }

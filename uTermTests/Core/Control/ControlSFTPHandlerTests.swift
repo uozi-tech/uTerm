@@ -1,6 +1,6 @@
 import XCTest
 import SwiftData
-@testable import Citadel
+import USSHTestServer
 @testable import uTerm
 @testable import USSHKit
 
@@ -26,6 +26,11 @@ final class ControlSFTPHandlerTests: XCTestCase {
         init(session: any SFTPProviding) { self.session = session }
 
         func failNext(_ error: Error) { failure = error }
+        /// 借成功这么多次之后一律抛 `error`（传输中途换不了新会话）。
+        private var failAfter: (successes: Int, error: Error)?
+        /// 借的次数（含失败的）。
+        private(set) var attempts = 0
+        func failAfter(successes: Int, with error: Error) { failAfter = (successes, error) }
 
         func executor(
             for host: HostConnectionSpec,
@@ -36,7 +41,9 @@ final class ControlSFTPHandlerTests: XCTestCase {
         }
 
         func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+            attempts += 1
             if let failure { throw failure }
+            if let failAfter, borrowed >= failAfter.successes { throw failAfter.error }
             sftpRequests.append(host.id)
             borrowed += 1
             return session
@@ -150,8 +157,10 @@ final class ControlSFTPHandlerTests: XCTestCase {
 
     /// 像 `ControlServer` 那样把 fd 挂进请求上下文再调 handler。fd 的所有权交给 handler
     /// （它负责关）；返回响应与上下文（好查进度账）。
-    private func transfer(_ request: ControlRequest, fd: Int32?) async -> (ControlResponse, ControlRequestContext) {
+    private func transfer(_ request: ControlRequest, fd: Int32?,
+                          on target: ControlHandler? = nil) async -> (ControlResponse, ControlRequestContext) {
         let context = ControlRequestContext(fileDescriptors: fd.map { [$0] } ?? [])
+        let handler = target ?? self.handler!
         let response = await ControlRequestContext.$current.withValue(context) {
             await handler.handle(request)
         }
@@ -315,6 +324,24 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(event.done.reduce(0) { $0 + $1.length }, 150_000, "进度账覆盖整个文件")
     }
 
+    /// 传输中途借不到新会话、原因是认证失败：不重试（每次重试都是一次失败的登录），也不让别的工作者接着去借。
+    func testTransferStopsAllWorkersOnPermanentBorrowFailure() async throws {
+        let remote = Data(repeating: 0x5A, count: 25 << 20)    // 4 段（每段 8 MiB）→ 4 个工作者
+        await sftp.setFile("/srv/big.bin", data: remote, mtime: Date())
+        await pool.failAfter(successes: 1, with: ControlConnectError.authFailed("服务器拒绝了密码"))
+        let local = try localFile(Data())
+
+        let (response, _) = await transfer(request(.sftpGet, path: "/srv/big.bin", parallel: 4), fd: local.fd)
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.code, ControlErrorCode.auth_failed.rawValue)
+        let attempts = await pool.attempts
+        // 先借一次读大小（成功），然后工作者一个一个借：第一个失败判了致命，后面的不再借（以前 1 + 4 × 3 = 13）。
+        XCTAssertEqual(attempts, 2)
+        XCTAssertTrue(ParallelTransfer.stopsAllWorkers(ControlConnectError.authFailed("x")))
+        XCTAssertFalse(ParallelTransfer.stopsAllWorkers(ControlConnectError.connectFailed("x")))
+    }
+
     /// 续传：只补给定的区间，别处一个字节都不动。
     func testGetWithRangesFillsOnlyThoseRanges() async throws {
         let remote = Self.randomData(100_000)
@@ -365,6 +392,20 @@ final class ControlSFTPHandlerTests: XCTestCase {
         let local = try localFile(Data())
         let (response, _) = await transfer(request(.sftpGet, path: "/nope"), fd: local.fd)
         XCTAssertEqual(response.code, ControlErrorCode.file_not_found.rawValue)
+    }
+
+    /// 报错里的远端路径是用户传进来的 `RemoteName` 写法：原样带回（不经 `SSHPeerText.sanitize`，那一步会去掉 U+2060，
+    /// 模型拿报错里的路径再试时就对不上了）。
+    func testErrorMessageKeepsAnEscapedPathVerbatim() async throws {
+        let escaped = "/srv/" + RemoteName.display([0xB2, 0xE2]) + ".bin"
+        XCTAssertTrue(escaped.unicodeScalars.contains("\u{2060}"))
+        let local = try localFile(Data())
+        let (response, _) = await transfer(request(.sftpGet, path: escaped), fd: local.fd)
+        XCTAssertFalse(response.ok)
+        let message = response.message ?? ""
+        XCTAssertTrue(message.utf8.starts(with: escaped.utf8), "实得 \(message.debugDescription)")
+        // 对照：消毒会去掉转义的收尾，所以文件名绝不能经过它。
+        XCTAssertFalse(SSHPeerText.sanitize(escaped).unicodeScalars.contains("\u{2060}"))
     }
 
     func testPutReadsThePassedFDIntoTheRemoteFile() async throws {
@@ -612,13 +653,77 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(response.code, ControlErrorCode.permission_denied.rawValue)
     }
 
-    // MARK: - Citadel 真实抛错
+    // MARK: - 不是 UTF-8 的文件名（命令行经真实 SFTP 会话）
 
-    /// Citadel 的 `SFTPClientInboundHandler` 对非 ok/eof 的响应直接
-    /// `promise.fail(status)` —— 抛出来的是**裸的 `SFTPMessage.Status`**，
-    /// 不是 `SFTPError.errorStatus(_:)`。只认后者时，`sftp rm` 一个不存在的文件
-    /// 会落到兜底的 `operation_failed`（真机实测）。
-    func testBareSFTPStatusMapsToFileNotFound() async throws {
+    /// 命令行的 `ls` 回的是无损写法；把它原样传回 `cat` / `rm`，操作的是那一个文件——几个 GBK 名字有损解码后
+    /// 一模一样也不会弄混。用真的 `SFTPSession` 对着进程内测试服务端（内存文件表，能放非 UTF-8 的名字）。
+    func testCLIRoundTripsNonUTF8NamesThroughARealSession() async throws {
+        let fs = SFTPMemoryFileSystem()
+        let first: [UInt8] = [0xB2, 0xE2, 0xCA, 0xD4] + Array(".txt".utf8)
+        let second: [UInt8] = [0xB1, 0xA8, 0xB8, 0xE6] + Array(".txt".utf8)
+        fs.put(SFTPPath(bytes: Array("/home/test/".utf8) + first), Array("first".utf8))
+        fs.put(SFTPPath(bytes: Array("/home/test/".utf8) + second), Array("second".utf8))
+        var configuration = SSHTestServer.Configuration(authentication: .acceptAnyone)
+        configuration.serveSFTP(fileSystem: fs)
+        let server = try await SSHTestServer.start(configuration)
+        let verifier = HostKeyVerifier(modelContainer: container)
+        let connected = try await SSHClientFactory.connect(
+            profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: server.port, jumpHost: nil),
+            auth: .password(username: "tester", password: "unused"), jumpHostAuth: nil,
+            hostKeyVerifier: verifier, hostKeyApprover: { _ in true })
+        let session = try await SFTPSession(connected: connected, pacesUploads: false)
+        let realHandler = ControlHandler(
+            settings: settings, modelContainer: container, forwardingCoordinator: ForwardingCoordinator(),
+            pool: FakePool(session: session), registry: TerminalSessionRegistry())
+        defer { Task { await session.close(); await server.stop() } }
+
+        let ls = await realHandler.handle(request(.sftpLs, path: "/home/test"))
+        XCTAssertTrue(ls.ok, ls.message)
+        let names = try XCTUnwrap(ls.entries?.map(\.name))
+        XCTAssertEqual(Set(names), [RemoteName.display(first), RemoteName.display(second)])
+
+        let cat = await realHandler.handle(request(.sftpCat, path: "/home/test/" + RemoteName.display(second)))
+        XCTAssertTrue(cat.ok, cat.message)
+        XCTAssertEqual(cat.file?.text, "second")
+
+        let rm = await realHandler.handle(request(.sftpRm, path: "/home/test/" + RemoteName.display(first)))
+        XCTAssertTrue(rm.ok, rm.message)
+        XCTAssertNil(fs.contents(SFTPPath(bytes: Array("/home/test/".utf8) + first)))
+        XCTAssertEqual(fs.contents(SFTPPath(bytes: Array("/home/test/".utf8) + second)), Array("second".utf8))
+    }
+
+    /// 服务端回 0 字节的 DATA（协议错误）：`sftp get` 失败，并行的各通道不按段反复重读（请求数有上限）。
+    func testZeroLengthDataFailsAParallelGetWithoutARetryLoop() async throws {
+        let fs = SFTPMemoryFileSystem()
+        fs.put("/home/test/big.bin", [UInt8](repeating: 7, count: 20 << 20))
+        fs.setZeroLengthData(from: 9 << 20)
+        let faults = SFTPFaultInjector()
+        var configuration = SSHTestServer.Configuration(authentication: .acceptAnyone)
+        configuration.serveSFTP(fileSystem: fs, faults: faults)
+        let server = try await SSHTestServer.start(configuration)
+        let connected = try await SSHClientFactory.connect(
+            profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: server.port, jumpHost: nil),
+            auth: .password(username: "tester", password: "unused"), jumpHostAuth: nil,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: container), hostKeyApprover: { _ in true })
+        let session = try await SFTPSession(connected: connected, pacesUploads: false)
+        let realHandler = ControlHandler(
+            settings: settings, modelContainer: container, forwardingCoordinator: ForwardingCoordinator(),
+            pool: FakePool(session: session), registry: TerminalSessionRegistry())
+        defer { Task { await session.close(); await server.stop() } }
+        let local = try localFile(Data())
+
+        let (response, _) = await transfer(request(.sftpGet, path: "/home/test/big.bin", parallel: 1), fd: local.fd, on: realHandler)
+
+        XCTAssertFalse(response.ok, "0 字节的 DATA 必须让传输失败")
+        // 20 MiB 按 255 KiB 一片约 80 个 READ；按段重试 3 次也就两三百个。这里只许一遍多一点。
+        XCTAssertLessThan(faults.requestCount(of: .read), 200, "按段重试了")
+    }
+
+    // MARK: - 服务端状态（`SFTPError.status`）
+
+    /// 服务端状态一律是 `SFTPError.status`。Citadel 时代有的路径抛裸的状态消息、有的包一层，
+    /// 只认一种时 `sftp rm` 一个不存在的文件会落到兜底的 `operation_failed`（真机实测）。
+    func testSFTPStatusMapsToFileNotFound() async throws {
         await sftp.setRemoveError("/tmp/gone", Self.status(.noSuchFile, "No such file"))
 
         let response = await handler.handle(request(.sftpRm, path: "/tmp/gone"))
@@ -630,7 +735,7 @@ final class ControlSFTPHandlerTests: XCTestCase {
                        "CLI 的 message 不该被 FriendlyError 洗过")
     }
 
-    func testBareSFTPStatusMapsPermissionDenied() {
+    func testSFTPStatusMapsPermissionDenied() {
         XCTAssertEqual(
             ControlFilePayloadBuilder.errorCode(
                 for: Self.status(.permissionDenied, "Permission denied")),
@@ -647,11 +752,18 @@ final class ControlSFTPHandlerTests: XCTestCase {
             .operation_failed)
     }
 
-    /// 包过一层的那条路径（`SFTPClient.setAttributes`）也要照旧认。
-    func testWrappedSFTPErrorStatusStillMaps() {
-        let wrapped = SFTPError.errorStatus(Self.status(.noSuchFile, "No such file"))
-        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: wrapped), .file_not_found)
-        XCTAssertTrue(ControlFilePayloadBuilder.errorDetail(for: wrapped).contains("No such file"))
+    /// 「文件已存在」按状态码认（SSH_FX_FILE_ALREADY_EXISTS = 11），不再比原始数字。
+    func testFileAlreadyExistsStatusMapsToFileExists() {
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: Self.status(.fileAlreadyExists, "")), .file_exists)
+        // 写阶段包的那层先剥掉再认。
+        let staged = SFTPWriteStageError(stage: .open, underlying: Self.status(.fileAlreadyExists, "exists"))
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: staged), .file_exists)
+    }
+
+    /// 下载中途文件变短：USSHCore 报 `shortRead`，不当成功、也不归成「找不到」。
+    func testShortReadMapsToOperationFailed() {
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: SFTPError.shortRead(expected: 10, actual: 3)),
+                       .operation_failed)
     }
 
     func testErrorDetailCarriesServerMessageAndCode() {
@@ -661,12 +773,31 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertTrue(detail.contains("SSH_FX 2"), detail)
     }
 
-    /// `SFTPMessage.Status` 的 memberwise init 是 internal，只有 `@testable import`
-    /// 拿得到 —— 这也是本文件 `@testable import Citadel` 的唯一理由。
-    private static func status(
-        _ code: SFTPStatusCode, _ message: String
-    ) -> SFTPMessage.Status {
-        SFTPMessage.Status(requestId: 1, errorCode: code, message: message, languageTag: "en")
+    /// 服务器的状态消息会被 utermctl 打到用户终端里：ESC / OSC、C1、双向覆盖符不能原样过去，超长的截断。
+    func testErrorDetailSanitizesTheServerMessage() {
+        let hostile = "denied\u{1B}]0;pwned\u{07}\u{9B}2J\u{202E}gnp.exe\nforged line"
+        let detail = ControlFilePayloadBuilder.errorDetail(for: Self.status(.permissionDenied, hostile))
+        for scalar in detail.unicodeScalars {
+            XCTAssertFalse(scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value), detail.debugDescription)
+            XCTAssertNotEqual(scalar.properties.generalCategory, .format, detail.debugDescription)
+        }
+        XCTAssertTrue(detail.contains("denied]0;pwned2Jgnp.exe forged line"), detail)
+        XCTAssertTrue(detail.contains("SSH_FX 3"), detail)
+
+        let long = ControlFilePayloadBuilder.errorDetail(
+            for: Self.status(.failure, String(repeating: "x", count: 5_000)))
+        XCTAssertLessThan(long.count, 400, "超长的服务器原话截断")
+    }
+
+    /// USSHCore 新增的两种本端限制：区间越界是请求不合法，超出读取上限是文件太大。
+    func testOffsetOutOfRangeAndLimitExceededHaveTheirOwnCodes() {
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: SFTPError.offsetOutOfRange), .invalid_request)
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: SFTPError.limitExceeded(maximumBytes: 10)),
+                       .file_too_large)
+    }
+
+    private static func status(_ code: SFTPStatusCode, _ message: String) -> SFTPError {
+        .status(code: code, message: message, languageTag: "en")
     }
 
     func testErrorCodeMapping() {

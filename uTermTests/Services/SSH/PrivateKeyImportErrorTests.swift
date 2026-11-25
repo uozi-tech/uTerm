@@ -42,7 +42,9 @@ final class PrivateKeyImportErrorTests: XCTestCase {
         )
 
         XCTAssertTrue(message.contains("不支持的私钥格式"))
-        XCTAssertTrue(message.contains("原因：检测到 OPENSSH sk-ecdsa-sha2-nistp256@openssh.com"))
+        // 私钥文件里的类型名是不可信文字：USSHKit 消毒后包在 FSI … PDI 里插进句子（`SSHPeerText.isolated`）。
+        XCTAssertTrue(message.contains(
+            "原因：检测到 \(SSHPeerText.isolated("OPENSSH sk-ecdsa-sha2-nistp256@openssh.com"))"), message)
         XCTAssertTrue(message.contains("建议：如果这是公钥或证书"))
     }
 

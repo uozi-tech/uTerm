@@ -28,6 +28,11 @@ nonisolated enum RemoteTrueColor {
         ("LC_TERMINAL", terminalName),
     ]
 
+    /// 同上，按 USSHCore 开通道时要的形状（`environment: [String: String]`）。
+    static var terminalEnvironmentDictionary: [String: String] {
+        Dictionary(terminalEnvironment.map { ($0.name, $0.value) }, uniquingKeysWith: { _, last in last })
+    }
+
     /// 重复启用时靠它认出已经加过。
     private static let marker = "# uTerm truecolor"
 

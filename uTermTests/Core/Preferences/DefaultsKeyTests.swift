@@ -38,6 +38,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.terminalQuitBehavior, "terminalQuitBehavior"),
         (DefaultsKey.settingsTabSelection, "settingsTabSelection"),
         (DefaultsKey.trueColorOfferDismissedHosts, "trueColorOfferDismissedHosts"),
+        (DefaultsKey.sshLegacyAlgorithmHosts, "ssh.legacyAlgorithmHosts"),
         (DefaultsKey.externalOpenAppByExtension, "externalOpen.appByExtension"),
         (DefaultsKey.permissionGuidePresentedRevision, "permissionGuide.presentedRevision"),
         (DefaultsKey.localShellKeepsLANConnections, "localShellKeepsLANConnections"),

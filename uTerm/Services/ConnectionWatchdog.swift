@@ -30,8 +30,8 @@ extension ConnectionHealthProbing {
 /// 长时间待机断网后，半死 TCP 不会自己报错：对端没机会发 FIN/RST，SwiftNIO
 /// 看到的通道仍是 active —— 终端徽标停在「已连接」、输入字节静默进内核缓冲，
 /// SFTP 操作要么挂死要么报 "I/O on closed channel" 且刷新无法恢复
-/// （v1.2.3 及之前的实况）。Citadel 0.12.1 没有 SSH 层 keepalive，
-/// 唯一可靠的判活手段是主动发一笔需要对端应答的流量。
+/// （v1.2.3 及之前的实况）。唯一可靠的判活手段是主动发一笔需要对端应答的流量
+/// （当时的 Citadel 没有 SSH 层 keepalive；USSHCore 有，但 App 的连接不开，靠这里）。
 ///
 /// 本服务在三类时刻出手：
 ///   1. 系统从睡眠唤醒（`NSWorkspace.didWakeNotification`）；
@@ -42,7 +42,7 @@ extension ConnectionHealthProbing {
 ///      空闲连接仍可能被中间 NAT / 防火墙的空闲超时、或服务器端 `ClientAliveInterval`
 ///      静默掐断；只靠 1/2 的反应式探测盖不住这个场景。周期探测发的 `exec true`
 ///      流量同时充当 keepalive（重置对端 / NAT 空闲计时）与判死手段，等价于
-///      `ssh -o ServerAliveInterval`，补上 Citadel 没有 SSH 层 keepalive 的缺口。
+///      `ssh -o ServerAliveInterval`。
 /// 等网络 settle 几秒后（周期心跳无需 settle，直接扫），对注册表里所有存活对象并发
 /// 探测；判死的连接由各自的 `probeConnectionHealth` 走既有恢复通道（终端：exitStream
 /// → 「重新连接」覆盖层；SFTP：自动重连并保留当前目录；转发：拆隧道并亮「重试」）。

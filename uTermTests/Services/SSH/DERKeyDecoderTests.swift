@@ -78,13 +78,16 @@ final class DERKeyDecoderTests: XCTestCase {
         guard case .rsa(let compsPKCS8) = fromPKCS8 else {
             return XCTFail("PKCS#8 RSA 应为 .rsa，得 \(fromPKCS8)")
         }
-        XCTAssertEqual(compsPKCS1.modulus, compsPKCS8.modulus,
-                       "同一密钥的 PKCS#1 与 PKCS#8 模数应相等")
-        XCTAssertEqual(compsOpenSSH.modulus, compsPKCS1.modulus,
-                       "同一密钥的 OpenSSH 容器与 PKCS#1 模数应相等")
-        XCTAssertEqual(compsOpenSSH.privateExponent, compsPKCS1.privateExponent)
-        // p/q 只存在于 OpenSSH 私钥段，读错位（n,e,d,iqmp,p,q）会在这里暴露。
-        XCTAssertEqual(compsOpenSSH.prime1, compsPKCS1.prime1)
-        XCTAssertEqual(compsOpenSSH.prime2, compsPKCS1.prime2)
+        XCTAssertEqual(compsPKCS1.publicKey, compsPKCS8.publicKey,
+                       "同一密钥的 PKCS#1 与 PKCS#8 公钥（n、e）应相等")
+        XCTAssertEqual(compsOpenSSH.publicKey, compsPKCS1.publicKey,
+                       "同一密钥的 OpenSSH 容器与 PKCS#1 公钥应相等")
+        // 私钥部分（d、p、q）不外露：PKCS#1 v1.5 签名是确定的，同一把私钥对同一段数据签出来逐字节相同。
+        // p/q 只存在于 OpenSSH 私钥段，读错位（n,e,d,iqmp,p,q）会在这里暴露（构造时就会核对失败）。
+        let message = Array("same-key".utf8)
+        XCTAssertEqual(try compsOpenSSH.signature(for: message, algorithm: .rsaSHA2_512),
+                       try compsPKCS1.signature(for: message, algorithm: .rsaSHA2_512))
+        XCTAssertEqual(try compsPKCS8.signature(for: message, algorithm: .rsaSHA2_512),
+                       try compsPKCS1.signature(for: message, algorithm: .rsaSHA2_512))
     }
 }

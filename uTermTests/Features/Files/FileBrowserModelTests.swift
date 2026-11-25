@@ -235,6 +235,37 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(model.entries.map(\.name), ["x", "y"])
     }
 
+    /// 建连失败是「重试也不会好」的那种（服务器拒绝了凭据）：看门狗不再自动重试；网络类的失败照旧自愈。
+    func testProbeConnectionHealthDoesNotRetryPermanentConnectFailures() async throws {
+        let context = try makeContext()
+        let server = ServerProfile()
+        server.name = "s1"
+        server.host = "127.0.0.1"
+        server.username = "root"
+        context.insert(server)
+        try context.save()
+
+        var connectCount = 0
+        var nextError: Error = SSHConnection.SSHConnectionError.authenticationFailed("服务器拒绝了密码")
+        let model = FileBrowserModel(sftpConnector: { _, _, _ in
+            connectCount += 1
+            throw nextError
+        })
+        await model.connect(profile: server, modelContainer: context.container)
+        XCTAssertTrue(model.failureNeedsUser)
+        await model.probeConnectionHealth()
+        await model.probeConnectionHealth()
+        XCTAssertEqual(connectCount, 1, "认证失败不能在每次心跳时再登录一次")
+
+        // 用户点重试（显式 refresh）照样会去连；这次是网络问题，之后的心跳自动重试。
+        nextError = SSHConnection.SSHConnectionError.connectFailed("无法连接")
+        await model.refresh()
+        XCTAssertEqual(connectCount, 2)
+        XCTAssertFalse(model.failureNeedsUser)
+        await model.probeConnectionHealth()
+        XCTAssertEqual(connectCount, 3)
+    }
+
     /// 探测到连接仍活着时不动任何状态、不发起重连。
     func testProbeConnectionHealthNoopWhenAlive() async {
         let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
@@ -767,7 +798,8 @@ final class FileBrowserModelTests: XCTestCase {
         let folder = model.entries[0]
         await model.setPermissions(entry: folder, mode: 0o750, recursive: true)
         let execs = await mock.execCommands
-        XCTAssertEqual(execs, ["chmod -R 750 '/home/user/etc'"])
+        XCTAssertEqual(execs, [RemoteFileOperations.chmodRecursiveCommand(path: "/home/user/etc", mode: 0o750,
+                                                                          escapedNames: false)])
         let changes = await mock.permissionChanges
         XCTAssertTrue(changes.isEmpty, "递归走 exec，不走 setstat")
     }

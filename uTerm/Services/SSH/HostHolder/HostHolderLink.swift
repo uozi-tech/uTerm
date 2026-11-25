@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
-@preconcurrency import Citadel
 import NIOCore
+import USSHKit
 
 /// 会话的输出交给终端的那一头：往后端的输出流里放东西，同时记着已经交出去的字节在整条输出流里的位置。
 /// 连接断了重新接入时从这个位置往后要；拍检查点时靠它知道检查点对应哪个位置。
@@ -159,7 +159,8 @@ nonisolated final class HostHolderLink: Sendable {
                     await withTaskGroup(of: Void.self) { group in
                         group.addTask { await self.pumpOutbound(to: writer) }
                         group.addTask {
-                            await self.pumpInbound(inbound, position: position, onCheckpoint: onCheckpoint) {
+                            await self.pumpInbound(inbound, exit: writer, position: position,
+                                                   onCheckpoint: onCheckpoint) {
                                 eventContinuation.yield($0)
                             }
                         }
@@ -181,7 +182,7 @@ nonisolated final class HostHolderLink: Sendable {
         return events
     }
 
-    private func pumpOutbound(to writer: TTYStdinWriter) async {
+    private func pumpOutbound(to writer: SSHExecHandle) async {
         for await bytes in outbound {
             do {
                 try await writer.write(ByteBuffer(bytes: bytes))
@@ -191,7 +192,8 @@ nonisolated final class HostHolderLink: Sendable {
         }
     }
 
-    private func pumpInbound(_ inbound: TTYOutput, position: HostHolderStreamPosition,
+    private func pumpInbound(_ inbound: SSHChannelOutput, exit process: SSHExecHandle,
+                             position: HostHolderStreamPosition,
                              onCheckpoint: @escaping @Sendable (HolderCheckpoint) -> Void,
                              onEvent: @Sendable (Event) -> Void) async {
         var reader = HolderFrameReader()
@@ -205,10 +207,13 @@ nonisolated final class HostHolderLink: Sendable {
                     if handle(frame, position: position, onCheckpoint: onCheckpoint, onEvent: onEvent) { return }
                 }
             }
-        } catch let failure as SSHClient.CommandFailed {
-            state.withLock { $0.exitCode = failure.exitCode }
         } catch {
             // 连接断了，或对端发来的不是帧。
+            return
+        }
+        // 输出读完了（对端发了 EOF）：通道关时带着 uterm-holder 的退出码，结束原因看它。
+        if case .exited(let code) = await process.exitStatus() {
+            state.withLock { $0.exitCode = code }
         }
     }
 

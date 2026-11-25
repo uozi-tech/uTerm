@@ -248,6 +248,214 @@ final class SharedConnectionPoolTests: XCTestCase {
 
 private struct FakeConnectError: Error {}
 
+extension SharedConnectionPoolTests {
+    /// 判死一条共享连接：断开要好几秒才完成（这期间 `isAlive` 还是真），但从判死那一刻起就不能再借给别人，
+    /// 上面的租约立刻收到断开通知。
+    /// 经跳板机时只断了目标那一跳：池子摘掉这条连接之后还要把它关掉，跳板机那一跳（socket + sshd 会话）才会断，
+    /// 不然表里没有它了，谁也不会再关，挂到 App 退出。
+    func testConnectionDroppedByThePeerIsClosedAfterEviction() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let first = try await pool.acquire("host") { await counter.makeConnection() }
+
+        first.connection.simulateRemoteClose()
+
+        try await waitUntil { first.connection.closeCount == 1 }
+        let open = await pool.connectionCount(for: "host")
+        XCTAssertEqual(open, 0)
+        // 之后照常归还 / 判死都不会再关一次（幂等，也不碰新连接）。
+        await pool.release(first.lease)
+        await pool.invalidate(first.lease)
+        XCTAssertEqual(first.connection.closeCount, 1)
+    }
+
+    /// 借之前才发现已经不活（`isAlive` 变假但没收到回调）：同样摘掉并关掉。
+    func testConnectionFoundDeadOnAcquireIsClosed() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let first = try await pool.acquire("host") { await counter.makeConnection() }
+        first.connection.markDeadSilently()
+
+        let second = try await pool.acquire("host") { await counter.makeConnection() }
+
+        XCTAssertFalse(first.connection === second.connection)
+        try await waitUntil { first.connection.closeCount == 1 }
+        XCTAssertEqual(second.connection.closeCount, 0)
+    }
+
+    // MARK: - 加入在途建连的人：等到结果之后的认领
+
+    /// 两人同时要同一台：第二个加入第一个的建连。第二个认领之前，第一个已经借了、又还光了（正在关，`isAlive` 仍真）——
+    /// 第二个不能把这条正在关的连接登记回去、借出去，要另建一条。
+    func testJoinedWaiterNeverRegistersAConnectionThatWasAlreadyReleased() async throws {
+        let pool = SharedConnectionPool<String, SlowClosingConnection>(maxLeasesPerConnection: 6)
+        let connectGate = Gate()
+        let claimGate = Gate()
+        let made = SlowConnections()
+        let connect: @Sendable @concurrent () async throws -> SlowClosingConnection = {
+            await connectGate.wait()
+            return made.make()
+        }
+
+        async let first = pool.acquire("host", connect: connect)
+        try await waitUntil {
+            let pending = await pool.pendingCount(for: "host")
+            return made.count == 0 && pending == 1
+        }
+        async let second = pool.acquire("host", sharesHandshake: true, connect: connect, beforeClaim: { await claimGate.wait() })
+        try await Task.sleep(for: .milliseconds(50))
+        await connectGate.open()
+
+        let one = try await first
+        let closing = Task { await pool.release(one.lease) }   // 最后一份 → 摘出表、开始关（挂在 finishClose 上）
+        try await waitUntil { one.connection.closeStarted }
+        XCTAssertTrue(one.connection.isAlive, "前提：还没关完")
+
+        await claimGate.open()
+        let two = try await second
+        XCTAssertFalse(two.connection === one.connection, "正在关的连接被登记回去借出去了")
+        XCTAssertEqual(made.count, 2, "应当另建了一条")
+        one.connection.finishClose()
+        await closing.value
+    }
+
+    /// 加入者认领时，那条连接已经断了（还没来得及收到回调）：不借出去，另建。
+    func testJoinedWaiterSkipsAConnectionThatDiedBeforeItClaimed() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let connectGate = Gate()
+        let claimGate = Gate()
+        let connect: @Sendable @concurrent () async throws -> FakeConnection = {
+            await connectGate.wait()
+            return await counter.makeConnection()
+        }
+        async let first = pool.acquire("host", connect: connect)
+        try await waitUntil { (await pool.pendingCount(for: "host")) == 1 }
+        async let second = pool.acquire("host", sharesHandshake: true, connect: connect, beforeClaim: { await claimGate.wait() })
+        try await Task.sleep(for: .milliseconds(50))
+        await connectGate.open()
+
+        let one = try await first
+        one.connection.markDeadSilently()
+        await claimGate.open()
+        let two = try await second
+        XCTAssertFalse(two.connection === one.connection)
+        XCTAssertTrue(two.connection.isAlive)
+    }
+
+    /// 加入者认领时，先来的已经把名额占满：不超额借出，另建一条。
+    func testJoinedWaiterRespectsTheLeaseLimit() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 1)
+        let counter = ConnectCounter()
+        let connectGate = Gate()
+        let claimGate = Gate()
+        let connect: @Sendable @concurrent () async throws -> FakeConnection = {
+            await connectGate.wait()
+            return await counter.makeConnection()
+        }
+        async let first = pool.acquire("host", connect: connect)
+        try await waitUntil { (await pool.pendingCount(for: "host")) == 1 }
+        async let second = pool.acquire("host", sharesHandshake: true, connect: connect, beforeClaim: { await claimGate.wait() })
+        try await Task.sleep(for: .milliseconds(50))
+        await connectGate.open()
+
+        let one = try await first
+        await claimGate.open()
+        let two = try await second
+        XCTAssertFalse(two.connection === one.connection, "一条连接只许一份租约")
+        let connects = await counter.count
+        XCTAssertEqual(connects, 2)
+    }
+
+    /// 不能问用户的建连（主机密钥一律拒绝）与能问的不共用握手：两个方向都各握各的手，谁也不替谁回答主机密钥。
+    /// 握好之后的连接照常复用。
+    func testNonInteractiveConnectsNeverShareAHandshake() async throws {
+        let pool = SharedConnectionPool<String, FakeConnection>(maxLeasesPerConnection: 6)
+        let counter = ConnectCounter()
+        let gate = Gate()
+        let connect: @Sendable @concurrent () async throws -> FakeConnection = {
+            let connection = await counter.makeConnection()
+            await gate.wait()
+            return connection
+        }
+
+        async let background = pool.acquire("host", sharesHandshake: false, connect: connect)
+        try await waitUntil { await counter.count == 1 }
+        async let interactive = pool.acquire("host", sharesHandshake: true, connect: connect)
+        try await waitUntil { await counter.count == 2 }
+        async let lateBackground = pool.acquire("host", sharesHandshake: false, connect: connect)
+        try await waitUntil { await counter.count == 3 }
+        await gate.open()
+
+        let results = try await [background, interactive, lateBackground]
+        XCTAssertEqual(results.map(\.origin), [.created, .created, .created], "谁也没加入别人的握手")
+
+        let reused = try await pool.acquire("host", sharesHandshake: false, connect: connect)
+        XCTAssertEqual(reused.origin, .reused, "握好的连接照常复用")
+    }
+
+    func testInvalidatedConnectionIsNeverHandedOutWhileItCloses() async throws {
+        let pool = SharedConnectionPool<String, SlowClosingConnection>(maxLeasesPerConnection: 6)
+        let first = try await pool.acquire("host") { SlowClosingConnection() }
+        let notified = Flag()
+        await pool.onClosed(first.lease) { notified.raise() }
+
+        let closing = Task { await pool.invalidate(first.lease) }
+        try await waitUntil { first.connection.closeStarted }
+        XCTAssertTrue(first.connection.isAlive, "前提：断开还没完成")
+        XCTAssertTrue(notified.isRaised, "判死时就通知租约，不等断开完成")
+
+        let next = try await pool.acquire("host") { SlowClosingConnection() }
+        XCTAssertEqual(next.origin, .created, "正在关的连接不能再借出去")
+        XCTAssertFalse(next.connection === first.connection)
+        first.connection.finishClose()
+        await closing.value
+    }
+}
+
+/// 断开要等 `finishClose()` 才完成的假连接（模拟经跳板机的内层连接最多等 5 秒）。
+private final class SlowClosingConnection: PooledConnection, @unchecked Sendable {
+    private let lock = NSLock()
+    private var alive = true
+    private var started = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var finished = false
+
+    var isAlive: Bool { lock.withLock { alive } }
+    var closeStarted: Bool { lock.withLock { started } }
+
+    func onTransportClosed(_ handler: @escaping @Sendable () -> Void) {}
+
+    func closeTransport() async {
+        await withCheckedContinuation { continuation in
+            let done = lock.withLock { () -> Bool in
+                started = true
+                if finished { return true }
+                waiter = continuation
+                return false
+            }
+            if done { continuation.resume() }
+        }
+        lock.withLock { alive = false }
+    }
+
+    func finishClose() {
+        let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            finished = true
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume()
+    }
+}
+
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised = false
+    var isRaised: Bool { lock.withLock { raised } }
+    func raise() { lock.withLock { raised = true } }
+}
+
 private final class FakeConnection: PooledConnection, @unchecked Sendable {
     private let lock = NSLock()
     private var alive = true
@@ -276,6 +484,17 @@ private final class FakeConnection: PooledConnection, @unchecked Sendable {
 
     func markDeadSilently() {
         lock.withLock { alive = false }
+    }
+}
+
+private final class SlowConnections: @unchecked Sendable {
+    private let lock = NSLock()
+    private var made: [SlowClosingConnection] = []
+    var count: Int { lock.withLock { made.count } }
+    func make() -> SlowClosingConnection {
+        let connection = SlowClosingConnection()
+        lock.withLock { made.append(connection) }
+        return connection
     }
 }
 

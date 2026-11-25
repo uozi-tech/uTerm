@@ -61,13 +61,15 @@ final class PEMDecryptorTests: XCTestCase {
     /// 构造一个 iterationCount 超过上限的 PBES2 EncryptedPrivateKeyInfo，
     /// 直接走 decryptedDER；应立即抛出结构损坏而非卡在 PBKDF2。
     func testOversizedIterationCountRejected() {
-        // 迭代次数 0x7FFFFFFF = 2,147,483,647，远超 10,000,000 上限，但仍 ≤4 字节。
+        // 迭代次数 0x7FFFFFFF = 2,147,483,647，远超 2,000,000 上限，但仍 ≤4 字节。
+        // 超过上限报的是 `.unsupportedKDFCost`（与 bcrypt 轮数同一种，USSHKit 20b5b53 起），不再是 `.malformedKey`。
         let der = Self.makePBES2DER(iterations: 0x7FFF_FFFF)
         let document = PEMDocument(
             label: "ENCRYPTED PRIVATE KEY", headers: [:], der: der)
         XCTAssertThrowsError(try PEMDecryptor.decryptedDER(
             from: document, passphrase: "whatever")) {
-            XCTAssertEqual($0 as? PrivateKeyImportError, .malformedKey(reason: ""))
+            XCTAssertEqual($0 as? PrivateKeyImportError,
+                           .unsupportedKDFCost(rounds: 0, maximum: KeyImportCrypto.maxPBKDF2Iterations))
         }
     }
 
@@ -78,7 +80,8 @@ final class PEMDecryptorTests: XCTestCase {
             label: "ENCRYPTED PRIVATE KEY", headers: [:], der: der)
         XCTAssertThrowsError(try PEMDecryptor.decryptedDER(
             from: document, passphrase: "whatever")) {
-            XCTAssertEqual($0 as? PrivateKeyImportError, .malformedKey(reason: ""))
+            XCTAssertEqual($0 as? PrivateKeyImportError,
+                           .unsupportedKDFCost(rounds: 0, maximum: KeyImportCrypto.maxPBKDF2Iterations))
         }
     }
 

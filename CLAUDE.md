@@ -28,30 +28,30 @@ uTerm 是**原生多语言**项目：源语言简体中文，同时完整支持 
 - `vendor/kcp`：上游 `skywind3000/kcp` 2.1.1，纯 C 的可靠重传（公网直连上跑控制消息和终端，视频不走它），MIT，代码未改。vendor 的原因同上。两端版本不同可能不兼容，升级算协议变更，见 `vendor/kcp/UTERM-PATCHES.md`。
 - `vendor/zstd`：上游 `facebook/zstd` v1.5.7，**只有解压部分**（`lib/common` + `lib/decompress` 里解压用的 9 个 `.c` 与头文件，arm64 代码段约 63 KB），BSD，代码未改（`MANIFEST.sha256` 逐个核对）。vendor 的原因：Codex CLI 把 7 天没动过的会话记录压成 `.jsonl.zst`，「历史会话」要在 App 里解开，Apple 的 Compression 框架没有 zstd，依赖闭包里也没有。手写 `Package.swift`（product `CZstd`）接进两个 App。升级见 `vendor/zstd/UTERM-PATCHES.md`。
 
-### SSH 栈（USSHKit / Citadel / swift-nio-ssh）在 uAppKit 里
+### SSH 栈（USSHKit / USSHCore / NIOSSH）在 uAppKit 里
 
-三者都在 uAppKit（`github.com/uozi-tech/uAppKit`，私有期间要 GitHub 登录才能拉）里，本工程只引用 uAppKit 这一个包。Citadel 与 swift-nio-ssh 带着补丁，
-不作为依赖引用，而是上游源码作为 uAppKit 的 target（`Citadel` / `CCitadelBcrypt` / `NIOSSH`，模块名保持上游原名）编进去：
-基线 `orlandos-nl/Citadel` `0.12.1` 与 `Wellz26/swift-nio-ssh` `0.3.6`（Citadel 用到这个 fork 的证书认证 API，换不成 Apple 的），
-补丁存成 `.patch` 放在 uAppKit 的 `ThirdParty/<组件>/patches/`，由它的 `Tools/ssh-stack/sync.sh` 在上游基线上重放
-（`check` 核对、`apply` 升级）。补丁现有 5 个：NIOSSH 两个方向的 window-adjust 崩溃守卫（远端关 channel 后排空缓冲读，
-对已关闭状态发 window-adjust 撞 precondition、abort 进程）、closeFuture 永不失败（`-L` 转发包成 `NIOAsyncChannel` 后传输突断
-会断言崩溃）、Apache-2.0 修改声明；Citadel 的 login timeout 可配置 + 登录失败关 channel（修首连信任弹层停留过久导致的
-「ChannelError 错误 0」与 socket 泄漏）。**补丁清单与升级步骤见 uAppKit 的 `ThirdParty/README.md`，升级上游前必读。**
+三层都在 uAppKit（`github.com/uozi-tech/uAppKit`，按版本引用，当前 `upToNextMinor` 2.0.0；工程与 `Packages/USSHStack` 的版本要求要一致）里，本工程只引用 uAppKit 这一个包：`USSHKit`（产品层：主机密钥库与策略、
+凭据与私钥导入、`-L` 隧道、文件传输、错误文案）→ `USSHCore`（我们自己写的客户端层：连接、认证、exec / PTY 句柄、
+direct-tcpip、远程转发、SFTP、RSA / DH / AES-CTR 等算法，没有面向用户的文字）→ `NIOSSH`（Apple swift-nio-ssh 0.15.2
+的源码作为 uAppKit 的 target 编进去，带 15 个补丁，上游自己的测试一起编成 `NIOSSHTests`）。`USSHKit` 用
+`@_exported import USSHCore` 转出客户端层，App 里 `import USSHKit` 就够。补丁存成 `.patch` 放在 uAppKit 的
+`ThirdParty/swift-nio-ssh/patches/`，由 `Tools/ssh-stack/sync.sh` 在上游基线上重放（`check` 核对、`apply` 升级）；
+**补丁清单与升级步骤见 uAppKit 的 `ThirdParty/README.md`，升级上游前必读。** App 侧怎么用这些接口（窗口 = 包长 × 64、
+错误怎么判断要不要重连、`SFTPPath`）见 uAppKit 的 `docs/ssh-stack-migration.md`。
+- 测试要 SSH 服务端时用 uAppKit 的 `USSHTestServer`（进程内，带 SFTP、故障注入）；它编在 `USSHStack.framework` 里
+  （见下），所以随 macOS 的 App 发布，iOS 不链它。
+- **别再在本工程（或任何依赖 uAppKit 的 App）里引用上游的 swift-nio-ssh 包**：模块会和 uAppKit 里的同名 target 重名。
 
-- uTermMobile 直接链的 `Citadel` product 来自 uAppKit（共享源码里有 `import Citadel` / `import NIOSSH`）。
-- **别再在本工程（或任何依赖 uAppKit 的 App）里引用上游的 Citadel / swift-nio-ssh 包**：模块会和 uAppKit 里的同名 target 重名。
-
-来历：2026-06 起两份源码在本仓库 `vendor/`；2026-09-01 的 `10461738` 为了让 USSHKit 搬进按 tag 发布的 uAppKit
-（按 tag 消费的远程包不允许带 path 依赖），拆成 `uApps/Citadel` 1.0.2、`uApps/swift-nio-ssh` 1.0.0 两个 fork 仓库；
-2026-11 并进 uAppKit，两个 fork 仓库作废（fork 时代改 manifest 的那些补丁随之消失）。
+来历：2026-06 起 Citadel 与 Wellz26 的 swift-nio-ssh fork 在本仓库 `vendor/`，2026-09 拆成 fork 仓库，2026-11 并进
+uAppKit；2026-11 底 uAppKit 2.0.0 换成跟 Apple 上游的 NIOSSH 加自写的 USSHCore，Citadel、它的补丁与 `Citadel` product
+删除（不兼容升级，所以版本要求是 `upToNextMinor` 而不是 `from`）。
 
 **macOS 上 SSH 栈是一个动态 framework**：本地包 `Packages/USSHStack`（只有一个空 target，`type: .dynamic` 的 product，依赖 uAppKit 的
-USSHKit，整个闭包——USSHKit / Citadel / swift-nio-ssh / swift-nio / swift-crypto 含 BoringSSL / swift-asn1 / BigInt / swift-log /
-swift-collections 的 DequeModule——链进 `Contents/Frameworks/USSHStack.framework`）。主程序 `uTerm` 与 `Helpers/uterm-ssh` 都只声明
+USSHKit 与 USSHTestServer，整个闭包——USSHKit / USSHCore / NIOSSH / USSHTestServer / swift-nio / swift-crypto 含 BoringSSL /
+swift-asn1 / BigInt / swift-log / swift-collections 的 DequeModule——链进 `Contents/Frameworks/USSHStack.framework`）。主程序 `uTerm` 与 `Helpers/uterm-ssh` 都只声明
 这一个 product、都从那里加载（uterm-ssh 的 rpath 是 `@executable_path/../Frameworks`，`Embed Frameworks` 阶段只在 uTerm target 上）。
 之前 uterm-ssh 静态链着和主程序一模一样的一整份（7.4 MB）。规矩：
-- 这两个 target **不要再直接声明** USSHKit / Citadel / SwiftASN1 / _CryptoExtras 这些静态 product，源码照常 `import NIOCore` 之类
+- 这两个 target 与测试 target **不要再直接声明** USSHKit / USSHCore / USSHTestServer / SwiftASN1 / _CryptoExtras 这些静态 product，源码照常 `import NIOCore` 之类
   （都在 USSHStack 的依赖闭包里）。同一个静态 target 既进 framework 又进 App，Xcode 会把它悄悄改成动态 framework 塞进
   `Contents/Frameworks/`（每个带一份 swiftmodule），或者链出两份类型元数据。`make verify-distribution-signing` 核两边都链着它。
 - 别的包也别再用 swift-collections：CodeEditTextView 为此打了补丁 #5（见它的 `UTERM-PATCHES.md`），否则 DequeModule 两头都要，

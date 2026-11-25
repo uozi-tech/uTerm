@@ -29,7 +29,7 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
     ///
     /// 优先按强类型 `POSIXError` 的 `errno` 判定（最可靠），再回退到
     /// `NSPOSIXErrorDomain` 的 `code`，最后退化到对 `localizedDescription`
-    /// 做大小写无关的子串匹配（覆盖 NIO/Citadel 把底层错误包成文本的情形）。
+    /// 做大小写无关的子串匹配（覆盖 NIO / SSH 栈把底层错误包成文本的情形）。
     ///
     /// 文案统一用 `rule.name` 前缀 + 归类原因，便于 UI 行直接展示。
     static func classify(_ error: Error, rule: ForwardingRuleSnapshot) -> ForwardingError {
@@ -77,7 +77,7 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
         if let code = FriendlyError.posixErrno(of: error), let k = kind(forErrno: code) {
             return k
         }
-        // 2. 文本子串匹配（大小写无关）—— 覆盖 Citadel/NIOSSH 的文本化错误。
+        // 2. 文本子串匹配（大小写无关）—— 覆盖 NIOSSH 等的文本化错误。
         let text = error.localizedDescription.lowercased()
         if text.contains("address already in use") || text.contains("eaddrinuse") {
             return .conflict

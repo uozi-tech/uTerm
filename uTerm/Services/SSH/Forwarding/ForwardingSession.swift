@@ -1,8 +1,7 @@
 import Foundation
-@preconcurrency import Citadel
 import NIOCore
 import NIOPosix
-import NIOSSH
+import USSHKit
 
 /// 一条隧道的状态（由 `ForwardingCoordinator` 观察、驱动 UI 行）。
 nonisolated enum TunnelStatus: Sendable, Equatable {
@@ -21,10 +20,8 @@ nonisolated struct TunnelBytes: Sendable, Equatable {
 
 /// 一台主机的专用转发会话（actor），镜像 `SSHConnection` 的生命周期 / 防泄漏范式。
 ///
-/// - `ConnectedClient`（`@unchecked Sendable`）在 connect 成功后由 actor 隔离字段持有，
-///   所有监听器 / 通道操作经它进行（与 `SFTPSession` 一致）—— 非 `Sendable` 的
-///   `SSHClient` 只在 `ConnectedClient` 包装内、本 actor 作用域内触碰，不跨隔离域
-///   并发使用。`close()` 独占负责 teardown（`connected.close()`）。
+/// - `ConnectedClient` 在 connect 成功后由 actor 隔离字段持有，所有监听器 / 通道操作经它进行
+///   （与 `SFTPSession` 一致）。`close()` 独占负责 teardown（`connected.close()`）。
 /// - 每条规则一个 `TunnelHandle`：一个驱动 Task + 可选的本地监听 actor（local/dynamic）。
 ///   `stop` 取消 Task 并关监听；`close` 拆掉全部隧道再关连接。
 /// - `connect()` 建立连接并持有 `ConnectedClient`。`start()` 在连接就绪后开隧道，
@@ -49,7 +46,7 @@ actor ForwardingSession {
     // MARK: - 运行时
 
     /// 已建立的连接（仅在 connect 成功后、close 之前可用）。
-    /// 与 `SFTPSession` 一致：监听器/通道操作都经它进行。`@unchecked Sendable`。
+    /// 与 `SFTPSession` 一致：监听器/通道操作都经它进行。
     private var connected: ConnectedClient?
     private var isClosed = false
 
@@ -62,7 +59,7 @@ actor ForwardingSession {
         let localListener: LocalForwardListener?
         /// dynamic 的本地 SOCKS5 监听器；remote/local 为 nil。
         let socksListener: SOCKS5ForwardListener?
-        /// 本规则的流量计数器（-L/-D 由监听器喂；-R 走 Citadel 内部不计，恒 0）。
+        /// 本规则的流量计数器（-L/-D 由监听器喂，-R 由 `RemoteForwardBridge` 喂）。
         let counter: TunnelByteCounter
     }
     private var tunnels: [UUID: TunnelHandle] = [:]
@@ -102,12 +99,13 @@ actor ForwardingSession {
             auth: auth,
             jumpHostAuth: jumpHostAuth,
             hostKeyVerifier: hostKeyVerifier,
-            hostKeyApprover: hostKeyApprover)
+            hostKeyApprover: hostKeyApprover,
+            // 审批闭包经协调器取「当前 relay」，可能是命令行的一次性 relay：不和同一台主机正在弹框的标签合并
+            // 连接方式那一问，免得命令行的「不」替标签答掉、或命令行干等标签那一问。
+            approvesInteractively: false)
         self.connected = connected
-        connected.target.onDisconnect { [weak self] in
-            Task { await self?.handleUnderlyingDisconnect() }
-        }
-        connected.bastion?.onDisconnect { [weak self] in
+        // 专用连接（不进共享池）：直接挂断开观察者，随连接一起释放。
+        connected.onTransportClosed { [weak self] in
             Task { await self?.handleUnderlyingDisconnect() }
         }
         AppLogger.info("转发会话已连接 \(self.profile.host):\(self.profile.port)",
@@ -140,10 +138,9 @@ actor ForwardingSession {
     /// `-R` 远程：子 Task 跑 `withRemotePortForward`，`onOpen` 回报 active；
     /// Task 阻塞至取消；抛错 → 归类后报 error。
     ///
-    /// **不要换回 Citadel 的 `runRemotePortForward`**：它不给 forwarded-tcpip 通道加
-    /// `SSHChannelData` → `ByteBuffer` 的编解码，第一份数据到达时 `NIOAsyncChannel<ByteBuffer, …>`
-    /// 在 `forceAsByteBuffer` 断言、整个 App 崩掉（2.1.2 真机实测：服务器上有人一连就崩）。
-    /// 这里自己加 `ForwardedChannelCodec`，再像 `-L` 一样用 `TunnelGlue` 双向泵（顺带有了流量计数）。
+    /// USSHCore 给每条 forwarded-tcpip 通道装好 `ByteBuffer` 编解码并打开对端半关闭，在通道的 EventLoop 上、
+    /// 激活之前包成 `NIOAsyncChannel` 交给 `onAccept`；这里像 `-L` 一样用 `TunnelGlue` 双向泵（顺带有了流量计数）。
+    /// （2.1.2 以前 Citadel 的 `runRemotePortForward` 不加编解码，第一份数据到达就断言崩溃。）
     private func startRemote(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
         let onStatus = self.onStatus
         // remote 需要本地目标地址；缺失时退化到回环（与 ssh -R 默认一致）。
@@ -155,18 +152,13 @@ actor ForwardingSession {
                 try await connected.target.withRemotePortForward(
                     host: rule.listenHost,
                     port: rule.listenPort,
-                    inboundType: ByteBuffer.self,
-                    outboundType: ByteBuffer.self,
-                    configure: { channel in
-                        channel.pipeline.addHandler(ForwardedChannelCodec())
-                    },
                     onOpen: { _ in
                         onStatus(rule.id, .active)
                         AppLogger.info(
                             "远程转发已建立 \(rule.listenHost):\(rule.listenPort) → \(destHost):\(rule.destPort)",
                             category: ForwardingLog.category)
                     },
-                    onAccept: { inbound in
+                    onAccept: { inbound, _ in
                         await RemoteForwardBridge.serve(
                             inbound, destHost: destHost, destPort: destPort,
                             ruleName: rule.name, counter: counter)
@@ -221,7 +213,11 @@ actor ForwardingSession {
         let listener = SOCKS5ForwardListener(
             connected: connected,
             listenHost: rule.listenHost, listenPort: rule.listenPort,
-            counter: counter)
+            counter: counter,
+            // 同 -L：开通道超时 / 传输层错误说明转发平面死了，拆掉整条会话重建（控制面的探活可能还通）。
+            onChannelFailure: { [weak self] error in
+                Task { await self?.handleForwardChannelFailure(rule, error: error) }
+            })
         let onStatus = self.onStatus
         let task = Task {
             do {
@@ -391,43 +387,6 @@ actor ForwardingSession {
 }
 
 // MARK: - -R 的入站连接
-
-/// forwarded-tcpip 通道上的 `SSHChannelData` ⇄ `ByteBuffer`。Citadel 自己那份
-/// （`DataToBufferCodec`）是 internal，`runRemotePortForward` 又没加它 —— 见 `startRemote`。
-///
-/// 加上时打开 `allowRemoteHalfClosure`：服务器那头的客户端发完请求先关写（FIN）时，
-/// 只让入站结束、回给它的响应照样能写回去（和 `-L` 的本地 socket 一样）。
-nonisolated final class ForwardedChannelCodec: ChannelDuplexHandler, Sendable {
-    typealias InboundIn = SSHChannelData
-    typealias InboundOut = ByteBuffer
-    typealias OutboundIn = ByteBuffer
-    typealias OutboundOut = SSHChannelData
-
-    func handlerAdded(context: ChannelHandlerContext) {
-        // handlerAdded 在通道的 EventLoop 上：能同步设就同步设，失败了也只是退回「不半关」。
-        if let options = context.channel.syncOptions {
-            try? options.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-        } else {
-            _ = context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-        }
-    }
-
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        let message = unwrapInboundIn(data)
-        // 只有 channel 数据是连接里的字节；扩展数据（stderr）在 TCP 转发里不该出现，丢掉。
-        guard case .channel = message.type, case .byteBuffer(let bytes) = message.data else {
-            return
-        }
-        context.fireChannelRead(wrapInboundOut(bytes))
-    }
-
-    func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
-        let bytes = unwrapOutboundIn(data)
-        context.write(
-            wrapOutboundOut(SSHChannelData(type: .channel, data: .byteBuffer(bytes))),
-            promise: promise)
-    }
-}
 
 /// 一条 -R 入站连接：连本机目标，然后和 forwarded-tcpip 通道双向泵。
 nonisolated enum RemoteForwardBridge {

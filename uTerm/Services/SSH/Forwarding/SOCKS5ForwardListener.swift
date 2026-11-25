@@ -1,16 +1,15 @@
 import Foundation
-@preconcurrency import Citadel
 import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
-import NIOSSH
+import USSHKit
 
 /// `-D` 动态转发监听器（自实现 SOCKS5 服务）。
 ///
 /// 在 `client.eventLoop` 上 `ServerBootstrap` 绑 `listenHost:listenPort`。每个连接：
 ///   1. 读字节直到 `SOCKS5Handshake.parseGreeting` 成功 → 回 `greetingReply`；
 ///   2. 读字节直到 `parseConnect` 成功 → 得目标 `host:port`；
-///   3. `createDirectTCPIPChannel` 经 SSH 连到目标；成功回 `connectReply(success:true)`、
+///   3. `ConnectedClient.openDirectTCPIP` 经 SSH 连到目标；成功回 `connectReply(success:true)`、
 ///      失败回 `connectReply(success:false)` 并关闭；
 ///   4. `TunnelGlue.pipe` 双向泵（剩余已读但未消费的字节先 flush 给目标）。
 ///
@@ -28,12 +27,18 @@ actor SOCKS5ForwardListener {
     /// NIOAsyncChannel 出站 writer 未 finish → NIO preconditionFailure abort。
     private let closing = NIOLockedValueBox(false)
 
+    /// 开 direct-tcpip 失败（含超时）时回调，同 `LocalForwardListener` 的 `onChannelFailure`：会话据此判断
+    /// 转发平面是不是已经死了（传输层错误、开通道超时 → 重建整条会话）。
+    private let onChannelFailure: @Sendable (Error) -> Void
+
     init(connected: ConnectedClient, listenHost: String, listenPort: Int,
-         counter: TunnelByteCounter? = nil) {
+         counter: TunnelByteCounter? = nil,
+         onChannelFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
         self.connected = connected
         self.listenHost = listenHost
         self.listenPort = listenPort
         self.counter = counter
+        self.onChannelFailure = onChannelFailure
     }
 
     /// 绑定本地 SOCKS5 监听。bind 失败抛出。
@@ -42,6 +47,7 @@ actor SOCKS5ForwardListener {
         let connected = self.connected
         let counter = self.counter
         let closing = self.closing
+        let onChannelFailure = self.onChannelFailure
 
         // 同 LocalForwardListener（修早期字节丢弃竞态）：用 bind 的 async 重载，在
         // childChannelInitializer 里、child 激活之前、于其 EL 上就把本地 socket 包成 NIOAsyncChannel
@@ -82,7 +88,8 @@ actor SOCKS5ForwardListener {
                     try await withThrowingDiscardingTaskGroup { group in
                         for try await localAsync in inbound {
                             group.addTask {
-                                await Self.handleAccepted(localAsync, connected: connected, counter: counter)
+                                await Self.handleAccepted(localAsync, connected: connected, counter: counter,
+                                                          onChannelFailure: onChannelFailure)
                             }
                         }
                     }
@@ -108,7 +115,8 @@ actor SOCKS5ForwardListener {
     private static func handleAccepted(
         _ localAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         connected: ConnectedClient,
-        counter: TunnelByteCounter?
+        counter: TunnelByteCounter?,
+        onChannelFailure: @escaping @Sendable (Error) -> Void
     ) async {
         // 已在 childChannelInitializer 包好（半关已开）。底层 Channel 供握手状态机 / glueRemote
         // 关闭与传参用。
@@ -144,7 +152,8 @@ actor SOCKS5ForwardListener {
                             localChannel: localChannel,
                             outbound: outbound, connected: connected,
                             bridge: bridge,
-                            remoteTask: &remoteTask, counter: counter)
+                            remoteTask: &remoteTask, counter: counter,
+                            onChannelFailure: onChannelFailure)
                         switch step {
                         case .needMoreBytes:
                             break parseLoop
@@ -195,7 +204,8 @@ actor SOCKS5ForwardListener {
         connected: ConnectedClient,
         bridge: BoundedByteBridge,
         remoteTask: inout Task<Void, Never>?,
-        counter: TunnelByteCounter?
+        counter: TunnelByteCounter?,
+        onChannelFailure: @Sendable (Error) -> Void
     ) async throws -> HandshakeStep {
         switch phase {
         case .greeting:
@@ -239,6 +249,7 @@ actor SOCKS5ForwardListener {
                     AppLogger.error(
                         "SOCKS5 开通道失败 → \(request.host):\(request.port)：\(error.localizedDescription)",
                         category: ForwardingLog.category)
+                    onChannelFailure(error)
                     try await Self.writeReply(SOCKS5Handshake.connectReply(success: false), to: outbound)
                     return .done
                 }

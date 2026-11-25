@@ -9,6 +9,7 @@
 import array
 import base64
 import hashlib
+import io
 import json
 import os
 import shlex
@@ -534,6 +535,8 @@ def main():
         exercise_on_demand_launch(root)
         exercise_socket_path_too_long()
         exercise_localization()
+        exercise_peer_text()
+        exercise_output_boundary()
         print("")
         if FAILURES:
             print("%d 项失败：" % len(FAILURES))
@@ -889,7 +892,7 @@ def exercise(server, root, rejecting):
         ("host_not_found", 4), ("host_ambiguous", 4), ("rule_not_found", 4),
         ("terminal_ambiguous", 4), ("file_not_found", 4),
         ("connect_failed", 5), ("auth_failed", 5), ("host_key_unknown", 5),
-        ("host_key_changed", 5), ("forward_failed", 5),
+        ("host_key_changed", 5), ("weak_algorithms", 5), ("forward_failed", 5),
         ("command_timeout", 6), ("handler_timeout", 6), ("client_timeout", 6),
         ("operation_failed", 1), ("not_implemented", 1), ("invalid_request", 1),
     ]
@@ -1337,6 +1340,7 @@ def exercise_socket_path_too_long():
     check("更新" in (response or {}).get("message", ""), "消息让用户更新 uTerm")
     check("UTERM_CONTROL_SOCKET" not in (response or {}).get("message", ""), "消息不再给 UTERM_CONTROL_SOCKET 的办法")
     equal(client.exit_code_for(response or {}), client.EXIT_LOCAL, "socket_path_too_long 归本地这一档")
+    check(not client.is_retryable("weak_algorithms"), "weak_algorithms（连接方式变弱了，要用户确认）不重试")
 
     refused = "uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开……"
     check(client.socket_path_too_long_response(request, candidates("exampleuser"), refused) is None,
@@ -1427,6 +1431,83 @@ def exercise_localization():
         help_in_languages(client)
     finally:
         subprocess.Popen = patched_popen
+
+
+def exercise_peer_text():
+    """服务器给的文字（文件名、SFTP 报错原话）打到终端之前：控制字符与双向覆盖符写成看得见的 `<U+XXXX>`、
+    换行变空格；名字里正常的格式字符（ZWJ、ZWNJ、软连字符、U+2060）原样留着；截断不切开转义；JSON 一字不差。"""
+    print("服务器原话")
+    client = load_client_module()
+    hostile = "a\x1b]0;pwned\x07b\u009b2J\u202ec\U000e0041d\nnext"
+    equal(client.terminal_safe(hostile), "a<U+001B>]0;pwned<U+0007>b<U+009B>2J<U+202E>c<U+E0041>d next",
+          "terminal_safe 把 ESC / C1 / 双向覆盖 / 标签字符写成看得见的转义，换行变空格")
+    for name, label in (("caf\ufffdE9\u2060.txt", "非 UTF-8 名字的转义结束符 U+2060"),
+                        ("\U0001F468\u200d\U0001F469\u200d\U0001F467.png", "emoji 的 ZWJ 组合"),
+                        ("\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.txt", "波斯文里的 ZWNJ"),
+                        ("hyphen\u00adated.md", "软连字符")):
+        equal(client.terminal_safe(name), name, label + "原样留着")
+    clipped = client.clip_safe("x" * 8 + "\u202e" + "y" * 20, 12)
+    check("<U+202E>" in clipped or "<U" not in clipped, "截断不把 <U+XXXX> 切开（实得 %r）" % clipped)
+    check(clipped.endswith("…") and len(clipped) <= 12, "截断后不超过上限并补「…」")
+    response = {"ok": False, "code": "operation_failed", "message": hostile}
+    text = client.as_json(response)
+    check(all(not (0x7F <= ord(c) <= 0x9F) and c not in "\u202e\U000e0041" for c in text),
+          "as_json 把 C1 / Cf 写成 \\u 转义")
+    equal(json.loads(text), response, "as_json 解析回来一字不差")
+    zwj = {"name": "\U0001F468\u200d\U0001F469"}
+    equal(client.as_json(zwj), json.dumps(zwj, ensure_ascii=False, indent=2, sort_keys=True),
+          "正常的格式字符在 JSON 里也原样")
+    table = client.render_table(["name"], [[hostile]])
+    check("\x1b" not in table and "\u202e" not in table and "<U+202E>" in table,
+          "表格里的远端文字转义成看得见的样子")
+    csv_text = client.render_csv(["name"], [[hostile]])
+    check("\x1b" not in csv_text and "\u009b" not in csv_text, "CSV 里的远端文字转义成看得见的样子")
+
+
+def exercise_output_boundary():
+    """stdout / stderr 的出口：给人看的文字（空表时的说明、对面报的名字、进度行）在出口统一消毒；
+    JSON、命令输出、文件正文原样。"""
+    print("输出出口")
+    client = load_client_module()
+    hostile = "dir\x1b]52;c;cGF5bG9hZA==\x07\u202e/x"
+
+    def emitted(text):
+        buffer = io.StringIO()
+        client.emit(text, stream=buffer)
+        return buffer.getvalue()
+
+    args = client.build_parser().parse_args(["sftp", "ls", "-H", "prod-web", "--format", "table"])
+    empty = {"ok": True, "entries": [], "message": hostile + "：0 项"}
+    out = emitted(client.render(empty, "table", args))
+    check("\x1b" not in out and "\u202e" not in out and "<U+001B>" in out, "空表时的说明在出口消毒（实得 %r）" % out)
+
+    as_json = client.as_json(empty)
+    equal(emitted(as_json), as_json + "\n", "JSON 在出口一字不动")
+    equal(json.loads(emitted(as_json)), empty, "JSON 解析回来一字不差")
+
+    run = {"ok": True, "result": {"host": "prod-web", "exitCode": 1, "durationMs": 3,
+                                  "errorCode": "x", "errorMessage": hostile, "output": "raw\x1b[31mred\n"}}
+    run_args = client.build_parser().parse_args(["run", "-H", "prod-web", "--format", "table", "--", "true"])
+    out = emitted(client.render(run, "table", run_args))
+    check("raw\x1b[31mred" in out, "命令的输出原样（和 ssh 一样）")
+    check("\u202e" not in out.split("raw")[0], "主机行里的报错原话消毒")
+
+    cat_args = client.build_parser().parse_args(["sftp", "cat", "-H", "prod-web", "/x", "--format", "table"])
+    binary = {"ok": True, "file": {"path": hostile, "bytes": 3, "text": None}}
+    out = emitted(client.render(binary, "table", cat_args))
+    check("\x1b" not in out and "\u202e" not in out, "「不是文本」提示里的远端路径消毒")
+    text = {"ok": True, "file": {"path": "/x", "bytes": 3, "text": "a\x1bb"}}
+    equal(emitted(client.render(text, "table", cat_args)), "a\x1bb\n", "文件正文原样（同 cat）")
+
+    saved = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        progress = client.Progress(hostile, 10, live=False)
+        progress.finish(hostile + " 完成")
+        written = sys.stderr.getvalue()
+    finally:
+        sys.stderr = saved
+    check("\x1b" not in written and "\u202e" not in written, "进度汇总行消毒（实得 %r）" % written)
 
 
 def help_in_languages(client):

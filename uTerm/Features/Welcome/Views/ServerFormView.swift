@@ -78,7 +78,7 @@ struct ServerFormView: View {
         // 关表单时取消进行中的测试，并放掉可能挂起的 host-key 续延，避免任务 / 续延泄漏。
         .onDisappear {
             testTask?.cancel()
-            hostKeyRelay.resolve(false)
+            hostKeyRelay.abandon()
         }
     }
 
@@ -310,7 +310,8 @@ struct ServerFormView: View {
         testGeneration &+= 1
         testTask?.cancel()
         testTask = nil
-        hostKeyRelay.resolve(false)
+        // 「没人回答」而不是「拒绝」：别替同时在问同一台主机的标签答掉（`HostKeyApprovalCoalescer`）。
+        hostKeyRelay.abandon()
         testInFlight = false
         testResult = nil
     }
@@ -357,7 +358,9 @@ struct ServerFormView: View {
         do {
             let connected = try await SSHClientFactory.connect(
                 profile: snapshot, auth: auth, jumpHostAuth: jumpAuth,
-                hostKeyVerifier: verifier, hostKeyApprover: approver)
+                hostKeyVerifier: verifier, hostKeyApprover: approver,
+                // 测试连接不和标签合并连接方式那一问：取消测试不能替正在弹框的标签答掉。
+                approvesInteractively: false)
             _ = try? await connected.exec("true")
             await connected.close()
             guard !Task.isCancelled else { return }

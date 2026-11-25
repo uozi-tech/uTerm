@@ -233,7 +233,7 @@ final class MobileSFTPController {
     /// 当前目录下某条目的完整远程路径。
     func fullPath(_ entry: RemoteEntry) -> String { RemotePath.join(path, entry.name) }
 
-    /// 改权限（真实 chmod，经 Citadel setAttributes，仅 9 位 POSIX 位）。
+    /// 改权限（真实 chmod，经 SFTP setstat，仅 9 位 POSIX 位）。
     func chmod(_ entry: RemoteEntry, mode: UInt32, in directory: String? = nil) {
         let dir = directory ?? path
         Task { await browser.setPermissions(entry: entry, mode: mode, recursive: false, in: dir) }

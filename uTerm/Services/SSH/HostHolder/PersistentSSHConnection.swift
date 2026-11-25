@@ -1,21 +1,34 @@
 import Foundation
 import Synchronization
 import SwiftData
-@preconcurrency import Citadel
 import NIOCore
-import NIOSSH
 
 /// 连接断了自己重连、不结束会话的后端。重连期间在 `reconnecting` 上报 true，接回后报 false。
 protocol ReconnectingTerminalBackend: TerminalBackend {
     nonisolated var reconnecting: AsyncStream<Bool> { get }
+    /// 自动重连停下来等用户处理时给出原因（服务器拒绝了凭据、主机密钥被拒、握手不成——重试也不会好的那类），
+    /// 处理完、重新开始重连时给 nil。会话还在（主机上的 shell 照常跑），用户处理完调 `retryAfterAttention()` 接回。
+    nonisolated var attention: AsyncStream<String?> { get }
     /// 连接多半已经断了的时刻（App 回到前台、网络刚变）：立刻处置，不等看门狗（它要等网络稳定 3 秒、再探活）。
     /// `lostInterface`：变之前走的那块网卡没了，上面的连接不可能再通。
     /// 判错的代价只是多重连一次的后端才实现；判错就等于断开的不实现，仍然等看门狗。
     func recheckAfterDisruption(lostInterface: Bool) async
+    /// 用户处理完了（改了密码、确认了主机密钥）：重新读凭据，马上再连一次，接回同一个会话。
+    func retryAfterAttention() async
 }
 
 extension ReconnectingTerminalBackend {
+    nonisolated var attention: AsyncStream<String?> { AsyncStream { $0.finish() } }
     func recheckAfterDisruption(lostInterface: Bool) async {}
+    func retryAfterAttention() async {}
+}
+
+/// 后端结束（`exitStream`）时，主机上的那个会话是不是也没了。只有它说「没了」，界面才换一个会话 id；
+/// 连不上、被关掉之类的结束，主机上的 shell 还在，下次凭同一个 id 接回。
+protocol HostSessionOwning: TerminalBackend {
+    nonisolated var hostSessionHasEnded: Bool { get }
+    /// 至少接上过一次主机上的会话。没接上过就结束的（第一次连接就失败），下次再连开的是**新**会话，不是接回。
+    nonisolated var hasAttachedToHostSession: Bool { get }
 }
 
 extension RemoteTerminalBackend: ReconnectingTerminalBackend {}
@@ -32,24 +45,65 @@ extension RemoteTerminalBackend: ReconnectingTerminalBackend {}
 ///
 /// 主机上用不了保持进程时（不是 Linux、装不上、退出登录会清进程）退回 `SSHConnection`，行为与之前相同。
 actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTrueColorConfiguring, ReconnectingTerminalBackend,
-                               CheckpointingTerminalBackend {
+                               CheckpointingTerminalBackend, HostSessionOwning {
+    /// 用户处理完、点重试时重新读**整份**主机设置：地址与跳板机（快照）、用户名、认证方式、用哪把钥匙，以及
+    /// 钥匙串里的密码 / 私钥。认证失败时用户改的往往正是用户名、认证方式、钥匙或跳板机，只重读钥匙串等于白改。
+    /// 规则同 `SSHAuthResolver.resolveForConnect`（跳板机缺凭据报错，绝不直连）。
+    typealias SettingsResolver = @Sendable () async throws -> ResolvedSettings
+
+    nonisolated struct ResolvedSettings: Sendable {
+        let profile: SSHConnection.ProfileSnapshot
+        let auth: ResolvedAuth
+        let jump: ResolvedAuth?
+    }
+
+    /// 重读的设置把目标的地址或端口改了：主机上的这个会话属于原来那台机器，拿它的 id 去新地址上接是错的。
+    nonisolated struct HostMovedError: LocalizedError {
+        var errorDescription: String? {
+            String(localized: "这台主机的地址或端口改了，原来的会话在另一台机器上。关掉这个标签页，再重新打开主机。")
+        }
+    }
+
+    /// 已保存的主机被删了。
+    nonisolated struct HostRemovedError: LocalizedError {
+        var errorDescription: String? { String(localized: "这台主机已被删除。") }
+    }
+
+    /// 这个后端接上过主机上的会话没有（至少一次）。第一次就没连上的话，主机上多半还没有这个会话：界面重试时不能当成
+    /// 「接回」，否则新 shell 启动时的输出按历史处理、终端查询没人答（fish 等 10 秒报错、提示符卡住）。
+    nonisolated var hasAttachedToHostSession: Bool { attachedOnce.value.withLock { $0 } }
+
     // MARK: - TerminalBackend
 
     nonisolated let outputItems: AsyncStream<TerminalOutputItem>
     nonisolated let exitStream: AsyncStream<Void>
     nonisolated let reconnecting: AsyncStream<Bool>
+    nonisolated let attention: AsyncStream<String?>
 
     private let itemContinuation: AsyncStream<TerminalOutputItem>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
     private let reconnectingContinuation: AsyncStream<Bool>.Continuation
+    private let attentionContinuation: AsyncStream<String?>.Continuation
+
+    /// 见 `HostSessionOwning`：只有保持进程说会话没了（shell 退出、被另一台设备接走、主机上没有这个会话）才为真。
+    nonisolated var hostSessionHasEnded: Bool { sessionEnded.value.withLock { $0 } }
+    private nonisolated let sessionEnded = SessionEndFlag()
+    private nonisolated let attachedOnce = SessionEndFlag()
+
+    private final class SessionEndFlag: Sendable {
+        let value = Mutex(false)
+        func set() { value.withLock { $0 = true } }
+    }
 
     // MARK: - 配置
 
     /// 主机上的会话 id。同一个 id 重新接入得到同一个 shell。
     nonisolated let sessionID: UUID
-    private let profile: SSHConnection.ProfileSnapshot
-    private let auth: ResolvedAuth
-    private let jumpHostAuth: ResolvedAuth?
+    private var profile: SSHConnection.ProfileSnapshot
+    private nonisolated let machineKey: String
+    private var auth: ResolvedAuth
+    private var jumpHostAuth: ResolvedAuth?
+    private let resolveSettings: SettingsResolver?
     private let hostKeyVerifier: HostKeyVerifier
     private let hostKeyApprover: @Sendable (HostKeyChallenge) async -> Bool
     private let bundle: Bundle
@@ -60,6 +114,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
 
     private enum Phase {
         case idle, connecting, attached, reconnecting
+        /// 自动重连停下了，等用户处理（`attention`）。
+        case needsAttention
         /// 这台主机用不了保持进程，全部转给 `fallback`。
         case plain
         case ended
@@ -67,7 +123,13 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
 
     private enum InitialOutcome {
         case attached, usePlainConnection, closed
+        /// 第一次接入时连接一再断开：报连接失败，**不**退到普通连接、**不**当成主机上的会话没了。
+        case lostBeforeAttach
     }
+
+    /// 第一次接入（回放还没收完）就断了的话，再连几次。不退到普通连接：那会悄悄换成一个不保持的 shell，主机上那个
+    /// 还在跑的会话也就没人接了。
+    static let firstAttachAttempts = 3
 
     private static let initialReconnectDelay = Duration.milliseconds(500)
     private static let maxReconnectDelay = Duration.seconds(15)
@@ -103,6 +165,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     /// 上一条 link 有没有走到「接入完成」。
     private var didAttachOnLastLink = false
     private var shellPID: Int32 = 0
+    /// 停在 `needsAttention` 时，等用户的那个续点（`retryAfterAttention` / `close` 叫醒）。
+    private var attentionWaiter: CheckedContinuation<Void, Never>?
     private var cols: UInt16 = 80
     private var rows: UInt16 = 24
     private var fallback: SSHConnection?
@@ -114,10 +178,13 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
          jumpHostAuth: ResolvedAuth?,
          hostKeyVerifier: HostKeyVerifier,
          hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+         resolveSettings: SettingsResolver? = nil,
          bundle: Bundle = .main) {
         self.sessionID = sessionID
+        self.resolveSettings = resolveSettings
         self.resumesSession = resumesSession
         self.profile = profile
+        self.machineKey = "\(profile.host):\(profile.port)"
         self.auth = auth
         self.jumpHostAuth = jumpHostAuth
         self.hostKeyVerifier = hostKeyVerifier
@@ -127,6 +194,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         position = HostHolderStreamPosition(items: itemContinuation, markInterval: Self.checkpointIntervalBytes)
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        (attention, attentionContinuation) = AsyncStream<String?>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
     // MARK: - connect
@@ -161,6 +229,10 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             try await connectPlain()
         case .closed:
             throw SSHConnection.SSHConnectionError.alreadyClosed
+        case .lostBeforeAttach:
+            isClosed = true
+            finishStreams()
+            throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "SSH 连接已断开"))
         }
     }
 
@@ -181,6 +253,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     private func supervise(startingWith first: ConnectedClient) async {
         var connected = first
         var installTried = false
+        var lostBeforeAttach = 0
         while true {
             let end = await runLink(on: connected)
             if isClosed {
@@ -188,7 +261,13 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
                 break
             }
             switch end {
-            case .exited, .replaced, .noSession, .closed:
+            case .exited, .replaced, .noSession:
+                // 保持进程说会话没了：之后再连就是新会话。
+                sessionEnded.set()
+                await connected.close()
+                finishStreams()
+                return
+            case .closed:
                 await connected.close()
                 finishStreams()
                 return
@@ -203,13 +282,23 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
                 return
             case .notInstalled, .unsupported, .transport:
                 await connected.close()
-                guard hasAttached else {
-                    // 还没接上过：这台主机用不了保持进程，或者连接刚建好就断了。交给普通连接，报错也由它报。
+                guard hasAttached || end == .transport else {
+                    // 还没接上过、这台主机用不了保持进程：交给普通连接，报错也由它报。
                     resolveFirstAttach(.usePlainConnection)
                     return
                 }
+                if !hasAttached {
+                    // 第一次接入时连接断了（回放到一半）：主机上的会话多半还在。再试几次，不行就报连接失败——
+                    // 不退到普通连接，也不说会话没了（界面留着这个会话 id，下次接着接）。
+                    lostBeforeAttach += 1
+                    guard lostBeforeAttach < Self.firstAttachAttempts else {
+                        resolveFirstAttach(.lostBeforeAttach)
+                        return
+                    }
+                }
                 if end != .transport {
                     // 接回时发现二进制没了：会话也跟着没了。
+                    sessionEnded.set()
                     finishStreams()
                     return
                 }
@@ -264,6 +353,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         if phase == .reconnecting { reconnectingContinuation.yield(false) }
         phase = .attached
         hasAttached = true
+        attachedOnce.set()
         didAttachOnLastLink = true
         self.shellPID = shellPID
         reconnectDelay = Self.initialReconnectDelay
@@ -306,18 +396,63 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     }
 
     /// 一直试到连上，或者这个后端被关掉（返回 nil）。
+    ///
+    /// 重试也不会好的失败（服务器拒绝了凭据、主机密钥被拒绝或等确认超时、握手协商不成——见
+    /// `SSHTransportFailure.isPermanentConnectFailure`）不自动再试（再试只是又一次失败的登录、又弹一次确认框），
+    /// 停在 `needsAttention`，经 `attention` 把原因交给界面。**会话不结束**：主机上的 shell 还在，
+    /// 用户处理完点重试（`retryAfterAttention`），重新读凭据、接回同一个会话。
     private func reconnect() async -> ConnectedClient? {
         while !isClosed {
-            if let connected = try? await openConnection() {
+            do {
+                let connected = try await openConnection()
                 if isClosed {
                     await connected.close()
                     return nil
                 }
                 return connected
+            } catch where SSHTransportFailure.isPermanentConnectFailure(error) {
+                AppLogger.error("保持会话的重连停下等用户处理：\(FriendlyError.describe(error))")
+                await waitForUser(FriendlyError.describe(error))
+            } catch {
+                await backOff()
             }
-            await backOff()
         }
         return nil
+    }
+
+    /// 停下来等用户：把原因交给界面，等 `retryAfterAttention()`（或 `close()`），然后重新读凭据。
+    /// 凭据读不出来（钥匙串里的密码被删了）也算要用户处理，接着等。
+    private func waitForUser(_ reason: String) async {
+        var reason = reason
+        while !isClosed {
+            phase = .needsAttention
+            attentionContinuation.yield(reason)
+            await withCheckedContinuation { attentionWaiter = $0 }
+            guard !isClosed else { return }
+            phase = .reconnecting
+            reconnectDelay = Self.initialReconnectDelay
+            guard let resolveSettings else { break }
+            do {
+                let fresh = try await resolveSettings()
+                guard Self.isSameMachine(fresh.profile, profile) else { throw HostMovedError() }
+                (profile, auth, jumpHostAuth) = (fresh.profile, fresh.auth, fresh.jump)
+                break
+            } catch {
+                reason = FriendlyError.describe(error)
+            }
+        }
+        attentionContinuation.yield(nil)
+    }
+
+    /// 会话 id 属于「这台机器」：地址（不分大小写）与端口都没变。跳板机换了没关系，目标还是那台。
+    nonisolated static func isSameMachine(_ a: SSHConnection.ProfileSnapshot, _ b: SSHConnection.ProfileSnapshot) -> Bool {
+        a.host.lowercased() == b.host.lowercased() && a.port == b.port
+    }
+
+    /// 用户处理完了：叫醒停在 `needsAttention` 的重连。没在等就什么都不做。
+    func retryAfterAttention() async {
+        attentionWaiter?.resume()
+        attentionWaiter = nil
     }
 
     /// 等一会儿再试，间隔逐次加倍。`verifyConnectionAlive`（回前台、网络恢复）会提前叫醒。
@@ -382,12 +517,25 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             for await item in plain.outputItems { items.yield(item) }
             items.finish()
         }
+        didFinishStreams = true
+        do {
+            try await plain.connect()
+        } catch {
+            // 普通连接没连上：这里从没有过会话，主机上的（如果有）也没动——不说「会话没了」。
+            exit.yield(())
+            exit.finish()
+            throw error
+        }
+        let ended = sessionEnded
         Task {
-            for await _ in plain.exitStream { exit.yield(()) }
+            // 普通连接没有留在主机上的会话：它结束了，之后再连就是新会话。连上之后才挂这一条。
+            for await _ in plain.exitStream {
+                ended.set()
+                exit.yield(())
+            }
+            ended.set()
             exit.finish()
         }
-        didFinishStreams = true
-        try await plain.connect()
     }
 
     // MARK: - write / resize / close
@@ -422,6 +570,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             return
         }
         backoffTask?.cancel()
+        attentionWaiter?.resume()
+        attentionWaiter = nil
         if phase == .attached, let link {
             link.send(HolderFrame(.terminate))
             // 主机上的会话结束后通道自己会关。等不到（连接其实已经半死）就强关。
@@ -440,15 +590,24 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         finishStreams()
     }
 
+    /// 关标签时连不上：另起一条连接去把主机上的会话结束掉。
+    ///
+    /// - 先重读一遍主机设置（停在 `needsAttention` 时用户可能已经改好了凭据、只是没点重试），地址没变才用新的；
+    /// - 主机密钥**不问**（标签已经关了，不能再弹信任框）：不认识或对不上就作罢，会话留在主机上，没人接 24 小时后自己结束。
     private func endSessionInBackground() {
         let profile = profile, auth = auth, jumpHostAuth = jumpHostAuth
-        let verifier = hostKeyVerifier, approver = hostKeyApprover
+        let verifier = hostKeyVerifier, resolveSettings = resolveSettings
         let command = HostHolder.killCommand(sessionID: sessionID)
         Task.detached {
             _ = await BoundedTask.run(timeout: .seconds(30)) {
+                var target = (profile: profile, auth: auth, jump: jumpHostAuth)
+                if let fresh = try? await resolveSettings?(), Self.isSameMachine(fresh.profile, profile) {
+                    target = (fresh.profile, fresh.auth, fresh.jump)
+                }
                 guard let connected = try? await SSHClientFactory.connectShared(
-                    profile: profile, auth: auth, jumpHostAuth: jumpHostAuth,
-                    hostKeyVerifier: verifier, hostKeyApprover: approver) else { return }
+                    profile: target.profile, auth: target.auth, jumpHostAuth: target.jump,
+                    hostKeyVerifier: verifier, hostKeyApprover: { _ in false },
+                    approvesInteractively: false) else { return }
                 _ = try? await connected.exec(command)
                 await connected.close()
             }
@@ -463,6 +622,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         exitContinuation.finish()
         itemContinuation.finish()
         reconnectingContinuation.finish()
+        attentionContinuation.finish()
     }
 
     private static func resizeFrame(cols: UInt16, rows: UInt16) -> HolderFrame {
@@ -530,6 +690,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         guard !isClosed else { return }
         isClosed = true
         backoffTask?.cancel()
+        attentionWaiter?.resume()
+        attentionWaiter = nil
         link?.close()
         await supervisor?.value
         finishStreams()
@@ -577,7 +739,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         return try await client.uploadTerminalVideo(video)
     }
 
-    nonisolated var trueColorHostKey: String { "\(profile.host):\(profile.port)" }
+    /// 目标的地址与端口在这个后端的一生里不会变（重读设置时变了就拒绝，见 `isSameMachine`），所以建的时候定下来。
+    nonisolated var trueColorHostKey: String { machineKey }
 
     func trueColorStatus() async throws -> RemoteTrueColor.Status {
         if let fallback { return try await fallback.trueColorStatus() }
@@ -610,13 +773,38 @@ extension PersistentSSHConnection {
         approver: @escaping @Sendable (HostKeyChallenge) async -> Bool
     ) async throws -> PersistentSSHConnection {
         let snapshot = SSHConnection.ProfileSnapshot(profile)
-        let resolved = try await SSHAuthResolver.resolveForConnect(
-            SSHAuthResolver.Lookup(profile),
-            jump: profile.jumpHost.map(SSHAuthResolver.Lookup.init))
+        let lookup = SSHAuthResolver.Lookup(profile)
+        let jumpLookup = profile.jumpHost.map(SSHAuthResolver.Lookup.init)
+        let resolved = try await SSHAuthResolver.resolveForConnect(lookup, jump: jumpLookup)
+        // 不在库里的主机（临时主机）没得重读，就用建标签时的那份。
+        let reread: SettingsResolver
+        if profile.modelContext != nil {
+            reread = settingsResolver(hostID: profile.id, container: container)
+        } else {
+            reread = {
+                let again = try await SSHAuthResolver.resolveForConnect(lookup, jump: jumpLookup)
+                return ResolvedSettings(profile: snapshot, auth: again.auth, jump: again.jump)
+            }
+        }
         return PersistentSSHConnection(sessionID: sessionID, resumesSession: resumesSession,
                                        profile: snapshot, auth: resolved.auth,
                                        jumpHostAuth: resolved.jump,
                                        hostKeyVerifier: HostKeyVerifier(modelContainer: container),
-                                       hostKeyApprover: approver)
+                                       hostKeyApprover: approver,
+                                       resolveSettings: reread)
+    }
+
+    /// 按 id 从库里重新取已保存的主机，现做快照与两跳的凭据。
+    nonisolated static func settingsResolver(hostID: UUID, container: ModelContainer) -> SettingsResolver {
+        {
+            let current = try await MainActor.run { () throws -> (SSHConnection.ProfileSnapshot, SSHAuthResolver.Lookup, SSHAuthResolver.Lookup?) in
+                let descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == hostID })
+                guard let profile = try container.mainContext.fetch(descriptor).first else { throw HostRemovedError() }
+                return (SSHConnection.ProfileSnapshot(profile), SSHAuthResolver.Lookup(profile),
+                        profile.jumpHost.map(SSHAuthResolver.Lookup.init))
+            }
+            let resolved = try await SSHAuthResolver.resolveForConnect(current.1, jump: current.2)
+            return ResolvedSettings(profile: current.0, auth: resolved.auth, jump: resolved.jump)
+        }
     }
 }

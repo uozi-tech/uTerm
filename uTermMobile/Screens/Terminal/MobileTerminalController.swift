@@ -80,6 +80,10 @@ final class MobileTerminalController {
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     /// 连接断了，后端正在自己重连（远控标签连 Mac、直连主机接回主机上的会话）。这期间按键发不出去，界面要明说。
     private(set) var isReconnecting = false
+    /// 自动重连停下来等用户处理的原因（服务器拒绝了凭据、主机密钥被拒、握手不成）。会话还在主机上，
+    /// 用户处理完点重试（`retryAfterAttention()`）接回同一个会话。nil = 没在等。
+    private(set) var attentionMessage: String?
+    @ObservationIgnored private var attentionTask: Task<Void, Never>?
     /// 重连提示的文案：连的是 Mac 还是主机。
     var reconnectNotice: LocalizedStringKey {
         connection is RemoteTerminalBackend ? "与 Mac 的连接已断开，正在重新连接…" : "连接已断开，正在重新连接…"
@@ -422,6 +426,14 @@ final class MobileTerminalController {
                 self?.isReconnecting = false
             }
         }
+        attentionMessage = nil
+        attentionTask?.cancel()
+        attentionTask = (conn as? any ReconnectingTerminalBackend).map { backend in
+            Task { [weak self] in
+                for await message in backend.attention { self?.attentionMessage = message }
+                self?.attentionMessage = nil
+            }
+        }
         if let remote = conn as? RemoteTerminalBackend {
             remote.client.setProgramStatusLooker(remote.sessionID) { [weak self] in self?.isLooking ?? false }
         }
@@ -442,9 +454,16 @@ final class MobileTerminalController {
         terminal.bind(conn)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
-                // 主机上的会话没了：之后重新连接开的是新会话。
-                self?.hostSessionID = UUID()
-                self?.resumesHostSession = false
+                // 主机上的会话没了（保持进程说的：shell 退出、被接走、主机上没有了）：之后重新连接开的是新会话。
+                // 连不上、被关掉之类的结束，shell 还在主机上，留着这个 id，下次接回它。
+                // 连不上、被关掉之类的结束，shell 还在主机上——前提是这个后端真的接上过它（或者本来就是接回上次的）：
+                // 第一次连接就失败的话主机上还没有这个会话，重试时是新建，新 shell 的启动输出与终端查询要照常处理。
+                if let owner = conn as? any HostSessionOwning, !owner.hostSessionHasEnded {
+                    self?.resumesHostSession = (self?.resumesHostSession ?? false) || owner.hasAttachedToHostSession
+                } else {
+                    self?.hostSessionID = UUID()
+                    self?.resumesHostSession = false
+                }
                 if case .failed = self?.state { } else { self?.state = .disconnected }
                 break
             }
@@ -453,6 +472,13 @@ final class MobileTerminalController {
 
     func write(_ data: Data) {
         terminal.write(data)
+    }
+
+    /// 用户处理完了（改了密码、确认了主机密钥）：后端重新读凭据再连一次，接回同一个会话。
+    func retryAfterAttention() {
+        guard let backend = connection as? any ReconnectingTerminalBackend else { return }
+        attentionMessage = nil
+        Task { await backend.retryAfterAttention() }
     }
 
     // MARK: - 图片
@@ -646,6 +672,9 @@ final class MobileTerminalController {
         reconnectTask?.cancel()
         reconnectTask = nil
         isReconnecting = false
+        attentionTask?.cancel()
+        attentionTask = nil
+        attentionMessage = nil
         if let remote = connection as? RemoteTerminalBackend {
             remote.client.setProgramStatusLooker(remote.sessionID, nil)
         }

@@ -19,7 +19,7 @@ import SwiftData
 /// 空转。上一版夹具是直接写 `state` / `path` / `entries` 三个字段绕过 `start()`，
 /// 那条路已经不需要了（`MobileFakeSFTP.controller(provider:)` 改走真实 `load`）。
 ///
-/// 生产路径不变：`start(profile:container:relay:)` 建的仍是真实 Citadel
+/// 生产路径不变：`start(profile:container:relay:)` 建的仍是真实 USSHCore
 /// `SFTPSession`，只是存进了协议类型的字段。
 ///
 /// ## 这份假会话覆盖什么

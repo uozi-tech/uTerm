@@ -370,6 +370,20 @@ nonisolated enum ParallelRunCopy {
             : String(localized: "无法连接：尚未信任该主机的密钥。核对指纹无误后点「信任并重试」。")
     }
 
+    /// 信任过的主机（或它的跳板机）这次只肯用 SHA-1 时代的旧算法，并行执行不能问人，直接拒了。两端共用，动词不写「点」。
+    static func weakAlgorithms(_ challenge: HostKeyChallenge) -> String {
+        challenge.isJumpHost
+            ? String(localized: "无法连接：跳板机 \(challenge.address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上；放行后经这台跳板机的连接都不再询问。确认没问题后选「仍然连接并重试」。")
+            : String(localized: "无法连接：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。确认没问题后选「仍然连接并重试」。")
+    }
+
+    /// 终端窗格里那一行。
+    static func weakAlgorithmsLine(_ challenge: HostKeyChallenge) -> String {
+        challenge.isJumpHost
+            ? String(localized: "跳板机 \(challenge.address) 要改用较旧的连接方式（SHA-1）才能连上，连接被拒绝")
+            : String(localized: "主机要改用较旧的连接方式（SHA-1）才能连上，连接被拒绝")
+    }
+
     static func unreachable(_ reason: String) -> String { String(localized: "无法连接到该主机：\(reason)。命令未执行。") }
 
     /// 把连接错误整理成一句原因（去空白；空则兜底）。

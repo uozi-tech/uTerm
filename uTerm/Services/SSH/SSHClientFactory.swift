@@ -1,5 +1,4 @@
 import Foundation
-@preconcurrency import Citadel
 import NIOCore
 @_spi(uTermIntegration) import USSHKit
 
@@ -7,7 +6,7 @@ import NIOCore
 ///
 /// 来自 `SSHClientFactory.connectShared` 的实例是共享连接上的一份租约（`lease` 非 nil）：
 /// `close()` 只归还租约，同一连接上的其他使用方不受影响；要判死整条连接用 `closeTransport()`。
-nonisolated struct ConnectedClient: @unchecked Sendable {
+nonisolated struct ConnectedClient: Sendable {
     let shared: USSHKit.ConnectedClient
     let lease: PooledLease?
 
@@ -28,8 +27,7 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
         }
     }
 
-    /// 传输断开（含别的共享者判死后断开）时回调。共享连接走池子分发 ——
-    /// Citadel 的 `onDisconnect` 只存一个回调，直接挂会顶掉别人的。
+    /// 传输断开（含别的共享者判死后断开）时回调。共享连接走池子分发（池子按租约登记、归还时一起撤掉）。
     func onDisconnect(_ handler: @escaping @Sendable () -> Void) async {
         if let lease {
             await SharedSSHConnections.pool.onClosed(lease, handler)
@@ -46,7 +44,7 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
     ///
     /// 与 `exec` 的两处不同，都是 CLI 的静默看门狗要的：
     /// - 能**边跑边**看到输出，于是能按「多久没动静」而不是「跑了多久」判超时；
-    /// - 没有 `exec` 那道 64 000 字节的总量闸（超了整条抛 `commandOutputTooLarge`，
+    /// - 没有 `exec` 那道 64 000 字节的总量闸（超了整条抛 `SSHCommandError.outputTooLarge`，
     ///   输出多一点的命令直接失败），留多少由调用方自己裁。
     func execStreaming(
         _ command: String,
@@ -75,71 +73,95 @@ nonisolated extension ConnectedClient: PooledConnection {
     }
 
     func onTransportClosed(_ handler: @escaping @Sendable () -> Void) {
-        target.onDisconnect(perform: handler)
-        bastion?.onDisconnect(perform: handler)
+        _ = target.onDisconnect { _ in handler() }
+        _ = bastion?.onDisconnect { _ in handler() }
     }
 
     /// 不管有几个共享者，直接断开底层传输。看门狗判死时用：连接死了对谁都是死的，
-    /// 断开后池子会通知这条连接上的所有使用方，各自走重连。
+    /// 池子通知这条连接上的所有使用方，各自走重连。共享连接先从池里摘掉再断开（`SharedConnectionPool.invalidate`），
+    /// 断开还没完成的那几秒里新来的借用者拿到的是新连接，不是这条正在关的。
     func closeTransport() async {
-        await shared.close()
+        if let lease {
+            await SharedSSHConnections.pool.invalidate(lease)
+        } else {
+            await shared.close()
+        }
+    }
+}
+
+/// USSHKit 的日志 → App 的日志（`ssh` 类别）。建连时交给它：比如「这台主机只能用旧算法」那一条警告
+/// （metadata 里有 host、port、用上的旧算法）。
+nonisolated struct AppSSHLogger: USSHKit.SSHLogger {
+    func log(_ event: USSHKit.SSHLogEvent) {
+        let details = event.metadata.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        let text = details.isEmpty ? event.message : "\(event.message) \(details)"
+        switch event.level {
+        case .trace, .debug, .info:
+            AppLogger.info(text, category: "ssh")
+        case .warning:
+            AppLogger.warn(text, category: "ssh")
+        case .error:
+            AppLogger.error(text, category: "ssh")
+        }
     }
 }
 
 /// uTerm's model/UI adapter around the shared connection engine.
 nonisolated enum SSHClientFactory {
-    /// SSH 子通道（PTY / SFTP / direct-tcpip）的入站窗口大小。
+    /// SSH 子通道（PTY / SFTP / direct-tcpip）的最大包长，决定每条子通道的入站窗口。
     ///
-    /// NIOSSH 把每条子通道的入站窗口钉死成 `SSHClientConfiguration.maximumPacketSize`
-    /// （`SSHChannelMultiplexer.createChildChannel` 里 `targetWindowSize:
-    /// Int32(self.maximumPacketSize)`），默认 `SSHPacketParser.defaultMaximumPacketSize`
-    /// = 128 KiB。SFTP 下载走 64 × 32 000 B 的读流水线，128 KiB 的窗口只放得下 4 个
-    /// 在途读请求 —— 流水线深度被窗口而不是被我们的并发度限制住，吞吐直接砍到 1/16。
+    /// NIOSSH 0.15 把每条子通道的入站窗口定为「最大包长 × 64」（`windowBytesPerPacket`），USSHCore 再把包长
+    /// 夹进 `SSHClient.maximumPacketSizeRange`（32 KiB…512 KiB，即窗口 2 MiB…32 MiB）。所以要某个窗口就传
+    /// 「窗口 ÷ 64」，见 `maximumPacketSize(forWindowBytes:)`。
     ///
-    /// 取 1 MiB 的理由：满流水线在途约 64 × 32 000 B ≈ 2 MiB，取其一半即可让窗口不再
-    /// 是瓶颈（窗口在消费一半时就会补发 window-adjust，1 MiB 足以覆盖一个 RTT 内的在
-    /// 途量）；再往上只是让慢消费者（例如 UI 还没读走的终端输出）在内存里多攒几倍数据，
-    /// 收益却已经饱和。NIOSSH 对这个值的硬约束是 `>= 32768 && <= (1 << 24)`
-    /// （`SSHPacketParser.init` 的两条 precondition），1 << 20 稳在区间内。
+    /// 终端、转发、共享连接原来要的是 1 MiB 窗口（SFTP 下载走 64 个在途 READ，128 KiB 的窗口只放得下 4 个，
+    /// 流水线被窗口卡住；再往上只是让慢消费者——例如 UI 还没读走的终端输出——在内存里多攒数据，收益已饱和）。
+    /// 1 MiB 低于现在能拿到的下限，取最接近的 2 MiB（包长 32 KiB）：每条子通道最多多压 1 MiB 内存，不会更慢。
     ///
-    /// 这个设置是**每条 SSH 连接**级别的，所以同一连接上的终端 PTY 通道与端口转发通道
-    /// 也会拿到 1 MiB 窗口 —— 纯粹是缓冲变大，没有行为变化。跳板机那一跳必须一起设，
-    /// 否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的 128 KiB 窗口里；
-    /// `USSHKitIntegration.connect`（uAppKit ≥ 1.4.6）内部对直连与跳板机两跳一并应用。
-    static let channelWindowOptions: Set<SSHProtocolOption> = windowOptions(bytes: 1 << 20)
+    /// 这个设置是**每条 SSH 连接**级别的，同一连接上的终端 PTY 与端口转发通道拿到同一个窗口。跳板机那一跳
+    /// 必须一起设，否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的窗口里；`USSHKitIntegration.connect`
+    /// 对直连与跳板机两跳一并应用。
+    static let channelMaximumPacketSize = maximumPacketSize(forWindowBytes: 1 << 20)
 
-    /// 指定窗口大小的协议选项（越界夹回 `maximumPacketSizeRange`）。大文件传输的专用连接
-    /// 用更大的窗口（见 `ParallelTransfer`），终端 / 转发连接仍用上面的 1 MiB。
-    static func windowOptions(bytes: Int) -> Set<SSHProtocolOption> {
-        [.maximumPacketSize(clampedMaximumPacketSize(bytes))]
+    /// NIOSSH：每条子通道的入站窗口 = 最大包长 × 64。
+    static let windowBytesPerPacket = 64
+
+    /// 要 `bytes` 大小的子通道窗口时该传的最大包长（越界夹回 `maximumPacketSizeRange`）。大文件传输的专用连接
+    /// 用更大的窗口（见 `ParallelTransfer`），终端 / 转发连接用上面那个。
+    static func maximumPacketSize(forWindowBytes bytes: Int) -> Int {
+        clampedMaximumPacketSize(bytes / windowBytesPerPacket)
     }
 
-    /// NIOSSH 允许的最大包长区间。
-    ///
-    /// `SSHPacketParser.init` 用两条 **precondition** 卡这个值 —— 越界不是抛错、不是
-    /// 回退默认值，而是直接 `abort()` 掐掉整个进程。所以宁可在这里把值夹回区间里也不
-    /// 能把越界值递下去：常量写错顶多是窗口没调成预期大小，传下去就是启动即崩。
-    static let maximumPacketSizeRange: ClosedRange<Int> = 32_768...(1 << 24)
+    /// USSHCore 允许的最大包长区间（它自己也会夹，这里先夹是为了让 app 里的数和真正生效的一致）。
+    static let maximumPacketSizeRange: ClosedRange<Int> = SSHClient.maximumPacketSizeRange
 
     /// 把包长夹进 `maximumPacketSizeRange`。
     static func clampedMaximumPacketSize(_ raw: Int) -> Int {
         min(max(raw, maximumPacketSizeRange.lowerBound), maximumPacketSizeRange.upperBound)
     }
 
+    /// - Parameters:
+    ///   - hostKeyApprover: 问用户的出口。主机密钥之外，信任过的主机这次只肯用 SHA-1 时代的旧算法时也经它问
+    ///     （`HostKeyChallenge.Kind.weakAlgorithms`，规则见 `LegacyAlgorithmGate`）。不能问用户的调用方返回 false，
+    ///     这时抛 `SSHConnection.SSHConnectionError.weakAlgorithmsDeclined`。
+    ///   - approvesInteractively: `hostKeyApprover` 真的会问人。为 false 时同一台主机同时在问的连接不和它合并
+    ///     （它的「不」不能替正在弹框的标签答掉）。
     static func connect(
         profile: SSHConnection.ProfileSnapshot,
         auth: ResolvedAuth,
         jumpHostAuth: ResolvedAuth?,
         hostKeyVerifier: HostKeyVerifier,
         hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
-        protocolOptions: Set<SSHProtocolOption> = SSHClientFactory.channelWindowOptions
+        approvesInteractively: Bool = true,
+        maximumPacketSize: Int = SSHClientFactory.channelMaximumPacketSize
     ) async throws -> ConnectedClient {
         LocalNetworkUse.markUsed()
         let target = packageAuth(auth)
         let jumpHost: USSHKit.SSHJumpHost?
         if let jump = profile.jumpHost {
             guard let jumpHostAuth else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"))
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"),
+                                                                      cause: .authentication)
             }
             let jumpMaterial = packageAuth(jumpHostAuth)
             jumpHost = USSHKit.SSHJumpHost(
@@ -164,35 +186,33 @@ nonisolated enum SSHClientFactory {
             await probe(profile: profile, auth: auth, timeline: timeline)
         }
 
+        let hostKeyPolicy = packageHostKeyPolicy()
+        let legacyGate = LegacyAlgorithmGate(verifier: hostKeyVerifier, hostKeyPolicy: hostKeyPolicy,
+                                             interactive: approvesInteractively, approver: hostKeyApprover)
         do {
             defer { timeline?.mark("handshake") }
             let shared = try await USSHKitIntegration.connect(
                 endpoint: endpoint,
                 credential: target.credential,
                 hostKeyStore: hostKeyVerifier,
-                hostKeyPolicy: packageHostKeyPolicy(),
+                hostKeyPolicy: hostKeyPolicy,
                 connectTimeout: .seconds(connectTimeoutSeconds()),
                 approver: packageApprover(hostKeyApprover),
-                protocolOptions: protocolOptions
+                maximumPacketSize: maximumPacketSize,
+                legacyFallbackApproval: legacyGate.approval,
+                logger: AppSSHLogger()
             )
+            legacyGate.connectionSucceeded(profile: profile, target: shared.targetNeededLegacyTransport,
+                                           jumpHost: shared.bastionNeededLegacyTransport)
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
-            // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
-            // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
-            switch error {
-            case .jumpHostFailed(let message):
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(message)
-            case .connectFailed(let message):
-                throw SSHConnection.SSHConnectionError.connectFailed(message)
-            case .authenticationFailed(let message):
-                throw SSHConnection.SSHConnectionError.authenticationFailed(message)
-            case .hostKeyRejected(let message):
-                throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "主机密钥被拒绝：\(message)"))
-            default:
-                throw SSHConnection.SSHConnectionError.connectFailed(
-                    error.errorDescription ?? FriendlyError.describe(error)
-                )
+            if case .weakAlgorithmsDeclined(let refusal) = appError(error) {
+                throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(legacyGate.marked(refusal))
             }
+            throw appError(error)
+        } catch let error as CancellationError {
+            // 取消（关窗口、关标签页）不是连接失败：原样交出去，调用方据此什么都不报。
+            throw error
         } catch {
             let message = FriendlyError.describe(error)
             if profile.jumpHost != nil {
@@ -202,27 +222,59 @@ nonisolated enum SSHClientFactory {
         }
     }
 
+    /// USSHKit 的建连错误 → App 的。逐个列、不带 `default`：USSHKit 新加的错误编译器会提醒。
+    static func appError(_ error: USSHKit.SSHConnectionError) -> SSHConnection.SSHConnectionError {
+        // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
+        // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
+        switch error {
+        case .legacyFallbackDeclined(let request), .jumpHostFailed(_, .legacyFallbackDeclined(let request)?):
+            // 没同意用旧算法（哪一跳都一样）：用户自己的决定，不是网络问题，重连逻辑不在它上面打转。
+            return .weakAlgorithmsDeclined(LegacyAlgorithmRefusal(request))
+        case .jumpHostFailed(let message, let cause):
+            // `cause` 是那一跳按直连规则归的类：认证 / 主机密钥 / 握手是配置问题，重连逻辑不在它上面打转。
+            return .jumpHostFailed(message, cause: JumpHostFailureCause(cause))
+        case .connectFailed(let message):
+            return .connectFailed(message)
+        case .authenticationFailed(let message):
+            return .authenticationFailed(message)
+        case .handshakeFailed(let message):
+            return .handshakeFailed(message)
+        case .hostKeyRejected(let message):
+            return .hostKeyRejected(message)
+        case .unsupportedAgentAuthentication:
+            return .authenticationFailed(error.errorDescription ?? FriendlyError.describe(error))
+        case .alreadyOpen, .closed, .bindFailed:
+            // 只有隧道会抛（`connect` 不会）；不值得重试的照 USSHKit 的 `isRetryable` 归成「重试也不会好」那类。
+            let message = error.errorDescription ?? FriendlyError.describe(error)
+            return error.isRetryable ? .connectFailed(message) : .handshakeFailed(message)
+        }
+    }
+
     /// 终端与 SFTP 侧栏用：同一目标（含跳板机与认证材料）复用已有连接，见
     /// `SharedConnectionPool`。返回的是一份租约，`close()` 只归还租约。
     ///
     /// 同时到来的建连只握一次手，用的是第一个建连者的主机密钥审批回调；后来者直接复用
-    /// 已经校验过主机密钥的连接。子通道窗口固定用 `channelWindowOptions` —— 要更大窗口的
+    /// 已经校验过主机密钥的连接。子通道窗口固定用 `channelMaximumPacketSize` —— 要更大窗口的
     /// 大文件传输走 `connect` 自己开专用连接。
     static func connectShared(
         profile: SSHConnection.ProfileSnapshot,
         auth: ResolvedAuth,
         jumpHostAuth: ResolvedAuth?,
         hostKeyVerifier: HostKeyVerifier,
-        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
+        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+        approvesInteractively: Bool = true
     ) async throws -> ConnectedClient {
         let key = SharedSSHKey(profile: profile, auth: auth, jumpHostAuth: jumpHostAuth)
-        let acquired = try await SharedSSHConnections.pool.acquire(key) {
+        // 不能问用户的建连（主机密钥一律拒绝）不和别人共用握手：它替同时打开的标签页答掉主机密钥问题的话，
+        // 用户连确认框都看不到。已经建好的连接照样复用（那时候主机密钥已经定了）。
+        let acquired = try await SharedSSHConnections.pool.acquire(key, sharesHandshake: approvesInteractively) {
             try await connect(
                 profile: profile,
                 auth: auth,
                 jumpHostAuth: jumpHostAuth,
                 hostKeyVerifier: hostKeyVerifier,
-                hostKeyApprover: hostKeyApprover)
+                hostKeyApprover: hostKeyApprover,
+                approvesInteractively: approvesInteractively)
         }
         if acquired.origin != .created {
             ConnectTimeline.current?.mark("handshake(\(acquired.origin.rawValue))")
@@ -251,12 +303,11 @@ nonisolated enum SSHClientFactory {
         timeline.exclude()
     }
 
-    /// Kept as a narrow compatibility entry point for callers/tests that need
-    /// a Citadel authentication method without owning key parsing.
-    static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthenticationMethod {
+    /// 凭据 → USSHCore 的认证配置（私钥在这里解析）。给建连前单独量私钥解析耗时的探针与测试用。
+    static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthentication {
         let material = packageAuth(auth)
         do {
-            return try USSHKitIntegration.makeAuthenticationMethod(
+            return try USSHKitIntegration.makeAuthentication(
                 username: material.username,
                 credential: material.credential
             )
@@ -317,3 +368,4 @@ nonisolated enum SSHClientFactory {
         return Int64(seconds)
     }
 }
+

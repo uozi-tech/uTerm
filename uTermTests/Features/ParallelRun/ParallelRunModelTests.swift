@@ -19,9 +19,9 @@ final class ParallelRunModelTests: XCTestCase {
         let gate = FakeGate()
         let challenge = HostKeyChallenge(host: "a.example", port: 22, kind: .unknown,
                                          newFingerprint: "SHA256:test", oldFingerprint: nil)
-        let executor = FakeExecutor { profile, trustNewKeys in
+        let executor = FakeExecutor { profile, pin in
             if profile == a.id {
-                return trustNewKeys ? FakeSession() : FakeSession(hostKey: challenge)
+                return pin?.matches(challenge) == true ? FakeSession() : FakeSession(hostKey: challenge)
             }
             return FakeSession(gate: gate)
         }
@@ -40,6 +40,84 @@ final class ParallelRunModelTests: XCTestCase {
         let runs = store.runs(for: cmd.id)
         XCTAssertEqual(runs.count, 1)
         XCTAssertEqual(runs.first?.results.map(\.ok), [true, true])
+    }
+
+    // MARK: - 连接方式变弱了
+
+    /// 卡片上的问题是「连接方式变弱了」：结论写的是它、按钮是「仍然连接并重试」；点了之后重试只放行这一问
+    /// （主机密钥要是也变了，还会再出一张主机密钥的卡片），同意也不在点的时候记——连上之后按 USSHKit 的结果记。
+    func testWeakAlgorithmsRetryPinsOnlyThatAskAndRecordsNothingYet() async throws {
+        let (store, container) = try makeStore()
+        let cmd = store.create(name: "uptime", serverIDs: [], command: "uptime", aiAssisted: false)
+        let a = host("a")
+        let challenge = HostKeyChallenge(host: "a.example", port: 22, kind: .weakAlgorithms,
+                                         newFingerprint: "", oldFingerprint: nil)
+        var calls: [HostKeyApprovalPin?] = []
+        let executor = FakeExecutor { _, pin in
+            calls.append(pin)
+            return calls.count == 1 ? FakeSession(hostKey: challenge) : FakeSession()
+        }
+        let model = makeModel(commandID: cmd.id, command: "uptime", intent: "", aiAssisted: false,
+                              targets: [a], doctor: nil, store: store, container: container,
+                              executor: executor)
+        model.start()
+        try await waitUntil { model.states[0].hostKeyUntrusted }
+        XCTAssertTrue(model.states[0].weakAlgorithmsDeclined)
+        XCTAssertEqual(model.states[0].hostKeyRetryTitle, String(localized: "仍然连接并重试"))
+        XCTAssertEqual(model.states[0].summary, ParallelRunCopy.weakAlgorithms(challenge))
+
+        model.trustAndRetry(serverID: a.id)
+        try await waitUntil { model.states[0].tone == .ok }
+        XCTAssertEqual(calls, [nil, HostKeyApprovalPin(challenge)], "重试只放行卡片上那一问")
+        let pin = HostKeyApprovalPin(challenge)
+        XCTAssertFalse(pin.matches(HostKeyChallenge(host: "a.example", port: 22, kind: .unknown,
+                                                    newFingerprint: "SHA256:x", oldFingerprint: nil)),
+                       "连接方式那一问的放行管不到主机密钥")
+    }
+
+    /// 钉住的是用户看到的那一问：跳板机后面的目标、换了一把钥匙、变成「密钥已变化」、同一台的别的端口都不放行。
+    func testPinMatchesOnlyTheExactChallenge() {
+        let seen = HostKeyChallenge(host: "bastion", port: 22, kind: .unknown,
+                                    newFingerprint: "SHA256:bastion", oldFingerprint: nil)
+        let pin = HostKeyApprovalPin(seen)
+        XCTAssertTrue(pin.matches(HostKeyChallenge(host: "bastion", port: 22, kind: .unknown,
+                                                   newFingerprint: "SHA256:bastion", oldFingerprint: nil)),
+                      "同一问（重连时是新的挑战对象）放行")
+        let others = [
+            HostKeyChallenge(host: "target", port: 22, kind: .unknown, newFingerprint: "SHA256:target", oldFingerprint: nil),
+            HostKeyChallenge(host: "bastion", port: 22, kind: .unknown, newFingerprint: "SHA256:other", oldFingerprint: nil),
+            HostKeyChallenge(host: "bastion", port: 22, kind: .mismatch, newFingerprint: "SHA256:bastion",
+                             oldFingerprint: "SHA256:old"),
+            HostKeyChallenge(host: "bastion", port: 2222, kind: .unknown, newFingerprint: "SHA256:bastion", oldFingerprint: nil),
+            HostKeyChallenge(host: "bastion", port: 22, kind: .weakAlgorithms, newFingerprint: "", oldFingerprint: nil),
+        ]
+        for other in others { XCTAssertFalse(pin.matches(other), "\(other)") }
+    }
+
+    /// 「信任并重试」重连时跳板机后面的目标也是未知密钥：不被顺手放过去，另出一张目标的卡片。
+    func testTrustAndRetryDoesNotApproveTheNextHopsKey() async throws {
+        let (store, container) = try makeStore()
+        let cmd = store.create(name: "uptime", serverIDs: [], command: "uptime", aiAssisted: false)
+        let a = host("a")
+        let bastion = HostKeyChallenge(host: "bastion", port: 22, kind: .unknown,
+                                       newFingerprint: "SHA256:bastion", oldFingerprint: nil)
+        let target = HostKeyChallenge(host: "a.example", port: 22, kind: .unknown,
+                                      newFingerprint: "SHA256:target", oldFingerprint: nil)
+        let executor = FakeExecutor { _, pin in
+            // 真执行器里审批闭包只放行钉住的那一问：跳板机放行了，目标那一问照常拒绝、记下。
+            guard let pin, pin.matches(bastion) else { return FakeSession(hostKey: bastion) }
+            return pin.matches(target) ? FakeSession() : FakeSession(hostKey: target)
+        }
+        let model = makeModel(commandID: cmd.id, command: "uptime", intent: "", aiAssisted: false,
+                              targets: [a], doctor: nil, store: store, container: container,
+                              executor: executor)
+        model.start()
+        try await waitUntil { model.states[0].hostKeyUntrusted }
+        model.trustAndRetry(serverID: a.id)
+        try await waitUntil {
+            if case .hostKeyUntrusted(let shown)? = model.states[0].failure { return shown.host == "a.example" }
+            return false
+        }
     }
 
     // MARK: - 纯意图命令的退出码
@@ -114,12 +192,12 @@ final class ParallelRunModelTests: XCTestCase {
 // MARK: - 假执行器
 
 private struct FakeExecutor: ParallelCommandExecuting {
-    let make: @MainActor (UUID, Bool) -> FakeSession
+    let make: @MainActor (UUID, HostKeyApprovalPin?) -> FakeSession
 
-    init(_ make: @escaping @MainActor (UUID, Bool) -> FakeSession) { self.make = make }
+    init(_ make: @escaping @MainActor (UUID, HostKeyApprovalPin?) -> FakeSession) { self.make = make }
 
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
-        make(profile.id, trustNewKeys)
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession {
+        make(profile.id, pin)
     }
 }
 

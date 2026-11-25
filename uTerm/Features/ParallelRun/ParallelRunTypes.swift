@@ -24,8 +24,9 @@ nonisolated enum ParallelLaneTone: Sendable, Equatable {
 }
 
 /// 单台「连接层失败」原因——命令根本没跑起来（区别于命令执行后非零退出）。
-/// - `hostKeyUntrusted`：主机指纹未信任 / 已变更，并行路径无交互入口直接拒了连接 →
-///   触发泳道内联「信任并重试」（携带与终端 / SFTP 征询同源的 `HostKeyChallenge`）。
+/// - `hostKeyUntrusted`：主机指纹未信任 / 已变更，或信任过的主机这次只肯用 SHA-1 时代的旧算法
+///   （`HostKeyChallenge.Kind.weakAlgorithms`），并行路径无交互入口直接拒了连接 →
+///   触发泳道内联「信任并重试」/「仍然连接并重试」（携带与终端 / SFTP 征询同源的 `HostKeyChallenge`）。
 /// - `connection`：其它连接 / 认证失败，仅展示原因文案，无自动重试。（命令跑起来后的超时
 ///   不算连接失败，不走这里，见 `ParallelRunModel.markStalled`。）
 ///
@@ -94,6 +95,17 @@ struct ParallelServerState: Identifiable {
     var hostKeyUntrusted: Bool {
         if case .hostKeyUntrusted = failure { return true }
         return false
+    }
+
+    /// `hostKeyUntrusted` 里那一问是「连接方式变弱了」（按钮写「仍然连接并重试」，不是「信任并重试」）。
+    var weakAlgorithmsDeclined: Bool {
+        if case .hostKeyUntrusted(let challenge) = failure { return challenge.isWeakAlgorithms }
+        return false
+    }
+
+    /// 泳道里重试按钮的字。
+    var hostKeyRetryTitle: String {
+        weakAlgorithmsDeclined ? String(localized: "仍然连接并重试") : String(localized: "信任并重试")
     }
 
     /// AI 泳道右侧状态徽标文案。

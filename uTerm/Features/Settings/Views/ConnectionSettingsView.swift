@@ -4,7 +4,7 @@ import SwiftUI
 /// 设置 · 连接：SSH 握手超时 / 主机密钥校验 / SFTP 并发上传数（原「高级」的前两组）。
 /// 三项都与 iOS 同步，iOS 在 设置 › 连接 里用预设档改同一组键。
 ///
-/// 砍掉的设计稿项：keepalive 与 SSH 压缩（Citadel/NIOSSH 不支持）。
+/// 砍掉的设计稿项：keepalive 与 SSH 压缩（当时的 SSH 栈不支持；现在 USSHCore 有 keepalive，App 仍用自己的看门狗）。
 struct ConnectionSettingsView: View {
     @AppStorage(DefaultsKey.sshConnectTimeout) private var connectTimeout: Int = ConnectionPresentation.defaultTimeout
     @AppStorage(DefaultsKey.sshHostKeyPolicy)  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue

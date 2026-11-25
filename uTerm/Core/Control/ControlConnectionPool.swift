@@ -629,6 +629,9 @@ extension ControlConnectionPool.Connector {
                     // 急切握手：`:` 是 shell 的 no-op，只为把建连（含主机密钥审批）做掉，
                     // 好让失败在这里就带着指纹上抛。连接随后被复用，不会白建。
                     _ = try await reusable.exec(":")
+                } catch is CancellationError {
+                    await reusable.close()
+                    throw CancellationError()
                 } catch {
                     await reusable.close()
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
@@ -642,6 +645,8 @@ extension ControlConnectionPool.Connector {
                         spec, sink: sink, windowBytes: transferWindowBytes)()
                     // 命令行自己的连接，上面没有终端：上传不按节奏，跑满速。
                     return try await SFTPSession(connected: connected, pacesUploads: false)
+                } catch is CancellationError {
+                    throw CancellationError()   // 命令行断开了：不是连接失败
                 } catch {
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
                 }
@@ -657,6 +662,8 @@ extension ControlConnectionPool.Connector {
                     // 握手成功即说明服务器出示的指纹与钉住的一致，`HostKeyVerifier` 已经
                     // 沿 TOFU 路径写好 `KnownHost`。这条连接只为信任而建，随手关掉。
                     await connected.close()
+                } catch is CancellationError {
+                    throw CancellationError()   // 命令行断开了：不是连接失败
                 } catch {
                     throw ControlConnectionPool.mapConnectError(error, sink: sink)
                 }
@@ -679,7 +686,7 @@ extension ControlConnectionPool {
         pinnedFingerprint: String? = nil,
         windowBytes: Int = 1 << 20
     ) -> @Sendable () async throws -> ConnectedClient {
-        let options = SSHClientFactory.windowOptions(bytes: windowBytes)
+        let maximumPacketSize = SSHClientFactory.maximumPacketSize(forWindowBytes: windowBytes)
         let snapshot = spec.profile
         let auth = spec.auth
         let jumpAuth = spec.jumpAuth
@@ -693,6 +700,8 @@ extension ControlConnectionPool {
                 hostKeyApprover: { challenge in
                     // `HostKeyChallenge.Kind` 的 Equatable 合规是 MainActor 隔离的
                     //（模块默认隔离），这里在 NIO 线程上，只能用模式匹配比。
+                    // 连接方式变弱了（`.weakAlgorithms`）也走这里：记下、拒绝，`mapConnectError` 归成 `weak_algorithms`。
+                    // `trust` 路径也不放行它——钉住的是主机密钥，不是连接方式。
                     guard let pinnedFingerprint else {
                         sink.record(challenge)
                         return false
@@ -705,7 +714,8 @@ extension ControlConnectionPool {
                     }
                     return true
                 },
-                protocolOptions: options
+                approvesInteractively: false,
+                maximumPacketSize: maximumPacketSize
             )
         }
     }
@@ -722,12 +732,26 @@ extension ControlConnectionPool {
                 return .hostKeyUnknown(fingerprint: challenge.newFingerprint, algorithm: "")
             case .mismatch:
                 return .hostKeyChanged(fingerprint: challenge.newFingerprint, algorithm: "")
+            case .weakAlgorithms:
+                return .weakAlgorithms(LegacyAlgorithmRefusal(host: challenge.host, port: challenge.port,
+                                                              isJumpHost: challenge.isJumpHost))
             }
         }
         if let already = error as? ControlConnectError { return already }
         let text = FriendlyError.describe(error)
-        if case SSHConnection.SSHConnectionError.authenticationFailed = error {
-            return .authFailed(text)
+        if let error = error as? SSHConnection.SSHConnectionError {
+            switch error {
+            case .weakAlgorithmsDeclined(let refusal):
+                return .weakAlgorithms(refusal)
+            case .authenticationFailed, .jumpHostFailed(_, .authentication):
+                return .authFailed(text)
+            // 握手 / 主机密钥：目标那一跳或跳板机那一跳都一样，重试不会好。
+            case .handshakeFailed, .hostKeyRejected, .jumpHostFailed(_, .hostKey), .jumpHostFailed(_, .handshake),
+                 .jumpHostFailed(_, .weakAlgorithms):
+                return .connectRejected(text)
+            case .notConnected, .alreadyClosed, .connectFailed, .jumpHostFailed(_, .unreachable):
+                break
+            }
         }
         if text.contains("认证失败") || text.localizedCaseInsensitiveContains("authentication") {
             return .authFailed(text)

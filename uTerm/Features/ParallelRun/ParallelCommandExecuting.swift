@@ -17,7 +17,8 @@ protocol ParallelCommandExecuting {
     /// `ExecTarget.setupErrorText` 的语义一致）。
     ///
     /// `async`：真实实现要读钥匙串，放在主线程之外做。同步实现（探针的假执行器）照样满足。
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession
+    /// `pin`：「信任并重试」时用户在卡片上看到的那一问，重连只放行它（`HostKeyApprovalPin`）；平时 nil，一律拒绝并记下。
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession
 }
 
 /// 一台主机上的一次执行会话（同台内多条命令串行复用同一条连接）。
@@ -57,7 +58,7 @@ nonisolated protocol ParallelExecutionSession: Sendable {
 struct SSHParallelExecutor: ParallelCommandExecuting {
     let container: ModelContainer
 
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession {
         let snapshot = SSHConnection.ProfileSnapshot(profile)
         let lookup = SSHAuthResolver.Lookup(profile)
         let jump = profile.jumpHost.map { SSHAuthResolver.Lookup($0) }
@@ -66,7 +67,7 @@ struct SSHParallelExecutor: ParallelCommandExecuting {
             let auth = try await SSHAuthResolver.resolveForConnect(lookup, jump: jump)
             let made = WorkspaceCommandExecutorFactory.make(
                 snapshot: snapshot, auth: auth.auth, jumpAuth: auth.jump, container: container,
-                trustNewKeys: trustNewKeys, reuseConnection: true)
+                approving: pin, reuseConnection: true)
             return SSHParallelSession(executor: made.executor,
                                       hostKeyChallenges: made.hostKeyChallenges,
                                       connection: made.connection,

@@ -44,13 +44,53 @@ final class RemoteFileSearchTests: XCTestCase {
         XCTAssertTrue(cmd.contains("2>/dev/null"))
         XCTAssertFalse(cmd.contains("\n"))
     }
+
     func testBuildFindCommandEmptyPatternUsesStar() {
         let cmd = RemoteFileSearch.buildFindCommand(root: "/var", pattern: "")
         XCTAssertTrue(cmd.contains("-iname '*'"))
     }
-    func testBuildFindCommandNeutralizesShellInjection() {
-        let cmd = RemoteFileSearch.buildFindCommand(root: "/home/u", pattern: "x; rm -rf /")
-        XCTAssertTrue(cmd.contains("'*x; rm -rf /*'"))
+
+    /// 根目录里有不是 UTF-8 的字节、模式里有 `!`：整段交给 sh -c，命令行上没有 `!` 与换行。
+    func testBuildFindCommandWrapsUnusualArgumentsInSh() {
+        let cmd = RemoteFileSearch.buildFindCommand(root: "/srv/" + RemoteName.display([0xB2]), pattern: "a!b",
+                                                    escapedNames: true)
+        XCTAssertTrue(cmd.hasPrefix("sh -c '"), cmd)
+        XCTAssertTrue(cmd.contains("find \"$a0\" -maxdepth 8"))
+        XCTAssertTrue(cmd.contains("-iname \"$a1\""))
+        XCTAssertFalse(cmd.contains("!"))
+        XCTAssertFalse(cmd.contains("\n"))
+    }
+
+    /// 根目录与模式都按字节传进 sh 的变量：在本机真的跑一遍，模式里的引号、分号、命令替换都只是字面值，什么都不执行。
+    func testBuildFindCommandNeutralizesShellInjection() throws {
+        let marker = FileManager.default.temporaryDirectory.appendingPathComponent("uterm-find-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        for pattern in ["x'; touch \(marker.path); '", "$(touch \(marker.path))", "`touch \(marker.path)`"] {
+            let cmd = RemoteFileSearch.buildFindCommand(root: "/nonexistent-uterm", pattern: pattern)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", cmd]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "模式被当成命令执行了：\(pattern)")
+        }
+    }
+
+    /// 会还原转义的 provider（SSH）：find 打出来的原样文字换成 `RemoteName` 写法再交回，名字里本来就有的 U+2060
+    /// 不会被当成转义的收尾。
+    func testSearchHitsFromAnEscapingProviderAreInDisplayForm() async throws {
+        let literal = "/home/u/a\u{FFFD}B2\u{2060}.txt"
+        let ssh = MockSFTP(escapesRawNames: true)
+        await ssh.setExecOutput("f\t\(literal)\n")
+        let hits = try await RemoteFileSearch.search(query: "a", home: "/home/u", provider: ssh)
+        XCTAssertEqual(RemoteName.bytes(hits[0].path), Array(literal.utf8), "还原出来的是服务器上原样的字节")
+
+        let mac = MockSFTP()
+        await mac.setExecOutput("f\t\(literal)\n")
+        let macHits = try await RemoteFileSearch.search(query: "a", home: "/home/u", provider: mac)
+        XCTAssertEqual(macHits.first?.path, literal, "不还原转义的 provider 原样给")
     }
 
     // parseFindOutput

@@ -113,8 +113,8 @@ struct MobileRootView: View {
                     M.backdrop.ignoresSafeArea()
                     MCenterModalContainer(width: 400) {
                         HostKeyTrustModal(challenge: challenge,
-                                          onCancel: { hostKeyRelay.resolve(false) },
-                                          onTrust: { hostKeyRelay.resolve(true) })
+                                          onCancel: { hostKeyRelay.resolve(false, for: challenge.id, byUser: true) },
+                                          onTrust: { hostKeyRelay.resolve(true, for: challenge.id, byUser: true) })
                     }
                 }
                 .environment(\.mAccent, M.accent)
@@ -122,6 +122,9 @@ struct MobileRootView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: hostKeyRelay.pendingChallenge)
+        // 根视图在就有人看得到这一问（`HostKeyChallengeRelay.isPresented`）。
+        .onAppear { hostKeyRelay.presenterAppeared() }
+        .onDisappear { hostKeyRelay.presenterDisappeared() }
     }
 }
 

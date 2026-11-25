@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
@@ -786,7 +785,6 @@
 				4A55494345000000000000A4 /* CJuice in Frameworks */,
 				4B43500000000000000000A4 /* CKCP in Frameworks */,
 				5A53544400000000000000A4 /* CZstd in Frameworks */,
-				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
 				10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */,
 				10C0DE0000000000000000E5 /* Markdown in Frameworks */,
@@ -1000,7 +998,6 @@
 				4A55494345000000000000A2 /* CJuice */,
 				4B43500000000000000000A2 /* CKCP */,
 				5A53544400000000000000A2 /* CZstd */,
-				10C0DE0000000000000000D2 /* Citadel */,
 				10C0DE0000000000000000D3 /* SwiftASN1 */,
 				10C0DE0000000000000000D4 /* _CryptoExtras */,
 				10C0DE0000000000000000D5 /* Markdown */,
@@ -2515,7 +2512,7 @@
 			repositoryURL = "https://github.com/uozi-tech/uAppKit.git";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.25.0;
+				minimumVersion = 2.0.0;
 			};
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
@@ -2613,11 +2610,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterPython;
-		};
-		10C0DE0000000000000000D2 /* Citadel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = Citadel;
 		};
 		10C0DE0000000000000000D3 /* SwiftASN1 */ = {
 			isa = XCSwiftPackageProductDependency;

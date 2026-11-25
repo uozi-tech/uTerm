@@ -19,6 +19,11 @@
 
 - `ls` 的 `path` 不给时默认 `.`（登录目录）。表格里 `kind` 是 `file` / `dir` /
   `link`，`mode` 是八进制权限。
+- 服务器上不是 UTF-8 的文件名（比如 GBK 编码的中文名）在 `ls` 里每个非法字节显示成 `�` + 两位十六进制
+  （后面跟一个看不见的 U+2060），例如 `�B2⁠�E2⁠.txt`。把它**原样**（包括看不见的字符）传回 `stat` / `rm` /
+  `get` 等命令就能操作到那个文件；别自己改写成别的样子。
+- 名字里的控制字符与双向覆盖符（如 U+202E）在 `--format table` / `csv` 里显示成看得见的 `<U+202E>`，那是显示，
+  不是名字本身；要拿名字回去操作时用 JSON 输出（默认），里面一字不差。
 - `stat` 回 `size` / `modifiedAt` / `permissions` / `kind`。`permissions` 是**原始
   POSIX mode（含类型位）**，与 `ls` 的那一列同义；`--format table` 里已经按
   `& 0o7777` 显示成八进制。`kind` 是 `file` / `directory` / `symlink` / `other`，

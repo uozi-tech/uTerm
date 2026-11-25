@@ -1,7 +1,7 @@
 import Foundation
 
 /// 真实命令执行器：把命令包成「总是 exit 0、附带真实退出码哨兵」的形式发给 SSH exec，
-/// 这样非零退出也能拿到输出与退出码（Citadel `executeCommand` 默认非零会抛错）。
+/// 这样非零退出也能拿到输出与退出码（`executeCommand` 非零退出会抛 `SSHCommandError.nonZeroExit`）。
 /// `exec` 闭包由调用方用工作区的 `ConnectedClient.exec` 提供。
 nonisolated struct SSHCommandExecutor: CommandExecutor {
     static let sentinel = "__UTERM_EXIT__"
@@ -28,7 +28,7 @@ nonisolated struct SSHCommandExecutor: CommandExecutor {
         // 合并 stderr，永远 exit 0，末行打印真实退出码哨兵。
         //
         // **必须是子 shell `( … )`，不能是命令组 `{ …; }`**：命令组在当前 shell 里跑，
-        // 顶层的 `exit 3` 会连整个 shell 一起退掉 —— 哨兵根本没机会打印，Citadel 对
+        // 顶层的 `exit 3` 会连整个 shell 一起退掉 —— 哨兵根本没机会打印，`exec` 对
         // 非零退出抛错，上层只看得到一个「连接失败」。子 shell 里 `exit N` 只退子
         // shell，`$?` 照样拿得到 N，哨兵照常带出来。
         //

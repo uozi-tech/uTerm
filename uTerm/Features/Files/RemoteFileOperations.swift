@@ -174,15 +174,17 @@ nonisolated enum RemoteFileOperations {
         let path = RemotePath.join(directory, entry.name)
         let perm = mode & 0o777
         if recursive && entry.isDirectory {
-            _ = try await provider.exec(chmodRecursiveCommand(path: path, mode: perm))
+            _ = try await provider.exec(chmodRecursiveCommand(path: path, mode: perm,
+                                                              escapedNames: provider.escapesRawNames))
         } else {
             try await provider.setPermissions(path: path, mode: perm)
         }
     }
 
-    /// `chmod -R <八进制> '<path>'`。
-    static func chmodRecursiveCommand(path: String, mode: UInt32) -> String {
-        "chmod -R \(String(mode & 0o777, radix: 8)) \(RemotePath.shellQuote(path))"
+    /// `sh -c '…chmod -R <八进制> "$a0"'`（路径按字节传，见 `RemotePath.shScript`）。
+    static func chmodRecursiveCommand(path: String, mode: UInt32, escapedNames: Bool) -> String {
+        RemotePath.shScript("chmod -R \(octal: mode & 0o777) \(argument: 0)",
+                            arguments: [path], escapedNames: escapedNames)
     }
 
     // MARK: - 重命名
@@ -190,7 +192,8 @@ nonisolated enum RemoteFileOperations {
     /// 校验并规范新名字：去首尾空白；空名或与原名相同返回 nil（调用方不发请求）。
     static func validatedNewName(_ newName: String, for entry: RemoteEntry) -> String? {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != entry.name else { return nil }
+        // 逐字节比：把 NFD 的名字改成 NFC 写法（或反过来）也是一次真改名。
+        guard !trimmed.isEmpty, trimmed.remoteKey != entry.name.remoteKey else { return nil }
         return trimmed
     }
 
@@ -247,8 +250,9 @@ nonisolated enum RemoteFileOperations {
     ) async -> [String] {
         guard !names.isEmpty,
               let listed = try? await provider.list(path: directory) else { return [] }
-        let existing = Set(listed.map(\.name))
-        return names.filter { existing.contains($0) }
+        // 逐字节比：本机拖进来的 NFD 名字和远端 NFC 的同名文件是两个文件，不算冲突（覆盖了也碰不到那一个）。
+        let existing = Set(listed.map(\.id))
+        return names.filter { existing.contains($0.remoteKey) }
     }
 
     // MARK: - 属主名补全
@@ -274,7 +278,8 @@ nonisolated enum RemoteFileOperations {
             let end = min(start + ownerStatChunkSize, indexedEntries.count)
             let chunk = Array(indexedEntries[start..<end])
             let paths = chunk.map { RemotePath.join(directory, $0.entry.name) }
-            guard let output = try? await provider.exec(ownerStatCommand(paths: paths)) else { continue }
+            guard let output = try? await provider.exec(
+                ownerStatCommand(paths: paths, escapedNames: provider.escapesRawNames)) else { continue }
             let rows = parseOwnerStatOutput(output)
             guard rows.count == chunk.count else { continue }
             for (indexed, row) in zip(chunk, rows) {
@@ -293,12 +298,11 @@ nonisolated enum RemoteFileOperations {
     }
 
     /// GNU `stat -c` 优先，失败回退 BSD `stat -f`；输出每行 `uid\tgid\tuser\tgroup`。
-    static func ownerStatCommand(paths: [String]) -> String {
-        let quotedPaths = paths.map(RemotePath.shellQuote).joined(separator: " ")
-        let gnuFormat = RemotePath.shellQuote("%u\t%g\t%U\t%G")
-        let bsdFormat = RemotePath.shellQuote("%u\t%g\t%Su\t%Sg")
-        return "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || " +
-            "stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null"
+    static func ownerStatCommand(paths: [String], escapedNames: Bool) -> String {
+        let all = 0..<paths.count
+        return RemotePath.shScript(
+            "(stat -c '%u\t%g\t%U\t%G' -- \(arguments: all) 2>/dev/null) || stat -f '%u\t%g\t%Su\t%Sg' \(arguments: all) 2>/dev/null",
+            arguments: paths, escapedNames: escapedNames)
     }
 
     static func parseOwnerStatOutput(_ output: String) -> [OwnerStatRow] {

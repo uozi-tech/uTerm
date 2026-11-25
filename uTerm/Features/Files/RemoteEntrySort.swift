@@ -74,6 +74,9 @@ nonisolated enum RemoteEntrySort {
                 if hasNil(a.e, b.e) { return p == .orderedAscending }
                 return ascending ? (p == .orderedAscending) : (p == .orderedDescending)
             }
+            // 按名字排时，只差在归一化（NFC / NFD）的两个名字 `localizedStandardCompare` 给「相等」：按字节定个先后，
+            // 每次列出来顺序都一样（不随服务器给的顺序变）。按大小 / 时间排的相等项照旧保持原始顺序。
+            if key == .name, a.e.id != b.e.id { return a.e.id < b.e.id }
             return a.idx < b.idx
         }
 

@@ -33,6 +33,10 @@ final class ForwardingCoordinator {
     /// 上 —— 窗口可能早关了，CLI 的 `forward-start` 更是每次都新造一个 relay。改成经
     /// `approveHostKey(serverID:challenge:)` 间接取当前 relay 后，UI 与 CLI 都拿得到挑战。
     @ObservationIgnored private var relays: [UUID: HostKeyChallengeRelay] = [:]
+    /// 每台主机最近一个**有人回答**的 relay（窗口的 sheet；`HostKeyChallengeRelay.isInteractive`）。
+    /// 后台重连只把问题投到这里，没有就直接拒绝：命令行 `forward-start` 的一次性 relay 请求一结束就没人轮询，
+    /// 问题投进去会让建连永远等着、规则一直 `.starting`。
+    @ObservationIgnored private var interactiveRelays: [UUID: HostKeyChallengeRelay] = [:]
     /// 每条规则的最新状态（观察源）。
     private var runtime: [UUID: TunnelStatus] = [:]
     /// 每条规则「最近一次单连接开通道失败」（观察源）。仅在规则仍 active 时写入，
@@ -57,11 +61,8 @@ final class ForwardingCoordinator {
 
     private struct ReconnectContext {
         let server: ServerProfile
-        /// 自动重连时喂给 `start` 的 relay。**刻意不跟着 `relays` 刷新**：CLI 的
-        /// `forward-start` 用的是一次性的非交互 relay，它的生命周期只到那次请求结束
-        /// （之后没人 `resolve`，挑战投进去会把连接挂死）。重连要用的是当初建会话那个
-        /// 长命 relay —— 通常是窗口的 sheet。
-        let relay: HostKeyChallengeRelay
+        // 不存 relay：重连时问 `interactiveRelays` 要界面当前的那个（见 `reconnectRelay`）。以前存的是建上下文
+        // 那一刻的 relay，第一个是命令行 `forward-start` 的一次性 relay 时，之后重连的问题就投进没人看的地方。
         let modelContainer: ModelContainer
         var rules: [UUID: ForwardingRuleSnapshot]
     }
@@ -123,18 +124,22 @@ final class ForwardingCoordinator {
         for rule in autostart {
             ruleServer[rule.id] = server.id
             runtime[rule.id] = .starting
-            rememberForReconnect(rule, server: server, relay: relay, modelContainer: modelContainer)
+            rememberForReconnect(rule, server: server, modelContainer: modelContainer)
         }
         // 单 Task：先 await connect 屏障，再依次开各隧道；connect 失败 → 把这批
         // 自启规则统一标成分类后的 .error（真实原因），不再卡在 generic 状态。
         Task { @MainActor in
             do {
                 try await self.ensureConnected(server.id)
+                guard self.sessions[server.id] === session else { return }
                 for rule in autostart { await session.start(rule) }
             } catch {
+                // 窗口关了（teardown 取消了建连）或会话已经换成了新的：这批状态不归它管了，什么都不写。
+                guard !(error is CancellationError), self.sessions[server.id] === session else { return }
                 let e = error
                 for rule in autostart {
                     self.runtime[rule.id] = .error(ForwardingError.classify(e, rule: rule))
+                    self.stopAutoReconnectIfPermanent(e, ruleID: rule.id, serverID: server.id)
                 }
                 self.evictSession(server.id)
             }
@@ -146,6 +151,14 @@ final class ForwardingCoordinator {
                on server: ServerProfile,
                relay: HostKeyChallengeRelay,
                modelContainer: ModelContainer) {
+        start(rule, on: server, optionalRelay: relay, modelContainer: modelContainer)
+    }
+
+    /// `relay` 为 nil：后台重连、没有界面可问，主机密钥 / 连接方式的问题一律拒绝（规则停在 `.error`，不挂住）。
+    private func start(_ rule: ForwardingRuleSnapshot,
+                       on server: ServerProfile,
+                       optionalRelay relay: HostKeyChallengeRelay?,
+                       modelContainer: ModelContainer) {
         guard let session = obtainSession(for: server, relay: relay, modelContainer: modelContainer)
         else {
             // 认证解析失败：把这条规则标成分类后的 error（而非静默返回）。
@@ -155,15 +168,18 @@ final class ForwardingCoordinator {
         }
         ruleServer[rule.id] = server.id
         runtime[rule.id] = .starting
-        rememberForReconnect(rule, server: server, relay: relay, modelContainer: modelContainer)
+        rememberForReconnect(rule, server: server, modelContainer: modelContainer)
         // 单 Task：先 await connect 屏障，再开隧道；只有 connect 失败才在此处分类报 error
         // （隧道自身的 active/error 由 session.start 经 onStatus 回报）。
         Task { @MainActor in
             do {
                 try await self.ensureConnected(server.id)
+                guard self.sessions[server.id] === session else { return }
                 await session.start(rule)
             } catch {
+                guard !(error is CancellationError), self.sessions[server.id] === session else { return }
                 self.runtime[rule.id] = .error(ForwardingError.classify(error, rule: rule))
+                self.stopAutoReconnectIfPermanent(error, ruleID: rule.id, serverID: server.id)
                 self.evictSession(server.id)
             }
         }
@@ -200,6 +216,7 @@ final class ForwardingCoordinator {
         //（留着只会让下一次挑战弹到一个已经不在屏幕上的 sheet）。
         reconnectContexts[serverID] = nil
         relays[serverID] = nil
+        interactiveRelays[serverID] = nil
         guard let session = sessions.removeValue(forKey: serverID) else { return }
         // 清理该主机所有规则的运行时状态。
         for (ruleID, owner) in ruleServer where owner == serverID {
@@ -218,8 +235,22 @@ final class ForwardingCoordinator {
     /// 那个 relay —— 于是「已有会话被复用」时挑战也能弹到最新的 sheet / CLI relay 上。
     /// 没有登记 relay（主机已 teardown）时一律拒绝，绝不静默 TOFU。
     func approveHostKey(serverID: UUID, challenge: HostKeyChallenge) async -> Bool {
-        guard let relay = relays[serverID] else { return false }
+        // 界面的 relay 此刻没挂在屏幕上（后台启动、窗口关了）：按不能问人处理，直接拒绝，规则落到 `.error`，
+        // 用户打开窗口点重试时再问。命令行的一次性 relay 由 forward-start 自己轮询，照常投。
+        guard let relay = relays[serverID], !relay.isInteractive || relay.isPresented else { return false }
         return await relay.makeApprover()(challenge)
+    }
+
+    /// 命令行 `forward-start` 等完了：它的一次性 relay 不再有人轮询。还是「当前 relay」的话换回界面的那个
+    /// （没有就是没人可问，之后的问题一律拒绝），免得重连、复用会话时的问题投进去把建连挂住。
+    func releaseRelay(_ relay: HostKeyChallengeRelay, serverID: UUID) {
+        guard relays[serverID] === relay else { return }
+        relays[serverID] = interactiveRelays[serverID]
+    }
+
+    /// 后台重连用的 relay：界面当前的那个，没有就 nil（问题一律拒绝）。
+    private func reconnectRelay(_ serverID: UUID) -> HostKeyChallengeRelay? {
+        interactiveRelays[serverID]
     }
 
     // MARK: - 私有
@@ -253,21 +284,27 @@ final class ForwardingCoordinator {
         AppLogger.info("转发即时重连 \(ctx.server.host)：\(ctx.rules.count) 条规则",
                        category: ForwardingLog.category)
         for rule in ctx.rules.values {
-            start(rule, on: ctx.server, relay: ctx.relay, modelContainer: ctx.modelContainer)
+            start(rule, on: ctx.server, optionalRelay: reconnectRelay(serverID), modelContainer: ctx.modelContainer)
         }
+    }
+
+    /// 建连失败是重试也不会好的那种（凭据被拒、主机密钥被拒、握手协商不成）：这条规则不再跟着看门狗每 30 秒
+    /// 自动重连，停在 `.error` 等用户处理后点「重试」（`retry` → `start` 会重新登记）。
+    private func stopAutoReconnectIfPermanent(_ error: Error, ruleID: UUID, serverID: UUID) {
+        guard SSHTransportFailure.isPermanentConnectFailure(error) else { return }
+        reconnectContexts[serverID]?.rules[ruleID] = nil
     }
 
     /// 记住一条「期望运行」的规则 + 其重建上下文，供看门狗判死后自动重连。
     private func rememberForReconnect(_ rule: ForwardingRuleSnapshot,
                                      server: ServerProfile,
-                                     relay: HostKeyChallengeRelay,
                                      modelContainer: ModelContainer) {
         if var ctx = reconnectContexts[server.id] {
             ctx.rules[rule.id] = rule
             reconnectContexts[server.id] = ctx
         } else {
             reconnectContexts[server.id] = ReconnectContext(
-                server: server, relay: relay, modelContainer: modelContainer,
+                server: server, modelContainer: modelContainer,
                 rules: [rule.id: rule])
         }
     }
@@ -283,7 +320,7 @@ final class ForwardingCoordinator {
     /// 认证解析失败返回 nil —— 调用方据此把受影响规则标成分类后的 `.error`。
     /// 连接本身由 `connectTasks[serverID]` 这条屏障独占发起（不再单独 detach connect）。
     private func obtainSession(for server: ServerProfile,
-                               relay: HostKeyChallengeRelay,
+                               relay: HostKeyChallengeRelay?,
                                modelContainer: ModelContainer) -> ForwardingSession? {
         // 注册到看门狗（幂等、弱引用）：系统唤醒 / 网络恢复后主动探测各主机的
         // 专用转发连接，半死隧道不再顶着 active 徽标静默挂着。放在会话创建的
@@ -292,6 +329,7 @@ final class ForwardingCoordinator {
         // 先记下**这一次**传进来的 relay：会话复用时也要更新，否则挑战会弹到上一个
         // relay（可能是已关窗口的 sheet，或 CLI 上一次 forward-start 的临时 relay）。
         relays[server.id] = relay
+        if let relay, relay.isInteractive { interactiveRelays[server.id] = relay }
         if let existing = sessions[server.id] { return existing }
 
         // 认证解析：与终端 / CLI 同一条规则（跳板机凭据缺了报错，不直连）。
@@ -352,6 +390,8 @@ final class ForwardingCoordinator {
         connectTasks[server.id] = Task {
             do {
                 try await session.connect()
+            } catch is CancellationError {
+                throw CancellationError()          // 窗口关了：不是失败，不记错误
             } catch {
                 AppLogger.error("转发会话连接失败 \(server.host)：\(error.localizedDescription)",
                                 category: ForwardingLog.category)
@@ -362,6 +402,11 @@ final class ForwardingCoordinator {
     }
 
     // MARK: - 测试 seam
+
+    /// 仅测试用：把建连屏障换成给定的任务（模拟还在握手的连接）。
+    func injectConnectTaskForTesting(_ task: Task<Void, Error>, serverID: UUID) {
+        connectTasks[serverID] = task
+    }
 
     /// 仅测试用：绕过认证解析 / SwiftData，直接把现成会话挂到指定主机名下。
     func injectSessionForTesting(_ session: ForwardingSession, serverID: UUID) {
@@ -421,12 +466,12 @@ extension ForwardingCoordinator: ConnectionHealthProbing {
         let toReconnect = reconnectContexts.filter { serverID, ctx in
             sessions[serverID] == nil && !ctx.rules.isEmpty
         }
-        for (_, ctx) in toReconnect {
+        for (serverID, ctx) in toReconnect {
             AppLogger.info(
                 "转发自动重连 \(ctx.server.host)：\(ctx.rules.count) 条规则",
                 category: ForwardingLog.category)
             for rule in ctx.rules.values {
-                start(rule, on: ctx.server, relay: ctx.relay, modelContainer: ctx.modelContainer)
+                start(rule, on: ctx.server, optionalRelay: reconnectRelay(serverID), modelContainer: ctx.modelContainer)
             }
         }
     }

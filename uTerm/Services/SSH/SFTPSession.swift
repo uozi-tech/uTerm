@@ -1,6 +1,7 @@
+import CryptoKit
 import Foundation
-import Citadel
 import NIOCore
+import USSHKit
 
 /// `writeRange` 的失败发生在**哪一阶段**。
 ///
@@ -33,7 +34,7 @@ nonisolated struct SFTPWriteStageError: Error, Sendable {
     }
 }
 
-/// 真实 SFTP 会话：在一个已连上的 `ConnectedClient` 上跑 Citadel SFTP。
+/// 真实 SFTP 会话：在一个已连上的 `ConnectedClient` 上跑 USSHCore 的 SFTP 客户端。
 actor SFTPSession: SFTPProviding {
     private let connected: ConnectedClient
     private let sftp: SFTPClient
@@ -55,31 +56,34 @@ actor SFTPSession: SFTPProviding {
         }
     }
 
+    nonisolated var escapesRawNames: Bool { true }
+
+    /// 界面 / 调用方给的路径 → 发给服务器的字节。路径里的名字用的是 `RemoteName` 的无损写法：
+    /// 不是 UTF-8 的名字显示成带转义的字符串，这里原样还原成服务器上的字节；其余路径（包括用户手打、
+    /// 命令行传来的）就是它的 UTF-8，和以前一样。
+    nonisolated func sftpPath(_ path: String) -> SFTPPath {
+        SFTPPath(bytes: RemoteName.bytes(path))
+    }
+
     func list(path: String) async throws -> [RemoteEntry] {
-        let names = try await sftp.listDirectory(atPath: path)
-        var entries: [RemoteEntry] = []
-        for name in names {
-            for component in name.components {
-                let filename = component.filename
-                if filename == "." || filename == ".." { continue }
-                let attributes = component.attributes
-                entries.append(
-                    RemoteEntry(
-                        name: filename,
-                        posixPermissions: attributes.permissions,
-                        size: attributes.size,
-                        modifiedAt: attributes.accessModificationTime?.modificationTime,
-                        uid: attributes.uidgid?.userId,
-                        gid: attributes.uidgid?.groupId
-                    )
-                )
-            }
+        // 不带 "." / ".."（`includingDotEntries` 默认 false）。
+        let listed = try await sftp.listDirectory(sftpPath(path))
+        return listed.map { entry in
+            let attributes = entry.attributes
+            return RemoteEntry(
+                // 无损写法：不是 UTF-8 的名字各显示各的（不会几个都成了 `����.txt`），拿回来还原得出原样字节。
+                name: RemoteName.display(entry.name.bytes),
+                posixPermissions: attributes.permissions,
+                size: attributes.size,
+                modifiedAt: attributes.modificationDate,
+                uid: attributes.owner?.userID,
+                gid: attributes.owner?.groupID
+            )
         }
-        return entries
     }
 
     func realPath(_ path: String) async throws -> String {
-        try await sftp.getRealPath(atPath: path)
+        RemoteName.display(try await sftp.realPath(sftpPath(path)).bytes)
     }
 
     func download(remotePath: String) async throws -> Data {
@@ -95,30 +99,30 @@ actor SFTPSession: SFTPProviding {
         try await upload(data: data, toRemotePath: toRemotePath, onProgress: nil)
     }
 
+    /// 编辑器保存：原地写（不换 inode，挂载进容器的单个文件、硬链接照样看得到改动）。
     func write(_ path: String, data: Data) async throws {
         try await writeRange(path, offset: 0, data: data, mode: .overwrite)
     }
 
     // MARK: - 区间读写（分片 / 断点续传的基础原语）
 
-    /// 本地分段大小：每段先攒到内存，再交给流水线切成 32 000 B 并发发出去。
-    /// 4 MiB 让内存占用有界，同时远大于「在途窗口」（64 × 32 000 ≈ 2 MiB），
-    /// 保证段内一直有活干。
+    /// 本地分段大小：每段先攒到内存，再交给流水线按服务器的单请求上限切片并发发出去。
+    /// 4 MiB 让内存占用有界，同时不小于通道窗口（2 MiB），保证段内一直有活干。
     static let segmentBytes = 4 * 1_048_576
 
     func writeRange(_ path: String, offset: UInt64, data: Data,
                     mode: SFTPWriteMode) async throws {
-        let flags: SFTPOpenFileFlags
+        let flags: SFTPOpenFlags
         switch mode {
         // SSH_FXF_EXCL：路径已存在时服务端直接拒绝，绝不截断既有文件。
-        case .create: flags = [.write, .create, .forceCreate]
+        case .create: flags = [.write, .create, .exclusive]
         case .overwrite: flags = [.write, .create, .truncate]
         // 不带 TRUNC / APPEND —— 分片并行写同一文件靠的就是这一档。
         case .write: flags = [.write, .create]
         }
         let file: SFTPFile
         do {
-            file = try await sftp.openFile(filePath: path, flags: flags)
+            file = try await sftp.openFile(sftpPath(path), flags: flags)
         } catch {
             // 打开阶段失败：包上阶段标记，handler 才敢做「是不是已存在」的 stat 兜底。
             throw SFTPWriteStageError(stage: .open, underlying: error)
@@ -126,7 +130,7 @@ actor SFTPSession: SFTPProviding {
         do {
             var buffer = ByteBuffer()
             buffer.writeBytes(data)
-            try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: offset)
+            try await SFTPPipeline.write(USSHPipelineFile(file), data: buffer, at: offset)
             try await file.close()
         } catch {
             // 写阶段失败原样上抛（文件已经建出来了，此时的 stat 兜底只会误报 file_exists）。
@@ -137,10 +141,10 @@ actor SFTPSession: SFTPProviding {
 
     func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data {
         guard length > 0 else { return Data() }
-        let file = try await sftp.openFile(filePath: path, flags: .read)
+        let file = try await sftp.openFile(sftpPath(path), flags: .read)
         do {
             let buffer = try await SFTPPipeline.read(
-                CitadelPipelineFile(file), offset: offset, length: length)
+                USSHPipelineFile(file), offset: offset, length: length)
             try await file.close()
             return Data(buffer.readableBytesView)
         } catch {
@@ -150,34 +154,33 @@ actor SFTPSession: SFTPProviding {
     }
 
     func openTransferHandle(_ path: String, writeMode: SFTPWriteMode?) async throws -> SFTPTransferHandle {
-        let flags: SFTPOpenFileFlags
+        let flags: SFTPOpenFlags
         switch writeMode {
         case nil: flags = .read
         // SSH_FXF_EXCL：路径已存在时服务端直接拒绝，绝不截断既有文件。
-        case .create: flags = [.write, .create, .forceCreate]
+        case .create: flags = [.write, .create, .exclusive]
         case .overwrite: flags = [.write, .create, .truncate]
         // 不截断：并行写 / 续传都落在这档。
         case .write: flags = [.write, .create]
         }
         let file: SFTPFile
         do {
-            file = try await sftp.openFile(filePath: path, flags: flags)
+            file = try await sftp.openFile(sftpPath(path), flags: flags)
         } catch where writeMode != nil {
             throw SFTPWriteStageError(stage: .open, underlying: error)
         }
-        let pipelined = CitadelPipelineFile(file)
+        let pipelined = USSHPipelineFile(file)
         return SFTPTransferHandle(file: pipelined, close: { await pipelined.close() })
     }
 
     func stat(_ path: String) async throws -> RemoteStat {
-        let attrs = try await sftp.getAttributes(at: path)
+        let attrs = try await sftp.stat(sftpPath(path))
         let size = Self.clampedSize(attrs.size)
-        let mtime = attrs.accessModificationTime?.modificationTime ?? Date()
+        let mtime = attrs.modificationDate ?? Date()
         return RemoteStat(size: size, mtime: mtime, permissions: attrs.permissions)
     }
 
-    /// 一次性命令 exec —— 委托给 `ConnectedClient.exec`（在 Sendable 包装上调用，
-    /// 不把非 Sendable 的 SSHClient 送出 actor）。复用目标 SSH 连接的 exec channel
+    /// 一次性命令 exec —— 委托给 `ConnectedClient.exec`。复用目标 SSH 连接开 exec channel
     /// （与 SFTP 子系统多路复用，不干扰终端 PTY）。
     func exec(_ command: String) async throws -> String {
         try await connected.exec(command)
@@ -186,25 +189,25 @@ actor SFTPSession: SFTPProviding {
     // MARK: 目录 / 改名 / 删除
 
     func rename(_ path: String, to newPath: String) async throws {
-        try await sftp.rename(at: path, to: newPath)
+        // 标准 RENAME（目标已存在时服务器拒绝），与以前一样不覆盖。
+        try await sftp.rename(sftpPath(path), to: sftpPath(newPath))
     }
     func removeFile(_ path: String) async throws {
-        try await sftp.remove(at: path)
+        try await sftp.remove(sftpPath(path))
     }
     func removeDirectory(_ path: String) async throws {
-        try await sftp.rmdir(at: path)
+        try await sftp.removeDirectory(sftpPath(path))
     }
     func createDirectory(_ path: String) async throws {
-        try await sftp.createDirectory(atPath: path)
+        try await sftp.createDirectory(sftpPath(path))
     }
 
-    /// 新建空文件：`.create | .forceCreate`（SSH_FXF_CREAT | SSH_FXF_EXCL）——
+    /// 新建空文件：`.create | .exclusive`（SSH_FXF_CREAT | SSH_FXF_EXCL）——
     /// EXCL 让服务器在路径已存在时直接拒绝，绝不截断既有文件。开成功即关闭，
     /// 留下一个 0 字节文件。
     func createFile(_ path: String) async throws {
-        let file = try await sftp.openFile(
-            filePath: path,
-            flags: [.write, .create, .forceCreate]
+        let file = try await sftp.openFile(sftpPath(path),
+            flags: [.write, .create, .exclusive]
         )
         try await file.close()
     }
@@ -213,7 +216,7 @@ actor SFTPSession: SFTPProviding {
         // SFTP setstat：只带权限位（`& 0o777`），保留文件类型位不动。
         var attrs = SFTPFileAttributes()
         attrs.permissions = mode & 0o777
-        try await sftp.setAttributes(at: path, to: attrs)
+        try await sftp.setAttributes(attrs, at: sftpPath(path))
     }
 
     // MARK: 带进度传输
@@ -221,10 +224,8 @@ actor SFTPSession: SFTPProviding {
     func upload(data: Data, toRemotePath: String,
                 onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
         let total = Int64(data.count)
-        let file = try await sftp.openFile(
-            filePath: toRemotePath, flags: [.write, .create, .truncate])
-        do {
-            let pipelined = CitadelPipelineFile(file)
+        try await replacing(toRemotePath) { file in
+            let pipelined = USSHPipelineFile(file)
             var offset = 0
             var pacer = pacesUploads ? SFTPUploadPacer() : nil
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
@@ -244,10 +245,6 @@ actor SFTPSession: SFTPProviding {
                 emitProgress(Int64(offset))
             }
             emitProgress(total)
-            try await file.close()
-        } catch {
-            try? await file.close()
-            throw error
         }
     }
 
@@ -256,22 +253,163 @@ actor SFTPSession: SFTPProviding {
         // 先确认本地文件读得到，再在远端建文件（读不到就别把远端的同名文件截断了）。
         let total = Int64(max(0, try localURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0))
         try FileHandle(forReadingFrom: localURL).close()
-        let remoteFile = try await sftp.openFile(
-            filePath: toRemotePath, flags: [.write, .create, .truncate])
-        do {
+        try await replacing(toRemotePath) { remoteFile in
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
             // 一次读一段本地文件（内存有界），整段交给流水线并发写出去。写完最后一片时报到总数（emitter 必放行）。
-            try await SFTPPipeline.write(CitadelPipelineFile(remoteFile), contentsOf: localURL,
+            try await SFTPPipeline.write(USSHPipelineFile(remoteFile), contentsOf: localURL,
                                          segmentBytes: Self.segmentBytes, paced: pacesUploads) { written, _ in
                 if progressEmitter.shouldEmit(bytesDone: written) {
                     onProgress?(TransferProgress(bytesDone: written, bytesTotal: total))
                 }
             }
-            try await remoteFile.close()
+        }
+    }
+
+    // MARK: 整份写（上传、保存）
+
+    /// 把 `remotePath` 整份写成 `write` 写出的内容。
+    ///
+    /// - **目标已经在**（任何类型，或者说不清在不在）：原地写（`[.write, .create, .truncate]`），和迁移之前一模一样。
+    ///   不换 inode：Docker / Kubernetes 单文件挂载、硬链接、开着它的进程与文件监听看到的都是同一个文件，属主、
+    ///   权限、ACL、扩展属性、SELinux 标签不动，只读文件照样写不进去；代价也和以前一样，写到一半失败时目标是半截的。
+    /// - **新建文件**：先写同目录的临时文件 `.<名字>.uterm-upload.tmp`（独占创建），写完再改名到目标；失败、取消、
+    ///   断线时目标位置上什么都没有，临时文件就地删掉（关句柄和删文件在同一个不继承取消、有时限的任务里）。
+    ///
+    /// 临时文件名是固定的：断线时删不掉的那一个，下次往同一个名字上传时发现它（普通文件）就先删掉再用，
+    /// 所以每个名字最多残留一个，直到下一次上传同名文件。见 `claimTemporary`。
+    private func replacing(_ remotePath: String,
+                           write: (SFTPFile) async throws -> Void) async throws {
+        let target = sftpPath(remotePath)
+        let isNew: Bool
+        do {
+            _ = try await sftp.lstat(target)
+            isNew = false
+        } catch let error as SFTPError where error.statusCode == .noSuchFile || error.statusCode == .noSuchPath {
+            isNew = true
         } catch {
-            try? await remoteFile.close()
+            // 说不清目标在不在（权限之类）：交给原地写，让真正的错误在打开时报出来。
+            try Task.checkCancellation()
+            isNew = false
+        }
+        guard isNew else { return try await writeInPlace(target, write: write) }
+
+        let temporary = Self.temporaryUploadPath(for: target)
+        guard let file = try await claimTemporary(temporary) else {
+            // 临时文件建不出来（名字太长、有人在那儿放了别的东西……）：独占地直接建目标，失败时删掉的也只是自己建的。
+            return try await writeNewFileDirectly(target, write: write)
+        }
+        do {
+            try await write(file)
+            try await file.close()
+            // `.standard`：这期间别人在同一个名字上建了文件，就报错而不是盖掉它。
+            try await sftp.rename(temporary, to: target, mode: .standard)
+        } catch {
+            await discard(file, at: temporary)
             throw error
         }
+    }
+
+    /// 独占地建临时文件。已经有一个普通文件（上次断线留下的）就删掉再建一次；是别的东西（符号链接、目录）就不碰，
+    /// 返回 nil。建不出来也返回 nil。
+    private func claimTemporary(_ temporary: SFTPPath) async throws -> SFTPFile? {
+        for attempt in 0..<2 {
+            do {
+                return try await sftp.openFile(temporary, flags: [.write, .create, .exclusive])
+            } catch {
+                try Task.checkCancellation()
+                guard attempt == 0,
+                      let stale = try? await sftp.lstat(temporary),
+                      (stale.permissions ?? 0) & 0o170000 == 0o100000,
+                      (try? await sftp.remove(temporary)) != nil
+                else { return nil }
+            }
+        }
+        return nil
+    }
+
+    private func writeNewFileDirectly(_ target: SFTPPath, write: (SFTPFile) async throws -> Void) async throws {
+        let file: SFTPFile
+        do {
+            file = try await sftp.openFile(target, flags: [.write, .create, .exclusive])
+        } catch let error as SFTPError where error.statusCode == .fileAlreadyExists || error.statusCode == .failure {
+            // 期间有人建了它（SFTP v3 撞上 EXCL 只回 failure）：退回原地写。别的错误（权限、路径不在……）照实报。
+            try Task.checkCancellation()
+            return try await writeInPlace(target, write: write)
+        }
+        do {
+            try await write(file)
+            try await file.close()
+        } catch {
+            await discard(file, at: target)
+            throw error
+        }
+    }
+
+    private func writeInPlace(_ target: SFTPPath, write: (SFTPFile) async throws -> Void) async throws {
+        let file = try await sftp.openFile(target, flags: [.write, .create, .truncate])
+        do {
+            try await write(file)
+            try await file.close()
+        } catch {
+            await discard(file, at: nil)
+            throw error
+        }
+    }
+
+    /// 失败、取消之后的收尾：关句柄、删掉自己建的文件。在不继承取消的任务里做，最多等 `cleanupDeadline`
+    /// （连接已经断了时两个请求都不会有回音，不能让调用方一直等）。
+    static let cleanupDeadline: Duration = .seconds(3)
+
+    private func discard(_ file: SFTPFile, at path: SFTPPath?) async {
+        let sftp = sftp
+        await Task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try? await file.close()
+                    if let path { try? await sftp.remove(path) }
+                }
+                group.addTask { try? await Task.sleep(for: Self.cleanupDeadline) }
+                await group.next()
+                group.cancelAll()
+            }
+        }.value
+    }
+
+    /// 目标旁边的隐藏临时文件：`<目录>/.<名字>.uterm-upload.tmp`（按字节拼，不是 UTF-8 的名字照样对）。
+    ///
+    /// 文件名最多 255 字节（ext4 / XFS / APFS 的 NAME_MAX）：名字长到加上前后缀会超的（超过 237 字节，比如 80 来个
+    /// 汉字），截短成「前一段 + `~` + 整个名字 SHA-256 的前 16 位十六进制」，不同的长名字不会撞到同一个临时文件。
+    /// 截短按字符边界来（名字是合法 UTF-8 时）。
+    nonisolated static func temporaryUploadPath(for target: SFTPPath) -> SFTPPath {
+        let bytes = Array(target.bytes)
+        let slash = bytes.lastIndex(of: UInt8(ascii: "/"))
+        let directory = slash.map { Array(bytes[...$0]) } ?? []
+        let name = slash.map { Array(bytes[($0 + 1)...]) } ?? bytes
+        let suffix = Array(".uterm-upload.tmp".utf8)
+        let budget = maximumNameBytes - 1 - suffix.count
+        var stem = name
+        if name.count > budget {
+            let digest = CryptoKit.SHA256.hash(data: Data(name)).prefix(8).map { String(format: "%02x", $0) }.joined()
+            let tag = Array("~\(digest)".utf8)
+            stem = truncatedOnCharacterBoundary(name, toBytes: budget - tag.count) + tag
+        }
+        return SFTPPath(bytes: directory + Array(".".utf8) + stem + suffix)
+    }
+
+    /// 一个文件名最多多少字节。
+    nonisolated static let maximumNameBytes = 255
+
+    /// 截到最多 `limit` 字节；是合法 UTF-8 时不切断字符（不是的话按字节截，反正本来就不是字符）。
+    nonisolated static func truncatedOnCharacterBoundary(_ bytes: [UInt8], toBytes limit: Int) -> [UInt8] {
+        guard bytes.count > limit else { return bytes }
+        guard let text = String(validating: bytes, as: UTF8.self) else { return Array(bytes.prefix(limit)) }
+        var result: [UInt8] = []
+        for character in text {
+            let size = String(character).utf8.count
+            guard result.count + size <= limit else { break }
+            result += Array(String(character).utf8)
+        }
+        return result
     }
 
     func download(remotePath: String,
@@ -282,9 +420,9 @@ actor SFTPSession: SFTPProviding {
 
     func download(remotePath: String, toLocalURL localURL: URL,
                   onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
-        let attrs = try await sftp.getAttributes(at: remotePath)
+        let attrs = try await sftp.stat(sftpPath(remotePath))
         let total = Self.clampedSize(attrs.size)
-        let remoteFile = try await sftp.openFile(filePath: remotePath, flags: .read)
+        let remoteFile = try await sftp.openFile(sftpPath(remotePath), flags: .read)
         let temporaryURL = Self.temporaryDownloadURL(for: localURL)
         let fileManager = FileManager.default
         do {
@@ -293,7 +431,7 @@ actor SFTPSession: SFTPProviding {
             }
             let localFile = try FileHandle(forWritingTo: temporaryURL)
             do {
-                let pipelined = CitadelPipelineFile(remoteFile)
+                let pipelined = USSHPipelineFile(remoteFile)
                 var offset: UInt64 = 0
                 var progressEmitter = TransferProgressEmitter(totalBytes: total)
                 func emitProgress(_ bytesDone: Int64) {
@@ -349,16 +487,16 @@ actor SFTPSession: SFTPProviding {
         onProgress: (@Sendable (TransferProgress) -> Void)?,
         maximumBytes: Int?
     ) async throws -> Data {
-        let attrs = try await sftp.getAttributes(at: remotePath)
+        let attrs = try await sftp.stat(sftpPath(remotePath))
         let total = Self.clampedSize(attrs.size)
         if let maximumBytes, total > Int64(maximumBytes) {
             throw SFTPDownloadLimitExceeded(observedBytes: total,
                                             maximumBytes: maximumBytes)
         }
-        let file = try await sftp.openFile(filePath: remotePath, flags: .read)
+        let file = try await sftp.openFile(sftpPath(remotePath), flags: .read)
         do {
             var data = Data()
-            let pipelined = CitadelPipelineFile(file)
+            let pipelined = USSHPipelineFile(file)
             var offset: UInt64 = 0
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
             func emitProgress(_ bytesDone: Int64) {
@@ -414,9 +552,9 @@ actor SFTPSession: SFTPProviding {
             remaining -= Int64(want)
         }
         // stat 之后还在长（日志文件之类）：非严格地续读，读不满才是真的到头。
-        // 第一发只探一个 32 000 B 的请求 —— 绝大多数文件没在长，拿整段 4 MiB 去探
-        // 等于每次下载白发 132 个必然落空的并发 READ。确认在长了再切回整段。
-        var want = SFTPPipeline.chunkSize
+        // 第一发只探一个请求那么长 —— 绝大多数文件没在长，拿整段 4 MiB 去探
+        // 等于每次下载白发几十上百个必然落空的并发 READ。确认在长了再切回整段。
+        var want = SFTPPipeline.chunkLength(serverLimit: file.maximumReadLength)
         while true {
             try Task.checkCancellation()
             let buffer = try await SFTPPipeline.read(file, offset: offset, length: want)
@@ -453,7 +591,7 @@ actor SFTPSession: SFTPProviding {
     }
 
     func close() async {
-        try? await sftp.close()
+        await sftp.close()
         await connected.close()
     }
 
@@ -490,7 +628,7 @@ actor SFTPSession: SFTPProviding {
     /// 只有传输层错误才判死。
     private func probeRoundTrip() async -> Bool {
         do {
-            _ = try await sftp.getRealPath(atPath: ".")
+            _ = try await sftp.realPath(".")
             return true
         } catch {
             return !SSHTransportFailure.isTransportFailure(error)

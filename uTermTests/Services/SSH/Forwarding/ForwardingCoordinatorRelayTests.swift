@@ -58,6 +58,8 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
 
         let first = HostKeyChallengeRelay()
         let latest = HostKeyChallengeRelay()
+        first.presenterAppeared()
+        latest.presenterAppeared()
         coordinator.start(rule("pg"), on: server, relay: first, modelContainer: container)
         coordinator.start(rule("pg2"), on: server, relay: latest, modelContainer: container)
 
@@ -84,6 +86,119 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
                                                         challenge: challenge)
         XCTAssertFalse(approved)
         XCTAssertNil(relay.pendingChallenge)
+    }
+
+    /// 握手还没完窗口就关了（teardown 取消建连）：被取消的建连不是失败，规则不能在拆完之后又被写成 `.error`。
+    func testTeardownDuringConnectLeavesNoErrorBehind() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        coordinator.injectConnectTaskForTesting(Task { try await Task.sleep(for: .seconds(30)) }, serverID: server.id)
+        let pg = rule("pg")
+
+        coordinator.start(pg, on: server, relay: HostKeyChallengeRelay(), modelContainer: container)
+        XCTAssertEqual(coordinator.status(pg.id), .starting)
+        coordinator.teardown(serverID: server.id)
+        try await Task.sleep(for: .milliseconds(300))
+
+        XCTAssertEqual(coordinator.status(pg.id), .inactive, "拆掉之后又被写成了错误")
+    }
+
+    /// 等建连期间会话被换掉了（拆了又开）：旧的那次建连失败不能把新会话下的规则写成错误。
+    func testFailureOfAReplacedSessionDoesNotTouchTheNewOne() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let failing = Task<Void, Error> {
+            try await Task.sleep(for: .milliseconds(200))
+            throw SSHConnection.SSHConnectionError.connectFailed("old")
+        }
+        coordinator.injectConnectTaskForTesting(failing, serverID: server.id)
+        let pg = rule("pg")
+        coordinator.start(pg, on: server, relay: HostKeyChallengeRelay(), modelContainer: container)
+
+        // 换上一个新会话（还在握手）。
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        coordinator.injectConnectTaskForTesting(Task { try await Task.sleep(for: .seconds(30)) }, serverID: server.id)
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(coordinator.status(pg.id), .starting, "旧会话的失败写到了新会话的规则上")
+        XCTAssertTrue(coordinator.hasSessionForTesting(serverID: server.id), "旧会话的失败把新会话驱逐了")
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 命令行 `forward-start` 的一次性 relay 请求结束后就没人轮询：放掉之后，后来的问题（看门狗重连、复用会话）
+    /// 不能投进去挂住，没有界面的 relay 就当场拒绝。
+    func testReleasedCLIRelayNoLongerReceivesAsks() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let cli = HostKeyChallengeRelay(interactive: false)
+        coordinator.start(rule("pg"), on: server, relay: cli, modelContainer: container)
+        coordinator.releaseRelay(cli, serverID: server.id)
+
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        let approved = await decision.value
+        XCTAssertFalse(approved)
+        XCTAssertNil(cli.pendingChallenge, "问题投进了没人看的命令行 relay")
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 界面开过这台主机的转发窗口：命令行 relay 放掉后，问题回到界面那个 relay（有人能回答）。
+    func testReleasingCLIRelayFallsBackToTheInteractiveOne() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let ui = HostKeyChallengeRelay()
+        ui.presenterAppeared()
+        let cli = HostKeyChallengeRelay(interactive: false)
+        coordinator.start(rule("pg"), on: server, relay: ui, modelContainer: container)
+        coordinator.start(rule("pg2"), on: server, relay: cli, modelContainer: container)
+        coordinator.releaseRelay(cli, serverID: server.id)
+
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        try await waitUntil { ui.pendingChallenge != nil }
+        XCTAssertNil(cli.pendingChallenge)
+        ui.resolve(true)
+        let approved = await decision.value
+        XCTAssertTrue(approved)
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 放掉的不是当前那个（界面后来又开了一次）：别把界面的 relay 换掉。
+    func testReleasingAStaleRelayKeepsTheCurrentOne() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let cli = HostKeyChallengeRelay(interactive: false)
+        let ui = HostKeyChallengeRelay()
+        ui.presenterAppeared()
+        coordinator.start(rule("pg"), on: server, relay: cli, modelContainer: container)
+        coordinator.start(rule("pg2"), on: server, relay: ui, modelContainer: container)
+        coordinator.releaseRelay(cli, serverID: server.id)
+
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        try await waitUntil { ui.pendingChallenge != nil }
+        ui.resolve(false)
+        _ = await decision.value
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 界面的 relay 此刻没挂在屏幕上（后台启动、关掉了窗口）：问了也没人看得到，当场拒绝，不让建连干等到超时。
+    /// 窗口重新出现后照常问。
+    func testInteractiveRelayWithoutVisibleHostRefusesAtOnce() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let hidden = HostKeyChallengeRelay()
+        coordinator.start(rule("pg"), on: server, relay: hidden, modelContainer: container)
+
+        let refused = await coordinator.approveHostKey(serverID: server.id, challenge: challenge)
+        XCTAssertFalse(refused)
+        XCTAssertNil(hidden.pendingChallenge, "没人看得到的 relay 上不该挂问题")
+
+        hidden.presenterAppeared()
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        try await waitUntil { hidden.pendingChallenge != nil }
+        hidden.resolve(true)
+        let approved = await decision.value
+        XCTAssertTrue(approved)
+        hidden.presenterDisappeared()
+        coordinator.teardown(serverID: server.id)
     }
 
     /// 从没 `start` 过的主机同理。

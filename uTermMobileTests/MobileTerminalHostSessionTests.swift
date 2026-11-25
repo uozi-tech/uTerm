@@ -159,6 +159,95 @@ final class MobileTerminalHostSessionTests: XCTestCase {
         controller.close()
     }
 
+    /// 断开了、但主机上的会话还在（连不上、自动重连停下了）：会话 id 不换，重新连接接回的还是它。
+    /// 只有保持进程说会话没了（`HostSessionOwning.hostSessionHasEnded`）才换。
+    func testDisconnectWithTheHostSessionAliveKeepsTheSessionID() async {
+        let saved = UUID()
+        let first = AttentiveBackend(sessionEnded: false)
+        let factory = AttentiveFactory(first)
+        let controller = MobileTerminalController(transportFactory: factory.transportFactory, hostSessionID: saved)
+        start(controller)
+        var connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+
+        first.end()
+        let disconnected = await MobileFakeTerminal.waitUntil { controller.state == .disconnected }
+        XCTAssertTrue(disconnected)
+        XCTAssertEqual(controller.hostSessionID, saved, "主机上的 shell 还在，不能换 id")
+
+        controller.restart()
+        connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        XCTAssertEqual(factory.requests.map(\.sessionID), [saved, saved])
+        XCTAssertEqual(factory.requests.last?.resumes, true)
+        controller.close()
+    }
+
+    /// 新开的标签第一次就没连上（还没接上过主机上的会话）：重试用同一个 id，但**不是接回**——主机上还没有这个会话，
+    /// 新 shell 的启动输出要照常处理、终端查询要回答（当成接回的话 fish 等 10 秒报错，提示符卡住）。
+    func testFirstConnectThatNeverAttachedRetriesAsANewSession() async {
+        let first = AttentiveBackend(sessionEnded: false, attached: false)
+        let factory = AttentiveFactory(first)
+        let controller = MobileTerminalController(transportFactory: factory.transportFactory)
+        start(controller)
+        var connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        let id = controller.hostSessionID
+
+        first.end()
+        let disconnected = await MobileFakeTerminal.waitUntil { controller.state == .disconnected }
+        XCTAssertTrue(disconnected)
+
+        controller.restart()
+        connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        XCTAssertEqual(factory.requests.map(\.sessionID), [id, id])
+        XCTAssertEqual(factory.requests.map(\.resumes), [false, false], "没接上过就不是接回")
+        controller.close()
+    }
+
+    /// 恢复的标签（带着上次的 id）第一次没连上：主机上多半还有那个会话，重试仍然是接回。
+    func testRestoredTabThatFailsFirstStillResumes() async {
+        let saved = UUID()
+        let first = AttentiveBackend(sessionEnded: false, attached: false)
+        let factory = AttentiveFactory(first)
+        let controller = MobileTerminalController(transportFactory: factory.transportFactory, hostSessionID: saved)
+        start(controller)
+        var connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        first.end()
+        _ = await MobileFakeTerminal.waitUntil { controller.state == .disconnected }
+
+        controller.restart()
+        connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        XCTAssertEqual(factory.requests.map(\.resumes), [true, true])
+        controller.close()
+    }
+
+    /// 后端停下来等用户（凭据被拒之类）：标签上显示原因；点重试交给后端，原因随之清掉。会话 id 不动。
+    func testAttentionIsShownAndRetryIsForwardedToTheBackend() async {
+        let saved = UUID()
+        let backend = AttentiveBackend(sessionEnded: false)
+        let factory = AttentiveFactory(backend)
+        let controller = MobileTerminalController(transportFactory: factory.transportFactory, hostSessionID: saved)
+        start(controller)
+        let connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+
+        backend.needsAttention("服务器拒绝了密码")
+        let shown = await MobileFakeTerminal.waitUntil { controller.attentionMessage == "服务器拒绝了密码" }
+        XCTAssertTrue(shown)
+        XCTAssertEqual(controller.state, .connected, "会话还在，不翻成已断开")
+
+        controller.retryAfterAttention()
+        XCTAssertNil(controller.attentionMessage)
+        let retried = await MobileFakeTerminal.waitUntilAsync { await backend.retries == 1 }
+        XCTAssertTrue(retried)
+        XCTAssertEqual(controller.hostSessionID, saved)
+        controller.close()
+    }
+
     /// 关掉的标签不再重连。
     func testClosedTabCannotReconnect() async {
         let factory = Factory()
@@ -339,6 +428,55 @@ final class MobileTerminalHostSessionTests: XCTestCase {
     /// 测试宿主和正式版共用一份偏好：根视图里的恢复器在宿主里默认什么都不碰。
     func testRestorerIsInertInsideTheTestHost() {
         XCTAssertNil(MobileTerminalTabRestorer().defaults)
+    }
+}
+
+/// 会自己重连、能说出「主机上的会话还在不在」的后端替身。
+actor AttentiveBackend: ReconnectingTerminalBackend, HostSessionOwning {
+    nonisolated let outputItems = AsyncStream<TerminalOutputItem> { _ in }
+    nonisolated let exitStream: AsyncStream<Void>
+    nonisolated let reconnecting: AsyncStream<Bool>
+    nonisolated let attention: AsyncStream<String?>
+    private nonisolated let exitContinuation: AsyncStream<Void>.Continuation
+    private nonisolated let reconnectingContinuation: AsyncStream<Bool>.Continuation
+    private nonisolated let attentionContinuation: AsyncStream<String?>.Continuation
+    nonisolated let hostSessionHasEnded: Bool
+    nonisolated let hasAttachedToHostSession: Bool
+    private(set) var retries = 0
+
+    init(sessionEnded: Bool, attached: Bool = true) {
+        hostSessionHasEnded = sessionEnded
+        hasAttachedToHostSession = attached
+        (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
+        (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream()
+        (attention, attentionContinuation) = AsyncStream<String?>.makeStream()
+    }
+
+    func connect() async throws {}
+    func write(_ data: Data) async {}
+    func resize(cols: UInt16, rows: UInt16) async {}
+    func close() async {}
+    func retryAfterAttention() async { retries += 1 }
+
+    nonisolated func end() { exitContinuation.yield(()) }
+    nonisolated func needsAttention(_ message: String) {
+        reconnectingContinuation.yield(true)
+        attentionContinuation.yield(message)
+    }
+}
+
+@MainActor
+final class AttentiveFactory {
+    private(set) var requests: [(sessionID: UUID, resumes: Bool)] = []
+    private var backends: [AttentiveBackend]
+
+    init(_ backends: AttentiveBackend...) { self.backends = backends }
+
+    var transportFactory: MobileTerminalTransportFactory {
+        MobileTerminalTransportFactory { [self] request in
+            requests.append((request.sessionID, request.resumesSession))
+            return backends.isEmpty ? AttentiveBackend(sessionEnded: false) : backends.removeFirst()
+        }
     }
 }
 

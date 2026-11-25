@@ -487,7 +487,7 @@ final class AppStoreScreenshotTests: XCTestCase {
 
 /// 并行执行的假执行器：每台整段返回一份写好的输出（同真 SSH：不按节拍回吐）。
 private struct ScriptedParallelExecutor: ParallelCommandExecuting {
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession {
         ScriptedParallelSession(host: profile.name)
     }
 }

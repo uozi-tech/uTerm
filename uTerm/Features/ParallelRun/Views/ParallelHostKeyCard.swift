@@ -9,25 +9,64 @@ import SwiftUI
 /// 执行器重建连接，握手成功即把密钥写入信任库（TOFU）。
 ///
 /// 未知指纹用中性「警示」色（`UD.caution`）；指纹变更（可能中间人）用红色（`UD.danger`）醒目警告。
+/// 信任过的主机这次只肯用 SHA-1 时代的旧算法（`.weakAlgorithms`）也用这张卡：没有指纹，按钮是「仍然连接并重试」，
+/// 用警示色（降级本身未必是攻击，多半是服务器配置变了）。
 struct HostKeyRetryCard: View {
     let challenge: HostKeyChallenge
     /// 用户点「信任并重试」。
     let onTrust: () -> Void
 
     private var isMismatch: Bool { challenge.kind == .mismatch }
+    private var isWeak: Bool { challenge.isWeakAlgorithms }
     private var tint: Color { isMismatch ? UD.danger : UD.caution }
+    private var address: String { challenge.address }
+
+    private var icon: String {
+        switch challenge.kind {
+        case .unknown: "lock.shield"
+        case .mismatch, .weakAlgorithms: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var title: String {
+        switch challenge.kind {
+        case .unknown: String(localized: "主机密钥未信任")
+        case .mismatch: String(localized: "主机密钥已变化")
+        case .weakAlgorithms:
+            challenge.isJumpHost ? String(localized: "跳板机的连接方式变弱了") : String(localized: "这台主机的连接方式变弱了")
+        }
+    }
+
+    private var message: String {
+        switch challenge.kind {
+        case .unknown:
+            String(localized: "\(challenge.host):\(String(challenge.port)) 的主机密钥尚未被信任，因此并行执行时直接拒绝了连接。")
+        case .mismatch:
+            String(localized: "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后再信任。")
+        case .weakAlgorithms:
+            challenge.isJumpHost
+                ? String(localized: "跳板机 \(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接；放行后经这台跳板机的连接都不再询问。如果你最近没有调整过这台跳板机（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
+                : String(localized: "\(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
+        }
+    }
+
+    private var buttonTitle: String {
+        switch challenge.kind {
+        case .unknown: String(localized: "信任并重试")
+        case .mismatch: String(localized: "我了解风险，信任并重试")
+        case .weakAlgorithms: String(localized: "仍然连接并重试")
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 7) {
-                Image(systemName: isMismatch ? "exclamationmark.triangle.fill" : "lock.shield")
+                Image(systemName: icon)
                     .font(.system(size: 12)).foregroundStyle(tint)
-                Text(isMismatch ? "主机密钥已变化" : "主机密钥未信任")
+                Text(title)
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(tint)
             }
-            Text(isMismatch
-                 ? "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后再信任。"
-                 : "\(challenge.host):\(String(challenge.port)) 的主机密钥尚未被信任，因此并行执行时直接拒绝了连接。")
+            Text(message)
                 .font(.system(size: 11.5)).foregroundStyle(UD.text3)
                 .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -35,15 +74,18 @@ struct HostKeyRetryCard: View {
             if isMismatch, let old = challenge.oldFingerprint {
                 fingerprintRow(String(localized: "已信任", comment: "此前已信任的主机密钥指纹"), old)
             }
-            fingerprintRow(isMismatch
-                ? String(localized: "本次出示", comment: "主机这次出示的密钥指纹")
-                : String(localized: "指纹", comment: "主机密钥指纹"),
-                challenge.newFingerprint)
+            // 连接方式那一问没有指纹可核对。
+            if !isWeak {
+                fingerprintRow(isMismatch
+                    ? String(localized: "本次出示", comment: "主机这次出示的密钥指纹")
+                    : String(localized: "指纹", comment: "主机密钥指纹"),
+                    challenge.newFingerprint)
+            }
 
             HStack {
                 Spacer(minLength: 0)
                 Button(action: onTrust) {
-                    Text(isMismatch ? "我了解风险，信任并重试" : "信任并重试")
+                    Text(buttonTitle)
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)

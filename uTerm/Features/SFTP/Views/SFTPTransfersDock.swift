@@ -116,9 +116,9 @@ struct SFTPTransfersDock: View {
         .buttonStyle(.udPlain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(s.direction == .up
-            ? String(localized: "上传 \(s.fileName)") : String(localized: "下载 \(s.fileName)"))
+            ? String(localized: "上传 \(RemoteName.isolated(s.fileName))") : String(localized: "下载 \(RemoteName.isolated(s.fileName))"))
         .accessibilityValue(queued ? String(localized: "排队中") : pctText)
-        DockCancelButton(title: String(localized: "取消传输 \(s.fileName)")) { onCancel(s.id) }
+        DockCancelButton(title: String(localized: "取消传输 \(RemoteName.isolated(s.fileName))")) { onCancel(s.id) }
     }
 
     @ViewBuilder private func aggregateChip(_ summary: SFTPTransfersDockSummary) -> some View {
@@ -361,7 +361,7 @@ struct SFTPTransferRow: View {
         .onHover { hover = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.direction == .up
-            ? String(localized: "上传 \(item.fileName)") : String(localized: "下载 \(item.fileName)"))
+            ? String(localized: "上传 \(RemoteName.isolated(item.fileName))") : String(localized: "下载 \(RemoteName.isolated(item.fileName))"))
         .accessibilityValue(item.status == .active
             ? String(localized: "\(UTermFormat.progress(fraction))，\(subtitle.0)", comment: "无障碍值：进度，状态")
             : subtitle.0)

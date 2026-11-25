@@ -8,8 +8,8 @@ import Foundation
 nonisolated enum TelemetryParser {
 
     /// 一次轮询发的合并命令。各段以 `echo __UT_X__` 行分隔；每条取数命令都
-    /// `2>/dev/null`，整串恒以 `echo` 收尾 → 退出码 0，避免 Citadel
-    /// `executeCommand` 在非零退出时抛错。sshd 把整串交给登录 shell 执行，故
+    /// `2>/dev/null`，整串恒以 `echo` 收尾 → 退出码 0，避免
+    /// `executeCommand` 在非零退出时抛 `SSHCommandError.nonZeroExit`。sshd 把整串交给登录 shell 执行，故
     /// `;` / 管道 / 重定向都成立。
     static let command: String = [
         "echo __UT_OS__",    "uname -s 2>/dev/null",

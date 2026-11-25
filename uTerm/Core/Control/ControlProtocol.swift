@@ -963,6 +963,8 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     // 建连
     case connect_failed
     case auth_failed
+    /// 信任过的主机这次只肯用 SHA-1 时代的旧算法：用户在 uTerm 里连一次、看过提示同意后才行。不重试。
+    case weak_algorithms
 
     // 执行
     case command_timeout

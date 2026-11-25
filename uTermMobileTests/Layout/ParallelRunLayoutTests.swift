@@ -219,7 +219,7 @@ private struct LayoutExecutor: ParallelCommandExecuting {
     let slowHost: UUID?
     /// Shell 模式下这一台的广播命令以非 0 退出，截图里要有一张失败卡。
     let failHost: UUID?
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession {
         LayoutSession(slow: profile.id == slowHost, failsBroadcast: profile.id == failHost)
     }
 }

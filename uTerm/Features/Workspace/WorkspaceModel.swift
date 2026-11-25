@@ -490,7 +490,10 @@ final class WorkspaceModel {
     ///   （只有一组就往右分出一组），按那个终端自己的主机读。目录不处理。
     ///
     /// 都不抢键盘焦点（用户还在终端里和程序对话）；不存在的不理（链接正则会把正文里像路径的词也认成链接）。
-    func terminalRequestedPreview(_ path: String, serverID: UUID, fromPane paneID: UUID? = nil) {
+    func terminalRequestedPreview(_ rawPath: String, serverID: UUID, fromPane paneID: UUID? = nil) {
+        // 终端给的是服务器上的原样文字；主机的文件 provider（`SFTPSession`）认的是 `RemoteName` 写法，换过去，
+        // 名字里本来就有 U+2060 的文件才不会被还原成别的字节。
+        let path = RemoteName.display(rawPath.utf8)
         if acceptsTerminalFilePreviews, fileBrowserModel.connectedHost?.id == serverID,
            let sftp = fileBrowserModel.sftpProvider {
             Task {
@@ -515,7 +518,8 @@ final class WorkspaceModel {
             guard let profile = try container.mainContext.fetch(descriptor).first else {
                 throw CancellationError()
             }
-            return try await SFTPSession.make(profile: profile, container: container, approver: { _ in false })
+            return try await SFTPSession.make(profile: profile, container: container, approver: { _ in false },
+                                              approvesInteractively: false)
         }
     }
 
@@ -552,7 +556,7 @@ final class WorkspaceModel {
 
         // 已经开着：带到它那一组的前台并重读（程序刚改过它）。
         if let existing = terminalGroups.allTabs.first(where: {
-            $0.payload.serverProfileID == serverID && $0.payload.fileBuffer?.remotePath == path
+            $0.payload.serverProfileID == serverID && $0.payload.fileBuffer?.remotePath.remoteKey == path.remoteKey
         }), let at = terminalGroups.locateTab(existing.id), let buffer = existing.payload.fileBuffer {
             terminalGroups.activateTab(groupID: at.groupID, index: at.index)
             restoreFocus(to: sourceTabID)

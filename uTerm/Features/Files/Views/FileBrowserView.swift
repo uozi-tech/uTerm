@@ -34,7 +34,7 @@ struct FileBrowserContent: View {
     @State private var rowHover = RowHoverState()
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
-    private static let upRowID = ".."
+    private static let upRowID: RemoteEntry.ID = ".."
     /// 行高（`..` 行与条目行同高）。**整表一个拖放目标**靠它把落点换算成行号
     /// （见 `RemoteRowDropTargeting`），所以这个常量与 `upRow` / `entryRow` 的
     /// `.frame(height:)` 必须同源。
@@ -592,14 +592,14 @@ struct FileBrowserContent: View {
 
     private var overwriteDialogTitle: String {
         overwriteConflictNames.count == 1
-            ? String(localized: "「\(overwriteConflictNames[0])」已存在，覆盖？")
+            ? String(localized: "「\(RemoteName.isolated(overwriteConflictNames[0]))」已存在，覆盖？")
             : String(localized: "\(overwriteConflictNames.count) 个文件已存在，覆盖？")
     }
 
     private var overwriteDialogMessage: String {
         overwriteConflictNames.count == 1
             ? String(localized: "该远程文件将被覆盖。")
-            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
+            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.map(RemoteName.isolated).joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {

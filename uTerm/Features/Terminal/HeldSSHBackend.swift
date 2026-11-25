@@ -106,21 +106,45 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             connection.close()
             handshake = nil
         }
-        let peer = SSHBridgeAppPeer(connection: connection, verifier: target.hostKeyVerifier, approver: target.hostKeyApprover)
+        let legacyGate = LegacyAlgorithmGate(verifier: target.hostKeyVerifier,
+                                             hostKeyPolicy: SSHClientFactory.packageHostKeyPolicy(),
+                                             interactive: true, approver: target.hostKeyApprover)
+        let peer = SSHBridgeAppPeer(connection: connection, verifier: target.hostKeyVerifier,
+                                    approver: target.hostKeyApprover, legacyGate: legacyGate)
         let outcome = await peer.run(request)
         switch outcome {
-        case .connected:
+        case .connected(let legacy):
+            legacyGate.connectionSucceeded(profile: target.profile, target: legacy?.target, jumpHost: legacy?.jumpHost)
             return
         case .failed(let failure):
             failedOnLocalNetwork = failure.localNetworkUnreachable == true
+            if let declined = failure.legacyDeclined {
+                throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(legacyGate.marked(LegacyAlgorithmRefusal(
+                    host: declined.host, port: declined.port, isJumpHost: declined.isJumpHost)))
+            }
             switch failure.kind {
-            case .jumpHost: throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message)
-            case .connect: throw SSHConnection.SSHConnectionError.connectFailed(failure.message)
+            case .jumpHost:
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message,
+                                                                      cause: failure.jumpHostCause)
+            case .connect: throw Self.connectError(failure)
             }
         case .disconnected:
             // 本端要结束时对面也就退出了，这不算失败。
             guard await !core.finished else { throw SSHConnection.SSHConnectionError.alreadyClosed }
             throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "终端的辅助进程意外退出"))
+        }
+    }
+
+    /// 直连失败 → 和进程内建连（`SSHClientFactory.connect`）同样的错误类型：认证 / 主机密钥 / 握手失败是「重试也不会好」
+    /// 的那类（`SSHTransportFailure.isPermanentConnectFailure`）。旧辅助进程不带类别时照旧是 connectFailed，文案不变。
+    nonisolated static func connectError(_ failure: SSHBridgeFailure) -> SSHConnection.SSHConnectionError {
+        switch (failure.connectCause, failure.connectDetail) {
+        case (.authentication?, let detail?): return .authenticationFailed(detail)
+        case (.hostKey?, let detail?): return .hostKeyRejected(detail)
+        case (.handshake?, let detail?): return .handshakeFailed(detail)
+        // 没同意用旧算法却没带 `legacyDeclined`（不该发生）：照样是「重试也不会好」的那类，别被当成网络问题重连。
+        case (.weakAlgorithms?, let detail): return .handshakeFailed(detail ?? failure.message)
+        default: return .connectFailed(failure.message)
         }
     }
 
@@ -130,7 +154,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         var jumpHost: SSHBridgeJumpHost?
         if let jump = target.profile.jumpHost {
             guard let jumpAuth = resolved.jump else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"))
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(String(localized: "缺少登录凭据"),
+                                                                      cause: .authentication)
             }
             let jumpMaterial = Self.material(jumpAuth)
             jumpHost = SSHBridgeJumpHost(host: jump.host, port: jump.port, username: jumpMaterial.username,
@@ -140,7 +165,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             host: target.profile.host, port: target.profile.port, username: material.username, credential: material.credential,
             jumpHost: jumpHost, hostKeyPolicy: SSHClientFactory.packageHostKeyPolicy().rawValue,
             connectTimeoutSeconds: Int(SSHClientFactory.connectTimeoutSeconds()),
-            environment: RemoteTrueColor.terminalEnvironment.map { SSHBridgeEnvironmentVariable(name: $0.name, value: $0.value) })
+            environment: RemoteTrueColor.terminalEnvironment.map { SSHBridgeEnvironmentVariable(name: $0.name, value: $0.value) },
+            asksLegacyAlgorithms: true)
     }
 
     private static func material(_ auth: ResolvedAuth) -> (username: String, credential: SSHBridgeCredential) {
@@ -264,7 +290,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
 /// 握手期间 App 这一头：发连接参数，回答 `uterm-ssh` 的主机密钥问题，等到连上或失败。
 nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
     enum Outcome: Sendable {
-        case connected
+        /// `legacy`：辅助进程报的每一跳要不要旧算法（旧辅助进程不带，nil）。
+        case connected(SSHBridgeLegacyTransport?)
         case failed(SSHBridgeFailure)
         case disconnected
     }
@@ -272,13 +299,19 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
     private let connection: HolderConnection
     private let verifier: HostKeyVerifier
     private let approver: @Sendable (HostKeyChallenge) async -> Bool
+    private let legacyGate: LegacyAlgorithmGate
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Outcome, Never>?
+    /// 在回答 `uterm-ssh` 的问题的任务。握手结束（连上、失败、关窗）时一并取消：relay 与合并器据此撤掉弹层，
+    /// 不留下没人收的回答。
+    private var pending: [Task<Void, Never>] = []
 
-    init(connection: HolderConnection, verifier: HostKeyVerifier, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool) {
+    init(connection: HolderConnection, verifier: HostKeyVerifier, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+         legacyGate: LegacyAlgorithmGate) {
         self.connection = connection
         self.verifier = verifier
         self.approver = approver
+        self.legacyGate = legacyGate
     }
 
     func run(_ request: SSHBridgeConnectRequest) async -> Outcome {
@@ -306,7 +339,7 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
                 send(.rememberResult(id: id))
             }
         case .approveHostKey(let id, let challenge):
-            Task { [self] in
+            answer { [self] in
                 let approved = await HostKeyApprovalCoalescer.shared.approve(HostKeyChallenge(
                     host: challenge.hostKey.host, port: challenge.hostKey.port,
                     kind: challenge.isMismatch ? .mismatch : .unknown,
@@ -314,8 +347,14 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
                     approver: approver)
                 send(.approval(id: id, approved))
             }
-        case .connected:
-            finish(.connected)
+        case .approveLegacyAlgorithms(let id, let legacy):
+            // 合并同一台主机同时在问的几个标签由 gate 自己做（`HostKeyApprovalCoalescer`），这里不再套一层。
+            answer { [self] in
+                let approved = await legacyGate.approve(host: legacy.host, port: legacy.port, isJumpHost: legacy.isJumpHost)
+                send(.approval(id: id, approved))
+            }
+        case .connected(let legacy):
+            finish(.connected(legacy))
         case .failed(let failure):
             finish(.failed(failure))
         case .connect, .verifyResult, .rememberResult, .approval, .exec, .execResult:
@@ -332,8 +371,19 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
         lock.lock()
         let taken = continuation
         continuation = nil
+        let tasks = pending
+        pending = []
         lock.unlock()
+        for task in tasks { task.cancel() }
         taken?.resume(returning: outcome)
+    }
+
+    /// 起一个回答问题的任务，记下来以便握手结束时取消。握手已经结束就不起了。
+    private func answer(_ body: @escaping @Sendable () async -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard continuation != nil else { return }
+        pending.append(Task { await body() })
     }
 
     private static func verification(_ result: USSHKit.SSHHostKeyVerification) -> SSHBridgeVerification {
@@ -342,38 +392,6 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
         case .unknown: return .unknown
         case .mismatch(let previous): return .mismatch(previousFingerprint: previous)
         }
-    }
-}
-
-/// 同时打开同一台新主机的几个标签，每个都各握一次手，但只问用户一次：一个窗口同时只能弹一个 sheet，
-/// 后来的弹不出来，那个标签就永远卡在「连接中」。
-actor HostKeyApprovalCoalescer {
-    static let shared = HostKeyApprovalCoalescer()
-
-    private enum Outcome { case approved, rejected, abandoned }
-    private struct Ask {
-        let token = UUID()
-        let task: Task<Outcome, Never>
-    }
-
-    private var inFlight: [String: Ask] = [:]
-
-    func approve(_ challenge: HostKeyChallenge, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool) async -> Bool {
-        let key = "\(challenge.host):\(challenge.port) \(challenge.newFingerprint)"
-        while let running = inFlight[key] {
-            let outcome = await running.task.value
-            if outcome != .abandoned { return outcome == .approved }
-            // 问的那个标签关掉了，用户没回答：撤掉这次询问，由还在等的标签重新问。
-            if inFlight[key]?.token == running.token { inFlight[key] = nil }
-        }
-        let ask = Ask(task: Task {
-            if await approver(challenge) { return .approved }
-            return HostKeyAbandonment.take(challenge.id) ? .abandoned : .rejected
-        })
-        inFlight[key] = ask
-        let outcome = await ask.task.value
-        if inFlight[key]?.token == ask.token { inFlight[key] = nil }
-        return outcome == .approved
     }
 }
 

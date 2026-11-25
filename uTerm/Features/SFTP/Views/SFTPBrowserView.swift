@@ -300,7 +300,7 @@ struct SFTPBrowserView: View {
     }
 
     private func navigate(to path: String) {
-        if path == model.currentPath { return }
+        if path.remoteKey == model.currentPath.remoteKey { return }
         Task { await model.navigate(toPath: path) }
     }
     // goBack/goFwd：只在导航空闲时才移动 hIdx 并发起导航。canBack/canFwd 已含
@@ -321,11 +321,11 @@ struct SFTPBrowserView: View {
         Task {
             await model.navigate(toPath: target)
             // 目标打不开（被删 / 改了权限）时停在原目录、只提示：位置也退回去，否则下次前进 / 后退会跳过或重复一格。
-            if model.currentPath != target, hIdx == index { hIdx = previous }
+            if model.currentPath.remoteKey != target.remoteKey, hIdx == index { hIdx = previous }
         }
     }
     private func syncHistory(to newPath: String) {
-        if history.indices.contains(hIdx), history[hIdx] == newPath { return }
+        if history.indices.contains(hIdx), history[hIdx].remoteKey == newPath.remoteKey { return }
         history = Array(history.prefix(hIdx + 1))
         history.append(newPath)
         hIdx = history.count - 1
@@ -443,14 +443,14 @@ struct SFTPBrowserView: View {
 
     private var overwriteDialogTitle: String {
         overwriteConflictNames.count == 1
-            ? String(localized: "「\(overwriteConflictNames[0])」已存在，覆盖？")
+            ? String(localized: "「\(RemoteName.isolated(overwriteConflictNames[0]))」已存在，覆盖？")
             : String(localized: "\(overwriteConflictNames.count) 个文件已存在，覆盖？")
     }
 
     private var overwriteDialogMessage: String {
         overwriteConflictNames.count == 1
             ? String(localized: "该远程文件将被覆盖。")
-            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
+            : String(localized: "这些远程文件将被覆盖：\(overwriteConflictNames.map(RemoteName.isolated).joined(separator: String(localized: "、", comment: "并列的文件名之间的分隔符")))")
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {

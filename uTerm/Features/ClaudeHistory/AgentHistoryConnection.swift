@@ -13,8 +13,9 @@ nonisolated final class ClaudeHistoryHostKeyGate: Sendable {
     var wasChallenged: Bool { challenged.withLock { $0 } }
 
     var approver: @Sendable (HostKeyChallenge) async -> Bool {
-        { [self] _ in
-            challenged.withLock { $0 = true }
+        { [self] challenge in
+            // 连接方式变弱了不是主机密钥的问题：不记，失败时报 `LegacyAlgorithmRefusal.message` 那句。
+            if !challenge.isWeakAlgorithms { challenged.withLock { $0 = true } }
             return false
         }
     }
@@ -37,9 +38,11 @@ enum AgentHistoryAccess {
         var errorDescription: String? { message }
     }
 
-    /// 一台已保存的 SSH 主机。只走 `SFTPSession.make`（共享连接池，和终端共用一条 SSH 连接），主机密钥不弹确认。
+    /// 一台已保存的 SSH 主机。只走 `SFTPSession.make`（共享连接池，和终端共用一条 SSH 连接），主机密钥不弹确认；
+    /// 也就不和同时在弹确认的终端合并握手（`approvesInteractively: false`），免得它的「不」替终端答掉。
     static func server(_ profile: ServerProfile, container: ModelContainer) -> Connect {
-        { gate in try await SFTPSession.make(profile: profile, container: container, approver: gate.approver) }
+        { gate in try await SFTPSession.make(profile: profile, container: container, approver: gate.approver,
+                                             approvesInteractively: false) }
     }
 
     /// 按 `ServerProfile.id` 找主机（Mac 的窗口身份里只有 id）。`found` 拿到主机名。
@@ -51,7 +54,8 @@ enum AgentHistoryAccess {
                 throw Failure(message: String(localized: "找不到这台主机，它可能已被删除。"))
             }
             found(profile)
-            return try await SFTPSession.make(profile: profile, container: container, approver: gate.approver)
+            return try await SFTPSession.make(profile: profile, container: container, approver: gate.approver,
+                                             approvesInteractively: false)
         }
     }
 

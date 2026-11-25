@@ -47,6 +47,34 @@ final class SSHConnectionIntegrationTests: XCTestCase {
         await conn.close()
     }
 
+    /// 后台进程占着伪终端时 `exit`：真 sshd 先报退出状态、通道要等 `sleep` 结束才关。会话应在几秒内结束。
+    func testShellExitWithABackgroundJobEndsTheSession() async throws {
+        try skipIfNoPassword()
+        let profile = ServerProfile()
+        profile.host = "127.0.0.1"
+        profile.port = 22
+        profile.username = testUser
+        profile.authMethod = .password
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
+        let conn = SSHConnection(
+            profile: SSHConnection.ProfileSnapshot(profile),
+            auth: .password(username: testUser, password: testPassword!),
+            jumpHostAuth: nil, hostKeyVerifier: verifier, hostKeyApprover: { _ in true })
+        try await conn.connect()
+        let exit = conn.exitStream
+        let ended = Task { () -> Bool in
+            for await _ in exit { return true }
+            // 流结束了却没给过一个元素：界面（TerminalSession / iOS 控制器）只在循环体里翻到「已断开」，不算结束。
+            return false
+        }
+        await conn.write(Data("sleep 1000 &\nexit\n".utf8))
+        let finished = try await withTimeout(seconds: 8) { await ended.value }
+        XCTAssertTrue(finished)
+        await conn.close()
+    }
+
     func testJumpHostConnectReachesTarget() async throws {
         try skipIfNoPassword()
         let bastion = ServerProfile()

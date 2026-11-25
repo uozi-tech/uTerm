@@ -248,7 +248,7 @@ extension MobileFakeParallelRun: ParallelCommandExecuting {
     ///
     /// 泳道序号优先按 `profile.id` 对上自己的 `states`（用 `targets:` 造的实例走这条），
     /// 对不上就按调用顺序发号 —— 控制器起任务的顺序就是 `targets` 的顺序。
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) -> ParallelExecutionSession {
         let index = states.firstIndex { $0.id == profile.id } ?? handedOutSessions
         handedOutSessions += 1
         let unreachable = index >= config.hosts - config.unreachableHosts

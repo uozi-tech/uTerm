@@ -216,7 +216,7 @@ private nonisolated final class ScriptedSession: ParallelExecutionSession, @unch
 
 private struct ScriptedExecutor: ParallelCommandExecuting {
     let session: ScriptedSession
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession {
         session
     }
 }

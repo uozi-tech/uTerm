@@ -26,8 +26,16 @@ extension HostKeyClassification: Equatable {
 }
 
 /// 向用户征询时所需的纯数据。
+///
+/// 除了主机密钥的两态，还有一种不是主机密钥的问题也走这条通路（`.weakAlgorithms`）：信任过的主机这次只肯用
+/// SHA-1 时代的旧算法，连之前问用户（`LegacyAlgorithmGate`）。它没有指纹，`newFingerprint` 是空串。
+/// 走同一条通路是为了复用现成的弹层、合并与「不能问用户就拒绝」的那些审批闭包——它们不认识这一种时也只会拒绝。
 struct HostKeyChallenge: Equatable, Sendable, Identifiable {
-    enum Kind: Sendable { case unknown, mismatch }
+    enum Kind: Sendable {
+        case unknown, mismatch
+        /// 以前用较新的连接方式连过，这次服务器只提供较旧的（SHA-1），要不要照样连。
+        case weakAlgorithms
+    }
     let id = UUID()
     let host: String
     let port: Int
@@ -35,6 +43,63 @@ struct HostKeyChallenge: Equatable, Sendable, Identifiable {
     let newFingerprint: String
     /// 仅 `.mismatch` 时非 nil。
     let oldFingerprint: String?
+    /// `.weakAlgorithms` 时：问的是跳板机（`host` / `port` 是跳板机的）。
+    var isJumpHost = false
+
+    /// 是不是「连接方式变弱了」那一问。`nonisolated`：审批闭包在 NIO 线程上调，`Kind` 的 Equatable 是主线程隔离的。
+    nonisolated var isWeakAlgorithms: Bool {
+        if case .weakAlgorithms = kind { return true }
+        return false
+    }
+
+    /// 同一个问题的合并键（`HostKeyApprovalCoalescer`）：主机密钥按「哪台 + 哪把钥匙」，连接方式按「哪台」。
+    nonisolated var coalescingKey: String {
+        if isWeakAlgorithms { return "\(host):\(port) weak-algorithms" }
+        return "\(host):\(port) \(newFingerprint)"
+    }
+
+    /// 给人看的「主机:端口」。IPv6 字面量加方括号（`[fe80::1]:22`），不然端口和地址混在一起。
+    nonisolated var address: String { SSHAddressText.format(host: host, port: port) }
+
+    /// 「连接方式变弱了」那一问。
+    nonisolated static func weakAlgorithms(_ request: SSHLegacyFallbackRequest) -> HostKeyChallenge {
+        HostKeyChallenge(host: request.host, port: request.port, kind: .weakAlgorithms,
+                         newFingerprint: "", oldFingerprint: nil, isJumpHost: request.hop == .jumpHost)
+    }
+}
+
+/// 给人看的「主机:端口」：IPv6 字面量加方括号，其余原样。
+nonisolated enum SSHAddressText {
+    static func format(host: String, port: Int) -> String {
+        host.contains(":") && !host.hasPrefix("[") ? "[\(host)]:\(String(port))" : "\(host):\(String(port))"
+    }
+}
+
+/// 用户在卡片上看过、点了放行的那一问（并行执行的「信任并重试」「仍然连接并重试」）。重连时只放行和它
+/// 一模一样的那一问——哪台、哪个端口、哪一跳、什么问题、哪把钥匙都对得上；别的（跳板机后面的目标、换了一把钥匙、
+/// 变成「密钥已变化」）照常拒绝、另出一张卡片，不会被这一下顺手放过去。
+nonisolated struct HostKeyApprovalPin: Sendable, Equatable {
+    let host: String
+    let port: Int
+    let isJumpHost: Bool
+    let kind: String
+    let fingerprint: String
+
+    init(_ challenge: HostKeyChallenge) {
+        host = challenge.host
+        port = challenge.port
+        isJumpHost = challenge.isJumpHost
+        switch challenge.kind {
+        case .unknown: kind = "unknown"
+        case .mismatch: kind = "mismatch"
+        case .weakAlgorithms: kind = "weak-algorithms"
+        }
+        fingerprint = challenge.newFingerprint
+    }
+
+    func matches(_ challenge: HostKeyChallenge) -> Bool {
+        HostKeyApprovalPin(challenge) == self
+    }
 }
 
 /// known-hosts 存储与 TOFU 决策。`@ModelActor` 使其自带一个由 `ModelContainer`
@@ -101,6 +166,18 @@ actor HostKeyVerifier {
     /// 测试辅助：某 host:port 的记录条数。
     func knownHostCount(host: String, port: Int) -> Int {
         existing(host: host, port: port).count
+    }
+
+    /// 信任库里有没有这台 host:port 的记录（不管密钥对不对得上）。有就说明以前连上过它（`LegacyAlgorithmGate` 用）。
+    /// 这台以前信任过没有（「连接方式变弱了」那一问用）。主机名不分大小写、IPv6 方括号不算：同一台换个写法
+    /// 不能被当成第一次连、静默放行旧算法。
+    func hasTrustRecord(host: String, port: Int) -> Bool {
+        if !existing(host: host, port: port).isEmpty { return true }
+        let wanted = LegacyAlgorithmConsent.Address.normalized(host)
+        let p = port
+        let descriptor = FetchDescriptor<KnownHost>(predicate: #Predicate { $0.port == p })
+        let all = (try? modelContext.fetch(descriptor)) ?? []
+        return all.contains { LegacyAlgorithmConsent.Address.normalized($0.host) == wanted }
     }
 }
 

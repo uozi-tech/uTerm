@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
-@preconcurrency import Citadel
 import NIOCore
+import USSHKit
 
 /// 把打包的 `uterm-holder` 装到主机上（用户目录，不需要 root）。
 ///
@@ -47,8 +47,7 @@ nonisolated enum HostHolderInstaller {
 
     /// 标准输入送二进制，返回标准输出（装成了的话里面有 `probe` 的结果）。
     ///
-    /// 不看有没有抛错：命令跑完后对端先关了通道，`withExec` 收尾时再关一次会抛错，那不代表没装成。
-    /// 成不成只看输出里有没有 `probe` 的那一行。
+    /// 不看有没有抛错：成不成只看输出里有没有 `probe` 的那一行（命令非零退出、通道出错都体现在输出里少了那一行）。
     private static func upload(_ binary: Data, on client: ConnectedClient) async -> String {
         let collected = Mutex(Data())
         try? await client.target.withExec(HostHolder.installCommand(byteCount: binary.count)) { inbound, writer in
@@ -72,7 +71,7 @@ nonisolated enum HostHolderInstaller {
     }
 }
 
-/// 给不响应取消的调用（Citadel 的 exec）加时限：到点先返回 nil，那个调用放手让它自己跑完。
+/// 给一段操作加时限：到点先返回 nil，并取消那段操作（USSHCore 的 exec / 开通道响应取消，会随之结束）。
 nonisolated enum BoundedTask {
     static func run<Value: Sendable>(timeout: Duration,
                                      operation: @escaping @Sendable () async -> Value) async -> Value? {

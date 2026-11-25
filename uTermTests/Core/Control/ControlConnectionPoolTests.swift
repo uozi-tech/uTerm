@@ -149,6 +149,57 @@ final class ControlConnectionPoolTests: XCTestCase {
 
     // MARK: 懒建 / 复用
 
+    /// 建连失败的归类：认证、握手、主机密钥（目标那一跳或跳板机那一跳）都是「重试也不会好」——`borrow` 不重试，
+    /// 并行传输的其余通道一起停；只有网络问题（含跳板机连不上目标）照旧重试。
+    func testConnectErrorsAreClassifiedByTypeIncludingTheJumpHostCause() {
+        typealias App = SSHConnection.SSHConnectionError
+        func mapped(_ error: Error) -> ControlConnectError {
+            ControlConnectionPool.mapConnectError(error, sink: HostKeyChallengeSink())
+        }
+        for permanent: Error in [App.authenticationFailed("x"), App.jumpHostFailed("x", cause: .authentication)] {
+            guard case .authFailed = mapped(permanent) else { return XCTFail("\(permanent) 应归认证失败") }
+        }
+        for permanent: Error in [App.handshakeFailed("x"), App.hostKeyRejected("x"),
+                                 App.jumpHostFailed("x", cause: .hostKey), App.jumpHostFailed("x", cause: .handshake)] {
+            let error = mapped(permanent)
+            guard case .connectRejected = error else { return XCTFail("\(permanent) 应归配置问题，实得 \(error)") }
+            XCTAssertFalse(error.isRetryableBorrowFailure)
+            XCTAssertTrue(ParallelTransfer.stopsAllWorkers(error))
+            XCTAssertEqual(error.code, .connect_failed)
+        }
+        for transient: Error in [App.connectFailed("x"), App.jumpHostFailed("x", cause: .unreachable)] {
+            let error = mapped(transient)
+            guard case .connectFailed = error else { return XCTFail("\(transient) 应归网络问题") }
+            XCTAssertTrue(error.isRetryableBorrowFailure)
+            XCTAssertFalse(ParallelTransfer.stopsAllWorkers(error))
+        }
+    }
+
+    /// 连接方式变弱了（信任过的主机这次只肯用 SHA-1 时代的旧算法）：命令行不能问人，拒绝 → `weak_algorithms`，
+    /// 不重试、并行传输整次停下，文案说清是哪台、怎么办。审批闭包记下的挑战与类型化错误两条路径结果一样。
+    func testWeakAlgorithmsMapToTheirOwnNonRetryableCode() {
+        let refusal = LegacyAlgorithmRefusal(host: "10.0.0.5", port: 2222, isJumpHost: false)
+        let fromError = ControlConnectionPool.mapConnectError(
+            SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(refusal), sink: HostKeyChallengeSink())
+        let sink = HostKeyChallengeSink()
+        sink.record(HostKeyChallenge(host: "10.0.0.5", port: 2222, kind: .weakAlgorithms,
+                                     newFingerprint: "", oldFingerprint: nil))
+        let fromChallenge = ControlConnectionPool.mapConnectError(
+            SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(refusal), sink: sink)
+        for error in [fromError, fromChallenge] {
+            guard case .weakAlgorithms(let mapped) = error else { return XCTFail("应归 weakAlgorithms，实得 \(error)") }
+            XCTAssertEqual(mapped, refusal)
+            XCTAssertEqual(error.code, .weak_algorithms)
+            XCTAssertFalse(error.isRetryableBorrowFailure)
+            XCTAssertTrue(ParallelTransfer.stopsAllWorkers(error))
+            XCTAssertNil(error.fingerprint, "没有指纹可 trust")
+            let message = error.message(host: "prod-web")
+            XCTAssertTrue(message.contains("prod-web") && message.contains("10.0.0.5:2222"), message)
+        }
+        let jump = ControlConnectError.weakAlgorithms(LegacyAlgorithmRefusal(host: "b", port: 22, isJumpHost: true))
+        XCTAssertTrue(jump.message(host: "prod-web").contains("b:22"))
+    }
+
     func testExecutorIsBuiltLazilyAndReusedPerHost() async throws {
         let factory = Factory()
         let clock = Clock()

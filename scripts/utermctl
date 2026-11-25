@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 
 # ---------------------------------------------------------------------------
@@ -2145,8 +2146,86 @@ def make_request(args):
     return request
 
 
+# 名字里正常会有、打到终端里也无害的格式字符（Unicode Cf）：ZWNJ（波斯文、印度诸文字）、ZWJ（emoji 组合）、
+# 软连字符，以及 uTerm 给非 UTF-8 文件名转义时的结束符 WORD JOINER（`RemoteName`，去掉了那个名字就对不上了）。
+_BENIGN_FORMAT = {0x200C, 0x200D, 0x00AD, 0x2060}
+
+
+def _is_unsafe_char(char):
+    """C0 / C1 控制字符、DEL 与其余 Unicode Cf（双向覆盖 / 隔离符、标签字符……）：打到终端里会被当成
+    控制命令，或者把文字显示成别的样子、藏进看不见的字。规则同 USSHKit 的 `SSHPeerText.sanitize`，
+    只是放过上面那几个正常名字里会有的格式字符。"""
+    code = ord(char)
+    if code in _BENIGN_FORMAT:
+        return False
+    return code < 0x20 or 0x7F <= code <= 0x9F or unicodedata.category(char) == "Cf"
+
+
+def _safe_units(text, whitespace_as_space):
+    """把文字拆成显示单位：安全的字符原样；不安全的写成看得见的 `<U+202E>`（一个单位，截断时不会从中间切开）。
+    `whitespace_as_space`：给人读的提示把换行、制表换成空格；表格里的名字也一样（一格一行）。"""
+    if not isinstance(text, str):
+        text = str(text)
+    units = []
+    for char in text:
+        if whitespace_as_space and char in "\t\n\r\v\f\x85\u2028\u2029":
+            units.append(" ")
+        elif _is_unsafe_char(char):
+            units.append("<U+%04X>" % ord(char))
+        else:
+            units.append(char)
+    return units
+
+
+def terminal_safe(text):
+    """服务器给的文字（远端文件名、SFTP 的报错原话）直接打到终端之前过一遍：空白类控制字符换成空格，
+    其余控制字符与双向覆盖之类的格式字符写成看得见的 `<U+XXXX>`（不丢，也不起作用）。
+    只用于给人看的表格与提示；JSON 走 `as_json`，那里一字不差。"""
+    return "".join(_safe_units(text, whitespace_as_space=True))
+
+
+def human_safe(text):
+    """给人看的整段输出（多行）：同 `terminal_safe`，但换行与制表符留着（表格、提示都是多行的）。"""
+    if not isinstance(text, str):
+        text = str(text)
+    out = []
+    for char in text:
+        if char in "\n\t":
+            out.append(char)
+        elif _is_unsafe_char(char):
+            out.append("<U+%04X>" % ord(char))
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+class Payload(str):
+    """原样输出、边界上不动的内容：JSON（已经转义好）、远端命令的输出、文件正文、读屏。
+    其余给人看的文字（提示、表格、服务器的报错原话、远端路径）都在 `emit` 那里过 `human_safe`。"""
+
+
+def emit(text, stream=None):
+    """stdout 的唯一出口：`Payload` 原样写，别的先过 `human_safe`。"""
+    stream = stream or sys.stdout
+    stream.write((text if isinstance(text, Payload) else human_safe(text)) + "\n")
+
+
+def clip_safe(text, limit):
+    """`terminal_safe` 之后最多 `limit` 个字符，超出的截掉、补「…」；不会把 `<U+XXXX>` 切成两半。"""
+    units = _safe_units(text, whitespace_as_space=True)
+    if sum(len(unit) for unit in units) <= limit:
+        return "".join(units)
+    kept, used = [], 0
+    for unit in units:
+        if used + len(unit) > limit - 1:
+            break
+        kept.append(unit)
+        used += len(unit)
+    return "".join(kept) + "…"
+
+
 def fail(message):
-    sys.stderr.write(message + "\n")
+    sys.stderr.write(terminal_safe(message) + "\n")
     sys.exit(EXIT_LOCAL)
 
 
@@ -2339,7 +2418,7 @@ def exit_code_for(response):
         return EXIT_GATED
     if code.endswith("_not_found") or code.endswith("_ambiguous"):
         return EXIT_NOT_FOUND
-    if (code in ("connect_failed", "auth_failed", "forward_failed", "relay_unreachable")
+    if (code in ("connect_failed", "auth_failed", "weak_algorithms", "forward_failed", "relay_unreachable")
             or code.startswith("host_key_") or code.endswith("_refused")):
         return EXIT_REMOTE
     if code in ("command_timeout", "handler_timeout", "client_timeout"):
@@ -2367,12 +2446,12 @@ def exit_code_for(response):
 # 撞上可重试的错误（连接断了、服务端忙）也是这样自动续上的，不从头来。
 # ---------------------------------------------------------------------------
 
-# 这些码重试没有意义：门禁、找不到、参数不对、远端已存在、密钥没信任，以及本地磁盘 /
-# 本地文件问题（重试改变不了事实）。
+# 这些码重试没有意义：门禁、找不到、参数不对、远端已存在、密钥没信任、连接方式变弱了（要用户在
+# uTerm 里确认），以及本地磁盘 / 本地文件问题（重试改变不了事实）。
 PERMANENT_CODES = frozenset([
     "control_disabled", "mutations_disabled", "host_sftp_only",
     "invalid_request", "not_implemented", "file_exists", "file_too_large",
-    "permission_denied", "is_directory", "auth_failed", "request_too_large",
+    "permission_denied", "is_directory", "auth_failed", "weak_algorithms", "request_too_large",
     "local_read_failed", "local_write_failed", "local_failure",
     CODE_NOT_RUNNING, CODE_SOCKET_STALE,
 ])
@@ -2471,7 +2550,7 @@ class Progress(object):
             return
         self.last = now
         self.drawn = True
-        sys.stderr.write("\r\033[K" + self._line(now))
+        sys.stderr.write("\r\033[K" + terminal_safe(self._line(now)))
         sys.stderr.flush()
 
     def _line(self, now):
@@ -2486,7 +2565,7 @@ class Progress(object):
             sys.stderr.write("\r\033[K")
             self.drawn = False
         if note and not self.silent:
-            sys.stderr.write(note + "\n")
+            sys.stderr.write(terminal_safe(note) + "\n")
         sys.stderr.flush()
 
 
@@ -3257,7 +3336,7 @@ def tree_response(verb, summary, failed, **payload):
     payload["failed"] = failed
     ok = not failed
     message = summary if ok else summary + _("；{count} 个没成，见 failed").format(count=len(failed))
-    sys.stderr.write(_("{verb}：{message}").format(verb=verb, message=message) + "\n")
+    sys.stderr.write(terminal_safe(_("{verb}：{message}").format(verb=verb, message=message)) + "\n")
     return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed",
             "message": message, "tree": payload}
 
@@ -3412,7 +3491,7 @@ def do_mac_sync(args):
         summary += _("；跳过 {count} 个符号链接").format(count=len(links))
     ok = not failed
     message = summary if ok else summary + _("；{count} 个没成，见 failed").format(count=len(failed))
-    sys.stderr.write(_("同步完成：{message}").format(message=message) + "\n")
+    sys.stderr.write(terminal_safe(_("同步完成：{message}").format(message=message)) + "\n")
     return {"id": str(uuid.uuid4()), "ok": ok, "code": "ok" if ok else "operation_failed", "message": message,
             "sync": {"direction": args.direction, "dryRun": False, "transferred": done, "deleted": deleted,
                      "unchanged": unchanged, "bytes": moved, "failed": failed, "skippedLinks": links,
@@ -3441,7 +3520,7 @@ def mac_output(response, fmt, action):
     payload = response.get("file")
     if isinstance(payload, dict):
         if payload.get("text") is not None:
-            return payload["text"]
+            return Payload(payload["text"])
         return _("-- {path} 不是 UTF-8 文本（{bytes} 字节）：用 `mac get` 下载后本地处理").format(
             path=payload.get("path", "?"), bytes=payload.get("bytes", "?"))
     if action == "mac-grep":
@@ -3477,9 +3556,10 @@ def mac_output(response, fmt, action):
         return None
     if mac.get("text") is not None and action in ("mac-read", "mac-tree", "mac-patch", "mac-xattr"):
         body = mac["text"].rstrip("\n")
-        if action == "mac-read" or mac.get("truncated"):
-            body += "\n-- " + (response.get("message") or "")
-        return body
+        note = "\n" + human_safe("-- " + (response.get("message") or "")) \
+            if action == "mac-read" or mac.get("truncated") else ""
+        # 读文件的正文原样给；目录树、补丁结果、扩展属性是对面报的名字，照常在出口消毒。
+        return Payload(body + note) if action == "mac-read" else body + note
     if action == "mac-xattr" and mac.get("names") is not None:
         return "\n".join(mac["names"]) or _("（没有扩展属性）")
     if action == "mac-wait-change" and mac.get("names"):
@@ -3578,9 +3658,7 @@ def render_table(header, rows, limit=60):
     for row in rows:
         cells = []
         for index, value in enumerate(row):
-            text = value.replace("\n", " ")
-            if len(text) > limit:
-                text = text[: limit - 1] + "…"
+            text = clip_safe(value, limit)
             cells.append(text)
             widths[index] = max(widths[index], len(text))
         clipped.append(cells)
@@ -3595,12 +3673,30 @@ def render_csv(header, rows):
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([[terminal_safe(cell) for cell in row] for row in rows])
     return buffer.getvalue().rstrip("\n")
 
 
 def as_json(response):
-    return json.dumps(response, ensure_ascii=False, indent=2, sort_keys=True)
+    # C0 由 json 自己转义；C1 与 Cf（双向覆盖符等）在 ensure_ascii=False 下会原样落到终端里，
+    # 这里也写成 \uXXXX。解析回来一字不差（JSON 字符串里本来就可以这样写）。
+    # （C0 不在这里动：字符串里的 json 已经转义了，剩下的是缩进用的换行。）
+    text = json.dumps(response, ensure_ascii=False, indent=2, sort_keys=True)
+    if not any(_needs_json_escape(char) for char in text):
+        return Payload(text)
+    return Payload("".join(_json_escape(char) if _needs_json_escape(char) else char for char in text))
+
+
+def _needs_json_escape(char):
+    return ord(char) >= 0x7F and _is_unsafe_char(char)
+
+
+def _json_escape(char):
+    code = ord(char)
+    if code <= 0xFFFF:
+        return "\\u%04x" % code
+    code -= 0x10000
+    return "\\u%04x\\u%04x" % (0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF))
 
 
 def run_output(response):
@@ -3617,7 +3713,8 @@ def run_output(response):
         head += "  %sms" % item.get("durationMs", 0)
         if item.get("errorCode"):
             head += "  [%s] %s" % (item["errorCode"], item.get("errorMessage") or "")
-        blocks.append(head)
+        blocks.append(human_safe(head))
+        # 命令的输出是正文：和 ssh 一样原样给（`emit` 不再动它）。
         body = item.get("output") or ""
         if body:
             blocks.append(body.rstrip("\n"))
@@ -3625,7 +3722,7 @@ def run_output(response):
             blocks.append(_("-- 输出已截断（--max-lines / --max-bytes 可放宽）"))
         if item.get("timedOut"):
             blocks.append(_("-- 已超时；**命令可能还在远端继续跑**"))
-    return "\n".join(blocks)
+    return Payload("\n".join(blocks))
 
 
 def terminal_run_output(response):
@@ -3639,10 +3736,10 @@ def terminal_run_output(response):
     state = run.get("state", "?")
     if run.get("exitCode") is not None:
         state += "  exit=%s" % run["exitCode"]
-    parts.append("-- [%s] %s" % (str(run.get("terminal", "?"))[:8], state))
+    parts.append(human_safe("-- [%s] %s" % (str(run.get("terminal", "?"))[:8], state)))
     if response.get("message"):
-        parts.append("-- " + response["message"])
-    return "\n".join(parts)
+        parts.append(human_safe("-- " + response["message"]))
+    return Payload("\n".join(parts))
 
 
 # 这两个码的响应带着完整的 results，人类可读格式照常逐主机渲染。
@@ -3670,7 +3767,7 @@ def render(response, fmt, args):
         # 一股脑打 JSON 等于把表格吞了。json 格式仍然原样输出。
         if (fmt != "json" and response.get("code") in RUN_BATCH_CODES
                 and isinstance(response.get("results"), list)):
-            return run_output(response) + "\n-- " + (response.get("message") or "")
+            return Payload(run_output(response) + "\n" + human_safe("-- " + (response.get("message") or "")))
         return as_json(response)
     action = resolved_action(args)
 
@@ -3692,7 +3789,7 @@ def render(response, fmt, args):
             body = payload["text"]
             if payload.get("truncated"):
                 body += _("\n-- 内容不完整：读取期间远端文件变大了")
-            return body
+            return Payload(body)   # 文件正文，同 cat
         return _("-- {path} 不是 UTF-8 文本（{bytes} 字节）：用 `sftp get` 下载后本地处理").format(
             path=payload.get("path", "?"), bytes=payload.get("bytes", "?"))
 
@@ -3705,7 +3802,7 @@ def render(response, fmt, args):
         body = "\n".join(screen.get("lines") or [])
         if screen.get("truncated"):
             body += _("\n-- 读屏已截断")
-        return body
+        return Payload(body)   # 终端屏幕上就是这些字
 
     if action in ("run", "run-many", "quick-run"):
         return run_output(response)
@@ -3742,7 +3839,7 @@ def main():
         except BaseException as raised:      # noqa: BLE001
             response = {"id": None, "ok": False, "code": "local_failure",
                         "message": "%s: %s" % (type(raised).__name__, raised)}
-        print(as_json(response))
+        emit(as_json(response))
         return exit_code_for(response)
     if action in ("sftp-put", "sftp-get", "mac-put", "mac-get"):
         try:
@@ -3753,11 +3850,11 @@ def main():
             # 传输路径绝不能吐 traceback：调用方（模型 / 脚本）读的是 JSON + 退出码。
             response = {"id": None, "ok": False, "code": "local_failure",
                         "message": "%s: %s" % (type(raised).__name__, raised)}
-        print(render_transfer(response, fmt))
+        emit(render_transfer(response, fmt))
         return exit_code_for(response)
     request = make_mac_request(args) if action.startswith("mac-") else make_request(args)
     response = send_request(request)
-    print(render(response, fmt, args))
+    emit(render(response, fmt, args))
     return exit_code_for(response)
 
 

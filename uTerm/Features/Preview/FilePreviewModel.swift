@@ -28,8 +28,8 @@ nonisolated struct MarkdownImageCache: Sendable {
     private let maxEntryCount: Int
 
     /// 插入顺序（最旧在前），用于 FIFO 淘汰。
-    private var order: [String] = []
-    private var storage: [String: Data] = [:]
+    private var order: [RemoteNameKey] = []
+    private var storage: [RemoteNameKey: Data] = [:]
     private(set) var totalBytes = 0
 
     init(perImageByteCap: Int = MarkdownImageCache.perImageByteCap,
@@ -42,12 +42,12 @@ nonisolated struct MarkdownImageCache: Sendable {
 
     var count: Int { storage.count }
 
-    subscript(key: String) -> Data? { storage[key] }
+    subscript(key: RemoteNameKey) -> Data? { storage[key] }
 
     /// 插入一条。超出单图上限的不缓存；插入后按总字节/条目数上限从最旧开始淘汰。
     /// 返回是否成功缓存（超单图上限时为 false）。
     @discardableResult
-    mutating func insert(_ data: Data, forKey key: String) -> Bool {
+    mutating func insert(_ data: Data, forKey key: RemoteNameKey) -> Bool {
         guard data.count <= perImageByteCap else { return false }
 
         if let existing = storage[key] {
@@ -143,7 +143,7 @@ final class FilePreviewModel {
     private var markdownImageCache = MarkdownImageCache()
     /// 每个文档读过哪些图（路径）：一篇文档最多读 `MarkdownImageCache.maxEntryCount` 张，免得一篇引用上千张图的文档
     /// 一下子开出上千次 SFTP 读。重读文档时清掉。
-    private var markdownImageRequests: [UUID: Set<String>] = [:]
+    private var markdownImageRequests: [UUID: Set<RemoteNameKey>] = [:]
     /// 不在预览区里的文档：终端区里由终端打开的文件标签（`openDetached`）。各自带着发起那个终端所连主机的 SFTP
     /// （终端窗口的标签可连不同主机，工作区里也可能不是侧栏那台），按文档 id 记；标签关掉时 `releaseDetached`。
     private var detached: [UUID: (buffer: FileBuffer, provider: any SFTPProviding)] = [:]
@@ -240,7 +240,7 @@ final class FilePreviewModel {
     func open(path: String, fileSize: Int64?, mtime: Date?, asPreview: Bool = false,
               focusEditor: Bool = true) async {
         // 已打开（在任何一个组里）则只切过去；永久打开命中预览标签时转正。
-        if let existing = panes.allTabs.first(where: { $0.payload.remotePath == path }) {
+        if let existing = panes.allTabs.first(where: { $0.payload.remotePath.remoteKey == path.remoteKey }) {
             selectTab(existing.id, focusEditor: focusEditor)
             if !asPreview { panes.promoteTransient(existing.id) }
             return
@@ -284,7 +284,7 @@ final class FilePreviewModel {
     /// 没打开过：以预览（临时）标签打开，顶替上一个预览标签。已经打开：切过去并重读——程序刚改过它；用户改了没存
     /// （脏）或正在存的不重读，免得盖掉用户的编辑。两种都不抢键盘焦点。
     func reveal(path: String) async {
-        guard let existing = panes.allTabs.first(where: { $0.payload.remotePath == path }) else {
+        guard let existing = panes.allTabs.first(where: { $0.payload.remotePath.remoteKey == path.remoteKey }) else {
             await open(path: path, fileSize: nil, mtime: nil, asPreview: true, focusEditor: false)
             return
         }
@@ -611,11 +611,11 @@ final class FilePreviewModel {
                 throw PreviewDownloadError.providerUnavailable
             }
             var requested = markdownImageRequests[buffer.id] ?? []
-            if !requested.contains(path) {
+            if !requested.contains(path.remoteKey) {
                 guard requested.count < MarkdownImageCache.maxEntryCount else {
                     throw PreviewDownloadError.tooManyMarkdownImages
                 }
-                requested.insert(path)
+                requested.insert(path.remoteKey)
                 markdownImageRequests[buffer.id] = requested
             }
             // 先 stat：只读普通文件（FIFO、设备读了会卡住侧栏共用的会话，见 `TerminalLinkTarget`），太大的不下。
@@ -882,9 +882,9 @@ final class FilePreviewModel {
     private enum MarkdownImageResource {
         case remotePath(String)
 
-        var cacheKey: String {
+        var cacheKey: RemoteNameKey {
             switch self {
-            case .remotePath(let path): return "sftp:\(path)"
+            case .remotePath(let path): return RemoteNameKey("sftp:\(path)")
             }
         }
     }
@@ -954,7 +954,7 @@ extension FilePreviewModel {
             return
         }
         let alert = NSAlert()
-        alert.messageText = String(localized: "是否保存对「\(buf.displayName)」的更改？")
+        alert.messageText = String(localized: "是否保存对「\(RemoteName.isolated(buf.displayName))」的更改？")
         alert.informativeText = String(localized: "如果不保存，你的更改将丢失。")
         alert.addButton(withTitle: String(localized: "保存"))
         alert.addButton(withTitle: String(localized: "不保存"))

@@ -15,6 +15,7 @@ extension SFTPSession {
         profile: ServerProfile,
         container: ModelContainer,
         approver: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+        approvesInteractively: Bool = true,
         keychain: some KeychainReading & Sendable = KeychainStore()
     ) async throws -> SFTPSession {
         let snapshot = SSHConnection.ProfileSnapshot(profile)
@@ -27,7 +28,8 @@ extension SFTPSession {
             profile: snapshot,
             auth: resolved.auth, jumpHostAuth: resolved.jump,
             hostKeyVerifier: HostKeyVerifier(modelContainer: container),
-            hostKeyApprover: approver)
+            hostKeyApprover: approver,
+            approvesInteractively: approvesInteractively)
         let session = try await SFTPSession(connected: connected)
         ConnectTimeline.current?.mark("sftpInit")
         return session

@@ -99,7 +99,7 @@ final class ParallelRunModel {
         laneTasks = [Task {
             var execTargets: [ExecTarget] = []
             for profile in targets {
-                execTargets.append(await makeExecTarget(profile: profile, trustNewKeys: false))
+                execTargets.append(await makeExecTarget(profile: profile, approving: nil))
             }
             guard !Task.isCancelled, gen == generation else { return }
             laneTasks += execTargets.enumerated().map { index, target in
@@ -124,8 +124,12 @@ final class ParallelRunModel {
 
     func trustAndRetry(serverID: UUID) {
         guard let index = states.firstIndex(where: { $0.id == serverID }),
-              states[index].hostKeyUntrusted,
+              case .hostKeyUntrusted(let challenge)? = states[index].failure,
               let profile = targets.first(where: { $0.id == serverID }) else { return }
+        // 只放行用户在卡片上看到的那一问（哪台、哪一跳、什么问题、哪把钥匙）：跳板机后面的目标、换了一把钥匙、
+        // 连接方式之后主机密钥也变了，都会再出一张卡片，不会被这一下顺手放过去。连接方式那一问的同意也不在这里记：
+        // 连上之后按 USSHKit 报的结果记（`LegacyAlgorithmGate.connectionSucceeded`），连不上什么也不留。
+        let pin = HostKeyApprovalPin(challenge)
         // 首轮已经收尾、落过日志，补跑这一台才不再记第二条；首轮还在跑（别的台还没完）时
         // 点的，照常在最终收尾时记一次——改前一律置 false，整次运行就从日志里消失了。
         if finishedAt != nil { recordOnFinalize = false }
@@ -134,7 +138,7 @@ final class ParallelRunModel {
         generation += 1
         running = true
         laneTasks.append(Task {
-            let target = await makeExecTarget(profile: profile, trustNewKeys: true)
+            let target = await makeExecTarget(profile: profile, approving: pin)
             await self.runServer(at: index, target: target)
         })
     }
@@ -153,8 +157,8 @@ final class ParallelRunModel {
         states[i].failure = nil
     }
 
-    private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) async -> ExecTarget {
-        let session = await executor.makeSession(for: profile, trustNewKeys: trustNewKeys)
+    private func makeExecTarget(profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ExecTarget {
+        let session = await executor.makeSession(for: profile, approving: pin)
         return ExecTarget(id: profile.id, name: QuickCommandTargets.displayName(profile),
                           endpoint: QuickCommandTargets.endpoint(profile),
                           session: session)
@@ -359,10 +363,15 @@ final class ParallelRunModel {
         states[index].tone = .failed
         states[index].exitCode = nil
         if let challenge = target.session.takeHostKeyChallenge() {
-            let mismatch: Bool = { if case .mismatch = challenge.kind { return true }; return false }()
             states[index].failure = .hostKeyUntrusted(challenge)
-            states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))
-            states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: mismatch)
+            switch challenge.kind {
+            case .weakAlgorithms:
+                states[index].lines.append(ParallelTermLine(kind: .err, text: ParallelRunCopy.weakAlgorithmsLine(challenge)))
+                states[index].summary = ParallelRunCopy.weakAlgorithms(challenge)
+            case .unknown, .mismatch:
+                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))
+                states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: challenge.kind == .mismatch)
+            }
         } else if let stall = outcome.stall {
             // 连通性预检（`true`）都卡住：多半是连接半死不活。
             markStalled(at: index, stall: stall, streamed: false)
