@@ -656,6 +656,10 @@ struct LocalShellWindowView: View {
             registry.setArranger(forWindow: windowID.id) { [weak windowModel] order in
                 windowModel?.groups.arrangeTabs(by: order, id: LocalShellWindowModel.heldSessionID)
             }
+            // 手机远控把这个窗口的 Code 标签页镜像成设备上的 Code 标签页（63 号消息）。
+            registry.setCodeTabs(forWindow: windowID.id) { [weak windowModel] in
+                windowModel?.remoteCodeTabs() ?? []
+            }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
             // 按标签页数，不按 shell 数：接回的可能只有一个 Code 标签页（里面的会话这时可能还没接回）。
