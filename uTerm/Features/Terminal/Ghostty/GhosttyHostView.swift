@@ -57,6 +57,8 @@ final class GhosttyContainerView: NSView {
     /// 滚动条：Ghostty 自己不画，按它报的总行数 / 视口位置自绘。只在用户滚动、且确有历史可滚时浮现，
     /// 停手约 1 s 后淡出。只显示，不能拖。
     let scrollIndicator = GhosttyScrollIndicator()
+    /// 按住 ⌘ 指着链接时，左下角显示它的地址（和 Ghostty 的 macOS App 一样）；鼠标挪到左下角时换到右下角，不挡住它。
+    let linkPreview = GhosttyLinkPreview()
     /// 「停稳再提交」的判定与顺延计时（与 iOS 的容器共用）。
     private let settler = TerminalResizeSettler()
     private var lastScrollbar: TerminalScrollbar?
@@ -80,6 +82,8 @@ final class GhosttyContainerView: NSView {
         self.surface?.removeFromSuperview()
         self.surface?.onScrollbar = nil
         self.surface?.onScrollActivity = nil
+        self.surface?.onHoveredLinkChange = nil
+        linkPreview.show(nil)
         surface.removeFromSuperview()
         self.surface = surface
         settler.cancel()
@@ -87,7 +91,9 @@ final class GhosttyContainerView: NSView {
         surface.holdsGridReports = true
         addSubview(surface)
         addSubview(scrollIndicator, positioned: .above, relativeTo: surface)
+        addSubview(linkPreview, positioned: .above, relativeTo: scrollIndicator)
         surface.onScrollbar = { [weak self] in self?.scrollbarDidChange($0) }
+        surface.onHoveredLinkChange = { [weak self] in self?.hoveredLinkDidChange($0) }
         surface.onScrollActivity = { [weak self] in self?.revealScrollIndicator() }
         needsLayout = true
         requestFocus()
@@ -102,6 +108,7 @@ final class GhosttyContainerView: NSView {
     override func layout() {
         super.layout()
         syncSurfaceFrame(settled: false)
+        layoutLinkPreview()
     }
 
     /// 把 Ghostty 视图的尺寸对齐到容器。视图尺寸一变 Ghostty 就立刻按新网格重排，而程序要等 SIGWINCH 才知道；
@@ -189,6 +196,23 @@ final class GhosttyContainerView: NSView {
     }
 
     /// 滑块的位置：轨道是终端视图露在窗格里的那一段的右边缘；滑块高度按「一屏 ÷ 总行数」，最矮 24pt。
+    private func hoveredLinkDidChange(_ link: String?) {
+        linkPreview.show(link)
+        layoutLinkPreview()
+    }
+
+    private func layoutLinkPreview() {
+        guard linkPreview.isShown, let surface else { return }
+        let area = surface.frame.intersection(bounds)
+        let maxWidth = max(0, min(area.width - 16, area.width * 0.6))
+        let size = linkPreview.fittingSize(maxWidth: maxWidth)
+        var frame = NSRect(x: area.minX + 4, y: area.minY + 4, width: size.width, height: size.height)
+        if let window, frame.insetBy(dx: -8, dy: -8).contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
+            frame.origin.x = area.maxX - 4 - size.width
+        }
+        if linkPreview.frame != frame { linkPreview.frame = frame }
+    }
+
     private func layoutScrollIndicator() {
         guard let surface, let bar = lastScrollbar, bar.total > bar.len else {
             scrollIndicator.isHidden = true
@@ -274,6 +298,63 @@ final class GhosttyContainerView: NSView {
 }
 
 /// Ghostty 窗格的滚动条滑块：一条半透明的圆角条，不接鼠标。
+/// ⌘ 指着链接时显示地址的小条：只显示，不接鼠标（点击照样落到终端上）。
+final class GhosttyLinkPreview: NSView {
+    private let label = NSTextField(labelWithString: "")
+    private(set) var isShown = false
+    var text: String { label.stringValue }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        isHidden = true
+        label.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        label.lineBreakMode = .byTruncatingMiddle
+        label.maximumNumberOfLines = 1
+        label.cell?.truncatesLastVisibleLine = true
+        addSubview(label)
+        updateColor()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColor()
+    }
+
+    private func updateColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92).cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+            layer?.borderWidth = 1
+            label.textColor = .secondaryLabelColor
+        }
+    }
+
+    func show(_ link: String?) {
+        isShown = link != nil
+        isHidden = !isShown
+        if let link { label.stringValue = link }
+    }
+
+    /// 放得下就按文字宽度，放不下从中间截断。
+    func fittingSize(maxWidth: CGFloat) -> NSSize {
+        let natural = label.intrinsicContentSize
+        let width = min(ceil(natural.width) + 12, maxWidth)
+        return NSSize(width: width, height: ceil(natural.height) + 6)
+    }
+
+    override func layout() {
+        super.layout()
+        label.frame = bounds.insetBy(dx: 6, dy: 3)
+    }
+}
+
 final class GhosttyScrollIndicator: NSView {
     private(set) var isShown = false
 

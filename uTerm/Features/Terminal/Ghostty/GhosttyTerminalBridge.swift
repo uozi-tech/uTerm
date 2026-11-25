@@ -348,13 +348,18 @@ final class GhosttyTerminalBridge {
     /// （标签藏着、surface 没在吃字节时它照样更新），surface 的那几个回调不接；surface 的生灭由 `TerminalSurfaceLink` 接。
     private final class DelegateProxy: TerminalSurfaceFocusDelegate,
         TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceScrollbarDelegate, TerminalSurfaceSearchDelegate,
-        TerminalSurfaceOpenURLHandlingDelegate {
+        TerminalSurfaceOpenURLHandlingDelegate, TerminalSurfaceHoverLinkDelegate, TerminalSurfaceMouseShapeDelegate {
         weak var bridge: GhosttyTerminalBridge?
 
         /// ⌘ 点链接：网址交给系统，路径在预览区打开（`TerminalSession.openTerminalLink`）。
         func terminalShouldHandleOpenURL(_ url: String, kind: TerminalOpenURLKind) -> Bool {
             bridge?.owner?.openTerminalLink(url, kind: kind) ?? false
         }
+
+        /// 按住 ⌘ 指着链接：引擎画下划线、报来地址和手形指针，宿主照着换指针、在底部显示地址。
+        /// 没接这两个回调之前，⌘ 点得开，但按下 ⌘ 时界面上什么都不变。
+        func terminalDidUpdateHoverLink(_ url: String?) { bridge?.view.updateHoveredLink(url) }
+        func terminalDidChangeMouseShape(_ shape: TerminalMouseShape) { bridge?.view.updateMouseShape(shape) }
 
         // 回滚区查找：引擎报来的一律交给会话的查找状态（两端共用的 `TerminalSearch`）。
         func terminalDidStartSearch(needle: String?) { bridge?.link.search.handle(.started(needle: needle)) }
@@ -414,6 +419,42 @@ final class GhosttySurfaceView: AppTerminalView {
     var onScrollActivity: (@MainActor () -> Void)?
     /// 这片终端的回滚区查找（会话的 `TerminalSurfaceLink.search`）：⌘F / ⌘G / ⇧⌘G / ⌘E 与「编辑 ▸ 查找」菜单都落到它上面。
     weak var search: TerminalSearch?
+
+    /// 按住 ⌘ 指着的链接（引擎在文字里认出来的网址 / 路径，或 OSC 8 超链接）；nil = 没指着。
+    /// 下划线由引擎自己画；这里只管宿主这一侧：手形指针、容器底部显示地址（`onHoveredLinkChange`）。
+    private(set) var hoveredLink: String?
+    var onHoveredLinkChange: (@MainActor (String?) -> Void)?
+    /// 终端里的鼠标指针，照引擎报的形状（文字上是 I 形，⌘ 指着链接是手形）。
+    private(set) var mouseCursor: NSCursor = .iBeam
+
+    /// 引擎报来的「鼠标下的链接」（空串 = 离开链接）。
+    func updateHoveredLink(_ url: String?) {
+        let link = url.flatMap { $0.isEmpty ? nil : $0 }
+        guard link != hoveredLink else { return }
+        hoveredLink = link
+        onHoveredLinkChange?(link)
+    }
+
+    /// 引擎报来的指针形状：⌘ 指着链接时是 pointer，离开 / 松开 ⌘ 回到程序要的形状（默认文字）。
+    func updateMouseShape(_ shape: TerminalMouseShape) {
+        let cursor: NSCursor = switch shape {
+        case .pointer: .pointingHand
+        case .default: .arrow
+        case .notAllowed: .operationNotAllowed
+        case .text, .other: .iBeam
+        }
+        guard cursor != mouseCursor else { return }
+        mouseCursor = cursor
+        window?.invalidateCursorRects(for: self)
+        // 指针就在终端上时当场换：按下 / 松开 ⌘ 时鼠标没动，光标区域要等下一次移动才会重新生效。
+        if let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
+            cursor.set()
+        }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: mouseCursor)
+    }
 
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
