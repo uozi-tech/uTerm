@@ -16,7 +16,8 @@ protocol CodeTabTerminal: AnyObject {
     func dispose()
     /// 那条命令起止标记的编号（存进保持进程的布局，重启后据此认出程序退出）。没有为 nil。
     var codeCommandMarker: String? { get }
-    /// 程序经 OSC 7501 报的状态（工作中、等确认、空闲……），同终端标签页上的圆点。没报过为 nil。
+    /// 程序经 OSC 7501 报的状态里最需要人处理的那条（工作中、等确认、空闲……），含空闲：取 `TerminalSession.programReport`，
+    /// 不是终端标签用的 `programStatus`（空闲时为 nil，侧栏会把停在输入框的会话当成没报过）。没报过为 nil。
     /// 界面在每一行自己的视图里读它：状态变了只重画那一行。
     var codeProgramStatus: ProgramStatusRecord? { get }
     /// App 重启后接回：命令照「还在跑」接上，再判一次程序在 App 不在时是不是已经退出了（规则见
@@ -85,6 +86,8 @@ final class CodeTabModel {
         var isUnmatched: Bool { path == nil && key == nil }
         /// 程序已经退出（留着最后的画面）。
         var isEnded: Bool { endedAt != nil }
+        /// 侧栏那一行上的状态（规则见 `CodeRunStatus`）。读终端的程序状态：在显示它的那一小块视图里读，变了只重画那一行。
+        var status: CodeRunStatus { .of(isEnded: isEnded, report: terminal.codeProgramStatus) }
     }
 
     /// 右边显示什么。

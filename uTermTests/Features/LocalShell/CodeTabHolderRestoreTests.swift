@@ -109,4 +109,64 @@ final class CodeTabHolderRestoreTests: XCTestCase {
 
         after.disposeAll()
     }
+
+    /// 假的编码工具：经 OSC 7501 报一次状态（同 Claude Code 报的样子），然后一直跑着。
+    private static func reporting(_ state: String) -> String {
+        "printf '\\033]7501;state=\(state):app=claude-code\\033\\\\'; sleep 600"
+    }
+
+    /// 侧栏那一行上的状态（「运行中」「空闲」……）跟着会话接回来：Claude Code 只在状态变化时报，接回之后不会为此再报一次，
+    /// 重启前报过什么，接回后那一行上就还是什么。「空闲」（做完一轮、停在输入框等人）也要写出来：它不上终端标签的圆点，
+    /// 但侧栏这一行没报过状态时什么都不写，不能和「空闲」混在一起。
+    func test_reported_program_status_comes_back_with_the_run() async throws {
+        let windowID = UUID()
+        let directory = NSTemporaryDirectory()
+        let before = model(windowID: windowID)
+        let codeID = before.openCodeTab(directory: directory)
+        let code = try XCTUnwrap(before.groups.tab(codeID)?.payload.codeTab)
+        let working = try XCTUnwrap(code.startNewSession(tool: .claude, command: Self.reporting("working"),
+                                                         directory: directory))
+        let idle = try XCTUnwrap(code.startNewSession(tool: .claude, command: Self.reporting("idle"),
+                                                      directory: directory))
+        let expected: [UUID: ProgramState] = [working.id: .working, idle.id: .idle]
+
+        func states(_ code: CodeTabModel) -> [UUID: ProgramState] {
+            var result: [UUID: ProgramState] = [:]
+            for run in code.runs {
+                if case .program(let record) = run.status { result[run.id] = record.state }
+            }
+            return result
+        }
+        let reported = await wait { states(code) == expected }
+        XCTAssertTrue(reported, "重启前侧栏那一行上的状态不对：\(states(code))")
+
+        let written = await wait {
+            for id in [working.id, idle.id] {
+                guard let layout = await self.stored(id)?.layout,
+                      layout.codeTabs?.first?.runs.map(\.session) == [working.id, idle.id] else { return false }
+            }
+            return true
+        }
+        XCTAssertTrue(written, "布局（含 Code 标签页）没写进保持进程")
+
+        let panes = try [working.id, idle.id].map { try XCTUnwrap(before.pane($0)) }
+        for pane in panes {
+            await (pane.session.backend as? LocalShellBackend)?.detach()
+            pane.session.detach()
+        }
+
+        let restorer = LocalShellRestorer(client: client, namespace: Self.namespace, gateTimeout: .milliseconds(50),
+                                          reopenDelay: .milliseconds(10))
+        restorer.install { _, _ in }
+        await restorer.restore()
+        let after = model(windowID: windowID)
+        restorer.adoptPending(windowID: windowID, into: after)
+        let back = try XCTUnwrap(after.groups.tab(codeID)?.payload.codeTab)
+        XCTAssertEqual(back.runs.map(\.id), [working.id, idle.id])
+
+        let restored = await wait { states(back) == expected }
+        XCTAssertTrue(restored, "接回后侧栏那一行上的状态丢了：\(states(back))")
+
+        after.disposeAll()
+    }
 }
