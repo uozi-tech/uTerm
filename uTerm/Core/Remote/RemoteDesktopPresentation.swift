@@ -74,6 +74,10 @@ extension RemoteDesktopSession {
         case .reconnecting:
             return RemoteDesktopNotice(spinner: true, title: String(localized: "连接已断开，正在重新连接…"),
                                        message: String(localized: "接上后画面会自动恢复"), dim: true)
+        case .streaming where awaitingFirstFrame && windowID != nil && supportsUnlock && screen.locked:
+            // 窗口模式、Mac 锁着屏：Mac 要等解锁后把窗口调成画布大小才发第一帧（见被控端 `awaitWindowFit`）。
+            // 这时由锁屏那一层（解锁入口 / 底部提示）说话，不再叠一层「正在连接」。
+            return nil
         case .streaming where awaitingFirstFrame:
             return RemoteDesktopNotice(spinner: true, title: String(localized: "正在连接 \(macName) 的屏幕…"),
                                        message: progress, dim: true)

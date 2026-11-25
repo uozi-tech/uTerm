@@ -740,6 +740,14 @@ final class FakeDesktopMac {
     var restoreDelay: Duration = .zero
     /// 改窗口大小要多久（真的 App 改大小带动画，辅助功能接口要等它停下来）。
     var fitDelay: Duration = .zero
+    /// Mac 停在锁屏界面（窗口模式判断要不要等着调大小用；手机那头的锁屏遮罩看 `screen.locked`）。
+    var screenLocked = false
+    /// 锁屏时辅助功能改不动别的 App 的窗口（2026-11-25 真机）：锁着时调大小一律不生效。
+    var fitRefusedWhileLocked = false
+    /// App 不让改窗口大小（锁不锁屏都改不动）。
+    var fitRefused = false
+    /// 被拒掉的调大小（按顺序）。
+    private(set) var refusedFits: [(id: UInt32, size: CGSize)] = []
     /// 开流前整理过几次显示器（无显示器换 2 倍模式那一步）。
     private(set) var preparedDisplays = 0
     /// 每次整理显示器时看的设备要的像素。
@@ -807,6 +815,10 @@ final class FakeDesktopMac {
             fitWindow: { [weak self] id, size in
                 if let delay = self?.fitDelay, delay > .zero { try? await Task.sleep(for: delay) }
                 guard let self, let index = self.windows.firstIndex(where: { $0.id == id }) else { return nil }
+                if self.fitRefused || (self.fitRefusedWhileLocked && self.screenLocked) {
+                    self.refusedFits.append((id, size))
+                    return nil
+                }
                 self.fittedWindows.append((id, size))
                 let original = self.windows[index].bounds
                 let fitted = CGSize(width: max(size.width, self.minimumWindowSize.width),
@@ -849,6 +861,7 @@ final class FakeDesktopMac {
                 guard let self, id == self.display.id, self.displayAfterWake != nil else { return }
                 self.mainReplaced = true
             },
+            isScreenLocked: { [weak self] in self?.screenLocked ?? false },
             isAudioEnabled: { [weak self] in self?.audioEnabled ?? false },
             makeAudioSource: { [weak self] _ in
                 let source = SyntheticAudioSource()

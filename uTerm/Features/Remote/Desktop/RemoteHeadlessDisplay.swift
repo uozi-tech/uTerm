@@ -612,11 +612,17 @@ enum RemoteWindowStage {
         }
         releaseTask?.cancel()
         releaseTask = nil
-        staged.insert(id)
+        let wasStaged = staged.insert(id).inserted == false
         let target = CGRect(x: area.minX, y: area.minY, width: min(fit.width, area.width).rounded(),
                             height: min(fit.height, area.height).rounded())
         let placed = await Task.detached { RemoteDesktopWindows.place(id: id, frame: target) }.value
-        return placed ? entry.bounds : nil
+        // 第一次就挪不过去（锁屏时辅助功能改不动别的 App 的窗口）：它不在这块屏上，别记成在上面，否则没人再放回去、
+        // 屏也拆不掉。已经在上面的（这次只是换大小没换成）照旧留着。
+        guard placed else {
+            if !wasStaged { restored(id: id) }
+            return nil
+        }
+        return entry.bounds
     }
 
     /// 窗口放回原处了：这块屏上没有别的窗口就过一会儿拆掉。

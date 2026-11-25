@@ -68,8 +68,15 @@ final class RemoteHostConnection {
     private var desktopWindowStream: (windowID: UInt32, maxWidth: Int, maxHeight: Int)?
     /// 原地换尺寸一次只做一个，后来的排在后面。
     private var windowRefitTask: Task<Void, Never>?
+    /// 开流时窗口没调成要的大小、而 Mac 锁着屏：等着调好的那个任务和要调成的大小（见 `awaitWindowFit`）。
+    private var windowFitWait: Task<Void, Never>?
+    private var pendingWindowFit: CGSize?
     static let windowFrontInterval: Duration = .seconds(1)
     static let windowRestoreGrace: Duration = .milliseconds(600)
+    /// 等窗口调好时多久看一次锁屏状态（读会话字典，零点几毫秒）。解开了马上调。
+    static let windowFitPollInterval: Duration = .milliseconds(250)
+    /// 还锁着时每隔多久再试着调一次：说不定只是刚醒来那一下调不动（显示器重新配置）。
+    static let windowFitLockedRetry: Duration = .seconds(2)
     /// 手机认得远程解锁 / 帘幕相关消息（`desktopScreenState` 等）。
     private var peerSupportsUnlock = false
     /// 对端认得解锁结果里的 `inputBlocked`。
@@ -645,6 +652,7 @@ final class RemoteHostConnection {
         windowRestoreTask = nil
         windowFrontTask?.cancel()
         windowFrontTask = nil
+        cancelWindowFitWait()
         if let pending = desktopWindowRestore {
             // 调过大小的窗口：连接断了马上放回去，不等了。
             desktopWindowRestore = nil
@@ -756,6 +764,7 @@ extension RemoteHostConnection {
         windowRestoreTask = nil
         windowFrontTask?.cancel()
         windowFrontTask = nil
+        cancelWindowFitWait()
         if let pending = desktopWindowRestore, pending.id != request.windowID || request.windowFit == nil {
             desktopWindowRestore = nil
             await environment.restoreWindow(pending.id, pending.frame)
@@ -763,7 +772,10 @@ extension RemoteHostConnection {
         }
         // 独立键鼠：输入直接投给窗口所在的进程，不动 Mac 上的指针，也就不用把窗口提到最前、把 App 变成当前 App。
         let independentInput = request.windowID != nil && request.windowIndependentInput == true && canControl
+        // 窗口没调成要的大小、Mac 又锁着屏时：先不发画面，等调好（见 `awaitWindowFit`）。
+        var awaitedFit: CGSize?
         if let windowID = request.windowID {
+            var resized = false
             if canControl {
                 if independentInput {
                     await environment.surfaceWindow(windowID)
@@ -771,9 +783,9 @@ extension RemoteHostConnection {
                     await environment.raiseWindow(windowID)
                 }
                 if let fit = request.windowFit,
-                   let original = await environment.fitWindow(windowID, CGSize(width: fit.width, height: fit.height)),
-                   desktopWindowRestore == nil {
-                    desktopWindowRestore = (windowID, original)
+                   let original = await environment.fitWindow(windowID, CGSize(width: fit.width, height: fit.height)) {
+                    resized = true
+                    if desktopWindowRestore == nil { desktopWindowRestore = (windowID, original) }
                 }
             }
             guard generation == desktopStartGeneration, !isClosed else { return }
@@ -782,9 +794,22 @@ extension RemoteHostConnection {
             }
             display = window.display
             windowTitle = window.title
+            if canControl, let fit = request.windowFit.map({ CGSize(width: $0.width, height: $0.height) }),
+               RemoteWindowFitWait.mustWait(fit: fit, window: window.display.bounds.size, resized: resized,
+                                            locked: environment.isScreenLocked()) {
+                awaitedFit = fit
+                AppLogger.notice("远程桌面：Mac 锁着屏，窗口没调成 \(Int(fit.width))×\(Int(fit.height)) 点"
+                                 + "（现在 \(Int(window.display.bounds.width))×\(Int(window.display.bounds.height))），"
+                                 + "画面先不发，调好再发", category: RemoteLog.category)
+            }
         }
         let size = RemoteDesktopGeometry.streamSize(
             displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),
+            maxWidth: request.maxWidth, maxHeight: request.maxHeight)
+        // 告诉主控端的尺寸：等着调大小时报要调成的那个（主控端第一眼的排版就是最终的），画面随调好的窗口一起到。
+        let announced = awaitedFit.map { RemoteWindowFitWait.announced(fit: $0, window: display) } ?? display
+        let announcedSize = awaitedFit == nil ? size : RemoteDesktopGeometry.streamSize(
+            displayPixels: CGSize(width: announced.pixelWidth, height: announced.pixelHeight),
             maxWidth: request.maxWidth, maxHeight: request.maxHeight)
         if let current = desktop {
             // 换流：调过大小的窗口上面已经处理过了（还原，或留给新的这条流），这里不再还原。
@@ -826,6 +851,10 @@ extension RemoteHostConnection {
                     }
                 }
             })
+        if awaitedFit != nil {
+            // 在开采集之前挂上：之后采到的帧一张都漏不出去。
+            streamer.holdUntilWindowFits()
+        }
         desktop = (channel, streamer)
         desktopRoute.set(streamer)
         if let windowID = display.windowID, request.windowKeepFront == true, canControl {
@@ -836,8 +865,8 @@ extension RemoteHostConnection {
         setupScreenControl(channel: channel)
         let info = RemoteDesktopInfo(
             requestID: request.requestID, displayID: display.id,
-            displayWidth: display.bounds.width, displayHeight: display.bounds.height,
-            streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
+            displayWidth: announced.bounds.width, displayHeight: announced.bounds.height,
+            streamWidth: announcedSize.width, streamHeight: announcedSize.height, codec: request.codec, canControl: canControl,
             controlNote: canControl ? nil : String(localized: "Mac 上还没有给远程控制「辅助功能」权限，只能查看。在 Mac 的 uTerm「设置 › 远程控制」里授权，并按提示重新启动 uTerm，即可控制。"),
             videoDatagrams: video != nil ? true : nil,
             displays: { let all = environment.listDisplays(); return all.isEmpty ? nil : all }(),
@@ -862,6 +891,9 @@ extension RemoteHostConnection {
             sendScreenState()
             if request.cursorImages == true, !ownsPointer { startCursorShapes(channel: channel) }
         }
+        if let awaitedFit, let windowID = display.windowID {
+            awaitWindowFit(awaitedFit, windowID: windowID, channel: channel)
+        }
     }
 
     /// 回窗口列表。没开远程桌面、没有屏幕录制授权时回空表加一句原因（没授权时系统不给窗口标题）。
@@ -884,6 +916,11 @@ extension RemoteHostConnection {
     /// 主控端的画布变了（转屏、键盘弹出收起）：不停流，把正在看的窗口改成新的大小，流原地换尺寸
     /// （`RemoteDesktopStreamer.retarget`）。排着队做，前一次没改完时不抢。
     private func refitDesktopWindow(_ fit: RemoteDesktopFit, channel: UInt32) {
+        if windowFitWait != nil, desktop?.channel == channel {
+            // 还在等锁屏解开后调大小：换成新要的大小，到时候按它调。
+            pendingWindowFit = CGSize(width: fit.width, height: fit.height)
+            return
+        }
         let previous = windowRefitTask
         windowRefitTask = Task { [weak self] in
             await previous?.value
@@ -915,6 +952,71 @@ extension RemoteHostConnection {
         current.streamer.retarget(display: window.display, width: size.width, height: size.height)
     }
 
+    /// 开流时窗口没调成要的大小、Mac 又锁着屏（2026-11-25 真机：锁屏 + 息屏时接管 Claude 的窗口，窗口还是
+    /// 2304×1204 的原尺寸，手机上下两大条黑边）。辅助功能在锁屏时改不动别的 App 的窗口：那次 37 ms 就失败返回，
+    /// 解锁后不会有人再去调。所以画面先冻住（`RemoteDesktopStreamer.holdUntilWindowFits`），隔一会儿看一眼：
+    /// 解锁了就调，调成了把流原地换成新尺寸，主控端看到的第一帧就是调好的；解锁后还是调不成（App 不让改）就按窗口
+    /// 实际的大小放行，不再等。还锁着时也每隔 `windowFitLockedRetry` 试一次，刚醒来那一下调不动的这样也能接上。
+    ///
+    /// 不改走虚拟屏：把窗口挪到虚拟屏上同样要靠辅助功能挪窗口，锁屏时一样挪不动。
+    private func awaitWindowFit(_ fit: CGSize, windowID: UInt32, channel: UInt32) {
+        windowFitWait?.cancel()
+        pendingWindowFit = fit
+        windowFitWait = Task { [weak self] in
+            let clock = ContinuousClock()
+            var lastTry = clock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.windowFitPollInterval)
+                guard !Task.isCancelled, let self, !self.isClosed, self.desktop?.channel == channel else { return }
+                let environment = self.server.desktopEnvironment
+                let locked = environment.isScreenLocked()
+                guard !locked || clock.now - lastTry >= Self.windowFitLockedRetry else { continue }
+                lastTry = clock.now
+                let target = self.pendingWindowFit ?? fit
+                let original = await environment.fitWindow(windowID, target)
+                guard !Task.isCancelled, !self.isClosed, let current = self.desktop, current.channel == channel else { return }
+                if let original, self.desktopWindowRestore == nil { self.desktopWindowRestore = (windowID, original) }
+                guard let window = environment.window(windowID) else {
+                    // 窗口没了：放开，采集那头自己会停。
+                    self.finishWindowFitWait(streamer: current.streamer, window: nil)
+                    return
+                }
+                let stillLocked = environment.isScreenLocked()
+                if RemoteWindowFitWait.mustWait(fit: target, window: window.display.bounds.size, resized: original != nil,
+                                                locked: stillLocked) { continue }
+                AppLogger.notice("远程桌面：\(locked ? "锁屏时" : "解锁后")窗口调到了 \(Int(window.display.bounds.width))×"
+                                 + "\(Int(window.display.bounds.height)) 点（要 \(Int(target.width))×\(Int(target.height))），开始发画面",
+                                 category: RemoteLog.category)
+                self.finishWindowFitWait(streamer: current.streamer, window: window.display)
+                return
+            }
+        }
+    }
+
+    /// 不等了：流原地换成窗口现在的大小（`retarget` 放开冻结，下一张新尺寸的画面就是第一帧）。
+    private func finishWindowFitWait(streamer: RemoteDesktopStreamer, window: RemoteDesktopDisplay?) {
+        windowFitWait = nil
+        pendingWindowFit = nil
+        guard let window else {
+            streamer.cancelRetargetHold()
+            return
+        }
+        if let target = desktopWindowStream {
+            let size = RemoteDesktopGeometry.streamSize(
+                displayPixels: CGSize(width: window.pixelWidth, height: window.pixelHeight),
+                maxWidth: target.maxWidth, maxHeight: target.maxHeight)
+            streamer.retarget(display: window, width: size.width, height: size.height)
+        } else {
+            streamer.cancelRetargetHold()
+        }
+    }
+
+    private func cancelWindowFitWait() {
+        windowFitWait?.cancel()
+        windowFitWait = nil
+        pendingWindowFit = nil
+    }
+
     /// 这条流还在的时候把窗口保持在最前：每隔 `windowFrontInterval` 看一眼，它的 App 不是当前 App 了就再提一次。
     /// 被别的 App 盖住的窗口 macOS 不让它重绘，画面就停在最后一帧（2026-11-18 user 反馈）。
     private func keepWindowFront(_ windowID: UInt32, channel: UInt32) {
@@ -941,6 +1043,7 @@ extension RemoteHostConnection {
         guard let current = desktop, current.channel == channel else { return }
         windowFrontTask?.cancel()
         windowFrontTask = nil
+        cancelWindowFitWait()
         desktopWindowStream = nil
         if restoresWindow, desktopWindowRestore != nil {
             // 为这条流调过大小的窗口放回去——等一小会儿，主控端马上按新尺寸再开同一个窗口时就不用折腾了。

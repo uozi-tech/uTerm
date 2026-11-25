@@ -342,3 +342,27 @@ nonisolated struct RemoteDesktopFrameGeometry: Equatable, Sendable {
                                     contentWidth: contentFraction.width, contentHeight: contentFraction.height)
     }
 }
+
+/// 窗口模式开流时窗口没调成要的大小，要不要先不发画面、等调好（见 `RemoteHostConnection.awaitWindowFit`）。
+///
+/// 2026-11-25 真机（这台 Mac 接两块 2304×1296 点的外接屏，macOS 27.2）：锁屏 + 息屏时从手机接管 Claude 的窗口，
+/// 要 1426×1003 点，日志「窗口要调成 1426×1003 点，实际 2304×1204」，调大小那一步连同提窗口只花了 37 ms——
+/// 辅助功能接口当场就失败了（改成功的话要等窗口停稳，至少七十多毫秒）。同一时刻 Claude 那边先查了一次辅助功能授权、
+/// 接着报了一条 AppKit 错误；锁屏期间这类错误每几秒一条，解锁（14:43:39）之后一条都没有了。
+nonisolated enum RemoteWindowFitWait {
+    /// 要等：Mac 锁着屏、这次没改动窗口、窗口也不是要的大小。改动过（App 有最小尺寸，只调到了最小）、
+    /// 本来就是这个大小、没锁屏（App 不让改，等也没用）都不等。
+    static func mustWait(fit: CGSize, window: CGSize, resized: Bool, locked: Bool) -> Bool {
+        guard locked, !resized else { return false }
+        return abs(window.width - fit.width.rounded()) > 1 || abs(window.height - fit.height.rounded()) > 1
+    }
+
+    /// 等着调大小时先报给主控端的那块范围：位置不动，大小是要调成的，像素按窗口所在屏幕的倍数算。
+    static func announced(fit: CGSize, window: RemoteDesktopDisplay) -> RemoteDesktopDisplay {
+        let scale = window.bounds.width > 0 ? CGFloat(window.pixelWidth) / window.bounds.width : 1
+        let size = CGSize(width: fit.width.rounded(), height: fit.height.rounded())
+        return RemoteDesktopDisplay(id: window.id, bounds: CGRect(origin: window.bounds.origin, size: size),
+                                    pixelWidth: Int((size.width * scale).rounded()),
+                                    pixelHeight: Int((size.height * scale).rounded()), windowID: window.windowID)
+    }
+}

@@ -56,6 +56,9 @@ struct RemoteDesktopEnvironment {
     var isUnlockEnabled: @MainActor () -> Bool = { false }
     /// 开流前点亮显示器并等它醒来：息屏时 ScreenCaptureKit 列不出睡着的显示器，采集会起不来。测试里不做事。
     var wakeDisplay: @MainActor (_ id: CGDirectDisplayID) async -> Void = { _ in }
+    /// Mac 此刻停在锁屏界面。窗口模式靠它判断「窗口调不动大小是不是因为锁着屏」（见
+    /// `RemoteHostConnection.awaitWindowFit`）。和 `makeScreenController` 分开：那个只在支持远程解锁时才有。
+    var isScreenLocked: @MainActor () -> Bool = { false }
     /// 用户是否打开了「允许传输声音」。
     var isAudioEnabled: @MainActor () -> Bool = { false }
     /// 系统声音的来源。nil = 这台 Mac 不送声音。
@@ -112,6 +115,7 @@ struct RemoteDesktopEnvironment {
             makeScreenController: { LiveRemoteScreenController() },
             isUnlockEnabled: { settings.isDesktopUnlockEnabled },
             wakeDisplay: { id in await RemoteDisplayWake.wake(display: id) },
+            isScreenLocked: { RemoteScreenLock.isLocked() },
             isAudioEnabled: { settings.isDesktopAudioEnabled },
             makeAudioSource: { display in ScreenCaptureAudioSource(displayID: display.id) })
     }

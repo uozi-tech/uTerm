@@ -223,6 +223,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var pendingGeometry: RemoteDesktopFrameGeometry?
     /// 原地换尺寸进行到哪儿了（见 `holdForRetarget`）。
     private enum RetargetHold {
+        /// 窗口还没调成主控端要的大小（锁屏时调不动，等解锁再调，见 `holdUntilWindowFits`）：一张都不送，没有时限。
+        case awaitingFit
         /// 正在改窗口大小：采集还是旧的那套，出来的是把新窗口缩在旧画面里的过渡帧。
         case resizing
         /// 采集和编码器已经换成新尺寸：等第一张新尺寸的画面。
@@ -1111,14 +1113,32 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         link.queue.async { [self] in
             guard !isStopped, isLive else { return }
             retargetHold = .resizing
+            armRetargetHoldLimit()
+        }
+    }
+
+    /// 冻结最多 `retargetHoldLimitMillis`：到点还没出新尺寸的画面就放开。在连接队列上。
+    private func armRetargetHoldLimit() {
+        retargetHoldGeneration &+= 1
+        let generation = retargetHoldGeneration
+        link.queue.asyncAfter(deadline: .now() + .milliseconds(Self.retargetHoldLimitMillis)) { [weak self] in
+            guard let self, self.retargetHoldGeneration == generation, self.retargetHold != nil else { return }
+            AppLogger.info("远程桌面：原地换尺寸等了 \(Self.retargetHoldLimitMillis) ms 还没出新画面，先放开",
+                           category: RemoteLog.category)
+            self.releaseRetargetHold()
+        }
+    }
+
+    /// 开流时窗口没能调成主控端要的大小（Mac 锁着屏，辅助功能改不动别的 App 的窗口，2026-11-25 真机）：
+    /// 从第一帧起就一张都不送、几何也不发，直到窗口调好后 `retarget`（或放弃时 `retarget` 回原来的大小）。
+    /// 主控端看到的第一帧就是调好尺寸的画面，不会先看到一张原尺寸、上下留黑边的。
+    /// 要在 `start` 之前调（之后采到的帧才一张都漏不出去）；不像 `holdForRetarget` 那样到点自己放开。
+    func holdUntilWindowFits() {
+        link.queue.async { [self] in
+            guard !isStopped else { return }
+            retargetHold = .awaitingFit
             retargetHoldGeneration &+= 1
-            let generation = retargetHoldGeneration
-            link.queue.asyncAfter(deadline: .now() + .milliseconds(Self.retargetHoldLimitMillis)) { [weak self] in
-                guard let self, self.retargetHoldGeneration == generation, self.retargetHold != nil else { return }
-                AppLogger.info("远程桌面：原地换尺寸等了 \(Self.retargetHoldLimitMillis) ms 还没出新画面，先放开",
-                               category: RemoteLog.category)
-                self.releaseRetargetHold()
-            }
+            lastFrame = nil
         }
     }
 
@@ -1168,9 +1188,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                 source.retarget(display: display, width: width, height: height)
             }
             pendingGeometry = nil
-            if resized, retargetHold != nil {
+            if resized, let hold = retargetHold {
                 // 新的几何等第一张新尺寸的画面出来时紧挨着它发（`captured`），主控端一次换完。
                 retargetHold = .awaitingFrame
+                // 从「等窗口调好」过来的没有时限，这里补上：新尺寸的画面迟迟不来也不能一直黑着。
+                if hold == .awaitingFit { armRetargetHoldLimit() }
             } else {
                 // 像素数没变（只挪了位置、或窗口改不动），或者没经过冻结：马上告诉主控端。
                 releaseRetargetHold()
