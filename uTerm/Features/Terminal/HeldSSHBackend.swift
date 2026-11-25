@@ -149,6 +149,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
     }
 
     private func connectRequest() async throws -> SSHBridgeConnectRequest {
+        // 同 `SSHClientFactory.connect`：不合法的地址不交给辅助进程去解析。
+        try HostAddressValidation.validate(host: target.profile.host, jumpHost: target.profile.jumpHost?.host)
         let resolved = try await target.resolveAuth()
         let material = Self.material(resolved.auth)
         var jumpHost: SSHBridgeJumpHost?

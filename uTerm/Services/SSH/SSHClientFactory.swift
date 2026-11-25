@@ -155,6 +155,9 @@ nonisolated enum SSHClientFactory {
         approvesInteractively: Bool = true,
         maximumPacketSize: Int = SSHClientFactory.channelMaximumPacketSize
     ) async throws -> ConnectedClient {
+        // 像 IPv4 却不合法的地址（`10.31.102`、`256.1.1.1`）不交给系统解析：系统会按老式简写连到别的机器，
+        // 或者当域名去查（开着代理 TUN 时查得到假 IP）。所有建连（终端、SFTP、转发、命令行、测试连接）都经这里。
+        try HostAddressValidation.validate(host: profile.host, jumpHost: profile.jumpHost?.host)
         LocalNetworkUse.markUsed()
         let target = packageAuth(auth)
         let jumpHost: USSHKit.SSHJumpHost?

@@ -28,8 +28,10 @@ struct HostFormSheet: View {
                 VStack(spacing: 22) {
                     MInsetGroup(header: String(localized: "连接", comment: "主机表单分组：连接参数")) {
                         formInput(String(localized: "名称"), String(localized: "例如：prod-web-01"), $draft.name, autocap: .sentences)
-                        formInput(String(localized: "主机地址"), String(localized: "example.com 或 10.0.0.1"), $draft.host)
-                        formInput(String(localized: "端口"), "22", $draft.port, keyboard: .numberPad, last: false)
+                        formInput(String(localized: "主机地址"), String(localized: "example.com 或 10.0.0.1"), $draft.host,
+                                  error: draft.hostError)
+                        formInput(String(localized: "端口"), "22", $draft.port, keyboard: .numberPad,
+                                  error: draft.portError, last: false)
                         formInput(String(localized: "用户名"), "root", $draft.username, last: true)
                     }
 
@@ -128,6 +130,7 @@ struct HostFormSheet: View {
     private func formInput(_ label: String, _ placeholder: String, _ binding: Binding<String>,
                            keyboard: UIKeyboardType = .default,
                            autocap: TextInputAutocapitalization = .never,
+                           error: String? = nil,
                            last: Bool = false) -> some View {
         VStack(spacing: 0) {
             HStack {
@@ -138,6 +141,14 @@ struct HostFormSheet: View {
                     .autocorrectionDisabled().multilineTextAlignment(.trailing)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
+            // 填错的地址 / 端口当场说明，保存按钮随之不可点（`HostDraft.isValid`）。
+            if let error {
+                Text(error)
+                    .font(M.sans(12.5)).foregroundStyle(M.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14).padding(.bottom, 10)
+            }
             if !last { MRowDivider() }
         }
     }

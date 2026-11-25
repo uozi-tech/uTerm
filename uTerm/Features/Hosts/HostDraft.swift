@@ -80,10 +80,17 @@ struct HostDraft {
         return nil
     }
 
-    /// 能否保存：名称 / 主机 / 用户名必填、端口合法、私钥认证须选密钥、开了跳板机须选一台。
+    /// 地址 inline 校验：像 IPv4 却不合法（`10.31.102`、`256.1.1.1`、`1.2.3.4.5`、`010.0.0.1`）当场报错。
+    /// 这类写法交给系统会被按老式简写解析成另一台机器，或者当域名去查，见 `HostAddressValidation`。
+    /// 留空不在这里报（必填由各端自己提示）。
+    var hostError: String? {
+        HostAddressValidation.isInvalidIPv4(trimmedHost) ? HostAddressValidation.message(for: trimmedHost) : nil
+    }
+
+    /// 能否保存：名称 / 主机 / 用户名必填、地址与端口合法、私钥认证须选密钥、开了跳板机须选一台。
     var isValid: Bool {
         guard !trimmedName.isEmpty, !trimmedHost.isEmpty, !trimmedUsername.isEmpty,
-              portError == nil else { return false }
+              hostError == nil, portError == nil else { return false }
         if auth == .privateKey, keyID == nil { return false }
         if useJumpHost, jumpHostID == nil { return false }
         return true

@@ -265,8 +265,9 @@ struct ServerFormView: View {
     /// 共享校验之外再加一条：主机字段编辑过又清空时的 inline 报错也拦住保存。
     private var isValid: Bool { draft.isValid && hostError == nil }
 
-    /// 主机名 inline 校验：必填。仅在用户编辑过又清空时提示（避免开屏 / 编辑态即红）。
+    /// 主机名 inline 校验：编辑过又清空时提示必填（避免开屏 / 编辑态即红）；不合法的 IP 写法随时提示（见 `HostDraft.hostError`）。
     private var hostError: String? {
+        if let error = draft.hostError { return error }
         guard hostTouched else { return nil }
         return draft.trimmedHost.isEmpty ? String(localized: "填写主机地址") : nil
     }
@@ -287,7 +288,7 @@ struct ServerFormView: View {
     /// 测试进行中时由 footer 单独判定（按钮转「取消测试」），此处不含 inFlight。
     private var canTest: Bool {
         guard !draft.trimmedHost.isEmpty, !draft.trimmedUsername.isEmpty,
-              draft.portError == nil else { return false }
+              draft.hostError == nil, draft.portError == nil else { return false }
         if draft.useJumpHost, draft.jumpHostID == nil { return false }
         switch draft.auth {
         case .password: return !draft.password.isEmpty
