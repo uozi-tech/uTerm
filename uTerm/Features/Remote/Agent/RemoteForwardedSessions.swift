@@ -7,6 +7,8 @@ import Foundation
 @MainActor
 final class RemoteForwardedSessions: RemoteHostSessions {
     private(set) var entries: [RemoteHostSessionEntry] = []
+    /// App 最近一次交来的 Code 标签页。App 从没交来过（老 App）为 nil；App 走了留着最后一份。
+    private var latestCodeTabs: [RemoteCodeTabInfo]?
     private(set) var terminalEngine: String
     /// App 报了「接回完成」。App 走了就变回 false，直到它回来再报。
     private(set) var isRestored = false
@@ -67,6 +69,8 @@ final class RemoteForwardedSessions: RemoteHostSessions {
         guard update.restored else { return }
         let previous = entries
         entries = update.entries
+        let codeTabsChanged = update.codeTabs.map { $0 != latestCodeTabs } ?? false
+        if let codeTabs = update.codeTabs { latestCodeTabs = codeTabs }
         let becameRestored = !isRestored
         isRestored = true
         if becameRestored {
@@ -74,6 +78,8 @@ final class RemoteForwardedSessions: RemoteHostSessions {
             restoreWaiters.removeAll()
             resumeSuspended()
         }
+        // Code 标签页先报：之后会话列表推出去之前，归属已经发给了设备（同一轮里 63 先于 20）。
+        if codeTabsChanged { observer?.codeTabsChanged() }
         notifyChanges(from: previous)
     }
 
@@ -96,6 +102,8 @@ final class RemoteForwardedSessions: RemoteHostSessions {
     // MARK: - RemoteHostSessions
 
     func orderedSessions() -> [RemoteHostSessionEntry] { entries }
+
+    func codeTabs() -> [RemoteCodeTabInfo]? { latestCodeTabs }
 
     func observe(_ observer: RemoteHostSessionObserver) { self.observer = observer }
 

@@ -130,6 +130,8 @@ nonisolated struct RemoteHostAgentSessions: Codable, Equatable, Sendable {
     var restored: Bool
     /// 手机新开本机终端时可选的目录（不允许打开本机终端时为空）。
     var workspaces: [String]?
+    /// Mac 上的 Code 标签页（63 号消息）。和会话目录同一包送达，两者对得上。老 App 不交（nil）：远控进程不发 63。
+    var codeTabs: [RemoteCodeTabInfo]? = nil
 }
 
 nonisolated struct RemoteHostAgentHello: Codable, Sendable {

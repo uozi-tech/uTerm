@@ -115,6 +115,9 @@ final class RemoteMacClient: Identifiable {
     /// 这条连接上最新收到的终端列表；还没收到（刚连上、断开了）时为 nil。那时 `sessions` 也是空的，
     /// 但不代表 Mac 上没有终端。
     private(set) var listedSessionIDs: [UUID]?
+    /// 这条连接上最新收到的 Mac 的 Code 标签页（63 号消息）。nil = 还没收到：老 Mac 不发、刚连上、断开了。
+    /// 那时设备照旧把每个会话开成终端标签页。新 Mac 先发它再发会话列表，收到列表时它已经在了。
+    private(set) var codeTabs: [RemoteCodeTabInfo]?
     /// Mac 上的人拒绝了配对（或没有确认）。再连只会再弹一次审批，自动重连到此为止。
     private(set) var pairingRefused = false
     /// 握手后才知道的 Mac 设备 ID（「忘记这台 Mac」要用）。
@@ -167,6 +170,20 @@ final class RemoteMacClient: Identifiable {
     var supportsDesktopAudioLossless: Bool { macFeatures.contains(RemoteFeature.desktopAudioLossless) }
     /// Mac 会推终端里程序的状态（`programStatus`）。老 Mac 不推，标签只显示连接状态。
     var supportsProgramStatus: Bool { macFeatures.contains(RemoteFeature.programStatus) }
+    /// Mac 会报它的 Code 标签页（`codeTabs`）。
+    var supportsCodeTabs: Bool { macFeatures.contains(RemoteFeature.codeTabs) }
+
+    /// 设备上开成 Code 标签页的那一个里面跑着的会话（`Array.mirrored`；认不出工具的不算，它们照旧开成终端标签页）。
+    /// 还没收到 Mac 的 Code 标签页时为空。
+    var codeRunSessionIDs: Set<UUID> {
+        guard let tab = codeTabs?.mirrored() else { return [] }
+        return Set(tab.runs.filter { AgentHistoryTool(rawValue: $0.tool) != nil }.map(\.session))
+    }
+
+    /// 收到 Mac 的 Code 标签页。一样的不写（标题变化时每秒都可能来一次，不让跟随逻辑白跑）。
+    func receiveCodeTabs(_ update: RemoteCodeTabsUpdate) {
+        if codeTabs != update.tabs { codeTabs = update.tabs }
+    }
     /// 各会话的程序状态。要在单枚标签自己的 body 里读（同 `TerminalSession.programStatus`）。
     private(set) var programStatusBook = RemoteProgramStatusBook()
 
@@ -676,6 +693,7 @@ final class RemoteMacClient: Identifiable {
         roundTripMillis = nil
         sessions = []
         listedSessionIDs = nil
+        codeTabs = nil
         programStatusBook.removeAllReports()
         if state == .connected || state == .connecting {
             failureIsPermanent = false
@@ -806,6 +824,10 @@ final class RemoteMacClient: Identifiable {
         case .programStatus:
             if let update = try? RemoteJSON.decode(RemoteProgramStatusUpdate.self, from: message.payload) {
                 receiveProgramStatus(update)
+            }
+        case .codeTabs:
+            if let update = try? RemoteJSON.decode(RemoteCodeTabsUpdate.self, from: message.payload) {
+                receiveCodeTabs(update)
             }
         case .terminalImageResult:
             guard let result = try? RemoteJSON.decode(RemoteTerminalImageResult.self, from: message.payload),

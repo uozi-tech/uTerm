@@ -22,6 +22,13 @@ protocol RemoteHostSessions: AnyObject {
     func requestArrange(order: [UUID]) async
     /// Mac 刚重启、本机终端还没接回来时要等：手机不能看到一份缺了它们的列表，也不能把接入回成「已关闭」。
     func waitUntilRestored() async
+    /// Mac 上的 Code 标签页（63 号消息，`RemoteCodeTabInfo`）。nil = 没有这份信息（远控进程里 App 还没交来过、
+    /// App 是不报它的老版本）：那时一条 63 都不发，设备照旧把每个会话开成终端标签页。
+    func codeTabs() -> [RemoteCodeTabInfo]?
+}
+
+extension RemoteHostSessions {
+    func codeTabs() -> [RemoteCodeTabInfo]? { nil }
 }
 
 /// 会话变化的回调。都在主线程上调。
@@ -35,6 +42,8 @@ struct RemoteHostSessionObserver {
     var programStatusChanged: () -> Void
     /// 标签先后变了。
     var orderChanged: () -> Void
+    /// Code 标签页变了（`codeTabs()` 和上次报的不一样才报）。
+    var codeTabsChanged: () -> Void = {}
 }
 
 /// 一条会话的远控视图。

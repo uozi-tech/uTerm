@@ -117,6 +117,17 @@ final class TerminalSessionRegistry {
         let read: @MainActor () -> [UUID]
     }
 
+    /// 每个窗口「读它此刻的 Code 标签页」的入口（手机远控把它们镜像成设备上的 Code 标签页，见 `codeTabs()`）。可观察：
+    /// 窗口登记、撤掉时远控重推。
+    private var codeTabReaders: [UUID: @MainActor () -> [CodeTabPublication]] = [:]
+
+    /// 窗口报的一个 Code 标签页：`info` 的 `slot` 由注册表按全部窗口的先后算（`codeTabs()`），窗口只给出它前面的那些
+    /// shell 标签（会话 id，按窗口里的先后）。
+    struct CodeTabPublication {
+        var info: RemoteCodeTabInfo
+        var precedingSessions: [UUID]
+    }
+
     private final class WeakSessionBox {
         weak var value: TerminalSession?
         /// 登记时到底给没给会话本体。给了却读出 nil = 会话已被释放（幻影行，要清）；
@@ -190,6 +201,33 @@ final class TerminalSessionRegistry {
         }
     }
 
+    /// 窗口登记（或用 nil 撤掉）「读它此刻的 Code 标签页」的入口。`read` 读可观察的模型，变了观察方就会知道。
+    func setCodeTabs(forWindow windowID: UUID, _ read: (@MainActor () -> [CodeTabPublication])?) {
+        codeTabReaders[windowID] = read
+    }
+
+    /// 全部窗口的 Code 标签页，窗口按 `orderedEntries` 的先后（没登记标签顺序的窗口排在最后）。每个的 `slot` 是它在
+    /// `orderedEntries()` 里排在第几个会话之前：前面窗口的会话，加上同一窗口里排在它前面的 shell 标签，此刻登记着的才算
+    ///（还在连接、还没登记的 shell 不占位置，和设备收到的会话列表对得上）。在观察里读会跟踪到各窗口的模型。
+    func codeTabs() -> [RemoteCodeTabInfo] {
+        guard !codeTabReaders.isEmpty else { return [] }
+        let ordered = orderedEntries().map(\.id)
+        let registered = tabOrders.map(\.windowID)
+        let unordered = codeTabReaders.keys.filter { !registered.contains($0) }.sorted { $0.uuidString < $1.uuidString }
+        var earlier: Set<UUID> = []
+        var result: [RemoteCodeTabInfo] = []
+        for windowID in registered + unordered {
+            for publication in codeTabReaders[windowID]?() ?? [] {
+                let before = earlier.union(publication.precedingSessions)
+                var info = publication.info
+                info.slot = ordered.reduce(0) { before.contains($1) ? $0 + 1 : $0 }
+                result.append(info)
+            }
+            earlier.formUnion(tabOrders.first { $0.windowID == windowID }?.read() ?? [])
+        }
+        return result
+    }
+
     /// 窗口登记（或用 nil 撤掉）「照给的先后排标签」的入口。
     func setArranger(forWindow windowID: UUID, _ arranger: (@MainActor ([UUID]) -> Void)?) {
         arrangers[windowID] = arranger
@@ -256,6 +294,7 @@ final class TerminalSessionRegistry {
         closers.removeValue(forKey: windowID)
         revealers.removeValue(forKey: windowID)
         arrangers.removeValue(forKey: windowID)
+        codeTabReaders.removeValue(forKey: windowID)
         setTabOrder(forWindow: windowID, nil)
     }
 

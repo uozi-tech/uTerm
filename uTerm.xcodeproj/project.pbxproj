@@ -542,6 +542,7 @@
 				Core/Remote/RemoteAudioCodec.swift,
 				Core/Remote/RemoteAudioProtocol.swift,
 				Core/Remote/RemoteCaptureRate.swift,
+				Core/Remote/RemoteCodeTabs.swift,
 				Core/Remote/RemoteConnectTrace.swift,
 				Core/Remote/RemoteCrypto.swift,
 				Core/Remote/RemoteDatagram.swift,
