@@ -68,6 +68,8 @@ struct WorkspaceScreen: View {
         .onChange(of: store.remoteTakeover) { _, t in consume(t) }
         .onChange(of: store.remoteFiles) { _, r in consume(r) }
         .onChange(of: followedSessionIDs) { _, _ in followRemoteSessions() }
+        // Mac 上的 Code 标签页变了（会话进出、结束、标题）：它的镜像跟着变。只变了它、会话列表没变时也要跟。
+        .onChange(of: followedCodeTabs) { _, _ in followRemoteSessions() }
         .task(id: workspace.followedClients.map(ObjectIdentifier.init)) { await keepFollowedMacsConnected() }
         .onAppear {
             workspace.onFilePreviewRequest = { term, path in showPreview(path, beside: term) }
@@ -90,6 +92,7 @@ struct WorkspaceScreen: View {
                 guard let removed = workspace.close(id) else { continue }
                 removed.shutdown()
                 dispose(removed)
+                workspace.noteClosedByUser(removed)
                 workspace.stopFollowingIfLastTab(removed)
             }
             if workspace.isEmpty { store.showWorkspace = false }
@@ -170,10 +173,11 @@ struct WorkspaceScreen: View {
         apply(changes)
         guard let req = store.connecting else { return }
         let focus = MRemoteSource(client: takeover.client, sessionID: takeover.focus)
-        let front = workspace.existing(remote: focus)
-        req.tabID = front?.id
-        req.terminal = front?.terminal?.controller
-        req.companionTabIDs = changes.opened.map(\.id).filter { $0 != front?.id }
+        // 前台的可能是 Code 标签页里镜像着的会话：连接中页盖那个标签页、跟着那个会话的终端。
+        let front = workspace.remoteTerminal(focus)
+        req.tabID = front?.tabID
+        req.terminal = front?.term.controller
+        req.companionTabIDs = changes.opened.map(\.id).filter { id in id != front?.term.id && workspace.tab(id) != nil }
     }
 
     /// 浏览一台 Mac 的文件：已有它的文件标签就带到前台，没有就开一个。文件走远控链路，和终端标签共用连接。
@@ -216,6 +220,11 @@ struct WorkspaceScreen: View {
     /// 不能当成「终端都没了」。
     private var followedSessionIDs: [[UUID]?] {
         workspace.followedClients.map(\.listedSessionIDs)
+    }
+
+    /// 接管中的 Mac 的 Code 标签页（63 号消息）。nil = 老 Mac、还没收到。
+    private var followedCodeTabs: [[RemoteCodeTabInfo]?] {
+        workspace.followedClients.map(\.codeTabs)
     }
 
     /// Mac 上开关、重排了终端：手机上的标签跟着开关、换顺序。
@@ -383,6 +392,7 @@ struct WorkspaceScreen: View {
     private func closeTab(_ id: UUID) {
         guard let removed = workspace.close(id) else { return }
         finishClosing(removed)
+        workspace.noteClosedByUser(removed)
         workspace.stopFollowingIfLastTab(removed)
         // 关掉最后一个会话就没有可看的了：收回主机列表。
         if workspace.isEmpty { store.showWorkspace = false }

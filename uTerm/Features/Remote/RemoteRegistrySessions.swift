@@ -43,6 +43,11 @@ final class RemoteRegistrySessions: RemoteHostSessions {
         registry.arrangeTabs(by: order)
     }
 
+    /// App 里一定报得出来（没有 Code 标签页就是空的）：设备据此知道这台 Mac 认得 Code 标签页。
+    func codeTabs() -> [RemoteCodeTabInfo]? {
+        registry.codeTabs()
+    }
+
     func attach(_ request: RemoteHostAttachRequest) async -> Result<any RemoteHostTerminalAttachment, RemoteHostAttachError> {
         guard let session = registry.session(for: request.sessionID), session.connectionState == .connected else {
             return .failure(.unavailable)
@@ -72,6 +77,7 @@ final class RemoteRegistrySessions: RemoteHostSessions {
         observeTitles(generation)
         observeProgramStatuses(generation)
         observeOrder(generation, listed: registry.orderedEntries().map(\.id))
+        observeCodeTabs(generation, last: registry.codeTabs())
     }
 
     func stopObserving() {
@@ -129,6 +135,20 @@ final class RemoteRegistrySessions: RemoteHostSessions {
                 let order = self.registry.orderedEntries().map(\.id)
                 if order != listed { self.observer?.orderChanged() }
                 self.observeOrder(generation, listed: order)
+            }
+        }
+    }
+
+    /// Code 标签页：侧栏里的标题、记录的信息一直在变（它们读的是记录列表），所以和上次报的不一样才报。
+    private func observeCodeTabs(_ generation: Int, last: [RemoteCodeTabInfo]) {
+        withObservationTracking {
+            _ = registry.codeTabs()
+        } onChange: { [weak self] in
+            Self.onMain {
+                guard let self, self.isCurrent(generation) else { return }
+                let current = self.registry.codeTabs()
+                if current != last { self.observer?.codeTabsChanged() }
+                self.observeCodeTabs(generation, last: current)
             }
         }
     }

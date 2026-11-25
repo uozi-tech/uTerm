@@ -41,6 +41,9 @@ final class CodeRunBoard<Terminal: AnyObject> {
         /// 起的时候列表里已经有的记录：新会话认记录时不要它们（同一个目录里别的终端也在跑同一种工具时，它们一直在写，
         /// 修改时间比这个 run 起来还晚）。重新打开后接回的不知道，为空。
         var knownPaths: Set<String> = []
+        /// 镜像的是接管的那台 Mac 上 Code 标签页里的会话（`adoptMirrored`）：id 就是 Mac 上的会话 id，记录、结束都照 Mac 报的，
+        /// 本机不去认记录、不看程序退出。
+        var isMirrored = false
 
         /// 还没对上记录的新会话。App 重新打开后接回的会话先只有会话 ID（`sessionID`），列表读出来之后再找回记录
         ///（`resolveRestored`），这期间不算新会话、不去认别的记录。
@@ -135,6 +138,34 @@ final class CodeRunBoard<Terminal: AnyObject> {
         return run
     }
 
+    /// 接管一台 Mac 时，把它的 Code 标签页里跑着的一个会话放进来（`RemoteCodeRunMirror`）。id 用 Mac 上的会话 id，
+    /// 不抢详情（看哪个由外面定）。已经有了返回已有的。
+    @discardableResult
+    func adoptMirrored(session: UUID, tool: AgentHistoryTool, directory: String, startedAt: Date, sessionPath: String?,
+                       sessionID: String?, endedAt: Date?, terminal: Terminal) -> Run {
+        if let existing = run(id: session) { return existing }
+        var run = Run(id: session, tool: tool, directory: directory, startedAt: startedAt, sessionPath: sessionPath,
+                      sessionID: sessionID, terminal: terminal)
+        run.endedAt = endedAt
+        run.isMirrored = true
+        runs.append(run)
+        return run
+    }
+
+    /// 镜像的会话在 Mac 上结束了（留着最后的画面）或者又接着跑了（nil）。
+    func setEnded(_ id: UUID, at date: Date?) {
+        guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
+        runs[index].endedAt = date
+    }
+
+    /// 镜像的会话在 Mac 上对上了记录（或者换了一份）。看着终端以外的那一面而记录没了时回到终端。
+    func updateRecord(_ id: UUID, path: String?, sessionID: String?) {
+        guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
+        runs[index].sessionPath = path
+        runs[index].sessionID = sessionID
+        if path == nil { runs[index].showsTerminal = true }
+    }
+
     // MARK: 看哪个
 
     /// 详情换成看这个 run（nil = 回到普通的记录 / 列表）。
@@ -225,7 +256,7 @@ final class CodeRunBoard<Terminal: AnyObject> {
     func reconcile(_ candidates: [Candidate]) -> [UUID] {
         var claimed = Set(runs.compactMap(\.sessionPath))
         var matched: [UUID] = []
-        for index in runs.indices where runs[index].isNewSession {
+        for index in runs.indices where runs[index].isNewSession && !runs[index].isMirrored {
             let run = runs[index]
             let pick = candidates
                 .filter { candidate in
@@ -253,7 +284,7 @@ final class CodeRunBoard<Terminal: AnyObject> {
     #endif
 
     /// 还有没对上记录的新会话（外面据此决定要不要定期去主机上看一眼）。
-    var hasUnmatchedNewSessions: Bool { runs.contains { $0.isNewSession && $0.isRunning } }
+    var hasUnmatchedNewSessions: Bool { runs.contains { $0.isNewSession && $0.isRunning && !$0.isMirrored } }
 
     nonisolated static func sameDirectory(_ a: String, _ b: String) -> Bool {
         func trimmed(_ path: String) -> String {

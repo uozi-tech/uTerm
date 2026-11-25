@@ -153,6 +153,9 @@ final class RemoteHostServer {
     @ObservationIgnored private var pushedProgramReports: [UUID: ProgramStatusRecord] = [:]
     /// 上次发出去的会话列表里的先后。重排之后跟它不同才重发列表：新开、关掉标签时列表已经随之发过了。
     @ObservationIgnored private var listedTabOrder: [UUID] = []
+    /// 上次看到的 Code 标签页：变的只是标题、记录路径时并进节流（`codeTabPush`），别的马上推。
+    @ObservationIgnored private var observedCodeTabs: [RemoteCodeTabInfo]?
+    @ObservationIgnored private var codeTabPush: Task<Void, Never>?
 
     init(sessions: any RemoteHostSessions,
          identity: RemoteIdentityStore = RemoteIdentityStore(role: .controllers),
@@ -214,6 +217,9 @@ final class RemoteHostServer {
             observationGeneration &+= 1
             tabTitlePush?.cancel()
             tabTitlePush = nil
+            codeTabPush?.cancel()
+            codeTabPush = nil
+            observedCodeTabs = sessions.codeTabs()
             pushedProgramReports = currentProgramReports()
             listedTabOrder = sessions.orderedSessions().map(\.id)
             observeSessions(generation: observationGeneration)
@@ -1103,7 +1109,30 @@ final class RemoteHostServer {
                 if self.sessions.orderedSessions().map(\.id) != self.listedTabOrder {
                     for connection in self.connections.values { connection.sendSessions() }
                 }
+            },
+            // Code 标签页：会话增减、结束、选中、位置马上推；只是标题、记录路径变了同标签名一样节流。
+            codeTabsChanged: { [weak self] in
+                guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                self.codeTabsChanged(generation: generation)
             }))
+    }
+
+    private func codeTabsChanged(generation: Int) {
+        let current = sessions.codeTabs()
+        let titlesOnly = current.map { $0.sameShape(as: observedCodeTabs) } ?? false
+        observedCodeTabs = current
+        guard titlesOnly else {
+            for connection in connections.values { connection.sendCodeTabsIfChanged() }
+            return
+        }
+        guard codeTabPush == nil else { return }
+        codeTabPush = Task { [weak self] in
+            try? await Task.sleep(for: RemoteConstants.tabTitlePushInterval)
+            guard let self, generation == self.observationGeneration else { return }
+            self.codeTabPush = nil
+            guard self.isRunning else { return }
+            for connection in self.connections.values { connection.sendCodeTabsIfChanged() }
+        }
     }
 
     private func currentProgramReports() -> [UUID: ProgramStatusRecord] {

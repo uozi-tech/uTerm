@@ -24,7 +24,8 @@ struct CodeRunPane: View {
                 TerminalSessionBody(tab: run.terminal, isActive: isActive && cover == nil,
                                     isFocused: code.isFocused && shown && cover == nil,
                                     onInteract: code.onInteract,
-                                    onClose: { code.tab.endRun(run.id) },
+                                    // 镜像那台 Mac 的会话：连不上时的「关闭」只回到列表，不去结束 Mac 上的会话。
+                                    onClose: { run.isMirrored ? code.tab.backToList() : code.tab.endRun(run.id) },
                                     // 断开就是程序退出了（命令后面接着 `exit`），重新连只会开一个空 shell：不给。
                                     offersReconnect: false,
                                     onRetry: { code.tab.retryRun(run.id) })
@@ -99,7 +100,7 @@ struct CodeRunHeader: View {
                               systemImage: run.showsTerminal ? "clock" : "terminal")
                     }
                 }
-                if let move = code.onMoveToTab {
+                if let move = code.onMoveToTab, !run.isMirrored {
                     Button { move(run.id) } label: {
                         Label("移到新标签页", systemImage: "rectangle.portrait.and.arrow.right")
                     }
@@ -115,10 +116,13 @@ struct CodeRunHeader: View {
             .accessibilityLabel(Text("更多"))
         } else {
             HStack(spacing: 6) {
-                MBtn(title: AgentHistoryText.restartSession, icon: "refresh", kind: .tinted, height: 34) {
-                    code.tab.restartRun(run.id)
+                // 镜像那台 Mac 的会话由 Mac 起，这边重新开始不了（P1）。
+                if !run.isMirrored {
+                    MBtn(title: AgentHistoryText.restartSession, icon: "refresh", kind: .tinted, height: 34) {
+                        code.tab.restartRun(run.id)
+                    }
+                    .fixedSize()
                 }
-                .fixedSize()
                 MBtn(title: hasRecord ? String(localized: "回到记录") : AgentHistoryText.closeEndedSession,
                      icon: hasRecord ? "clock" : "x", kind: .tinted, height: 34) {
                     code.tab.endRun(run.id)

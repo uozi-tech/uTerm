@@ -140,7 +140,9 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
             sessionsChanged: { [weak self] _ in self?.scheduleSessionsPush() },
             titlesChanged: { [weak self] in self?.scheduleSessionsPush(delay: RemoteConstants.tabTitlePushInterval) },
             programStatusChanged: { [weak self] in self?.scheduleSessionsPush() },
-            orderChanged: { [weak self] in self?.scheduleSessionsPush() }))
+            orderChanged: { [weak self] in self?.scheduleSessionsPush() },
+            // 标题的节流在远控进程里做（同 63 的其余推送规则），这里只管尽快交过去。
+            codeTabsChanged: { [weak self] in self?.scheduleSessionsPush() }))
         // 远控关着时不拉起远控进程：没必要让一个空闲的进程常驻。
         if settings.isEnabled { connect() }
         if restoresEagerly { beginRestoration() }
@@ -361,7 +363,8 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
 
     private func currentSessions() -> RemoteHostAgentSessions {
         RemoteHostAgentSessions(entries: sessions.orderedSessions(), terminalEngine: sessions.terminalEngine,
-                                restored: restored, workspaces: server.localShellOpener.workspaces())
+                                restored: restored, workspaces: server.localShellOpener.workspaces(),
+                                codeTabs: sessions.codeTabs())
     }
 
     private func scheduleSessionsPush(delay: Duration = .zero) {

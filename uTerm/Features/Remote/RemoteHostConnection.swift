@@ -37,6 +37,10 @@ final class RemoteHostConnection {
     private var peerTerminalEngine: String?
     /// 两端都声明了 `terminal-replay`（对端认得回放流，本机会发）。
     private var peerTakesTerminalReplay = false
+    /// 对端认得 `codeTabs`（老设备收到会当未知消息断开整条连接）。本机也要声明过才推。
+    private var peerTakesCodeTabs = false
+    /// 上次发给这台设备的 Code 标签页。没变就不再发：会话列表每推一次都先问一遍。
+    private var sentCodeTabs: [RemoteCodeTabInfo]?
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -201,6 +205,8 @@ final class RemoteHostConnection {
             peerSupportsAudioLossless = peer.supports(RemoteFeature.desktopAudioLossless)
             peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
                 && server.localFeatures.contains(RemoteFeature.programStatus)
+            peerTakesCodeTabs = peer.supports(RemoteFeature.codeTabs)
+                && server.localFeatures.contains(RemoteFeature.codeTabs)
             peerTerminalEngine = peer.terminalEngine
             peerTakesTerminalReplay = peer.supports(RemoteFeature.terminalReplay)
                 && server.localFeatures.contains(RemoteFeature.terminalReplay)
@@ -470,7 +476,7 @@ final class RemoteHostConnection {
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
              .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult, .revokeSiblingResult,
-             .desktopWindowList, .desktopGeometry, .desktopAuthPromptResult:
+             .desktopWindowList, .desktopGeometry, .desktopAuthPromptResult, .codeTabs:
             break
         }
     }
@@ -520,7 +526,17 @@ final class RemoteHostConnection {
 
     func sendSessions() {
         guard subscribedToSessions else { return }
+        // 先于列表：设备收到列表时已经知道哪些会话归 Code 标签页（见 `RemoteMessage.Kind.codeTabs`）。
+        sendCodeTabsIfChanged()
         link.send(RemoteMessage(.sessions, payload: RemoteJSON.encode(server.sessionInfos())))
+    }
+
+    /// Mac 上的 Code 标签页和上次发给这台设备的不一样就发一份（整份替换）。只发给认得这条消息、订阅了会话列表的设备；
+    /// 会话这边报不出来（远控进程里 App 还没交来过）时一条都不发。
+    func sendCodeTabsIfChanged() {
+        guard subscribedToSessions, peerTakesCodeTabs, let tabs = server.sessions.codeTabs(), tabs != sentCodeTabs else { return }
+        sentCodeTabs = tabs
+        link.send(RemoteMessage(.codeTabs, payload: RemoteJSON.encode(RemoteCodeTabsUpdate(tabs: tabs))))
     }
 
     /// 程序状态：订阅时的全量快照，之后是变了的会话。只发给认得这条消息、且订阅了会话列表的设备。

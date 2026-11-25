@@ -559,6 +559,52 @@ final class RemoteHostAgentTests: XCTestCase {
         pad.disconnect()
     }
 
+    /// Mac 上的 Code 标签页（63 号消息）：App 注册表里的 → 桥 → 远控进程 → 手机；App 走了远控进程留着最后一份，
+    /// 回来之后照新的发。
+    func test_code_tabs_reach_the_phone_through_the_agent() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        let codeTab = AgentCodeTabsBox(RemoteCodeTabInfo(
+            id: UUID(), serverID: RemoteConstants.localShellServerID, serverName: "这台 Mac", directory: "/tmp",
+            slot: nil, runs: [.init(session: rig.sessionID, tool: AgentHistoryTool.claude.rawValue, directory: "/tmp",
+                                    startedAt: Date(timeIntervalSince1970: 1_800_000_000), sessionID: nil, path: nil,
+                                    title: "新会话", endedAt: nil)],
+            selectedRun: rig.sessionID, selectedRecord: nil))
+        let windowID = UUID()
+        rig.registry.setCodeTabs(forWindow: windowID) { [.init(info: codeTab.info, precedingSessions: [])] }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(rig.agentServer?.port)
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !rig.appServer.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        rig.appServer.approvePairing(try XCTUnwrap(rig.appServer.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(client.state, .connected)
+        XCTAssertTrue(client.supportsCodeTabs, "远控进程也声明了这项能力")
+        let arrived = await waitUntil { client.codeTabs?.first?.runs.map(\.session) == [rig.sessionID] }
+        XCTAssertTrue(arrived, "Code 标签页经 App → 远控进程 → 手机：\(String(describing: client.codeTabs))")
+        XCTAssertEqual(client.codeTabs?.first?.slot, 0)
+        XCTAssertEqual(client.codeRunSessionIDs, [rig.sessionID])
+
+        // App 走了：手机上的那份不动（远控进程留着最后一份，没有新的可发）。
+        rig.bridge?.simulateAppTermination()
+        codeTab.info.runs[0].endedAt = Date(timeIntervalSince1970: 1_800_000_100)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(client.codeTabs?.first?.runs.first?.endedAt)
+        XCTAssertEqual(client.codeRunSessionIDs, [rig.sessionID])
+
+        // App 回来：照它此刻的发。
+        rig.startApp()
+        let updated = await waitUntil(10) { client.codeTabs?.first?.runs.first?.endedAt != nil }
+        XCTAssertTrue(updated, "App 回来后照新的发")
+        client.disconnect()
+    }
+
     func test_mirrored_secret_storage_keeps_unflushed_writes_over_app_snapshot() throws {
         let storage = RemoteMirroredSecretStorage(values: ["trustedPeers": Data([1])])
         let saved = Recorder()
@@ -569,6 +615,13 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertEqual(try storage.load("identity"), Data([9]))
         XCTAssertEqual(saved.items, ["trustedPeers"])
     }
+}
+
+@MainActor
+@Observable
+final class AgentCodeTabsBox {
+    var info: RemoteCodeTabInfo
+    init(_ info: RemoteCodeTabInfo) { self.info = info }
 }
 
 private final class Counter: @unchecked Sendable {

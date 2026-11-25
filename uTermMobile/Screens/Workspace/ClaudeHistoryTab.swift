@@ -57,6 +57,12 @@ final class ClaudeHistoryTab: Identifiable {
     @ObservationIgnored var runRelay: HostKeyChallengeRelay?
     /// App 重新打开后要还原的「详情看的是哪一个」：列表读出来之后还原（`applyRestoredState`），用户先点了别的就作废。
     var restoredSelection: CodeRestoredSelection?
+    /// 镜像着接管的那台 Mac 上的哪个 Code 标签页（`ClaudeHistoryTab+Mirror`）；nil = 没在镜像。
+    var mirroredMacTabID: UUID?
+    /// 是接管时为了镜像才开出来的：Mac 上那个 Code 标签页没了就跟着关。用户自己开的（「＋」、终端标签长按）不关。
+    var opensForMirror = false
+    /// 镜像着的会话上点了「结束会话」：请那台 Mac 结束它（`RemoteMacClient.closeSessionOnMac`，消息 8）。测试换成记下来的。
+    @ObservationIgnored var endOnMac: @MainActor (UUID) -> Void = { _ in }
 
     init(host: ServerProfile, connection: AgentHistoryConnection, remoteMac: RemoteMacClient? = nil) {
         self.host = host
@@ -84,6 +90,7 @@ final class ClaudeHistoryTab: Identifiable {
                                                      pinHost: { client.macDeviceID.map(AgentHistoryPinHost.pairedMac) },
                                                      connect: AgentHistoryAccess.pairedMac(client)),
                   remoteMac: client)
+        endOnMac = { [weak client] session in client?.closeSessionOnMac(session) }
     }
 
     /// 能不能「继续这个会话」「＋新会话」：要在那台主机上开终端。仅 SFTP 的主机开不了；配对的 Mac 要认得「新建本机终端」。
@@ -215,6 +222,11 @@ struct ClaudeHistorySessionBody: View {
 
     /// 直连主机：就在这个标签页里起终端；配对的 Mac（或者没注入主机密钥裁决的用例）：交给 `onRun` 开终端标签页。
     private func resume(_ file: AgentHistorySessionFile, in history: AgentHistoryModel) {
+        // 这份记录正在那台 Mac 的 Code 标签页里跑着（镜像过来的）：回到它的终端，不在 Mac 上再开一个。
+        if let run = tab.runs.run(forSession: file.path), run.isMirrored, run.isRunning {
+            tab.focusRun(run.id)
+            return
+        }
         guard let plan = history.resumeCommand(for: file) else { return }
         if tab.runsInPlace, let relay {
             tab.resumeInPlace(file, command: plan.command, directory: plan.directory,

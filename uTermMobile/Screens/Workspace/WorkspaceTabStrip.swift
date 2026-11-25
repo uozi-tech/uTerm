@@ -40,8 +40,9 @@ final class MTabCloseFlow {
 
     func request(_ tab: MWorkTab, close: @escaping (UUID) -> Void) {
         let id = tab.id
-        // Code 标签页：里面有会话在跑就照终端标签页问一句（确认后里面的会话一起结束）。
-        if let code = tab.history, !code.runTerminals.isEmpty {
+        // Code 标签页：里面有会话在跑就照终端标签页问一句（确认后里面的会话一起结束）。镜像配对 Mac 的不问：关掉只断开镜像，
+        // Mac 上的会话照旧跑。
+        if let code = tab.history, code.remoteMac == nil, !code.runTerminals.isEmpty {
             let tabName = tab.title
             Task {
                 await probe.probe(id, tabName: tabName, activity: { await code.foregroundActivity() }) { prompt in

@@ -381,6 +381,8 @@ struct RemoteMacSheet: View {
 
     private func subtitle(_ session: RemoteSessionInfo) -> String {
         var parts = [session.serverName]
+        // 在 Mac 的 Code 标签页里跑着：点下去打开手机上的 Code 标签页并选中它（产品名，不翻译）。
+        if client.codeRunSessionIDs.contains(session.id) { parts.append("Code") }
         if let controller = session.controlledBy { parts.append(String(localized: "\(controller) 正在接管")) }
         return parts.joined(separator: " · ")
     }
