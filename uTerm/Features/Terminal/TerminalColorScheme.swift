@@ -140,12 +140,15 @@ nonisolated struct TerminalColorScheme: @unchecked Sendable {
     /// 是全局的，深灰段底上起点过暗的黄会被对比度钳制往更暗方向修成暗橄榄。
     /// 逐 cell 可读性由渲染期 minimumContrastRatio 兜底——浅灰段底上压暗、
     /// 深灰段底上提亮，两种方向都正确。
+    ///
+    /// 前景不用官方的 #3B3B3B，压到 #1F1F1F：Claude Code 等 Agent 的浅色主题把次要文字画成真彩 #666666，
+    /// #3B3B3B 和它的对比只有 1.95，正文和次要文字分不开（#1F1F1F 是 2.87，纯黑 3.66）。块光标跟前景同色。
     static let vscodeLight = TerminalColorScheme(
         displayName: "VS Code Light",
         backgroundColor: rgb(0xFFFFFF),
-        foregroundColor: rgb(0x3B3B3B),
+        foregroundColor: rgb(0x1F1F1F),
         accentColor: rgb(0x005FB8),
-        cursorColor: rgb(0x3B3B3B),
+        cursorColor: rgb(0x1F1F1F),
         selectionColor: rgb(0xADD6FF),
         ansiColors: makeAnsi(
             normals: [(0x00,0x00,0x00),(0xCD,0x31,0x31),(0x00,0xBC,0x00),(0x94,0x98,0x00),

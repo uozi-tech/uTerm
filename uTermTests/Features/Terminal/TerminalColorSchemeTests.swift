@@ -29,6 +29,31 @@ final class TerminalColorSchemeTests: XCTestCase {
         XCTAssertEqual(bright.blue,  0xFF)
     }
 
+    /// 浅色下正文要和 Agent 的次要文字拉得开。Claude Code 浅色主题把「Ran 1 shell command」「· 28m 47s」这类次要文字
+    /// 画成真彩 #666666；前景原来是 VS Code Light Modern 的 #3B3B3B，两者对比只有 1.95，正文和次要文字看上去差不多
+    /// （用户拿 iGhostVT 的纯黑前景对比报的）。要求前景对 #666666 的 WCAG 对比 ≥ 2.5，前景本身对底色 ≥ 15。
+    func test_vscode_light_foreground_stands_apart_from_secondary_gray() {
+        let scheme = TerminalColorScheme.resolve(dark: false)
+        let fg = scheme.foregroundColor.usingColorSpace(.sRGB)!
+        let bg = scheme.backgroundColor.usingColorSpace(.sRGB)!
+        let secondary = NSColor(srgbRed: 0x66 / 255.0, green: 0x66 / 255.0, blue: 0x66 / 255.0, alpha: 1)
+        XCTAssertGreaterThanOrEqual(contrast(fg, secondary), 2.5, "正文与 #666666 次要文字的对比 \(contrast(fg, secondary))")
+        XCTAssertGreaterThanOrEqual(contrast(fg, bg), 15, "正文对底色的对比 \(contrast(fg, bg))")
+        XCTAssertEqual(scheme.cursorColor.usingColorSpace(.sRGB), fg, "块光标与正文同色")
+    }
+
+    private func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+        func lum(_ c: NSColor) -> Double {
+            func lin(_ v: CGFloat) -> Double {
+                let v = Double(v)
+                return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * lin(c.redComponent) + 0.7152 * lin(c.greenComponent) + 0.0722 * lin(c.blueComponent)
+        }
+        let (x, y) = (lum(a), lum(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
     private func nsColor(_ c: TerminalRGB) -> NSColor {
         NSColor(srgbRed: CGFloat(c.red) / 255,
                 green: CGFloat(c.green) / 255,
