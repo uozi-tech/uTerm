@@ -212,8 +212,9 @@ struct AgentHistorySessionList: View {
         return VStack(alignment: .leading, spacing: 4) {
             // 只留三样：搜索框、「＋」、菜单。刷新、收起侧栏不常用，收进菜单，搜索框拿到这些宽度。
             HStack(spacing: 2) {
-                UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
-                              showsHotkeyChip: false)
+                // 不写占位文字（Mac 侧栏窄，放大镜就够说明）；读屏照旧读得出这是什么框。iOS 仍有占位文字。
+                UDSearchField(text: $history.searchText, placeholder: "", showsHotkeyChip: false)
+                    .accessibilityLabel(Text(AgentHistoryText.searchPlaceholder))
                     .onSubmit { history.submitSearch() }
                     .help(AgentHistoryText.searchHelp)
                     .padding(.trailing, 4)
