@@ -46,7 +46,7 @@ final class CodeTabTests: XCTestCase {
         }
     }
 
-    private func session(_ id: String, in directory: String, title: String, ago seconds: TimeInterval) -> Session {
+    private func session(_ id: String, in directory: String, title: String?, ago seconds: TimeInterval) -> Session {
         Session(id: id, projectID: ClaudeProjectPath.encode(directory), resumeDirectory: directory, title: title,
                 modifiedAt: Date().addingTimeInterval(-seconds))
     }
@@ -143,6 +143,168 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(history.selectedFile?.path, a.path)
         XCTAssertFalse(history.transcript === before, "记录从末尾重新读到最新")
         XCTAssertFalse(code.runs.contains { $0.id == run.id })
+    }
+
+    /// 没有对话记录的会话退出：终端留着、标成已结束，不再被看着的那一圈处理，不算在跑，侧栏那一行是「已结束」。
+    func testEndedNewSessionStaysWithItsTerminal() async throws {
+        let (code, history, source) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 600)])
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '/srv/shop' && claude",
+                                                      directory: Self.shop))
+        // 记录写出来了，但没有对话（只敲了 exit）：列表不列它。
+        var empty = session("empty", in: Self.shop, title: nil, ago: -1)
+        empty.isListed = false
+        await source.add(empty)
+        made[0].codeCommandHasEnded = true
+        code.checkRuns()
+        for _ in 0..<100 { try await Task.sleep(for: .milliseconds(5)) }
+        let ended = try XCTUnwrap(code.runs.first)
+        XCTAssertEqual(ended.id, run.id)
+        XCTAssertTrue(ended.isEnded)
+        XCTAssertFalse(made[0].disposed, "终端留着最后的画面")
+        XCTAssertEqual(code.detail, .terminal(run.id), "不跳回「新会话」页")
+        XCTAssertEqual(code.runningCount, 0)
+        XCTAssertEqual(code.runs.first?.path, history.files.first { $0.sessionID == "empty" }?.path,
+                       "对上了那份空的记录，也照样留着（没有对话可看）")
+
+        made[0].codeCommandHasEnded = false
+        code.checkRuns()
+        XCTAssertTrue(code.runs.first?.isEnded == true, "已结束的不再算")
+
+        // 侧栏顶上那一行
+        XCTAssertEqual(code.unlistedRuns(shown: Set(history.visibleFiles.map(\.path))).map(\.id), [run.id])
+
+        // 手机远控「同时关闭 Mac 上的终端」照旧直接结束。
+        XCTAssertTrue(code.end(run.id))
+        XCTAssertTrue(made[0].disposed)
+        XCTAssertTrue(code.runs.isEmpty)
+    }
+
+    func testRestartAndDismissEndedSession() async throws {
+        let (code, history, _) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 600)])
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '/srv/shop' && claude",
+                                                      directory: Self.shop))
+        made[0].codeCommandHasEnded = true
+        code.checkRuns()
+        for _ in 0..<50 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertNil(code.restart(UUID()), "没有这个会话")
+
+        let again = try XCTUnwrap(code.restart(run.id))
+        XCTAssertTrue(made[0].disposed, "已结束的那个结束")
+        XCTAssertEqual(made.count, 2)
+        XCTAssertEqual(made[1].command, "cd -- '/srv/shop' && claude", "同一条命令再起一次")
+        XCTAssertEqual(code.runs.map(\.id), [again.id])
+        XCTAssertEqual(code.detail, .terminal(again.id))
+        XCTAssertFalse(again.isEnded)
+        XCTAssertNil(again.path)
+
+        made[1].codeCommandHasEnded = true
+        code.checkRuns()
+        for _ in 0..<50 { try await Task.sleep(for: .milliseconds(5)) }
+        code.dismissEnded(again.id)
+        XCTAssertTrue(made[1].disposed)
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .empty, "「关闭」回到起始页")
+        XCTAssertNil(history.selectedFile)
+    }
+
+    /// 「结束会话」（终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×）：同程序跑完一样收尾——没有记录的新会话回到起始页，
+    /// 有记录的回到它的记录（读到最新）；别的会话不动。
+    func testEndSessionFinishesLikeTheProgramExiting() async throws {
+        let (code, history, _) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 60)])
+        let a = try file(history, "a")
+        let resumed = try XCTUnwrap(code.resume(a))
+        let fresh = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
+        XCTAssertEqual(code.detail, .terminal(fresh.id))
+
+        code.endSession(fresh.id)
+        XCTAssertTrue(made[1].disposed, "这个终端结束")
+        XCTAssertEqual(code.runs.map(\.id), [resumed.id], "另一个照跑")
+        XCTAssertFalse(made[0].disposed)
+        XCTAssertEqual(code.detail, .empty, "没有记录：回到起始页")
+
+        code.selectRun(resumed.id)
+        XCTAssertEqual(code.detail, .terminal(resumed.id))
+        let before = history.transcript
+        code.endSession(resumed.id)
+        XCTAssertTrue(made[0].disposed)
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .transcript, "有记录：回到它的记录")
+        XCTAssertEqual(history.selectedFile?.path, a.path)
+        XCTAssertFalse(history.transcript === before, "记录从末尾重新读到最新")
+
+        code.endSession(UUID())   // 没有这个会话：什么都不做
+        XCTAssertEqual(code.detail, .transcript)
+    }
+
+    /// 结束一个右边没在看的会话：右边看着的不动。
+    func testEndingAnotherSessionKeepsTheDetail() async throws {
+        let (code, history, _) = await makeCode(sessions: [
+            session("a", in: Self.shop, title: "a", ago: 60),
+            session("b", in: Self.infra, title: "b", ago: 120),
+        ])
+        let a = try file(history, "a"), b = try file(history, "b")
+        let runA = try XCTUnwrap(code.resume(a))
+        history.select(b)
+        code.historySelectionChanged()
+        XCTAssertEqual(code.detail, .transcript)
+
+        code.endSession(runA.id)
+        XCTAssertTrue(made[0].disposed)
+        XCTAssertEqual(history.selectedFile?.path, b.path, "右边还是 b 的记录")
+        XCTAssertEqual(code.detail, .transcript)
+    }
+
+    /// 已结束、留着画面的会话上「结束会话」同「关闭」：结束终端，回到起始页。
+    func testEndSessionOnAnEndedSessionIsClose() async throws {
+        let (code, history, _) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 600)])
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '/srv/shop' && claude",
+                                                      directory: Self.shop))
+        made[0].codeCommandHasEnded = true
+        code.checkRuns()
+        for _ in 0..<50 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(code.runs.first?.isEnded, true)
+
+        code.endSession(run.id)
+        XCTAssertTrue(made[0].disposed)
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .empty)
+        XCTAssertNil(history.selectedFile)
+    }
+
+    /// 侧栏那一行右键「查看记录」：右边换成它的记录，会话照跑；「返回终端」（点那一行）回到它的终端。
+    func testShowRecordFromTheSidebar() async throws {
+        let (code, history, _) = await makeCode(sessions: [
+            session("a", in: Self.shop, title: "a", ago: 60),
+            session("b", in: Self.infra, title: "b", ago: 120),
+        ])
+        let a = try file(history, "a"), b = try file(history, "b")
+        let run = try XCTUnwrap(code.resume(a))
+        history.select(b)
+        code.historySelectionChanged()
+
+        code.showRecord(of: run.id)
+        XCTAssertEqual(history.selectedFile?.path, a.path)
+        XCTAssertEqual(code.detail, .transcript, "看它的记录")
+        XCTAssertEqual(code.displayedRun?.id, run.id)
+        XCTAssertFalse(made[0].disposed)
+
+        code.selectRun(run.id)
+        XCTAssertEqual(code.detail, .terminal(run.id), "「返回终端」")
+    }
+
+    /// 结束会话前的确认：标题同关终端标签页（说在跑的是哪个程序），正文说结束会话。
+    func testEndSessionPromptKeepsTheCloseTitle() throws {
+        let close = try XCTUnwrap(TerminalActivity.running("claude").closePrompt())
+        XCTAssertEqual(close.endingSession.title, close.title)
+        XCTAssertNotEqual(close.endingSession.message, close.message)
+    }
+
+    /// 继续一份记录、很快退出（命令出错）时 Mac 照旧回到记录（Mac 不留报错画面，iOS 留：`CodeRunExitPolicy`）。
+    func testExitPolicy() {
+        XCTAssertTrue(CodeRunExitPolicy.keepsTerminal(hasListedRecord: false, ranFor: 600, quickExit: 0), "没有记录：留着")
+        XCTAssertFalse(CodeRunExitPolicy.keepsTerminal(hasListedRecord: true, ranFor: 1, quickExit: 0), "Mac：有记录就回去")
+        XCTAssertTrue(CodeRunExitPolicy.keepsTerminal(hasListedRecord: true, ranFor: 1, quickExit: 8), "iOS：很快退出的留着")
+        XCTAssertFalse(CodeRunExitPolicy.keepsTerminal(hasListedRecord: true, ranFor: 60, quickExit: 8))
     }
 
     /// Mac 的终端怎么算「跑完了」：命令的结束标记到了，或者 shell 退出；连接失败不算（面板上给重试）。

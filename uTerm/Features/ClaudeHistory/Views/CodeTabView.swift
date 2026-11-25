@@ -17,10 +17,13 @@ struct CodeTabView: View {
     let code: CodeTabModel
     /// 第一次显示时建文件通道。
     let makeConnection: () -> AgentHistoryConnection
-    /// 右边那个终端的面板（SSH 是 `PaneView`，本机是本机终端的面板）。
-    let terminal: (any CodeTabTerminal) -> AnyView
+    /// 右边那个终端的面板（SSH 是 `PaneView`，本机是本机终端的面板）。`ended`：程序已经退出、留着最后的画面
+    ///（只画终端本身，不要连接状态那几页）。
+    let terminal: (any CodeTabTerminal, _ ended: Bool) -> AnyView
     /// 「移到新标签页」；nil = 不出这个按钮。
     var onMoveToTab: ((UUID) -> Void)? = nil
+    /// 「结束会话」：宿主先问前台程序（`TerminalCloseGuard.requestEndSession`），再结束。nil = 不出这个按钮。
+    var onEndRun: ((UUID) -> Void)? = nil
 
     var body: some View {
         content
@@ -40,7 +43,8 @@ struct CodeTabView: View {
                     UDButton(title: String(localized: "重试")) { Task { await connection.open() } }
                 }
             case .ready(let history):
-                CodeTabBrowser(code: code, history: history, terminal: terminal, onMoveToTab: onMoveToTab)
+                CodeTabBrowser(code: code, history: history, terminal: terminal, onMoveToTab: onMoveToTab,
+                               onEndRun: onEndRun)
             }
         } else {
             RemoteMacProgressView(text: String(localized: "正在连接…"))
@@ -55,8 +59,9 @@ struct CodeTabView: View {
 private struct CodeTabBrowser: View {
     let code: CodeTabModel
     let history: AgentHistoryModel
-    let terminal: (any CodeTabTerminal) -> AnyView
+    let terminal: (any CodeTabTerminal, _ ended: Bool) -> AnyView
     let onMoveToTab: ((UUID) -> Void)?
+    let onEndRun: ((UUID) -> Void)?
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -77,7 +82,7 @@ private struct CodeTabBrowser: View {
                     ColumnResizer(width: Binding(get: { code.sidebarWidth }, set: { code.sidebarWidth = $0 }),
                                   range: AgentHistoryBrowser.sidebarRange.lowerBound...upper, sign: 1)
                 } else {
-                    CodeTabRail(runningCount: code.runs.count) {
+                    CodeTabRail(runningCount: code.runningCount) {
                         if compact { code.sidebarOverlayShown = true } else { code.sidebarHidden = false }
                     }
                     Rectangle().fill(UD.border).frame(width: 1)
@@ -112,16 +117,37 @@ private struct CodeTabBrowser: View {
             // 「＋」不直接开：右边换成起始页，在那里选目录和工具。
             newSession: AgentHistoryNewSession(presenting: { code.showNewSessionPage() }),
             reveal: code.reveal,
-            running: AgentHistoryRunning(paths: Set(code.runs.compactMap(\.path)), unlisted: { shown in
+            running: AgentHistoryRunning(rows: {
                 let selected = code.displayedRun?.id
-                return code.unlistedRuns(shown: shown).map { run in
-                    AgentHistoryRunRow(id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
-                                       isSelected: run.id == selected)
+                let showsRecord = code.detail == .transcript
+                return code.runs.map { run in
+                    let terminal = run.terminal
+                    let ended = run.isEnded
+                    return AgentHistoryRunRow(
+                        id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
+                        isSelected: run.id == selected, path: run.path,
+                        status: AgentHistoryRunStatus {
+                            if ended { return .ended }
+                            return terminal.codeProgramStatus.map { .program($0) } ?? .running
+                        },
+                        showsRecord: showsRecord && run.id == selected)
                 }
-            }) { id in
+            }, onSelect: { id in
                 code.selectRun(id)
                 code.sidebarOverlayShown = false
-            },
+            }, actions: onEndRun.map { end in
+                AgentHistoryRunActions(
+                    end: end,
+                    showRecord: { id in
+                        code.showRecord(of: id)
+                        code.sidebarOverlayShown = false
+                    },
+                    showTerminal: { id in
+                        code.selectRun(id)
+                        code.sidebarOverlayShown = false
+                    },
+                    moveToTab: onMoveToTab)
+            }),
             onCollapse: onCollapse)
     }
 
@@ -140,7 +166,8 @@ private struct CodeTabBrowser: View {
             if let run = code.runs.first(where: { $0.id == id }) {
                 VStack(spacing: 0) {
                     runHeader(run)
-                    terminal(run.terminal)
+                    if run.isEnded { CodeTabEndedBanner(code: code, runID: run.id) }
+                    terminal(run.terminal, run.isEnded)
                         // 每个会话一个面板：换会话就是换一个终端，不复用同一个视图。
                         .id(run.id)
                 }
@@ -148,7 +175,7 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页）。
+    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页、结束会话）。
     /// 右边显示着终端本身就说明在跑，不再写「运行中」。与侧栏顶部那一行等高，中间的竖线上下贯通。
     private func runHeader(_ run: CodeTabModel.Run) -> some View {
         let title = code.title(of: run)
@@ -170,10 +197,10 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「移到新标签页」。没对上记录的新会话没有记录可看。
+    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「移到新标签页」、「结束会话」。没对上记录的新会话没有记录可看。
     @ViewBuilder private func runMenu(_ run: CodeTabModel.Run) -> some View {
         let showsRecord = code.detail == .transcript
-        if run.path != nil || onMoveToTab != nil {
+        if run.path != nil || onMoveToTab != nil || onEndRun != nil {
             Menu {
                 if run.path != nil {
                     Button(showsRecord ? String(localized: "返回终端") : Self.viewRecord) {
@@ -182,6 +209,10 @@ private struct CodeTabBrowser: View {
                 }
                 if let onMoveToTab {
                     Button(Self.moveToTab) { onMoveToTab(run.id) }
+                }
+                if let onEndRun {
+                    Divider()
+                    Button(AgentHistoryText.endSession, role: .destructive) { onEndRun(run.id) }
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -202,6 +233,44 @@ private struct CodeTabBrowser: View {
 
     private static var moveToTab: String {
         String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
+    }
+}
+
+/// 程序已经退出、没有对话记录可看的会话：右边终端顶上一条「会话已结束」，带「重新开始」「关闭」。下面是终端最后的画面。
+/// 不自己跳走：用户看完了再决定。
+struct CodeTabEndedBanner: View {
+    let code: CodeTabModel
+    let runID: UUID
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(UD.text3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(AgentHistoryText.sessionEndedBanner)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(UD.text)
+                    Text(AgentHistoryText.sessionEndedDetail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                UDButton(title: AgentHistoryText.restartSession, systemImage: "arrow.clockwise") {
+                    code.restart(runID)
+                }
+                UDButton(title: AgentHistoryText.closeEndedSession, style: .secondary) {
+                    code.dismissEnded(runID)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(UD.fillSoft)
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(AgentHistoryText.sessionEndedBanner))
     }
 }
 

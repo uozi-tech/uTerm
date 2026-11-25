@@ -57,6 +57,26 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     func setProjectsError(_ error: (any Error)?) { projectsError = error }
 
+    /// 列这些项目（记录目录名）时失败（断线、辅助程序重启）：`allSessions` 跳过它们，`listAllSessions` 报出来。
+    private var failingProjects: Set<String> = []
+    func setFailingProjects(_ ids: Set<String>) { failingProjects = ids }
+
+    /// 读这些会话的信息时一直等着（读得很慢的记录），直到 `releaseMetadata`。
+    private var heldMetadata: Set<String> = []
+    private var heldWaiters: [CheckedContinuation<Void, Never>] = []
+    func holdMetadata(_ ids: Set<String>) { heldMetadata = ids }
+    func releaseMetadata() {
+        heldMetadata = []
+        for waiter in heldWaiters { waiter.resume() }
+        heldWaiters = []
+    }
+
+    /// 改一份记录（会话还开着、又写了几行）：大小、修改时间跟着变。
+    func update(_ id: String, _ change: @Sendable (inout Session) -> Void) {
+        guard let index = sessionList.firstIndex(where: { $0.id == id }) else { return }
+        change(&sessionList[index])
+    }
+
     /// 后来才出现的记录（Code 标签页里新开的会话写出了记录文件）。
     func add(_ session: Session) { sessionList.append(session) }
 
@@ -90,8 +110,14 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     }
 
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
-        let ids = Set(projects.map(\.id))
-        return sessionList.filter { ids.contains($0.projectID) }.map(file).sorted { $0.modifiedAt > $1.modifiedAt }
+        await listAllSessions(in: projects).files
+    }
+
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
+        let ids = Set(projects.map(\.id)).subtracting(failingProjects)
+        let files = sessionList.filter { ids.contains($0.projectID) }.map(file).sorted { $0.modifiedAt > $1.modifiedAt }
+        let failed = projects.filter { failingProjects.contains($0.id) }.map(AgentHistoryProjectKey.init)
+        return AgentHistorySessionListing(files: files, failedProjects: Set(failed))
     }
 
     private func session(at path: String) -> Session? {
@@ -100,6 +126,9 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata {
         metadataReads += 1
+        if let held = session(at: file.path), heldMetadata.contains(held.id) {
+            await withCheckedContinuation { heldWaiters.append($0) }
+        }
         guard let session = session(at: file.path) else { throw AgentHistoryFakeError.missing }
         return AgentHistorySessionMetadata(title: session.title, isListed: session.isListed,
                                            lastDirectory: session.resumeDirectory, resumeDirectory: session.resumeDirectory,

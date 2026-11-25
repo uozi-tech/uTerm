@@ -54,7 +54,8 @@ final class CodeTabRunsTests: XCTestCase {
         let board = CodeRunBoard<FakeTerminal>()
         let start = Date(timeIntervalSince1970: 1_000)
         let quick = board.startNew(tool: .claude, directory: "/w", now: start, terminal: FakeTerminal())
-        XCTAssertEqual(board.ended(quick.id, now: start.addingTimeInterval(2)), .kept, "很快就退出：留着给人看报错")
+        XCTAssertEqual(board.ended(quick.id, hasListedRecord: true, now: start.addingTimeInterval(2)), .kept,
+                       "很快就退出：留着给人看报错")
         XCTAssertEqual(board.run(id: quick.id)?.isRunning, false)
         XCTAssertEqual(board.runningCount, 0)
         XCTAssertEqual(board.remove(quick.id), .removed(sessionPath: nil, wasFocused: true))
@@ -64,9 +65,35 @@ final class CodeTabRunsTests: XCTestCase {
         }!
         let other = board.startNew(tool: .codex, directory: "/w", now: start, terminal: FakeTerminal())
         XCTAssertEqual(board.focusedID, other.id)
-        XCTAssertEqual(board.ended(long.id, now: start.addingTimeInterval(60)), .removed(sessionPath: "/p/a.jsonl", wasFocused: false))
+        XCTAssertEqual(board.ended(long.id, hasListedRecord: true, now: start.addingTimeInterval(60)),
+                       .removed(sessionPath: "/p/a.jsonl", wasFocused: false))
         XCTAssertEqual(board.runs.map(\.id), [other.id])
-        XCTAssertEqual(board.ended(long.id), .unknown)
+        XCTAssertEqual(board.ended(long.id, hasListedRecord: true), .unknown)
+    }
+
+    /// 没有对话记录可看的（新会话没说话就退出，或者对上的记录是空的）：跑多久都留着终端、标成已结束（同 Mac）。
+    /// 「重新开始」换成一个新起的，放在原来的位置。
+    func testEndedWithoutRecordIsKeptAndRestartReplacesItInPlace() {
+        let board = CodeRunBoard<FakeTerminal>()
+        let start = Date(timeIntervalSince1970: 5_000)
+        let fresh = board.startNew(tool: .claude, directory: "/w", now: start, terminal: FakeTerminal())
+        let other = board.startNew(tool: .codex, directory: "/w", now: start, terminal: FakeTerminal())
+        board.focus(fresh.id)
+        XCTAssertEqual(board.ended(fresh.id, hasListedRecord: false, now: start.addingTimeInterval(600)), .kept,
+                       "没有记录：留着，不跳走")
+        XCTAssertEqual(board.focusedID, fresh.id)
+        XCTAssertEqual(board.runningCount, 1)
+
+        let oldTerminal = fresh.terminal
+        let again = board.makeRun(tool: .claude, directory: "/w", sessionPath: nil, sessionID: nil, terminal: FakeTerminal())
+        XCTAssertTrue(board.replace(fresh.id, with: again) === oldTerminal, "旧的终端交出去关掉")
+        XCTAssertEqual(board.runs.map(\.id), [again.id, other.id], "放在原来的位置")
+        XCTAssertEqual(board.focusedID, again.id, "看着旧的就看新的")
+        XCTAssertTrue(board.run(id: again.id)?.isRunning == true)
+
+        board.setSessionForTesting(again.id, path: "/p/empty.jsonl")
+        XCTAssertEqual(board.ended(again.id, hasListedRecord: false, now: start.addingTimeInterval(900)), .kept,
+                       "对上的是一份空记录：也留着")
     }
 
     func testNewSessionsClaimTheirRecordsOnceAndInOrder() {
@@ -105,6 +132,29 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(board.run(id: first.id)?.sessionPath, "/x1", "认下来的不再换")
         XCTAssertEqual(Set(board.runs.compactMap(\.sessionPath)).count, 2, "不重复")
         XCTAssertEqual(board.run(forSession: "/x2")?.id, second.id, "认下来之后再「继续」那份记录回到它")
+    }
+
+    /// 同一个目录里别的终端也在跑同一种工具（2026-11-25 实测：同一个项目里三个 Claude Code 会话一直在写）：
+    /// 起的时候就有的记录修改时间比新会话起来还晚，也不能认；新会话的记录写出来后认它。
+    func testNewSessionIgnoresRecordsThatExistedWhenItStarted() {
+        let board = CodeRunBoard<FakeTerminal>()
+        let start = Date(timeIntervalSince1970: 30_000)
+        let run = board.startNew(tool: .claude, directory: "/w/shop", now: start,
+                                 knownPaths: ["/p/busy-1.jsonl", "/p/busy-2.jsonl"], terminal: FakeTerminal())
+        typealias C = CodeRunBoard<FakeTerminal>.Candidate
+        let busy = [
+            C(path: "/p/busy-1.jsonl", sessionID: "busy-1", tool: .claude, directory: "/w/shop",
+              modifiedAt: start.addingTimeInterval(120)),
+            C(path: "/p/busy-2.jsonl", sessionID: "busy-2", tool: .claude, directory: "/w/shop",
+              modifiedAt: start.addingTimeInterval(90)),
+        ]
+        XCTAssertEqual(board.reconcile(busy), [], "别的终端里一直在写的会话不认")
+        XCTAssertNil(board.run(id: run.id)?.sessionPath)
+
+        let mine = C(path: "/p/mine.jsonl", sessionID: "mine", tool: .claude, directory: "/w/shop",
+                     modifiedAt: start.addingTimeInterval(40))
+        XCTAssertEqual(board.reconcile(busy + [mine]), [run.id], "自己的记录比别的会话改得早也认它")
+        XCTAssertEqual(board.run(id: run.id)?.sessionPath, "/p/mine.jsonl")
     }
 
     /// 列表里没有行的 run 放在列表最顶上：没对上记录的新会话、对上了但列表里还没那一行的；列表里有行的不再出（不重复）。
@@ -222,11 +272,38 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertTrue(reopened, "记录重新读到最新")
         XCTAssertNil(tab.runs.focused)
 
+        // 没有对话记录的新会话：跑多久都留着（同 Mac），「重新开始」同一条命令再起一个，「关闭」结束它。
+        let command = try XCTUnwrap(model.newSessionCommand(tool: .claude, directory: MobileAgentHistoryFixture.shop))
+        tab.startNewInPlace(tool: .claude, command: command, directory: MobileAgentHistoryFixture.shop,
+                            container: container, relay: HostKeyChallengeRelay())
+        let fresh = try XCTUnwrap(tab.runs.focused)
+        _ = await MobileFakeTerminal.waitUntilConnected(fresh.terminal.controller)
+        await handles()[1].latest?.simulateDrop()
+        let ended = await MobileFakeTerminal.waitUntil { tab.runs.run(id: fresh.id)?.isRunning == false }
+        XCTAssertTrue(ended, "没有记录：留着终端、标成已结束")
+        XCTAssertEqual(tab.runs.focusedID, fresh.id, "不跳回列表")
+        tab.restartRun(fresh.id)
+        let restarted = try XCTUnwrap(tab.runs.focused)
+        XCTAssertNotEqual(restarted.id, fresh.id)
+        XCTAssertTrue(restarted.isRunning)
+        XCTAssertNil(tab.runs.run(id: fresh.id))
+        XCTAssertEqual(tab.runs.runs.count, 1)
+        _ = await MobileFakeTerminal.waitUntilConnected(restarted.terminal.controller)
+        var written = ""
+        for _ in 0..<100 {
+            written = await handles()[2].latest?.writtenText ?? ""
+            if written.contains(command + "; exit") { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(written.contains(command + "; exit"), "同一条命令再起一次")
+        tab.endRun(restarted.id)
+        XCTAssertTrue(tab.runs.runs.isEmpty)
+
         tab.runs.quickExit = 60
         _ = try resume(tab, model, tool: .codex, container: container)
         let quick = try XCTUnwrap(tab.runs.focused)
         _ = await MobileFakeTerminal.waitUntilConnected(quick.terminal.controller)
-        await handles()[1].latest?.simulateDrop()
+        await handles()[3].latest?.simulateDrop()
         let kept = await MobileFakeTerminal.waitUntil { tab.runs.run(id: quick.id)?.isRunning == false }
         XCTAssertTrue(kept, "很快就退出的留着给人看")
         XCTAssertNil(tab.keyboardTerminal, "已退出的不拿键盘")
@@ -242,8 +319,6 @@ final class CodeTabRunsTests: XCTestCase {
         let source = MobileFakeAgentSource(tool: .codex, sessions: [
             .init(id: "x-old", projectID: "2026-11-01", projectDirectory: MobileAgentHistoryFixture.shop,
                   resumeDirectory: MobileAgentHistoryFixture.shop, title: "很早以前的", modifiedAt: start.addingTimeInterval(-86_400)),
-            .init(id: "x-new", projectID: "2026-11-23", projectDirectory: MobileAgentHistoryFixture.shop,
-                  resumeDirectory: MobileAgentHistoryFixture.shop, title: "刚开的这个", modifiedAt: start.addingTimeInterval(30)),
         ])
         let (tab, model, _) = try await codeTab(host: host, source: AgentHistoryCompositeSource([
             source, MobileFakeAgentSource(tool: .claude, sessions: []),
@@ -256,6 +331,10 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(tab.title(of: run), AgentHistoryText.newSession)
         XCTAssertNil(model.selectedFile)
 
+        // 新会话起来之后主机上才写出它的记录（起的时候列表里已有的记录不认，见 `CodeRunBoard.Run.knownPaths`）。
+        await source.add(.init(id: "x-new", projectID: "2026-11-23", projectDirectory: MobileAgentHistoryFixture.shop,
+                               resumeDirectory: MobileAgentHistoryFixture.shop, title: "刚开的这个",
+                               modifiedAt: start.addingTimeInterval(30)))
         await tab.matchNewSessions()
         let matched = try XCTUnwrap(tab.runs.run(id: run.id))
         XCTAssertEqual(matched.sessionID, "x-new")

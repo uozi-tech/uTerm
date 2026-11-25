@@ -19737,6 +19737,35 @@
         }
       }
     },
+    "会话已结束" : {
+      "comment" : "Code 标签页：会话里的编码工具已经退出，下面是终端最后的画面",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session ended"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションが終了しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션이 종료됨"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作階段已結束"
+          }
+        }
+      }
+    },
     "会话记录一直在写入，几次读到的都对不上，稍后再试" : {
       "localizations" : {
         "en" : {
@@ -39699,6 +39728,7 @@
       }
     },
     "已结束" : {
+      "comment" : "Code 标签页：会话里的编码工具已经退出，终端还留着最后的画面",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -65049,6 +65079,7 @@
       }
     },
     "程序已退出" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -67740,6 +67771,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "結束工作階段"
+          }
+        }
+      }
+    },
+    "结束会话会关闭这个终端，里面的程序可能被中断。" : {
+      "comment" : "Code 标签页里结束一个会话前的确认",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ending the session closes this terminal. Programs running in it may be interrupted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションを終了するとこのターミナルが閉じ、実行中のプログラムが中断される可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션을 종료하면 이 터미널이 닫히며, 실행 중인 프로그램이 중단될 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結束工作階段會關閉這個終端機，裡面的程式可能會被中斷。"
           }
         }
       }
@@ -75542,6 +75602,35 @@
         }
       }
     },
+    "这个会话没有留下对话记录。" : {
+      "comment" : "Code 标签页「会话已结束」那一条上的说明",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session left no conversation history."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションには会話の記録が残っていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션에는 대화 기록이 남지 않았습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個工作階段沒有留下對話記錄。"
+          }
+        }
+      }
+    },
     "这个会话里没有可显示的消息。" : {
       "localizations" : {
         "en" : {
@@ -82385,6 +82474,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重新啟動"
+          }
+        }
+      }
+    },
+    "重新开始" : {
+      "comment" : "Code 标签页：会话结束后，同一个工具、同一个目录再开一次",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "もう一度開始"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다시 시작"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新開始"
           }
         }
       }

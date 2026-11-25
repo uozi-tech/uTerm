@@ -29,6 +29,9 @@ final class AgentHistoryModel {
     let preferredDirectory: String?
     /// 一开始落在终端当前目录对上的项目里（iOS 的历史标签）；false 一直列全部项目（Mac 的列表按项目分组，用不着先挑一个）。
     let followsCurrentProject: Bool
+    /// 列表缓存的键（`AgentHistoryListCache`）：同一台主机、同一组工具的列表再开一次（新开 Code 标签页、关了又开）时，
+    /// 先把上一次列到的显示出来，再在后台重列。nil = 不用缓存。
+    let cacheKey: String?
 
     private(set) var phase: Phase = .loading
     private(set) var projects: [AgentHistoryProject] = []
@@ -94,18 +97,20 @@ final class AgentHistoryModel {
     init(source: any AgentHistorySource, preferredDirectory: String?,
          followTiming: AgentTranscriptFollowTiming = .standard,
          searchLimits: AgentHistorySearchLimits = .standard, allowsSearch: Bool = true,
-         followsCurrentProject: Bool = true) {
+         followsCurrentProject: Bool = true, cacheKey: String? = nil) {
         self.source = source
         self.preferredDirectory = preferredDirectory
         self.followsCurrentProject = followsCurrentProject
+        self.cacheKey = cacheKey
         self.followTiming = followTiming
         self.searchLimits = searchLimits
         self.allowsSearch = allowsSearch
     }
 
-    /// 列表里显示的：已经读过的那一段里要列出来的。
+    /// 列表里显示的：已经读过的那一段里要列出来的。后台重列后排进这一段、还没读到信息的（新写出来的记录）先不显示，
+    /// 读到了再出来（见 `setScope`）。
     var visibleFiles: [AgentHistorySessionFile] {
-        files.prefix(resolvedCount).filter { metadata[$0.path]?.isListed ?? true }
+        files.prefix(resolvedCount).filter { metadata[$0.path]?.isListed ?? false }
     }
 
     /// 列表最上面「置顶」一组的行（按用户排的顺序；已经按「显示」筛过，还没读到信息的、找不到的不在里面）。
@@ -119,7 +124,7 @@ final class AgentHistoryModel {
     func readPinnedMetadata() {
         guard let pins, !pins.keys.isEmpty, !files.isEmpty else { return }
         let wanted = Set(pins.keys)
-        let pinned = files.filter { wanted.contains(AgentHistoryPinKey($0)) && metadata[$0.path] == nil }
+        let pinned = files.filter { wanted.contains(AgentHistoryPinKey($0)) && needsRead($0) }
         guard !pinned.isEmpty else { return }
         for file in pinned.reversed() where !inFlight.contains(file.path) && !failed.contains(file.path) {
             queued.removeAll { $0.path == file.path }
@@ -201,7 +206,35 @@ final class AgentHistoryModel {
 
     func start() async {
         guard phase == .loading, projects.isEmpty else { return }
-        await reload()
+        if let cacheKey, let cached = AgentHistoryListCache.shared.entry(cacheKey) {
+            // 上一次列到的先显示出来（行、标题都是上次读的），再在后台重列：重列不会让已经显示的行消失（`setScope`）。
+            apply(cached)
+            await reload(showsLoading: false)
+        } else {
+            await reload()
+        }
+    }
+
+    private func apply(_ cached: AgentHistoryListCache.Entry) {
+        projects = cached.projects
+        availableTools = cached.availableTools
+        metadata = cached.metadata
+        metadataKeys = cached.metadataKeys
+        scope = .all
+        listedFiles = cached.listedFiles
+        files = cached.listedFiles.filter(passesToolFilter)
+        phase = .ready
+        resolvedCount = 0
+        advanceResolved()
+        targetRows = max(pageRows, cached.shownRows)
+    }
+
+    /// 把这一份列表记进缓存（只记「全部项目」的）。列完、列表多出行、关掉时调。
+    func storeInCache() {
+        guard let cacheKey, scope == .all, phase == .ready else { return }
+        AgentHistoryListCache.shared.store(cacheKey, AgentHistoryListCache.Entry(
+            projects: projects, availableTools: availableTools, listedFiles: listedFiles, metadata: metadata,
+            metadataKeys: metadataKeys, shownRows: visibleFiles.count))
     }
 
     /// 重新列项目与会话。读过的信息按缓存键复用（文件没变就不再读）。
@@ -238,6 +271,8 @@ final class AgentHistoryModel {
             phase = .ready
             await setScope(nextScope)
         } catch {
+            // 后台重列失败（断线、辅助程序重启）：列表照旧显示上一次列到的，下次再列。
+            guard showsLoading || phase != .ready else { return }
             phase = .failed(error.localizedDescription)
             failWaitingSearch()
         }
@@ -256,7 +291,8 @@ final class AgentHistoryModel {
         queued.removeAll()
         isListing = true
         defer { if generation == listGeneration { isListing = false } }
-        let listed: [AgentHistorySessionFile]
+        let previousScope = scope
+        var listed: [AgentHistorySessionFile]
         switch newScope {
         case .project(let project):
             do {
@@ -268,34 +304,89 @@ final class AgentHistoryModel {
                 return
             }
         case .all:
-            listed = await source.allSessions(in: projects)
+            let listing = await source.listAllSessions(in: projects)
+            listed = listing.files
+            // 这一趟有项目没列出来（断线、辅助程序重启）：它们上一次列到的会话留着，不能一下子从侧栏上消失。
+            if !listing.failedProjects.isEmpty, previousScope == .all {
+                let kept = listedFiles.filter { listing.failedProjects.contains(AgentHistoryProjectKey($0.project)) }
+                let present = Set(listed.map(\.path))
+                listed = (listed + kept.filter { !present.contains($0.path) }).sorted { $0.modifiedAt > $1.modifiedAt }
+            }
         }
         guard generation == listGeneration else { return }
-        listedFiles = listed
-        files = listed.filter(passesToolFilter)
-        // 列表里的修改时间是刚列的了，之前记的不再需要（正开着的那份照样从对话里取）。
-        seenActivity.removeAll()
-        failed.removeAll()
-        // 文件变过的（大小或修改时间不一样了）信息作废，重读。
-        for file in listed where metadataKeys[file.path] != nil && metadataKeys[file.path] != file.cacheKey {
-            metadata[file.path] = nil
-            metadataKeys[file.path] = nil
-        }
-        resolvedCount = 0
-        advanceResolved()
-        targetRows = pageRows
-        readPinnedMetadata()
-        fill()
-        if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) {
-            select(nil)
-        }
+        adopt(listed, shownBefore: previousScope == newScope ? resolvedCount : 0)
         // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
         isListing = false
         if let query = search?.query { startSearch(query) }
     }
 
-    /// 后面还有没读的记录（列表底下画「正在读取」）。
-    var hasMore: Bool { resolvedCount < files.count }
+    /// 只重列这几份记录所在的项目，别的项目照旧（Code 标签页里跑着的会话：记录一直在写，侧栏那一行与终端顶上的标题
+    /// 跟着 Claude Code 后来起的名字走）。已经显示着的行一行都不收（同后台重列）。正在列的时候不插一脚，下次再来。
+    func refreshProjects(containing paths: Set<String>) async {
+        guard phase == .ready, !isListing, !paths.isEmpty else { return }
+        var projects: [AgentHistoryProjectKey: AgentHistoryProject] = [:]
+        for file in listedFiles where paths.contains(file.path) { projects[AgentHistoryProjectKey(file.project)] = file.project }
+        guard !projects.isEmpty else { return }
+        let generation = listGeneration
+        var fresh: [AgentHistorySessionFile] = []
+        var refreshed: Set<AgentHistoryProjectKey> = []
+        for (key, project) in projects {
+            guard let listed = try? await source.sessions(in: project) else { continue }
+            fresh += listed
+            refreshed.insert(key)
+        }
+        // 这期间整个重列过（或换了范围）：那一趟的结果更新，这一份作废。
+        guard generation == listGeneration, !isListing, !refreshed.isEmpty else { return }
+        let kept = listedFiles.filter { !refreshed.contains(AgentHistoryProjectKey($0.project)) }
+        adopt((kept + fresh).sorted { $0.modifiedAt > $1.modifiedAt }, shownBefore: resolvedCount,
+              refreshed: Set(fresh.map(\.path)))
+    }
+
+    /// 换上新列出来的记录。`shownBefore`：原来显示到第几份（同一个范围重列时），0 = 从头显示。
+    /// `refreshed`：只重列了一部分时，刚列过的那些（只清它们记下的时间）；nil = 全部重列过。
+    private func adopt(_ listed: [AgentHistorySessionFile], shownBefore: Int, refreshed: Set<String>? = nil) {
+        // 换了范围就从头显示；同一个范围重列（后台刷新）时，已经显示着的行一行都不收：
+        // 数一数原来显示到第几份（都读过信息），新列表里数到同样多份读过的为止都算已经显示。中间新冒出来的（新写出的记录）
+        // 先不显示、读到信息再出来；文件变了的照旧显示上次读到的标题，后台重读（`needsRead`）。
+        listedFiles = listed
+        files = listed.filter(passesToolFilter)
+        // 列表里的修改时间是刚列的了，之前记的不再需要（正开着的那份照样从对话里取）。
+        if let refreshed {
+            for path in refreshed { seenActivity[path] = nil }
+            failed.subtract(refreshed)
+        } else {
+            seenActivity.removeAll()
+            failed.removeAll()
+        }
+        resolvedCount = 0
+        if shownBefore > 0 {
+            var known = 0
+            while resolvedCount < files.count, known < shownBefore {
+                if metadata[files[resolvedCount].path] != nil { known += 1 }
+                resolvedCount += 1
+            }
+        }
+        advanceResolved()
+        targetRows = max(pageRows, shownBefore > 0 ? visibleFiles.count : 0)
+        // 已经显示的那一段里没读过的、文件变了的，先读。
+        for file in files.prefix(resolvedCount).reversed() where needsRead(file) {
+            guard !inFlight.contains(file.path) else { continue }
+            queued.removeAll { $0.path == file.path }
+            queued.insert(file, at: 0)
+        }
+        readPinnedMetadata()
+        pump()
+        fill()
+        storeInCache()
+        if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) {
+            select(nil)
+        }
+    }
+
+    /// 后面还有没读的记录（列表底下画「正在读取」），或者后台重列后排进已显示那一段的新记录还没读到。
+    var hasMore: Bool {
+        resolvedCount < files.count || files.prefix(resolvedCount).contains { metadata[$0.path] == nil }
+    }
 
     /// 再往后读一批：读到列表多出一批行，或者读完为止。列表滚到底时调。
     ///
@@ -324,9 +415,13 @@ final class AgentHistoryModel {
     }
 
     private func enqueue(_ file: AgentHistorySessionFile) {
-        guard metadata[file.path] == nil, !inFlight.contains(file.path), !failed.contains(file.path),
-              !queued.contains(where: { $0.path == file.path }) else { return }
+        guard needsRead(file), !inFlight.contains(file.path), !queued.contains(where: { $0.path == file.path }) else { return }
         queued.append(file)
+    }
+
+    /// 这一份的信息还没读过，或者读的是文件变之前的样子（大小、修改时间不一样了）。读失败过的这一趟不再读。
+    private func needsRead(_ file: AgentHistorySessionFile) -> Bool {
+        metadataKeys[file.path] != file.cacheKey && !failed.contains(file.path)
     }
 
     private func pump() {
@@ -344,6 +439,7 @@ final class AgentHistoryModel {
         inFlight.remove(file.path)
         // 读的时候文件又变了（中途刷新过）：这份信息是旧的，丢掉重读。
         if let current = files.first(where: { $0.path == file.path }), current.cacheKey != file.cacheKey {
+            enqueue(current)
             pump()
             fill()
             return
@@ -358,9 +454,11 @@ final class AgentHistoryModel {
                                                               resumeDirectory: file.project.directory,
                                                               gitBranch: nil, lastActivity: nil)
         }
+        let before = resolvedCount
         advanceResolved()
         pump()
         fill()
+        if resolvedCount != before || (queued.isEmpty && inFlight.isEmpty) { storeInCache() }
     }
 
     func select(_ file: AgentHistorySessionFile?) {

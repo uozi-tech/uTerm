@@ -16,6 +16,9 @@ protocol CodeTabTerminal: AnyObject {
     func dispose()
     /// 那条命令起止标记的编号（存进保持进程的布局，重启后据此认出程序退出）。没有为 nil。
     var codeCommandMarker: String? { get }
+    /// 程序经 OSC 7501 报的状态（工作中、等确认、空闲……），同终端标签页上的圆点。没报过为 nil。
+    /// 界面在每一行自己的视图里读它：状态变了只重画那一行。
+    var codeProgramStatus: ProgramStatusRecord? { get }
     /// App 重启后接回：命令照「还在跑」接上，再判一次程序在 App 不在时是不是已经退出了（规则见
     /// `TerminalSession.restoreCodeCommand`）。
     func restoreCodeCommand(marker: String?, startedAt: Date)
@@ -23,13 +26,15 @@ protocol CodeTabTerminal: AnyObject {
 
 extension CodeTabTerminal {
     var codeCommandMarker: String? { nil }
+    var codeProgramStatus: ProgramStatusRecord? { nil }
     func restoreCodeCommand(marker: String?, startedAt: Date) {}
 }
 
 /// 一个 Code 标签页：左边这台主机上编码工具的历史会话，右边看选中那份记录，或者就在右边接着聊（一个跑着继续命令的终端）。
 ///
 /// 被「继续」过的会话各自留着自己的终端（`runs`）：点侧栏里别的会话不打断正在跑的，点回去就回到它的终端。
-/// 终端里的程序退出（用户退出了 Claude）就结束那个终端，这个会话回到只读记录，记录重新读到最新。
+/// 终端里的程序退出（用户退出了 Claude）：有对话记录可看的，结束那个终端，回到只读记录（重新读到最新）；没有的（新开了
+/// 没说话就退出、记录没写出来或者是空的），终端留着（最后的画面），右边顶上一条「会话已结束」，由用户「重新开始」或「关闭」。
 /// App 重启后整个标签页按保持进程里存的布局开回来（`record` 存、`restore` 接回），里面的会话回到它里面。
 @MainActor
 @Observable
@@ -53,9 +58,18 @@ final class CodeTabModel {
         /// 对应的是哪份记录（工具 + 会话 ID，同置顶的认法）：和 `path` 一起填上，存进布局的就是它。重启后接回的会话
         /// 先只有它，列表读出来之后再找回 `path`（`resolveRestoredRuns`）；找到之前不当新会话去对别的记录。
         var key: AgentHistoryPinKey?
+        /// 起它时打的命令（「重新开始」照原样再打一次）。重启后接回的没有（按记录现算，见 `restart`）。
+        var command: String?
+        /// 是「继续」一份记录起的（不是「＋」新会话）。「重新开始」据此再继续同一份，还是在同一个目录里新开一个。
+        var resumesRecord: Bool
+        /// 程序已经退出、终端留着给人看（没有对话记录可显示）的时刻。还在跑为 nil。
+        var endedAt: Date?
 
         init(terminal: any CodeTabTerminal, tool: AgentHistoryTool, directory: String, startedAt: Date, path: String?,
-             knownPaths: Set<String>, title: String?, showsTranscript: Bool = false, key: AgentHistoryPinKey? = nil) {
+             knownPaths: Set<String>, title: String?, showsTranscript: Bool = false, key: AgentHistoryPinKey? = nil,
+             command: String? = nil, resumesRecord: Bool? = nil) {
+            self.command = command
+            self.resumesRecord = resumesRecord ?? (title != nil)
             self.terminal = terminal
             self.tool = tool
             self.directory = directory
@@ -69,6 +83,8 @@ final class CodeTabModel {
 
         /// 还没对上任何记录的新会话（接回后等着找回记录的不算）。
         var isUnmatched: Bool { path == nil && key == nil }
+        /// 程序已经退出（留着最后的画面）。
+        var isEnded: Bool { endedAt != nil }
     }
 
     /// 右边显示什么。
@@ -108,8 +124,17 @@ final class CodeTabModel {
     /// 多久看一次各个终端的状态（`codeCommandHasEnded`）。Mac 上命令的起止标记（`TerminalTrackedRun`）不参与观察、
     /// 连接状态的回调又被宿主占着，所以轮询；只在有会话在跑时转。
     nonisolated static let checkInterval: Duration = .seconds(1)
-    /// 有新会话还没对上记录时，隔多久安静地重列一次（不闪「正在读取」）。
+    /// 有会话在跑时，隔多久安静地重列一次（不闪「正在读取」）：有新会话还没对上记录时重列全部，都对上了只重列它们所在的
+    /// 项目（标题跟着 Claude Code 后来起的名字走）。
     nonisolated static let refreshInterval: Duration = .seconds(10)
+
+    /// 看终端、重列的间隔（测试换成短的）。
+    struct Timing {
+        var check: Duration
+        var refresh: Duration
+        static let standard = Timing(check: CodeTabModel.checkInterval, refresh: CodeTabModel.refreshInterval)
+    }
+    @ObservationIgnored var timing = Timing.standard
 
     /// 重启前右边看的是什么：列表还没列出来，先记着，列出来之后还原（`applyRestoredState`）；用户先点了别的就作废。
     private enum RestoredSelection: Equatable {
@@ -163,8 +188,11 @@ final class CodeTabModel {
         connection?.close()
     }
 
-    /// 标签页里跑着的终端（关标签页 / 关窗口时问前台程序、退出 App 时一起断开）。
+    /// 标签页里的终端（关标签页 / 关窗口时问前台程序、退出 App 时一起断开），含已结束、留着画面的。
     var terminals: [any CodeTabTerminal] { runs.map(\.terminal) }
+
+    /// 还在跑的会话个数（标签上、收起的侧栏上的数字）。已结束、留着画面的不算。
+    var runningCount: Int { runs.reduce(0) { $0 + ($1.isEnded ? 0 : 1) } }
 
     // MARK: 右边显示什么
 
@@ -229,6 +257,12 @@ final class CodeTabModel {
         }
     }
 
+    /// 侧栏那一行右键「查看记录」：选中它那份记录、右边看记录（不打断它）。没有记录的新会话同点一下那一行。
+    func showRecord(of id: UUID) {
+        selectRun(id)
+        setShowsTranscript(true, for: id)
+    }
+
     func requestReveal(directory: String?) {
         guard let directory else { return }
         revealGeneration += 1
@@ -251,7 +285,7 @@ final class CodeTabModel {
         guard let plan = history.resumeCommand(for: file) else { return nil }
         let title = AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])
         guard let run = start(plan.command, tool: file.tool, directory: plan.directory, path: file.path, title: title,
-                              key: AgentHistoryPinKey(file)) else {
+                              key: AgentHistoryPinKey(file), resumesRecord: true) else {
             return nil
         }
         selectedRunID = nil
@@ -290,7 +324,8 @@ final class CodeTabModel {
     /// 新会话：在右边起一个终端跑新会话的命令。它在列表里还没有行，单独选中，等对上记录（`matchNewSessions`）。
     @discardableResult
     func startNewSession(tool: AgentHistoryTool, command: String, directory: String) -> Run? {
-        guard let run = start(command, tool: tool, directory: directory, path: nil, title: nil, key: nil) else { return nil }
+        guard let run = start(command, tool: tool, directory: directory, path: nil, title: nil, key: nil,
+                              resumesRecord: false) else { return nil }
         restoredSelection = nil
         history?.select(nil)
         selectedRunID = run.id
@@ -298,11 +333,12 @@ final class CodeTabModel {
     }
 
     private func start(_ command: String, tool: AgentHistoryTool, directory: String, path: String?,
-                       title: String?, key: AgentHistoryPinKey?) -> Run? {
+                       title: String?, key: AgentHistoryPinKey?, resumesRecord: Bool) -> Run? {
         guard !isClosed, let terminal = makeTerminal(directory) else { return nil }
         terminal.runCodeCommand(command)
         let run = Run(terminal: terminal, tool: tool, directory: directory, startedAt: Date(), path: path,
-                      knownPaths: Set(history?.files.map(\.path) ?? []), title: title, key: key)
+                      knownPaths: Set(history?.files.map(\.path) ?? []), title: title, key: key, command: command,
+                      resumesRecord: resumesRecord)
         runs.append(run)
         startWatching()
         return run
@@ -325,7 +361,7 @@ final class CodeTabModel {
             terminal.restoreCodeCommand(marker: saved.marker, startedAt: saved.startedAt)
             runs.append(Run(terminal: terminal, tool: tool, directory: saved.directory, startedAt: saved.startedAt,
                             path: nil, knownPaths: [], title: nil, showsTranscript: saved.showsTranscript ?? false,
-                            key: saved.key))
+                            key: saved.key, resumesRecord: saved.key != nil))
             adopted.append(terminal.id)
         }
         if let id = record.selectedRun, runs.contains(where: { $0.id == id }) {
@@ -349,6 +385,10 @@ final class CodeTabModel {
     func applyRestoredState() {
         guard let history, history.phase == .ready || history.phase == .empty else { return }
         resolveRestoredRuns()
+        // 列表读出来之前就认出程序退出了、当时还不知道有没有记录的：找回了有对话的记录就照常收尾（要还原的选中随之改成那份记录）。
+        for run in runs where run.isEnded {
+            if let path = run.path, history.metadata[path]?.isListed == true { finish(run) }
+        }
         guard let wanted = restoredSelection else { return }
         restoredSelection = nil
         switch wanted {
@@ -393,6 +433,9 @@ final class CodeTabModel {
 
     /// 存进布局的样子（`HeldSessionLayout.codeTabs`）：跑着的会话、右边看的是哪一个。`id` 是标签页的 id。
     /// 列表还没列出来、重启前的选中还没还原时，照原样记下那份选中（马上又退出也不丢）。
+    ///
+    /// 已结束、留着画面的会话照样记（shell 还在保持进程里时，重启后接回、再判一次程序已经退出，又显示成已结束，
+    /// 不会变成一个普通标签页）；shell 已经退出的保持进程里没有它，接回时自然丢掉。
     func record(id: UUID, host: UUID? = nil) -> CodeTabRecord {
         let saved = runs.map { run in
             CodeRunRecord(session: run.id, tool: run.tool, sessionID: run.key?.sessionID, directory: run.directory,
@@ -433,6 +476,14 @@ final class CodeTabModel {
         return true
     }
 
+    /// 用户点的「结束会话」（终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×；要不要先问由宿主定，见
+    /// `TerminalCloseGuard.requestEndSession`）：同程序跑完一样收尾，有记录的回到记录、没有的回到起始页。
+    /// 已结束、留着画面的同「关闭」。
+    func endSession(_ id: UUID) {
+        guard let run = runs.first(where: { $0.id == id }) else { return }
+        if run.isEnded { dismissEnded(id) } else { finish(run) }
+    }
+
     // MARK: 看着各个终端
 
     private func startWatching() {
@@ -440,35 +491,122 @@ final class CodeTabModel {
         watcher = Task { [weak self] in
             var sinceRefresh = Duration.zero
             while !Task.isCancelled {
-                try? await Task.sleep(for: CodeTabModel.checkInterval)
-                guard let self, !Task.isCancelled, !self.runs.isEmpty else { break }
+                try? await Task.sleep(for: self?.timing.check ?? CodeTabModel.checkInterval)
+                guard let self, !Task.isCancelled, self.runs.contains(where: { !$0.isEnded }) else { break }
                 self.checkRuns()
-                sinceRefresh += CodeTabModel.checkInterval
-                if sinceRefresh >= CodeTabModel.refreshInterval, self.runs.contains(where: { $0.path == nil }) {
+                sinceRefresh += self.timing.check
+                if sinceRefresh >= self.timing.refresh {
                     sinceRefresh = .zero
-                    await self.refreshList()
+                    if self.runs.contains(where: { $0.path == nil && !$0.isEnded }) {
+                        await self.refreshList()
+                    } else {
+                        await self.refreshRunRecords()
+                    }
                 }
             }
             self?.watcher = nil
         }
     }
 
-    /// 跑完的结束掉；新会话试着对上记录。
+    /// 跑完的收尾（`programExited`）；新会话试着对上记录。已结束、留着画面的不再看。
     func checkRuns() {
-        for run in runs where run.terminal.codeCommandHasEnded { finish(run) }
+        for run in runs where !run.isEnded && run.terminal.codeCommandHasEnded { programExited(run) }
         matchNewSessions()
     }
 
-    private func finish(_ run: Run) {
+    /// 终端里的程序退出了。有对话记录可看的（列表里有它那一行）结束终端、回到记录；没有的终端留着、标成已结束，
+    /// 先重列一次（新会话的记录可能刚写出来），列出来了、有对话就照样回到记录，否则一直留着，等用户「重新开始」或「关闭」。
+    private func programExited(_ run: Run) {
+        guard let index = runs.firstIndex(where: { $0.id == run.id }) else { return }
+        let listed = run.path.map { history?.metadata[$0]?.isListed == true } ?? false
+        guard CodeRunExitPolicy.keepsTerminal(hasListedRecord: listed, ranFor: Date().timeIntervalSince(run.startedAt),
+                                              quickExit: 0) else {
+            finish(run)
+            return
+        }
+        runs[index].endedAt = Date()
+        // 重启后接回、列表还没读出来就结束了的：要还原的选中留在它身上（它的终端还在）。
+        Task { [weak self] in
+            await self?.refreshList()
+            await self?.settleEnded(run.id)
+        }
+    }
+
+    /// 已结束的会话重列之后再看一次：对上了有对话的记录就照常收尾、回到记录；还是没有就留着。
+    private func settleEnded(_ id: UUID) async {
+        guard let history, let run = runs.first(where: { $0.id == id }), run.isEnded else { return }
+        let path = run.path ?? run.key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key }?.path }
+        guard let path, let file = history.files.first(where: { $0.path == path }) else { return }
+        // 记录的信息按文件现在的样子读（侧栏那份可能是会话刚开始、还没对话时读的）。
+        var listed = history.metadata[path]?.isListed == true
+        if !listed { listed = (try? await history.source.metadata(for: file))?.isListed ?? false }
+        guard listed, let current = runs.first(where: { $0.id == id }), current.isEnded else { return }
+        let looking = selectedRunID == id || (history.selectedFile?.path == path)
+        finish(current)
+        if looking, selectedRunID == nil {
+            if history.selectedFile?.path == path {
+                history.jumpToLatest()
+            } else {
+                history.select(file)
+            }
+        }
+    }
+
+    /// 「会话已结束」那一条上的「重新开始」：同一种工具、同一个目录，继续的会话再继续同一份记录，新会话再新开一个。
+    /// 已结束的那个终端随之结束，右边换成新的。返回新起的；起不了（宿主没了、这种工具在这里开不了）为 nil，原样留着。
+    @discardableResult
+    func restart(_ id: UUID) -> Run? {
+        guard let old = runs.first(where: { $0.id == id }), old.isEnded, let history else { return nil }
+        let file = (old.path ?? old.key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key }?.path })
+            .flatMap { path in history.files.first { $0.path == path } }
+        let resumes = old.resumesRecord && file != nil
+        let command = old.command
+            ?? (resumes ? file.flatMap { history.resumeCommand(for: $0)?.command }
+                : history.newSessionCommand(tool: old.tool, directory: old.directory))
+        guard let command else { return nil }
+        let title = file.map { AgentHistoryText.sessionTitle($0, metadata: history.metadata[$0.path]) } ?? old.title
+        let wasSelected = displayedRun?.id == id
+        guard let run = start(command, tool: old.tool, directory: old.directory, path: resumes ? file?.path : nil,
+                              title: resumes ? title : nil, key: resumes ? file.map { AgentHistoryPinKey($0) } : nil,
+                              resumesRecord: resumes) else { return nil }
+        // 新的放在旧的位置上（侧栏顶上那一行不挪）。
+        runs.removeAll { $0.id == run.id }
+        if let index = runs.firstIndex(where: { $0.id == id }) { runs.insert(run, at: index) } else { runs.append(run) }
+        runs.removeAll { $0.id == id }
+        old.terminal.dispose()
+        if wasSelected {
+            restoredSelection = nil
+            if resumes, let file {
+                selectedRunID = nil
+                if history.selectedFile?.path != file.path { history.select(file) }
+            } else {
+                history.select(nil)
+                selectedRunID = run.id
+            }
+        }
+        return run
+    }
+
+    /// 「会话已结束」那一条上的「关闭」：结束那个终端，右边回到起始页（侧栏里它那一行随之拿掉）。
+    func dismissEnded(_ id: UUID) {
+        guard let run = runs.first(where: { $0.id == id }), run.isEnded else { return }
+        let wasLooking = displayedRun?.id == id
+        finish(run, revealsRecord: false)
+        if wasLooking { history?.select(nil) }
+    }
+
+    /// 结束一个终端，从这里拿掉。`revealsRecord`：右边正看着它的话回到它的记录（读到最新）；跑完才列到的新会话，
+    /// 右边没在看别的就打开那份记录。
+    private func finish(_ run: Run, revealsRecord: Bool = true) {
         guard runs.contains(where: { $0.id == run.id }) else { return }
         runs.removeAll { $0.id == run.id }
         run.terminal.dispose()
         // 右边正看着它：回到它的记录，并从末尾重新读到最新。没对上记录的新会话就回到空态，等下面重列之后再对。
-        if let path = run.path, history?.selectedFile?.path == path { history?.jumpToLatest() }
+        if revealsRecord, let path = run.path, history?.selectedFile?.path == path { history?.jumpToLatest() }
         if selectedRunID == run.id { selectedRunID = nil }
         // 重启后接回、列表还没读出来就结束了的（App 不在时程序已经退出）：要还原的选中改成它的记录。
         if case .run(run.id)? = restoredSelection { restoredSelection = run.key.map { .record($0) } }
-        let pending = run.path == nil ? run : nil
+        let pending = revealsRecord && run.path == nil ? run : nil
         Task { [weak self] in
             await self?.refreshList()
             guard let self, let pending, let history = self.history else { return }
@@ -492,6 +630,12 @@ final class CodeTabModel {
         guard let history, !isClosed else { return }
         await history.reload(showsLoading: false)
         matchNewSessions()
+    }
+
+    /// 跑着的会话的记录重读一遍（只重列它们所在的项目）：Claude Code 一直在写，标题、时间跟着它。
+    func refreshRunRecords() async {
+        guard let history, !isClosed else { return }
+        await history.refreshProjects(containing: Set(runs.filter { !$0.isEnded }.compactMap(\.path)))
     }
 
     /// 把还没对上记录的新会话对上列表里的真实记录（规则见 `match`）。对上了：侧栏顶上那一行「新会话」拿掉，
@@ -557,12 +701,14 @@ final class CodeTabModel {
         runs.filter { run in run.path.map { !shown.contains($0) } ?? true }
     }
 
-    /// 一个跑着的会话叫什么：对上了记录用记录的标题，继续的会话用起的时候的标题，新会话叫「新会话」。
+    /// 一个跑着的会话叫什么：对上了记录、读到了信息的用记录的标题（Claude Code 起的名字，跟着它变），继续的会话
+    /// 在那之前用起的时候的标题，新会话叫「新会话」（刚对上、记录的信息还没读到时也是，不闪一下「（无标题）」）。
     /// 接回后还没找回记录的会话用会话 ID 的前 8 位（同列表里读不到标题的那一行）。
     func title(of run: Run) -> String {
         let file = run.path.flatMap { path in history?.files.first { $0.path == path } }
-        if let file { return AgentHistoryText.sessionTitle(file, metadata: history?.metadata[file.path]) }
+        if let file, let metadata = history?.metadata[file.path] { return AgentHistoryText.sessionTitle(file, metadata: metadata) }
         if let title = run.title { return title }
+        if !run.resumesRecord { return AgentHistoryText.newSession }
         if let key = run.key { return String(localized: "（无标题）\(String(key.sessionID.prefix(8)))") }
         return AgentHistoryText.newSession
     }

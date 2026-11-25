@@ -1,25 +1,57 @@
 import AppKit
 import SwiftUI
+import UAppKitBridge
 import UDesignKit
 import UniformTypeIdentifiers
 
 /// 在 Code 标签页里跑着的会话（`CodeTabModel.runs`）：列表里对应的行标成「运行中」；列表里没有行的（还没对上记录的
 /// 新会话）放在列表最顶上。不另起一组「正在运行」：一个会话只出现一次。独立的历史窗口没有。
 struct AgentHistoryRunning {
-    /// 跑着的会话对应的记录文件：列表里这些行标成「运行中」。
-    let paths: Set<String>
-    /// 列表里没有行的那几个（`CodeTabModel.unlistedRuns`）；参数是列表里显示着的记录。
-    let unlisted: (_ shown: Set<String>) -> [AgentHistoryRunRow]
+    /// 在 Code 标签页里跑着（或已结束、留着画面）的会话，按起来的先后。列表把它们都放在最顶上，置顶与下面的分组里
+    /// 不再出现（一个会话只出现一次）；结束、拿掉之后回到它的记录平常的位置。
+    let rows: () -> [AgentHistoryRunRow]
     let onSelect: (UUID) -> Void
+    /// 行上的操作（右键菜单、悬停的 ×）。nil = 没有（只能点一下回到它）。
+    var actions: AgentHistoryRunActions? = nil
 }
 
-/// 列表最顶上的一行：跑着、但列表里没有它那份记录的会话（多半是还没写出记录的新会话）。
-struct AgentHistoryRunRow: Identifiable, Equatable {
+/// 顶上跑着的会话那一行的操作，同终端顶上「⋯」菜单里的那几样。
+struct AgentHistoryRunActions {
+    /// 「结束会话」（右键菜单与悬停的 ×）。前台还有程序在跑时先问，由宿主管。
+    let end: (UUID) -> Void
+    /// 「查看记录」：有记录的会话右边看它的记录。
+    let showRecord: (UUID) -> Void
+    /// 「返回终端」：右边正看着它的记录时回到它的终端。
+    let showTerminal: (UUID) -> Void
+    /// 「移到新标签页」；nil = 不出这一项。
+    let moveToTab: ((UUID) -> Void)?
+}
+
+/// 列表最顶上的一行：一个跑着的会话。有记录、列表里有那份记录的，画成那份记录平常的样子；没有的（还没写出记录的新会话）
+/// 写标题与目录。行上的状态见 `AgentHistoryRunStatus`。
+struct AgentHistoryRunRow: Identifiable {
     let id: UUID
     let title: String
     let tool: AgentHistoryTool
     let directory: String
     let isSelected: Bool
+    /// 对上的记录；新会话还没对上为 nil。
+    let path: String?
+    let status: AgentHistoryRunStatus
+    /// 右边正看着它的记录（右键菜单里是「返回终端」，否则「查看记录」）。
+    var showsRecord = false
+}
+
+/// 一个跑着的会话此刻的状态：程序经 OSC 7501 报的（同终端标签页上的圆点与文字），没报过就是「运行中」，程序退出了
+/// 是「已结束」（优先）。`read` 在显示它的那一小块视图里调：状态变了只重画那一行，不让整个列表重算。
+struct AgentHistoryRunStatus {
+    enum Phase: Equatable {
+        case running
+        case ended
+        case program(ProgramStatusRecord)
+    }
+
+    let read: @MainActor () -> Phase
 }
 
 /// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口用它；Code 标签页另摆（`CodeTabView`），
@@ -180,8 +212,9 @@ struct AgentHistorySessionList: View {
         return VStack(alignment: .leading, spacing: 4) {
             // 只留三样：搜索框、「＋」、菜单。刷新、收起侧栏不常用，收进菜单，搜索框拿到这些宽度。
             HStack(spacing: 2) {
-                UDSearchField(text: $history.searchText, placeholder: AgentHistoryText.searchPlaceholder,
-                              showsHotkeyChip: false)
+                // 不写占位文字（Mac 侧栏窄，放大镜就够说明）；读屏照旧读得出这是什么框。iOS 仍有占位文字。
+                UDSearchField(text: $history.searchText, placeholder: "", showsHotkeyChip: false)
+                    .accessibilityLabel(Text(AgentHistoryText.searchPlaceholder))
                     .onSubmit { history.submitSearch() }
                     .help(AgentHistoryText.searchHelp)
                     .padding(.trailing, 4)
@@ -331,38 +364,58 @@ struct AgentHistorySessionList: View {
         case .ready:
             let files = history.visibleFiles
             let pinned = history.pinnedFiles
+            let runs = running?.rows() ?? []
             // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
-            if files.isEmpty && pinned.isEmpty && (history.isListing || history.hasMore) {
+            if files.isEmpty && pinned.isEmpty && runs.isEmpty && (history.isListing || history.hasMore) {
                 RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
-            } else if files.isEmpty && pinned.isEmpty && (running?.unlisted([]).isEmpty ?? true) {
+            } else if files.isEmpty && pinned.isEmpty && runs.isEmpty {
                 RemoteMacStateView(systemImage: "tray", title: String(localized: "没有命令行会话"),
                                    detail: emptyDetail)
             } else {
-                list(files, pinned: pinned)
+                list(files, pinned: pinned, runs: runs)
             }
         }
     }
 
     private var emptyDetail: String { AgentHistoryText.emptyListDetail(hidden: history.hiddenCount) }
 
-    private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
+    private func list(_ allFiles: [AgentHistorySessionFile], pinned allPinned: [AgentHistorySessionFile],
+                      runs: [AgentHistoryRunRow]) -> some View {
+        // 跑着的都在最顶上，下面（置顶、分组）不再出现。
+        let runPaths = Set(runs.compactMap(\.path))
+        let (files, pinned) = AgentHistoryListing.excludingRunning(allFiles, pinned: allPinned, running: runPaths)
+        let byPath = Dictionary((allFiles + allPinned).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
-        let unlisted = running?.unlisted(Set(files.map(\.path)).union(pinned.map(\.path))) ?? []
         let pins = history.pins
-        // 拖动中、还没有置顶的会话：列表顶上出一条落点（不拖的时候不占地方）。
+        // 拖动中、还没有置顶的会话：分组最上面盖一条落点。盖在上面、不占位置：出现消失都不推动列表，拖着的落点不跟着跳。
         let showsDropStrip = pins != nil && pinned.isEmpty && pinDrag.isOver
         return GeometryReader { viewport in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(unlisted) { row in
-                            AgentHistoryUnlistedRunRow(row: row, showsTool: history.isMultiTool)
+                        ForEach(runs) { row in
+                            let file = row.path.flatMap { byPath[$0] }
+                            runRow(row, file: file)
+                                .modifier(AgentHistoryRunRowActions(row: row, file: file, pins: pins,
+                                                                    actions: running?.actions))
                                 .onTapGesture { running?.onSelect(row.id) }
                         }
-                        if showsDropStrip {
-                            AgentHistoryPinDropStrip(isTargeted: pinDrag.target == .pin(index: 0))
-                                .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: .strip))
+                        if !runs.isEmpty, !groups.isEmpty {
+                            Rectangle().fill(UD.border).frame(height: 1)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                        }
+                        if pins != nil, pinned.isEmpty {
+                            // 落点的锚：零高度，一直在（拖动开始时不插进新的一行）。落点画在它下面、盖住接下来的那一截。
+                            Color.clear.frame(height: 0)
+                                .overlay(alignment: .top) {
+                                    if showsDropStrip {
+                                        AgentHistoryPinDropStrip(isTargeted: pinDrag.target == .pin(index: 0))
+                                            .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: .strip))
+                                    }
+                                }
+                                .zIndex(1)
                         }
                         ForEach(groups) { group in
                             let collapsed = history.collapsedGroups.contains(group.id)
@@ -399,6 +452,18 @@ struct AgentHistorySessionList: View {
         }
     }
 
+    /// 顶上一个跑着的会话：列表里有它那份记录的画成记录平常的那一行，没有的写标题与目录。行上的状态是它此刻的状态。
+    @ViewBuilder
+    private func runRow(_ row: AgentHistoryRunRow, file: AgentHistorySessionFile?) -> some View {
+        if let file {
+            AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
+                                   showsProject: true, showsTool: history.isMultiTool, isSelected: row.isSelected,
+                                   runStatus: row.status)
+        } else {
+            AgentHistoryUnlistedRunRow(row: row, showsTool: history.isMultiTool)
+        }
+    }
+
     /// 一行会话：点一下选中；Mac 上能拖进 / 拖出「置顶」，右键「置顶」/「取消置顶」（同一件事，菜单好找）。
     @ViewBuilder
     private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
@@ -407,8 +472,7 @@ struct AgentHistorySessionList: View {
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                           showsProject: grouping != .project || group.kind == .pinned,
                                           showsTool: showsTool,
-                                          isSelected: history.selectedFile?.path == file.path,
-                                          isRunning: running?.paths.contains(file.path) == true)
+                                          isSelected: history.selectedFile?.path == file.path)
             .onTapGesture { history.select(file) }
         if let pins {
             let isPinned = group.kind == .pinned
@@ -424,6 +488,8 @@ struct AgentHistorySessionList: View {
                 .onDrag {
                     pinDrag.begin(key)
                     return AgentHistoryPinDragPayload.itemProvider()
+                } preview: {
+                    AgentHistorySessionRowPreview(history: history, file: file, showsTool: showsTool)
                 }
                 .contextMenu {
                     Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(key))) { pins.toggle(file) }
@@ -532,6 +598,48 @@ struct AgentHistoryRunningTag: View {
     }
 }
 
+/// 跑着的会话行上的状态：程序报的状态用终端标签页上同一套圆点颜色与文字（`ProgramStatusRecord.tabDot` /
+/// `statusLabel`），没报过是「运行中」，程序退出了是「已结束」。在自己的 `body` 里读状态：变了只重画这一小块。
+struct AgentHistoryRunStatusTag: View {
+    let status: AgentHistoryRunStatus
+
+    var body: some View {
+        let phase = status.read()
+        HStack(spacing: 3) {
+            Circle().fill(color(phase)).frame(width: 6, height: 6)
+            Text(verbatim: label(phase))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(phase == .ended ? UD.text3 : color(phase))
+        }
+        .fixedSize()
+        .help(Text(verbatim: help(phase)))
+    }
+
+    private func color(_ phase: AgentHistoryRunStatus.Phase) -> Color {
+        switch phase {
+        case .running: UD.success
+        case .ended: UD.text4
+        case .program(let record): record.tabDot
+        }
+    }
+
+    private func label(_ phase: AgentHistoryRunStatus.Phase) -> String {
+        switch phase {
+        case .running: String(localized: "运行中")
+        case .ended: AgentHistoryText.sessionEnded
+        case .program(let record): record.statusLabel
+        }
+    }
+
+    private func help(_ phase: AgentHistoryRunStatus.Phase) -> String {
+        switch phase {
+        case .running: String(localized: "运行中")
+        case .ended: AgentHistoryText.sessionEnded
+        case .program(let record): record.tabHelp
+        }
+    }
+}
+
 /// 列表最顶上那一行（`AgentHistoryRunRow`）：标题（新会话就是「新会话」），第二行「运行中」+ 目录名。点一下回到它的终端。
 private struct AgentHistoryUnlistedRunRow: View {
     let row: AgentHistoryRunRow
@@ -547,7 +655,7 @@ private struct AgentHistoryUnlistedRunRow: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 5) {
-                AgentHistoryRunningTag()
+                AgentHistoryRunStatusTag(status: row.status)
                 Text(verbatim: detail)
                     .font(.system(size: 11))
                     .foregroundStyle(UD.text3)
@@ -566,6 +674,85 @@ private struct AgentHistoryUnlistedRunRow: View {
     private var detail: String {
         let place = (row.directory as NSString).lastPathComponent
         return showsTool ? "\(row.tool.displayName) · \(place)" : place
+    }
+}
+
+/// 顶上跑着的会话那一行的操作：右键菜单（「查看记录」/「返回终端」、「移到新标签页」、有记录的「置顶」、「结束会话」），
+/// 悬停时右上角一个 ×（结束会话）。× 盖在行上、不占位置：出现消失这一行的字不挪。这几行不能拖（跑着的不进「置顶」那一套拖动）。
+struct AgentHistoryRunRowActions: ViewModifier {
+    let row: AgentHistoryRunRow
+    let file: AgentHistorySessionFile?
+    let pins: AgentHistoryPins?
+    let actions: AgentHistoryRunActions?
+
+    /// 界面画廊与测试用：建出来的行一开始就当作鼠标悬在上面（悬停拍不到）。App 里始终为 false。
+    static var catalogHovered = false
+
+    @State private var hovered = AgentHistoryRunRowActions.catalogHovered
+
+    func body(content: Content) -> some View {
+        if let actions {
+            content
+                .overlay(alignment: .topTrailing) {
+                    if hovered {
+                        AgentHistoryRunEndButton(isSelected: row.isSelected) { actions.end(row.id) }
+                            .padding(.top, 5)
+                            .padding(.trailing, 5)
+                    }
+                }
+                .hoverGated { hovered = $0 || Self.catalogHovered }
+                .contextMenu { menu(actions) }
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder private func menu(_ actions: AgentHistoryRunActions) -> some View {
+        if row.path != nil {
+            if row.showsRecord {
+                Button(String(localized: "返回终端")) { actions.showTerminal(row.id) }
+            } else {
+                Button(String(localized: "查看记录", comment: "Code 标签页：看这个正在跑的会话的对话记录")) {
+                    actions.showRecord(row.id)
+                }
+            }
+        }
+        if let move = actions.moveToTab {
+            Button(String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")) {
+                move(row.id)
+            }
+        }
+        if let file, let pins {
+            Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(AgentHistoryPinKey(file)))) { pins.toggle(file) }
+        }
+        Divider()
+        Button(AgentHistoryText.endSession, role: .destructive) { actions.end(row.id) }
+    }
+}
+
+/// 跑着的会话那一行悬停时右上角的 ×：结束会话。底色同这一行（盖住下面的字），悬在它上面时再深一点。
+struct AgentHistoryRunEndButton: View {
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(hovered ? UD.text : UD.text3)
+                .frame(width: 20, height: 20)
+                .background {
+                    RoundedRectangle(cornerRadius: 5).fill(UD.card)
+                        .overlay(RoundedRectangle(cornerRadius: 5).fill(isSelected ? UD.rowSelected : Color.clear))
+                        .overlay(RoundedRectangle(cornerRadius: 5).fill(hovered ? UD.panelHover : Color.clear))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.udPlain)
+        .hoverGated { hovered = $0 }
+        .help(AgentHistoryText.endSession)
+        .accessibilityLabel(Text(AgentHistoryText.endSession))
     }
 }
 
@@ -778,6 +965,8 @@ private struct AgentHistoryPinDropStrip: View {
         .frame(maxWidth: .infinity)
         .frame(height: 30)
         .background(RoundedRectangle(cornerRadius: 6).fill(isTargeted ? UD.accentSoft : UD.fillSoft))
+        // 盖在列表上（不占位置）：底下垫一层不透明的，免得透出下面那一行的字。
+        .background(RoundedRectangle(cornerRadius: 6).fill(UD.card))
         .overlay(RoundedRectangle(cornerRadius: 6)
             .strokeBorder(isTargeted ? UD.accent : UD.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         .padding(.bottom, 2)
@@ -967,8 +1156,8 @@ private struct AgentHistorySessionRow: View {
     /// 组里不止一种工具：第二行最前面写工具名。
     var showsTool = false
     let isSelected: Bool
-    /// 在 Code 标签页里跑着（`AgentHistoryRunning`）。
-    var isRunning = false
+    /// 在 Code 标签页里跑着（`AgentHistoryRunning`）：第二行前面是它此刻的状态。
+    var runStatus: AgentHistoryRunStatus? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -978,7 +1167,7 @@ private struct AgentHistorySessionRow: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 5) {
-                if isRunning { AgentHistoryRunningTag() }
+                if let runStatus { AgentHistoryRunStatusTag(status: runStatus) }
                 AgentSessionTimeText(history: history, file: file) { activity in
                     AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
                                                      showsTool: showsTool, activity: activity)
@@ -1506,5 +1695,33 @@ private struct AgentClippedBlock: View {
     private func binding(_ key: String) -> Binding<Bool> {
         Binding(get: { expanded.contains(key) },
                 set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
+
+/// 拖动置顶时跟着光标的那一行：不透明、带阴影的卡片（不然字直接叠在别的行上，两行重影读不清）。
+struct AgentHistorySessionRowPreview: View {
+    let history: AgentHistoryModel
+    let file: AgentHistorySessionFile
+    var showsTool = false
+
+    var body: some View {
+        AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
+                               showsProject: false, showsTool: showsTool, isSelected: false)
+            .frame(width: AgentHistoryPinDragPreview.width, alignment: .leading)
+            .modifier(AgentHistoryPinDragPreview())
+    }
+}
+
+/// 拖动置顶时跟着光标的那张卡片：不透明的底、细描边、阴影（同 Mac 列表里拖起来的行）。
+struct AgentHistoryPinDragPreview: ViewModifier {
+    static let width: CGFloat = 260
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.card))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+            .padding(10)
     }
 }

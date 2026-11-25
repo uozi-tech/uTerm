@@ -25,7 +25,7 @@ actor MobileFakeAgentSource: AgentHistorySource {
 
     nonisolated let tool: AgentHistoryTool
     nonisolated let supportsSearch: Bool
-    private let sessionList: [Session]
+    private var sessionList: [Session]
     /// 列项目时抛的错（看「某种工具的记录读不出来」那一句）。
     private let projectsError: (any Error)?
 
@@ -35,6 +35,9 @@ actor MobileFakeAgentSource: AgentHistorySource {
         self.supportsSearch = supportsSearch
         self.projectsError = projectsError
     }
+
+    /// 主机上新写出一份记录（新会话起来之后）。
+    func add(_ session: Session) { sessionList.append(session) }
 
     nonisolated func projectPath(_ id: String) -> String { "/fake/\(tool.rawValue)/\(id)" }
     nonisolated func sessionPath(_ session: Session) -> String { projectPath(session.projectID) + "/\(session.id).jsonl" }

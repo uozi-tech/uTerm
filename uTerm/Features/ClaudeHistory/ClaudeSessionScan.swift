@@ -76,19 +76,41 @@ nonisolated struct ClaudeSessionScan: Equatable, Sendable {
                 }
                 continue
             }
-            if ClaudeJSONLScan.contains("\"type\":\"custom-title\"", in: head),
-               let value = Self.field("customTitle", ofLine: line) {
-                scan.customTitle = value
-            } else if ClaudeJSONLScan.contains("\"type\":\"ai-title\"", in: head),
-                      let value = Self.field("aiTitle", ofLine: line) {
-                scan.aiTitle = value
-            } else if ClaudeJSONLScan.contains("\"type\":\"last-prompt\"", in: head),
-                      let value = Self.field("lastPrompt", ofLine: line) {
-                scan.lastPrompt = value
+            switch titleLine(line, head: head) {
+            case .customTitle(let value): scan.customTitle = value
+            case .aiTitle(let value): scan.aiTitle = value
+            case .lastPrompt(let value): scan.lastPrompt = value
+            case nil: break
             }
         }
         return scan
     }
+
+    /// 三种标题行。Claude Code 每轮提问时追加一次（`last-prompt` 紧跟着 `ai-title`），一轮长的工具调用之后
+    /// 文件末尾几百 KB 里可能一行都没有。
+    enum TitleLine: Equatable {
+        case customTitle(String)
+        case aiTitle(String)
+        case lastPrompt(String)
+    }
+
+    /// 这一行是不是标题行、记的是什么。`head` 是行首一段（判断类型用）。
+    static func titleLine(_ line: Data, head: Data) -> TitleLine? {
+        guard line.count <= maxTitleLineBytes else { return nil }
+        if ClaudeJSONLScan.contains("\"type\":\"custom-title\"", in: head) {
+            return field("customTitle", ofLine: line).map(TitleLine.customTitle)
+        }
+        if ClaudeJSONLScan.contains("\"type\":\"ai-title\"", in: head) {
+            return field("aiTitle", ofLine: line).map(TitleLine.aiTitle)
+        }
+        if ClaudeJSONLScan.contains("\"type\":\"last-prompt\"", in: head) {
+            return field("lastPrompt", ofLine: line).map(TitleLine.lastPrompt)
+        }
+        return nil
+    }
+
+    /// 读到的块里有没有 Claude Code 起的名字（用户改的或 AI 起的）。
+    var hasNameLine: Bool { customTitle != nil || aiTitle != nil }
 
     private static func field(_ key: String, ofLine line: Data) -> String? {
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
@@ -131,6 +153,25 @@ nonisolated struct ClaudeSessionScan: Equatable, Sendable {
         let collapsed = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }.joined(separator: " ")
         return collapsed.count > limit ? String(collapsed.prefix(limit)) + "…" : collapsed
+    }
+}
+
+/// 一份记录在 `size` 之前最近的标题行与工作目录（`ClaudeHistorySource` 按路径记着，文件变长后接着用）。
+nonisolated struct ClaudeSessionNames: Equatable, Sendable {
+    var size: UInt64
+    var customTitle: String?
+    var aiTitle: String?
+    var lastPrompt: String?
+    var lastDirectory: String?
+}
+
+nonisolated extension ClaudeSessionScan {
+    /// 末尾那一块里没有的标题行用更早的补上（用户改的名字不管多早都算数，所以单独补）。
+    mutating func fillNames(from earlier: ClaudeSessionNames) {
+        if customTitle == nil { customTitle = earlier.customTitle }
+        guard aiTitle == nil else { return }
+        aiTitle = earlier.aiTitle
+        if lastPrompt == nil { lastPrompt = earlier.lastPrompt }
     }
 }
 

@@ -120,11 +120,14 @@ struct TerminalArea: View {
                                        pinHost: { .server(serverID) },
                                        connect: AgentHistoryAccess.server(id: serverID, container: container) { _ in })
             },
-            terminal: { terminal in
+            terminal: { terminal, ended in
                 guard let pane = terminal as? PaneModel else { return AnyView(EmptyView()) }
+                // 程序已经退出、留着最后的画面：只画终端本身（shell 也退出了的，面板会换成「连接已断开」那一页）。
+                if ended { return AnyView(RemoteControlledTerminal(session: pane.session).background(background)) }
                 return AnyView(paneView(pane, profiles: profiles, profileCount: profileCount, background: background))
             },
-            onMoveToTab: { runID in workspace.moveCodeRunToTab(runID, fromCodeTab: tabID) })
+            onMoveToTab: { runID in workspace.moveCodeRunToTab(runID, fromCodeTab: tabID) },
+            onEndRun: { runID in TerminalCloseGuard.requestEndSession(runID, in: code) { ($0 as? PaneModel)?.session } })
     }
 
     /// Code 标签页的标题。一个窗口里可能有几台主机时（终端窗口）带上主机名。「Code」是名字，五种语言都不翻译。
@@ -152,7 +155,7 @@ struct TerminalArea: View {
         let pane = tab.payload
         if let code = pane.codeTab {
             let hostName = profiles[pane.serverProfileID]?.name ?? code.hostName
-            let running = code.runs.count
+            let running = code.runningCount
             let help = running > 0
                 ? "\(codeTabTitle(hostName: hostName, showsHost: true))\n"
                     + String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")

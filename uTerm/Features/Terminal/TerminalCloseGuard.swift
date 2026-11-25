@@ -57,6 +57,34 @@ enum TerminalCloseGuard {
         }
     }
 
+    /// Code 标签页里「结束会话」（终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×）：同关终端标签页，前台还有程序在跑才问，
+    /// 确认按钮是「结束会话」，确认后 `CodeTabModel.endSession`。已结束、留着画面的（程序已经退出）不问。
+    /// `session` 从会话的终端取出它的 `TerminalSession`（两种宿主的终端类型不同）。`confirm` 只给测试换掉弹框。
+    /// 返回探测那一趟（测试等它），不用问时为 nil。
+    @discardableResult
+    static func requestEndSession(
+        _ runID: UUID,
+        in code: CodeTabModel,
+        session: (any CodeTabTerminal) -> TerminalSession?,
+        window: NSWindow? = NSApp.keyWindow,
+        confirm: (@MainActor (TerminalClosePrompt) async -> Bool)? = nil
+    ) -> Task<Void, Never>? {
+        guard let run = code.runs.first(where: { $0.id == runID }) else { return nil }
+        guard !run.isEnded, let target = session(run.terminal) else {
+            code.endSession(runID)
+            return nil
+        }
+        let ask = confirm ?? { prompt in
+            await Self.confirm(prompt, action: AgentHistoryText.endSession, in: window)
+        }
+        return Task {
+            await probe.probe(ObjectIdentifier(target), activity: target.foregroundActivity) { prompt in
+                if let prompt, await !ask(prompt.endingSession) { return }
+                code.endSession(runID)
+            }
+        }
+    }
+
     /// 关窗前问一遍窗口里的所有终端。逐个探测：一条连接上最多 6 个 shell，同时再各开一个 exec
     /// 通道会撞上 sshd 默认的 `MaxSessions 10`，开不了的就成了「判断不了」。
     static func confirmClosingWindow(_ window: NSWindow, sessions: [TerminalSession]) async -> Bool {
@@ -88,6 +116,13 @@ extension TerminalClosePrompt {
                           comment: "关 Code 标签页前的确认：里面有几个终端还有程序在跑"),
             message: String(localized: "关闭标签页会结束这些会话，里面的程序可能被中断。",
                             comment: "关 Code 标签页前的确认"))
+    }
+
+    /// 结束 Code 标签页里一个会话前的确认：标题同关终端标签页（说在跑的是哪个程序），正文说的是结束会话。
+    var endingSession: TerminalClosePrompt {
+        TerminalClosePrompt(title: title,
+                            message: String(localized: "结束会话会关闭这个终端，里面的程序可能被中断。",
+                                            comment: "Code 标签页里结束一个会话前的确认"))
     }
 }
 

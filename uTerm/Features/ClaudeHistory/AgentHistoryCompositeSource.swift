@@ -110,17 +110,25 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
     }
 
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
+        await listAllSessions(in: projects).files
+    }
+
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         let byTool = Dictionary(grouping: projects, by: \.tool)
-        let lists = await withTaskGroup(of: [AgentHistorySessionFile].self) { group in
+        let lists = await withTaskGroup(of: AgentHistorySessionListing.self) { group in
             for source in sources {
                 guard let mine = byTool[source.tool], !mine.isEmpty else { continue }
-                group.addTask { await source.allSessions(in: mine) }
+                group.addTask { await source.listAllSessions(in: mine) }
             }
-            var collected: [AgentHistorySessionFile] = []
-            for await files in group { collected += files }
+            var collected = AgentHistorySessionListing(files: [])
+            for await listing in group {
+                collected.files += listing.files
+                collected.failedProjects.formUnion(listing.failedProjects)
+            }
             return collected
         }
-        return lists.sorted { $0.modifiedAt > $1.modifiedAt }
+        return AgentHistorySessionListing(files: lists.files.sorted { $0.modifiedAt > $1.modifiedAt },
+                                          failedProjects: lists.failedProjects)
     }
 
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata {

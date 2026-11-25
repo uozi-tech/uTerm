@@ -24,6 +24,12 @@ extension UICatalog {
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login"))
             },
+            // 鼠标悬在顶上跑着的会话那几行上：右上角一个 ×（结束会话），盖在行上、不挤字。
+            UICatalogEntry("终端窗口/Code 标签页_跑着的会话悬停", source: src, symbol: "AgentHistoryRunEndButton", size: size,
+                           live: true) { stage in
+                try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login",
+                                                     hoversRuns: true))
+            },
             // 看着一个仍在跑的会话的记录：记录标题行上「继续这个会话」换成「返回终端」。
             UICatalogEntry("终端窗口/Code 标签页_跑着的会话看记录", source: src, symbol: "AgentHistoryTranscriptStack",
                            size: size) { stage in
@@ -33,6 +39,13 @@ extension UICatalog {
             UICatalogEntry("终端窗口/Code 标签页_新会话", source: src, symbol: "CodeTabModel", size: size,
                            live: true) { stage in
                 try await codeTabRender(stage, .init(selects: false, newSession: true))
+            },
+            // 新会话没说话就退出了（没有对话记录）：右边不跳走，终端留着最后的画面，顶上「会话已结束」与「重新开始」「关闭」；
+            // 侧栏顶上那一行写「已结束」。另一个会话在跑：它也在最顶上（不在下面的分组里）。
+            UICatalogEntry("终端窗口/Code 标签页_会话已结束", source: src, symbol: "CodeTabEndedBanner", size: size,
+                           live: true) { stage in
+                try await codeTabRender(stage, .init(selects: false, running: ["x-tests"], newSession: true,
+                                                     newSessionEnded: true))
             },
             // 置顶了两个（一个 Codex、一个 Claude Code）：最上面一组「置顶」，原来那几组里不再出现；组里混着两种工具，写工具名。
             UICatalogEntry("终端窗口/Code 标签页_置顶", source: src, symbol: "AgentHistorySessionList", size: size) { stage in
@@ -149,10 +162,14 @@ extension UICatalog {
         var showsRun: String?
         /// 起一个还没对上记录的新会话，右边显示它。
         var newSession = false
+        /// 那个新会话里的程序退出了（没说话就退出、没有对话记录）：终端留着，顶上「会话已结束」。
+        var newSessionEnded = false
         var sidebarHidden = false
         var overlay = false
         /// 跑着的那个会话切到「查看记录」。
         var showsRecord = false
+        /// 顶上跑着的会话那几行摆成鼠标悬在上面的样子（右上角的 ×）。
+        var hoversRuns = false
         /// 摆成「正拖着这个会话（会话 ID）、落在这里」的样子。
         var pinDrag: (session: String, target: AgentHistoryPinDrop)?
         /// Code 标签页「新会话」的目录；nil = 照默认（项目 shop-api），`.some(nil)` = 不知道。
@@ -181,8 +198,10 @@ extension UICatalog {
                                              catalogModel: workspace))
         return UICatalogRender(view, after: { _ in
             await feed(terminals)
+            if setup.newSessionEnded { await endNewSession(code) }
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
+            AgentHistoryRunRowActions.catalogHovered = false
             workspace.dispose()
         })
     }
@@ -210,6 +229,7 @@ extension UICatalog {
             await feed(terminals)
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
+            AgentHistoryRunRowActions.catalogHovered = false
             model.disposeAll()
         })
     }
@@ -224,6 +244,7 @@ extension UICatalog {
         AgentHistoryPinDragModel.catalogPreset = setup.pinDrag.flatMap { drag in
             history.files.first { $0.sessionID == drag.session }.map { (AgentHistoryPinKey($0), drag.target) }
         }
+        AgentHistoryRunRowActions.catalogHovered = setup.hoversRuns
         code.sidebarHidden = setup.sidebarHidden
         code.sidebarOverlayShown = setup.overlay
         var terminals: [(TerminalSession, String)] = []
@@ -266,6 +287,15 @@ extension UICatalog {
     private static func feed(_ terminals: [(TerminalSession, String)]) async {
         try? await Task.sleep(for: .milliseconds(400))
         for (session, script) in terminals { session.feedOutput(text: script) }
+        try? await Task.sleep(for: .milliseconds(300))
+    }
+
+    /// 新会话里的程序退出了：结束标记到（同 shell 里打出来的那样），Code 标签页把它标成已结束。
+    private static func endNewSession(_ code: CodeTabModel) async {
+        guard let run = code.runs.last, let session = session(of: run.terminal) else { return }
+        session.feedOutput(text: "\r\n\u{1B}[2m（Claude Code 已退出）\u{1B}[0m\r\n$ ")
+        session.trackedRun?.phase = .finished(0)
+        code.checkRuns()
         try? await Task.sleep(for: .milliseconds(300))
     }
 }

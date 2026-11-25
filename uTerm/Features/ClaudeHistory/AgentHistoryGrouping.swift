@@ -81,6 +81,14 @@ nonisolated enum AgentHistoryListing {
         return [AgentHistoryGroup(id: AgentHistoryGroup.pinnedID, kind: .pinned, files: pinned)] + rest
     }
 
+    /// Code 标签页里跑着的会话都放在列表最顶上（`running`：它们对上的记录），置顶与分组里不再出现：一个会话只出现一次，
+    /// 结束、拿掉之后回到它平常的位置。返回下面那部分该用的记录与置顶。
+    static func excludingRunning(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile],
+                                 running: Set<String>) -> (files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) {
+        guard !running.isEmpty else { return (files, pinned) }
+        return (files.filter { !running.contains($0.path) }, pinned.filter { !running.contains($0.path) })
+    }
+
     /// 组标题画不画：只有「不分组」那一组、前面也没有「置顶」时不画。
     static func showsHeader(_ group: AgentHistoryGroup, in groups: [AgentHistoryGroup]) -> Bool {
         group.kind != .all || groups.count > 1

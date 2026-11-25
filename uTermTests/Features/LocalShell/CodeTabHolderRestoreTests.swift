@@ -102,7 +102,10 @@ final class CodeTabHolderRestoreTests: XCTestCase {
         XCTAssertTrue(stillRunning, "还在跑的那个接回的是同一个 shell")
         XCTAssertFalse(longPaneAfter.codeCommandHasEnded, "还在跑的不能被当成结束")
         back.checkRuns()
-        XCTAssertEqual(back.runs.map(\.id), [long.id], "跑完的收尾，还在跑的留着")
+        // 这里没有列表（不知道有没有对话记录）：跑完的标成已结束、终端留着（见 `CodeTabRunExitTests`），还在跑的照跑。
+        XCTAssertEqual(back.runs.map(\.id), [long.id, short.id])
+        XCTAssertEqual(back.runs.map(\.isEnded), [false, true], "跑完的收尾，还在跑的留着")
+        XCTAssertEqual(back.runningCount, 1)
 
         after.disposeAll()
     }

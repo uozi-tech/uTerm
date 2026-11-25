@@ -17,8 +17,15 @@ actor ClaudeHistorySource: AgentHistorySource {
     /// 子代理的信息文件很小（实测几百字节），读这么多足够。
     static let subagentInfoBytes = 64 * 1024
 
+    /// 末尾那一块里没有标题行时，往前最多再找这么多（真实的记录里两行标题之间隔过 1 MB 多，中间还有近 1 MB 的一行）。
+    static let titleSearchLimit = 4 * 1024 * 1024
+    static let titleSearchChunk = 256 * 1024
+
     private var home: String?
     private var cache: [AgentHistorySessionFile.CacheKey: AgentHistorySessionMetadata] = [:]
+    /// 每份记录上一次读到的标题行与工作目录（按路径）。记录只往后长：下次末尾那一块里没有，就只往前找新写的那一段，
+    /// 再没有就用这里记的。没有它，跑着的会话每次重读（文件变长了）标题都跟着末尾那一块跳。
+    private var names: [String: ClaudeSessionNames] = [:]
     /// 子代理的信息文件读过就不再读（按路径；它在子代理派出时写好，之后基本不变）。
     private var infoCache: [String: AgentSubagentInfo] = [:]
 
@@ -84,26 +91,49 @@ actor ClaudeHistorySource: AgentHistorySource {
 
     /// 全部项目的会话合在一起，新的在前。列不了的项目跳过。
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
+        await listAllSessions(in: projects).files
+    }
+
+    /// 同上，另报出列不了的项目。
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         var result: [AgentHistorySessionFile] = []
+        var failed: Set<AgentHistoryProjectKey> = []
         var next = 0
-        await withTaskGroup(of: [AgentHistorySessionFile].self) { group in
+        await withTaskGroup(of: (AgentHistoryProject, [AgentHistorySessionFile]?).self) { group in
             func launch() {
                 let project = projects[next]
                 next += 1
-                group.addTask { (try? await self.sessions(in: project)) ?? [] }
+                group.addTask { (project, try? await self.sessions(in: project)) }
             }
             while next < min(Self.listConcurrency, projects.count) { launch() }
-            while let files = await group.next() {
-                result.append(contentsOf: files)
+            while let (project, files) = await group.next() {
+                if let files { result.append(contentsOf: files) } else { failed.insert(AgentHistoryProjectKey(project)) }
                 if next < projects.count { launch() }
             }
         }
-        return result.sorted { $0.modifiedAt > $1.modifiedAt }
+        return AgentHistorySessionListing(files: result.sorted { $0.modifiedAt > $1.modifiedAt }, failedProjects: failed)
     }
 
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata {
         if let cached = cache[file.cacheKey] { return cached }
-        let scan = try await Self.scan(file: file, provider: provider)
+        let parts = try await Self.scanParts(file: file, provider: provider)
+        var scan = parts.tail
+        // 记下的只在文件只长不缩时可用（同一路径换成了别的文件就作废）。
+        let known = names[file.path].flatMap { $0.size <= file.size ? $0 : nil }
+        // 不列的（桌面版等，实测这类记录末尾常常没有标题行）不往前找：列表里不显示它们的标题。
+        let origin = (parts.head.map { scan.merged(withEarlier: $0) } ?? scan).origin
+        if !scan.hasNameLine, origin.isListed, let boundary = parts.searchEnd {
+            let floor = max(known?.size ?? 0, boundary > UInt64(Self.titleSearchLimit) ? boundary - UInt64(Self.titleSearchLimit) : 0)
+            if boundary > floor {
+                let found = try await Self.searchNames(file.path, before: boundary, downTo: floor, provider: provider)
+                scan.fillNames(from: found)
+            }
+        }
+        if let known { scan.fillNames(from: known) }
+        if scan.directories.isEmpty, let directory = known?.lastDirectory { scan.directories = [directory] }
+        if let head = parts.head { scan = scan.merged(withEarlier: head) }
+        names[file.path] = ClaudeSessionNames(size: file.size, customTitle: scan.customTitle, aiTitle: scan.aiTitle,
+                                              lastPrompt: scan.lastPrompt, lastDirectory: scan.directories.last)
         let candidates = Array(scan.directories.reversed())
         // 整份都读过了却没有一句对话（只敲过 `/exit` 之类）的不列：点开也什么都没有。
         let isEmpty = file.size <= UInt64(Self.tailBytes) && !scan.hasConversation
@@ -121,12 +151,22 @@ actor ClaudeHistorySource: AgentHistorySource {
 
     /// 读末尾一块；来源没定下来再从开头往后读几块。
     static func scan(file: AgentHistorySessionFile, provider: any SFTPProviding) async throws -> ClaudeSessionScan {
+        let parts = try await scanParts(file: file, provider: provider)
+        guard let head = parts.head else { return parts.tail }
+        return parts.tail.merged(withEarlier: head)
+    }
+
+    /// `scan` 拆开交：末尾那一块读到的、（来源没定下来时）开头几块读到的，以及末尾那一块之前的部分到哪为止
+    ///（末尾那一块第一行是半截时是那一行的结尾，往前找标题行从这里起；整份都在末尾那一块里为 nil）。
+    static func scanParts(file: AgentHistorySessionFile, provider: any SFTPProviding) async throws
+        -> (tail: ClaudeSessionScan, head: ClaudeSessionScan?, searchEnd: UInt64?) {
         let size = file.size
         let tailLength = Int(min(size, UInt64(tailBytes)))
         let tailOffset = size - UInt64(tailLength)
         let tail = try await provider.readRange(file.path, offset: tailOffset, length: tailLength)
-        var scan = ClaudeSessionScan.scan(tail, dropsLeadingPartial: tailOffset > 0, dropsTrailingPartial: false)
-        guard !scan.isOriginDecided, tailOffset > 0 else { return scan }
+        let scan = ClaudeSessionScan.scan(tail, dropsLeadingPartial: tailOffset > 0, dropsTrailingPartial: false)
+        let searchEnd: UInt64? = tailOffset > 0 ? tail.firstIndex(of: 0x0A).map { tailOffset + UInt64($0 - tail.startIndex) } ?? size : nil
+        guard !scan.isOriginDecided, tailOffset > 0 else { return (scan, nil, searchEnd) }
 
         var offset: UInt64 = 0
         var head = ClaudeSessionScan()
@@ -140,8 +180,33 @@ actor ClaudeHistorySource: AgentHistorySource {
             if part.isOriginDecided { break }
         }
         // 开头读到的 entrypoint 比末尾更早；末尾什么都没有，用开头的。
-        scan = scan.merged(withEarlier: head)
-        return scan
+        return (scan, head, searchEnd)
+    }
+
+    /// 从 `end` 往前倒着读，找 `[floor, end)` 里最近的标题行：找到 Claude Code 起的名字（用户改的或 AI 起的）就停，
+    /// 顺带记下这一段里最近的 `last-prompt`。只认整行（跨块的行拼好再认），超长的行跳过。
+    static func searchNames(_ path: String, before end: UInt64, downTo floor: UInt64,
+                            provider: any SFTPProviding) async throws -> ClaudeSessionNames {
+        var scanner = ClaudeReverseLineScanner(fileSize: end, maxLineBytes: ClaudeSessionScan.maxTitleLineBytes,
+                                               headBytes: ClaudeTranscriptParser.headBytes)
+        var found = ClaudeSessionNames(size: end)
+        while scanner.cursor > floor, let range = scanner.nextRange(chunkSize: titleSearchChunk) {
+            let chunk = try await provider.readRange(path, offset: range.offset, length: range.length)
+            guard chunk.count == range.length else { break }
+            var lines = scanner.feed(chunk)
+            if scanner.cursor == 0, let first = scanner.finish() { lines.append(first) }
+            for line in lines where !line.isTruncated && line.offset >= floor {
+                let head = line.bytes.prefix(ClaudeTranscriptParser.headBytes)
+                switch ClaudeSessionScan.titleLine(line.bytes, head: head) {
+                case .customTitle(let value): if found.customTitle == nil { found.customTitle = value }
+                case .aiTitle(let value): if found.aiTitle == nil { found.aiTitle = value }
+                case .lastPrompt(let value): if found.lastPrompt == nil { found.lastPrompt = value }
+                case nil: break
+                }
+            }
+            if found.customTitle != nil || found.aiTitle != nil { break }
+        }
+        return found
     }
 
     nonisolated func transcript(for file: AgentHistorySessionFile) -> any AgentTranscriptPaging {

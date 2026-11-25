@@ -26,9 +26,10 @@ extension ClaudeHistoryTab {
 
     /// 列表与详情标题行上这个 run 的名字：对上了记录用记录的标题，新会话叫「新会话」。
     func title(of run: CodeRunBoard<TermTab>.Run) -> String {
-        if let title = runTitles[run.id] { return title }
+        // 列表里读到的在前：跑着的会话的记录定期重读（`pollRuns`），标题跟着 Claude Code 后来起的名字走。
         if let path = run.sessionPath, let history = connection.history,
            let title = history.metadata[path]?.title { return title }
+        if let title = runTitles[run.id] { return title }
         if run.isNewSession { return AgentHistoryText.newSession }
         return String(localized: "（无标题）\(String((run.sessionID ?? "").prefix(8)))")
     }
@@ -44,13 +45,15 @@ extension ClaudeHistoryTab {
         guard let run = runs.resume(sessionPath: file.path, sessionID: file.sessionID, tool: file.tool,
                                     directory: directory, make: { factory(host) }) else { return }
         launch(run, command: command, container: container, relay: relay)
+        pollNewSessionsIfNeeded()
     }
 
     /// 「＋」新会话：在这个标签页里起一个终端跑它。还没有记录，列表最顶上先放一行「新会话」占位。
     func startNewInPlace(tool: AgentHistoryTool, command: String, directory: String,
                          container: ModelContainer, relay: HostKeyChallengeRelay) {
         restoredSelection = nil
-        let run = runs.startNew(tool: tool, directory: directory, terminal: runTerminalFactory(host))
+        let run = runs.startNew(tool: tool, directory: directory, knownPaths: knownSessionPaths,
+                                terminal: runTerminalFactory(host))
         launch(run, command: command, container: container, relay: relay)
         pollNewSessionsIfNeeded()
     }
@@ -64,6 +67,7 @@ extension ClaudeHistoryTab {
         let cover = MConnectRequest(host: host, kind: .terminal, origin: .hosts)
         cover.terminal = term.controller
         runCovers[run.id] = cover
+        runStartCommands[run.id] = command
         // 程序退出 shell 跟着结束（见类型注释）。
         runCommands[run.id] = command + "; exit"
         type(run.id)
@@ -164,7 +168,9 @@ extension ClaudeHistoryTab {
         if state == .disconnected, controller.hadConnected, run.isRunning { runEnded(id) }
     }
 
-    /// 程序退出了：很快就退出的留着给人看（标成已退出）；否则拿掉、关掉终端，记录重新读到最新、详情回到它。
+    /// 程序退出了（规则见 `CodeRunExitPolicy`）：有对话记录可看、跑得够久的拿掉、关掉终端，记录重新读到最新、详情回到它；
+    /// 没有对话记录的（新会话没说话就退出）、很快就退出的留着最后的画面，标成已结束。没有记录的再去主机上看一眼
+    ///（记录可能刚写出来），有对话了就照常收回记录。
     func runEnded(_ id: UUID) {
         guard let run = runs.run(id: id) else { return }
         let term = run.terminal
@@ -173,13 +179,66 @@ extension ClaudeHistoryTab {
         if case .run(id, _)? = restoredSelection {
             restoredSelection = run.sessionID.map { .record(AgentHistoryPinKey(tool: run.tool, sessionID: $0)) }
         }
-        switch runs.ended(id) {
+        switch runs.ended(id, hasListedRecord: hasListedRecord(run)) {
         case .removed(let path, let wasFocused):
             dispose(id, term)
             refreshAfterRun(path: path, wasFocused: wasFocused)
-        case .kept, .unknown:
+        case .kept:
+            if !hasListedRecord(run) { Task { await settleEnded(id) } }
+        case .unknown:
             break
         }
+    }
+
+    /// 它对上的记录列表里会列出来（有对话可看）。列表还没读到那份的信息时按有算（同列表：读到之前不知道）。
+    private func hasListedRecord(_ run: CodeRunBoard<TermTab>.Run) -> Bool {
+        guard let path = run.sessionPath else { return false }
+        return connection.history?.metadata[path]?.isListed ?? true
+    }
+
+    /// 已结束、没有记录的：去主机上对一次记录，对上了、有对话就照常收回记录（同 Mac 的 `settleEnded`）。
+    func settleEnded(_ id: UUID) async {
+        await matchNewSessions(includingEnded: true)
+        guard let history = connection.history, let run = runs.run(id: id), !run.isRunning,
+              let path = run.sessionPath else { return }
+        var listed = history.metadata[path]?.isListed == true
+        if !listed, let file = history.files.first(where: { $0.path == path }) ?? found(path) {
+            listed = (try? await history.source.metadata(for: file))?.isListed ?? false
+        }
+        guard listed, runs.run(id: id) != nil else { return }
+        endRun(id)
+    }
+
+    /// 列表里还没有、`matchNewSessions` 刚找到的那份记录。
+    private func found(_ path: String) -> AgentHistorySessionFile? { matchedFiles[path] }
+
+    /// 「会话已结束」上的「重新开始」：同一种工具、同一个目录再起一个（继续的会话再继续同一份），放在原来的位置，
+    /// 已结束的那个终端关掉。起不了（这种工具在这里开不了）时什么都不做。
+    func restartRun(_ id: UUID) {
+        guard let old = runs.run(id: id), !old.isRunning, let history = connection.history,
+              let container = runContainer, let relay = runRelay else { return }
+        let file = old.sessionPath.flatMap { path in history.files.first { $0.path == path } }
+        let resumes = file.map { history.metadata[$0.path]?.isListed ?? true } ?? false
+        let command: String
+        let directory: String
+        if let stored = runStartCommands[id] {
+            command = stored
+            directory = old.directory
+        } else if resumes, let file, let plan = history.resumeCommand(for: file) {
+            (command, directory) = (plan.command, plan.directory)
+        } else if let made = history.newSessionCommand(tool: old.tool, directory: old.directory) {
+            (command, directory) = (made, old.directory)
+        } else {
+            return
+        }
+        let run = runs.makeRun(tool: old.tool, directory: directory, sessionPath: resumes ? file?.path : nil,
+                               sessionID: resumes ? file?.sessionID : nil, knownPaths: knownSessionPaths,
+                               terminal: runTerminalFactory(host))
+        guard let replaced = runs.replace(id, with: run) else { return }
+        dispose(id, replaced)
+        restoredSelection = nil
+        launch(run, command: command, container: container, relay: relay)
+        pollNewSessionsIfNeeded()
     }
 
     /// 结束一个 run：已退出的「回到记录」、用户「结束会话」、连接中页上的「返回」。还在跑的连接一并关掉。
@@ -207,6 +266,7 @@ extension ClaudeHistoryTab {
     private func dispose(_ id: UUID, _ term: TermTab) {
         runTyping.removeValue(forKey: id)?.cancel()
         runCommands[id] = nil
+        runStartCommands[id] = nil
         runCovers[id] = nil
         runTitles[id] = nil
         term.controller.resignKeyboard()
@@ -310,6 +370,7 @@ extension ClaudeHistoryTab {
             restoredSelection = .run(first.id, showsTranscript: false)
         }
         applyRestoredState()
+        pollNewSessionsIfNeeded()
         return adopted
     }
 
@@ -365,28 +426,39 @@ extension ClaudeHistoryTab {
 
     // MARK: 新会话对上记录
 
-    /// 隔多久去主机上看一眼新会话的记录有没有写出来。
+    /// 隔多久去主机上看一眼：新会话的记录有没有写出来，跑着的会话的记录（标题）有没有变。
     nonisolated static var newSessionPollInterval: Duration { .seconds(6) }
 
+    /// 有会话在跑就隔一会儿去主机上看一眼：没对上记录的新会话去认记录；跑着的会话的记录重读（只重列它们所在的项目），
+    /// 列表那一行与详情顶上的标题跟着 Claude Code 后来起的名字走（同 Mac 的 `CodeTabModel`）。都不跑了就停。
     func pollNewSessionsIfNeeded() {
-        guard newSessionPoll == nil, runs.hasUnmatchedNewSessions else { return }
+        guard newSessionPoll == nil, runs.runningCount > 0 else { return }
         newSessionPoll = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.newSessionPollInterval)
-                guard let self, !Task.isCancelled else { return }
-                await self.matchNewSessions()
-                guard self.runs.hasUnmatchedNewSessions else { break }
+                guard let self, !Task.isCancelled, self.runs.runningCount > 0 else { break }
+                if self.runs.hasUnmatchedNewSessions { await self.matchNewSessions() }
+                await self.refreshRunRecords()
             }
             self?.newSessionPoll = nil
         }
     }
 
+    /// 跑着的会话的记录重读一遍（只重列它们所在的项目，见 `AgentHistoryModel.refreshProjects`）。
+    func refreshRunRecords() async {
+        guard let history = connection.history else { return }
+        await history.refreshProjects(containing: Set(runs.runs.filter(\.isRunning).compactMap(\.sessionPath)))
+    }
+
+    /// 起新会话时列表里已经有的记录（认记录时不要它们，见 `CodeRunBoard.Run.knownPaths`）。
+    var knownSessionPaths: Set<String> { Set(connection.history?.files.map(\.path) ?? []) }
+
     /// 去主机上看新会话的记录写出来没有：只看对应工具最近的几个项目里、比 run 起来晚的那些（读它们的末尾拿工作目录），
     /// 交给 `CodeRunBoard.reconcile` 认领。不碰列表本身（列表重读会闪），认下来后读一下标题（列表还没列出那份记录时，
     /// 顶上那一行用它）。
-    func matchNewSessions() async {
+    func matchNewSessions(includingEnded: Bool = false) async {
         guard let history = connection.history else { return }
-        let waiting = runs.runs.filter { $0.isNewSession && $0.isRunning }
+        let waiting = runs.runs.filter { $0.isNewSession && ($0.isRunning || includingEnded) }
         guard let earliest = waiting.map(\.startedAt).min() else { return }
         let since = earliest.addingTimeInterval(-CodeRunBoard<TermTab>.matchSlack)
         var candidates: [CodeRunBoard<TermTab>.Candidate] = []
@@ -404,6 +476,7 @@ extension ClaudeHistoryTab {
                 candidates.append(.init(path: file.path, sessionID: file.sessionID, tool: tool, directory: directory,
                                         modifiedAt: file.modifiedAt))
                 found[file.path] = (file, source)
+                matchedFiles[file.path] = file
             }
         }
         for id in runs.reconcile(candidates) {

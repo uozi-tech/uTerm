@@ -118,14 +118,17 @@ final class AgentHistoryConnection {
     @ObservationIgnored private let pinHost: @MainActor () -> AgentHistoryPinHost?
     /// 置顶存在哪（测试换成一次性的）。
     @ObservationIgnored private let pinDefaults: UserDefaults
+    /// 列表缓存的键；nil = 按置顶的主机算（`cacheKey(host:tools:home:)`），不能置顶的列表不缓存。
+    @ObservationIgnored private let cacheKey: String?
 
     /// `home`：主目录，不给就问那台主机（见 `ClaudeHistorySource.init`）。
     init(preferredDirectory: String?, home: String? = nil, allowsCommands: @escaping @MainActor () -> Bool = { true },
          tools: [AgentHistoryTool] = [.claude], followsCurrentProject: Bool = true,
          makeSource: ((any SFTPProviding, String?) -> any AgentHistorySource)? = nil,
          pinHost: @escaping @MainActor () -> AgentHistoryPinHost? = { nil }, pinDefaults: UserDefaults = .standard,
-         connect: @escaping AgentHistoryAccess.Connect) {
+         cacheKey: String? = nil, connect: @escaping AgentHistoryAccess.Connect) {
         self.preferredDirectory = preferredDirectory
+        self.cacheKey = cacheKey
         self.pinHost = pinHost
         self.pinDefaults = pinDefaults
         self.home = home
@@ -148,6 +151,7 @@ final class AgentHistoryConnection {
         makeSource = { _, _ in history.source }
         pinHost = { nil }
         pinDefaults = .standard
+        cacheKey = nil
         connect = nil
         phase = .ready(history)
     }
@@ -184,15 +188,22 @@ final class AgentHistoryConnection {
                     self.homeDirectory = resolved.flatMap(ClaudeProjectPath.normalized)
                 }
             }
+            let host = pinHost()
             let history = AgentHistoryModel(source: makeSource(provider, home), preferredDirectory: preferredDirectory,
-                                            allowsSearch: allowsCommands(), followsCurrentProject: followsCurrentProject)
-            history.pins = pinHost().map { AgentHistoryPins(host: $0, defaults: pinDefaults) }
+                                            allowsSearch: allowsCommands(), followsCurrentProject: followsCurrentProject,
+                                            cacheKey: cacheKey ?? host.map { Self.cacheKey(host: $0, tools: tools, home: home) })
+            history.pins = host.map { AgentHistoryPins(host: $0, defaults: pinDefaults) }
             phase = .ready(history)
             await history.start()
         } catch {
             guard !isClosed else { return }
             phase = .failed(hostKeys.failureMessage(for: error))
         }
+    }
+
+    /// 列表缓存（`AgentHistoryListCache`）按什么认：哪台主机、读哪几种工具、主目录（测试给的临时目录）。
+    nonisolated static func cacheKey(host: AgentHistoryPinHost, tools: [AgentHistoryTool], home: String?) -> String {
+        ([host.stored] + tools.map(\.rawValue) + [home ?? ""]).joined(separator: "|")
     }
 
     /// 新会话里手输的目录：展开 `~`，经这条文件通道核对它存在、是目录（`AgentHistoryDirectoryInput.check`）。
@@ -210,6 +221,7 @@ final class AgentHistoryConnection {
         isClosed = true
         // 在途的搜索不再往主机上发命令。
         history?.stopSearch()
+        history?.storeInCache()
         let provider = self.provider
         self.provider = nil
         if let provider { Task { await provider.close() } }
