@@ -175,7 +175,7 @@ final class ControlConnectionPoolTests: XCTestCase {
         }
     }
 
-    /// 加密方式变弱了（信任过的主机这次只肯用 SHA-1 时代的旧算法）：命令行不能问人，拒绝 → `weak_algorithms`，
+    /// 连接方式变弱了（信任过的主机这次只肯用 SHA-1 时代的旧算法）：命令行不能问人，拒绝 → `weak_algorithms`，
     /// 不重试、并行传输整次停下，文案说清是哪台、怎么办。审批闭包记下的挑战与类型化错误两条路径结果一样。
     func testWeakAlgorithmsMapToTheirOwnNonRetryableCode() {
         let refusal = LegacyAlgorithmRefusal(host: "10.0.0.5", port: 2222, isJumpHost: false)

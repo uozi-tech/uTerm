@@ -11,9 +11,9 @@ import USSHKit
 /// | 本机记着同意过 | 信任库里有记录 | 核对主机密钥 | 结果 |
 /// |---|---|---|---|
 /// | 是 | — | — | 照常连 |
-/// | 否 | 否（第一次连） | — | 照常连，连上了记下同意（之后照常走新主机的信任确认） |
-/// | 否 | — | 否（设置里关了核对） | 同上：中间人本来就能冒充它，问加密方式没有意义 |
-/// | 否 | 是 | 是 | 问用户；同意了记下，之后不再问 |
+/// | 否 | 否（第一次连） | — | 照常连（之后照常走新主机的信任确认） |
+/// | 否 | — | 否（设置里关了核对） | 同上：中间人本来就能冒充它，问连接方式没有意义 |
+/// | 否 | 是 | 是 | 问用户 |
 ///
 /// 旧栈（Citadel + Wellz 的 swift-nio-ssh，SSH 栈换成 USSHKit 之前）**协商不到**这些旧算法：它只带 NIOSSH
 /// 自带的 curve25519 / ECDH 密钥交换、ed25519 / ECDSA 主机密钥和 AES-GCM，Citadel 的 `ssh-rsa`、group14-sha1、
@@ -21,28 +21,23 @@ import USSHKit
 /// 不会因为升级被误问。会误问的只有一种：设备 A 第一次就用旧算法连上一台老设备（静默、只在 A 上记下同意），
 /// 它的 `KnownHost` 经 iCloud 同步到设备 B，B 第一次连时会问一次（同意记在本机，不同步）。
 ///
-/// 记下同意的时机：用户在提示里同意了，当场记；第一次连静默放行的，**连上之后**才记（`connectionSucceeded`）——
-/// 主机密钥没被信任、认证失败，都不该留下「这台本来就只会旧算法」。
-///
-/// 清掉同意的时机：某一跳**连上了**，而这次连接里 USSHKit 一次都没为那一跳调过 `legacyFallbackApproval`——
-/// 钩子只在要用旧算法时才调（第一次没有共同算法要再试、进程内记着需要旧算法要第一次就带上），没被调用又连上了，
-/// 就是协商到了现代算法，这是 USSHKit 给的确定信号，不靠 `legacyAlgorithmsInUse` 的名字去猜（加密是 AES-GCM、
-/// 服务器只报了 `hmac-sha1` 名字的那类服务器每次都会因为没有共同算法触发钩子，不会被误清）。于是服务器升级之后
-/// 又退回 SHA-1，会再问一次——这正是这个提示要拦的。跳板机与目标各按自己那一跳判断（`connectionSucceeded(hops:)`）。
-/// 在信任库里删掉这台主机时也一起忘掉（`KnownHostLibrary.delete`）。
+/// **同意只按连上之后 USSHKit 报的结果写**（`record`，读 `ConnectedClient.targetNeededLegacyTransport` /
+/// `bastionNeededLegacyTransport`）：这一跳的传输层这次真的要旧算法（`true`）记下，用的是现代算法（`false`）清掉，
+/// 没读懂服务器的握手（`nil`）不动。钩子里（`approve`）什么都不记：中间人只篡改第一次的明文 KEXINIT 就能让钩子被调、
+/// 用户被问；同意之后真正的服务器照样协商到现代算法，结果是 `false`，同意随之清掉，不会被植入一条。同样不能按
+/// 「钩子有没有被调」去清——加密是 AES-GCM、服务器只报了 `hmac-sha1` 名字的那类服务器每次都会触发钩子，
+/// 结果却是 `true`，它要记着。于是服务器升级之后又退回 SHA-1，会再问一次——这正是这个提示要拦的。
+/// 跳板机与目标各按自己那一跳。在信任库里删掉这台主机时也一起忘掉（`KnownHostLibrary.delete`）。
 nonisolated final class LegacyAlgorithmGate: Sendable {
     enum Decision: Equatable, Sendable {
-        /// 本机记着同意过：照常连。
+        /// 本机记着同意过，或第一次连 / 不核对主机密钥：照常连（记不记由连上之后的结果定）。
         case allow
-        /// 第一次连（或不核对主机密钥）：照常连，连上之后记下同意。
-        case allowAndRemember
         /// 以前连上过、没同意过旧算法：问用户。
         case ask
     }
 
     static func decide(consented: Bool, hasTrustRecord: Bool, verifiesHostKeys: Bool) -> Decision {
-        if consented { return .allow }
-        if !hasTrustRecord || !verifiesHostKeys { return .allowAndRemember }
+        if consented || !hasTrustRecord || !verifiesHostKeys { return .allow }
         return .ask
     }
 
@@ -51,15 +46,14 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
     private let hasTrustRecord: @Sendable (String, Int) async -> Bool
     private let approver: @Sendable (HostKeyChallenge) async -> Bool
     private let coalesces: Bool
-    /// 静默放行、等连上之后再记下同意的那几跳。
-    private let pending = Mutex<Set<LegacyAlgorithmConsent.Address>>([])
-    /// 这次连接里 USSHKit 为哪几跳调过钩子（要用旧算法）。没在这里的跳连上了 = 用的是现代算法。
-    private let asked = Mutex<Set<LegacyAlgorithmConsent.Address>>([])
 
     /// - Parameters:
     ///   - approver: 问用户的出口，就是这条连接问主机密钥的那个（不能问的上下文它直接返回 false = 不同意）。
     ///   - interactive: `approver` 真的会问人时为 true：同一台主机同时在问的几条连接合并成一问
     ///     （`HostKeyApprovalCoalescer`）。不会问人的（命令行、Agent、收尾）不合并：它的「不」不能替正在弹框的标签答掉。
+    ///
+    /// 不自己限时：USSHKit 给钩子限时（`approvalTimeout`，到点按不同意），建连任务被取消时立即结束、钩子所在的任务
+    /// 也被取消，relay 与合并器响应取消、撤掉弹层。
     init(consent: LegacyAlgorithmConsent = .shared,
          verifiesHostKeys: Bool,
          interactive: Bool,
@@ -91,45 +85,41 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
         }
     }
 
-    /// 某一跳要用旧算法了，同不同意。
+    /// 某一跳要用旧算法了，同不同意。不记：记不记看连上之后的结果（`record`）。
     func approve(host: String, port: Int, isJumpHost: Bool) async -> Bool {
         let address = LegacyAlgorithmConsent.Address(host: host, port: port)
-        asked.withLock { _ = $0.insert(address) }
         let decision = Self.decide(consented: consent.contains(address),
                                    hasTrustRecord: await hasTrustRecord(host, port),
                                    verifiesHostKeys: verifiesHostKeys)
-        switch decision {
-        case .allow:
-            return true
-        case .allowAndRemember:
-            pending.withLock { _ = $0.insert(address) }
-            return true
-        case .ask:
-            let challenge = HostKeyChallenge(host: host, port: port, kind: .weakAlgorithms,
-                                             newFingerprint: "", oldFingerprint: nil, isJumpHost: isJumpHost)
-            let approved = coalesces
-                ? await HostKeyApprovalCoalescer.shared.approve(challenge, approver: approver)
-                : await approver(challenge)
-            if approved { consent.insert(address) }
-            AppLogger.info("加密方式变弱的主机 \(address.key)：\(approved ? "用户同意用旧算法连接" : "没有同意，不连接")",
-                           category: "ssh")
-            return approved
+        guard decision == .ask else { return true }
+        let challenge = HostKeyChallenge(host: host, port: port, kind: .weakAlgorithms,
+                                         newFingerprint: "", oldFingerprint: nil, isJumpHost: isJumpHost)
+        let approved = coalesces
+            ? await HostKeyApprovalCoalescer.shared.approve(challenge, approver: approver)
+            : await approver(challenge)
+        AppLogger.info("连接方式变弱的主机 \(address.key)：\(approved ? "用户同意用旧算法连接" : "没有同意，不连接")",
+                       category: "ssh")
+        return approved
+    }
+
+    /// 整条连接连上了（含认证）：按 USSHKit 报的每一跳的结果写同意。`true` 记、`false` 清、`nil` 不动。
+    static func record(target: (host: String, port: Int, neededLegacy: Bool?),
+                       jumpHost: (host: String, port: Int, neededLegacy: Bool?)?,
+                       consent: LegacyAlgorithmConsent = .shared) {
+        for hop in [jumpHost, target].compactMap({ $0 }) {
+            switch hop.neededLegacy {
+            case true?: consent.insert(host: hop.host, port: hop.port)
+            case false?: consent.remove(host: hop.host, port: hop.port)
+            case nil: break
+            }
         }
     }
 
-    /// 整条连接连上了（`hops` 是这次的每一跳：跳板机与目标）：把静默放行的那几跳记成「本来就只会旧算法」；
-    /// 没为它调过钩子的那几跳用的是现代算法，清掉它们的同意，之后再退回旧算法会再问。
-    func connectionSucceeded(hops: [(host: String, port: Int)]) {
-        let addresses = pending.withLock { taken -> Set<LegacyAlgorithmConsent.Address> in
-            defer { taken = [] }
-            return taken
-        }
-        for address in addresses { consent.insert(address) }
-        let askedHops = asked.withLock { $0 }
-        for hop in hops {
-            let address = LegacyAlgorithmConsent.Address(host: hop.host, port: hop.port)
-            if !askedHops.contains(address) { consent.remove(address) }
-        }
+    /// 连上之后：按这次连接的每一跳与 USSHKit 的三态结果写进这个门的同意记录。
+    func connectionSucceeded(profile: SSHConnection.ProfileSnapshot, target: Bool?, jumpHost: Bool?) {
+        Self.record(target: (profile.host, profile.port, target),
+                    jumpHost: profile.jumpHost.map { ($0.host, $0.port, jumpHost) },
+                    consent: consent)
     }
 }
 
@@ -231,28 +221,28 @@ nonisolated struct LegacyAlgorithmRefusal: Sendable, Equatable {
     /// 连接失败时给人看的那句：说清是怎么回事、怎么办。不能问用户的地方（Agent、历史会话）也是这句。
     var message: String {
         isJumpHost
-            ? String(localized: "没有连接跳板机 \(address)：这台跳板机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
-            : String(localized: "没有连接 \(address)：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
+            ? String(localized: "没有连接跳板机 \(address)：这台跳板机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。要继续连接，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
+            : String(localized: "没有连接 \(address)：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。要继续连接，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
     }
 }
 
-/// 「加密方式变弱了」那一问的文案（Mac 的 `HostKeyPromptView`、iOS 的 `HostKeyTrustModal` 共用）。
+/// 「连接方式变弱了」那一问的文案（Mac 的 `HostKeyPromptView`、iOS 的 `HostKeyTrustModal` 共用）。
 /// 不出现 KEXINIT、hmac 这类词：说清以前怎样、这次怎样、可能是什么原因、选了会怎样。
 nonisolated enum WeakAlgorithmsCopy {
     static func title(_ challenge: HostKeyChallenge) -> String {
         challenge.isJumpHost
-            ? String(localized: "跳板机的加密方式变弱了")
-            : String(localized: "这台主机的加密方式变弱了")
+            ? String(localized: "跳板机的连接方式变弱了")
+            : String(localized: "这台主机的连接方式变弱了")
     }
 
     static func summary(_ challenge: HostKeyChallenge) -> String {
         let address = "\(challenge.host):\(String(challenge.port))"
         return challenge.isJumpHost
-            ? String(localized: "跳板机 \(address) 以前用较新的加密方式连接，这次只提供较旧的方式（SHA-1），安全性较低。")
-            : String(localized: "\(address) 以前用较新的加密方式连接，这次服务器只提供较旧的方式（SHA-1），安全性较低。")
+            ? String(localized: "跳板机 \(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。")
+            : String(localized: "\(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。")
     }
 
     static var advice: String {
-        String(localized: "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回较新的方式时，这个许可自动作废。")
+        String(localized: "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回更安全的连接方式时，这个许可自动作废。")
     }
 }

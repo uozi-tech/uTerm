@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 主机密钥信任弹层（设计稿 `HostKeyModal`）。首次连接（unknown）/ 密钥变化（mismatch）两态，外加
-/// 「加密方式变弱了」（`.weakAlgorithms`，不是主机密钥的问题，没有指纹，取消是醒目的那个）。
+/// 「连接方式变弱了」（`.weakAlgorithms`，不是主机密钥的问题，没有指纹，取消是醒目的那个）。
 /// 由根视图在 `HostKeyChallengeRelay.pendingChallenge` 非空时居中呈现；裁决经 relay 续延回 SSH 层。
 struct HostKeyTrustModal: View {
     let challenge: HostKeyChallenge
@@ -28,7 +28,7 @@ struct HostKeyTrustModal: View {
         }
     }
 
-    // MARK: - 加密方式变弱了（没有指纹；「取消」是醒目的那个，「仍然连接」在旁边）
+    // MARK: - 连接方式变弱了（没有指纹；「取消」是醒目的那个，「仍然连接」在旁边）
 
     private var weakHeader: some View {
         HStack(alignment: .top, spacing: 13) {
@@ -63,7 +63,7 @@ struct HostKeyTrustModal: View {
 
     private var weakButtons: some View {
         HStack(spacing: 10) {
-            MBtn(title: String(localized: "仍然连接", comment: "加密方式变弱时照样连接"), kind: .secondary, full: true,
+            MBtn(title: String(localized: "仍然连接", comment: "连接方式变弱时照样连接"), kind: .secondary, full: true,
                  height: 46, action: onTrust)
             MBtn(title: String(localized: "取消"), kind: .primary, full: true, height: 46, action: onCancel)
         }

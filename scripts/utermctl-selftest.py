@@ -1340,7 +1340,7 @@ def exercise_socket_path_too_long():
     check("更新" in (response or {}).get("message", ""), "消息让用户更新 uTerm")
     check("UTERM_CONTROL_SOCKET" not in (response or {}).get("message", ""), "消息不再给 UTERM_CONTROL_SOCKET 的办法")
     equal(client.exit_code_for(response or {}), client.EXIT_LOCAL, "socket_path_too_long 归本地这一档")
-    check(not client.is_retryable("weak_algorithms"), "weak_algorithms（加密方式变弱了，要用户确认）不重试")
+    check(not client.is_retryable("weak_algorithms"), "weak_algorithms（连接方式变弱了，要用户确认）不重试")
 
     refused = "uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开……"
     check(client.socket_path_too_long_response(request, candidates("exampleuser"), refused) is None,

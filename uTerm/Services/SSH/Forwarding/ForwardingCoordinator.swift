@@ -154,7 +154,7 @@ final class ForwardingCoordinator {
         start(rule, on: server, optionalRelay: relay, modelContainer: modelContainer)
     }
 
-    /// `relay` 为 nil：后台重连、没有界面可问，主机密钥 / 加密方式的问题一律拒绝（规则停在 `.error`，不挂住）。
+    /// `relay` 为 nil：后台重连、没有界面可问，主机密钥 / 连接方式的问题一律拒绝（规则停在 `.error`，不挂住）。
     private func start(_ rule: ForwardingRuleSnapshot,
                        on server: ServerProfile,
                        optionalRelay relay: HostKeyChallengeRelay?,

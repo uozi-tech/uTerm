@@ -97,7 +97,7 @@ struct ParallelServerState: Identifiable {
         return false
     }
 
-    /// `hostKeyUntrusted` 里那一问是「加密方式变弱了」（按钮写「仍然连接并重试」，不是「信任并重试」）。
+    /// `hostKeyUntrusted` 里那一问是「连接方式变弱了」（按钮写「仍然连接并重试」，不是「信任并重试」）。
     var weakAlgorithmsDeclined: Bool {
         if case .hostKeyUntrusted(let challenge) = failure { return challenge.isWeakAlgorithms }
         return false

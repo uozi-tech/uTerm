@@ -48,7 +48,7 @@ final class ParallelRunModel {
     private var recordOnFinalize = true
     /// 每台一条在跑的任务 —— 只为 `cancel()`（探针拆窗、将来的「中途返回就停」）留把手。
     private var laneTasks: [Task<Void, Never>] = []
-    /// 「加密方式变弱了」卡片上点「仍然连接并重试」时记下同意的地方（测试换成单独的一份）。
+    /// 「连接方式变弱了」卡片上点「仍然连接并重试」时记下同意的地方（测试换成单独的一份）。
     var legacyConsent: LegacyAlgorithmConsent = .shared
 
     init(commandID: UUID, commandName: String, command: String, intent: String,
@@ -128,7 +128,7 @@ final class ParallelRunModel {
         guard let index = states.firstIndex(where: { $0.id == serverID }),
               case .hostKeyUntrusted(let challenge)? = states[index].failure,
               let profile = targets.first(where: { $0.id == serverID }) else { return }
-        // 加密方式变弱了：用户在卡片上同意了，记下同意，照常（不信任新密钥）重连——之后主机密钥要是也变了，
+        // 连接方式变弱了：用户在卡片上同意了，记下同意，照常（不信任新密钥）重连——之后主机密钥要是也变了，
         // 还会再出一张主机密钥的卡片，不会被这一下顺手放过去。
         let weakAlgorithms = challenge.isWeakAlgorithms
         if weakAlgorithms { legacyConsent.insert(host: challenge.host, port: challenge.port) }
@@ -368,7 +368,7 @@ final class ParallelRunModel {
             states[index].failure = .hostKeyUntrusted(challenge)
             switch challenge.kind {
             case .weakAlgorithms:
-                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机只提供较旧的加密方式（SHA-1），连接被拒绝")))
+                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机要改用较旧的连接方式（SHA-1）才能连上，连接被拒绝")))
                 states[index].summary = ParallelRunCopy.weakAlgorithms
             case .unknown, .mismatch:
                 states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))

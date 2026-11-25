@@ -33,7 +33,7 @@ struct HostKeyRetryCard: View {
         case .unknown: String(localized: "主机密钥未信任")
         case .mismatch: String(localized: "主机密钥已变化")
         case .weakAlgorithms:
-            challenge.isJumpHost ? String(localized: "跳板机的加密方式变弱了") : String(localized: "这台主机的加密方式变弱了")
+            challenge.isJumpHost ? String(localized: "跳板机的连接方式变弱了") : String(localized: "这台主机的连接方式变弱了")
         }
     }
 
@@ -44,7 +44,7 @@ struct HostKeyRetryCard: View {
         case .mismatch:
             String(localized: "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后再信任。")
         case .weakAlgorithms:
-            String(localized: "\(address) 以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1），因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
+            String(localized: "\(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
         }
     }
 
@@ -72,7 +72,7 @@ struct HostKeyRetryCard: View {
             if isMismatch, let old = challenge.oldFingerprint {
                 fingerprintRow(String(localized: "已信任", comment: "此前已信任的主机密钥指纹"), old)
             }
-            // 加密方式那一问没有指纹可核对。
+            // 连接方式那一问没有指纹可核对。
             if !isWeak {
                 fingerprintRow(isMismatch
                     ? String(localized: "本次出示", comment: "主机这次出示的密钥指纹")

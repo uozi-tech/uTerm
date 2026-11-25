@@ -128,8 +128,8 @@ extension ControlConnectError {
             return String(localized: "「\(host)」认证失败：\(reason)")
         case .weakAlgorithms(let refusal):
             return refusal.isJumpHost
-                ? String(localized: "主机「\(host)」的跳板机（\(refusal.address)）以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。")
-                : String(localized: "主机「\(host)」（\(refusal.address)）以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。")
+                ? String(localized: "主机「\(host)」的跳板机（\(refusal.address)）以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。")
+                : String(localized: "主机「\(host)」（\(refusal.address)）以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。")
         case .released(let reason):
             return String(localized: "「\(host)」的连接在建立过程中被释放（\(reason)），请重试。")
         }

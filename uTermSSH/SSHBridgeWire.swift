@@ -19,7 +19,9 @@ nonisolated enum SSHBridgeMessage: Codable, Sendable {
     /// 某一跳只肯用 SHA-1 时代的旧算法，要不要照样连（App 按 `LegacyAlgorithmGate` 的规则答，答复是 `approval`）。
     /// 只在 App 的 `connect` 带了 `asksLegacyAlgorithms` 时发。
     case approveLegacyAlgorithms(id: Int, SSHBridgeLegacyRequest)
-    case connected
+    /// 连上了（含认证、开好伪终端）。`legacy` 是 USSHKit 报的每一跳这次要不要旧算法（三态），App 据此写
+    /// `LegacyAlgorithmConsent`。旧辅助进程发的是不带它的 `connected`（解出来是 nil，App 不动同意记录）。只加不改。
+    case connected(legacy: SSHBridgeLegacyTransport? = nil)
     case failed(SSHBridgeFailure)
     // 连上之后经 holder 转发（`childRequest` / `childReply`）。App 重启后也还能用，不碰凭据、不握手。
     case exec(id: Int, command: String)
@@ -56,6 +58,13 @@ nonisolated struct SSHBridgeConnectRequest: Codable, Sendable {
     var environment: [SSHBridgeEnvironmentVariable]
     /// App 会回答 `approveLegacyAlgorithms`。没带（旧版 App）时 `uterm-ssh` 不问、照旧自动退到旧算法。只加不改。
     var asksLegacyAlgorithms: Bool? = nil
+}
+
+/// 连上之后每一跳的传输层这次要不要旧算法（USSHKit 的 `targetNeededLegacyTransport` / `bastionNeededLegacyTransport`）：
+/// true 要、false 不要、nil 不知道（没读懂服务器的握手，或者没有跳板机）。
+nonisolated struct SSHBridgeLegacyTransport: Codable, Sendable, Equatable {
+    var target: Bool?
+    var jumpHost: Bool?
 }
 
 /// 要用旧算法连的那一跳。

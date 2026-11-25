@@ -101,7 +101,7 @@ actor ForwardingSession {
             hostKeyVerifier: hostKeyVerifier,
             hostKeyApprover: hostKeyApprover,
             // 审批闭包经协调器取「当前 relay」，可能是命令行的一次性 relay：不和同一台主机正在弹框的标签合并
-            // 加密方式那一问，免得命令行的「不」替标签答掉、或命令行干等标签那一问。
+            // 连接方式那一问，免得命令行的「不」替标签答掉、或命令行干等标签那一问。
             approvesInteractively: false)
         self.connected = connected
         // 专用连接（不进共享池）：直接挂断开观察者，随连接一起释放。

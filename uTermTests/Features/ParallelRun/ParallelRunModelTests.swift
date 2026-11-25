@@ -42,9 +42,9 @@ final class ParallelRunModelTests: XCTestCase {
         XCTAssertEqual(runs.first?.results.map(\.ok), [true, true])
     }
 
-    // MARK: - 加密方式变弱了
+    // MARK: - 连接方式变弱了
 
-    /// 卡片上的问题是「加密方式变弱了」：结论写的是它、按钮是「仍然连接并重试」；点了之后本机记下同意，
+    /// 卡片上的问题是「连接方式变弱了」：结论写的是它、按钮是「仍然连接并重试」；点了之后本机记下同意，
     /// 重试**不**带「信任新密钥」——之后主机密钥要是也变了，还会再出一张主机密钥的卡片。
     func testWeakAlgorithmsRetryRecordsConsentWithoutTrustingNewKeys() async throws {
         let (store, container) = try makeStore()

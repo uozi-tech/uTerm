@@ -113,8 +113,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
                                     approver: target.hostKeyApprover, legacyGate: legacyGate)
         let outcome = await peer.run(request)
         switch outcome {
-        case .connected:
-            legacyGate.connectionSucceeded(hops: target.profile.legacyGateHops)
+        case .connected(let legacy):
+            legacyGate.connectionSucceeded(profile: target.profile, target: legacy?.target, jumpHost: legacy?.jumpHost)
             return
         case .failed(let failure):
             failedOnLocalNetwork = failure.localNetworkUnreachable == true
@@ -288,7 +288,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
 /// 握手期间 App 这一头：发连接参数，回答 `uterm-ssh` 的主机密钥问题，等到连上或失败。
 nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
     enum Outcome: Sendable {
-        case connected
+        /// `legacy`：辅助进程报的每一跳要不要旧算法（旧辅助进程不带，nil）。
+        case connected(SSHBridgeLegacyTransport?)
         case failed(SSHBridgeFailure)
         case disconnected
     }
@@ -347,8 +348,8 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
                 let approved = await legacyGate.approve(host: legacy.host, port: legacy.port, isJumpHost: legacy.isJumpHost)
                 send(.approval(id: id, approved))
             }
-        case .connected:
-            finish(.connected)
+        case .connected(let legacy):
+            finish(.connected(legacy))
         case .failed(let failure):
             finish(.failed(failure))
         case .connect, .verifyResult, .rememberResult, .approval, .exec, .execResult:

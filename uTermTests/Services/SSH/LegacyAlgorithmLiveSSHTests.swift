@@ -4,7 +4,7 @@ import XCTest
 @testable import uTerm
 @_spi(uTermIntegration) import USSHKit
 
-/// 「加密方式变弱了」对着**真 OpenSSH**：只给 `ssh-rsa`（SHA-1）主机签名的 sshd。第一次连静默退到旧算法、照常问主机密钥；
+/// 「连接方式变弱了」对着**真 OpenSSH**：只给 `ssh-rsa`（SHA-1）主机签名的 sshd。第一次连静默退到旧算法、照常问主机密钥；
 /// 信任过、本机没记过同意时问用户（拒绝 → 类型化失败；同意 → 连上、之后不再问）；命令行的连接池不能问，回 `weak_algorithms`。
 ///
 /// 默认跳过。跑法（用完 `docker rm -f uterm-legacy-ssh`）：

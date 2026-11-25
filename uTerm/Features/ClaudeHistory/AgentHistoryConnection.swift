@@ -14,7 +14,7 @@ nonisolated final class ClaudeHistoryHostKeyGate: Sendable {
 
     var approver: @Sendable (HostKeyChallenge) async -> Bool {
         { [self] challenge in
-            // 加密方式变弱了不是主机密钥的问题：不记，失败时报 `LegacyAlgorithmRefusal.message` 那句。
+            // 连接方式变弱了不是主机密钥的问题：不记，失败时报 `LegacyAlgorithmRefusal.message` 那句。
             if !challenge.isWeakAlgorithms { challenged.withLock { $0 = true } }
             return false
         }

@@ -372,7 +372,7 @@ nonisolated enum ParallelRunCopy {
 
     /// 信任过的主机这次只肯用 SHA-1 时代的旧算法，并行执行不能问人，直接拒了。
     static var weakAlgorithms: String {
-        String(localized: "无法连接：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。确认没问题后点「仍然连接并重试」。")
+        String(localized: "无法连接：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。确认没问题后点「仍然连接并重试」。")
     }
 
     static func unreachable(_ reason: String) -> String { String(localized: "无法连接到该主机：\(reason)。命令未执行。") }

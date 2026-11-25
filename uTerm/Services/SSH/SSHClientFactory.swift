@@ -202,7 +202,8 @@ nonisolated enum SSHClientFactory {
                 legacyFallbackApproval: legacyGate.approval,
                 logger: AppSSHLogger()
             )
-            legacyGate.connectionSucceeded(hops: profile.legacyGateHops)
+            legacyGate.connectionSucceeded(profile: profile, target: shared.targetNeededLegacyTransport,
+                                           jumpHost: shared.bastionNeededLegacyTransport)
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
             throw appError(error)
@@ -218,7 +219,7 @@ nonisolated enum SSHClientFactory {
         }
     }
 
-    /// USSHKit 的建连错误 → App 的。`switch` 里有 `default`，USSHKit 新加的错误编译器不会提醒，这里逐个列。
+    /// USSHKit 的建连错误 → App 的。逐个列、不带 `default`：USSHKit 新加的错误编译器会提醒。
     static func appError(_ error: USSHKit.SSHConnectionError) -> SSHConnection.SSHConnectionError {
         // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
         // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
@@ -237,8 +238,12 @@ nonisolated enum SSHClientFactory {
             return .handshakeFailed(message)
         case .hostKeyRejected(let message):
             return .hostKeyRejected(message)
-        default:
-            return .connectFailed(error.errorDescription ?? FriendlyError.describe(error))
+        case .unsupportedAgentAuthentication:
+            return .authenticationFailed(error.errorDescription ?? FriendlyError.describe(error))
+        case .alreadyOpen, .closed, .bindFailed:
+            // 只有隧道会抛（`connect` 不会）；不值得重试的照 USSHKit 的 `isRetryable` 归成「重试也不会好」那类。
+            let message = error.errorDescription ?? FriendlyError.describe(error)
+            return error.isRetryable ? .connectFailed(message) : .handshakeFailed(message)
         }
     }
 
@@ -361,9 +366,3 @@ nonisolated enum SSHClientFactory {
     }
 }
 
-nonisolated extension SSHConnection.ProfileSnapshot {
-    /// 这次连接的每一跳（跳板机在前），交给 `LegacyAlgorithmGate.connectionSucceeded(hops:)`。
-    var legacyGateHops: [(host: String, port: Int)] {
-        (jumpHost.map { [(host: $0.host, port: $0.port)] } ?? []) + [(host: host, port: port)]
-    }
-}

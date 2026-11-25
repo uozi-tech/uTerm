@@ -2441,58 +2441,58 @@
         }
       }
     },
-    "%@ 以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1），因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。" : {
+    "%@ 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1), so the parallel run refused the connection. If you haven't changed this server recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection."
+            "value" : "%@ used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1), so the parallel run refused the connection. If you haven't changed this server recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ は以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しなかったため、並列実行では接続を拒否しました。最近このサーバを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があります。"
+            "value" : "%@ は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できないため、並列実行では接続を拒否しました。最近このサーバを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@은(는) 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공해 병렬 실행에서 연결을 거부했습니다. 최근에 이 서버를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있습니다."
+            "value" : "%@은(는) 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있어 병렬 실행에서 연결을 거부했습니다. 최근에 이 서버를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있습니다."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1），因此平行執行時直接拒絕了連線。如果你最近沒有調整過這台伺服器（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截。"
+            "value" : "%@ 以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上，因此平行執行時直接拒絕了連線。如果你最近沒有調整過這台伺服器（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截。"
           }
         }
       }
     },
-    "%@ 以前用较新的加密方式连接，这次服务器只提供较旧的方式（SHA-1），安全性较低。" : {
+    "%@ 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ used to connect with newer encryption, but this time the server offers only an older, less secure method (SHA-1)."
+            "value" : "%@ used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ は以前は新しい暗号化方式で接続していましたが、今回サーバは古い方式（SHA-1）しか提供していません。安全性が低くなります。"
+            "value" : "%@ は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@은(는) 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 서버가 오래된 방식(SHA-1)만 제공합니다. 보안성이 낮습니다."
+            "value" : "%@은(는) 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 以前用較新的加密方式連線，這次伺服器只提供較舊的方式（SHA-1），安全性較低。"
+            "value" : "%@ 以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。"
           }
         }
       }
@@ -17366,30 +17366,30 @@
         }
       }
     },
-    "主机「%@」（%@）以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。" : {
+    "主机「%@」（%@）以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Host “%1$@” (%2$@) used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). The CLI won't allow this on the user's behalf: ask the user to connect to this host once in uTerm, read the prompt and choose “Connect Anyway”, then retry."
+            "value" : "Host “%1$@” (%2$@) used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). The CLI won't allow this on the user's behalf: ask the user to connect to this host once in uTerm, read the prompt and choose “Connect Anyway”, then retry."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ホスト「%1$@」（%2$@）は以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。CLI がユーザの代わりに許可することはありません。ユーザに uTerm でこのホストに一度接続してもらい、表示内容を確認して「このまま接続」を選んでもらってから再試行してください。"
+            "value" : "ホスト「%1$@」（%2$@）は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。CLI がユーザの代わりに許可することはありません。ユーザに uTerm でこのホストに一度接続してもらい、表示内容を確認して「このまま接続」を選んでもらってから再試行してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호스트 ‘%1$@’(%2$@)은(는) 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. CLI는 사용자를 대신해 허용하지 않습니다. 사용자가 uTerm에서 이 호스트에 한 번 연결하고 안내를 확인한 뒤 ‘그래도 연결’을 선택하도록 한 다음 다시 시도하십시오."
+            "value" : "호스트 ‘%1$@’(%2$@)은(는) 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. CLI는 사용자를 대신해 허용하지 않습니다. 사용자가 uTerm에서 이 호스트에 한 번 연결하고 안내를 확인한 뒤 ‘그래도 연결’을 선택하도록 한 다음 다시 시도하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主機「%1$@」（%2$@）以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。命令列不會替使用者放行：請讓使用者在 uTerm 裡連線這台主機一次，看過提示後選「仍然連線」，再重試。"
+            "value" : "主機「%1$@」（%2$@）以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。命令列不會替使用者放行：請讓使用者在 uTerm 裡連線這台主機一次，看過提示後選「仍然連線」，再重試。"
           }
         }
       }
@@ -17714,30 +17714,30 @@
         }
       }
     },
-    "主机「%@」的跳板机（%@）以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。" : {
+    "主机「%@」的跳板机（%@）以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The jump host of “%1$@” (%2$@) used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). The CLI won't allow this on the user's behalf: ask the user to connect to this host once in uTerm, read the prompt and choose “Connect Anyway”, then retry."
+            "value" : "The jump host of “%1$@” (%2$@) used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). The CLI won't allow this on the user's behalf: ask the user to connect to this host once in uTerm, read the prompt and choose “Connect Anyway”, then retry."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ホスト「%1$@」の踏み台ホスト（%2$@）は以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。CLI がユーザの代わりに許可することはありません。ユーザに uTerm でこのホストに一度接続してもらい、表示内容を確認して「このまま接続」を選んでもらってから再試行してください。"
+            "value" : "ホスト「%1$@」の踏み台ホスト（%2$@）は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。CLI がユーザの代わりに許可することはありません。ユーザに uTerm でこのホストに一度接続してもらい、表示内容を確認して「このまま接続」を選んでもらってから再試行してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호스트 ‘%1$@’의 점프 호스트(%2$@)는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. CLI는 사용자를 대신해 허용하지 않습니다. 사용자가 uTerm에서 이 호스트에 한 번 연결하고 안내를 확인한 뒤 ‘그래도 연결’을 선택하도록 한 다음 다시 시도하십시오."
+            "value" : "호스트 ‘%1$@’의 점프 호스트(%2$@)는 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. CLI는 사용자를 대신해 허용하지 않습니다. 사용자가 uTerm에서 이 호스트에 한 번 연결하고 안내를 확인한 뒤 ‘그래도 연결’을 선택하도록 한 다음 다시 시도하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主機「%1$@」的跳板主機（%2$@）以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。命令列不會替使用者放行：請讓使用者在 uTerm 裡連線這台主機一次，看過提示後選「仍然連線」，再重試。"
+            "value" : "主機「%1$@」的跳板主機（%2$@）以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。命令列不會替使用者放行：請讓使用者在 uTerm 裡連線這台主機一次，看過提示後選「仍然連線」，再重試。"
           }
         }
       }
@@ -17850,34 +17850,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主機群組"
-          }
-        }
-      }
-    },
-    "主机只提供较旧的加密方式（SHA-1），连接被拒绝" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The host offered only older encryption (SHA-1); connection refused"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ホストが古い暗号化方式（SHA-1）しか提供しないため、接続を拒否しました"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "호스트가 오래된 암호화 방식(SHA-1)만 제공해 연결이 거부됨"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "主機只提供較舊的加密方式（SHA-1），連線被拒絕"
           }
         }
       }
@@ -18270,6 +18242,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主機監聽連接埠"
+          }
+        }
+      }
+    },
+    "主机要改用较旧的连接方式（SHA-1）才能连上，连接被拒绝" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The host can only connect with an older method (SHA-1); connection refused"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ホストが古い接続方式（SHA-1）でしか接続できないため、接続を拒否しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호스트가 오래된 연결 방식(SHA-1)으로만 연결할 수 있어 연결이 거부됨"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主機要改用較舊的連線方式（SHA-1）才能連上，連線被拒絕"
           }
         }
       }
@@ -34163,30 +34163,30 @@
         }
       }
     },
-    "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回较新的方式时，这个许可自动作废。" : {
+    "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回更安全的连接方式时，这个许可自动作废。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "If you haven't changed this server recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection, so it's safer to cancel. If you choose “Connect Anyway”, this device won't ask again; the permission is dropped automatically once the host goes back to the newer method."
+            "value" : "If you haven't changed this server recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection, so it's safer to cancel. If you choose “Connect Anyway”, this device won't ask again; the permission is dropped automatically once the host goes back to the more secure method."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最近このサーバを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があるため、キャンセルをおすすめします。「このまま接続」を選ぶと、このデバイスでは今後確認しません。ホストが新しい方式に戻ると、この許可は自動的に無効になります。"
+            "value" : "最近このサーバを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があるため、キャンセルをおすすめします。「このまま接続」を選ぶと、このデバイスでは今後確認しません。ホストがより安全な接続方式に戻ると、この許可は自動的に無効になります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "최근에 이 서버를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있으니 취소하는 것이 좋습니다. ‘그래도 연결’을 선택하면 이 기기에서는 다시 묻지 않으며, 호스트가 더 새로운 방식으로 돌아가면 이 허용은 자동으로 무효가 됩니다."
+            "value" : "최근에 이 서버를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있으니 취소하는 것이 좋습니다. ‘그래도 연결’을 선택하면 이 기기에서는 다시 묻지 않으며, 호스트가 더 안전한 연결 방식으로 돌아가면 이 허용은 자동으로 무효가 됩니다."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "如果你最近沒有調整過這台伺服器（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截，建議先取消。選「仍然連線」後，這台裝置上不再詢問；它又改回較新的方式時，這個許可會自動失效。"
+            "value" : "如果你最近沒有調整過這台伺服器（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截，建議先取消。選「仍然連線」後，這台裝置上不再詢問；它又改回更安全的連線方式時，這個許可會自動失效。"
           }
         }
       }
@@ -50850,30 +50850,30 @@
         }
       }
     },
-    "无法连接：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。确认没问题后点「仍然连接并重试」。" : {
+    "无法连接：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。确认没问题后点「仍然连接并重试」。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Couldn't connect: this host used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). If you're sure it's fine, click “Connect Anyway and Retry”."
+            "value" : "Couldn't connect: this host used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). If you're sure it's fine, click “Connect Anyway and Retry”."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "接続できません：このホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。問題がないことを確認したら「このまま接続して再試行」をクリックしてください。"
+            "value" : "接続できません：このホストは以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。問題がないことを確認したら「このまま接続して再試行」をクリックしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "연결할 수 없음: 이 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 문제가 없음을 확인했다면 ‘그래도 연결하고 다시 시도’를 클릭하십시오."
+            "value" : "연결할 수 없음: 이 호스트는 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. 문제가 없음을 확인했다면 ‘그래도 연결하고 다시 시도’를 클릭하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法連線：這台主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。確認沒問題後點「仍然連線並重試」。"
+            "value" : "無法連線：這台主機以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。確認沒問題後點「仍然連線並重試」。"
           }
         }
       }
@@ -60138,58 +60138,58 @@
         }
       }
     },
-    "没有连接 %@：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。" : {
+    "没有连接 %@：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。要继续连接，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Didn't connect to %@: this host used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). To keep using it, reconnect to this host in uTerm and choose “Connect Anyway” when asked."
+            "value" : "Didn't connect to %@: this host used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). To connect anyway, reconnect to this host in uTerm and choose “Connect Anyway” when asked."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ に接続しませんでした：このホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。この方式で接続する場合は、uTerm でこのホストに再接続し、確認が表示されたら「このまま接続」を選んでください。"
+            "value" : "%@ に接続しませんでした：このホストは以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。接続を続ける場合は、uTerm でこのホストに再接続し、確認が表示されたら「このまま接続」を選んでください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@에 연결하지 않았습니다: 이 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 이 방식으로 계속 연결하려면 uTerm에서 이 호스트에 다시 연결하고 안내가 나오면 ‘그래도 연결’을 선택하십시오."
+            "value" : "%@에 연결하지 않았습니다: 이 호스트는 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. 계속 연결하려면 uTerm에서 이 호스트에 다시 연결하고 안내가 나오면 ‘그래도 연결’을 선택하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連線至 %@：這台主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。要繼續用這種方式，請在 uTerm 裡重新連線這台主機，在提示中選「仍然連線」。"
+            "value" : "未連線至 %@：這台主機以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。要繼續連線，請在 uTerm 裡重新連線這台主機，在提示中選「仍然連線」。"
           }
         }
       }
     },
-    "没有连接跳板机 %@：这台跳板机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。" : {
+    "没有连接跳板机 %@：这台跳板机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。要继续连接，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Didn't connect to the jump host %@: it used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). To keep using it, reconnect to this host in uTerm and choose “Connect Anyway” when asked."
+            "value" : "Didn't connect to the jump host %@: it used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). To connect anyway, reconnect to this host in uTerm and choose “Connect Anyway” when asked."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "踏み台ホスト %@ に接続しませんでした：この踏み台ホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。この方式で接続する場合は、uTerm でこのホストに再接続し、確認が表示されたら「このまま接続」を選んでください。"
+            "value" : "踏み台ホスト %@ に接続しませんでした：この踏み台ホストは以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。接続を続ける場合は、uTerm でこのホストに再接続し、確認が表示されたら「このまま接続」を選んでください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "점프 호스트 %@에 연결하지 않았습니다: 이 점프 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 이 방식으로 계속 연결하려면 uTerm에서 이 호스트에 다시 연결하고 안내가 나오면 ‘그래도 연결’을 선택하십시오."
+            "value" : "점프 호스트 %@에 연결하지 않았습니다: 이 점프 호스트는 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. 계속 연결하려면 uTerm에서 이 호스트에 다시 연결하고 안내가 나오면 ‘그래도 연결’을 선택하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連線至跳板主機 %@：這台跳板主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。要繼續用這種方式，請在 uTerm 裡重新連線這台主機，在提示中選「仍然連線」。"
+            "value" : "未連線至跳板主機 %@：這台跳板主機以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。要繼續連線，請在 uTerm 裡重新連線這台主機，在提示中選「仍然連線」。"
           }
         }
       }
@@ -72761,58 +72761,58 @@
         }
       }
     },
-    "跳板机 %@ 以前用较新的加密方式连接，这次只提供较旧的方式（SHA-1），安全性较低。" : {
+    "跳板机 %@ 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The jump host %@ used to connect with newer encryption, but this time it offers only an older, less secure method (SHA-1)."
+            "value" : "The jump host %@ used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "踏み台ホスト %@ は以前は新しい暗号化方式で接続していましたが、今回は古い方式（SHA-1）しか提供していません。安全性が低くなります。"
+            "value" : "踏み台ホスト %@ は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "점프 호스트 %@은(는) 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래된 방식(SHA-1)만 제공합니다. 보안성이 낮습니다."
+            "value" : "점프 호스트 %@은(는) 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳板主機 %@ 以前用較新的加密方式連線，這次只提供較舊的方式（SHA-1），安全性較低。"
+            "value" : "跳板主機 %@ 以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。"
           }
         }
       }
     },
-    "跳板机的加密方式变弱了" : {
+    "跳板机的连接方式变弱了" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The Jump Host's Encryption Got Weaker"
+            "value" : "The Jump Host's Connection Got Less Secure"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "踏み台ホストの暗号化方式が弱くなりました"
+            "value" : "踏み台ホストの接続方式が弱くなりました"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "점프 호스트의 암호화 방식이 약해졌습니다"
+            "value" : "점프 호스트의 연결 방식이 약해졌습니다"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳板主機的加密方式變弱了"
+            "value" : "跳板主機的連線方式變弱了"
           }
         }
       }
@@ -76553,34 +76553,6 @@
         }
       }
     },
-    "这台主机的加密方式变弱了" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This Host's Encryption Got Weaker"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "このホストの暗号化方式が弱くなりました"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 호스트의 암호화 방식이 약해졌습니다"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "這台主機的加密方式變弱了"
-          }
-        }
-      }
-    },
     "这台主机的地址或端口改了，原来的会话在另一台机器上。关掉这个标签页，再重新打开主机。" : {
       "localizations" : {
         "en" : {
@@ -76633,6 +76605,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這台主機的金鑰尚未被信任，或與已信任的不一致。請先在終端機中連線到這台主機並信任其金鑰，再回來打開歷史工作階段。"
+          }
+        }
+      }
+    },
+    "这台主机的连接方式变弱了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Host's Connection Got Less Secure"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このホストの接続方式が弱くなりました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 호스트의 연결 방식이 약해졌습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台主機的連線方式變弱了"
           }
         }
       }

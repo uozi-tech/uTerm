@@ -51,7 +51,8 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                                      uniquingKeysWith: { _, last in last })
         do {
             try await client.target.withPTY(pty, environment: environment) { inbound, outbound in
-                await control.send(.connected)
+                await control.send(.connected(legacy: SSHBridgeLegacyTransport(
+                    target: client.targetNeededLegacyTransport, jumpHost: client.bastionNeededLegacyTransport)))
                 control.close()
                 let input = startInputPump(outbound)
                 installSignalHandlers(client: client, input: input)

@@ -33,7 +33,7 @@ extension HostKeyClassification: Equatable {
 struct HostKeyChallenge: Equatable, Sendable, Identifiable {
     enum Kind: Sendable {
         case unknown, mismatch
-        /// 以前用较新的加密方式连过，这次服务器只提供较旧的（SHA-1），要不要照样连。
+        /// 以前用较新的连接方式连过，这次服务器只提供较旧的（SHA-1），要不要照样连。
         case weakAlgorithms
     }
     let id = UUID()
@@ -46,19 +46,19 @@ struct HostKeyChallenge: Equatable, Sendable, Identifiable {
     /// `.weakAlgorithms` 时：问的是跳板机（`host` / `port` 是跳板机的）。
     var isJumpHost = false
 
-    /// 是不是「加密方式变弱了」那一问。`nonisolated`：审批闭包在 NIO 线程上调，`Kind` 的 Equatable 是主线程隔离的。
+    /// 是不是「连接方式变弱了」那一问。`nonisolated`：审批闭包在 NIO 线程上调，`Kind` 的 Equatable 是主线程隔离的。
     nonisolated var isWeakAlgorithms: Bool {
         if case .weakAlgorithms = kind { return true }
         return false
     }
 
-    /// 同一个问题的合并键（`HostKeyApprovalCoalescer`）：主机密钥按「哪台 + 哪把钥匙」，加密方式按「哪台」。
+    /// 同一个问题的合并键（`HostKeyApprovalCoalescer`）：主机密钥按「哪台 + 哪把钥匙」，连接方式按「哪台」。
     nonisolated var coalescingKey: String {
         if isWeakAlgorithms { return "\(host):\(port) weak-algorithms" }
         return "\(host):\(port) \(newFingerprint)"
     }
 
-    /// 「加密方式变弱了」那一问。
+    /// 「连接方式变弱了」那一问。
     nonisolated static func weakAlgorithms(_ request: SSHLegacyFallbackRequest) -> HostKeyChallenge {
         HostKeyChallenge(host: request.host, port: request.port, kind: .weakAlgorithms,
                          newFingerprint: "", oldFingerprint: nil, isJumpHost: request.hop == .jumpHost)

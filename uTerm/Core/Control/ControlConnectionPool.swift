@@ -700,8 +700,8 @@ extension ControlConnectionPool {
                 hostKeyApprover: { challenge in
                     // `HostKeyChallenge.Kind` 的 Equatable 合规是 MainActor 隔离的
                     //（模块默认隔离），这里在 NIO 线程上，只能用模式匹配比。
-                    // 加密方式变弱了（`.weakAlgorithms`）也走这里：记下、拒绝，`mapConnectError` 归成 `weak_algorithms`。
-                    // `trust` 路径也不放行它——钉住的是主机密钥，不是加密方式。
+                    // 连接方式变弱了（`.weakAlgorithms`）也走这里：记下、拒绝，`mapConnectError` 归成 `weak_algorithms`。
+                    // `trust` 路径也不放行它——钉住的是主机密钥，不是连接方式。
                     guard let pinnedFingerprint else {
                         sink.record(challenge)
                         return false

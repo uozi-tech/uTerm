@@ -1,7 +1,7 @@
 import UDesignKit
 import SwiftUI
 
-/// 主机密钥征询弹窗内容。未知主机用中性样式；密钥不匹配用红色醒目警告；加密方式变弱了（`.weakAlgorithms`）
+/// 主机密钥征询弹窗内容。未知主机用中性样式；密钥不匹配用红色醒目警告；连接方式变弱了（`.weakAlgorithms`）
 /// 用警示色，「取消」是默认按钮（回车），「仍然连接」要点。
 struct HostKeyPromptView: View {
     let challenge: HostKeyChallenge
@@ -42,7 +42,7 @@ struct HostKeyPromptView: View {
                 // 取消是安全的那一边：回车也是它。
                 HStack {
                     Spacer()
-                    Button(String(localized: "仍然连接", comment: "加密方式变弱时照样连接")) { decide(true) }
+                    Button(String(localized: "仍然连接", comment: "连接方式变弱时照样连接")) { decide(true) }
                     Button("取消") { decide(false) }
                         .keyboardShortcut(.defaultAction)
                 }

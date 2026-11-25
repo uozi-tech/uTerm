@@ -248,9 +248,9 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 即使两个开关都开着，命令行也**不允许**覆盖 —— 让用户回 uTerm 界面处理。不要试图先
 `trust` 再重试。
 
-`weak_algorithms` 也要用户自己处理：这台主机（或它的跳板机）以前用较新的加密方式连上过，
+`weak_algorithms` 也要用户自己处理：这台主机（或它的跳板机）以前用较新的连接方式连上过，
 这次只肯用 SHA-1 时代的旧方式。可能只是服务器改了配置，也可能有人在中间拦截。命令行没有
-放行它的选项，`trust` 也管不了它（钉的是主机密钥，不是加密方式）。把 `message` 转告用户，
+放行它的选项，`trust` 也管不了它（钉的是主机密钥，不是连接方式）。把 `message` 转告用户，
 请他在 uTerm 里连这台主机一次、看过提示后选「仍然连接」，之后再重跑原命令；不要反复重试。
 一直只会旧算法的老设备（第一次连就是这样）不会出这个错。
 
@@ -320,7 +320,7 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `host_key_changed` | 主机密钥变了（或信任库里有冲突记录）—— 命令行不给覆盖，回 uTerm 界面处理 |
 | `connect_failed` | 建连失败（消息是 SSH 原话，可能是网络或跳板机） |
 | `auth_failed` | 认证失败 —— 用户存的凭据不对，只能他自己改 |
-| `weak_algorithms` | 信任过的主机这次只肯用 SHA-1 时代的旧加密方式 —— 请用户在 uTerm 里连一次并确认，不要重试（见「主机密钥」） |
+| `weak_algorithms` | 信任过的主机这次只肯用 SHA-1 时代的旧连接方式 —— 请用户在 uTerm 里连一次并确认，不要重试（见「主机密钥」） |
 | `command_timeout` | 静默超时或撞上总时长上限（看 `timeoutReason`）；`killed: false` 时**命令可能还在远端继续跑** |
 | `run_partial_failure` | `run-many` / `quick-run`：有成有败，逐台看 `results` |
 | `run_failed` | `run-many` / `quick-run`：一台都没成 |
@@ -341,6 +341,6 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `2` | 本地：连不上 uTerm、socket 出错、`server_busy`、本地文件读写失败、客户端自己的前置检查没过 |
 | `3` | 门禁：`control_disabled` / `mutations_disabled` / `host_sftp_only` / `rule_protected` |
 | `4` | 找不到 / 有歧义（`*_not_found` / `*_ambiguous`） |
-| `5` | 远端：建连 / 认证 / 主机密钥 / 加密方式（`weak_algorithms`）/ 转发失败，以及 `run_failed` 的全军覆没 |
+| `5` | 远端：建连 / 认证 / 主机密钥 / 连接方式（`weak_algorithms`）/ 转发失败，以及 `run_failed` 的全军覆没 |
 | `6` | 超时：`command_timeout` / `handler_timeout` / `client_timeout` |
 | `7` | 多主机部分失败（`run_partial_failure`） |

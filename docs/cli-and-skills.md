@@ -162,7 +162,7 @@ UTERM_CONTROL_SOCKET="$HOME/Library/Containers/com.uozi.uTerm/Data/Library/Appli
 
 信任过的主机这次只肯用 SHA-1 时代的旧算法时（`LegacyAlgorithmGate`，规则见它的头注释），
 界面会问用户；CLI 不能问，审批闭包一律拒绝，回 `weak_algorithms`（退出码 5，不重试）。
-`trust` 没有放行它的选项：主机密钥有指纹可以核对，加密方式没有，一个开关只会被模型顺手
+`trust` 没有放行它的选项：主机密钥有指纹可以核对，连接方式没有，一个开关只会被模型顺手
 打开。用户在界面里连一次、选「仍然连接」之后（同意只记在本机），CLI 照常连。
 
 `forward-start` 是唯一**不经连接池**建连的动作（走 `ForwardingCoordinator` 的专用转发

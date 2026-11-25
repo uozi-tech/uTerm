@@ -123,7 +123,7 @@ extension ControlHandler {
             )
 
         case .hostKey(let challenge) where challenge.isWeakAlgorithms:
-            // 不是主机密钥的问题：加密方式变弱了。不记进池里（`trust` 管不了它），照连接池的说法回。
+            // 不是主机密钥的问题：连接方式变弱了。不记进池里（`trust` 管不了它），照连接池的说法回。
             let error = ControlConnectError.weakAlgorithms(LegacyAlgorithmRefusal(
                 host: challenge.host, port: challenge.port, isJumpHost: challenge.isJumpHost))
             return .failure(
