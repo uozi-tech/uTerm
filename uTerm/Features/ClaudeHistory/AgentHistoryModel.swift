@@ -22,6 +22,15 @@ final class AgentHistoryModel {
     enum Scope: Equatable {
         case project(AgentHistoryProject)
         case all
+
+        /// 同一个范围（同一个项目按工具 + ID 认，重列后修改时间变了也算同一个）：后台重列时已经显示着的行留着。
+        func isSameRange(as other: Scope) -> Bool {
+            switch (self, other) {
+            case (.all, .all): return true
+            case (.project(let a), .project(let b)): return a.id == b.id && a.tool == b.tool
+            default: return false
+            }
+        }
     }
 
     let source: any AgentHistorySource
@@ -246,7 +255,15 @@ final class AgentHistoryModel {
             projects = found
             toolFailures = await (source as? AgentHistoryCompositeSource)?.failures ?? [:]
             let present = Set(found.map(\.tool))
-            availableTools = AgentHistoryTool.allCases.filter(present.contains)
+            // 这一趟列不出来的工具，上一次列到的会话留着（`setScope`）：它也照旧算这台主机上有记录的工具。不然几种工具
+            // 都有记录时，按「显示」筛的那一步（`passesToolFilter`）又把留着的会话筛掉了，侧栏照样一下子空掉。
+            let retained = Set(listedFiles.map(\.tool)).intersection(toolFailures.keys)
+            availableTools = AgentHistoryTool.allCases.filter { present.contains($0) || retained.contains($0) }
+            if !toolFailures.isEmpty {
+                // 落盘，事后查「侧栏怎么一下子空了」用。只写工具名，原因里可能有路径，不写。
+                let tools = toolFailures.keys.map(\.rawValue).sorted().joined(separator: ",")
+                AppLogger.notice("历史会话：重列时 \(tools) 列不出来，留着上一次列到的", category: AgentHistoryLog.category)
+            }
             guard !found.isEmpty else {
                 phase = .empty
                 files = []
@@ -271,6 +288,7 @@ final class AgentHistoryModel {
             phase = .ready
             await setScope(nextScope)
         } catch {
+            AppLogger.notice("历史会话：重列失败（\(AgentHistoryLog.kind(of: error))）", category: AgentHistoryLog.category)
             // 后台重列失败（断线、辅助程序重启）：列表照旧显示上一次列到的，下次再列。
             guard showsLoading || phase != .ready else { return }
             phase = .failed(error.localizedDescription)
@@ -285,13 +303,14 @@ final class AgentHistoryModel {
 
     /// 切到某个项目或全部项目。
     func setScope(_ newScope: Scope) async {
+        // 先记下原来的范围再换（以前换完才记，「换了范围」永远判不出来）。
+        let previousScope = scope
         scope = newScope
         listGeneration += 1
         let generation = listGeneration
         queued.removeAll()
         isListing = true
         defer { if generation == listGeneration { isListing = false } }
-        let previousScope = scope
         var listed: [AgentHistorySessionFile]
         switch newScope {
         case .project(let project):
@@ -318,7 +337,7 @@ final class AgentHistoryModel {
             }
         }
         guard generation == listGeneration else { return }
-        adopt(listed, shownBefore: previousScope == newScope ? resolvedCount : 0)
+        adopt(listed, shownBefore: previousScope.isSameRange(as: newScope) ? resolvedCount : 0)
         // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
         isListing = false
         if let query = search?.query { startSearch(query) }

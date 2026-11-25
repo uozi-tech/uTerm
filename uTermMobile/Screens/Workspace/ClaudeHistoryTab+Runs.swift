@@ -280,7 +280,8 @@ extension ClaudeHistoryTab {
         guard let history = connection.history else { return }
         let reopen = path.flatMap { path in wasFocused || history.selectedFile?.path == path ? path : nil }
         Task {
-            await history.reload()
+            // 安静地重列（同 Mac 的 Code 标签页）：列表照旧显示着、列完再换；一时列不出来（断线）也不换成失败页。
+            await history.reload(showsLoading: false)
             guard let reopen, let file = history.files.first(where: { $0.path == reopen }) else { return }
             history.select(nil)
             history.select(file)

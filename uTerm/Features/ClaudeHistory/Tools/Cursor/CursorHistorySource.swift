@@ -56,8 +56,8 @@ actor CursorHistorySource: AgentHistorySource {
             do {
                 entries = try await provider.list(path: root)
             } catch {
-                // 目录不存在 = 没用过（或者不在这个根下）。别的错误（没权限、断线）照常报。
-                if (try? await provider.stat(root)) == nil { continue }
+                // 目录不存在 = 没用过（或者不在这个根下）。只认明确的「不存在」，别的错误（没权限、断线）照常报。
+                if await AgentHistoryMissingPath.confirmsAbsent(root, after: error, provider: provider) { continue }
                 throw error
             }
             for entry in entries where (entry.isDirectory || entry.isSymlink) && CursorWorkspace.isHashName(entry.name) {
@@ -171,21 +171,36 @@ actor CursorHistorySource: AgentHistorySource {
     }
 
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
+        await listAllSessions(in: projects).files
+    }
+
+    /// 同上，另报出列不出来的项目（断线、辅助程序一时连不上）：后台重列留着它们上一次列到的会话。
+    /// 项目目录已经不在了（明确不存在）的不算失败。
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         var result: [AgentHistorySessionFile] = []
+        var failed: Set<AgentHistoryProjectKey> = []
         var next = 0
-        await withTaskGroup(of: [AgentHistorySessionFile].self) { group in
+        await withTaskGroup(of: (AgentHistoryProject, [AgentHistorySessionFile]?).self) { group in
             func launch() {
                 let project = projects[next]
                 next += 1
-                group.addTask { (try? await self.sessions(in: project)) ?? [] }
+                group.addTask {
+                    do {
+                        return (project, try await self.sessions(in: project))
+                    } catch where AgentHistoryMissingPath.isNotFound(error) {
+                        return (project, [])
+                    } catch {
+                        return (project, nil)
+                    }
+                }
             }
             while next < min(Self.listConcurrency, projects.count) { launch() }
-            while let files = await group.next() {
-                result.append(contentsOf: files)
+            while let (project, files) = await group.next() {
+                if let files { result.append(contentsOf: files) } else { failed.insert(AgentHistoryProjectKey(project)) }
                 if next < projects.count { launch() }
             }
         }
-        return result.sorted { $0.modifiedAt > $1.modifiedAt }
+        return AgentHistorySessionListing(files: result.sorted { $0.modifiedAt > $1.modifiedAt }, failedProjects: failed)
     }
 
     private func summary(for file: AgentHistorySessionFile) async throws -> CursorChatStore.Summary? {

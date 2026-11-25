@@ -216,9 +216,11 @@ final class CodeTabRunTitleTests: XCTestCase {
     /// 实测（2026-11-25，build 1500）：同一个 Code 标签页里接回了两个会话，退出其中一个之后，另一个侧栏那一行与终端顶上
     /// 都变成「（无标题）6d0608a6」，那一行也不再是列表里那份记录的样子（只写目录），之后一直这样。
     ///
-    /// 退出会整个重列一次。那一趟要是没列出这份记录（辅助程序一时连不上：Claude Code 的项目目录列不出来、也取不到属性，
-    /// 数据源当成「没用过」，一份都不列），标题就只剩会话 ID；之后每 10 秒的重读只认列表里有的项目，永远补不回来。
-    /// 这里用假主机复现同样的形状：标题在末尾 64 KB 之外、靠往前找；另有一种工具的记录，所以那一趟照常列完。
+    /// 退出会整个重列一次。那一趟正赶上辅助程序一时连不上（Claude Code 的项目目录列不出来、也取不到属性）：以前数据源
+    /// 当成「没用过」、一份都不列，标题就只剩会话 ID，侧栏也只剩顶上跑着的那几行；之后每 10 秒的重读只认列表里有的项目，
+    /// 永远补不回来。现在数据源报错（`AgentHistoryMissingPath`），这一种工具上一次列到的会话留着（见
+    /// `AgentHistoryTransientFailureTests`）。这里用假主机复现同样的形状：标题在末尾 64 KB 之外、靠往前找；另有一种工具
+    /// 的记录，所以那一趟照常列完。
     func testRunKeepsItsTitleWhenAReloadMissesItsRecordAndComesBack() async throws {
         let host = SQLiteTestHost(home: Self.home)
         let mine = "6d0608a6-76df-4181-a620-48e53965caba"
@@ -253,16 +255,18 @@ final class CodeTabRunTitleTests: XCTestCase {
         XCTAssertEqual(code.title(of: try run()), "Code 视图侧边栏与 Desktop 差异")
         XCTAssertEqual(try run().path, Self.path(mine))
 
-        // 辅助程序断了一下的时候，另一个会话退出了：收尾时整个重列，这一趟 Claude Code 的记录一份都没列出来。
+        // 辅助程序断了一下的时候，另一个会话退出了：收尾时整个重列，这一趟 Claude Code 的记录一份都列不出来。
         await host.setUnreachable([ClaudeProjectPath.projectsRoot(home: Self.home)])
         otherTerminal.codeCommandHasEnded = true
-        try await waitUntil("退出的那个收尾、重列漏了记录") {
-            code.runs.count == 1 && !history.files.contains { $0.path == Self.path(mine) }
+        try await waitUntil("退出的那个收尾、重列时 Claude Code 列不出来") {
+            code.runs.count == 1 && history.toolFailures[.claude] != nil
         }
+        XCTAssertTrue(history.visibleFiles.contains { $0.path == Self.path(mine) }, "列不出来不是「没有」：记录留在列表里")
+        XCTAssertTrue(history.visibleFiles.contains { $0.sessionID == "old" }, "别的会话也都还在")
         XCTAssertEqual(code.title(of: try run()), "Code 视图侧边栏与 Desktop 差异",
                        "读过的标题还在：不退回「（无标题）6d0608a6」")
 
-        // 连上了：跑着的会话的记录补回列表（侧栏那一行回到记录平常的样子），标题照旧。
+        // 连上了：照常，标题照旧。
         await host.setUnreachable([])
         try await waitUntil("记录补回列表") { history.visibleFiles.contains { $0.path == Self.path(mine) } }
         XCTAssertEqual(code.title(of: try run()), "Code 视图侧边栏与 Desktop 差异")

@@ -175,6 +175,11 @@ enum MobileClaudeFixture {
 actor MobileFakeClaudeTree: SFTPProviding {
     nonisolated struct Unsupported: Error {}
 
+    /// 不存在：同真的主机，明确报 ENOENT（数据源只认这种「不存在」，见 `AgentHistoryMissingPath`）。
+    nonisolated static func missing(_ path: String) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT), userInfo: [NSLocalizedDescriptionKey: "no such file: \(path)"])
+    }
+
     private let home: String
     private var files: [String: (data: Data, mtime: Date)] = [:]
     private var directories: [String: Date] = [:]
@@ -193,7 +198,7 @@ actor MobileFakeClaudeTree: SFTPProviding {
     }
 
     func list(path: String) async throws -> [RemoteEntry] {
-        guard directories[path] != nil else { throw Unsupported() }
+        guard directories[path] != nil else { throw Self.missing(path) }
         let prefix = path + "/"
         var names: [String: RemoteEntry] = [:]
         for (dir, mtime) in directories where dir.hasPrefix(prefix) && !dir.dropFirst(prefix.count).contains("/") {
@@ -221,7 +226,7 @@ actor MobileFakeClaudeTree: SFTPProviding {
     func stat(_ path: String) async throws -> RemoteStat {
         if let file = files[path] { return RemoteStat(size: Int64(file.data.count), mtime: file.mtime, permissions: 0o100644) }
         if let mtime = directories[path] { return RemoteStat(size: 4096, mtime: mtime, permissions: 0o040755) }
-        throw Unsupported()
+        throw Self.missing(path)
     }
 
     func download(remotePath: String) async throws -> Data {
