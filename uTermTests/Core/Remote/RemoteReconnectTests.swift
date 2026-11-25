@@ -216,6 +216,12 @@ final class RemoteReconnectTests: XCTestCase {
             fixture.proxy.stop()
             fixture.session.dispose()
         }
+        // 连上时 Mac 回的那一串（Code 标签页、会话列表、程序状态）收齐了再掐：还在路上的算作「探测之后收到了字节」，
+        // 探测就不判死了。
+        let settled = await waitUntil { fixture.client.listedSessionIDs != nil && fixture.client.codeTabs != nil }
+        XCTAssertTrue(settled)
+        // 程序状态紧跟在列表后面。
+        try await Task.sleep(for: .milliseconds(100))
         let before = fixture.proxy.accepted
         fixture.proxy.setMode(.stalled)
         fixture.client.networkChanged(isSatisfied: true)
