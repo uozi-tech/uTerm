@@ -253,6 +253,6 @@ nonisolated enum WeakAlgorithmsCopy {
     }
 
     static var advice: String {
-        String(localized: "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，以后连接它不再询问。")
+        String(localized: "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回较新的方式时，这个许可自动作废。")
     }
 }

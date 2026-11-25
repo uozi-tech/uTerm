@@ -34163,30 +34163,30 @@
         }
       }
     },
-    "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，以后连接它不再询问。" : {
+    "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回较新的方式时，这个许可自动作废。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "If you haven't changed this server recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection, so it's safer to cancel. If you choose “Connect Anyway”, you won't be asked again for this host."
+            "value" : "If you haven't changed this server recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection, so it's safer to cancel. If you choose “Connect Anyway”, this device won't ask again; the permission is dropped automatically once the host goes back to the newer method."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最近このサーバを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があるため、キャンセルをおすすめします。「このまま接続」を選ぶと、今後このホストについては確認しません。"
+            "value" : "最近このサーバを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があるため、キャンセルをおすすめします。「このまま接続」を選ぶと、このデバイスでは今後確認しません。ホストが新しい方式に戻ると、この許可は自動的に無効になります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "최근에 이 서버를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있으니 취소하는 것이 좋습니다. ‘그래도 연결’을 선택하면 이후 이 호스트에 연결할 때 다시 묻지 않습니다."
+            "value" : "최근에 이 서버를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있으니 취소하는 것이 좋습니다. ‘그래도 연결’을 선택하면 이 기기에서는 다시 묻지 않으며, 호스트가 더 새로운 방식으로 돌아가면 이 허용은 자동으로 무효가 됩니다."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "如果你最近沒有調整過這台伺服器（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截，建議先取消。選「仍然連線」後，以後連線它不再詢問。"
+            "value" : "如果你最近沒有調整過這台伺服器（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截，建議先取消。選「仍然連線」後，這台裝置上不再詢問；它又改回較新的方式時，這個許可會自動失效。"
           }
         }
       }
