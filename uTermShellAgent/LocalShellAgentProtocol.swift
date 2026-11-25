@@ -44,4 +44,41 @@ nonisolated enum LocalShellAgent {
     /// 同上，但只放行落在 `scope`（JSON 编码的 `RemoteFileScope`）里的请求：主控端把几个文件夹共享给被控的 Mac 时用。
     /// 路径要解析掉符号链接才能判断在不在范围里，沙盒里的主程序做不了，所以检查也在这边做。
     func scopedFileRequest(_ payload: Data, scope: Data, reply: @escaping @Sendable (Data) -> Void)
+    /// 用户在本机终端里 ⌘ 点了一个路径（绝对路径）：文件用系统默认的 App 打开，目录与不该直接打开的东西在 Finder 里显示
+    /// （规则见 `LocalPathOpenPolicy`）。沙盒里的主程序看不到主目录，打开也得在这边做。回 false = 不存在或打不开。
+    func openLocalPath(_ path: String, reply: @escaping @Sendable (Bool) -> Void)
+}
+
+/// 本机终端里 ⌘ 点一个路径怎么处理。终端里的文字谁都能写（`cat` 一个下载来的文件、程序的输出），点一下不能变成
+/// 「运行了什么」：可执行文件、App 与安装包、脚本、快捷方式一类只在 Finder 里显示，不打开。
+nonisolated enum LocalPathOpenPolicy {
+    enum Action: Equatable {
+        /// 交给系统默认的 App 打开（`open <路径>`）。
+        case open
+        /// 在 Finder 里显示（`open -R <路径>`）。
+        case reveal
+    }
+
+    /// 打开就会运行点什么、或者改系统设置的扩展名（小写）。
+    static let revealOnlyExtensions: Set<String> = [
+        "app", "command", "tool", "terminal", "workflow", "action", "scpt", "scptd", "applescript",
+        "pkg", "mpkg", "dmg", "jar", "webloc", "inetloc", "fileloc", "url", "prefpane", "kext", "mobileconfig",
+        "shortcut", "service", "plugin", "bundle", "framework", "appex", "xpc", "systemextension", "dext",
+        "saver", "qlgenerator", "mdimporter", "osax",
+    ]
+
+    /// `isDirectory`：是目录（App 也是目录）；`isExecutable`：普通文件带任意一个执行位。
+    static func action(path: String, isDirectory: Bool, isExecutable: Bool) -> Action {
+        if isDirectory || isExecutable { return .reveal }
+        let ext = (path as NSString).pathExtension.lowercased()
+        return revealOnlyExtensions.contains(ext) ? .reveal : .open
+    }
+
+    /// 交给 `/usr/bin/open` 的参数。路径是绝对路径（以 `/` 开头），不会被当成选项。
+    static func openArguments(path: String, action: Action) -> [String] {
+        switch action {
+        case .open: return [path]
+        case .reveal: return ["-R", path]
+        }
+    }
 }

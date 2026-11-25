@@ -16,7 +16,8 @@ extension TerminalSession {
     /// （它只开自己写出的临时文件，`.text` / `.html`）。
     ///
     /// 网址交给系统打开（Ghostty 自己的处理会拒掉文字里认出来的网址和 OSC 8 链接，不接的话 ⌘ 点网址没反应）。
-    /// 路径解析成主机上的绝对路径后在预览区打开；没有预览区可开（纯终端窗口、本机终端）或是远控镜像时不做什么。
+    /// 路径解析成主机上的绝对路径：本机终端交给系统打开（`LocalPathOpening`），SSH 终端在预览区打开；
+    /// 没有预览区可开（纯终端窗口）或是远控镜像时不做什么。
     func openTerminalLink(_ link: String, kind: TerminalOpenURLKind) -> Bool {
         switch kind {
         case .text, .html: return false
@@ -26,8 +27,17 @@ extension TerminalSession {
         case .web(let url):
             NSWorkspace.shared.open(url)
         case .path(let raw):
-            guard onFilePreviewRequest != nil, let backend, !backend.mirrorsRemoteGrid else { return true }
+            guard let backend, !backend.mirrorsRemoteGrid else { return true }
             let reported = shadow.workingDirectory
+            if let local = backend as? any LocalPathOpening {
+                Task {
+                    guard let path = await TerminalLinkResolver.absolutePath(raw, reportedDirectory: reported,
+                                                                             backend: backend) else { return }
+                    _ = await local.openLocalPath(path)
+                }
+                return true
+            }
+            guard onFilePreviewRequest != nil else { return true }
             Task { [weak self] in
                 guard let path = await TerminalLinkResolver.absolutePath(raw, reportedDirectory: reported,
                                                                          backend: backend) else { return }
@@ -38,4 +48,10 @@ extension TerminalSession {
         }
         return true
     }
+}
+
+/// 终端就在这台 Mac 上（本机终端）：⌘ 点的路径交给系统打开，不走 SFTP 预览。
+protocol LocalPathOpening: TerminalBackend {
+    /// 打开本机上的绝对路径；不存在或打不开时回 false。
+    func openLocalPath(_ path: String) async -> Bool
 }

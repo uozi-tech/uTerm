@@ -167,6 +167,64 @@ final class TerminalFilePreviewTests: XCTestCase {
         await session.close()
     }
 
+    // MARK: 本机终端：交给系统打开
+
+    private actor LocalOpeningBackend: LocalPathOpening {
+        nonisolated let outputItems = AsyncStream<TerminalOutputItem> { _ in }
+        nonisolated let exitStream = AsyncStream<Void> { _ in }
+        let directories: RemoteForegroundDirectories
+        private(set) var opened: [String] = []
+        init(_ directories: RemoteForegroundDirectories) { self.directories = directories }
+        func connect() async throws {}
+        func write(_ data: Data) async {}
+        func resize(cols: UInt16, rows: UInt16) async {}
+        func close() async {}
+        func foregroundDirectories() async -> RemoteForegroundDirectories? { directories }
+        func openLocalPath(_ path: String) async -> Bool {
+            opened.append(path)
+            return true
+        }
+    }
+
+    func testLocalTerminalOpensPathsWithTheSystemWithoutAPreviewPane() async {
+        let backend = LocalOpeningBackend(.init(workingDirectory: "/Users/me/repo", home: "/Users/me"))
+        let session = TerminalSession()
+        await session.connect(using: backend)
+        XCTAssertNil(session.onFilePreviewRequest, "本机终端没有预览区")
+
+        XCTAssertTrue(session.openTerminalLink("/Users/me/uGit/build/ui-gallery-wt/latest/index.html", kind: .unknown))
+        XCTAssertTrue(session.openTerminalLink("docs/plan.md:12", kind: .unknown))
+        XCTAssertTrue(session.openTerminalLink("~/notes.md", kind: .unknown))
+        XCTAssertTrue(session.openTerminalLink("file:///Users/me/a%20b.txt", kind: .osc8))
+        XCTAssertFalse(session.openTerminalLink("/tmp/ghostty-scrollback.txt", kind: .text), "Ghostty 自己写的临时文件照旧交回")
+
+        var opened: [String] = []
+        for _ in 0..<200 {
+            opened = await backend.opened
+            if opened.count == 4 { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(Set(opened), ["/Users/me/uGit/build/ui-gallery-wt/latest/index.html", "/Users/me/repo/docs/plan.md",
+                                     "/Users/me/notes.md", "/Users/me/a b.txt"])
+        await session.close()
+    }
+
+    func testLocalPathPolicyNeverRunsThingsItOnlyReveals() {
+        XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/index.html", isDirectory: false, isExecutable: false), .open)
+        XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/plan.md", isDirectory: false, isExecutable: false), .open)
+        XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/repo", isDirectory: true, isExecutable: false), .reveal)
+        XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Applications/Foo.app", isDirectory: true, isExecutable: false), .reveal,
+                       "App 是目录，点了不能启动它")
+        XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/build.sh", isDirectory: false, isExecutable: true), .reveal,
+                       "带执行位的文件交给 open 会在终端里运行")
+        XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/run", isDirectory: false, isExecutable: true), .reveal)
+        for name in ["x.command", "x.TOOL", "x.pkg", "x.dmg", "x.webloc", "x.mobileconfig", "x.scpt", "x.terminal"] {
+            XCTAssertEqual(LocalPathOpenPolicy.action(path: "/tmp/\(name)", isDirectory: false, isExecutable: false), .reveal, name)
+        }
+        XCTAssertEqual(LocalPathOpenPolicy.openArguments(path: "/a b/c.md", action: .open), ["/a b/c.md"])
+        XCTAssertEqual(LocalPathOpenPolicy.openArguments(path: "/a/b", action: .reveal), ["-R", "/a/b"])
+    }
+
     // MARK: 手机上选中文字后的「打开」
 
     func testDetectsLinksInSelections() {

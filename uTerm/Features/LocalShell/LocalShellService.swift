@@ -168,6 +168,18 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         }
     }
 
+    /// 用系统打开本机上的一个路径（规则见 `LocalPathOpenPolicy`）。不存在、打不开或辅助程序连不上时回 false。
+    func openLocalPath(_ path: String) async -> Bool {
+        (try? await withCheckedThrowingContinuation { continuation in
+            let once = LocalShellOnce(continuation)
+            guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
+                once.resume(returning: false)
+                return
+            }
+            agent.openLocalPath(path) { once.resume(returning: $0) }
+        }) ?? false
+    }
+
     func listSessions(namespace: String) async throws -> [UUID] {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)

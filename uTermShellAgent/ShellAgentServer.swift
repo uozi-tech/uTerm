@@ -6,7 +6,7 @@ import os
 ///
 /// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
-    static let version = "7"
+    static let version = "8"
     /// 等 holder 开始监听的上限。正常几毫秒。
     private static let spawnWaitSeconds = 5.0
     /// 控制通道在 holder 和 `uterm-ssh` 里的 fd 号。0/1/2 之后第一个，holder 自己开的 fd 都排在它后面。
@@ -63,6 +63,37 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         let isLong = RemoteFileCodec.operation(of: payload)?.isLongRunning ?? false
         (isLong ? longFileQueue : fileQueue).addOperation {
             reply(RemoteFileService.handle(payload, scope: scope))
+        }
+    }
+
+    func openLocalPath(_ path: String, reply: @escaping @Sendable (Bool) -> Void) {
+        queue.async {
+            var info = stat()
+            guard path.hasPrefix("/"), stat(path, &info) == 0 else {
+                reply(false)
+                return
+            }
+            let type = info.st_mode & S_IFMT
+            // FIFO、设备、套接字：不打开也不显示。
+            guard type == S_IFREG || type == S_IFDIR else {
+                reply(false)
+                return
+            }
+            let action = LocalPathOpenPolicy.action(path: path, isDirectory: type == S_IFDIR,
+                                                    isExecutable: info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH) != 0)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = LocalPathOpenPolicy.openArguments(path: path, action: action)
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                reply(true)
+            } catch {
+                self.log.error("打开路径失败：\(error.localizedDescription, privacy: .public)")
+                reply(false)
+            }
         }
     }
 

@@ -144,4 +144,29 @@ final class LocalShellIntegrationTests: XCTestCase {
         while Self.isAlive(pid), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
         XCTAssertFalse(Self.isAlive(pid), "关标签后 shell 进程还在")
     }
+
+    /// ⌘ 点相对路径 / `~/` 时问本机 shell 的目录：当前目录是 shell 的（不是测试宿主的），家目录是真的主目录（不是沙盒容器）。
+    /// 不存在的路径辅助程序回 false、不打开任何东西。
+    func test_local_shell_reports_foreground_directories_and_refuses_missing_paths() async throws {
+        let client = LocalShellAgentClient()
+        defer { client.invalidate() }
+        let backend = LocalShellBackend(client: client, namespace: "integration-test", sessionID: UUID(), directory: "/usr",
+                                        columns: 80, rows: 24)
+        try await backend.connect()
+        defer { Task { await backend.close() } }
+
+        var dirs: RemoteForegroundDirectories?
+        for _ in 0..<100 {
+            dirs = await backend.foregroundDirectories()
+            if dirs?.workingDirectory != nil { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(dirs?.workingDirectory, "/usr")
+        let home = try XCTUnwrap(dirs?.home)
+        XCTAssertFalse(home.contains("/Library/Containers/"), "家目录不能是沙盒容器：\(home)")
+        XCTAssertTrue(home.hasPrefix("/"))
+
+        let missing = await backend.openLocalPath("/nonexistent-uterm-\(UUID().uuidString)/plan.md")
+        XCTAssertFalse(missing)
+    }
 }

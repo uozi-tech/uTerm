@@ -2,7 +2,7 @@ import Foundation
 
 /// 本机 shell 的终端后端。shell 和伪终端都在 `uterm-holder` 里，App 退出、崩溃都不影响；这里只是连上去收发帧。
 /// 连接由 XPC 服务建好交过来（见 `LocalShellAgentClient`）。
-actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
+actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving, LocalPathOpening {
     private let core = HeldSessionCore()
     nonisolated var outputItems: AsyncStream<TerminalOutputItem> { core.output.items }
     nonisolated var exitStream: AsyncStream<Void> { core.exitStream }
@@ -38,11 +38,37 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     /// shell 现在的工作目录（已结束 / 未启动时 nil）。问内核，所以 shell 不用配合，程序在前台跑着也问得到。
     func workingDirectory() async -> String? {
         guard let shell = await core.pid else { return nil }
+        return Self.currentDirectory(of: shell)
+    }
+
+    /// ⌘ 点相对路径 / `~/` 时用：前台那个进程（没有就是 shell）的当前目录，和这个用户的家目录。
+    /// 家目录不能用 `NSHomeDirectory()`：沙盒里它是容器目录。
+    func foregroundDirectories() async -> RemoteForegroundDirectories? {
+        guard let shell = await core.pid else { return nil }
+        var process = shell
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, shell]
+        if sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0, info.kp_eproc.e_tpgid > 0 {
+            process = info.kp_eproc.e_tpgid
+        }
+        let cwd = Self.currentDirectory(of: process) ?? Self.currentDirectory(of: shell)
+        let home = getpwuid(getuid()).flatMap { $0.pointee.pw_dir.map { String(cString: $0) } }
+        guard cwd != nil || home != nil else { return nil }
+        return RemoteForegroundDirectories(workingDirectory: cwd, home: home)
+    }
+
+    /// 本机路径交给辅助程序用系统打开（主程序在沙盒里看不到主目录）。
+    func openLocalPath(_ path: String) async -> Bool {
+        await client.openLocalPath(path)
+    }
+
+    private static func currentDirectory(of pid: Int32) -> String? {
         var info = proc_vnodepathinfo()
         let size = Int32(MemoryLayout<proc_vnodepathinfo>.stride)
-        guard proc_pidinfo(shell, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
         let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
-        return path.isEmpty ? nil : path
+        return path.hasPrefix("/") ? path : nil
     }
 
     func connect() async throws {
