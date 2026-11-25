@@ -60138,58 +60138,58 @@
         }
       }
     },
-    "没有连接 %@：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在终端里重新连接并选「仍然连接」。" : {
+    "没有连接 %@：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Didn't connect to %@: this host used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). To keep using it, reconnect in a terminal and choose “Connect Anyway”."
+            "value" : "Didn't connect to %@: this host used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). To keep using it, reconnect to this host in uTerm and choose “Connect Anyway” when asked."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ に接続しませんでした：このホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。この方式で接続する場合は、ターミナルで再接続して「このまま接続」を選んでください。"
+            "value" : "%@ に接続しませんでした：このホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。この方式で接続する場合は、uTerm でこのホストに再接続し、確認が表示されたら「このまま接続」を選んでください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@에 연결하지 않았습니다: 이 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 이 방식으로 계속 연결하려면 터미널에서 다시 연결하고 ‘그래도 연결’을 선택하십시오."
+            "value" : "%@에 연결하지 않았습니다: 이 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 이 방식으로 계속 연결하려면 uTerm에서 이 호스트에 다시 연결하고 안내가 나오면 ‘그래도 연결’을 선택하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連線至 %@：這台主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。要繼續用這種方式，請在終端機裡重新連線並選「仍然連線」。"
+            "value" : "未連線至 %@：這台主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。要繼續用這種方式，請在 uTerm 裡重新連線這台主機，在提示中選「仍然連線」。"
           }
         }
       }
     },
-    "没有连接跳板机 %@：这台跳板机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在终端里重新连接并选「仍然连接」。" : {
+    "没有连接跳板机 %@：这台跳板机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Didn't connect to the jump host %@: it used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). To keep using it, reconnect in a terminal and choose “Connect Anyway”."
+            "value" : "Didn't connect to the jump host %@: it used to connect with newer encryption, but this time it offered only an older, less secure method (SHA-1). To keep using it, reconnect to this host in uTerm and choose “Connect Anyway” when asked."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "踏み台ホスト %@ に接続しませんでした：この踏み台ホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。この方式で接続する場合は、ターミナルで再接続して「このまま接続」を選んでください。"
+            "value" : "踏み台ホスト %@ に接続しませんでした：この踏み台ホストは以前は新しい暗号化方式で接続していましたが、今回は古く安全性の低い方式（SHA-1）しか提供しませんでした。この方式で接続する場合は、uTerm でこのホストに再接続し、確認が表示されたら「このまま接続」を選んでください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "점프 호스트 %@에 연결하지 않았습니다: 이 점프 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 이 방식으로 계속 연결하려면 터미널에서 다시 연결하고 ‘그래도 연결’을 선택하십시오."
+            "value" : "점프 호스트 %@에 연결하지 않았습니다: 이 점프 호스트는 이전에 더 새로운 암호화 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 방식(SHA-1)만 제공했습니다. 이 방식으로 계속 연결하려면 uTerm에서 이 호스트에 다시 연결하고 안내가 나오면 ‘그래도 연결’을 선택하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連線至跳板主機 %@：這台跳板主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。要繼續用這種方式，請在終端機裡重新連線並選「仍然連線」。"
+            "value" : "未連線至跳板主機 %@：這台跳板主機以前用較新的加密方式連線，這次只提供較舊、安全性較低的方式（SHA-1）。要繼續用這種方式，請在 uTerm 裡重新連線這台主機，在提示中選「仍然連線」。"
           }
         }
       }

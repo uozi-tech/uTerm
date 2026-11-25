@@ -31,14 +31,18 @@ extension UICatalog {
                 let s = try stage.session()
                 let challenge = HostKeyChallenge(host: "prod-web-01.example.com", port: 22, kind: .weakAlgorithms,
                                                  newFingerprint: "", oldFingerprint: nil)
-                return UICatalogRender(s.wrap(HostKeyPromptView(challenge: challenge) { _ in }))
+                // 真的弹层里背景是 sheet 窗口给的，这里补上，不然深色图是白底白字。
+                return UICatalogRender(s.wrap(HostKeyPromptView(challenge: challenge) { _ in }
+                    .background(Color(nsColor: .windowBackgroundColor))))
             },
             UICatalogEntry("连接确认/加密方式变弱了 · 跳板机", .sheet, source: "uTerm/Shared/Views/HostKeyPromptView.swift",
                            symbol: "HostKeyPromptView", size: CGSize(width: 460, height: 260)) { stage in
                 let s = try stage.session()
                 let challenge = HostKeyChallenge(host: "bastion.example.com", port: 2222, kind: .weakAlgorithms,
                                                  newFingerprint: "", oldFingerprint: nil, isJumpHost: true)
-                return UICatalogRender(s.wrap(HostKeyPromptView(challenge: challenge) { _ in }))
+                // 真的弹层里背景是 sheet 窗口给的，这里补上，不然深色图是白底白字。
+                return UICatalogRender(s.wrap(HostKeyPromptView(challenge: challenge) { _ in }
+                    .background(Color(nsColor: .windowBackgroundColor))))
             },
             UICatalogEntry("密钥管理", source: "uTerm/Features/Keys/Views/KeyManagerView.swift",
                            symbol: "KeyManagerView", size: mid) { stage in

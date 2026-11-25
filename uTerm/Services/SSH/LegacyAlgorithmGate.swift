@@ -213,8 +213,8 @@ nonisolated struct LegacyAlgorithmRefusal: Sendable, Equatable {
     /// 连接失败时给人看的那句：说清是怎么回事、怎么办。不能问用户的地方（Agent、历史会话）也是这句。
     var message: String {
         isJumpHost
-            ? String(localized: "没有连接跳板机 \(address)：这台跳板机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在终端里重新连接并选「仍然连接」。")
-            : String(localized: "没有连接 \(address)：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在终端里重新连接并选「仍然连接」。")
+            ? String(localized: "没有连接跳板机 \(address)：这台跳板机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
+            : String(localized: "没有连接 \(address)：这台主机以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。要继续用这种方式，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
     }
 }
 
