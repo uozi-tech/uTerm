@@ -463,4 +463,25 @@ final class LegacyAlgorithmGateTests: XCTestCase {
         XCTAssertEqual(asker.challenges.first?.isJumpHost, true)
         XCTAssertEqual(asker.challenges.count, 1)
     }
+
+    // MARK: - 历史会话的门
+
+    /// 读历史会话不弹确认：加密方式那一问被拒时报加密方式那句，而不是「密钥还没有被信任」。
+    func testHistoryGateDoesNotTreatWeakAlgorithmsAsAnUntrustedKey() async {
+        let gate = ClaudeHistoryHostKeyGate()
+        let weak = HostKeyChallenge(host: "192.0.2.50", port: 22, kind: .weakAlgorithms,
+                                    newFingerprint: "", oldFingerprint: nil)
+        let approved = await gate.approver(weak)
+        XCTAssertFalse(approved)
+        XCTAssertFalse(gate.wasChallenged)
+
+        let refusal = LegacyAlgorithmRefusal(host: "192.0.2.50", port: 22, isJumpHost: false)
+        let message = gate.failureMessage(for: SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(refusal))
+        XCTAssertEqual(message, refusal.message)
+
+        let unknown = HostKeyChallenge(host: "192.0.2.50", port: 22, kind: .unknown,
+                                       newFingerprint: "SHA256:x", oldFingerprint: nil)
+        _ = await gate.approver(unknown)
+        XCTAssertTrue(gate.wasChallenged)
+    }
 }
