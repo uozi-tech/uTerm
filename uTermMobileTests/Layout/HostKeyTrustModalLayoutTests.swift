@@ -53,9 +53,7 @@ final class HostKeyTrustModalLayoutTests: XCTestCase {
 
     /// 截图给人看（按需）：`TEST_RUNNER_UTERM_STYLE_SHOTS_DIR=/path`。
     func test_snapshot() throws {
-        guard let dir = ProcessInfo.processInfo.environment["UTERM_STYLE_SHOTS_DIR"], !dir.isEmpty else {
-            throw XCTSkip("未设置 UTERM_STYLE_SHOTS_DIR")
-        }
+        let dir = try Self.shotsDirectory()
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         for (name, challenge) in challenges {
             for scheme in [ColorScheme.light, .dark] {
@@ -72,14 +70,14 @@ final class HostKeyTrustModalLayoutTests: XCTestCase {
     }
 
     /// 真窗口里的样子（按需）：同 `MobileRootView` 的背板 + 卡片。竖屏 iPhone 整屏、竖屏弹着键盘（底下 336pt
-    /// 被键盘大小的一块占掉，同根视图的 overlay 只拿到上面那截），以及横屏弹着键盘（放不下，截滚动起点和滚到底）。
+    /// 被键盘大小的一块占掉，同根视图的 overlay 只拿到上面那截），横屏弹着键盘（放不下，截滚动起点和滚到底），
+    /// 以及本机屏幕原尺寸（真机上跑看实际设备）。
     func test_on_screen_snapshot() async throws {
-        guard let dir = ProcessInfo.processInfo.environment["UTERM_STYLE_SHOTS_DIR"], !dir.isEmpty else {
-            throw XCTSkip("未设置 UTERM_STYLE_SHOTS_DIR")
-        }
+        let dir = try Self.shotsDirectory()
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         defer { MobileProbeWindow.closeAll() }
-        let cases: [(tag: String, size: CGSize, keyboard: CGFloat, scrolls: Bool)] = [
+        let cases: [(tag: String, size: CGSize?, keyboard: CGFloat, scrolls: Bool?)] = [
+            ("device", nil, 0, nil),
             ("full", CGSize(width: 393, height: 852), 0, false),
             ("keyboard", CGSize(width: 393, height: 852), 336, false),
             ("landscape-keyboard", CGSize(width: 852, height: 393), 170, true),
@@ -104,25 +102,38 @@ final class HostKeyTrustModalLayoutTests: XCTestCase {
                     try await Task.sleep(for: .milliseconds(80))
                 }
                 try write(host.view, to: dir, "host-key-onscreen-\(name)-\(tag).png")
-                if scrolls {
+                if scrolls == true {
                     let scroll = try XCTUnwrap(Self.scrollView(in: host.view), "\(name)：矮了应变成可滚动")
                     let bottom = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
                     XCTAssertGreaterThan(bottom, 0)
                     scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
                     try await Task.sleep(for: .milliseconds(120))
                     try write(host.view, to: dir, "host-key-onscreen-\(name)-\(tag)-end.png")
-                } else {
+                } else if scrolls == false {
                     XCTAssertNil(Self.scrollView(in: host.view), "\(name)：放得下时不该套滚动")
                 }
             }
         }
     }
 
+    /// 截图目录：`UTERM_STYLE_SHOTS_DIR`，没设就跳过；写相对路径时落在本进程的临时目录（真机上用，图另挂成附件）。
+    private static func shotsDirectory() throws -> String {
+        guard let dir = ProcessInfo.processInfo.environment["UTERM_STYLE_SHOTS_DIR"], !dir.isEmpty else {
+            throw XCTSkip("未设置 UTERM_STYLE_SHOTS_DIR")
+        }
+        return dir.hasPrefix("/") ? dir : (NSTemporaryDirectory() as NSString).appendingPathComponent(dir)
+    }
+
     private func write(_ view: UIView, to dir: String, _ file: String) throws {
         let image = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
             _ = view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
         }
-        try XCTUnwrap(image.pngData()).write(to: URL(fileURLWithPath: dir).appendingPathComponent(file))
+        let data = try XCTUnwrap(image.pngData())
+        try data.write(to: URL(fileURLWithPath: dir).appendingPathComponent(file))
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+        attachment.name = file
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private static func scrollView(in view: UIView) -> UIScrollView? {
