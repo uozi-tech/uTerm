@@ -24,8 +24,10 @@ extension ClaudeHistoryTab {
         return run.terminal
     }
 
-    /// 列表与详情标题行上这个 run 的名字：对上了记录用记录的标题，新会话叫「新会话」。
+    /// 列表与详情标题行上这个 run 的名字：对上了记录用记录的标题，新会话叫「新会话」。镜像那台 Mac 的会话用 Mac 侧栏上的
+    /// 名字（Mac 那边一直在重读它的记录，比这边读到的新）。
     func title(of run: CodeRunBoard<TermTab>.Run) -> String {
+        if run.isMirrored, let title = runTitles[run.id] { return title }
         // 列表里读到的在前：跑着的会话的记录定期重读（`pollRuns`），标题跟着 Claude Code 后来起的名字走。
         if let path = run.sessionPath, let history = connection.history,
            let title = history.metadata[path]?.title { return title }
@@ -210,7 +212,7 @@ extension ClaudeHistoryTab {
     /// 「会话已结束」上的「重新开始」：同一种工具、同一个目录再起一个（继续的会话再继续同一份），放在原来的位置，
     /// 已结束的那个终端关掉。起不了（这种工具在这里开不了）时什么都不做。
     func restartRun(_ id: UUID) {
-        guard let old = runs.run(id: id), !old.isRunning, let history = connection.history,
+        guard let old = runs.run(id: id), !old.isRunning, !old.isMirrored, let history = connection.history,
               let container = runContainer, let relay = runRelay else { return }
         let file = old.sessionPath.flatMap { path in history.files.first { $0.path == path } }
         let resumes = file.map { history.metadata[$0.path]?.isListed ?? true } ?? false
@@ -237,7 +239,13 @@ extension ClaudeHistoryTab {
     }
 
     /// 结束一个 run：已退出的「回到记录」、用户「结束会话」、连接中页上的「返回」。还在跑的连接一并关掉。
+    /// 镜像那台 Mac 的会话请 Mac 结束它（同手机上关远控标签时「同时关闭 Mac 上的终端」），这边等 Mac 推来新的 Code 标签页
+    /// 再拿掉（`ClaudeHistoryTab+Mirror`）。
     func endRun(_ id: UUID) {
+        if runs.run(id: id)?.isMirrored == true {
+            endOnMac(id)
+            return
+        }
         guard let term = runs.run(id: id)?.terminal else { return }
         guard case .removed(let path, let wasFocused) = runs.remove(id) else { return }
         dispose(id, term)
@@ -248,7 +256,9 @@ extension ClaudeHistoryTab {
     /// 命令后面的 `; exit` 还在：程序退出后那个标签页显示「已断开」。
     @discardableResult
     func moveRunToTab(_ id: UUID, in workspace: MobileWorkspace) -> TermTab? {
-        guard let term = runs.run(id: id)?.terminal, runCovers[id] == nil else { return nil }
+        // 镜像那台 Mac 的会话归 Mac 的 Code 标签页管，这边挪不走（P1）。
+        guard let run = runs.run(id: id), !run.isMirrored, runCovers[id] == nil else { return nil }
+        let term = run.terminal
         let pane = workspace.paneIndex(containing: self.id).map { workspace.panes[$0].id }
         runs.remove(id)
         runTyping[id] = nil
@@ -258,7 +268,7 @@ extension ClaudeHistoryTab {
         return term
     }
 
-    private func dispose(_ id: UUID, _ term: TermTab) {
+    func dispose(_ id: UUID, _ term: TermTab) {
         runTyping.removeValue(forKey: id)?.cancel()
         runCommands[id] = nil
         runStartCommands[id] = nil
