@@ -146,7 +146,9 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         AgentHistoryRunRowActions.catalogHovered = hovered
         defer { AgentHistoryRunRowActions.catalogHovered = false }
         let row = AgentHistoryRunRow(id: UUID(), title: title, tool: .claude, directory: "/srv/shop",
-                                     isSelected: selected, path: nil, status: AgentHistoryRunStatus { .running })
+                                     isSelected: selected, path: nil, status: AgentHistoryRunStatus {
+                                         .program(ProgramStatusRecord(state: .working, app: "claude-code"))
+                                     })
         let actions = AgentHistoryRunActions(end: { _ in }, showRecord: { _ in }, showTerminal: { _ in }, moveToTab: nil)
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
                                       key: true, placement: .transparentOnScreen)

@@ -55,6 +55,8 @@ final class MobileTerminalController {
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
     /// 见 `ProgramStatusTracker`）。远控标签不用它：状态由 Mac 推来，见 `TermTab.programStatus`。
     private(set) var programStatus: ProgramStatusRecord?
+    /// 同一条，但含 `idle`（Code 标签页侧栏那一行要写「空闲」，见 `CodeRunStatus`）。远控标签同样不用它。
+    private(set) var programReport: ProgramStatusRecord?
     /// 前台是在报告状态的程序（Claude Code / Codex），不是 shell（含空闲态，见 `ProgramStatusTracker.hasRecords`）。
     /// 键盘条按它决定面板里先放「启动」还是先放提示词。远控标签同样不用它，见 `TermTab.agentInForeground`。
     private(set) var agentInForeground = false
@@ -288,9 +290,12 @@ final class MobileTerminalController {
     }
 
     private func publishProgramStatus() {
-        let next = terminal.events.tracker.display
+        let tracker = terminal.events.tracker
+        let next = tracker.display
         if next != programStatus { programStatus = next }
-        let agent = terminal.events.tracker.hasRecords
+        let report = tracker.board.summary
+        if report != programReport { programReport = report }
+        let agent = tracker.hasRecords
         if agent != agentInForeground { agentInForeground = agent }
     }
 

@@ -74301,6 +74301,7 @@
     },
     "运行中 · %@" : {
       "comment" : "Code 标签页：会话正在跑，后面是工作目录的名字",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

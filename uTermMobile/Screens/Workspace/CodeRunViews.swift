@@ -131,7 +131,7 @@ struct CodeRunHeader: View {
 }
 
 /// 列表最顶上的一行：跑着、但列表里没有它那份记录的会话（多半是还没写出记录的新会话，见 `CodeRunBoard.unlistedRuns`）。
-/// 标题（新会话就是「新会话」），第二行「运行中」+ 目录名（连接中、已退出时换成那句状态）。点一下回到它的终端。
+/// 标题（新会话就是「新会话」），第二行程序报的状态 + 目录名（连接中、已退出时换成那句状态）。点一下回到它的终端。
 struct CodeUnlistedRunRow: View {
     let code: CodeTabRuns
     let run: CodeRunBoard<TermTab>.Run
@@ -165,21 +165,22 @@ struct CodeUnlistedRunRow: View {
     }
 }
 
-/// 列表行上一个跑着的会话的状态：程序报的状态用终端标签上同一套颜色与文字（`statusLabel`，颜色同标签圆点），
-/// 没报过是「运行中」，程序退出了是「已结束」。在自己的 `body` 里读状态：变了只重画这一小块（同 Mac 的
-/// `AgentHistoryRunStatusTag`）。
+/// 列表行上一个跑着的会话的状态（规则见 `CodeRunStatus`，同 Mac 的 `AgentHistoryRunStatusTag`）：程序报的状态用终端标签上
+/// 同一套颜色与文字（`statusLabel`，颜色同标签圆点；空闲是灰的），程序退出了是「已结束」，没报过什么都不画。
+/// 在自己的 `body` 里读状态：变了只重画这一小块。
 struct CodeRunStatusMark: View {
     let run: CodeRunBoard<TermTab>.Run
     @Environment(\.mAccent) private var accent
 
     var body: some View {
-        if !run.isRunning {
+        switch CodeRunStatus.of(isEnded: !run.isRunning, report: run.terminal.programReport) {
+        case .unreported:
+            EmptyView()
+        case .ended:
             mark(color: M.text4, text: AgentHistoryText.sessionEnded, textColor: M.text3)
-        } else if let status = run.terminal.programStatus {
+        case .program(let status):
             let color = WorkspaceTabChip.color(for: status.tone, accent: accent)
-            mark(color: color, text: status.statusLabel, textColor: color)
-        } else {
-            CodeRunningMark()
+            mark(color: color, text: status.statusLabel, textColor: status.tone == .idle ? M.text3 : color)
         }
     }
 
@@ -193,21 +194,9 @@ struct CodeRunStatusMark: View {
     }
 }
 
-/// 列表行上的「运行中」：这份记录正在 Code 标签页里继续着（程序还没报过状态）。
-struct CodeRunningMark: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(M.success).frame(width: 6, height: 6)
-            Text("运行中", comment: "Code 标签页：这个会话正在标签页里继续着")
-                .font(M.sans(11.5, weight: .medium)).foregroundStyle(M.success)
-        }
-        .fixedSize()
-    }
-}
-
 /// 跑着的会话的状态那一行。
 enum CodeRunText {
-    /// 列表顶上那一行的小字：连着时是目录名（前面另有「运行中」标记），否则是状态（正在连接、已退出……）。
+    /// 列表顶上那一行的小字：连着时是目录名（前面另有程序报的状态，见 `CodeRunStatusMark`），否则是状态（正在连接、已退出……）。
     @MainActor
     static func listDetail(of run: CodeRunBoard<TermTab>.Run,
                            controller: MobileTerminalController) -> (text: String, isConnected: Bool) {
@@ -227,9 +216,10 @@ enum CodeRunText {
         case .disconnected: return String(localized: "已断开")
         case .connected:
             if controller.isReconnecting { return String(localized: "正在重新连接…") }
-            // 程序报了状态（等待确认、空闲……）就写它，同侧栏那一行与终端标签。
-            if let status = run.terminal.programStatus { return "\(status.statusLabel) · \(place)" }
-            return String(localized: "运行中 · \(place)", comment: "Code 标签页：会话正在跑，后面是工作目录的名字")
+            // 程序报了状态（运行中、等待确认、空闲……）就写它，同侧栏那一行（`CodeRunStatus`）；没报过只写目录：
+            // 不能写「运行中」，那是程序报来的「正在干活」，没报过的多半正停在输入框等人。
+            if let status = run.terminal.programReport { return "\(status.statusLabel) · \(place)" }
+            return place
         }
     }
 }
