@@ -84,21 +84,27 @@ actor ClaudeHistorySource: AgentHistorySource {
 
     /// 全部项目的会话合在一起，新的在前。列不了的项目跳过。
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
+        await listAllSessions(in: projects).files
+    }
+
+    /// 同上，另报出列不了的项目。
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         var result: [AgentHistorySessionFile] = []
+        var failed: Set<AgentHistoryProjectKey> = []
         var next = 0
-        await withTaskGroup(of: [AgentHistorySessionFile].self) { group in
+        await withTaskGroup(of: (AgentHistoryProject, [AgentHistorySessionFile]?).self) { group in
             func launch() {
                 let project = projects[next]
                 next += 1
-                group.addTask { (try? await self.sessions(in: project)) ?? [] }
+                group.addTask { (project, try? await self.sessions(in: project)) }
             }
             while next < min(Self.listConcurrency, projects.count) { launch() }
-            while let files = await group.next() {
-                result.append(contentsOf: files)
+            while let (project, files) = await group.next() {
+                if let files { result.append(contentsOf: files) } else { failed.insert(AgentHistoryProjectKey(project)) }
                 if next < projects.count { launch() }
             }
         }
-        return result.sorted { $0.modifiedAt > $1.modifiedAt }
+        return AgentHistorySessionListing(files: result.sorted { $0.modifiedAt > $1.modifiedAt }, failedProjects: failed)
     }
 
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata {

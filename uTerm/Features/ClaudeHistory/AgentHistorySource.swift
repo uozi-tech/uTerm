@@ -109,6 +109,9 @@ protocol AgentHistorySource: Actor {
     func sessions(in project: AgentHistoryProject) async throws -> [AgentHistorySessionFile]
     /// 「全部项目」：所有项目的会话合在一起，新的在前；列不了的项目跳过。
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile]
+    /// 同 `allSessions`，另外报出这一趟列不出来的项目（`AgentHistoryProject.id` + 工具）。后台重列时据此留着那些项目上一次
+    /// 列到的会话，一次没列出来（断线、辅助程序重启）不能让它们从侧栏上消失。不能逐个项目报的实现用默认的（不报失败）。
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing
     /// 列表一行的信息。实现自己按 `cacheKey` 缓存。
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata
     /// 一页一页往前读对话。
@@ -134,8 +137,30 @@ protocol AgentHistorySource: Actor {
 }
 
 extension AgentHistorySource {
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
+        AgentHistorySessionListing(files: await allSessions(in: projects))
+    }
+
     nonisolated var supportsSearch: Bool { true }
     nonisolated func newSessionCommand(directory: String) -> String? { nil }
+}
+
+/// 「全部项目」列一趟的结果：会话（新的在前）与列不出来的项目。
+nonisolated struct AgentHistorySessionListing: Sendable {
+    var files: [AgentHistorySessionFile]
+    /// 列不出来的项目：`AgentHistoryProjectKey`。
+    var failedProjects: Set<AgentHistoryProjectKey> = []
+}
+
+/// 一个项目的身份（不同工具的项目 `id` 可能相同，要连工具一起认）。
+nonisolated struct AgentHistoryProjectKey: Hashable, Sendable {
+    let tool: AgentHistoryTool
+    let id: String
+
+    init(_ project: AgentHistoryProject) {
+        tool = project.tool
+        id = project.id
+    }
 }
 
 /// 一页一页往前读一份对话；读到末尾之后还能接着读文件新长出来的部分（会话还开着）。
