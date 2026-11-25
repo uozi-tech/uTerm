@@ -184,7 +184,7 @@ struct TerminalSessionBody: View {
         if let message = controller.attentionMessage {
             MTerminalAttentionBanner(message: message) { controller.retryAfterAttention() }
         } else if controller.isReconnecting {
-            MTerminalReconnectBanner(notice: controller.reconnectNotice)
+            MTerminalReconnectBanner(notice: controller.reconnectNotice, failure: controller.reconnectFailure)
         } else if tab.remote == nil, offersReconnect, controller.canReconnect {
             MTerminalDisconnectedBanner { controller.restart() }
         } else if controller.state == .connecting, store.connecting?.tabID != tab.id {

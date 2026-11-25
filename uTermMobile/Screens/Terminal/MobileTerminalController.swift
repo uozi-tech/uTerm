@@ -80,6 +80,9 @@ final class MobileTerminalController {
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     /// 连接断了，后端正在自己重连（远控标签连 Mac、直连主机接回主机上的会话）。这期间按键发不出去，界面要明说。
     private(set) var isReconnecting = false
+    /// 自动重连上一次为什么没连上（拒绝连接、不可达、超时……，后端还会接着试）。接回或不在重连时为 nil。
+    private(set) var reconnectFailure: String?
+    @ObservationIgnored private var reconnectFailureTask: Task<Void, Never>?
     /// 自动重连停下来等用户处理的原因（服务器拒绝了凭据、主机密钥被拒、握手不成）。会话还在主机上，
     /// 用户处理完点重试（`retryAfterAttention()`）接回同一个会话。nil = 没在等。
     private(set) var attentionMessage: String?
@@ -389,7 +392,9 @@ final class MobileTerminalController {
             return conn
         case .failure(let error):
             // 工厂只会从认证材料解析那一步抛错（与抽工厂之前同义）。
-            state = .failed(String(localized: "凭据解析失败：\(error.localizedDescription)"))
+            let message = retrying ? TerminalConnectFailure.message(for: error, retrying: true)
+                : String(localized: "凭据解析失败：\(error.localizedDescription)")
+            state = .failed(message)
             return nil
         }
     }
@@ -399,9 +404,11 @@ final class MobileTerminalController {
                                pid: PersistentIdentifier?, container: ModelContainer) {
         guard connectGeneration == attempt else { return }
         if let error {
-            state = .failed(error.localizedDescription)
+            // 用户点了重新连接 / 重试之后仍然失败：说「仍然连不上：原因」，别让人以为又连上又断了一次。
+            state = .failed(TerminalConnectFailure.message(for: error, retrying: retrying))
             return
         }
+        retrying = false
         state = .connected
         hadConnected = true
         // 远控终端接上之后才知道是不是 Mac 的本机 shell（只有它收文件）。
@@ -424,6 +431,14 @@ final class MobileTerminalController {
             Task { [weak self] in
                 for await reconnecting in backend.reconnecting { self?.isReconnecting = reconnecting }
                 self?.isReconnecting = false
+            }
+        }
+        reconnectFailure = nil
+        reconnectFailureTask?.cancel()
+        reconnectFailureTask = (conn as? any ReconnectingTerminalBackend).map { backend in
+            Task { [weak self] in
+                for await reason in backend.reconnectFailure { self?.reconnectFailure = reason }
+                self?.reconnectFailure = nil
             }
         }
         attentionMessage = nil
@@ -659,9 +674,13 @@ final class MobileTerminalController {
               let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
         teardownConnection()
         started = false
+        retrying = true
         state = .idle
         start(profile: profile, container: container, relay: relay)
     }
+
+    /// 这次建连是用户点「重新连接」/「重试」发起的：失败时文案说「仍然连不上」。连上就清掉。
+    @ObservationIgnored private var retrying = false
 
     /// 作废在途建连（代次 +1，晚到的结果一律丢弃），拆掉终端与后端之间的输出 / 输入，再关传输。
     private func teardownConnection() {
@@ -672,6 +691,9 @@ final class MobileTerminalController {
         reconnectTask?.cancel()
         reconnectTask = nil
         isReconnecting = false
+        reconnectFailureTask?.cancel()
+        reconnectFailureTask = nil
+        reconnectFailure = nil
         attentionTask?.cancel()
         attentionTask = nil
         attentionMessage = nil

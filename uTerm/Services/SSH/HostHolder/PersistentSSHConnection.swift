@@ -9,6 +9,9 @@ protocol ReconnectingTerminalBackend: TerminalBackend {
     /// 自动重连停下来等用户处理时给出原因（服务器拒绝了凭据、主机密钥被拒、握手不成——重试也不会好的那类），
     /// 处理完、重新开始重连时给 nil。会话还在（主机上的 shell 照常跑），用户处理完调 `retryAfterAttention()` 接回。
     nonisolated var attention: AsyncStream<String?> { get }
+    /// 自动重连这一次又没连上（还会接着试的那类：拒绝连接、不可达、超时……）时给出原因，接回时给 nil。
+    /// 界面在「正在重新连接」旁边说明为什么还没连上，而不是一直只说「断了」。
+    nonisolated var reconnectFailure: AsyncStream<String?> { get }
     /// 连接多半已经断了的时刻（App 回到前台、网络刚变）：立刻处置，不等看门狗（它要等网络稳定 3 秒、再探活）。
     /// `lostInterface`：变之前走的那块网卡没了，上面的连接不可能再通。
     /// 判错的代价只是多重连一次的后端才实现；判错就等于断开的不实现，仍然等看门狗。
@@ -19,6 +22,7 @@ protocol ReconnectingTerminalBackend: TerminalBackend {
 
 extension ReconnectingTerminalBackend {
     nonisolated var attention: AsyncStream<String?> { AsyncStream { $0.finish() } }
+    nonisolated var reconnectFailure: AsyncStream<String?> { AsyncStream { $0.finish() } }
     func recheckAfterDisruption(lostInterface: Bool) async {}
     func retryAfterAttention() async {}
 }
@@ -79,11 +83,13 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     nonisolated let exitStream: AsyncStream<Void>
     nonisolated let reconnecting: AsyncStream<Bool>
     nonisolated let attention: AsyncStream<String?>
+    nonisolated let reconnectFailure: AsyncStream<String?>
 
     private let itemContinuation: AsyncStream<TerminalOutputItem>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
     private let reconnectingContinuation: AsyncStream<Bool>.Continuation
     private let attentionContinuation: AsyncStream<String?>.Continuation
+    private let reconnectFailureContinuation: AsyncStream<String?>.Continuation
 
     /// 见 `HostSessionOwning`：只有保持进程说会话没了（shell 退出、被另一台设备接走、主机上没有这个会话）才为真。
     nonisolated var hostSessionHasEnded: Bool { sessionEnded.value.withLock { $0 } }
@@ -195,6 +201,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
         (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
         (attention, attentionContinuation) = AsyncStream<String?>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        (reconnectFailure, reconnectFailureContinuation) = AsyncStream<String?>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
     // MARK: - connect
@@ -350,7 +357,10 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
 
     private func didAttach(on link: HostHolderLink, hadGap: Bool, shellPID: Int32) {
         guard !isClosed else { return }
-        if phase == .reconnecting { reconnectingContinuation.yield(false) }
+        if phase == .reconnecting {
+            reconnectingContinuation.yield(false)
+            reconnectFailureContinuation.yield(nil)
+        }
         phase = .attached
         hasAttached = true
         attachedOnce.set()
@@ -412,8 +422,11 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
                 return connected
             } catch where SSHTransportFailure.isPermanentConnectFailure(error) {
                 AppLogger.error("保持会话的重连停下等用户处理：\(FriendlyError.describe(error))")
+                reconnectFailureContinuation.yield(nil)
                 await waitForUser(FriendlyError.describe(error))
             } catch {
+                // 服务器不在（拒绝连接）、不可达、超时：接着试，同时告诉界面这一次为什么没连上。
+                reconnectFailureContinuation.yield(TerminalConnectFailure.reason(of: error))
                 await backOff()
             }
         }
@@ -511,6 +524,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         fallback = plain
         phase = .plain
         reconnectingContinuation.finish()
+        reconnectFailureContinuation.finish()
         let items = itemContinuation
         let exit = exitContinuation
         Task {
@@ -623,6 +637,7 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         itemContinuation.finish()
         reconnectingContinuation.finish()
         attentionContinuation.finish()
+        reconnectFailureContinuation.finish()
     }
 
     private static func resizeFrame(cols: UInt16, rows: UInt16) -> HolderFrame {

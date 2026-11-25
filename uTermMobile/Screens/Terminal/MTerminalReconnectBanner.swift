@@ -3,17 +3,29 @@ import SwiftUI
 /// 终端顶部的断线提示。画面还停在断线前，这时按键发不出去，不说的话看起来就像卡住了。
 struct MTerminalReconnectBanner: View {
     let notice: LocalizedStringKey
+    /// 上一次重连为什么没连上（服务器拒绝连接、不可达、超时……）。有就在下面一行说明，nil 不显示。
+    var failure: String? = nil
 
     var body: some View {
-        HStack(spacing: 6) {
-            ProgressView().controlSize(.mini)
-            Text(notice)
-                .font(.footnote)
-                .foregroundStyle(M.text)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(M.text)
+            }
+            if let failure {
+                Text("仍然连不上：\(failure)")
+                    .font(.caption)
+                    .foregroundStyle(M.text2)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: failure == nil ? 100 : 14, style: .continuous))
+        .padding(.horizontal, 12)
         .padding(.top, 8)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)

@@ -2700,6 +2700,34 @@
         }
       }
     },
+    "%@ 在 SSH 握手前就断开了连接，没有收到 SSH 服务的回应：服务器可能没在运行（开着代理或 VPN 时，连不上的主机也会这样表现）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ closed the connection before the SSH handshake, with no response from an SSH service. The server may not be running (with a proxy or VPN on, unreachable hosts look like this too)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ は SSH ハンドシェイクの前に接続を閉じ、SSH サービスからの応答がありませんでした。サーバが動いていない可能性があります（プロキシや VPN を使っていると、接続できないホストもこう見えます）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@이(가) SSH 핸드셰이크 전에 연결을 닫았고 SSH 서비스의 응답이 없습니다. 서버가 실행 중이 아닐 수 있습니다(프록시나 VPN을 켜 두면 연결할 수 없는 호스트도 이렇게 보입니다)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 在 SSH 交握前就中斷了連線，沒有收到 SSH 服務的回應：伺服器可能沒在執行（開著代理伺服器或 VPN 時，連不上的主機也會這樣）"
+          }
+        }
+      }
+    },
     "%@ 在你打开之后被别处改过。上传会覆盖远程的这些改动。" : {
       "localizations" : {
         "en" : {
@@ -3007,6 +3035,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 開始"
+          }
+        }
+      }
+    },
+    "%@ 拒绝了连接：那里没有在运行的 SSH 服务（服务器可能已关闭，或端口不对）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ refused the connection: no SSH service is running there (the server may be shut down, or the port is wrong)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ が接続を拒否しました：そこで動いている SSH サービスがありません（サーバが停止しているか、ポートが間違っている可能性があります）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@이(가) 연결을 거부했습니다: 그곳에서 실행 중인 SSH 서비스가 없습니다(서버가 꺼져 있거나 포트가 잘못되었을 수 있음)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 拒絕了連線：那裡沒有在執行的 SSH 服務（伺服器可能已關閉，或連接埠不對）"
           }
         }
       }
@@ -18946,6 +19002,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仍然開啟"
+          }
+        }
+      }
+    },
+    "仍然连不上：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still can’t connect: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ接続できません：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여전히 연결할 수 없음: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍然連不上：%@"
           }
         }
       }
@@ -50126,6 +50210,34 @@
         }
       }
     },
+    "无法到达 %@：主机不可达" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can’t reach %@: the host is unreachable"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ に到達できません：ホストに到達できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에 연결할 수 없습니다: 호스트에 도달할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法連到 %@：主機無法抵達"
+          }
+        }
+      }
+    },
     "无法加入密钥库" : {
       "localizations" : {
         "en" : {
@@ -69007,6 +69119,34 @@
         }
       }
     },
+    "网络不可达，连不到 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The network is unreachable; can’t connect to %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ネットワークに到達できないため、%@ に接続できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "네트워크에 연결할 수 없어 %@에 접속할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路無法連線，連不到 %@"
+          }
+        }
+      }
+    },
     "网络变化：%@（%@）" : {
       "localizations" : {
         "en" : {
@@ -78856,6 +78996,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "連線 / 執行逾時（超過 %lld 秒仍無結果）"
+          }
+        }
+      }
+    },
+    "连接 %@ 超时：对方没有回应（主机可能已关机、地址不对，或被防火墙拦住）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting to %@ timed out: no response (the host may be off, the address may be wrong, or a firewall may be blocking it)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ への接続がタイムアウトしました：応答がありません（ホストの電源が切れているか、アドレスが間違っているか、ファイアウォールで遮断されている可能性があります）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 연결 시간이 초과되었습니다: 응답이 없습니다(호스트가 꺼져 있거나 주소가 잘못되었거나 방화벽에 막혔을 수 있음)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線 %@ 逾時：對方沒有回應（主機可能已關機、位址不對，或被防火牆擋住）"
           }
         }
       }

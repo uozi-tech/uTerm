@@ -139,7 +139,9 @@ final class HeldSSHIntegrationTests: XCTestCase {
         guard case .failed(let message) = session.connectionState else {
             return XCTFail("应该失败：\(session.connectionState)")
         }
-        XCTAssertTrue(message.contains("connectFailed"), message)
+        // 界面上给人看的是本地化的原因，不是 Swift 枚举的调试写法（以前是 `connectFailed("…")`）。
+        XCTAssertTrue(message.contains("认证失败"), message)
+        XCTAssertFalse(message.contains("connectFailed"), message)
         let gone = try await waitForRemoved(id)
         XCTAssertTrue(gone, "失败的会话不能留在机器上")
     }
@@ -225,7 +227,8 @@ final class HeldSSHIntegrationTests: XCTestCase {
                 hostKeyApprover: { _ in true }),
             attributes: nil))
         guard case .failed(let message) = session.connectionState else { return XCTFail("应该失败") }
-        XCTAssertTrue(message.contains("jumpHostFailed"), message)
+        XCTAssertTrue(message.contains("跳板机"), message)
+        XCTAssertFalse(message.contains("jumpHostFailed"), message)
     }
 
     func test_close_ends_session_and_same_id_can_open_again_immediately() async throws {

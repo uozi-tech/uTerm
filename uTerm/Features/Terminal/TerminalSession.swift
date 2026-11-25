@@ -216,7 +216,7 @@ final class TerminalSession: NSObject {
             // Superseded while suspended — a newer connect/dispose owns the
             // session now; don't overwrite its state or clear its backend.
             guard feedGeneration == myGen else { return }
-            connectionState = .failed("\(error)")
+            connectionState = .failed(TerminalConnectFailure.message(for: error, retrying: connectAttemptIsRetry))
             self.backend = nil
             inputChannel.unbind()
             return
@@ -225,6 +225,7 @@ final class TerminalSession: NSObject {
         // `===` identity guard rejects the case where a newer connect bound a
         // different backend at the same generation boundary.
         guard feedGeneration == myGen, self.backend === backend else { return }
+        connectAttemptIsRetry = false
         // 在翻成「已连接」之前恢复画面：手机一接入拿到的快照就是完整的。
         if let held = backend as? any HeldTerminalBackend {
             guard await restoreHeldScreen(from: held, generation: myGen),
@@ -267,6 +268,10 @@ final class TerminalSession: NSObject {
         resetFeedAndResizeState()
         backend = nil
     }
+
+    /// 这次建连是用户在失败 / 断开之后点「重试」/「重新连接」发起的（`PaneModel.connect` 置上）：
+    /// 失败文案说「仍然连不上：原因」，而不是又一句像是刚断开的话。连上就清掉。
+    var connectAttemptIsRetry = false
 
     /// 在尚未取得后端时（如认证解析失败）直接置失败态。
     func markFailed(_ message: String) {

@@ -209,10 +209,16 @@ nonisolated enum SSHClientFactory {
                                            jumpHost: shared.bastionNeededLegacyTransport)
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
-            if case .weakAlgorithmsDeclined(let refusal) = appError(error) {
+            switch appError(error) {
+            case .weakAlgorithmsDeclined(let refusal):
                 throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(legacyGate.marked(refusal))
+            case .connectFailed(let detail) where profile.jumpHost == nil:
+                // 拒绝连接 / 不可达 / 握手前被断开……按原因改写，别让「被对方重置」读起来像是连上又断了。
+                throw SSHConnection.SSHConnectionError.connectFailed(
+                    SSHConnectFailureText.refine(detail, host: profile.host, port: profile.port))
+            case let mapped:
+                throw mapped
             }
-            throw appError(error)
         } catch let error as CancellationError {
             // 取消（关窗口、关标签页）不是连接失败：原样交出去，调用方据此什么都不报。
             throw error

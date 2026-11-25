@@ -85,6 +85,36 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(msg.contains("boom"))
     }
 
+    /// 失败页上给人看的是本地化的原因，不是 Swift 枚举的调试写法（以前是 `connectFailed("…")`）。
+    func testConnectFailureShowsLocalizedReasonNotEnumDump() async {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        await backend.setConnectError(SSHConnection.SSHConnectionError.connectFailed("10.0.0.1:22 拒绝了连接"))
+        await session.connect(using: backend)
+        guard case .failed(let msg) = session.connectionState else { return XCTFail("应为 .failed") }
+        XCTAssertFalse(msg.contains("connectFailed("), msg)
+        XCTAssertEqual(msg, SSHConnection.SSHConnectionError.connectFailed("10.0.0.1:22 拒绝了连接").localizedDescription)
+    }
+
+    /// 用户在失败 / 断开之后点「重试」/「重新连接」，又没连上：说「仍然连不上：原因」，不是又一句像是刚断开的话。
+    func testRetryFailureSaysStillCannotConnectWithTheReason() async {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        await backend.setConnectError(SSHConnection.SSHConnectionError.connectFailed("10.0.0.1:22 拒绝了连接"))
+        session.connectAttemptIsRetry = true
+        await session.connect(using: backend)
+        guard case .failed(let msg) = session.connectionState else { return XCTFail("应为 .failed") }
+        XCTAssertTrue(msg.hasPrefix("仍然连不上："), msg)
+        XCTAssertTrue(msg.contains("拒绝了连接"), msg)
+        XCTAssertTrue(session.connectAttemptIsRetry, "没连上之前一直算重试")
+
+        // 连上就清掉：之后的失败不再带「仍然」。
+        let ok = MockBackend()
+        await session.connect(using: ok)
+        XCTAssertEqual(session.connectionState, .connected)
+        XCTAssertFalse(session.connectAttemptIsRetry)
+    }
+
     func testRemoteExitReachesDisconnected() async {
         let session = TerminalSession()
         let backend = MockBackend()

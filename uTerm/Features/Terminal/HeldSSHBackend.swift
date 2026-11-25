@@ -126,7 +126,13 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             case .jumpHost:
                 throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message,
                                                                       cause: failure.jumpHostCause)
-            case .connect: throw Self.connectError(failure)
+            case .connect:
+                // 同 `SSHClientFactory.connect`：拒绝连接 / 不可达 / 握手前被断开按原因改写。
+                if case .connectFailed(let detail) = Self.connectError(failure) {
+                    throw SSHConnection.SSHConnectionError.connectFailed(SSHConnectFailureText.refine(
+                        detail, host: target.profile.host, port: target.profile.port))
+                }
+                throw Self.connectError(failure)
             }
         case .disconnected:
             // 本端要结束时对面也就退出了，这不算失败。

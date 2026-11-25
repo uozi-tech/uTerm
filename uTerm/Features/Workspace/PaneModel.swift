@@ -77,6 +77,10 @@ final class PaneModel: Identifiable {
         isConnecting = true
         defer { isConnecting = false }
 
+        switch session.connectionState {
+        case .failed, .disconnected: session.connectAttemptIsRetry = true
+        case .idle, .connecting, .connected: session.connectAttemptIsRetry = false
+        }
         await session.close()
         let timeline = ConnectTimeline(kind: "terminal", target: profile.timingTarget)
         await ConnectTimeline.$current.withValue(timeline) {
@@ -118,7 +122,7 @@ final class PaneModel: Identifiable {
             registerIfConnected(profile)
         } catch {
             timeline.finish("failed")
-            session.markFailed("\(error)")
+            session.markFailed(TerminalConnectFailure.message(for: error, retrying: session.connectAttemptIsRetry))
         }
     }
 
