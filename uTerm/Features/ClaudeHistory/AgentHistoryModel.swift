@@ -314,15 +314,50 @@ final class AgentHistoryModel {
             }
         }
         guard generation == listGeneration else { return }
+        adopt(listed, shownBefore: previousScope == newScope ? resolvedCount : 0)
+        // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
+        isListing = false
+        if let query = search?.query { startSearch(query) }
+    }
+
+    /// 只重列这几份记录所在的项目，别的项目照旧（Code 标签页里跑着的会话：记录一直在写，侧栏那一行与终端顶上的标题
+    /// 跟着 Claude Code 后来起的名字走）。已经显示着的行一行都不收（同后台重列）。正在列的时候不插一脚，下次再来。
+    func refreshProjects(containing paths: Set<String>) async {
+        guard phase == .ready, !isListing, !paths.isEmpty else { return }
+        var projects: [AgentHistoryProjectKey: AgentHistoryProject] = [:]
+        for file in listedFiles where paths.contains(file.path) { projects[AgentHistoryProjectKey(file.project)] = file.project }
+        guard !projects.isEmpty else { return }
+        let generation = listGeneration
+        var fresh: [AgentHistorySessionFile] = []
+        var refreshed: Set<AgentHistoryProjectKey> = []
+        for (key, project) in projects {
+            guard let listed = try? await source.sessions(in: project) else { continue }
+            fresh += listed
+            refreshed.insert(key)
+        }
+        // 这期间整个重列过（或换了范围）：那一趟的结果更新，这一份作废。
+        guard generation == listGeneration, !isListing, !refreshed.isEmpty else { return }
+        let kept = listedFiles.filter { !refreshed.contains(AgentHistoryProjectKey($0.project)) }
+        adopt((kept + fresh).sorted { $0.modifiedAt > $1.modifiedAt }, shownBefore: resolvedCount,
+              refreshed: Set(fresh.map(\.path)))
+    }
+
+    /// 换上新列出来的记录。`shownBefore`：原来显示到第几份（同一个范围重列时），0 = 从头显示。
+    /// `refreshed`：只重列了一部分时，刚列过的那些（只清它们记下的时间）；nil = 全部重列过。
+    private func adopt(_ listed: [AgentHistorySessionFile], shownBefore: Int, refreshed: Set<String>? = nil) {
         // 换了范围就从头显示；同一个范围重列（后台刷新）时，已经显示着的行一行都不收：
         // 数一数原来显示到第几份（都读过信息），新列表里数到同样多份读过的为止都算已经显示。中间新冒出来的（新写出的记录）
         // 先不显示、读到信息再出来；文件变了的照旧显示上次读到的标题，后台重读（`needsRead`）。
-        let shownBefore = previousScope == newScope ? resolvedCount : 0
         listedFiles = listed
         files = listed.filter(passesToolFilter)
         // 列表里的修改时间是刚列的了，之前记的不再需要（正开着的那份照样从对话里取）。
-        seenActivity.removeAll()
-        failed.removeAll()
+        if let refreshed {
+            for path in refreshed { seenActivity[path] = nil }
+            failed.subtract(refreshed)
+        } else {
+            seenActivity.removeAll()
+            failed.removeAll()
+        }
         resolvedCount = 0
         if shownBefore > 0 {
             var known = 0
@@ -346,9 +381,6 @@ final class AgentHistoryModel {
         if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) {
             select(nil)
         }
-        // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
-        isListing = false
-        if let query = search?.query { startSearch(query) }
     }
 
     /// 后面还有没读的记录（列表底下画「正在读取」），或者后台重列后排进已显示那一段的新记录还没读到。

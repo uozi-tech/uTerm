@@ -50,7 +50,7 @@ final class ClaudeHistoryTab: Identifiable {
     /// 对新会话记录时在主机上看到的记录（列表里可能还没有），按路径。
     @ObservationIgnored var matchedFiles: [String: AgentHistorySessionFile] = [:]
     @ObservationIgnored var runTyping: [UUID: Task<Void, Never>] = [:]
-    /// 新会话还没对上记录时，隔一会儿去主机上看一眼。
+    /// 有会话在跑时隔一会儿去主机上看一眼（新会话认记录、跑着的会话的标题，见 `pollNewSessionsIfNeeded`）。
     @ObservationIgnored var newSessionPoll: Task<Void, Never>?
     /// 建 run 连接用的容器与主机密钥裁决（第一次起 run 时由界面交进来，重试沿用）。
     @ObservationIgnored var runContainer: ModelContainer?

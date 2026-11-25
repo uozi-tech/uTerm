@@ -12,8 +12,9 @@ import Observation
 /// - 一份记录（`AgentHistorySessionFile.path`）至多一个活终端：再「继续」同一份就回到它，不另起。
 /// - 点别的会话不打断正在跑的：每个 run 各留各的终端，`focused` 只是换详情看哪个。
 /// - 新会话（「＋」）一开始没有记录，`sessionPath` 为 nil，列表最顶上单独一行「新会话」（`unlistedRuns`）。
-///   之后外面拿主机上的会话列表来 `reconcile`：同一种工具、工作目录相同、修改时间不早于这个 run 起来之前
-///   `matchSlack` 秒、还没被别的 run 认领的记录里，取修改时间最新的那份认下来（多个新会话按起来的先后依次认）。
+///   之后外面拿主机上的会话列表来 `reconcile`：同一种工具、工作目录相同、起的时候还不在列表里（`knownPaths`）、
+///   修改时间不早于这个 run 起来之前 `matchSlack` 秒、还没被别的 run 认领的记录里，取修改时间最新的那份认下来
+///   （多个新会话按起来的先后依次认）。
 ///   认下来之后它就是那份记录的 run（再「继续」那份记录回到它），顶上那一行拿掉，回到那份记录平常的那一行（不自动置顶）；
 ///   对不上的一直留着占位（不丢），同一份记录不会被两个 run 认领（不重复）。
 /// - 程序退出（`ended`）：规则同 Mac（`CodeRunExitPolicy`）。没有对话记录可看的（新会话没说话就退出）、跑了不到
@@ -36,6 +37,9 @@ final class CodeRunBoard<Terminal: AnyObject> {
         /// 程序退出的时刻（很快就退出、留着给人看的那种）；还在跑为 nil。
         var endedAt: Date?
         let terminal: Terminal
+        /// 起的时候列表里已经有的记录：新会话认记录时不要它们（同一个目录里别的终端也在跑同一种工具时，它们一直在写，
+        /// 修改时间比这个 run 起来还晚）。重新打开后接回的不知道，为空。
+        var knownPaths: Set<String> = []
 
         /// 还没对上记录的新会话。App 重新打开后接回的会话先只有会话 ID（`sessionID`），列表读出来之后再找回记录
         ///（`resolveRestored`），这期间不算新会话、不去认别的记录。
@@ -120,8 +124,10 @@ final class CodeRunBoard<Terminal: AnyObject> {
 
     /// 「＋」新会话：总是新起一个（还没有记录可对）。
     @discardableResult
-    func startNew(tool: AgentHistoryTool, directory: String, now: Date = Date(), terminal: Terminal) -> Run {
-        let run = Run(id: UUID(), tool: tool, directory: directory, startedAt: now, terminal: terminal)
+    func startNew(tool: AgentHistoryTool, directory: String, now: Date = Date(), knownPaths: Set<String> = [],
+                  terminal: Terminal) -> Run {
+        let run = Run(id: UUID(), tool: tool, directory: directory, startedAt: now, terminal: terminal,
+                      knownPaths: knownPaths)
         runs.append(run)
         focusedID = run.id
         return run
@@ -206,9 +212,9 @@ final class CodeRunBoard<Terminal: AnyObject> {
 
     /// 新起一个 run（不放进来，交给 `replace`）。
     func makeRun(tool: AgentHistoryTool, directory: String, sessionPath: String?, sessionID: String?,
-                 now: Date = Date(), terminal: Terminal) -> Run {
+                 now: Date = Date(), knownPaths: Set<String> = [], terminal: Terminal) -> Run {
         Run(id: UUID(), tool: tool, directory: directory, startedAt: now, sessionPath: sessionPath, sessionID: sessionID,
-            terminal: terminal)
+            terminal: terminal, knownPaths: knownPaths)
     }
 
     /// 让还没对上记录的新会话认领记录（规则见类型注释）。已结束、留着画面的也认（认上了有对话的，外面再把它收回记录）。
@@ -222,6 +228,7 @@ final class CodeRunBoard<Terminal: AnyObject> {
             let pick = candidates
                 .filter { candidate in
                     candidate.tool == run.tool && !claimed.contains(candidate.path)
+                        && !run.knownPaths.contains(candidate.path)
                         && candidate.modifiedAt >= run.startedAt.addingTimeInterval(-Self.matchSlack)
                         && candidate.directory.map { Self.sameDirectory($0, run.directory) } == true
                 }

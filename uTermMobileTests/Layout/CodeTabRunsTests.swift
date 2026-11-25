@@ -134,6 +134,29 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(board.run(forSession: "/x2")?.id, second.id, "认下来之后再「继续」那份记录回到它")
     }
 
+    /// 同一个目录里别的终端也在跑同一种工具（2026-11-25 实测：同一个项目里三个 Claude Code 会话一直在写）：
+    /// 起的时候就有的记录修改时间比新会话起来还晚，也不能认；新会话的记录写出来后认它。
+    func testNewSessionIgnoresRecordsThatExistedWhenItStarted() {
+        let board = CodeRunBoard<FakeTerminal>()
+        let start = Date(timeIntervalSince1970: 30_000)
+        let run = board.startNew(tool: .claude, directory: "/w/shop", now: start,
+                                 knownPaths: ["/p/busy-1.jsonl", "/p/busy-2.jsonl"], terminal: FakeTerminal())
+        typealias C = CodeRunBoard<FakeTerminal>.Candidate
+        let busy = [
+            C(path: "/p/busy-1.jsonl", sessionID: "busy-1", tool: .claude, directory: "/w/shop",
+              modifiedAt: start.addingTimeInterval(120)),
+            C(path: "/p/busy-2.jsonl", sessionID: "busy-2", tool: .claude, directory: "/w/shop",
+              modifiedAt: start.addingTimeInterval(90)),
+        ]
+        XCTAssertEqual(board.reconcile(busy), [], "别的终端里一直在写的会话不认")
+        XCTAssertNil(board.run(id: run.id)?.sessionPath)
+
+        let mine = C(path: "/p/mine.jsonl", sessionID: "mine", tool: .claude, directory: "/w/shop",
+                     modifiedAt: start.addingTimeInterval(40))
+        XCTAssertEqual(board.reconcile(busy + [mine]), [run.id], "自己的记录比别的会话改得早也认它")
+        XCTAssertEqual(board.run(id: run.id)?.sessionPath, "/p/mine.jsonl")
+    }
+
     /// 列表里没有行的 run 放在列表最顶上：没对上记录的新会话、对上了但列表里还没那一行的；列表里有行的不再出（不重复）。
     func testUnlistedRunsStayOnTopUntilTheirRecordIsListed() {
         let board = CodeRunBoard<FakeTerminal>()
@@ -296,8 +319,6 @@ final class CodeTabRunsTests: XCTestCase {
         let source = MobileFakeAgentSource(tool: .codex, sessions: [
             .init(id: "x-old", projectID: "2026-11-01", projectDirectory: MobileAgentHistoryFixture.shop,
                   resumeDirectory: MobileAgentHistoryFixture.shop, title: "很早以前的", modifiedAt: start.addingTimeInterval(-86_400)),
-            .init(id: "x-new", projectID: "2026-11-23", projectDirectory: MobileAgentHistoryFixture.shop,
-                  resumeDirectory: MobileAgentHistoryFixture.shop, title: "刚开的这个", modifiedAt: start.addingTimeInterval(30)),
         ])
         let (tab, model, _) = try await codeTab(host: host, source: AgentHistoryCompositeSource([
             source, MobileFakeAgentSource(tool: .claude, sessions: []),
@@ -310,6 +331,10 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(tab.title(of: run), AgentHistoryText.newSession)
         XCTAssertNil(model.selectedFile)
 
+        // 新会话起来之后主机上才写出它的记录（起的时候列表里已有的记录不认，见 `CodeRunBoard.Run.knownPaths`）。
+        await source.add(.init(id: "x-new", projectID: "2026-11-23", projectDirectory: MobileAgentHistoryFixture.shop,
+                               resumeDirectory: MobileAgentHistoryFixture.shop, title: "刚开的这个",
+                               modifiedAt: start.addingTimeInterval(30)))
         await tab.matchNewSessions()
         let matched = try XCTUnwrap(tab.runs.run(id: run.id))
         XCTAssertEqual(matched.sessionID, "x-new")

@@ -124,8 +124,17 @@ final class CodeTabModel {
     /// 多久看一次各个终端的状态（`codeCommandHasEnded`）。Mac 上命令的起止标记（`TerminalTrackedRun`）不参与观察、
     /// 连接状态的回调又被宿主占着，所以轮询；只在有会话在跑时转。
     nonisolated static let checkInterval: Duration = .seconds(1)
-    /// 有新会话还没对上记录时，隔多久安静地重列一次（不闪「正在读取」）。
+    /// 有会话在跑时，隔多久安静地重列一次（不闪「正在读取」）：有新会话还没对上记录时重列全部，都对上了只重列它们所在的
+    /// 项目（标题跟着 Claude Code 后来起的名字走）。
     nonisolated static let refreshInterval: Duration = .seconds(10)
+
+    /// 看终端、重列的间隔（测试换成短的）。
+    struct Timing {
+        var check: Duration
+        var refresh: Duration
+        static let standard = Timing(check: CodeTabModel.checkInterval, refresh: CodeTabModel.refreshInterval)
+    }
+    @ObservationIgnored var timing = Timing.standard
 
     /// 重启前右边看的是什么：列表还没列出来，先记着，列出来之后还原（`applyRestoredState`）；用户先点了别的就作废。
     private enum RestoredSelection: Equatable {
@@ -468,14 +477,17 @@ final class CodeTabModel {
         watcher = Task { [weak self] in
             var sinceRefresh = Duration.zero
             while !Task.isCancelled {
-                try? await Task.sleep(for: CodeTabModel.checkInterval)
+                try? await Task.sleep(for: self?.timing.check ?? CodeTabModel.checkInterval)
                 guard let self, !Task.isCancelled, self.runs.contains(where: { !$0.isEnded }) else { break }
                 self.checkRuns()
-                sinceRefresh += CodeTabModel.checkInterval
-                if sinceRefresh >= CodeTabModel.refreshInterval,
-                   self.runs.contains(where: { $0.path == nil && !$0.isEnded }) {
+                sinceRefresh += self.timing.check
+                if sinceRefresh >= self.timing.refresh {
                     sinceRefresh = .zero
-                    await self.refreshList()
+                    if self.runs.contains(where: { $0.path == nil && !$0.isEnded }) {
+                        await self.refreshList()
+                    } else {
+                        await self.refreshRunRecords()
+                    }
                 }
             }
             self?.watcher = nil
@@ -606,6 +618,12 @@ final class CodeTabModel {
         matchNewSessions()
     }
 
+    /// 跑着的会话的记录重读一遍（只重列它们所在的项目）：Claude Code 一直在写，标题、时间跟着它。
+    func refreshRunRecords() async {
+        guard let history, !isClosed else { return }
+        await history.refreshProjects(containing: Set(runs.filter { !$0.isEnded }.compactMap(\.path)))
+    }
+
     /// 把还没对上记录的新会话对上列表里的真实记录（规则见 `match`）。对上了：侧栏顶上那一行「新会话」拿掉，
     /// 列表里那份记录平常的那一行标成在跑（不自动置顶）；
     /// 右边正看着它的继续看它的终端（改由列表选中那份记录）。
@@ -669,12 +687,14 @@ final class CodeTabModel {
         runs.filter { run in run.path.map { !shown.contains($0) } ?? true }
     }
 
-    /// 一个跑着的会话叫什么：对上了记录用记录的标题，继续的会话用起的时候的标题，新会话叫「新会话」。
+    /// 一个跑着的会话叫什么：对上了记录、读到了信息的用记录的标题（Claude Code 起的名字，跟着它变），继续的会话
+    /// 在那之前用起的时候的标题，新会话叫「新会话」（刚对上、记录的信息还没读到时也是，不闪一下「（无标题）」）。
     /// 接回后还没找回记录的会话用会话 ID 的前 8 位（同列表里读不到标题的那一行）。
     func title(of run: Run) -> String {
         let file = run.path.flatMap { path in history?.files.first { $0.path == path } }
-        if let file { return AgentHistoryText.sessionTitle(file, metadata: history?.metadata[file.path]) }
+        if let file, let metadata = history?.metadata[file.path] { return AgentHistoryText.sessionTitle(file, metadata: metadata) }
         if let title = run.title { return title }
+        if !run.resumesRecord { return AgentHistoryText.newSession }
         if let key = run.key { return String(localized: "（无标题）\(String(key.sessionID.prefix(8)))") }
         return AgentHistoryText.newSession
     }
