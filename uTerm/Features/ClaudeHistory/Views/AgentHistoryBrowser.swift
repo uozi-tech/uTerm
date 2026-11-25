@@ -389,6 +389,8 @@ struct AgentHistorySessionList: View {
                     .modifier(AgentHistoryPinDropTarget(drag: pinDrag, pins: pins, pinned: pinned,
                                                         pinnedCollapsed: history.collapsedGroups.contains(AgentHistoryGroup.pinnedID)))
                 }
+                // 展开 / 收起分组时内容高度在变，滚动条一会儿出现一会儿消失，看着像列表在跳；侧栏不显示滚动条（`.never`：接着鼠标时 `.hidden` 仍会显示常驻滚动条）。
+                .scrollIndicators(.never)
                 .onAppear { pendingReveal = reveal }
                 .onChange(of: reveal) { _, request in pendingReveal = request }
                 .onChange(of: pendingReveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
@@ -820,6 +822,7 @@ struct AgentHistorySearchResults: View {
                 }
                 .padding(6)
             }
+            .scrollIndicators(.never)
         }
     }
 
