@@ -18,7 +18,8 @@ typealias TerminalHostedView = UITerminalView
 ///   surface 的终端报来的网格（M4 的前提：不按视图尺寸算、不绕主线程），新 surface 出生时的默认网格那一次不认
 ///   （`TerminalSurfaceGridGate`）；远控主控端的影子跟着对端的快照走（泵的 `followsSnapshotGrid`）。
 /// - **回主线程**：surface 的写出（击键、应答）与网格报告、影子的应答 / 剪贴板 / 事件都从任意线程回到主线程，一律走主队列
-///   （`TerminalMainHop`：FIFO，击键和应答的先后不乱）。
+///   （`TerminalMainHop`：FIFO，击键和应答的先后不乱）。例外是平台设了 `directInput`：surface 的写出在 IO 线程上直接进
+///   输入通道（`TerminalInputChannel.direct`），主线程只收一声通知。
 /// - **surface 就绪**：surface 建好之后，等它的终端报来的网格和视图算出来的对上（兜底 0.25 s）才让泵开始喂它；拆掉时
 ///   关闸、记为落后（下一个 surface 是空的，要整屏回放）。
 /// - **整屏回放之后**：把影子的标题再交一次（影子被快照整个换掉时不会逐条发事件）；擦屏后清选区、回放后找回视口（`keeper`）。
@@ -41,8 +42,16 @@ final class TerminalSurfaceLink {
 
     // MARK: 平台出口（都在主线程上调）
 
-    /// surface 发出的字节（击键、粘贴、它答的查询）。
+    /// surface 发出的字节（击键、粘贴、它答的查询）。`directInput` 收下的那些不走这里，见下面两项。
     var onSurfaceInput: (Data) -> Void = { _ in }
+    /// `directInput` 已经在 IO 线程上收下（发往后端）的字节，随后在主线程上报一声，只作观察（记录、测试），别再发一遍。
+    var onSurfaceInputSent: (Data) -> Void = { _ in }
+    /// 在 Ghostty 的 IO 线程上直接收 surface 写出的字节，不先回主线程（打字回显少等一次主线程，见 `TerminalInputChannel`）。
+    /// 返回 false 的那块照旧回主线程交给 `onSurfaceInput`（平台要在主线程上改写的，如 iOS 的焦点报告）。nil = 全部回主线程。
+    nonisolated var directInput: (@Sendable (Data) -> Bool)? {
+        get { relay.directInput }
+        set { relay.directInput = newValue }
+    }
     /// 影子替 surface 答的查询（surface 不吃字节的时候）。
     var onShadowReply: (Data) -> Void = { _ in }
     /// 程序写剪贴板（OSC 52；影子喂历史时不来）。
@@ -65,10 +74,12 @@ final class TerminalSurfaceLink {
     private var reportedGridSinceAttach: (cols: Int, rows: Int)?
     private var surfaceSizeTimeout: Task<Void, Never>?
     private var shadowColorsAreDark: Bool?
+    private nonisolated let relay: Relay
 
     init(cols: UInt16, rows: UInt16, options: ShadowTerminal.Options) {
         let shadow = ShadowTerminal(cols: cols, rows: rows, options: options)
         let relay = Relay()
+        self.relay = relay
         let gridGate = TerminalSurfaceGridGate()
         self.gridGate = gridGate
         self.shadow = shadow
@@ -121,6 +132,12 @@ final class TerminalSurfaceLink {
         private let lock = NSLock()
         private weak var target: TerminalSurfaceLink?
         private weak var targetPump: TerminalOutputPump?
+        private var directHandler: (@Sendable (Data) -> Bool)?
+
+        var directInput: (@Sendable (Data) -> Bool)? {
+            get { lock.withLock { directHandler } }
+            set { lock.withLock { directHandler = newValue } }
+        }
 
         var link: TerminalSurfaceLink? {
             get { lock.withLock { target } }
@@ -136,6 +153,10 @@ final class TerminalSurfaceLink {
         var followsSnapshotGrid: Bool { pump?.followsSnapshotGrid ?? false }
 
         func surfaceWrote(_ data: Data) {
+            if let direct = directInput, direct(data) {
+                TerminalMainHop.run { self.link?.onSurfaceInputSent(data) }
+                return
+            }
             TerminalMainHop.run { self.link?.onSurfaceInput(data) }
         }
 

@@ -215,7 +215,9 @@ final class GhosttyMeasureProbeTests: XCTestCase {
     /// 开关：`UTERM_M6_VIA=insertText` 改成直接调 `insertText`（会误导，见下面的注释）；`UTERM_M6_STALLS=1` 抄主线程的栈。
     ///
     /// 2026-11-25 Duo（120 Hz）：回显 p50 16.4 ms = 键盘到调进 `insertText` 8.3 + 交出字节 0.35 + 等主线程做完键盘的后半段
-    /// 3.9 + 进后端回显进泵 1.4 + 出帧 2.7；`UITextView` 从落字到报文字变了 12.4 ms。
+    /// 3.9 + 进后端回显进泵 1.4 + 出帧 2.7；`UITextView` 从落字到报文字变了 12.4 ms。击键改成在 IO 线程直写进输入通道
+    ///（`TerminalSurfaceLink.directInput`，消费任务也不回主线程）之后 12.6 ms：交出字节到回显进泵 0.13 ms，出帧落在主线程
+    /// 做完键盘后半段的那一刻（iOS 上画面交给图层要回主线程，引擎补丁 0005 的设计），和 `UITextView` 的 12.9 ms 持平。
     /// 硬件键 `pressesBegan` 要真 `UIPress`，XCTest 造不出来（spike 已记），这里不量，留给 M16 手感。
     func testM6TypingEcho() async throws {
         let screen = sceneSize
@@ -233,10 +235,15 @@ final class GhosttyMeasureProbeTests: XCTestCase {
 
         // 拆段：落字 → 调进 insertText → IO 线程交出字节 → 主线程拿到（`input→mainWrite`）→ 回显进输出泵（`mainWrite→echoPumped`）→ 出帧。
         let writeTime = M6TimeBox(), echoTime = M6TimeBox()
-        let previousInput = gh.link.onSurfaceInput
+        // 击键直写进输入通道（`TerminalSurfaceLink.directInput`）时主线程只收一声 `onSurfaceInputSent`，不直写的走 `onSurfaceInput`。
+        let previousInput = gh.link.onSurfaceInput, previousSent = gh.link.onSurfaceInputSent
         gh.link.onSurfaceInput = { data in
             writeTime.setIfEmpty(CACurrentMediaTime())
             previousInput(data)
+        }
+        gh.link.onSurfaceInputSent = { data in
+            writeTime.setIfEmpty(CACurrentMediaTime())
+            previousSent(data)
         }
         let previousFed = gh.outputPump.onFed
         gh.outputPump.onFed = { bytes in
@@ -255,6 +262,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
         TerminalDebugLog.isEnabled = true
         defer {
             gh.link.onSurfaceInput = previousInput
+            gh.link.onSurfaceInputSent = previousSent
             gh.outputPump.onFed = previousFed
             TerminalDebugLog.isEnabled = false
             TerminalDebugLog.sink = previousSink
@@ -335,6 +343,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
                         if let w { parts["ioWrite→mainWrite", default: []].append((w - io) * 1000) }
                     }
                     if let w, let e { parts["mainWrite→echoPumped", default: []].append((e - w) * 1000) }
+                    if let io = ioTime.value, let e { parts["ioWrite→echoPumped", default: []].append((e - io) * 1000) }
                     if let e { parts["echoPumped→frame", default: []].append((at - e) * 1000) }
                 }
                 // 这一下到后端没有（有丢键就记下是第几下、什么字）。
@@ -388,7 +397,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
         print(String(format: "MEASURE m6 %@ typing-echo n=%d p50=%.2fms p95=%.2fms max=%.2fms",
                      engine, results.count, ProbeMetrics.percentile(results, 0.5),
                      ProbeMetrics.percentile(results, 0.95), results.max() ?? 0))
-        for key in ["input call returns", "main free (ping)", "input→insertText entered", "insertText entered→ioWrite", "input→ioWrite", "ioWrite→mainWrite", "input→mainWrite", "mainWrite→echoPumped", "echoPumped→frame"] {
+        for key in ["input call returns", "main free (ping)", "input→insertText entered", "insertText entered→ioWrite", "input→ioWrite", "ioWrite→mainWrite", "input→mainWrite", "mainWrite→echoPumped", "ioWrite→echoPumped", "echoPumped→frame"] {
             let values = parts[key] ?? []
             print(String(format: "MEASURE m6 %@ part %@ n=%d p50=%.2fms p95=%.2fms max=%.2fms", engine, key, values.count,
                          ProbeMetrics.percentile(values, 0.5), ProbeMetrics.percentile(values, 0.95), values.max() ?? 0))

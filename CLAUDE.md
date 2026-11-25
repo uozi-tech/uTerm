@@ -92,7 +92,8 @@ swift-collections 的 DequeModule——链进 `Contents/Frameworks/USSHStack.fra
     `TerminalPaste` / `TerminalTitle` / `TerminalCloseProbe` / `TerminalConnectionState` / `TerminalResizeSettler`
     （两端的容器都等尺寸停稳才提交）/ `TerminalCursorPreference`；程序状态 `ProgramStatusTracker` 与它的记账副本
     `ProgramStatusJournal`（在影子的事件回调里同步更新，和检查点存在一起）；输入与尺寸 `TerminalInputChannel`
-    （写入和 resize 同一条 FIFO，同轮合并、相同尺寸不重发）。远控的整屏快照是引擎的二进制格式（消息 47），经
+    （写入和 resize 同一条 FIFO，同轮合并、相同尺寸不重发；surface 写出的击键在 IO 线程上经 `TerminalSurfaceLink.directInput`
+    直接进这条 FIFO、消费任务也不在主线程，打字回显不等主线程——iOS 上按键之后主线程还要忙几 ms 系统键盘）。远控的整屏快照是引擎的二进制格式（消息 47），经
     `TerminalBackend.outputItems` 的 `.snapshot` 进泵。影子的回调在喂字节的线程上、拿着锁同步调用，回调里不能再
     `feed` / `resize` / `restore`。平台各自的一层：Mac 是 `Features/Terminal/Ghostty/`（`GhosttyTerminalBridge` /
     `GhosttyHostView` / `GhosttyTerminalConfig`，mac-only），iOS 是 `uTermMobile/Screens/Terminal/Ghostty/`——两边各有一个

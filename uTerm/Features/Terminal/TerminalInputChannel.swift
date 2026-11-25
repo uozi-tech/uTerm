@@ -15,6 +15,13 @@ import Foundation
 ///
 /// 建连也排进这条 FIFO（`connect(_:)`）：绑定时排进去的尺寸一定先到后端。远控主控端靠这个让接入请求就带上本地网格
 ///（对端钉好这个尺寸再拍第一张快照，不必先按默认的 80×24 接入、再改一次尺寸重发快照）。
+///
+/// 不经主线程的两处（打字回显的延迟）：
+/// - 消费任务是 detached 的：每一块发往后端不回主线程。
+/// - `direct`：任意线程可调的入口，surface 在 Ghostty 的 IO 线程上写出的击键直接排进这条 FIFO
+///   （`TerminalSurfaceLink.directInput`）。iOS 上按一下键之后主线程还要忙约 4 ms 系统键盘的后半段，先回主线程再进队列
+///   就要等它（2026-11-25 Duo，`GhosttyMeasureProbeTests.testM6TypingEcho`）。主线程上的 `write` 与它进的是同一个续体，
+///   先后按各自调用的时刻排。
 @MainActor
 final class TerminalInputChannel {
     typealias Size = (cols: UInt16, rows: UInt16)
@@ -23,25 +30,20 @@ final class TerminalInputChannel {
     private(set) var latestSize: Size?
     /// 在当前绑定上最后发出（或排进队列）的尺寸。换绑定时清空。
     private var lastSentSize: Size?
-    private var continuation: AsyncStream<Input>.Continuation?
+    /// 这条 FIFO 的入口（线程安全）。没绑定时写进来的丢弃。
+    nonisolated let direct = TerminalInputSink()
     private weak var boundBackend: (any TerminalBackend)?
     private var pendingResize: Task<Void, Never>?
-
-    private enum Input: Sendable {
-        case data(Data)
-        case resize(cols: UInt16, rows: UInt16)
-        case connect(CheckedContinuation<Void, any Error>)
-    }
 
     /// 之后的输入都发给 `backend`。先解除旧绑定。
     /// - Parameter sendingLatestSize: 立刻把 `latestSize` 排进队首（排在之后的 `connect(_:)` 前面）。尺寸可能早于后端就绪
     ///   （首次排布、重连），两端都在建连前绑定、靠它把尺寸带进建连（SSH 当 PTY 的初始尺寸，远控当接入请求的网格）。
     func bind(to backend: any TerminalBackend, sendingLatestSize: Bool) {
         unbind()
-        let (inputs, continuation) = AsyncStream.makeStream(of: Input.self)
-        self.continuation = continuation
+        let (inputs, continuation) = AsyncStream.makeStream(of: TerminalInputSink.Input.self)
+        direct.attach(continuation)
         boundBackend = backend
-        Task {
+        Task.detached(priority: .userInitiated) {
             for await input in inputs {
                 switch input {
                 case .data(let data): await backend.write(data)
@@ -65,21 +67,20 @@ final class TerminalInputChannel {
         pendingResize = nil
         lastSentSize = nil
         boundBackend = nil
-        continuation?.finish()
-        continuation = nil
+        direct.detach()
     }
 
     /// 让 `backend` 建连，排在这之前进队列的尺寸、输入之后；建连期间的键入排在它后面，连上再发。
     /// `backend` 已经不是绑着的那条（这期间换了绑定、解了绑）时直接建连，不经队列。
     func connect(_ backend: any TerminalBackend) async throws {
-        guard let continuation, boundBackend === backend else {
+        guard direct.isAttached, boundBackend === backend else {
             try await backend.connect()
             return
         }
         // 队列刚结束、`yield` 被拒时这一项不会有人取：放行，在这里自己建连。
         var enqueued = false
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
-            if case .enqueued = continuation.yield(.connect(done)) {
+            if direct.yield(.connect(done)) {
                 enqueued = true
             } else {
                 done.resume()
@@ -89,7 +90,7 @@ final class TerminalInputChannel {
     }
 
     func write(_ data: Data) {
-        continuation?.yield(.data(data))
+        direct.write(data)
     }
 
     func reportSize(cols: UInt16, rows: UInt16) {
@@ -116,11 +117,58 @@ final class TerminalInputChannel {
         pendingResize?.cancel()
         pendingResize = nil
         lastSentSize = size
-        continuation?.yield(.resize(cols: size.cols, rows: size.rows))
+        direct.yield(.resize(cols: size.cols, rows: size.rows))
     }
 
     deinit {
         pendingResize?.cancel()
-        continuation?.finish()
+        direct.detach()
+    }
+}
+
+/// `TerminalInputChannel` 那条 FIFO 的入口：拿着锁换续体、往里排。任意线程可调。
+nonisolated final class TerminalInputSink: @unchecked Sendable {
+    enum Input: Sendable {
+        case data(Data)
+        case resize(cols: UInt16, rows: UInt16)
+        case connect(CheckedContinuation<Void, any Error>)
+    }
+
+    private let lock = NSLock()
+    private var continuation: AsyncStream<Input>.Continuation?
+
+    var isAttached: Bool { lock.withLock { continuation != nil } }
+
+    /// 排进一块输入。没绑定时丢弃。
+    func write(_ data: Data) {
+        _ = yield(.data(data))
+    }
+
+    /// 排进去了返回 true（没绑定、队列已结束返回 false）。拿着锁 yield：两条线程同时写时，先拿到锁的先进队列。
+    @discardableResult
+    func yield(_ input: Input) -> Bool {
+        lock.withLock {
+            guard let continuation else { return false }
+            if case .enqueued = continuation.yield(input) { return true }
+            return false
+        }
+    }
+
+    func attach(_ next: AsyncStream<Input>.Continuation) {
+        let previous = lock.withLock {
+            let previous = continuation
+            continuation = next
+            return previous
+        }
+        previous?.finish()
+    }
+
+    func detach() {
+        let previous = lock.withLock {
+            let previous = continuation
+            continuation = nil
+            return previous
+        }
+        previous?.finish()
     }
 }

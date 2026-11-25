@@ -230,6 +230,7 @@ final class GhosttyMeasureTests: XCTestCase {
     /// - session：真 `TerminalSession` + `EchoBackend`：输入走 `TerminalInputChannel`，回显走输出泵
     ///   （先喂影子终端，再转给 surface）。
     /// - local-shell / local-window[-zsh] / ssh-held / ssh-inproc / ssh-persistent：真 PTY，见 `runShellEcho`。
+    ///   名字里带 `-nodirect`（如 `local-shell-nodirect`）关掉击键直写，击键先回主线程再进输入通道，和不带的交替对照。
     ///
     /// 出帧：以 IOSurface 设成图层 contents、且光标已经移到下一格为准。每个配置开测前先记 1 秒空闲时交了几帧（应为 0）。
     ///
@@ -440,7 +441,7 @@ final class GhosttyMeasureTests: XCTestCase {
         -> (latencies: [Double], parts: [String: [Double]], misses: Int) {
         let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
         let inWindow = config.hasPrefix("local-window")
-        let atPrompt = config.hasSuffix("-zsh")
+        let atPrompt = config.contains("-zsh")
         let session: TerminalSession
         let window: NSWindow
         var model: LocalShellWindowModel?
@@ -462,6 +463,8 @@ final class GhosttyMeasureTests: XCTestCase {
             container.layoutSubtreeIfNeeded()
         }
         session.attentionSink = { _ in }
+        // `-nodirect`：关掉击键直写（`TerminalSurfaceLink.directInput`），击键照旧先回主线程再进输入通道（对照用）。
+        if config.contains("-nodirect") { session.link.directInput = nil }
         let bridge = session.ghostty
         defer {
             model?.disposeAll()

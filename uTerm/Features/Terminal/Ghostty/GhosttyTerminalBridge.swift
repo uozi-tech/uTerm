@@ -58,6 +58,12 @@ final class GhosttyTerminalBridge {
         view = GhosttySurfaceView(frame: .zero)
         link.attach(view)
         link.onSurfaceInput = { [weak self] in self?.ghosttyDidWrite($0) }
+        // 击键在 IO 线程上直接进会话的输入通道，不先回主线程（见 `TerminalInputChannel`）；主线程上只给测试报一声。
+        link.directInput = { [sink = owner.inputChannel.direct] data in
+            sink.write(data)
+            return true
+        }
+        link.onSurfaceInputSent = { [weak self] in self?.onWriteForTesting?($0) }
         link.onGridReported = { [weak self] viewport in
             self?.ghosttyDidResize(cols: Int(viewport.columns), rows: Int(viewport.rows))
         }

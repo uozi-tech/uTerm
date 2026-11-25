@@ -175,6 +175,14 @@ final class GhosttyTerminalBridge {
         view.onFocusReport = { [weak self] in self?.focusReportChanged($0) }
         // surface 写出的（击键、它答的查询）和影子替它答的走同一条路回后端。
         link.onSurfaceInput = { [weak self] in self?.surfaceInput($0) }
+        // 击键在 IO 线程上直接进输入通道，不等主线程（按键之后主线程还要忙几 ms 系统键盘的后半段）。焦点报告要按这里记的
+        // 状态改写（见 `surfaceInput`），照旧回主线程。
+        link.directInput = { [sink = input.direct] data in
+            guard data != Self.focusIn, data != Self.focusOut else { return false }
+            sink.write(data)
+            return true
+        }
+        link.onSurfaceInputSent = { [weak self] in self?.inputLog?.append($0) }
         link.onShadowReply = { [weak self] in self?.userInput($0) }
         // 程序写剪贴板（OSC 52）：以影子为准。影子从快照还原时不解析字节、喂历史时不调，都不会再写。
         link.onClipboardWrite = { [weak self] in self?.pasteboard.string = $0 }
@@ -402,8 +410,8 @@ final class GhosttyTerminalBridge {
 
     // MARK: 焦点报告（DEC 1004）
 
-    private static let focusIn = Data([0x1B, 0x5B, 0x49])    // CSI I
-    private static let focusOut = Data([0x1B, 0x5B, 0x4F])   // CSI O
+    private nonisolated static let focusIn = Data([0x1B, 0x5B, 0x49])    // CSI I
+    private nonisolated static let focusOut = Data([0x1B, 0x5B, 0x4F])   // CSI O
 
     /// 照换引擎之前（旧引擎 iOS 视图）的规则报焦点：成为第一响应者报 `CSI I`、放弃报 `CSI O`，只在程序开着 1004 时报
     ///（模式读影子，surface 在不在都一样）；进出后台、标签藏起来不动第一响应者，也就不报。和旧引擎不同的一点：状态没变不重报
