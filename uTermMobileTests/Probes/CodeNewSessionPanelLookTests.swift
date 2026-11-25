@@ -116,18 +116,23 @@ final class CodeNewSessionPanelLookTests: XCTestCase {
         let tab = try await makeTab()
         let (window, cover) = try await present(tab)
         let draft = try XCTUnwrap(tab.newSessionDraft)
-        // 同点「输入路径…」那一行。
+        // 同点「输入路径…」那一行：先截一张键盘还没起来时的（按钮位置作对照），再看输入框自己拿到焦点。
         draft.typing = AgentHistoryPathEntry(text: draft.display(MobileAgentHistoryFixture.shop))
-        try await Task.sleep(for: .milliseconds(500))
+        var field: UITextField?
+        for _ in 0..<20 where field == nil {
+            try await Task.sleep(for: .milliseconds(10))
+            field = textField(in: cover.view)
+        }
         let before = try shot("typing", window)
-        let field = try XCTUnwrap(textField(in: cover.view), "找不到输入框")
+        let input = try XCTUnwrap(field, "找不到输入框")
+        let fieldView = input
         // 「取消」「选择」并排、和输入框一样宽：取输入框右沿往里一点那一列（「选择」右侧没有字；宽屏上卡片限宽居中）。
-        let chooseX = field.convert(field.bounds, to: nil).maxX - 4
+        let chooseX = fieldView.convert(fieldView.bounds, to: nil).maxX - 4
         let chooseBefore = try XCTUnwrap(accentSpan(in: before, atX: chooseX), "画面里找不到「选择」")
 
-        print("PANEL-FOCUS 换成输入框时自动拿到焦点：\(field.isFirstResponder)")
-        field.becomeFirstResponder()
+        // 不再手动 becomeFirstResponder：换成输入框后它自己拿焦点、弹键盘，不用再点一下。
         for _ in 0..<30 where keyboardFrame.height == 0 { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertTrue(fieldView.isFirstResponder, "换成输入框后自己拿到焦点")
         try await Task.sleep(for: .milliseconds(900))
         let screen = window.screen.bounds
         let keyboard = keyboardFrame.intersection(screen)
@@ -136,7 +141,7 @@ final class CodeNewSessionPanelLookTests: XCTestCase {
             throw XCTSkip("没弹软键盘（模拟器接着硬件键盘）：键盘遮挡要在真机上量")
         }
         let choose = try XCTUnwrap(accentSpan(in: focused, atX: chooseX), "画面里找不到「选择」")
-        let fieldFrame = field.convert(field.bounds, to: nil)
+        let fieldFrame = fieldView.convert(fieldView.bounds, to: nil)
         print("PANEL-KEYBOARD screen=\(screen) keyboard=\(keyboard) field=\(fieldFrame) choose=\(choose) "
               + "chooseBefore=\(chooseBefore) gap=\(keyboard.minY - choose.upperBound) moved=\(chooseBefore.lowerBound - choose.lowerBound)")
         XCTAssertLessThanOrEqual(fieldFrame.maxY, keyboard.minY, "输入框被键盘挡住")

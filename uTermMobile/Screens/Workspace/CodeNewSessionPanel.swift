@@ -128,7 +128,7 @@ struct CodeNewSessionPanel: View {
         return VStack(alignment: .leading, spacing: 8) {
             MSectionCap(text: AgentHistoryText.enterPathTitle)
             MInput(text: $entry.text, placeholder: AgentHistoryText.enterPathPlaceholder, mono: true,
-                   keyboard: .asciiCapable)
+                   keyboard: .asciiCapable, autofocus: true)
                 .submitLabel(.done)
                 .onSubmit { submit(entry) }
             Text(entry.message ?? AgentHistoryText.enterPathHint)

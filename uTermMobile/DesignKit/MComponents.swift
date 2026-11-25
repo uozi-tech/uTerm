@@ -139,6 +139,8 @@ struct MInput: View {
     var revealable: Bool = false
     var keyboard: UIKeyboardType = .default
     var autocap: TextInputAutocapitalization = .never
+    /// 出现时就拿焦点、弹键盘（点一下才换出来的输入框，别让人再点一次）。
+    var autofocus: Bool = false
 
     @FocusState private var focused: Bool
     @State private var revealed = false
@@ -168,6 +170,12 @@ struct MInput: View {
         .background(M.inputBg)
         .overlay(RoundedRectangle(cornerRadius: MRadius.lg).stroke(focused ? accent : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
+        .task {
+            guard autofocus else { return }
+            // 等这一拍布局落地再给焦点：刚插进视图树的输入框当场要焦点，有时 UIKit 那边还没挂上、要不到。
+            await Task.yield()
+            focused = true
+        }
     }
 
     /// 掩码 ⇄ 明文。`SecureField` 与 `TextField` 是两个不同的 UIKit 视图，换一个必然丢焦点
