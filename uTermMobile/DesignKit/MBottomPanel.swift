@@ -71,9 +71,14 @@ private struct MBottomPanelChrome<Panel: View>: View {
     var onDismiss: () -> Void
     @ViewBuilder var panel: Panel
     @State private var drag: CGFloat = 0
+    /// 系统键盘（或外接键盘的快捷栏）露着。SwiftUI 的安全区分不出底部那一截是 Home 条还是键盘
+    ///（忽略键盘区域的视图读到的底部安全区照样含键盘），只能听键盘的通知。
+    @State private var keyboardShown = false
 
     var body: some View {
         GeometryReader { proxy in
+            // 键盘弹出时 `proxy` 的底部安全区就是键盘的高度。卡片已经停在键盘上沿（外层只让出了容器的底边、没让键盘），
+            // 内容底下再按它留白就等于被键盘的高度抬了两次：按钮离键盘空出一大截。这时只留固定的 24pt。
             ZStack(alignment: .bottom) {
                 // 不用 M.backdrop：它在日间是透明的（设计语言 v2），面板会和底下的页面混在一起。
                 Color.black.opacity(MBottomPanelMetrics.scrimOpacity)
@@ -86,12 +91,18 @@ private struct MBottomPanelChrome<Panel: View>: View {
                     .accessibilityLabel(Text("关闭"))
                     .accessibilityAddTraits(.isButton)
                 if shown {
-                    card(bottomSafeArea: proxy.safeAreaInsets.bottom)
+                    card(bottomSafeArea: keyboardShown ? 0 : proxy.safeAreaInsets.bottom)
                         .transition(.move(edge: .bottom))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .ignoresSafeArea(.container, edges: .bottom)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardShown = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardShown = false
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.9), value: shown)
         .onAppear { shown = true }
@@ -106,7 +117,7 @@ private struct MBottomPanelChrome<Panel: View>: View {
                 .accessibilityHidden(true)
             panel
                 .padding(.horizontal, MBottomPanelMetrics.contentInset)
-                // 卡片伸到 Home 条底下：内容让出 Home 条，再留 24pt 离开底部大圆角。
+                // 卡片伸到 Home 条底下：内容让出 Home 条，再留 24pt 离开底部大圆角。键盘弹出时卡片停在键盘上沿，只留 24pt。
                 .padding(.bottom, 24 + max(0, bottomSafeArea - MBottomPanelMetrics.screenInset))
         }
         .frame(maxWidth: MBottomPanelMetrics.maxWidth)
