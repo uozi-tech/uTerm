@@ -17,9 +17,10 @@ import PackageDescription
 ///
 /// 进程内 SSH 测试服务端 `USSHTestServer` 也编进这个 framework：macOS 的测试 bundle 由 App 宿主、
 /// 不声明任何包依赖（声明了 Xcode 会改成动态链接、漏掉链接任务），它要的 USSHCore / NIOSSH 只能从这里来；
-/// 单独再链一份就是两份 NIOSSH（重复的类型与进程级的算法登记表）。代价是测试服务端的代码随 App 发布
-/// （它的依赖闭包本来就在这里，只多它自己那部分）。SwiftPM 的依赖不能按 Debug / Release 区分，没有更干净的办法。
-/// Citadel 时代同理：它的 `SSHServer` 一直在这个 framework 里。iOS 的测试不起 SSH 服务端，不链它。
+/// 单独再链一份就是两份 NIOSSH（重复的类型与进程级的算法登记表）。它不随 App 发布：SwiftPM 的依赖不能按
+/// Debug / Release 区分，所以 uAppKit 改用编译条件——`USSHTestServer` 的源码整个包在 `#if USSH_TEST_SERVER` 里，
+/// 这个条件只在 debug 配置下定义（Xcode 的 Debug 对应 `.debug`），Release 下它是空模块（framework 里没有它的
+/// 符号）。代价是 Release 配置编不过测试，测试本来就用 Debug。iOS 的测试不起 SSH 服务端，不链它。
 let package = Package(
     name: "USSHStack",
     platforms: [
