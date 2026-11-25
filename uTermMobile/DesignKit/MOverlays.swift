@@ -11,7 +11,17 @@ struct MCenterModalContainer<Content: View>: View {
     var width: CGFloat = 360
     @ViewBuilder var content: Content
 
+    /// 放得下就居中摆着；放不下（键盘弹着、横屏、分屏的矮格子）就整张卡片可滚动。
+    /// 不能让外面的高度去挤卡片：多行文字会被压扁、溢出底下的框，按钮也可能被挤到键盘后面。
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            card
+            ScrollView { card }
+                .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private var card: some View {
         content
             .frame(maxWidth: width)
             .background(M.overlayHi)
