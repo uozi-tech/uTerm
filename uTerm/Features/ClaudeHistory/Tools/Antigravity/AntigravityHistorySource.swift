@@ -130,7 +130,8 @@ actor AntigravityHistorySource: AgentHistorySource {
             do {
                 entries = try await provider.list(path: brain)
             } catch {
-                if (try? await provider.stat(brain)) == nil { continue }
+                // 只认明确的「不存在」：断线、辅助程序一时连不上时照常报（见 `AgentHistoryMissingPath`）。
+                if await AgentHistoryMissingPath.confirmsAbsent(brain, after: error, provider: provider) { continue }
                 throw error
             }
             let infos = (try? await index.conversations(root: rootPath, provider: provider)) ?? [:]
@@ -173,13 +174,23 @@ actor AntigravityHistorySource: AgentHistorySource {
 
     func sessions(in project: AgentHistoryProject) async throws -> [AgentHistorySessionFile] {
         let all = try await currentConversations()
-        return await files(for: all.filter { $0.projectID == project.id }.map { ($0, project) })
+        let listing = await files(for: all.filter { $0.projectID == project.id }.map { ($0, project) })
+        if let error = listing.error { throw error }
+        return listing.files
     }
 
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
-        guard let all = try? await currentConversations() else { return [] }
+        await listAllSessions(in: projects).files
+    }
+
+    /// 有会话列不出来（断线、辅助程序一时连不上）的项目报成列不出来：后台重列留着它们上一次列到的会话。
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
+        guard let all = try? await currentConversations() else {
+            return AgentHistorySessionListing(files: [], failedProjects: Set(projects.map(AgentHistoryProjectKey.init)))
+        }
         let byID = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return await files(for: all.compactMap { conversation in byID[conversation.projectID].map { (conversation, $0) } })
+        let listing = await files(for: all.compactMap { conversation in byID[conversation.projectID].map { (conversation, $0) } })
+        return AgentHistorySessionListing(files: listing.files, failedProjects: listing.failedProjects)
     }
 
     private func currentConversations() async throws -> [Conversation] {
@@ -189,29 +200,51 @@ actor AntigravityHistorySource: AgentHistorySource {
         return found
     }
 
-    /// 每个会话列一次 `logs/`（一趟拿到大小和修改时间），没有记录的跳过。新的在前。
-    private func files(for members: [(Conversation, AgentHistoryProject)]) async -> [AgentHistorySessionFile] {
+    /// 每个会话列一次 `logs/`（一趟拿到大小和修改时间），没有记录的跳过。新的在前。`logs/` 列不出来（不是「不存在」）
+    /// 的会话所在的项目记进 `failedProjects`，`error` 是其中一个错误。
+    private func files(for members: [(Conversation, AgentHistoryProject)]) async
+        -> (files: [AgentHistorySessionFile], failedProjects: Set<AgentHistoryProjectKey>, error: (any Error)?) {
         var result: [AgentHistorySessionFile] = []
+        var failed: Set<AgentHistoryProjectKey> = []
+        var firstError: (any Error)?
         var next = 0
         let provider = provider
-        await withTaskGroup(of: AgentHistorySessionFile?.self) { group in
+        await withTaskGroup(of: (AgentHistoryProject, Result<AgentHistorySessionFile?, any Error>).self) { group in
             func launch() {
                 let (conversation, project) = members[next]
                 next += 1
-                group.addTask { await Self.file(of: conversation, in: project, provider: provider) }
+                group.addTask {
+                    do {
+                        return (project, .success(try await Self.file(of: conversation, in: project, provider: provider)))
+                    } catch {
+                        return (project, .failure(error))
+                    }
+                }
             }
             while next < min(Self.listConcurrency, members.count) { launch() }
-            while let file = await group.next() {
-                if let file { result.append(file) }
+            while let (project, outcome) = await group.next() {
+                switch outcome {
+                case .success(let file):
+                    if let file { result.append(file) }
+                case .failure(let error):
+                    failed.insert(AgentHistoryProjectKey(project))
+                    if firstError == nil { firstError = error }
+                }
                 if next < members.count { launch() }
             }
         }
-        return result.sorted { $0.modifiedAt > $1.modifiedAt }
+        return (result.sorted { $0.modifiedAt > $1.modifiedAt }, failed, firstError)
     }
 
+    /// 一个会话的记录文件；没有记录（`logs/` 不存在、读不了、里面没有记录文件）为 nil。别的失败（断线）照常抛。
     private nonisolated static func file(of conversation: Conversation, in project: AgentHistoryProject,
-                                         provider: any SFTPProviding) async -> AgentHistorySessionFile? {
-        guard let entries = try? await provider.list(path: conversation.logs) else { return nil }
+                                         provider: any SFTPProviding) async throws -> AgentHistorySessionFile? {
+        let entries: [RemoteEntry]
+        do {
+            entries = try await provider.list(path: conversation.logs)
+        } catch where AgentHistoryMissingPath.isNotFound(error) || AgentHistoryMissingPath.isPermissionDenied(error) {
+            return nil
+        }
         let byName = Dictionary(entries.filter { !$0.isDirectory }.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         guard let entry = byName[fullTranscriptName] ?? byName[shortTranscriptName] else { return nil }
         let path = conversation.logs + "/" + entry.name
