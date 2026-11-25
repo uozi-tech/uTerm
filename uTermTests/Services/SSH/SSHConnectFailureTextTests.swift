@@ -21,6 +21,8 @@ final class SSHConnectFailureTextTests: XCTestCase {
         XCTAssertEqual(SSHConnectFailureText.kind(of: refused), .refused)
         XCTAssertEqual(SSHConnectFailureText.kind(of: reset), .closedBeforeHandshake)
         XCTAssertEqual(SSHConnectFailureText.kind(of: SSHDisconnectReason.remoteClosed.userDescription), .closedBeforeHandshake)
+        // 同一种情形有时报成写握手时通道已关（全量并行跑时实测）。
+        XCTAssertEqual(SSHConnectFailureText.kind(of: "I/O on closed channel（NIOCore.ChannelError）"), .closedBeforeHandshake)
         XCTAssertEqual(SSHConnectFailureText.kind(of: "connect: Operation timed out (errno: 60)"), .timedOut)
         XCTAssertEqual(SSHConnectFailureText.kind(of: "connect: No route to host (errno: 65)"), .hostUnreachable)
         XCTAssertEqual(SSHConnectFailureText.kind(of: "connect: Network is unreachable (errno: 51)"), .networkUnreachable)

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import NIOCore
 import USSHKit
 
 /// 连不上的时候说清楚是哪一种：拒绝连接、主机不可达、超时、在 SSH 握手前就被断开……
@@ -7,8 +8,9 @@ import USSHKit
 /// USSHKit 把底层的建连错误收成 `.connectFailed(String)`，正文是底层错误的原话（NIO 的
 /// `connect(descriptor:addr:size:): Connection refused (errno: 61)` 之类）。原话说不清楚，「被对方重置」
 /// 更像是「连接断了」——用户对一台已经关掉的服务器点重试，看到的却像是连上又断了（实机：开着代理 TUN 时，
-/// 连不上的地址也是先被代理接下、随即断开）。这里按两样不随语言变化的东西归类：NIO 错误里带的 errno 编号，
-/// 以及 USSHKit 自己给「握手前对方关闭」的那一句（`SSHDisconnectReason.remoteClosed.userDescription`）。
+/// 连不上的地址也是先被代理接下、随即断开）。这里按不随语言变化的东西归类：NIO 错误里带的 errno 编号、
+/// USSHKit 自己给「握手前对方关闭」的那一句（`SSHDisconnectReason.remoteClosed.userDescription`），
+/// 以及 NIO `ChannelError` 的描述（对方接下就关时也会是「I/O on closed channel」）。
 /// 认不出的原样返回，不猜。
 nonisolated enum SSHConnectFailureText {
 
@@ -25,6 +27,10 @@ nonisolated enum SSHConnectFailureText {
     /// `.connectFailed` 的正文 → 归类。认不出为 nil。
     static func kind(of detail: String) -> Kind? {
         if detail == SSHDisconnectReason.remoteClosed.userDescription { return .closedBeforeHandshake }
+        // 对方接下就关、本端写握手时撞上已关的通道：NIO 的 `ChannelError`（描述是 NIO 自己的英文，不随语言变）。
+        if closedChannelErrors.contains(where: { detail.hasPrefix(String(describing: $0)) }) {
+            return .closedBeforeHandshake
+        }
         guard let code = errno(in: detail) else { return nil }
         switch code {
         case ECONNREFUSED: return .refused
@@ -35,6 +41,8 @@ nonisolated enum SSHConnectFailureText {
         default: return nil
         }
     }
+
+    private static let closedChannelErrors: [ChannelError] = [.ioOnClosedChannel, .alreadyClosed, .eof, .outputClosed, .inputClosed]
 
     /// 改写成说清原因的一句；认不出的原样返回。
     static func refine(_ detail: String, host: String, port: Int) -> String {
