@@ -101,6 +101,59 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         XCTAssertEqual(differingRows(still, dragging, from: below), 0, "落点出现时下面的列表不动")
     }
 
+    /// 顶上跑着的会话那一行悬停时右上角的 ×（结束会话）：盖在行上，不挤这一行的字、不推动下面的列表——
+    /// 和没悬停时比，变了的像素只在右端那一小块里。悬停拍不到，用画廊的口子（`catalogHovered`）摆出来。
+    func testRunRowEndButtonDoesNotShiftTheRow() async throws {
+        let plain = try await runRowSnapshot(hovered: false)
+        let hovered = try await runRowSnapshot(hovered: true)
+        let changed = changedBox(plain, hovered)
+        let box = try XCTUnwrap(changed, "悬停时出 ×")
+        let scale = CGFloat(plain.pixelsWide) / plain.size.width
+        XCTAssertGreaterThan(box.minX, (300 - 40) * scale, "变的只在右端：行里的字没挪")
+        XCTAssertLessThan(box.height, 26 * scale, "只有那个 × 的高度：下面的行没被推动")
+    }
+
+    private func runRowSnapshot(hovered: Bool) async throws -> NSBitmapImageRep {
+        let history = await history()
+        AgentHistoryRunRowActions.catalogHovered = hovered
+        defer { AgentHistoryRunRowActions.catalogHovered = false }
+        let row = AgentHistoryRunRow(id: UUID(), title: AgentHistoryText.newSession, tool: .claude, directory: "/srv/shop",
+                                     isSelected: false, path: nil, status: AgentHistoryRunStatus { .running })
+        let actions = AgentHistoryRunActions(end: { _ in }, showRecord: { _ in }, showTerminal: { _ in }, moveToTab: nil)
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
+                                      key: true, placement: .transparentOnScreen)
+        let host = NSHostingView(rootView: AgentHistorySessionList(
+            history: history, running: AgentHistoryRunning(rows: { [row] }, onSelect: { _ in }, actions: actions))
+            .frame(width: 300, height: 600)
+            .background(UD.card))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
+        window.contentView = host
+        defer {
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+        for _ in 0..<6 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return rep
+    }
+
+    /// 两张图不一样的像素围成的框（像素坐标）。一样时为 nil。
+    private func changedBox(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> CGRect? {
+        var minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
+        for y in 0..<min(a.pixelsHigh, b.pixelsHigh) {
+            for x in 0..<min(a.pixelsWide, b.pixelsWide) where a.colorAt(x: x, y: y) != b.colorAt(x: x, y: y) {
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= 0 else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
     /// 跟手的卡片：拍成图，看中间偏右（字的右边、没有字的地方）是不是不透明的底。
     func testDragPreviewIsAnOpaqueCard() async throws {
         let history = await history()

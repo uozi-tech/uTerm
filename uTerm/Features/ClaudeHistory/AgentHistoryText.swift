@@ -337,6 +337,11 @@ enum AgentHistoryText {
         String(localized: "关闭", comment: "Code 标签页：会话结束后，关掉留着的终端")
     }
 
+    /// 结束一个在 Code 标签页里跑着的会话（Mac：终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×；iOS 同名菜单项）。
+    static var endSession: String {
+        String(localized: "结束会话")
+    }
+
     static func newSessionHelp(directory: String?) -> String {
         guard let directory else { return String(localized: "不知道终端当前在哪个目录，无法新开会话") }
         return String(localized: "在 \(directory) 里新开一个会话")

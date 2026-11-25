@@ -67775,6 +67775,35 @@
         }
       }
     },
+    "结束会话会关闭这个终端，里面的程序可能被中断。" : {
+      "comment" : "Code 标签页里结束一个会话前的确认",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ending the session closes this terminal. Programs running in it may be interrupted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションを終了するとこのターミナルが閉じ、実行中のプログラムが中断される可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션을 종료하면 이 터미널이 닫히며, 실행 중인 프로그램이 중단될 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結束工作階段會關閉這個終端機，裡面的程式可能會被中斷。"
+          }
+        }
+      }
+    },
     "结果" : {
       "localizations" : {
         "en" : {

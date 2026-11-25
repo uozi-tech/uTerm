@@ -22,6 +22,8 @@ struct CodeTabView: View {
     let terminal: (any CodeTabTerminal, _ ended: Bool) -> AnyView
     /// 「移到新标签页」；nil = 不出这个按钮。
     var onMoveToTab: ((UUID) -> Void)? = nil
+    /// 「结束会话」：宿主先问前台程序（`TerminalCloseGuard.requestEndSession`），再结束。nil = 不出这个按钮。
+    var onEndRun: ((UUID) -> Void)? = nil
 
     var body: some View {
         content
@@ -41,7 +43,8 @@ struct CodeTabView: View {
                     UDButton(title: String(localized: "重试")) { Task { await connection.open() } }
                 }
             case .ready(let history):
-                CodeTabBrowser(code: code, history: history, terminal: terminal, onMoveToTab: onMoveToTab)
+                CodeTabBrowser(code: code, history: history, terminal: terminal, onMoveToTab: onMoveToTab,
+                               onEndRun: onEndRun)
             }
         } else {
             RemoteMacProgressView(text: String(localized: "正在连接…"))
@@ -58,6 +61,7 @@ private struct CodeTabBrowser: View {
     let history: AgentHistoryModel
     let terminal: (any CodeTabTerminal, _ ended: Bool) -> AnyView
     let onMoveToTab: ((UUID) -> Void)?
+    let onEndRun: ((UUID) -> Void)?
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -115,6 +119,7 @@ private struct CodeTabBrowser: View {
             reveal: code.reveal,
             running: AgentHistoryRunning(rows: {
                 let selected = code.displayedRun?.id
+                let showsRecord = code.detail == .transcript
                 return code.runs.map { run in
                     let terminal = run.terminal
                     let ended = run.isEnded
@@ -124,12 +129,25 @@ private struct CodeTabBrowser: View {
                         status: AgentHistoryRunStatus {
                             if ended { return .ended }
                             return terminal.codeProgramStatus.map { .program($0) } ?? .running
-                        })
+                        },
+                        showsRecord: showsRecord && run.id == selected)
                 }
-            }) { id in
+            }, onSelect: { id in
                 code.selectRun(id)
                 code.sidebarOverlayShown = false
-            },
+            }, actions: onEndRun.map { end in
+                AgentHistoryRunActions(
+                    end: end,
+                    showRecord: { id in
+                        code.showRecord(of: id)
+                        code.sidebarOverlayShown = false
+                    },
+                    showTerminal: { id in
+                        code.selectRun(id)
+                        code.sidebarOverlayShown = false
+                    },
+                    moveToTab: onMoveToTab)
+            }),
             onCollapse: onCollapse)
     }
 
@@ -157,7 +175,7 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页）。
+    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页、结束会话）。
     /// 右边显示着终端本身就说明在跑，不再写「运行中」。与侧栏顶部那一行等高，中间的竖线上下贯通。
     private func runHeader(_ run: CodeTabModel.Run) -> some View {
         let title = code.title(of: run)
@@ -179,10 +197,10 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「移到新标签页」。没对上记录的新会话没有记录可看。
+    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「移到新标签页」、「结束会话」。没对上记录的新会话没有记录可看。
     @ViewBuilder private func runMenu(_ run: CodeTabModel.Run) -> some View {
         let showsRecord = code.detail == .transcript
-        if run.path != nil || onMoveToTab != nil {
+        if run.path != nil || onMoveToTab != nil || onEndRun != nil {
             Menu {
                 if run.path != nil {
                     Button(showsRecord ? String(localized: "返回终端") : Self.viewRecord) {
@@ -191,6 +209,10 @@ private struct CodeTabBrowser: View {
                 }
                 if let onMoveToTab {
                     Button(Self.moveToTab) { onMoveToTab(run.id) }
+                }
+                if let onEndRun {
+                    Divider()
+                    Button(AgentHistoryText.endSession, role: .destructive) { onEndRun(run.id) }
                 }
             } label: {
                 Image(systemName: "ellipsis")

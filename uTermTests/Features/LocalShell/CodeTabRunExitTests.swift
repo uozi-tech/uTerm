@@ -308,6 +308,76 @@ final class CodeTabRunExitTests: XCTestCase {
         XCTAssertEqual(code.detail, .empty, "右边回到起始页")
     }
 
+    /// 记下确认框被问了什么，按预设的回答答。
+    private final class ConfirmRecorder {
+        var prompts: [TerminalClosePrompt] = []
+        var answer = false
+        func ask(_ prompt: TerminalClosePrompt) -> Bool {
+            prompts.append(prompt)
+            return answer
+        }
+    }
+
+    /// 「结束会话」：前台还有程序在跑（这里是 `sleep`）时先问，用的是关终端标签页那一套探测与提示；取消就不动，
+    /// 确认才结束，右边回到起始页（没有记录的新会话）。
+    func test_end_session_asks_first_while_a_program_is_running() async throws {
+        let model = localModel()
+        let window = window(LocalShellTerminalArea(model: model))
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
+        let codeID = model.openCodeTab(directory: directory)
+        let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
+        code.install(await fakeConnection(directory: directory, command: Self.fakeTool))
+        let started = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '\(directory)' && sleep 600",
+                                                         directory: directory))
+        let run = try XCTUnwrap(model.pane(started.id))
+        await wait("sleep 跑起来") { await run.session.foregroundActivity() == .running("sleep") }
+        let session: (any CodeTabTerminal) -> TerminalSession? = { ($0 as? LocalShellPane)?.session }
+
+        let recorder = ConfirmRecorder()
+        await TerminalCloseGuard.requestEndSession(run.id, in: code, session: session,
+                                                   confirm: { recorder.ask($0) })?.value
+        XCTAssertEqual(recorder.prompts.count, 1, "前台有程序在跑：先问")
+        XCTAssertEqual(recorder.prompts.first?.title, TerminalActivity.running("sleep").closePrompt()?.title,
+                       "标题同关终端标签页")
+        XCTAssertEqual(recorder.prompts.first, TerminalActivity.running("sleep").closePrompt()?.endingSession)
+        XCTAssertFalse(run.isDisposed, "取消：不动")
+        XCTAssertEqual(code.runs.map(\.id), [run.id])
+        XCTAssertEqual(code.detail, .terminal(run.id))
+
+        recorder.answer = true
+        await TerminalCloseGuard.requestEndSession(run.id, in: code, session: session,
+                                                   confirm: { recorder.ask($0) })?.value
+        XCTAssertEqual(recorder.prompts.count, 2)
+        XCTAssertTrue(run.isDisposed, "确认：结束这个终端")
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .empty, "没有记录的新会话：回到起始页")
+        XCTAssertEqual(model.groups.allTabs.map(\.id), [codeID], "Code 标签页还在")
+    }
+
+    /// 已结束、留着画面的会话（程序已经退出）：「结束会话」不问，同「关闭」。
+    func test_end_session_on_an_ended_session_does_not_ask() async throws {
+        let model = localModel()
+        let window = window(LocalShellTerminalArea(model: model))
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
+        let (code, ended, _) = try await endedNewSession(model, window: window, directory: directory)
+        let recorder = ConfirmRecorder()
+        let task = TerminalCloseGuard.requestEndSession(ended.id, in: code, session: { ($0 as? LocalShellPane)?.session },
+                                                        confirm: { recorder.ask($0) })
+        XCTAssertNil(task, "不用探测")
+        XCTAssertTrue(recorder.prompts.isEmpty)
+        XCTAssertTrue(ended.isDisposed)
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertEqual(code.detail, .empty)
+    }
+
     /// 新会话里说过话、记录写出来了：照旧回到记录（不留终端）。
     func test_new_session_with_a_conversation_goes_back_to_its_record() async throws {
         let model = localModel()

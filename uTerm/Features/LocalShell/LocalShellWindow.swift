@@ -757,7 +757,8 @@ struct LocalShellTerminalArea: View {
                 if ended { return AnyView(RemoteControlledTerminal(session: pane.session).background(background)) }
                 return AnyView(LocalShellPaneView(pane: pane, background: background) { _ = code.end(pane.id) })
             },
-            onMoveToTab: { runID in model.moveCodeRunToTab(runID, fromCodeTab: tabID) })
+            onMoveToTab: { runID in model.moveCodeRunToTab(runID, fromCodeTab: tabID) },
+            onEndRun: { runID in TerminalCloseGuard.requestEndSession(runID, in: code) { ($0 as? LocalShellPane)?.session } })
     }
 
     /// 在每个 chip 自己的 body 里求值：`shellTitle` 可能高频变化，只让这一枚标签跟着重算。
