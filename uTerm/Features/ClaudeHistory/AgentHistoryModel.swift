@@ -307,8 +307,12 @@ final class AgentHistoryModel {
             let listing = await source.listAllSessions(in: projects)
             listed = listing.files
             // 这一趟有项目没列出来（断线、辅助程序重启）：它们上一次列到的会话留着，不能一下子从侧栏上消失。
-            if !listing.failedProjects.isEmpty, previousScope == .all {
-                let kept = listedFiles.filter { listing.failedProjects.contains(AgentHistoryProjectKey($0.project)) }
+            // 一种工具这一趟连项目都没列出来（`toolFailures`）也一样：它的会话留着上一次列到的。
+            let failedTools = Set(toolFailures.keys)
+            if !listing.failedProjects.isEmpty || !failedTools.isEmpty, previousScope == .all {
+                let kept = listedFiles.filter {
+                    listing.failedProjects.contains(AgentHistoryProjectKey($0.project)) || failedTools.contains($0.tool)
+                }
                 let present = Set(listed.map(\.path))
                 listed = (listed + kept.filter { !present.contains($0.path) }).sorted { $0.modifiedAt > $1.modifiedAt }
             }
@@ -322,8 +326,17 @@ final class AgentHistoryModel {
 
     /// 只重列这几份记录所在的项目，别的项目照旧（Code 标签页里跑着的会话：记录一直在写，侧栏那一行与终端顶上的标题
     /// 跟着 Claude Code 后来起的名字走）。已经显示着的行一行都不收（同后台重列）。正在列的时候不插一脚，下次再来。
+    ///
+    /// 其中有的已经不在列表里了（之前的一趟重列漏了它，比如辅助程序一时连不上、那种工具一份项目都没列出来）：
+    /// 从列表里找不到它在哪个项目，只重列项目就永远补不回来，改成整个重列一次（不闪「正在读取」）。只在列全部项目时这样：
+    /// 只列一个项目时，别的项目里的记录本来就不在列表里。
     func refreshProjects(containing paths: Set<String>) async {
         guard phase == .ready, !isListing, !paths.isEmpty else { return }
+        let listed = Set(listedFiles.map(\.path))
+        if scope == .all, !paths.isSubset(of: listed) {
+            await reload(showsLoading: false)
+            return
+        }
         var projects: [AgentHistoryProjectKey: AgentHistoryProject] = [:]
         for file in listedFiles where paths.contains(file.path) { projects[AgentHistoryProjectKey(file.project)] = file.project }
         guard !projects.isEmpty else { return }
@@ -444,10 +457,15 @@ final class AgentHistoryModel {
             fill()
             return
         }
-        metadataKeys[file.path] = file.cacheKey
         if let result {
+            metadataKeys[file.path] = file.cacheKey
             metadata[file.path] = result
+        } else if metadata[file.path] != nil {
+            // 读过、这次重读失败（辅助程序一时连不上、断线）：留着上次读到的（标题不退回「（无标题）」），
+            // 这一趟不再读，下次重列时再读（`failed` 在重列时清掉，`metadataKeys` 没跟上文件，还会再读）。
+            failed.insert(file.path)
         } else {
+            metadataKeys[file.path] = file.cacheKey
             // 读不了的（文件刚被删、没权限）照样列着，标题显示文件名。不反复重试。
             failed.insert(file.path)
             metadata[file.path] = AgentHistorySessionMetadata(title: nil, isListed: true, lastDirectory: nil,

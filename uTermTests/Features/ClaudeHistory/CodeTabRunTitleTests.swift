@@ -211,6 +211,93 @@ final class CodeTabRunTitleTests: XCTestCase {
         try await waitUntil("继续的会话也跟着新名字") { code.runs.first.map { code.title(of: $0) } == "输入延迟：换个测法" }
     }
 
+    // MARK: 后台重列出岔子时标题不退回「（无标题）」
+
+    /// 实测（2026-11-25，build 1500）：同一个 Code 标签页里接回了两个会话，退出其中一个之后，另一个侧栏那一行与终端顶上
+    /// 都变成「（无标题）6d0608a6」，那一行也不再是列表里那份记录的样子（只写目录），之后一直这样。
+    ///
+    /// 退出会整个重列一次。那一趟要是没列出这份记录（辅助程序一时连不上：Claude Code 的项目目录列不出来、也取不到属性，
+    /// 数据源当成「没用过」，一份都不列），标题就只剩会话 ID；之后每 10 秒的重读只认列表里有的项目，永远补不回来。
+    /// 这里用假主机复现同样的形状：标题在末尾 64 KB 之外、靠往前找；另有一种工具的记录，所以那一趟照常列完。
+    func testRunKeepsItsTitleWhenAReloadMissesItsRecordAndComesBack() async throws {
+        let host = SQLiteTestHost(home: Self.home)
+        let mine = "6d0608a6-76df-4181-a620-48e53965caba"
+        let other = "3f2c8f87-b3ad-43be-bd14-6498e9b4b618"
+        await append(host, mine, Self.turn(prompt: "研究侧栏", title: "Code 视图侧边栏与 Desktop 差异", toolLines: 20)
+            + [Self.hugeLine()] + Self.turn(prompt: nil, title: nil, toolLines: 100), mtime: Date().addingTimeInterval(-30))
+        await append(host, other, Self.turn(prompt: "统筹", title: "多 Agent 进度统筹", toolLines: 5),
+                     mtime: Date().addingTimeInterval(-60))
+        await append(host, "old", Self.turn(prompt: "旧的", title: "以前的会话", toolLines: 2),
+                     mtime: Date().addingTimeInterval(-6000))
+        let codex = AgentHistoryFakeSource(tool: .codex, sessions: [
+            .init(id: "x1", projectID: "2026-11", projectDirectory: Self.directory, resumeDirectory: Self.directory,
+                  title: "Codex 的会话", modifiedAt: Date().addingTimeInterval(-9000)),
+        ])
+        let source = AgentHistoryCompositeSource([ClaudeHistorySource(provider: host, home: Self.home), codex])
+        let history = AgentHistoryModel(source: source, preferredDirectory: Self.directory, followsCurrentProject: false)
+        let code = CodeTabModel(hostName: "mac", directory: Self.directory) { _ in FakeTerminal() }
+        code.timing = .init(check: .milliseconds(20), refresh: .milliseconds(60))
+        defer { code.close() }
+        // App 重启后接回的两个会话（同实测：都是在 App 不在时就跑着的）。
+        let mineTerminal = FakeTerminal(), otherTerminal = FakeTerminal()
+        let started = Date().addingTimeInterval(-3600)
+        code.restore(CodeTabRecord(id: UUID(), directory: Self.directory, runs: [
+            CodeRunRecord(session: otherTerminal.id, tool: .claude, sessionID: other, directory: Self.directory, startedAt: started),
+            CodeRunRecord(session: mineTerminal.id, tool: .claude, sessionID: mine, directory: Self.directory, startedAt: started),
+        ], selectedRun: mineTerminal.id), terminals: [mineTerminal.id: mineTerminal, otherTerminal.id: otherTerminal])
+        code.install(AgentHistoryConnection(history: history))
+        await history.start()
+        await settle(history)
+        code.applyRestoredState()
+        func run() throws -> CodeTabModel.Run { try XCTUnwrap(code.runs.first { $0.id == mineTerminal.id }) }
+        XCTAssertEqual(code.title(of: try run()), "Code 视图侧边栏与 Desktop 差异")
+        XCTAssertEqual(try run().path, Self.path(mine))
+
+        // 辅助程序断了一下的时候，另一个会话退出了：收尾时整个重列，这一趟 Claude Code 的记录一份都没列出来。
+        await host.setUnreachable([ClaudeProjectPath.projectsRoot(home: Self.home)])
+        otherTerminal.codeCommandHasEnded = true
+        try await waitUntil("退出的那个收尾、重列漏了记录") {
+            code.runs.count == 1 && !history.files.contains { $0.path == Self.path(mine) }
+        }
+        XCTAssertEqual(code.title(of: try run()), "Code 视图侧边栏与 Desktop 差异",
+                       "读过的标题还在：不退回「（无标题）6d0608a6」")
+
+        // 连上了：跑着的会话的记录补回列表（侧栏那一行回到记录平常的样子），标题照旧。
+        await host.setUnreachable([])
+        try await waitUntil("记录补回列表") { history.visibleFiles.contains { $0.path == Self.path(mine) } }
+        XCTAssertEqual(code.title(of: try run()), "Code 视图侧边栏与 Desktop 差异")
+        XCTAssertEqual(history.metadata[Self.path(mine)]?.title, "Code 视图侧边栏与 Desktop 差异")
+    }
+
+    /// 跑着的会话的记录重读时读失败（辅助程序断了一下）：留着上次读到的标题，不换成「（无标题）」；连上后照常跟着记录走。
+    func testFailedRereadKeepsTheTitleItHad() async throws {
+        let host = SQLiteTestHost(home: Self.home)
+        await append(host, "live", Self.turn(prompt: "第一问", title: "第一个名字", toolLines: 10))
+        let history = AgentHistoryModel(source: ClaudeHistorySource(provider: host, home: Self.home),
+                                        preferredDirectory: nil, followsCurrentProject: false)
+        await history.start()
+        await settle(history)
+        XCTAssertEqual(history.metadata[Self.path("live")]?.title, "第一个名字")
+
+        await append(host, "live", Self.turn(prompt: nil, title: nil, toolLines: 20))
+        await host.setUnreachable([Self.path("live")])
+        await host.clearCounters()
+        await history.refreshProjects(containing: [Self.path("live")])
+        // 等重读真的发出去、失败回来（读不到的那一下之后列表照常排完）。
+        for _ in 0..<200 where await !host.reads.contains(where: { $0.path == Self.path("live") }) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(history.metadata[Self.path("live")]?.title, "第一个名字", "重读失败：留着上次读到的")
+        let row = try XCTUnwrap(history.files.first { $0.path == Self.path("live") })
+        XCTAssertEqual(AgentHistoryText.sessionTitle(row, metadata: history.metadata[row.path]), "第一个名字")
+
+        await host.setUnreachable([])
+        await append(host, "live", Self.turn(prompt: "第二问", title: "第二个名字", toolLines: 2))
+        await history.refreshProjects(containing: [Self.path("live")])
+        try await waitUntil("连上后照常重读") { history.metadata[Self.path("live")]?.title == "第二个名字" }
+    }
+
     // MARK: 工具
 
     private func settle(_ history: AgentHistoryModel) async {

@@ -11,6 +11,8 @@ actor SQLiteTestHost: SFTPProviding {
     private(set) var lists: [String] = []
     private(set) var writeAttempts: [String] = []
     private var beforeRead: (@Sendable (SQLiteTestHost, String) async -> Void)?
+    /// 一时连不上的路径（前缀）：列目录、取属性、读都报错，像辅助程序断了一下。
+    private var unreachable: [String] = []
     let home: String
 
     init(home: String = "/home/user") { self.home = home }
@@ -19,6 +21,7 @@ actor SQLiteTestHost: SFTPProviding {
     func remove(_ path: String) { files[path] = nil }
     func data(_ path: String) -> Data? { files[path]?.data }
     func setBeforeRead(_ hook: (@Sendable (SQLiteTestHost, String) async -> Void)?) { beforeRead = hook }
+    func setUnreachable(_ prefixes: [String]) { unreachable = prefixes }
     func clearCounters() {
         reads = []
         lists = []
@@ -51,12 +54,18 @@ actor SQLiteTestHost: SFTPProviding {
         return found ? Array(output.values).sorted { $0.name < $1.name } : nil
     }
 
+    private func checkReachable(_ path: String) throws {
+        guard unreachable.contains(where: { path.hasPrefix($0) }) else { return }
+        throw NSError(domain: "SQLiteTestHost", code: 4, userInfo: [NSLocalizedDescriptionKey: "connection interrupted: \(path)"])
+    }
+
     private func missing(_ path: String) -> NSError {
         NSError(domain: "SQLiteTestHost", code: 2, userInfo: [NSLocalizedDescriptionKey: "no such file: \(path)"])
     }
 
     func list(path: String) async throws -> [RemoteEntry] {
         lists.append(path)
+        try checkReachable(path)
         guard let entries = children(of: path) else { throw missing(path) }
         return entries
     }
@@ -64,6 +73,7 @@ actor SQLiteTestHost: SFTPProviding {
     func realPath(_ path: String) async throws -> String { path == "." ? home : path }
 
     func stat(_ path: String) async throws -> RemoteStat {
+        try checkReachable(path)
         if let file = files[path] { return RemoteStat(size: Int64(file.data.count), mtime: file.mtime) }
         if let entries = children(of: path) {
             return RemoteStat(size: 0, mtime: entries.compactMap(\.modifiedAt).max() ?? .distantPast, permissions: 0o040755)
@@ -74,6 +84,7 @@ actor SQLiteTestHost: SFTPProviding {
     func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data {
         if let beforeRead { await beforeRead(self, path) }
         reads.append((path, offset, length))
+        try checkReachable(path)
         guard let data = files[path]?.data else { throw missing(path) }
         let start = min(Int(offset), data.count)
         return data.subdata(in: start..<min(data.count, start + max(0, length)))

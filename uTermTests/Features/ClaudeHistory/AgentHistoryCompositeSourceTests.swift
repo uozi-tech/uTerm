@@ -243,6 +243,27 @@ final class AgentHistoryCompositeSourceTests: XCTestCase {
         XCTAssertEqual(model.availableTools, [.claude])
     }
 
+    /// 后台重列时一种工具连项目都没列出来（辅助程序断了一下）：它上一次列到的会话留着，不从侧栏上一下子全消失。
+    func testBackgroundReloadKeepsSessionsOfAToolThatFailedToList() async throws {
+        let failing = codex()
+        let model = AgentHistoryModel(source: AgentHistoryCompositeSource([claude(), failing]), preferredDirectory: nil,
+                                      followsCurrentProject: false)
+        await model.start()
+        await drainMetadata(model)
+        XCTAssertEqual(model.visibleFiles.map(\.sessionID), ["c-new", "x-mid", "c-old"])
+
+        await failing.setProjectsError(AgentHistoryFakeError.offline)
+        await model.reload(showsLoading: false)
+        await drainMetadata(model)
+        XCTAssertNotNil(model.toolFailures[.codex])
+        XCTAssertEqual(model.visibleFiles.map(\.sessionID), ["c-new", "x-mid", "c-old"], "列不出来的那种工具的会话留着")
+
+        await failing.setProjectsError(nil)
+        await model.reload(showsLoading: false)
+        XCTAssertNil(model.toolFailures[.codex])
+        XCTAssertEqual(model.visibleFiles.map(\.sessionID), ["c-new", "x-mid", "c-old"])
+    }
+
     func testCurrentProjectAcrossToolsPicksNearest() async throws {
         let model = AgentHistoryModel(source: AgentHistoryCompositeSource([claude(), codex()]),
                                       preferredDirectory: shop + "/internal")

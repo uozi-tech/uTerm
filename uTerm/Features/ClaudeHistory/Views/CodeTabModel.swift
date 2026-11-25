@@ -721,9 +721,16 @@ final class CodeTabModel {
     /// 一个跑着的会话叫什么：对上了记录、读到了信息的用记录的标题（Claude Code 起的名字，跟着它变），继续的会话
     /// 在那之前用起的时候的标题，新会话叫「新会话」（刚对上、记录的信息还没读到时也是，不闪一下「（无标题）」）。
     /// 接回后还没找回记录的会话用会话 ID 的前 8 位（同列表里读不到标题的那一行）。
+    ///
+    /// 记录的信息按路径取，不经 `files`：后台重列偶尔漏掉一份记录（那一趟没列出它）时，读过的信息还在，标题不退回
+    /// 「（无标题）」。
     func title(of run: Run) -> String {
-        let file = run.path.flatMap { path in history?.files.first { $0.path == path } }
-        if let file, let metadata = history?.metadata[file.path] { return AgentHistoryText.sessionTitle(file, metadata: metadata) }
+        if let path = run.path, let metadata = history?.metadata[path] {
+            if let title = metadata.title { return title }
+            let sessionID = run.key?.sessionID ?? history?.files.first { $0.path == path }?.sessionID
+                ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+            return String(localized: "（无标题）\(String(sessionID.prefix(8)))")
+        }
         if let title = run.title { return title }
         if !run.resumesRecord { return AgentHistoryText.newSession }
         if let key = run.key { return String(localized: "（无标题）\(String(key.sessionID.prefix(8)))") }
