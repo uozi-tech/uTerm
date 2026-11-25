@@ -151,11 +151,6 @@ extension ClaudeHistoryTab {
         history.select(file)
     }
 
-    /// 记录这份是不是有 run 对着（列表行上的「运行中」）。
-    func isRunning(_ file: AgentHistorySessionFile) -> Bool {
-        runs.run(forSession: file.path)?.isRunning ?? false
-    }
-
     // MARK: 程序退出
 
     /// 盯着 run 的连接：曾经连上过、后来收尾了（shell 退出），就是程序退出了。

@@ -15,20 +15,22 @@ extension UICatalog {
         let localSize = CGSize(width: 1100, height: 700)
         return [
             // 按项目分组：同一个目录下 Claude Code 与 Codex 的会话在一组里，行上第二行最前面写工具名；只有一种工具的组不写。
-            // 另一个会话在这个标签页里跑着：列表里那一行标着「运行中」，顶上没有单独一组。没有置顶：顶上不多出东西。
+            // 另一个会话在这个标签页里跑着：就在它那一组里自己那一行上，标着它此刻的状态（没报过状态就不写），
+            // 顶上没有单独一块。没有置顶：顶上不多出东西。
             UICatalogEntry("终端窗口/Code 标签页", source: src, symbol: "CodeTabView", size: size) { stage in
-                try await codeTabRender(stage, .init(running: ["x-tests"]))
+                try await codeTabRender(stage, .init(running: ["x-tests"], runStates: ["x-tests": "working"]))
             },
             // 选中的就是跑着的那个：右边是它的终端，顶上「终端 / 记录」。
             UICatalogEntry("终端窗口/Code 标签页_活终端", source: src, symbol: "CodeTabView", size: size,
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login"))
             },
-            // 鼠标悬在顶上跑着的会话那几行上：右端一个 ×（结束会话，上下居中），盖在行上、不挤字。
+            // 鼠标悬在跑着的会话那几行上（各在自己那一组里）：右端一个 ×（结束会话，上下居中），盖在行上、不挤字。
             UICatalogEntry("终端窗口/Code 标签页_跑着的会话悬停", source: src, symbol: "AgentHistoryRunEndButton", size: size,
                            live: true) { stage in
-                try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login",
-                                                     hoversRuns: true))
+                try await codeTabRender(stage, .init(running: ["c-login", "x-tests"],
+                                                     runStates: ["c-login": "idle", "x-tests": "working"],
+                                                     showsRun: "c-login", hoversRuns: true))
             },
             // 看着一个仍在跑的会话的记录：记录标题行上「继续这个会话」换成「返回终端」。
             UICatalogEntry("终端窗口/Code 标签页_跑着的会话看记录", source: src, symbol: "AgentHistoryTranscriptStack",
@@ -41,15 +43,24 @@ extension UICatalog {
                 try await codeTabRender(stage, .init(selects: false, newSession: true))
             },
             // 新会话没说话就退出了（没有对话记录）：右边不跳走，终端留着最后的画面，顶上「会话已结束」与「重新开始」「关闭」；
-            // 侧栏顶上那一行写「已结束」。另一个会话在跑：它也在最顶上（不在下面的分组里）。
+            // 侧栏顶上那一行写「已结束」（没有记录，没有组可放）。另一个会话在跑：它在自己那一组里那一行上，不在顶上。
             UICatalogEntry("终端窗口/Code 标签页_会话已结束", source: src, symbol: "CodeTabEndedBanner", size: size,
                            live: true) { stage in
-                try await codeTabRender(stage, .init(selects: false, running: ["x-tests"], newSession: true,
-                                                     newSessionEnded: true))
+                try await codeTabRender(stage, .init(selects: false, running: ["x-tests"], runStates: ["x-tests": "working"],
+                                                     newSession: true, newSessionEnded: true))
             },
             // 置顶了两个（一个 Codex、一个 Claude Code）：最上面一组「置顶」，原来那几组里不再出现；组里混着两种工具，写工具名。
             UICatalogEntry("终端窗口/Code 标签页_置顶", source: src, symbol: "AgentHistorySessionList", size: size) { stage in
                 try await codeTabRender(stage, .init(fixtures: .init(pinned: ["x-502", "c-nginx"]), running: ["x-tests"]))
+            },
+            // 置顶了一个跑着的会话：它在「置顶」里（行上标着状态、右键 / 悬停是跑着的会话那几样），不在原来那一组、也不在顶上；
+            // 另一个跑着的（右边是它的终端）在它自己那一组里。
+            UICatalogEntry("终端窗口/Code 标签页_跑着的会话置顶", source: src, symbol: "AgentHistorySessionList",
+                           size: size, live: true) { stage in
+                try await codeTabRender(stage, .init(fixtures: .init(pinned: ["x-tests", "c-nginx"]),
+                                                     running: ["x-tests", "c-login"],
+                                                     runStates: ["x-tests": "idle", "c-login": "working"],
+                                                     showsRun: "c-login"))
             },
             // 拖动中（拍成静态）：还没有置顶的会话时，列表顶上出一条「拖到这里置顶」，悬在上面时高亮。
             UICatalogEntry("终端窗口/Code 标签页_拖到置顶", source: src, symbol: "AgentHistoryPinDropStrip", size: size) { stage in
@@ -158,6 +169,9 @@ extension UICatalog {
         var selects = true
         /// 在这个标签页里跑着的会话（会话 ID）。
         var running: [String] = []
+        /// 跑着的会话里的程序经 OSC 7501 报的状态（会话 ID → `working` / `idle` / `blocked`…）：侧栏那一行上写它。
+        /// 不在这里的没报过，行上不写状态。
+        var runStates: [String: String] = [:]
         /// 右边显示这个跑着的会话的终端。
         var showsRun: String?
         /// 起一个还没对上记录的新会话，右边显示它。
@@ -251,7 +265,10 @@ extension UICatalog {
         let selected = history.selectedFile
         for id in setup.running {
             guard let file = history.files.first(where: { $0.sessionID == id }), let run = code.resume(file) else { continue }
-            if let session = session(of: run.terminal) { terminals.append((session, UICatalogTerminalScripts.claude)) }
+            let report = setup.runStates[id].map { "\u{1b}]7501;state=\($0):app=claude-code\u{1b}\\" } ?? ""
+            if let session = session(of: run.terminal) {
+                terminals.append((session, UICatalogTerminalScripts.claude + report))
+            }
         }
         if setup.newSession, let directory = code.newSessionDirectory,
            let run = code.startNewSession(tool: .claude, command: "claude", directory: directory) {

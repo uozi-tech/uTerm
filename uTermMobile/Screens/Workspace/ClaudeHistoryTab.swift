@@ -379,12 +379,15 @@ private struct ClaudeHistoryList: View {
     let history: AgentHistoryModel
     let newSession: AgentHistoryNewSession?
     @Binding var reveal: AgentHistoryReveal?
-    /// Code 标签页里跑着的会话：行上标「运行中」，点一行按它走（见 `ClaudeHistoryTab.select`）；列表里没有行的
-    /// （还没对上记录的新会话）放在列表最顶上。不另起一组「正在运行」：一个会话只出现一次（同 Mac）。
+    /// Code 标签页里跑着的会话：不另起一块，就在它那份记录平常的那一行上（置顶了在「置顶」，否则在它那一组），
+    /// 行上标它此刻的状态，点一下回到它的终端；列表里没有行的（还没对上记录的新会话）放在列表最顶上。
+    /// 规则同 Mac（`AgentHistoryRunPlacement`）。
     var code: CodeTabRuns? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
+    /// 看着的那个跑着的会话那份记录还没露出来（它那一组收着、还没列到）：列表变了再试，见 `tryRevealRun`。
+    @State private var pendingRunReveal: String?
 
     private var grouping: AgentHistoryGrouping {
         AgentHistoryListPreferences.effectiveGrouping(groupingRaw, isMultiTool: history.isMultiTool)
@@ -577,35 +580,22 @@ private struct ClaudeHistoryList: View {
         }
     }
 
-    private func list(_ allFiles: [AgentHistorySessionFile], pinned allPinned: [AgentHistorySessionFile]) -> some View {
-        // 跑着的会话（含已结束、留着画面的）都在最顶上，置顶与下面的分组里不再出现（一个会话只出现一次，同 Mac）。
-        let runs = code?.board.runs ?? []
-        let runPaths = Set(runs.compactMap(\.sessionPath))
-        let (files, pinned) = AgentHistoryListing.excludingRunning(allFiles, pinned: allPinned, running: runPaths)
-        let byPath = Dictionary((allFiles + allPinned).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+    private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
         let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
+        // 跑着的会话（含已结束、留着画面的）不另起一块：有记录的在那一行上（置顶或它那一组），只有没记录的在最顶上（同 Mac）。
+        let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, groups: groups)
+        let focusedRunPath = code?.board.focused?.sessionPath
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if let code {
-                        ForEach(runs) { run in
+                        ForEach(placement.top) { run in
                             Button { code.tab.focusRun(run.id) } label: {
-                                let selected = code.board.focusedID == run.id && run.showsTerminal
-                                if let file = run.sessionPath.flatMap({ byPath[$0] }) {
-                                    ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
-                                                     showsProject: true, showsTool: history.isMultiTool, run: run,
-                                                     isSelected: selected || history.selectedFile?.path == file.path)
-                                } else {
-                                    CodeUnlistedRunRow(code: code, run: run, showsTool: history.isMultiTool,
-                                                       selected: selected)
-                                }
+                                CodeUnlistedRunRow(code: code, run: run, showsTool: history.isMultiTool,
+                                                   selected: code.board.focusedID == run.id && run.showsTerminal)
                             }
                             .buttonStyle(MPressStyle())
-                        }
-                        if !runs.isEmpty, !groups.isEmpty {
-                            Rectangle().fill(M.divider).frame(height: 1)
-                                .padding(.horizontal, 10).padding(.vertical, 4)
                         }
                     }
                     ForEach(groups) { group in
@@ -617,7 +607,7 @@ private struct ClaudeHistoryList: View {
                         if !collapsed {
                             let showsTool = group.mixesTools
                             ForEach(group.files) { file in
-                                row(file, in: group, showsTool: showsTool)
+                                row(file, in: group, showsTool: showsTool, run: placement.inList[file.path])
                             }
                         }
                     }
@@ -630,21 +620,48 @@ private struct ClaudeHistoryList: View {
             // 下拉刷新：列表不换成「正在读取…」（那样内容会消失一下、转圈跟着闪），安静地重列。
             .refreshable { await history.reload(showsLoading: false) }
             .onChange(of: reveal, initial: true) { _, _ in tryReveal(groups, proxy: proxy) }
-            .onChange(of: groups.map(\.id)) { _, _ in tryReveal(groups, proxy: proxy) }
+            // 看着一个跑着的会话（新会话刚对上记录、重新打开后还原……）：它那一组收着就打开。
+            .onChange(of: focusedRunPath, initial: true) { _, path in
+                pendingRunReveal = path
+                tryRevealRun(groups, proxy: proxy)
+            }
+            .onChange(of: groups.map(\.id)) { _, _ in
+                tryReveal(groups, proxy: proxy)
+                tryRevealRun(groups, proxy: proxy)
+            }
         }
     }
 
     /// 一行会话：点一下看它；长按菜单「置顶」/「取消置顶」（iOS 不做拖动排序：会和滚动、标签拖动抢手势）。
-    private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool) -> some View {
-        Button {
-            if let code { code.tab.select(file) } else { history.select(file) }
+    /// `run`：这份记录正在 Code 标签页里跑着——行上写它此刻的状态，点一下回到它的终端（同最顶上那几行）。
+    private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
+                     run: CodeRunBoard<TermTab>.Run?) -> some View {
+        let showsItsTerminal = run.map { code?.board.focusedID == $0.id && $0.showsTerminal } ?? false
+        return Button {
+            if let code, let run {
+                code.tab.focusRun(run.id)
+            } else if let code {
+                code.tab.select(file)
+            } else {
+                history.select(file)
+            }
         } label: {
             ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
                              showsProject: grouping != .project || group.kind == .pinned, showsTool: showsTool,
-                             isSelected: history.selectedFile?.path == file.path)
+                             run: run, isSelected: showsItsTerminal || history.selectedFile?.path == file.path)
         }
         .buttonStyle(MPressStyle())
         .modifier(ClaudeHistoryPinMenu(pins: history.pins, file: file))
+    }
+
+    /// 看着的那个跑着的会话那一行在一个收着的组里：打开那一组、滚到它（不收着就不动）。那份记录还没列到的，等列表变了再试。
+    private func tryRevealRun(_ groups: [AgentHistoryGroup], proxy: ScrollViewProxy) {
+        guard let path = pendingRunReveal, let id = AgentHistoryListing.groupID(ofRecord: path, in: groups) else { return }
+        pendingRunReveal = nil
+        guard history.collapsedGroups.contains(id) else { return }
+        history.collapsedGroups.remove(id)
+        // 行的 id 就是记录的路径（`AgentHistorySessionFile.id`）。
+        Task { @MainActor in proxy.scrollTo(path) }
     }
 
     /// 定位到终端当前目录那一组：展开它并滚过去。还没列到它就等列表变了再试；不按项目分组时不动（同 Mac）。
