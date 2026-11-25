@@ -92,7 +92,7 @@ extension ControlHandler {
         }
 
         // 非交互 host-key：不弹 sheet，也不自动信任 —— 挑战一来就记下 fingerprint 并拒绝。
-        let relay = Self.forwardRelayFactoryForTesting?() ?? HostKeyChallengeRelay()
+        let relay = Self.forwardRelayFactoryForTesting?() ?? HostKeyChallengeRelay(interactive: false)
         let ruleSnapshot = rule.snapshot
         deps.forwardingCoordinator.start(
             ruleSnapshot,
@@ -102,6 +102,8 @@ extension ControlHandler {
         )
 
         let outcome = await waitForStart(ruleID: ruleSnapshot.id, relay: relay, deps)
+        // 请求结束后没人再轮询这个 relay：别让之后的重连、复用会话把问题投进来挂住。
+        deps.forwardingCoordinator.releaseRelay(relay, serverID: profile.id)
         let after = deps.forwardingCoordinator.status(ruleSnapshot.id)
         let latestTraffic = await deps.forwardingCoordinator.trafficSnapshot()
         let snap = ControlForwardSnapshotBuilder.make(
@@ -180,7 +182,7 @@ extension ControlHandler {
     ///
     /// 挑战是异步落到 relay 上的，测试没法卡住那个时间窗；换成一个**预置了
     /// `pendingChallenge`** 的 relay，「拿到挑战 → 记进连接池 → 回 `host_key_*`」
-    /// 这条链就变成确定的。生产路径永远是 nil（`?? HostKeyChallengeRelay()`）。
+    /// 这条链就变成确定的。生产路径永远是 nil（`?? HostKeyChallengeRelay(interactive: false)`）。
     @MainActor static var forwardRelayFactoryForTesting: (() -> HostKeyChallengeRelay)?
 
     /// `forward-start` 的等待策略：`ForwardingCoordinator.start` 是同步返回、异步建连的，

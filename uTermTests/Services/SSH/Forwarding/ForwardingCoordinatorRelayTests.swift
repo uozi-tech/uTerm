@@ -123,6 +123,58 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
         coordinator.teardown(serverID: server.id)
     }
 
+    /// 命令行 `forward-start` 的一次性 relay 请求结束后就没人轮询：放掉之后，后来的问题（看门狗重连、复用会话）
+    /// 不能投进去挂住，没有界面的 relay 就当场拒绝。
+    func testReleasedCLIRelayNoLongerReceivesAsks() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let cli = HostKeyChallengeRelay(interactive: false)
+        coordinator.start(rule("pg"), on: server, relay: cli, modelContainer: container)
+        coordinator.releaseRelay(cli, serverID: server.id)
+
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        let approved = await decision.value
+        XCTAssertFalse(approved)
+        XCTAssertNil(cli.pendingChallenge, "问题投进了没人看的命令行 relay")
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 界面开过这台主机的转发窗口：命令行 relay 放掉后，问题回到界面那个 relay（有人能回答）。
+    func testReleasingCLIRelayFallsBackToTheInteractiveOne() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let ui = HostKeyChallengeRelay()
+        let cli = HostKeyChallengeRelay(interactive: false)
+        coordinator.start(rule("pg"), on: server, relay: ui, modelContainer: container)
+        coordinator.start(rule("pg2"), on: server, relay: cli, modelContainer: container)
+        coordinator.releaseRelay(cli, serverID: server.id)
+
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        try await waitUntil { ui.pendingChallenge != nil }
+        XCTAssertNil(cli.pendingChallenge)
+        ui.resolve(true)
+        let approved = await decision.value
+        XCTAssertTrue(approved)
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 放掉的不是当前那个（界面后来又开了一次）：别把界面的 relay 换掉。
+    func testReleasingAStaleRelayKeepsTheCurrentOne() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let cli = HostKeyChallengeRelay(interactive: false)
+        let ui = HostKeyChallengeRelay()
+        coordinator.start(rule("pg"), on: server, relay: cli, modelContainer: container)
+        coordinator.start(rule("pg2"), on: server, relay: ui, modelContainer: container)
+        coordinator.releaseRelay(cli, serverID: server.id)
+
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        try await waitUntil { ui.pendingChallenge != nil }
+        ui.resolve(false)
+        _ = await decision.value
+        coordinator.teardown(serverID: server.id)
+    }
+
     /// 从没 `start` 过的主机同理。
     func testApproverRefusesUnknownServer() async {
         let coordinator = ForwardingCoordinator()
