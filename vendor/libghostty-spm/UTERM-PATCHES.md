@@ -105,7 +105,7 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 | `Package.swift` | 见「manifest 改动」 |
 | `ENGINE.lock` | 两个二进制的清单：引擎版本串、zip 文件名、sha256 |
 | `BinaryTarget/` | `GhosttyKit.xcframework`、`ghostty-vt.xcframework` 解在这里，**不进版本库**（`.gitignore`），由 `make engine` 放进来 |
-| `Patches/ghostty/` | 我们加的引擎补丁 `0024`、`0025`（接在上游的 `0001`–`0023` 后面） |
+| `Patches/ghostty/` | 我们加的引擎补丁 `0024`、`0025`、`0026`（接在上游的 `0001`–`0023` 后面） |
 | `Scripts/prelink-vt.sh` | vt 的预链接：每个 slice 并成一个 `.o`、只导出 `ghostty_*` |
 | `BUILD.md` | 怎么从上游 tag 编出这两个二进制 |
 
@@ -117,9 +117,9 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 二进制不进版本库（GhosttyKit 解开 197 MB，vt 14 MB）。`ENGINE.lock` 记着要哪两份：
 
 ```
-engine_version=ghostty-56de3f0f+p0025/snapshot-1
-ghosttykit_zip=GhosttyKit-56de3f0f-0025.xcframework.zip     sha256 2b981e34…0a15
-ghosttyvt_zip=ghostty-vt-56de3f0f-0025.xcframework.zip      sha256 f7aee3c2…0a31
+engine_version=ghostty-56de3f0f+p0026/snapshot-1
+ghosttykit_zip=GhosttyKit-56de3f0f-0026.xcframework.zip     sha256 d7069f72…2c65
+ghosttyvt_zip=ghostty-vt-56de3f0f-0026.xcframework.zip      sha256 0af2799f…e3e1
 ```
 
 `make engine`（`scripts/fetch-ghostty-engine.sh`）按它从本地目录取 zip、校验 sha256、解到 `BinaryTarget/`，旁边各留一个
@@ -160,8 +160,8 @@ Ghostty 提交 + 引擎补丁的最大编号 + 快照格式的修订号。远控
 
 ## 引擎补丁（`Patches/ghostty/`）
 
-上游 `Patches/ghostty/` 里的 `0001`–`0023` 原样用。我们加的两个（`0024`、`0025`）接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
-这两个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
+上游 `Patches/ghostty/` 里的 `0001`–`0023` 原样用。我们加的三个（`0024`、`0025`、`0026`）接在后面，放进上游检出的同一个目录后 `build.sh` 会自动打上。
+这三个文件和编出现在这份二进制时用的逐字节相同，不要改（改了就对不上 `ENGINE.lock` 记的那份产物）。
 
 写我们自己的补丁要注意：上游的 `.sh` 补丁靠「自己加的那段文字原样还在」判断打没打过（`Script/support/anchored_edit.py`），
 `build.sh` 每个平台都把整个补丁栈再跑一遍。我们的补丁只要改到上游某个补丁加的文字里面，它下一遍就认不出自己、把那段再插一次
@@ -250,12 +250,73 @@ Mac Catalyst 版的终端（没有 display link）每一帧都这么画。只影
 （关 vsync 1.8 / 2.3）；本机 shell（`cat`）10.2 → 2.4 ms、真窗口 10.5 → 1.8 ms、zsh 提示符 10.0 → 5.4 ms（其中 zsh 自己约 3.5 ms）；
 SSH（本机容器）进程内 2.9、经 `uterm-ssh` 4.8、经主机上的保持进程 4.4 ms。空闲时照旧每秒 0 帧。
 
+**上面这组「之后」的读数第二天复现不出来（2026-11-25）**：显示器醒着时，只有 0025 的引擎按键到交帧仍是 120 Hz 约 10–11.5 ms、
+60 Hz 约 20 ms，和没打补丁一样。原因见下面的 0026：按键自己先把渲染线程叫醒两次，「空闲后的第一帧」被按键那两帧用掉了，
+回显那一帧照旧等节拍。11-24 那组数最可能是显示器睡着时量的——没有 display link，引擎走后备模式，每次更新都当场画，
+有没有补丁都快（11-25 量到一半显示器睡了，旧引擎的读数当场从 20 ms 掉到 2.2 ms）。**量这类延迟前先确认显示器醒着**
+（`caffeinate -d -u`），可见窗口的配置里「事件 → 上屏」那一项读不到数（`n=0`）就是睡了。
+0025 单独管用的是只叫醒渲染线程一次的事：空闲后一下一下拖选 1.9 ms（见 0026 的表）。
+
 回归用例：`GhosttyMacScrollTests`、`GhosttyMagicMouseScrollTests`、`GhosttyPinnedScrollJitterTests`、`GhosttyMacHostTests`、
 `GhosttyDisplayLinkTests`、`GhosttyFontRenderingTests`、`TerminalRowFillSurfaceTests`（34 个，换上补丁后全过）。
 
+### 0026 按键和它的回显都当场画
+
+`0026-uterm-draw-echo-frame-after-idle.patch`，2026-11-25 加。文件：`src/renderer/Thread.zig`（`renderCallback` 和 `Thread` 的两个字段）。
+切在 libghostty-spm `2.2.2026112401` 打完 `0001`–`0025` 的树上（Ghostty `56de3f0f`）。
+
+只有 0025 时打字回显仍然等节拍。一次按键渲染线程醒三次（给引擎加打点量的，本机 shell，按键算 0）：
+
+| 时刻 | 谁叫醒的 | 画的是什么 |
+|---|---|---|
+| +0.22 ms | `Surface.keyCallback` 里的 `queueRender` | 和屏上一模一样的一帧 |
+| +0.37 ms | 往 pty 写这个键的那条路上的 `queueRender` | 同上 |
+| +0.8 ms（zsh 约 +4 ms） | 回显的字节解析完 | 带着新字的一帧 |
+
+每次 `updateFrame` 都重建并出帧，不管变没变（`rebuildCells` 末尾无条件置 `cells_rebuilt`）。第一次把 0025 的「空闲后的第一帧」用掉，
+同时把 display link 打开；回显到的时候 link 在跑，等它的第一拍——link 刚开，第一拍在一到两个刷新周期之后
+（120 Hz 交帧 p50 约 10 ms，60 Hz 约 20 ms，机器忙时 18–26 ms）。
+
+补丁把更新看成一阵一阵的，一阵里的前 4 次当场画（`max_immediate_draws`；按键那两次加回显的一两次，或者拖选的一次）。
+新的一阵从这两种情况之一开始：这次更新之前 link 是停着的；或者渲染线程刚才闲了 4 ms 以上（`burst_gap_ns`，量的是上一次
+`renderCallback` 结束到这一次开始）。第二条管连着快打：下一个键到的时候，上一个键打开的 link 还没停。
+不停的输出让 link 一直跑、渲染线程一直忙，只在开头算一阵，之后照旧一拍一帧。
+
+只算「link 停过」不够（第一版就是这样）：间隔 0–30 ms 连着打时约两成按键仍等节拍（p95 18 ms）。额度只给 2 也不够（按键自己就用两次）。
+
+代价：每 4–16 ms 写一小段的输出（60 Hz 屏；120 Hz 屏是 4–8 ms）每段都当场画，出帧数等于写的次数、高于刷新率
+（下表 200 / 125 帧每秒）。多出来的帧屏上看不到，换来的是最后一段离上屏更近。写得更密（一拍里好几段）或更疏的都和原来一样。
+只影响 macOS（别的平台没有 display link，本来每次更新都当场画）。只改渲染，快照格式没变（p0025 记进 `sameSnapshotFormat`）。
+
+写补丁的注意：`Script/apply-patches.sh` 靠反向应用来认「这个补丁打过了」，后面的补丁不能改前面补丁加的行，也不能落在它的上下文里。
+0026 的代码加在 0025 那几行的前面（函数开头取时间）和后面（`armAnimationTimer()` 之后），0025 的行一字没动。
+
+读数（2026-11-25，Debug 构建，一台 60 Hz 外接屏，显示器醒着，机器安静；新旧引擎交替跑；p50 / p95，毫秒）：
+
+| 场景（用例） | 只有 0025 | 加 0026 |
+|---|---|---|
+| 按键 → 交帧，本机 shell `cat`（`testM6EchoLatency`） | 19.9–21.3 / 26–28 | 2.0–2.4 / 3.2–3.5 |
+| 按键 → 交帧，zsh 提示符（zsh 自己约 4 ms） | 20.4–20.7 / 27 | 4.6–5.6 / 6.1–7.7 |
+| 按键 → 真正上屏（可见窗口，ScreenCaptureKit 的显示时刻） | 35 | 19–20 |
+| 连着快打（`M6_GAP_MS=0`，间隔 0–30 ms）→ 交帧 | 15.1 / 25.9 | 1.9 / 3.7–4.5 |
+| 连着快打 → 真正上屏 | 29 | 14 |
+| 拖选，一下一下拖（`testM18SelectionDrag` 的 `step`）→ 交帧 | 1.9 / 2.8–3.8 | 1.5 / 2.4 |
+| 拖选，每秒 120 次连续拖（`steady`）→ 交帧 | 9.5–13 / 16–17 | 1.4 / 2.4 |
+| 连续拖选 → 真正上屏 | 25–28 | 11 |
+| 输出时每秒出帧（`testM19OutputFrameRate`），每段间隔 ≤ 3 ms | 60.5 | 62–64 |
+| 同上，间隔 5 ms / 8 ms | 60.5 / 60.5 | 200 / 125 |
+| 同上，间隔 16 ms / 33 ms / 100 ms | 60 / 30.5 / 10 | 62.5 / 30.5 / 10 |
+
+120 Hz 屏上只有 0025 时按键到交帧 p50 10–11.5 ms（11-25 上午量的）；加 0026 之后没在 120 Hz 上重量（量的时候换成了 60 Hz 屏）。
+「交帧」是 `layer.contents` 设上的时刻；到真正上屏还有合成那一段（60 Hz 上 p50 约 15 ms），补丁动不了它。
+装好的 2.4.2（只有 0025）和 iGhostVT 黑盒对比（合成按键 + 录屏时刻，120 Hz）：uTerm p50 24.5 / 最快 15.5 ms，iGhostVT p50 21.6 / 最快约 5 ms；
+加 0026 之后还没用装好的包重新比。
+
+回归用例同 0025 那七组（34 个，1 个本来就跳过，其余全过）。
+
 ## GhosttyVt（libghostty-vt）
 
-- 和 GhosttyKit 同一棵打过 `0001`–`0025` 的源码树编出来（上游的 0022 给 `src/terminal/PageList.zig` 加了视口移动计数，
+- 和 GhosttyKit 同一棵打过 `0001`–`0026` 的源码树编出来（上游的 0022 给 `src/terminal/PageList.zig` 加了视口移动计数，
   所以 vt 也必须带上它；0023 只改 shader 和渲染器，0024 只改 surface 和渲染器）。
 - 三个 slice：`ios-arm64`、`ios-arm64-simulator`（只有 arm64，Intel Mac 上的模拟器链不了）、`macos-arm64_x86_64`。
 - 每个 slice 预链接成一个 `.o`（`Scripts/prelink-vt.sh`），只导出 209 个 `ghostty_*`，Zig 打包进来的 ubsan、memset、simdutf、

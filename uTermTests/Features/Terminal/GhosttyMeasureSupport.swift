@@ -259,6 +259,8 @@ nonisolated final class GhosttyFrameWatch: @unchecked Sendable {
     private var _probe: (@Sendable (IOSurfaceRef) -> Bool)?
     private var _hit: CFTimeInterval?
     private var _offMain = 0
+    private var _frames: [Frame] = []
+    private var _sampler: (@Sendable (IOSurfaceRef) -> Int)?
     private var observation: NSKeyValueObservation?
     private(set) weak var layer: CALayer?
 
@@ -283,6 +285,17 @@ nonisolated final class GhosttyFrameWatch: @unchecked Sendable {
 
     func disarm() { lock.withLock { _probe = nil } }
 
+    /// 一帧：`contents` 设上的时刻、是不是在主线程上设的、`sampler` 对这一帧读出的数（没装 sampler 是 -1）。
+    /// Mac 上引擎不管当场画还是等显示节拍，画完都 dispatch 回主线程设，所以 `onMain` 分不出走的哪条路。
+    struct Frame: Sendable { let time: CFTimeInterval; let onMain: Bool; let value: Int }
+
+    /// 开始逐帧记账（清掉之前的）。`sampler` 在设 contents 的那个线程上、对每一帧调一次。
+    func startLog(sampler: (@Sendable (IOSurfaceRef) -> Int)? = nil) {
+        lock.withLock { _frames.removeAll(keepingCapacity: true); _sampler = sampler }
+    }
+
+    var frames: [Frame] { lock.withLock { _frames } }
+
     private func didChange(_ value: Any?) {
         let now = CACurrentMediaTime()
         let probe = lock.withLock { () -> (@Sendable (IOSurfaceRef) -> Bool)? in
@@ -291,8 +304,11 @@ nonisolated final class GhosttyFrameWatch: @unchecked Sendable {
             if !Thread.isMainThread { _offMain += 1 }
             return _hit == nil ? _probe : nil
         }
-        guard let probe, let value, CFGetTypeID(value as CFTypeRef) == IOSurfaceGetTypeID() else { return }
-        let surface = value as! IOSurfaceRef
+        let surface: IOSurfaceRef? = value.flatMap { CFGetTypeID($0 as CFTypeRef) == IOSurfaceGetTypeID() ? ($0 as! IOSurfaceRef) : nil }
+        let sampler = lock.withLock { _sampler }
+        let sampled = surface.flatMap { s in sampler.map { $0(s) } } ?? -1
+        lock.withLock { _frames.append(Frame(time: now, onMain: Thread.isMainThread, value: sampled)) }
+        guard let probe, let surface else { return }
         if probe(surface) { lock.withLock { if _hit == nil { _hit = now } } }
     }
 

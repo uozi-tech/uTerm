@@ -1,6 +1,6 @@
 # 出包：从上游 tag 编出 GhosttyKit 和 ghostty-vt
 
-`ENGINE.lock` 记的两个 zip 是照这里的步骤编出来的（最近一次 2026-11-24，换到上游 `2.2.2026112401`、Ghostty `56de3f0f`；第一次是 2026-11-09 的 M17 出包演练）。平时不用重编：`make engine` 从现成的 zip 取。
+`ENGINE.lock` 记的两个 zip 是照这里的步骤编出来的（最近一次 2026-11-25，加了我们的 `0026`，四个平台组用 `scripts/build-ghostty-engine.sh --pack` 出的；2026-11-24 换到上游 `2.2.2026112401`、Ghostty `56de3f0f`；第一次是 2026-11-09 的 M17 出包演练）。平时不用重编：`make engine` 从现成的 zip 取。
 换 Ghostty 提交、换上游 tag、加减引擎补丁时才走一遍，完了按 `UTERM-PATCHES.md` 的「升级步骤」改清单和版本串。
 
 **下面第 1、2 步和第 3 步的核对已经写成脚本**：`scripts/build-ghostty-engine.sh`（`make engine-build`，自测

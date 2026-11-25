@@ -1,0 +1,104 @@
+uTerm: draw the echo's frame right away too, not just the key press's
+(libghostty-spm patch 0026)
+
+Drop this file into libghostty-spm's Patches/ghostty/ (after 0025);
+build.sh applies it with `git apply` on every target. It is cut against
+libghostty-spm 2.2.2026112401 with 0001-0025 applied, Ghostty 56de3f0f.
+
+What it does (UTERM-PATCHES.md, "按键和它的回显都当场画"):
+  - Patch 0025 draws the first frame after the display link was idle
+    without waiting for vsync. A key press takes that frame for itself:
+    `Surface.keyCallback` queues a render and so does the write to the
+    pty, the renderer thread wakes twice (+0.2 and +0.4 ms), and every
+    `updateFrame` rebuilds cells and draws, changed or not (`rebuildCells`
+    always sets `cells_rebuilt`). Those frames are identical to the one on
+    screen, the first starts the display link, and the echo, parsed at
+    ~+0.8 ms, finds the link running and waits for its first tick, which
+    after a start is one to two refresh intervals away.
+  - renderer/Thread.zig renderCallback: updates come in bursts, and the
+    first four of a burst are drawn now (`immediate_draws`): the two from
+    the key press and the echo in one or two pieces, or a pointer position
+    of a selection drag. A burst starts when the display link was idle, or
+    when the renderer thread had nothing to do for 4 ms (`last_update_end`;
+    the next key of fast typing arrives while the link started by the last
+    one is still running). Continuous output keeps the link running and
+    the thread busy, so it gets one burst and then stays at one frame per
+    refresh.
+  - The lines patch 0025 added are left exactly as they are (the code is
+    added before and after them): apply-patches.sh recognises an applied
+    patch by reversing it, so a later patch must not edit its hunks.
+
+Only macOS has a display link (`hasVsync()` is always false on iOS, Mac
+Catalyst and visionOS, where every update already draws at once), so this
+changes nothing there. Rendering only: snapshot format and `src/terminal`
+untouched.
+
+Measurements: UTERM-PATCHES.md.
+
+diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
+index 1a6ea91..e2f01a3 100644
+--- a/src/renderer/Thread.zig
++++ b/src/renderer/Thread.zig
+@@ -82,6 +82,12 @@ mailbox: *Mailbox,
+ /// Configuration we need derived from the main config.
+ config: DerivedConfig,
+ 
++/// uTerm (patch 0026): frames drawn right away, without waiting for the
++/// display link, in the current burst of updates, and when the last update
++/// finished. See `renderCallback`.
++immediate_draws: u8 = 0,
++last_update_end: ?std.Io.Timestamp = null,
++
+ flags: packed struct {
+     /// This is true when a blinking cursor should be visible and false
+     /// when it should not be visible. This is toggled on a timer by the
+@@ -557,6 +563,14 @@ fn renderCallback(
+         return .disarm;
+     };
+ 
++    // uTerm (patch 0026): how long this thread sat idle before this update;
++    // used at the end of this function.
++    const update_start: std.Io.Timestamp = .now(global.io(), .awake);
++    const quiet_ns: i96 = if (t.last_update_end) |end|
++        end.durationTo(update_start).nanoseconds
++    else
++        std.math.maxInt(i96);
++
+     // If the display is now unrealized, release GPU resources now
+     // we're on the render thread, and do not try to update and draw
+     // this frame.
+@@ -596,6 +610,34 @@ fn renderCallback(
+     // Schedule the next animation wake, if the renderer needs one.
+     t.armAnimationTimer();
+ 
++    // uTerm (patch 0026): the echo's frame is drawn now too, not just the
++    // first frame after idle (patch 0025 above). A key press wakes this
++    // thread by itself, twice (`Surface.keyCallback` queues a render, and
++    // so does the write to the pty), and every update rebuilds cells and
++    // draws, changed or not. Those frames took the one immediate draw and
++    // started the display link ~0.5 ms before the echo was parsed, so the
++    // echo found the link running and waited for its first tick, which
++    // after a start is one to two refresh intervals away.
++    //
++    // So updates come in bursts, and the first `max_immediate_draws` of a
++    // burst are drawn now: the two from the key press and the echo in one
++    // or two pieces, or a pointer position of a selection drag.
++    // `drawFrame(link_was_idle)` above did nothing when the link was
++    // already running, so those are drawn here. A burst starts when the
++    // link was idle, or when this thread had nothing to do for
++    // `burst_gap_ns` (the next key of fast typing arrives while the link
++    // from the last one is still running). Continuous output keeps the
++    // link running and this thread busy, so it gets one burst and then
++    // stays at one frame per refresh.
++    const max_immediate_draws = 4;
++    const burst_gap_ns = 4 * std.time.ns_per_ms;
++    if (link_was_idle or quiet_ns >= burst_gap_ns) t.immediate_draws = 0;
++    if (t.immediate_draws < max_immediate_draws) {
++        t.immediate_draws += 1;
++        if (!link_was_idle) t.drawFrame(true);
++    }
++    t.last_update_end = std.Io.Timestamp.now(global.io(), .awake);
++
+     return .disarm;
+ }
+ 

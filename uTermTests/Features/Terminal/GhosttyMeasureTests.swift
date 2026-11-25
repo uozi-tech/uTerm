@@ -236,8 +236,9 @@ final class GhosttyMeasureTests: XCTestCase {
     ///
     /// 开关（`TEST_RUNNER_` 前缀）：`M6_CONFIGS`、`M6_SAMPLES`、`M6_ROUNDS`；`M6_GAP_MS` 按键间隔（默认 30，再加 0–30 ms 抖动）；
     /// `M6_CURSOR=steady|blink` 用 DECSCUSR 钉光标样式；`M6_SSH_PORT` / `M6_SSH_PASSWORD` 测试 sshd。
-    /// 2026-11-24 读数（120 Hz 屏）：引擎补丁 0025 之前开着 vsync 时按键到交帧 p50 约 10 ms，之后约 2 ms（本机 shell 2.4、
-    /// SSH 进程内 2.9、经 `uterm-ssh` 4.8、经主机上的保持进程 4.4），见 `vendor/libghostty-spm/UTERM-PATCHES.md` 的 0025。
+    /// 2026-11-25 读数（60 Hz 屏，显示器醒着）：只有引擎补丁 0025 时按键到交帧 p50 约 20 ms（120 Hz 屏约 10 ms），加 0026 之后
+    /// 本机 shell 约 2 ms、zsh 约 5 ms，见 `vendor/libghostty-spm/UTERM-PATCHES.md` 的 0026。**显示器睡着时没有 display link，
+    /// 每次更新都当场画，新旧引擎读数一样快**——量之前先 `caffeinate -d -u`（11-24 那组「0025 之后约 2 ms」就是这么来的）。
     func testM6EchoLatency() async throws {
         let samples = MeasureEnv.int("M6_SAMPLES", 60)
         let rounds = MeasureEnv.int("M6_ROUNDS", 3)
@@ -277,6 +278,41 @@ final class GhosttyMeasureTests: XCTestCase {
         let scale = pane.window!.backingScaleFactor
         log("ghostty viewport=\(v) cellPt=\(pt) scale=\(scale)")
         return (Int((pt.width * scale).rounded()), Int((pt.height * scale).rounded()))
+    }
+
+    /// 配置名带 `-visible` 的窗口真的上屏（alpha 1），否则是透明的那一档。透明窗口 WindowServer 不合成，
+    /// 量「设上 contents → 真的显示」要用可见的。
+    private static func placement(for config: String) -> ProbeWindow.Placement {
+        config.contains("-visible") ? .visibleOnScreen : .transparentOnScreen
+    }
+
+    /// 整幅画面的摘要（隔 3 个像素取一个，留低 24 位）：看一帧和上一帧是不是同一幅画。
+    private nonisolated static let surfaceHash: @Sendable (IOSurfaceRef) -> Int = { surface in
+        IOSurfaceLock(surface, .readOnly, nil)
+        defer { IOSurfaceUnlock(surface, .readOnly, nil) }
+        let count = IOSurfaceGetAllocSize(surface) / 4
+        let px = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt32.self)
+        var hash: UInt64 = 1469598103934665603
+        var i = 0
+        while i < count { hash = (hash ^ UInt64(px[i])) &* 1099511628211; i += 3 }
+        return Int(truncatingIfNeeded: hash & 0xFFFFFF)
+    }
+
+    private nonisolated final class TraceLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [(CFTimeInterval, String)] = []
+        func add(_ t: CFTimeInterval, _ s: String) { lock.withLock { items.append((t, s)) } }
+        func reset() { lock.withLock { items.removeAll(keepingCapacity: true) } }
+        var value: [(CFTimeInterval, String)] { lock.withLock { items } }
+    }
+
+    /// 喂给 surface 的每一片输出的时刻与字节数（`TEST_RUNNER_M6_KEYLOG=1` 时逐键打出来）。
+    private nonisolated final class FedLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [(CFTimeInterval, Int)] = []
+        func add(_ t: CFTimeInterval, _ n: Int) { lock.withLock { items.append((t, n)) } }
+        func reset() { lock.withLock { items.removeAll(keepingCapacity: true) } }
+        var value: [(CFTimeInterval, Int)] { lock.withLock { items } }
     }
 
     private nonisolated final class TimeBox: @unchecked Sendable {
@@ -448,7 +484,8 @@ final class GhosttyMeasureTests: XCTestCase {
         if inWindow {
             let m = LocalShellWindowModel()
             model = m
-            window = ProbeWindow.make(contentRect: rect, placement: .transparentOnScreen)
+            window = ProbeWindow.make(contentRect: rect, placement: Self.placement(for: config),
+                                     keepsDrawing: !config.contains("-nofloat"))
             let host = NSHostingView(rootView: LocalShellTerminalArea(model: m))
             host.frame = NSRect(origin: .zero, size: rect.size)
             window.contentView = host
@@ -458,7 +495,8 @@ final class GhosttyMeasureTests: XCTestCase {
             session = TerminalSession()
             let container = GhosttyContainerView(surface: session.ghostty.view)
             container.isActive = true
-            window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+            window = ProbeWindow.make(contentRect: rect, contentView: container, placement: Self.placement(for: config),
+                                     keepsDrawing: !config.contains("-nofloat"))
             container.frame = window.contentView?.bounds ?? rect
             container.layoutSubtreeIfNeeded()
         }
@@ -501,14 +539,36 @@ final class GhosttyMeasureTests: XCTestCase {
         bridge.onWriteForTesting = { _ in writeTime.setIfEmpty(CACurrentMediaTime()) }
         let pump = session.outputPump
         let previousFed = pump.onFed
+        let fedLog = FedLog()
         pump.onFed = { bytes in
-            echoTime.setIfEmpty(CACurrentMediaTime())
+            let now = CACurrentMediaTime()
+            echoTime.setIfEmpty(now)
+            fedLog.add(now, bytes.count)
             previousFed?(bytes)
         }
         defer { pump.onFed = previousFed }
 
         _ = await waitUntil(5) { GhosttyFrameWatch.contentLayer(of: bridge.view) != nil }
         let watch = GhosttyFrameWatch(layer: try XCTUnwrap(GhosttyFrameWatch.contentLayer(of: bridge.view)))
+        // `TEST_RUNNER_M6_KEYLOG=1`：每个按键打一行 `M6 KEY t0= t1=`（CACurrentMediaTime，秒）。配
+        // `TEST_RUNNER_UTERM_PROBE_PLACEMENT=visible` 让窗口真的上屏，外面的 ScreenCaptureKit 读同一个时钟上的
+        // displayTime，就能量到「contents 设上 → 合成器真的显示」这一段（t1 只到 contents 设上为止）。
+        let keyLog = MeasureEnv.string("M6_KEYLOG", "0") == "1"
+        if keyLog { log("M6 WINDOW number=\(window.windowNumber)") }
+        let hashFrames = MeasureEnv.string("M6_HASH", "0") == "1"
+        // `M6_TRACE=1`：Swift 这一层的输入 / 输出 / 重画打点（`TerminalDebugLog`）也逐键记下来。
+        let trace = TraceLog()
+        let previousSink = TerminalDebugLog.sink, previousCategories = TerminalDebugLog.categories
+        if MeasureEnv.string("M6_TRACE", "0") == "1" {
+            TerminalDebugLog.categories = [.input, .output, .render]
+            TerminalDebugLog.sink = { message in trace.add(CACurrentMediaTime(), String(message.prefix(40))) }
+            TerminalDebugLog.isEnabled = true
+        }
+        defer {
+            TerminalDebugLog.isEnabled = false
+            TerminalDebugLog.sink = previousSink
+            TerminalDebugLog.categories = previousCategories
+        }
         let letters: [Character] = Array("asdfghjkl")
         var latencies: [Double] = []
         var parts: [String: [Double]] = [:]
@@ -525,6 +585,9 @@ final class GhosttyMeasureTests: XCTestCase {
             i += 1
             let cursor = session.shadow.cursor
             writeTime.reset(); echoTime.reset()
+            // `M6_HASH=1`：逐帧记整幅画面的摘要（隔 3 个像素取一个），看每一帧到底变没变。
+            fedLog.reset(); trace.reset()
+            watch.startLog(sampler: hashFrames ? Self.surfaceHash : nil)
             let x = (cursor.x + 1) * cell.w, y = cursor.y * cell.h, w = cell.w, h = cell.h
             watch.arm { surface in SurfacePixels.inkFraction(surface, x: x, y: y, width: w, height: h) > 0.03 }
             let t0 = CACurrentMediaTime()
@@ -533,6 +596,25 @@ final class GhosttyMeasureTests: XCTestCase {
             window.sendEvent(RealEvents.key(.keyUp, window: window, characters: String(ch), keyCode: code))
             let hit = await waitUntil(1.0) { watch.hitTime != nil }
             watch.disarm()
+            if keyLog {
+                // feds：每片输出进 surface 的时刻（+ms）与字节数；frames：每一帧设上的时刻（m / r = 在主线程 /
+                // 别的线程上设的，Mac 上引擎一律回主线程设）；* 是命中的那一帧；#… 是 `M6_HASH=1` 时的画面摘要。
+                let hitTime = watch.hitTime
+                let feds = fedLog.value.map { String(format: "+%.1f(%dB)", ($0.0 - t0) * 1000, $0.1) }.joined(separator: ",")
+                let frames = watch.frames.map {
+                    frame -> String in
+                    let mark = (frame.onMain ? "m" : "r") + (frame.time == hitTime ? "*" : "")
+                    let hash = frame.value >= 0 ? String(format: "#%06x", frame.value) : ""
+                    return String(format: "+%.1f", (frame.time - t0) * 1000) + mark + hash
+                }.joined(separator: ",")
+                log(String(format: "M6 KEY cfg=%@ t0=%.6f t1=%.6f feds=[%@] frames=[%@]", config, t0, hitTime ?? 0, feds, frames))
+                let traced = trace.value.map { String(format: "+%.1f %@", ($0.0 - t0) * 1000, $0.1) }
+                if !traced.isEmpty { log("M6 TRACE " + traced.joined(separator: " | ")) }
+            }
+            // 命中的是按键之后的第几帧：按键本身会叫引擎画一帧（内容没变），回显在它后面那一帧。
+            if hit, let t1 = watch.hitTime, let index = watch.frames.firstIndex(where: { $0.time == t1 }) {
+                parts["命中在第 \(index + 1) 帧", default: []].append((t1 - t0) * 1000)
+            }
             if hit, let t1 = watch.hitTime {
                 latencies.append((t1 - t0) * 1000)
                 let w = writeTime.value, e = echoTime.value
@@ -557,6 +639,244 @@ final class GhosttyMeasureTests: XCTestCase {
         // 先关后端再放：`HolderConnection` 没 close 就释放会在 deinit 里撞 libdispatch 的断言（已知问题）。
         if model == nil { await session.close() }
         return (latencies, parts, misses)
+    }
+
+    // MARK: - M18 拖动选中
+
+    /// 终端里按住鼠标拖动选中：每个 `leftMouseDragged` 事件到「选区盖到这一格」的那一帧设上 contents 的时间。
+    /// 选中不经过 shell（纯本地），量的是 鼠标事件 → 引擎 → 出帧。屏幕上的鼠标指针由 WindowServer 直接画，
+    /// 选区比指针晚多少，就是这个数再加上合成那一段。
+    ///
+    /// 配置（`TEST_RUNNER_M18_CONFIGS`，逗号分隔，默认 `step,steady`；名字带 `-visible` 的窗口真的上屏）：
+    /// - `step…`：一次拖一格，两次之间空 `M18_GAP_MS`（默认 150）：空闲后的第一下。
+    /// - `steady…`：按 `M18_RATE_HZ`（默认 120）连续拖，像真的鼠标。
+    /// `M18_SAMPLES`（默认 200）、`M18_ROUNDS`（默认 1，各配置轮流）。`M6_KEYLOG=1` 时逐事件打 `M18 KEY t0= t1=`。
+    func testM18SelectionDrag() async throws {
+        let configs = MeasureEnv.string("M18_CONFIGS", "step,steady").split(separator: ",").map(String.init)
+        let samples = MeasureEnv.int("M18_SAMPLES", 200), rounds = MeasureEnv.int("M18_ROUNDS", 1)
+        log("M18 start loadavg=\(loadavg()) samples=\(samples)x\(rounds) screenMaxFPS=\(NSScreen.screens.map(\.maximumFramesPerSecond).max() ?? 0)")
+        let cell = try await ghosttyCellPixels()
+        let savedPasteboard = NSPasteboard.general.string(forType: .string)
+        defer {
+            // 用户开着「选中即复制」时松手会改剪贴板（测试宿主和正式版共用设置），还原。
+            if NSPasteboard.general.string(forType: .string) != savedPasteboard {
+                NSPasteboard.general.clearContents()
+                if let savedPasteboard { NSPasteboard.general.setString(savedPasteboard, forType: .string) }
+            }
+        }
+        var all: [String: [Double]] = [:]
+        var breakdown: [String: [String: [Double]]] = [:]
+        for round in 0..<rounds {
+            for config in (round % 2 == 0 ? configs : configs.reversed()) {
+                let r = try await runDrag(config, samples: samples, cell: cell)
+                all[config, default: []] += r.latencies
+                for (k, v) in r.parts { breakdown[config, default: [:]][k, default: []] += v }
+                log("M18 round=\(round) config=\(config) \(stats(r.latencies)) misses=\(r.misses) \(r.note)")
+            }
+        }
+        for config in configs {
+            log("M18 RESULT config=\(config) latency(ms) \(stats(all[config] ?? []))")
+            for (k, v) in (breakdown[config] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                log("M18 RESULT config=\(config) part=\(k)(ms) \(stats(v))")
+            }
+        }
+        log("M18 end loadavg=\(loadavg())")
+    }
+
+    private func runDrag(_ config: String, samples: Int, cell: (w: Int, h: Int)) async throws
+        -> (latencies: [Double], parts: [String: [Double]], misses: Int, note: String) {
+        let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let session = TerminalSession()
+        let backend = EchoBackend()
+        let bridge = session.ghostty
+        let container = GhosttyContainerView(surface: bridge.view)
+        container.isActive = true
+        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: Self.placement(for: config),
+                                      keepsDrawing: true)
+        container.frame = window.contentView?.bounds ?? rect
+        container.layoutSubtreeIfNeeded()
+        defer {
+            session.dispose()
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+        _ = await waitUntil(10) { bridge.isLive && bridge.grid != nil }
+        await session.connect(using: backend)
+        window.makeFirstResponder(bridge.view)
+        let view = bridge.view
+        let cols = Int(session.currentProcessSize.cols)
+        // 铺几行字：选区盖到有字的格子上。
+        let line = String(repeating: "x", count: max(4, cols - 1))
+        backend.emit(Data(("\u{1B}[2J\u{1B}[H" + Array(repeating: line, count: 8).joined(separator: "\r\n")).utf8))
+        await sleep(1.0)
+        _ = await waitUntil(5) { GhosttyFrameWatch.contentLayer(of: view) != nil }
+        let watch = GhosttyFrameWatch(layer: try XCTUnwrap(GhosttyFrameWatch.contentLayer(of: view)))
+
+        let scale = window.backingScaleFactor
+        let row = 4, startCol = 2, lastCol = cols - 4
+        let cw = cell.w, ch = cell.h
+        func cellPoint(_ col: Int, fraction: CGFloat) -> NSPoint {
+            let x = (CGFloat(col) + fraction) * CGFloat(cw) / scale
+            let yTop = (CGFloat(row) + 0.5) * CGFloat(ch) / scale
+            return view.convert(NSPoint(x: x, y: view.bounds.height - yTop), to: nil)
+        }
+        // 这一格选上了没有：格子左上角那两个像素是底色（字 x 碰不到），选上后变成选区色。
+        @Sendable func selected(_ surface: IOSurfaceRef, _ col: Int) -> Bool {
+            SurfacePixels.inkFraction(surface, x: col * cw + 1, y: row * ch + 1, width: 2, height: 2, threshold: 10) > 0.5
+        }
+        func send(_ type: NSEvent.EventType, _ col: Int, fraction: CGFloat) {
+            window.sendEvent(RealEvents.mouse(type, window: window, at: cellPoint(col, fraction: fraction)))
+        }
+        /// 松手、点一下清掉选区、在起点重新按下。
+        func restart(first: Bool) async {
+            if !first {
+                send(.leftMouseUp, startCol, fraction: 0.1)
+                await sleep(0.1)
+            }
+            send(.leftMouseDown, startCol, fraction: 0.1)
+            await sleep(0.3)
+        }
+
+        let keyLog = MeasureEnv.string("M6_KEYLOG", "0") == "1"
+        var latencies: [Double] = []
+        var parts: [String: [Double]] = [:]
+        var misses = 0
+        func record(t0: CFTimeInterval, frame: GhosttyFrameWatch.Frame?) {
+            guard let frame else { misses += 1; return }
+            let ms = (frame.time - t0) * 1000
+            latencies.append(ms)
+            if keyLog { log(String(format: "M18 KEY cfg=%@ t0=%.6f t1=%.6f %@", config, t0, frame.time, frame.onMain ? "m" : "r")) }
+        }
+        var note = ""
+        await restart(first: true)
+        if config.hasPrefix("steady") {
+            let period = 1.0 / Double(MeasureEnv.int("M18_RATE_HZ", 120))
+            var frameCount = 0, eventCount = 0
+            while latencies.count + misses < samples {
+                // 逐帧读「选区盖到第几列」。
+                watch.startLog { surface in
+                    var col = startCol
+                    while col + 1 <= lastCol, selected(surface, col + 1) { col += 1 }
+                    return col
+                }
+                var events: [(t0: CFTimeInterval, col: Int)] = []
+                let begin = CACurrentMediaTime()
+                var col = startCol
+                while col < lastCol, latencies.count + misses + events.count < samples {
+                    col += 1
+                    events.append((CACurrentMediaTime(), col))
+                    send(.leftMouseDragged, col, fraction: 0.9)
+                    let next = begin + Double(events.count) * period
+                    let wait = next - CACurrentMediaTime()
+                    if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) }
+                }
+                await sleep(0.2)
+                let frames = watch.frames
+                frameCount += frames.count; eventCount += events.count
+                for e in events { record(t0: e.t0, frame: frames.first { $0.value >= e.col && $0.time >= e.t0 }) }
+                await restart(first: false)
+            }
+            note = "events=\(eventCount) frames=\(frameCount)"
+        } else {
+            let gap = Double(MeasureEnv.int("M18_GAP_MS", 150)) / 1000
+            var col = startCol
+            var i = 0
+            while latencies.count + misses < samples {
+                if col >= lastCol {
+                    await restart(first: false)
+                    col = startCol
+                }
+                col += 1
+                i += 1
+                let target = col
+                watch.startLog()
+                watch.arm { surface in selected(surface, target) }
+                let t0 = CACurrentMediaTime()
+                send(.leftMouseDragged, target, fraction: 0.9)
+                let hit = await waitUntil(1.0) { watch.hitTime != nil }
+                watch.disarm()
+                let hitTime = watch.hitTime
+                record(t0: t0, frame: hit ? watch.frames.first { $0.time == hitTime } : nil)
+                await sleep(gap + Double((i * 7919) % 31) / 1000)
+            }
+        }
+        send(.leftMouseUp, startCol, fraction: 0.1)
+        await sleep(0.1)
+        await session.close()
+        return (latencies, parts, misses, note)
+    }
+
+    // MARK: - M19 输出时出多少帧
+
+    /// 程序按固定间隔往终端写一小段（每段都改画面），数这段时间里交到图层的帧数。
+    /// 要核的是：不停地写（间隔远小于一个刷新周期）时一个刷新周期只出一帧，不因为「空闲后当场画」多画；
+    /// 间隔大于刷新周期时一段一帧。
+    ///
+    /// `TEST_RUNNER_M19_PERIODS_US`（逗号分隔的间隔，微秒；0 = 尽量快），`M19_SECONDS`（每档写多久，默认 2）。
+    func testM19OutputFrameRate() async throws {
+        let periods = MeasureEnv.string("M19_PERIODS_US", "0,200,1000,2000,3000,5000,8000,16000,33000,100000")
+            .split(separator: ",").compactMap { Int($0) }
+        let seconds = Double(MeasureEnv.int("M19_SECONDS", 2))
+        let maxFPS = NSScreen.screens.map(\.maximumFramesPerSecond).max() ?? 0
+        log("M19 start loadavg=\(loadavg()) seconds=\(seconds) screenMaxFPS=\(maxFPS)")
+        let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let session = TerminalSession()
+        let backend = EchoBackend()
+        let bridge = session.ghostty
+        let container = GhosttyContainerView(surface: bridge.view)
+        container.isActive = true
+        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .visibleOnScreen, keepsDrawing: true)
+        container.frame = window.contentView?.bounds ?? rect
+        container.layoutSubtreeIfNeeded()
+        defer {
+            session.dispose()
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+        _ = await waitUntil(10) { bridge.isLive && bridge.grid != nil }
+        await session.connect(using: backend)
+        backend.emit(Data("\u{1B}[2J\u{1B}[H".utf8))
+        await sleep(1.0)
+        _ = await waitUntil(5) { GhosttyFrameWatch.contentLayer(of: bridge.view) != nil }
+        let watch = GhosttyFrameWatch(layer: try XCTUnwrap(GhosttyFrameWatch.contentLayer(of: bridge.view)))
+
+        for period in periods {
+            watch.startLog()
+            let emitted = TimeBoxData()
+            let begin = CACurrentMediaTime()
+            let end = begin + seconds
+            let done = DispatchSemaphore(value: 0)
+            let thread = Thread {
+                var i = 0
+                var next = CACurrentMediaTime()
+                while CACurrentMediaTime() < end {
+                    i += 1
+                    // 一行里原地改一个数：每段都让画面变，又不滚屏。
+                    let piece = Data("\r\u{1B}[K\(i) \(String(repeating: "#", count: i % 40))".utf8)
+                    backend.emit(piece)
+                    emitted.append(Data([0]))
+                    next += Double(max(period, 20)) / 1_000_000
+                    // 短间隔用自旋（usleep 的粒度不够），长间隔先睡再自旋。
+                    let wait = next - CACurrentMediaTime()
+                    if wait > 0.002 { usleep(UInt32((wait - 0.001) * 1_000_000)) }
+                    while CACurrentMediaTime() < next {}
+                }
+                done.signal()
+            }
+            thread.qualityOfService = .userInteractive
+            thread.start()
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().async { done.wait(); c.resume() }
+            }
+            await sleep(0.3)
+            let frames = watch.frames.filter { $0.time >= begin && $0.time <= end + 0.05 }
+            let gaps = zip(frames.dropFirst(), frames).map { ($0.time - $1.time) * 1000 }
+            log(String(format: "M19 RESULT period_us=%d emits/s=%.0f frames/s=%.1f 帧间隔(ms) %@",
+                       period, Double(emitted.value.count) / seconds, Double(frames.count) / seconds, stats(gaps)))
+            await sleep(0.5)
+        }
+        await session.close()
+        log("M19 end loadavg=\(loadavg())")
     }
 
     // MARK: - M7 开标签与恢复
