@@ -68,6 +68,16 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
         }
     }
 
+    /// 第一次接入途中断了、重连又没连上：「仍然连不上：<那一次的原因>」。值不值得重试照原因的。
+    nonisolated struct FirstAttachReconnectError: LocalizedError, SSHFailureClassifying {
+        let underlying: any Error
+        var errorDescription: String? {
+            String(localized: "仍然连不上：\(TerminalConnectFailure.reason(of: underlying))")
+        }
+        var isPermanentConnectFailure: Bool { SSHTransportFailure.isPermanentConnectFailure(underlying) }
+        var transportFailureVerdict: Bool? { SSHTransportFailure.isTransportFailure(underlying) }
+    }
+
     /// 已保存的主机被删了。
     nonisolated struct HostRemovedError: LocalizedError {
         var errorDescription: String? { String(localized: "这台主机已被删除。") }
@@ -129,6 +139,8 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
 
     private enum InitialOutcome {
         case attached, usePlainConnection, closed
+        /// 第一次接入途中断了，重连又没连上（重试不会好的，或可以再试的已经试满了）：带着那一次的原因失败。
+        case reconnectFailed(any Error)
         /// 第一次接入时连接一再断开：报连接失败，**不**退到普通连接、**不**当成主机上的会话没了。
         case lostBeforeAttach
     }
@@ -136,6 +148,9 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
     /// 第一次接入（回放还没收完）就断了的话，再连几次。不退到普通连接：那会悄悄换成一个不保持的 shell，主机上那个
     /// 还在跑的会话也就没人接了。
     static let firstAttachAttempts = 3
+    /// 第一次接入途中断了之后，重连「可以再试」的失败（握手前被断开、超时、不可达……）最多试这么多次，
+    /// 到了就带着原因失败返回：这时界面停在连接中页，不能一直退避下去。
+    static let firstAttachReconnectAttempts = 4
 
     private static let initialReconnectDelay = Duration.milliseconds(500)
     private static let maxReconnectDelay = Duration.seconds(15)
@@ -240,6 +255,10 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             isClosed = true
             finishStreams()
             throw SSHConnection.SSHConnectionError.connectFailed(String(localized: "SSH 连接已断开"))
+        case .reconnectFailed(let error):
+            isClosed = true
+            finishStreams()
+            throw FirstAttachReconnectError(underlying: error)
         }
     }
 
@@ -315,7 +334,10 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             reconnectingContinuation.yield(true)
             // 这一轮连上了却没接回就又断了：等一等再试，别原地打转。
             if !didAttachOnLastLink { await backOff() }
-            guard let next = await reconnect() else { break }
+            // 第一次接入还没完成：界面停在连接中页、还没有终端，也没有「重试」入口，不能像接上之后那样
+            // 一直退避或停下等用户——那样 `connect()` 永远不返回，一直「正在连接」。
+            let reconnected = hasAttached ? await reconnect() : await reconnectBeforeFirstAttach()
+            guard let next = reconnected else { break }
             connected = next
         }
         resolveFirstAttach(.closed)
@@ -431,6 +453,43 @@ actor PersistentSSHConnection: TerminalImageReceiving, TerminalVideoReceiving, T
             }
         }
         return nil
+    }
+
+    /// 第一次接入途中断了之后的重连：重试不会好的失败（拒绝连接、认证、主机密钥、连接方式变弱、地址不合法）
+    /// 马上带着原因失败；可以再试的（握手前被断开、超时、不可达……）最多试 `firstAttachReconnectAttempts` 次。
+    /// 失败时经 `resolveFirstAttach(.reconnectFailed)` 让 `connect()` 抛出，返回 nil。
+    private func reconnectBeforeFirstAttach() async -> ConnectedClient? {
+        var attempts = 0
+        while !isClosed {
+            do {
+                let connected = try await openConnection()
+                if isClosed {
+                    await connected.close()
+                    return nil
+                }
+                return connected
+            } catch {
+                attempts += 1
+                reconnectFailureContinuation.yield(TerminalConnectFailure.reason(of: error))
+                if Self.endsFirstAttach(error, host: profile.host, port: profile.port)
+                    || attempts >= Self.firstAttachReconnectAttempts {
+                    AppLogger.error("第一次接入途中断开后重连失败（第 \(attempts) 次），不再试：\(FriendlyError.describe(error))")
+                    resolveFirstAttach(.reconnectFailed(error))
+                    return nil
+                }
+                await backOff()
+            }
+        }
+        return nil
+    }
+
+    /// 第一次接入时重连碰到就不再试的失败：重试不会好的那类，以及拒绝连接（服务器已经不在了）。
+    nonisolated static func endsFirstAttach(_ error: any Error, host: String, port: Int) -> Bool {
+        if SSHTransportFailure.isPermanentConnectFailure(error) { return true }
+        if case SSHConnection.SSHConnectionError.connectFailed(let detail) = error {
+            return SSHConnectFailureText.isRefusal(detail, host: host, port: port)
+        }
+        return false
     }
 
     /// 停下来等用户：把原因交给界面，等 `retryAfterAttention()`（或 `close()`），然后重新读凭据。

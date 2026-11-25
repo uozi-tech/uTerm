@@ -50,7 +50,7 @@ nonisolated enum SSHConnectFailureText {
         let endpoint = address(host: host, port: port)
         switch kind {
         case .refused:
-            return String(localized: "\(endpoint) 拒绝了连接：那里没有在运行的 SSH 服务（服务器可能已关闭，或端口不对）")
+            return refusedMessage(endpoint: endpoint)
         case .closedBeforeHandshake:
             return String(localized: "\(endpoint) 在 SSH 握手前就断开了连接，没有收到 SSH 服务的回应：服务器可能没在运行（开着代理或 VPN 时，连不上的主机也会这样表现）")
         case .timedOut:
@@ -60,6 +60,15 @@ nonisolated enum SSHConnectFailureText {
         case .networkUnreachable:
             return String(localized: "网络不可达，连不到 \(endpoint)")
         }
+    }
+
+    /// 改写过的正文是不是「拒绝了连接」那一句（改写后 errno 没了，按同一句话比对）。
+    static func isRefusal(_ detail: String, host: String, port: Int) -> Bool {
+        kind(of: detail) == .refused || detail == refusedMessage(endpoint: address(host: host, port: port))
+    }
+
+    private static func refusedMessage(endpoint: String) -> String {
+        String(localized: "\(endpoint) 拒绝了连接：那里没有在运行的 SSH 服务（服务器可能已关闭，或端口不对）")
     }
 
     /// NIO `IOError` 的描述里带的 errno（`… (errno: 61)`），取最后一个。
@@ -91,6 +100,9 @@ nonisolated enum TerminalConnectFailure {
     /// 去掉「SSH 连接失败：」这层前缀后的原因（重试的那句已经说了连不上）。
     static func reason(of error: any Error) -> String {
         switch error {
+        case let error as PersistentSSHConnection.FirstAttachReconnectError:
+            // 已经是「仍然连不上：…」那句了，取里面的原因，别说两遍。
+            return reason(of: error.underlying)
         case SSHConnection.SSHConnectionError.connectFailed(let message),
              SSHConnection.SSHConnectionError.handshakeFailed(let message):
             return message

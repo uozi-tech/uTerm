@@ -109,6 +109,26 @@ final class MobileTerminalConnectFailureTests: XCTestCase {
         tab.controller.close()
     }
 
+    // MARK: - 第一次接入途中断了、重连失败
+
+    /// 会话留在主机上的后端第一次接入途中断开、重连被拒：`connect()` 带着原因失败，连接中页 / 失败页说
+    /// 「仍然连不上：…拒绝了连接」；点重试再失败也只说一遍「仍然连不上」。
+    func testFirstAttachReconnectFailureSaysStillCannotConnectOnce() async throws {
+        let refused = SSHConnection.SSHConnectionError.connectFailed("10.31.0.102:2298 拒绝了连接")
+        let factory = MobileTerminalTransportFactory { _ in
+            FailingBackend(error: PersistentSSHConnection.FirstAttachReconnectError(underlying: refused))
+        }
+        let controller = MobileTerminalController(transportFactory: factory)
+        controller.start(profile: ServerProfile(), container: try MobileFixtures.emptyContainer(), relay: relay)
+        let first = await failure(of: controller, "第一次接入")
+        XCTAssertEqual(first, "仍然连不上：10.31.0.102:2298 拒绝了连接")
+
+        controller.restart()
+        await MobileFakeTerminal.waitUntil { if case .failed = controller.state { true } else { false } }
+        let second = await failure(of: controller, "重试")
+        XCTAssertEqual(second, "仍然连不上：10.31.0.102:2298 拒绝了连接", "只说一遍「仍然连不上」")
+    }
+
     // MARK: - 自动重连时说明为什么还没连上
 
     /// 会话留在主机上的后端自己重连、每次都被拒绝：「正在重新连接」下面说明上一次为什么没连上；接回后清掉。
@@ -130,6 +150,18 @@ final class MobileTerminalConnectFailureTests: XCTestCase {
         XCTAssertTrue(cleared)
         controller.close()
     }
+}
+
+/// 建连就失败的后端。
+private actor FailingBackend: TerminalBackend {
+    nonisolated let outputItems = AsyncStream<TerminalOutputItem> { $0.finish() }
+    nonisolated let exitStream = AsyncStream<Void> { $0.finish() }
+    let error: any Error
+    init(error: any Error) { self.error = error }
+    func connect() async throws { throw error }
+    func write(_ data: Data) async {}
+    func resize(cols: UInt16, rows: UInt16) async {}
+    func close() async {}
 }
 
 /// 只会按测试的指令报「正在重连 / 为什么没连上」的后端。

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import NIOCore
 import NIOSSH
@@ -606,6 +607,97 @@ final class PersistentSSHConnectionAttentionTests: XCTestCase {
         XCTAssertNotNil(exited, "界面要知道这个后端结束了")
     }
 
+    // MARK: - 第一次接入途中断了、接着连不上：不能挂死
+
+    /// 第一次接入（回放）途中断开后的重连失败：`connect()` 要在有限时间内带着原因失败，不能一直退避、一直
+    /// 「正在连接」。连不上就抛出，失败的原因就在错误里（界面据此说「仍然连不上：…」）。
+    private static func connectFailure(_ backend: PersistentSSHConnection, within seconds: Double) async throws -> any Error {
+        do {
+            try await bounded("connect() 带着原因失败返回（挂住了）", within: seconds) {
+                try await backend.connect()
+            }
+        } catch is BoundedWaitTimeout {
+            throw BoundedWaitTimeout(what: "connect() 挂住了", seconds: seconds)
+        } catch {
+            return error
+        }
+        XCTFail("应当连不上")
+        throw CancellationError()
+    }
+
+    /// 服务器在回放途中整个不在了（端口没人监听）：重连被拒绝，马上带着「拒绝了连接」失败。
+    func testFirstAttachLostThenRefusedFailsWithTheReasonInsteadOfHanging() async throws {
+        let switches = Switches()
+        switches.replayEndDelay.withLock { $0 = .seconds(30) }   // 回放一直没收完
+        let server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: Self.fakeHolder(switches)))
+        let port = server.port
+        let backend = try makeBackend(server, resumes: true)
+        addTeardownBlock { _ = try? await bounded("收尾时关闭后端") { await backend.close() } }
+        let failing = Task { try await Self.connectFailure(backend, within: 15) }
+        _ = try await server.waitForEvents(timeout: .seconds(10)) { _ in
+            switches.attachPayloads.withLock { $0.count } == 1
+        }
+        await server.stop()
+        let stoppedAt = ContinuousClock.now
+        let error = try await failing.value
+        let text = error.localizedDescription
+        XCTAssertTrue(text.hasPrefix("仍然连不上："), text)
+        XCTAssertTrue(text.contains("拒绝了连接") && text.contains("127.0.0.1:\(port)"), text)
+        // 被拒绝就不再试：一次退避（0.5 秒）加一次被拒，不该走完可以再试的那几轮（约 7.5 秒）。
+        XCTAssertLessThan(ContinuousClock.now - stoppedAt, .seconds(4), "被拒绝了还在一轮轮地试")
+        XCTAssertFalse(backend.hostSessionHasEnded, "主机上的会话不能当成没了")
+        let exited: Void? = try await BoundedStream(backend.exitStream).next("失败后的 exitStream")
+        XCTAssertNotNil(exited)
+    }
+
+    /// 回放途中断开、重连时服务器拒绝了凭据（重试不会好）：以前停下等用户点重试——可第一次接入时界面上还没有终端、
+    /// 也没有重试入口，`connect()` 永远不返回。现在直接带着认证失败的原因失败。
+    func testFirstAttachLostThenAuthenticationFailsInsteadOfWaitingForever() async throws {
+        let switches = Switches()
+        switches.replayEndDelay.withLock { $0 = .seconds(30) }
+        let server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: SSHTestAuthentication(custom: { _ in !switches.rejectLogins.withLock { $0 } }),
+            exec: Self.fakeHolder(switches)))
+        defer { Task { await server.stop() } }
+        let backend = try makeBackend(server, resumes: true)
+        addTeardownBlock { _ = try? await bounded("收尾时关闭后端") { await backend.close() } }
+        let failing = Task { try await Self.connectFailure(backend, within: 15) }
+        _ = try await server.waitForEvents(timeout: .seconds(10)) { _ in
+            switches.attachPayloads.withLock { $0.count } == 1
+        }
+        switches.rejectLogins.withLock { $0 = true }
+        await server.dropAllConnections()
+        let error = try await failing.value
+        let text = error.localizedDescription
+        XCTAssertTrue(text.hasPrefix("仍然连不上："), text)
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(error), "认证失败重试不会好：\(error)")
+    }
+
+    /// 重连一直是「可以再试」的那类失败（这里：端口接下就断，同开着代理时连不上的地址）：有次数上限，到了也带着原因失败。
+    func testFirstAttachRetryableReconnectFailuresAreBounded() async throws {
+        let switches = Switches()
+        switches.replayEndDelay.withLock { $0 = .seconds(30) }
+        let server = try await SSHTestServer.start(SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: Self.fakeHolder(switches)))
+        let port = server.port
+        let backend = try makeBackend(server, resumes: true)
+        addTeardownBlock { _ = try? await bounded("收尾时关闭后端") { await backend.close() } }
+        let failing = Task { try await Self.connectFailure(backend, within: 30) }
+        _ = try await server.waitForEvents(timeout: .seconds(10)) { _ in
+            switches.attachPayloads.withLock { $0.count } == 1
+        }
+        await server.stop()
+        let listener = try ReusableAcceptAndCloseListener(port: port)
+        defer { listener.close() }
+        let error = try await failing.value
+        let text = error.localizedDescription
+        XCTAssertTrue(text.hasPrefix("仍然连不上："), text)
+        XCTAssertTrue(text.contains("握手前"), text)
+        XCTAssertGreaterThanOrEqual(listener.acceptCount, PersistentSSHConnection.firstAttachReconnectAttempts,
+                                    "可以再试的失败要真的再试几次")
+    }
+
     /// 普通连接（主机用不了保持进程）没连上：不说「会话没了」——从来就没有过。
     func testPlainFallbackThatFailsToConnectDoesNotClaimTheSessionEnded() async throws {
         let attempts = PromptCounter()
@@ -624,3 +716,46 @@ final class PersistentSSHConnectionAttentionTests: XCTestCase {
     }
 }
 
+
+/// 指定端口上的回环监听（`SO_REUSEADDR`，刚停掉的测试服务端的端口也能马上接手）：接下连接立刻关掉，记次数。
+private final class ReusableAcceptAndCloseListener: @unchecked Sendable {
+    private let fd: Int32
+    private let lock = NSLock()
+    private var accepts = 0
+    private var closed = false
+    var acceptCount: Int { lock.withLock { accepts } }
+
+    init(port: Int) throws {
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        guard sock >= 0 else { throw POSIXError(.EIO) }
+        var on: Int32 = 1
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        addr.sin_port = UInt16(port).bigEndian
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, listen(sock, 16) == 0 else { Darwin.close(sock); throw POSIXError(.EADDRINUSE) }
+        fd = sock
+        Thread.detachNewThread { [weak self] in
+            while true {
+                let client = accept(sock, nil, nil)
+                guard client >= 0 else { return }
+                Darwin.close(client)
+                guard let self else { return }
+                self.lock.withLock { self.accepts += 1 }
+            }
+        }
+    }
+
+    func close() {
+        lock.withLock {
+            guard !closed else { return }
+            closed = true
+            shutdown(fd, SHUT_RDWR)
+            Darwin.close(fd)
+        }
+    }
+}
