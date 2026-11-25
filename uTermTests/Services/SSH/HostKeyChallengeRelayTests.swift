@@ -1,16 +1,25 @@
+import Synchronization
 import XCTest
 @testable import uTerm
 
-/// 主机密钥 / 加密方式的询问不会把连接挂住：等回答的连接任务被取消（关标签、端口转发超时）时立刻返回，
+/// 主机密钥 / 连接方式的询问不会把连接挂住：等回答的连接任务被取消（关标签、端口转发超时）时立刻返回，
 /// 几个标签同时在问时排队而不是新的顶掉旧的（被顶掉的那一问以前按「拒绝」结束，连接就停在「要用户处理」）。
-/// 等不到就算挂住：返回 nil。
+/// 等不到就算挂住：返回 nil。到点就回来，不管 `task` 还挂不挂着（`Task.value` 不响应取消，放进任务组会把组一起挂住）。
 private func finished<T: Sendable>(_ task: Task<T, Never>, within seconds: Double = 2) async -> T? {
-    await withTaskGroup(of: T?.self) { group in
-        group.addTask { await task.value }
-        group.addTask { try? await Task.sleep(for: .seconds(seconds)); return nil }
-        let first = await group.next() ?? nil
-        group.cancelAll()
-        return first
+    let slot = Mutex<CheckedContinuation<T?, Never>?>(nil)
+    @Sendable func deliver(_ value: T?) {
+        slot.withLock { continuation in
+            continuation?.resume(returning: value)
+            continuation = nil
+        }
+    }
+    return await withCheckedContinuation { continuation in
+        slot.withLock { $0 = continuation }
+        Task { deliver(await task.value) }
+        Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            deliver(nil)
+        }
     }
 }
 
@@ -153,7 +162,7 @@ final class HostKeyChallengeRelayTests: XCTestCase {
         XCTAssertEqual(kept, true)
     }
 
-    /// 问的那个持有者关掉了（abandon）：合并在上面的人重新问，而不是跟着失败。
+    /// 问的那个持有者关掉了（标签关了：连接任务被取消、relay 被 abandon）：合并在上面的人重新问，而不是跟着失败。
     func testAbandonedAskIsAskedAgainForTheRemainingWaiter() async {
         let closing = HostKeyChallengeRelay()
         let staying = HostKeyChallengeRelay()
@@ -164,12 +173,14 @@ final class HostKeyChallengeRelayTests: XCTestCase {
         let b = Task { await coalescer.approve(asked, approver: staying.makeApprover()) }
         try? await Task.sleep(for: .milliseconds(100))
 
+        a.cancel()
+        let left = await finished(a)
+        XCTAssertEqual(left, false)
+        XCTAssertNotNil(closing.pendingChallenge, "还有人在等这一问")
         closing.abandon()
         await waitUntil { staying.pendingChallenge != nil }
         staying.resolve(true)
         let kept = await finished(b)
         XCTAssertEqual(kept, true)
-        a.cancel()
-        _ = await finished(a)
     }
 }

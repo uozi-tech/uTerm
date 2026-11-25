@@ -6,7 +6,7 @@ import Foundation
 /// 由 `PaneModel` / `FileBrowserModel` / 端口转发窗口 / iOS 根视图等共用。iOS 全 App 只有一个 relay，
 /// 几个标签可能同时在问，所以问题**排队**（一次弹一个），而不是新的顶掉旧的：以前被顶掉的那一问按「拒绝」
 /// 结束，那个连接就停在「要用户处理」、不再自动重试，可用户根本没看到它。问的是同一件事（`coalescingKey`
-/// 相同：同一台主机同一把钥匙，或同一台主机的加密方式）时并成一问，一次回答给所有在等的。
+/// 相同：同一台主机同一把钥匙，或同一台主机的连接方式）时并成一问，一次回答给所有在等的。
 ///
 /// 询问响应取消：等回答的连接任务被取消（关标签、超时），它那一份立刻按「没人回答」（`HostKeyAbandonment`）
 /// 结束、从队列里撤掉，不会把连接挂住；一问里所有人都走了，弹层也随之撤掉。
@@ -125,7 +125,7 @@ nonisolated enum HostKeyAbandonment {
 
 /// 同时打开同一台新主机的几个标签，每个都各握一次手，但只问用户一次：一个窗口同时只能弹一个 sheet，
 /// 后来的弹不出来，那个标签就永远卡在「连接中」。Mac 的保持终端（`HeldSSHBackend`）问主机密钥、两端的
-/// `LegacyAlgorithmGate` 问加密方式都经它。
+/// `LegacyAlgorithmGate` 问连接方式都经它。
 ///
 /// 响应取消：等着的连接任务被取消时，它那一份立刻按「拒绝」返回（不等别人那一问）；一问里所有人都走了，
 /// 正在问的那个审批任务也被取消（relay 随之撤掉弹层）。问的那个标签关掉了（「没人回答」）时，还在等的重新问。
@@ -147,7 +147,8 @@ actor HostKeyApprovalCoalescer {
     func approve(_ challenge: HostKeyChallenge, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool) async -> Bool {
         let key = challenge.coalescingKey
         while !Task.isCancelled {
-            let ask = inFlight[key] ?? start(key, challenge, approver)
+            let joined = inFlight[key]
+            let ask = joined ?? start(key, challenge, approver)
             let waiterID = UUID()
             let outcome = await withTaskCancellationHandler {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
@@ -163,8 +164,11 @@ actor HostKeyApprovalCoalescer {
             switch outcome {
             case .approved: return true
             case .rejected: return false
-            // 问的那个标签关掉了，用户没回答：由还在等的重新问（自己被取消的话循环条件会挡住）。
-            case .abandoned: continue
+            // 问的那个标签关掉了，用户没回答：合并进来的、还在等的重新问（自己被取消的话循环条件会挡住）；
+            // 发起这一问的就是关掉的那个，按没同意结束，不再用它那个已经没人看的 relay 问。
+            case .abandoned:
+                if joined == nil { return false }
+                continue
             }
         }
         return false
