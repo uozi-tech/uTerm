@@ -148,13 +148,14 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     func info(of subagent: AgentSubagentFile) async -> AgentSubagentInfo? { nil }
 
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {
-        guard resumable, directory.hasPrefix("/") else { return nil }
-        return "cd -- '\(directory)' && " + (command ?? "\(tool.rawValue) resume \(sessionID)")
+        guard resumable, let quoted = ClaudeResumeCommand.quotedDirectory(directory) else { return nil }
+        return "cd -- \(quoted) && " + (command ?? "\(tool.rawValue) resume \(sessionID)")
     }
 
     nonisolated func newSessionCommand(directory: String) -> String? {
-        guard startsSessions, directory.hasPrefix("/") else { return nil }
-        return "cd -- '\(directory)' && " + (command ?? tool.rawValue)
+        guard startsSessions, let quoted = ClaudeResumeCommand.quotedDirectory(directory) else { return nil }
+        // 引号同真的数据源：起真 shell 的用例用带单引号的目录名。
+        return "cd -- \(quoted) && " + (command ?? tool.rawValue)
     }
 
     // MARK: 手写的条目
