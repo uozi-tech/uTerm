@@ -121,15 +121,10 @@ private struct CodeTabBrowser: View {
                 let selected = code.displayedRun?.id
                 let showsRecord = code.detail == .transcript
                 return code.runs.map { run in
-                    let terminal = run.terminal
-                    let ended = run.isEnded
-                    return AgentHistoryRunRow(
+                    AgentHistoryRunRow(
                         id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
                         isSelected: run.id == selected, path: run.path,
-                        status: AgentHistoryRunStatus {
-                            if ended { return .ended }
-                            return terminal.codeProgramStatus.map { .program($0) } ?? .running
-                        },
+                        status: AgentHistoryRunStatus { run.status },
                         showsRecord: showsRecord && run.id == selected)
                 }
             }, onSelect: { id in

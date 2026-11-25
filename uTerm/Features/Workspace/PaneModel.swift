@@ -210,7 +210,7 @@ extension PaneModel: CodeTabTerminal {
     func runCodeCommand(_ command: String) { session.startCodeCommand(command) }
     var codeCommandHasEnded: Bool { session.codeCommandHasEnded }
     var codeCommandMarker: String? { session.codeCommandMarker }
-    var codeProgramStatus: ProgramStatusRecord? { session.programStatus }
+    var codeProgramStatus: ProgramStatusRecord? { session.programReport }
     func restoreCodeCommand(marker: String?, startedAt: Date) {
         session.restoreCodeCommand(marker: marker, startedAt: startedAt)
     }

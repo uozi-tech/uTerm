@@ -4,8 +4,8 @@ import UAppKitBridge
 import UDesignKit
 import UniformTypeIdentifiers
 
-/// 在 Code 标签页里跑着的会话（`CodeTabModel.runs`）：列表里对应的行标成「运行中」；列表里没有行的（还没对上记录的
-/// 新会话）放在列表最顶上。不另起一组「正在运行」：一个会话只出现一次。独立的历史窗口没有。
+/// 在 Code 标签页里跑着的会话（`CodeTabModel.runs`）：都放在列表最顶上（列表里没有行的、还没对上记录的新会话也在），
+/// 行上是它此刻的状态（`CodeRunStatus`）。不另起一组「正在运行」：一个会话只出现一次。独立的历史窗口没有。
 struct AgentHistoryRunning {
     /// 在 Code 标签页里跑着（或已结束、留着画面）的会话，按起来的先后。列表把它们都放在最顶上，置顶与下面的分组里
     /// 不再出现（一个会话只出现一次）；结束、拿掉之后回到它的记录平常的位置。
@@ -42,16 +42,10 @@ struct AgentHistoryRunRow: Identifiable {
     var showsRecord = false
 }
 
-/// 一个跑着的会话此刻的状态：程序经 OSC 7501 报的（同终端标签页上的圆点与文字），没报过就是「运行中」，程序退出了
-/// 是「已结束」（优先）。`read` 在显示它的那一小块视图里调：状态变了只重画那一行，不让整个列表重算。
+/// 一个跑着的会话此刻的状态（规则见 `CodeRunStatus`）。`read` 在显示它的那一小块视图里调：状态变了只重画那一行，
+/// 不让整个列表重算。
 struct AgentHistoryRunStatus {
-    enum Phase: Equatable {
-        case running
-        case ended
-        case program(ProgramStatusRecord)
-    }
-
-    let read: @MainActor () -> Phase
+    let read: @MainActor () -> CodeRunStatus
 }
 
 /// 历史会话的内容：左边会话列表（可拖宽），右边选中会话的对话。独立的历史窗口用它；Code 标签页另摆（`CodeTabView`），
@@ -164,7 +158,7 @@ struct AgentHistorySessionList: View {
     let history: AgentHistoryModel
     var newSession: AgentHistoryNewSession? = nil
     var reveal: AgentHistoryReveal? = nil
-    /// Code 标签页里跑着的会话：列表里对应的行标成「运行中」，列表里没有行的放在最顶上。
+    /// Code 标签页里跑着的会话：放在最顶上，行上是它此刻的状态。
     var running: AgentHistoryRunning? = nil
     /// 收起侧栏（Code 标签页，放在菜单里）；nil = 菜单里不出这一项。
     var onCollapse: (() -> Void)? = nil
@@ -585,62 +579,37 @@ private struct AgentHistoryGroupHeader: View {
 
 // MARK: - 运行中
 
-/// 「运行中」小标记：绿点 + 字。
-struct AgentHistoryRunningTag: View {
-    var body: some View {
-        HStack(spacing: 3) {
-            Circle().fill(UD.success).frame(width: 6, height: 6)
-            Text("运行中")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(UD.success)
-        }
-        .fixedSize()
-    }
-}
-
-/// 跑着的会话行上的状态：程序报的状态用终端标签页上同一套圆点颜色与文字（`ProgramStatusRecord.tabDot` /
-/// `statusLabel`），没报过是「运行中」，程序退出了是「已结束」。在自己的 `body` 里读状态：变了只重画这一小块。
+/// 跑着的会话行上的状态（`CodeRunStatus`）：程序报的状态用终端标签页上同一套圆点颜色与文字（`ProgramStatusRecord.tabDot` /
+/// `statusLabel`；空闲的圆点是灰的），程序退出了是「已结束」，没报过什么都不画。在自己的 `body` 里读状态：变了只重画这一小块。
 struct AgentHistoryRunStatusTag: View {
     let status: AgentHistoryRunStatus
 
     var body: some View {
-        let phase = status.read()
+        switch status.read() {
+        case .unreported:
+            EmptyView()
+        case .ended:
+            tag(dot: UD.text4, text: AgentHistoryText.sessionEnded, textColor: UD.text3, help: AgentHistoryText.sessionEnded)
+        case .program(let record):
+            // 空闲的圆点是最淡的灰，字用次一级的灰才看得清。
+            tag(dot: record.tabDot, text: record.statusLabel, textColor: record.tone == .idle ? UD.text3 : record.tabDot,
+                help: record.tabHelp)
+        }
+    }
+
+    private func tag(dot: Color, text: String, textColor: Color, help: String) -> some View {
         HStack(spacing: 3) {
-            Circle().fill(color(phase)).frame(width: 6, height: 6)
-            Text(verbatim: label(phase))
+            Circle().fill(dot).frame(width: 6, height: 6)
+            Text(verbatim: text)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(phase == .ended ? UD.text3 : color(phase))
+                .foregroundStyle(textColor)
         }
         .fixedSize()
-        .help(Text(verbatim: help(phase)))
-    }
-
-    private func color(_ phase: AgentHistoryRunStatus.Phase) -> Color {
-        switch phase {
-        case .running: UD.success
-        case .ended: UD.text4
-        case .program(let record): record.tabDot
-        }
-    }
-
-    private func label(_ phase: AgentHistoryRunStatus.Phase) -> String {
-        switch phase {
-        case .running: String(localized: "运行中")
-        case .ended: AgentHistoryText.sessionEnded
-        case .program(let record): record.statusLabel
-        }
-    }
-
-    private func help(_ phase: AgentHistoryRunStatus.Phase) -> String {
-        switch phase {
-        case .running: String(localized: "运行中")
-        case .ended: AgentHistoryText.sessionEnded
-        case .program(let record): record.tabHelp
-        }
+        .help(Text(verbatim: help))
     }
 }
 
-/// 列表最顶上那一行（`AgentHistoryRunRow`）：标题（新会话就是「新会话」），第二行「运行中」+ 目录名。点一下回到它的终端。
+/// 列表最顶上那一行（`AgentHistoryRunRow`）：标题（新会话就是「新会话」），第二行状态（程序报过的话）+ 目录名。点一下回到它的终端。
 private struct AgentHistoryUnlistedRunRow: View {
     let row: AgentHistoryRunRow
     /// 这台主机上不止一种工具：写出是哪种（「新会话」本身看不出来）。

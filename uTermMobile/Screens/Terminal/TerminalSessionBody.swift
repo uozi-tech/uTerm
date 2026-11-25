@@ -71,6 +71,13 @@ final class TermTab: Identifiable {
         return controller.programStatus
     }
 
+    /// 同 `programStatus`，但含空闲：Code 标签页侧栏那一行写「空闲」（`CodeRunStatus`）。
+    var programReport: ProgramStatusRecord? {
+        guard controller.state == .connected else { return nil }
+        if let remote { return remote.client.programReport(for: remote.sessionID) }
+        return controller.programReport
+    }
+
     /// 前台在跑 AI 命令行（含空闲），不是 shell。规则同 `programStatus`：远控读 Mac 推来的，直连读本机解析的。
     var agentInForeground: Bool {
         guard controller.state == .connected else { return false }
