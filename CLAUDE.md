@@ -355,6 +355,7 @@ to-one 关系镜像成一个 `STRING` 引用字段，to-many 靠子表反向键�
 - 列表/表格渲染的判定、读数、已排除的路与未决账全在 `docs/scroll-perf-findings.md`（开头有一页总表）；动手改列表前先读它的「与 uTable 结论不同之处」与「探针纪律」两节。
 - 全量用 `make test-fast` / `make test-mobile-fast`（并行全跑，失败用例再串行复核，以串行结果为准）：实测 macOS 2368 个用例约 5 分钟（串行 40 分钟以上），iOS 217 个约 5 分钟。悬停探针和性能探针并行时会假红，性能探针在机器忙时串行也会红（脚本复核前会等负载回落，等不到会提示）；钥匙串用例在锁屏时必失败（-25308）。
 - 夹具在 `uTermTests/Support/`（`ProbeWindow` / `ProbeMetrics` / `VisionTextProbe`），自证用例 `ProbeSmokeTests`——**别再抄第二份**。
+- 测试宿主里窗口进出场动画是关着的（测试包的 principal class `UTermTestBundlePrincipal`，`uTermTests/Support/TestHostWindowAnimations.swift`）：AppKit 收窗口的动画跑在 GCD 全局队列的工作线程上、等屏幕的 display link，全量跑到一半显示器睡了，每收一个窗口卡住一条线程，攒满 90 条（`kern.wq_max_constrained_threads`）后全局并发队列上的活全都排不上。别在用例里把 `NSAutomaticWindowAnimationsEnabled` 再打开（回归用例 `TestHostWindowAnimationTests`）。
 - 跑法（含 worktree、`build-for-testing` + `test-without-building` 的完整命令、以及「不要加 `CODE_SIGNING_ALLOWED=NO`」等注意事项）见该文档的「跑法」一节。
 - **iOS/iPadOS** 的测试 target 是 `uTermMobileTests`（宿主 `uTermMobile.app`，跑模拟器），一条命令 `make test-mobile`（换机器传 `MOBILE_DESTINATION`）。
 - iOS 侧的 target 配置、夹具（`uTermMobileTests/Support/`）、基线读数与八条坑（模拟器运行时要单独下、`uTerm/` 加 AppKit-only 文件要同步改 `membershipExceptions`、CloudKit 报错是常态……）见 `uTermMobileTests/README.md`。
