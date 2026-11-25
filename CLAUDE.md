@@ -30,10 +30,10 @@ uTerm 是**原生多语言**项目：源语言简体中文，同时完整支持 
 
 ### SSH 栈（USSHKit / USSHCore / NIOSSH）在 uAppKit 里
 
-三层都在 uAppKit（`github.com/uozi-tech/uAppKit`）里，本工程只引用 uAppKit 这一个包：`USSHKit`（产品层：主机密钥库与策略、
+三层都在 uAppKit（`github.com/uozi-tech/uAppKit`，按版本引用，当前 `upToNextMinor` 2.0.0；工程与 `Packages/USSHStack` 的版本要求要一致）里，本工程只引用 uAppKit 这一个包：`USSHKit`（产品层：主机密钥库与策略、
 凭据与私钥导入、`-L` 隧道、文件传输、错误文案）→ `USSHCore`（我们自己写的客户端层：连接、认证、exec / PTY 句柄、
 direct-tcpip、远程转发、SFTP、RSA / DH / AES-CTR 等算法，没有面向用户的文字）→ `NIOSSH`（Apple swift-nio-ssh 0.15.2
-的源码作为 uAppKit 的 target 编进去，带 14 个补丁，上游自己的测试一起编成 `NIOSSHTests`）。`USSHKit` 用
+的源码作为 uAppKit 的 target 编进去，带 15 个补丁，上游自己的测试一起编成 `NIOSSHTests`）。`USSHKit` 用
 `@_exported import USSHCore` 转出客户端层，App 里 `import USSHKit` 就够。补丁存成 `.patch` 放在 uAppKit 的
 `ThirdParty/swift-nio-ssh/patches/`，由 `Tools/ssh-stack/sync.sh` 在上游基线上重放（`check` 核对、`apply` 升级）；
 **补丁清单与升级步骤见 uAppKit 的 `ThirdParty/README.md`，升级上游前必读。** App 侧怎么用这些接口（窗口 = 包长 × 64、
@@ -43,8 +43,8 @@ direct-tcpip、远程转发、SFTP、RSA / DH / AES-CTR 等算法，没有面向
 - **别再在本工程（或任何依赖 uAppKit 的 App）里引用上游的 swift-nio-ssh 包**：模块会和 uAppKit 里的同名 target 重名。
 
 来历：2026-06 起 Citadel 与 Wellz26 的 swift-nio-ssh fork 在本仓库 `vendor/`，2026-09 拆成 fork 仓库，2026-11 并进
-uAppKit；2026-11 底换成跟 Apple 上游的 NIOSSH 加自写的 USSHCore，Citadel、它的补丁与 `Citadel` product 删除
-。
+uAppKit；2026-11 底 uAppKit 2.0.0 换成跟 Apple 上游的 NIOSSH 加自写的 USSHCore，Citadel、它的补丁与 `Citadel` product
+删除（不兼容升级，所以版本要求是 `upToNextMinor` 而不是 `from`）。
 
 **macOS 上 SSH 栈是一个动态 framework**：本地包 `Packages/USSHStack`（只有一个空 target，`type: .dynamic` 的 product，依赖 uAppKit 的
 USSHKit 与 USSHTestServer，整个闭包——USSHKit / USSHCore / NIOSSH / USSHTestServer / swift-nio / swift-crypto 含 BoringSSL /

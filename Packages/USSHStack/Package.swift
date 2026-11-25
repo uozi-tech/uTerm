@@ -30,7 +30,9 @@ let package = Package(
         .library(name: "USSHStack", type: .dynamic, targets: ["USSHStack"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/uozi-tech/uAppKit.git", from: "1.24.2"),
+        // 与工程里 uAppKit 的版本要求一致（upToNextMinor 2.0.0）：2.0 起 SSH 栈换成 Apple swift-nio-ssh + USSHCore，
+        // 去掉了 Citadel product，是不兼容的协议层升级。
+        .package(url: "https://github.com/uozi-tech/uAppKit.git", .upToNextMinor(from: "2.0.0")),
     ],
     targets: [
         .target(
