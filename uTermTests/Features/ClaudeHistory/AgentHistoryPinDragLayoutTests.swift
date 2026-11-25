@@ -101,7 +101,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         XCTAssertEqual(differingRows(still, dragging, from: below), 0, "落点出现时下面的列表不动")
     }
 
-    /// 顶上跑着的会话那一行悬停时右上角的 ×（结束会话）：盖在行上，不挤这一行的字、不推动下面的列表——
+    /// 顶上跑着的会话那一行悬停时右端的 ×（结束会话）：盖在行上，不挤这一行的字、不推动下面的列表——
     /// 和没悬停时比，变了的像素只在右端那一小块里。悬停拍不到，用画廊的口子（`catalogHovered`）摆出来。
     func testRunRowEndButtonDoesNotShiftTheRow() async throws {
         let plain = try await runRowSnapshot(hovered: false)
@@ -113,12 +113,40 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         XCTAssertLessThan(box.height, 26 * scale, "只有那个 × 的高度：下面的行没被推动")
     }
 
-    private func runRowSnapshot(hovered: Bool) async throws -> NSBitmapImageRep {
+    /// × 在这一行里上下居中（用户报的：以前贴着右上角）。行的范围取选中底色那一块（选中与没选中两张图的差），
+    /// × 取悬停与没悬停的差，比两块的竖直中心。
+    func testRunRowEndButtonIsVerticallyCentered() async throws {
+        let plain = try await runRowSnapshot(hovered: false)
+        let selected = try await runRowSnapshot(hovered: false, selected: true)
+        let hovered = try await runRowSnapshot(hovered: true)
+        let rowBox = try XCTUnwrap(changedBox(plain, selected), "选中时这一行有底色")
+        let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出 ×")
+        let scale = CGFloat(plain.pixelsWide) / plain.size.width
+        XCTAssertGreaterThan(rowBox.height, 30 * scale, "行高两行字")
+        XCTAssertEqual(buttonBox.midY, rowBox.midY, accuracy: 1.5 * scale, "× 上下居中")
+    }
+
+    /// 标题很长时 × 盖住两行字的行尾，上下不露半截字：悬停时变了的像素从行顶到行底是一整条。
+    func testRunRowEndButtonCoversBothLineEnds() async throws {
+        let title = String(repeating: "很长的标题", count: 20)
+        let plain = try await runRowSnapshot(hovered: false, title: title)
+        let selected = try await runRowSnapshot(hovered: false, selected: true, title: title)
+        let hovered = try await runRowSnapshot(hovered: true, title: title)
+        let rowBox = try XCTUnwrap(changedBox(plain, selected))
+        let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出 ×")
+        let scale = CGFloat(plain.pixelsWide) / plain.size.width
+        XCTAssertGreaterThan(buttonBox.minX, (300 - 40) * scale, "变的只在右端")
+        XCTAssertEqual(buttonBox.midY, rowBox.midY, accuracy: 1.5 * scale, "盖住的那一块也上下居中")
+        XCTAssertLessThanOrEqual(buttonBox.height, rowBox.height, "不出这一行")
+    }
+
+    private func runRowSnapshot(hovered: Bool, selected: Bool = false,
+                                title: String = AgentHistoryText.newSession) async throws -> NSBitmapImageRep {
         let history = await history()
         AgentHistoryRunRowActions.catalogHovered = hovered
         defer { AgentHistoryRunRowActions.catalogHovered = false }
-        let row = AgentHistoryRunRow(id: UUID(), title: AgentHistoryText.newSession, tool: .claude, directory: "/srv/shop",
-                                     isSelected: false, path: nil, status: AgentHistoryRunStatus { .running })
+        let row = AgentHistoryRunRow(id: UUID(), title: title, tool: .claude, directory: "/srv/shop",
+                                     isSelected: selected, path: nil, status: AgentHistoryRunStatus { .running })
         let actions = AgentHistoryRunActions(end: { _ in }, showRecord: { _ in }, showTerminal: { _ in }, moveToTab: nil)
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
                                       key: true, placement: .transparentOnScreen)

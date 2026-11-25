@@ -678,7 +678,7 @@ private struct AgentHistoryUnlistedRunRow: View {
 }
 
 /// 顶上跑着的会话那一行的操作：右键菜单（「查看记录」/「返回终端」、「移到新标签页」、有记录的「置顶」、「结束会话」），
-/// 悬停时右上角一个 ×（结束会话）。× 盖在行上、不占位置：出现消失这一行的字不挪。这几行不能拖（跑着的不进「置顶」那一套拖动）。
+/// 悬停时右端一个 ×（结束会话），上下居中。× 盖在行上、不占位置：出现消失这一行的字不挪。这几行不能拖（跑着的不进「置顶」那一套拖动）。
 struct AgentHistoryRunRowActions: ViewModifier {
     let row: AgentHistoryRunRow
     let file: AgentHistorySessionFile?
@@ -693,11 +693,9 @@ struct AgentHistoryRunRowActions: ViewModifier {
     func body(content: Content) -> some View {
         if let actions {
             content
-                .overlay(alignment: .topTrailing) {
+                .overlay(alignment: .trailing) {
                     if hovered {
                         AgentHistoryRunEndButton(isSelected: row.isSelected) { actions.end(row.id) }
-                            .padding(.top, 5)
-                            .padding(.trailing, 5)
                     }
                 }
                 .hoverGated { hovered = $0 || Self.catalogHovered }
@@ -730,7 +728,8 @@ struct AgentHistoryRunRowActions: ViewModifier {
     }
 }
 
-/// 跑着的会话那一行悬停时右上角的 ×：结束会话。底色同这一行（盖住下面的字），悬在它上面时再深一点。
+/// 跑着的会话那一行悬停时右端的 ×：结束会话，在这一行里上下居中。它后面垫一条整行高、颜色同这一行的底，
+/// 把两行字的行尾都盖住（只垫按钮那一小块的话，居中之后上下各露出半截字）；悬在 × 上时按钮那一块再深一点。
 struct AgentHistoryRunEndButton: View {
     let isSelected: Bool
     let action: () -> Void
@@ -742,17 +741,20 @@ struct AgentHistoryRunEndButton: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(hovered ? UD.text : UD.text3)
                 .frame(width: 20, height: 20)
-                .background {
-                    RoundedRectangle(cornerRadius: 5).fill(UD.card)
-                        .overlay(RoundedRectangle(cornerRadius: 5).fill(isSelected ? UD.rowSelected : Color.clear))
-                        .overlay(RoundedRectangle(cornerRadius: 5).fill(hovered ? UD.panelHover : Color.clear))
-                }
+                .background(RoundedRectangle(cornerRadius: 5).fill(hovered ? UD.panelHover : Color.clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.udPlain)
         .hoverGated { hovered = $0 }
         .help(AgentHistoryText.endSession)
         .accessibilityLabel(Text(AgentHistoryText.endSession))
+        .padding(.horizontal, 5)
+        .frame(maxHeight: .infinity)
+        .background {
+            // 右边两个角同这一行选中底色的圆角（6）。
+            let strip = UnevenRoundedRectangle(bottomTrailingRadius: 6, topTrailingRadius: 6)
+            strip.fill(UD.card).overlay(strip.fill(isSelected ? UD.rowSelected : Color.clear))
+        }
     }
 }
 

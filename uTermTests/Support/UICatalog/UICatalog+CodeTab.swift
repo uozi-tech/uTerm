@@ -24,7 +24,7 @@ extension UICatalog {
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login"))
             },
-            // 鼠标悬在顶上跑着的会话那几行上：右上角一个 ×（结束会话），盖在行上、不挤字。
+            // 鼠标悬在顶上跑着的会话那几行上：右端一个 ×（结束会话，上下居中），盖在行上、不挤字。
             UICatalogEntry("终端窗口/Code 标签页_跑着的会话悬停", source: src, symbol: "AgentHistoryRunEndButton", size: size,
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login",
@@ -168,7 +168,7 @@ extension UICatalog {
         var overlay = false
         /// 跑着的那个会话切到「查看记录」。
         var showsRecord = false
-        /// 顶上跑着的会话那几行摆成鼠标悬在上面的样子（右上角的 ×）。
+        /// 顶上跑着的会话那几行摆成鼠标悬在上面的样子（右端的 ×）。
         var hoversRuns = false
         /// 摆成「正拖着这个会话（会话 ID）、落在这里」的样子。
         var pinDrag: (session: String, target: AgentHistoryPinDrop)?
