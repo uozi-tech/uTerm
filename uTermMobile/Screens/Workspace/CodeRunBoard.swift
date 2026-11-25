@@ -15,7 +15,8 @@ import Observation
 ///   之后外面拿主机上的会话列表来 `reconcile`：同一种工具、工作目录相同、起的时候还不在列表里（`knownPaths`）、
 ///   修改时间不早于这个 run 起来之前 `matchSlack` 秒、还没被别的 run 认领的记录里，取修改时间最新的那份认下来
 ///   （多个新会话按起来的先后依次认）。
-///   认下来之后它就是那份记录的 run（再「继续」那份记录回到它），顶上那一行拿掉，回到那份记录平常的那一行（不自动置顶）；
+///   认下来之后它就是那份记录的 run（再「继续」那份记录回到它），顶上那一行拿掉，回到那份记录平常的那一行（置顶了在「置顶」，
+///   否则在它那一组；不自动置顶）；
 ///   对不上的一直留着占位（不丢），同一份记录不会被两个 run 认领（不重复）。
 /// - 程序退出（`ended`）：规则同 Mac（`CodeRunExitPolicy`）。没有对话记录可看的（新会话没说话就退出）、跑了不到
 ///   `quickExit` 的（多半是报错）留着终端，标成已结束，由用户「重新开始」「回到记录」或关掉；别的直接拿掉，
@@ -72,9 +73,10 @@ final class CodeRunBoard<Terminal: AnyObject> {
     func run(for terminal: Terminal) -> Run? { runs.first { $0.terminal === terminal } }
 
     /// 列表里没有行的 run：还没对上记录的新会话，或者对上了但那份记录列表里还没列出来（还没重列、被「显示」筛掉、
-    /// 还没翻到）。列表把它们放在最顶上，一个都不丢；列表里有行的不在这里（不重复）。`shown`：列表里显示着的记录。
+    /// 还没翻到）。列表把它们放在最顶上，一个都不丢；列表里有行的在那一行上（置顶或它那一组），不在这里、也不重复。
+    /// `shown`：列表里显示着的记录。规则两端共用（`AgentHistoryRunPlacement`，列表画的时候用的同一个）。
     func unlistedRuns(shown: Set<String>) -> [Run] {
-        runs.filter { run in run.sessionPath.map { !shown.contains($0) } ?? true }
+        AgentHistoryRunPlacement(runs: runs, path: \.sessionPath, listed: shown).top
     }
 
     // MARK: 起

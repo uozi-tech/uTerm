@@ -102,8 +102,16 @@ actor CodexHistorySource: AgentHistorySource {
     }
 
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
-        guard let snapshot = try? await current() else { return [] }
-        return projects.flatMap { snapshot.sessions[$0.id] ?? [] }.sorted { $0.modifiedAt > $1.modifiedAt }
+        await listAllSessions(in: projects).files
+    }
+
+    /// 列不出来（断线、辅助程序一时连不上）时这些项目都报成列不出来：后台重列留着它们上一次列到的会话。
+    func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
+        guard let snapshot = try? await current() else {
+            return AgentHistorySessionListing(files: [], failedProjects: Set(projects.map(AgentHistoryProjectKey.init)))
+        }
+        return AgentHistorySessionListing(
+            files: projects.flatMap { snapshot.sessions[$0.id] ?? [] }.sorted { $0.modifiedAt > $1.modifiedAt })
     }
 
     /// 有就用上一次列的（`projects()` 刚列过），没有才列。
@@ -173,19 +181,19 @@ actor CodexHistorySource: AgentHistorySource {
         do {
             years = try await provider.list(path: root)
         } catch {
-            // 目录不存在 = 这台主机上没用过 Codex。别的错误（没权限、断线）照常报。
-            if (try? await provider.stat(root)) == nil { return [] }
+            // 目录不存在 = 这台主机上没用过 Codex。只认明确的「不存在」，别的错误（没权限、断线）照常报。
+            if await AgentHistoryMissingPath.confirmsAbsent(root, after: error, provider: provider) { return [] }
             throw error
         }
         var directories = years.filter { $0.isDirectory && Self.isDigits($0.name) }.map { root + "/" + $0.name }
         for _ in 0..<2 {
-            let listed = await listAll(directories)
+            let listed = try await listAll(directories)
             directories = listed.flatMap { path, entries in
                 entries.filter { $0.isDirectory && Self.isDigits($0.name) }.map { path + "/" + $0.name }
             }
         }
         var byPlainPath: [String: CodexRecordFile] = [:]
-        for (directory, entries) in await listAll(directories) {
+        for (directory, entries) in try await listAll(directories) {
             for entry in entries where !entry.isDirectory {
                 guard let file = CodexRecordFile(directory: directory, entry: entry) else { continue }
                 if let existing = byPlainPath[file.plainPath], !existing.isCompressed { continue }
@@ -199,18 +207,26 @@ actor CodexHistorySource: AgentHistorySource {
         !name.isEmpty && name.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
     }
 
-    /// 列不了的目录跳过（刚被删、没权限）。
-    private func listAll(_ paths: [String]) async -> [(String, [RemoteEntry])] {
+    /// 刚被删的、没权限的目录跳过。别的失败（断线、辅助程序一时连不上）整趟照常报：少列一截就当成
+    /// 那几天没有记录的话，后台重列会让它们从侧栏上消失（见 `AgentHistoryMissingPath`）。
+    private func listAll(_ paths: [String]) async throws -> [(String, [RemoteEntry])] {
         var result: [(String, [RemoteEntry])] = []
         var next = 0
-        await withTaskGroup(of: (String, [RemoteEntry]).self) { group in
+        try await withThrowingTaskGroup(of: (String, [RemoteEntry]).self) { group in
             func launch() {
                 let path = paths[next]
                 next += 1
-                group.addTask { (path, (try? await self.provider.list(path: path)) ?? []) }
+                group.addTask {
+                    do {
+                        return (path, try await self.provider.list(path: path))
+                    } catch where AgentHistoryMissingPath.isNotFound(error)
+                                    || AgentHistoryMissingPath.isPermissionDenied(error) {
+                        return (path, [])
+                    }
+                }
             }
             while next < min(listing.listConcurrency, paths.count) { launch() }
-            while let item = await group.next() {
+            while let item = try await group.next() {
                 result.append(item)
                 if next < paths.count { launch() }
             }

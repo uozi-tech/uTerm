@@ -517,7 +517,8 @@ final class StyleGalleryTests: XCTestCase {
     }
 
     /// Code 标签页里继续聊天：右边（窄屏是详情那一层）是活终端（假传输喂一段写好的输出），跑着两个（一个继续的 Codex 会话，
-    /// 列表里它那一行标「运行中」；一个还没有记录的新会话，在列表最顶上）；同一个会话切到「记录」；列表顶上「置顶」一组；连接中的样子。
+    /// 列表里它那一行（在它那一组里）标着此刻的状态；一个还没有记录的新会话，在列表最顶上）；同一个会话切到「记录」；
+    /// 列表顶上「置顶」一组（跑着的那个也置顶了：在「置顶」里，不在别处）；连接中的样子。
     func testCodeTabRuns() async throws {
         defer { MobileProbeWindow.closeAll() }
         let c = try MobileFixtures.modelContainer(seed: .smoke)
@@ -542,6 +543,8 @@ final class StyleGalleryTests: XCTestCase {
             "",
             "\u{1B}[33m•\u{1B}[0m Working (12s • esc to interrupt)",
         ].joined(separator: "\r\n")
+            // 程序经 OSC 7501 报「运行中」：侧栏里它那一行上写着（同 Codex 在干活时报的）。
+            + "\u{1B}]7501;state=working:app=codex\u{1B}\\"
 
         func mount(_ workspace: MobileWorkspace) -> some View {
             WorkspaceScreen()
@@ -582,17 +585,20 @@ final class StyleGalleryTests: XCTestCase {
             liveTab.setShowsTerminal(runID, false)
             _ = await MobileFakeTerminal.waitUntil { liveTab.connection.history?.transcript?.reachedStart == true }
             try await shoot("code-run-record", on: device, settle: .milliseconds(900)) { mount(live) }
-            // 窄屏回到列表：还没对上记录的新会话在最顶上一行，继续着的那个在它自己那一行上标「运行中」。
+            // 窄屏回到列表：还没对上记录的新会话在最顶上一行，继续着的那个在它那一组里自己那一行上标着状态。
             liveTab.backToList()
             try await shoot("code-run-list", on: device, settle: .milliseconds(600)) { mount(live) }
-            // 置顶两个（Codex、Claude Code 各一）：最上面一组「置顶」，组里混着两种工具，行上写工具名。
+            // 置顶两个（Codex、Claude Code 各一）再加上跑着的那个：最上面一组「置顶」，跑着的那个就在里面（行上标着状态，
+            // 不在别处）；组里混着两种工具，行上写工具名。
             if let model = liveTab.connection.history {
                 let pins = AgentHistoryPins(host: .server(host.id), defaults: defaults)
                 model.pins = pins
+                let runningPath = liveTab.runs.run(id: runID)?.sessionPath
+                if let file = model.files.first(where: { $0.path == runningPath }) { pins.pin(AgentHistoryPinKey(file)) }
                 for id in ["x-cert", "c-nginx"] {
                     if let file = model.files.first(where: { $0.sessionID == id }) { pins.pin(AgentHistoryPinKey(file)) }
                 }
-                _ = await MobileFakeTerminal.waitUntil { model.pinnedFiles.count == 2 }
+                _ = await MobileFakeTerminal.waitUntil { model.pinnedFiles.count == 3 }
             }
             try await shoot("code-run-pinned", on: device, settle: .milliseconds(600)) { mount(live) }
             defaults.removeObject(forKey: DefaultsKey.agentHistoryPinnedSessions)

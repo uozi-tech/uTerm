@@ -128,16 +128,4 @@ final class AgentHistoryBackgroundRefreshTests: XCTestCase {
         let elsewhere = await model(other, cacheKey: "host-b")
         XCTAssertNotEqual(elsewhere.phase, .ready, "别的主机不用这一份")
     }
-
-    func testRunningSessionsLeaveThePinnedAndGroupedRows() {
-        let project = AgentHistoryProject(id: "p", path: "/p", modifiedAt: nil)
-        func file(_ id: String) -> AgentHistorySessionFile {
-            AgentHistorySessionFile(sessionID: id, project: project, path: "/p/\(id).jsonl", size: 1, modifiedAt: Date())
-        }
-        let (files, pinned) = AgentHistoryListing.excludingRunning([file("a"), file("b"), file("c")],
-                                                                   pinned: [file("c"), file("d")],
-                                                                   running: ["/p/b.jsonl", "/p/c.jsonl"])
-        XCTAssertEqual(files.map(\.sessionID), ["a"], "跑着的放到最顶上，下面不再出现")
-        XCTAssertEqual(pinned.map(\.sessionID), ["d"], "置顶的在跑：也只在顶上出现一次")
-    }
 }

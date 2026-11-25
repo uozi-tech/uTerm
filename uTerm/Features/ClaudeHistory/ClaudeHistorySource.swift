@@ -53,8 +53,9 @@ actor ClaudeHistorySource: AgentHistorySource {
         do {
             entries = try await provider.list(path: root)
         } catch {
-            // 目录不存在 = 这台主机上没用过 Claude Code。别的错误（没权限、断线）照常报。
-            if (try? await provider.stat(root)) == nil { return [] }
+            // 目录不存在 = 这台主机上没用过 Claude Code。只认明确的「不存在」：辅助程序一时连不上、断线时
+            // 列和 stat 都会失败，当成「没用过」会让后台重列把整个侧栏清空（见 `AgentHistoryMissingPath`）。
+            if await AgentHistoryMissingPath.confirmsAbsent(root, after: error, provider: provider) { return [] }
             throw error
         }
         return entries

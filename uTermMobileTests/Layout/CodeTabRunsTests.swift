@@ -175,6 +175,44 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(board.unlistedRuns(shown: []).map(\.id), [fresh.id, resumed.id])
     }
 
+    /// 跑着的会话不另起一块（同 Mac，两端共用 `AgentHistoryRunPlacement`）：有记录的在它那一组里自己那一行上，
+    /// 置顶了在「置顶」里（只在那里），取消置顶回去；只有没记录的新会话在最顶上。程序退出（已结束、留着画面）不挪。
+    func testRunsStayInTheirGroupOrPinnedNotOnTop() throws {
+        let board = CodeRunBoard<FakeTerminal>()
+        let start = Date(timeIntervalSince1970: 20_000)
+        let fresh = board.startNew(tool: .claude, directory: "/w", now: start, terminal: FakeTerminal())
+        let resumed = try XCTUnwrap(board.resume(sessionPath: "/p/a.jsonl", sessionID: "a", tool: .claude,
+                                                 directory: "/w", now: start) { FakeTerminal() })
+        func file(_ id: String, _ directory: String, ago: TimeInterval) -> AgentHistorySessionFile {
+            var project = AgentHistoryProject(id: ClaudeProjectPath.encode(directory), path: "/p", modifiedAt: nil)
+            project.directory = directory
+            return AgentHistorySessionFile(sessionID: id, project: project, path: "/p/\(id).jsonl", size: 1,
+                                           modifiedAt: start.addingTimeInterval(-ago))
+        }
+        let files = [file("b", "/x", ago: 10), file("a", "/w", ago: 20), file("c", "/w", ago: 30)]
+        func placement(pinned: [AgentHistorySessionFile] = []) -> (AgentHistoryRunPlacement<CodeRunBoard<FakeTerminal>.Run>,
+                                                                  [AgentHistoryGroup]) {
+            let groups = AgentHistoryListing.groups(files, by: .project, metadata: [:], pinned: pinned)
+            return (AgentHistoryRunPlacement(runs: board.runs, path: \.sessionPath, groups: groups), groups)
+        }
+
+        let (plain, groups) = placement()
+        XCTAssertEqual(plain.top.map(\.id), [fresh.id], "只有没记录的新会话在顶上")
+        XCTAssertEqual(plain.inList["/p/a.jsonl"]?.id, resumed.id, "继续的在它自己那一行上")
+        XCTAssertEqual(AgentHistoryListing.groupID(ofRecord: "/p/a.jsonl", in: groups), "project:/w", "在它那一组里")
+
+        let (pinned, pinnedGroups) = placement(pinned: [files[1]])
+        XCTAssertEqual(pinned.top.map(\.id), [fresh.id])
+        XCTAssertEqual(AgentHistoryListing.groupID(ofRecord: "/p/a.jsonl", in: pinnedGroups), AgentHistoryGroup.pinnedID,
+                       "置顶了在「置顶」里")
+        XCTAssertEqual(pinnedGroups.flatMap(\.files).filter { $0.path == "/p/a.jsonl" }.count, 1, "只在那里")
+
+        XCTAssertEqual(board.ended(resumed.id, hasListedRecord: false, now: start.addingTimeInterval(1)), .kept)
+        let (ended, _) = placement()
+        XCTAssertEqual(ended.top.map(\.id), [fresh.id], "已结束不挪")
+        XCTAssertEqual(ended.inList["/p/a.jsonl"]?.id, resumed.id)
+    }
+
     // MARK: - 接到真终端
 
     private func container() throws -> (ModelContainer, ServerProfile) {

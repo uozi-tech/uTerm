@@ -125,7 +125,7 @@ final class CodeTabRunTimeTests: XCTestCase {
         XCTAssertEqual(history.files.first?.sessionID, id, "最近写过的排在最上面")
     }
 
-    /// 画出来的侧栏（同 Code 标签页：跑着的会话在最顶上，`AgentHistoryRunning`）：记录接着写、后台重读之后，
+    /// 画出来的侧栏（同 Code 标签页：跑着的会话在它那一组里自己那一行上，`AgentHistoryRunning`）：记录接着写、后台重读之后，
     /// 那一行画出来的字里大小和时间都换成新的。
     func testRunRowOnScreenTracksTheRecord() async throws {
         AccessibilityTreeForTests.enable(for: self)

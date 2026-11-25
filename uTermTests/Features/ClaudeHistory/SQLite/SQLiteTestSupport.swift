@@ -59,8 +59,9 @@ actor SQLiteTestHost: SFTPProviding {
         throw NSError(domain: "SQLiteTestHost", code: 4, userInfo: [NSLocalizedDescriptionKey: "connection interrupted: \(path)"])
     }
 
+    /// 不存在：同真的主机，明确报 ENOENT（数据源只认这种「不存在」，见 `AgentHistoryMissingPath`）。
     private func missing(_ path: String) -> NSError {
-        NSError(domain: "SQLiteTestHost", code: 2, userInfo: [NSLocalizedDescriptionKey: "no such file: \(path)"])
+        NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT), userInfo: [NSLocalizedDescriptionKey: "no such file: \(path)"])
     }
 
     func list(path: String) async throws -> [RemoteEntry] {

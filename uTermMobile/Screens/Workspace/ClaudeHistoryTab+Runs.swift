@@ -151,11 +151,6 @@ extension ClaudeHistoryTab {
         history.select(file)
     }
 
-    /// 记录这份是不是有 run 对着（列表行上的「运行中」）。
-    func isRunning(_ file: AgentHistorySessionFile) -> Bool {
-        runs.run(forSession: file.path)?.isRunning ?? false
-    }
-
     // MARK: 程序退出
 
     /// 盯着 run 的连接：曾经连上过、后来收尾了（shell 退出），就是程序退出了。
@@ -280,7 +275,8 @@ extension ClaudeHistoryTab {
         guard let history = connection.history else { return }
         let reopen = path.flatMap { path in wasFocused || history.selectedFile?.path == path ? path : nil }
         Task {
-            await history.reload()
+            // 安静地重列（同 Mac 的 Code 标签页）：列表照旧显示着、列完再换；一时列不出来（断线）也不换成失败页。
+            await history.reload(showsLoading: false)
             guard let reopen, let file = history.files.first(where: { $0.path == reopen }) else { return }
             history.select(nil)
             history.select(file)

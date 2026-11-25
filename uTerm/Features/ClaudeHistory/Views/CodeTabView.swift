@@ -11,7 +11,7 @@ enum CodeTabLayout {
     static let railWidth: CGFloat = 36
 }
 
-/// 一个 Code 标签页的内容：左边会话侧栏（置顶、分组、筛选、搜索；跑着的会话行上标「运行中」），右边看选中那份记录，
+/// 一个 Code 标签页的内容：左边会话侧栏（置顶、分组、筛选、搜索；跑着的会话就在它那一行上，标着此刻的状态），右边看选中那份记录，
 /// 或者那个会话在这个标签页里跑着的终端。SSH 的终端区（`TerminalArea`）和本机终端窗口都用它，各自给终端面板怎么画。
 struct CodeTabView: View {
     let code: CodeTabModel
