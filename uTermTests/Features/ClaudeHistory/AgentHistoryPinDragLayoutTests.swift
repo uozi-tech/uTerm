@@ -1,0 +1,118 @@
+import AppKit
+import SwiftUI
+import UDesignKit
+import XCTest
+@testable import uTerm
+
+/// 侧栏拖动置顶的样子（用户录屏里的三处）：真窗口里挂会话列表，拍「正拖着、悬在列表上」与「没在拖」两个样子比。
+///
+/// - 「拖到这里置顶」那一条出现时不推动列表：下面各组标题的位置一点不动（以前它插进列表，整列往下跳一行、松手又弹回）；
+/// - 跟着光标的那张卡片是不透明的（以前透明，字直接叠在别的行上，两行重影）。
+///
+/// 系统的拖动会话（`NSDraggingSession`）在进程里驱动不了，拖动中的状态用画廊的那个口子（`catalogPreset`）摆出来。
+@MainActor
+final class AgentHistoryPinDragLayoutTests: XCTestCase {
+    private typealias Session = AgentHistoryFakeSource.Session
+    private var defaults: UserDefaults!
+    private var suite = ""
+
+    override func setUp() async throws {
+        try await super.setUp()
+        suite = "pin-drag-layout-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+        AccessibilityTreeForTests.enable(for: self)
+    }
+
+    override func tearDown() async throws {
+        AgentHistoryPinDragModel.catalogPreset = nil
+        defaults?.removePersistentDomain(forName: suite)
+        try await super.tearDown()
+    }
+
+    private func history() async -> AgentHistoryModel {
+        let now = Date()
+        var sessions: [Session] = []
+        for (index, project) in ["shop", "infra", "blog"].enumerated() {
+            for n in 0..<3 {
+                sessions.append(Session(id: "\(project)-\(n)", projectID: ClaudeProjectPath.encode("/srv/\(project)"),
+                                        resumeDirectory: "/srv/\(project)", title: "\(project) 的第 \(n) 个会话",
+                                        modifiedAt: now.addingTimeInterval(-TimeInterval(index * 1000 + n * 60))))
+            }
+        }
+        let source = AgentHistoryFakeSource(tool: .claude, sessions: sessions)
+        let history = AgentHistoryModel(source: source, preferredDirectory: nil, followsCurrentProject: false)
+        history.pins = AgentHistoryPins(host: .local, defaults: defaults)
+        await history.start()
+        for _ in 0..<200 where history.hasMore || history.isListing { try? await Task.sleep(for: .milliseconds(5)) }
+        return history
+    }
+
+    /// 拍下列表：`dragging` 时摆成「正拖着一个会话、悬在列表上、落点是置顶」。被拖的那个不在列表里（不让它那一行变淡）。
+    /// 无障碍树在 `LazyVStack` 里是懒的、读不到行，所以直接比像素。
+    private func snapshot(dragging: Bool) async throws -> NSBitmapImageRep {
+        let history = await history()
+        AgentHistoryPinDragModel.catalogPreset = dragging
+            ? (AgentHistoryPinKey(tool: .claude, sessionID: "elsewhere"), .pin(index: 0)) : nil
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
+                                      key: true, placement: .transparentOnScreen)
+        let host = NSHostingView(rootView: AgentHistorySessionList(history: history)
+            .frame(width: 300, height: 600)
+            .background(UD.card))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
+        window.contentView = host
+        defer {
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+        for _ in 0..<6 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return rep
+    }
+
+    /// 两张图从 `top` 往下（视图坐标，向下为正）有多少行像素不一样。
+    private func differingRows(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, from top: CGFloat) -> Int {
+        let scale = CGFloat(a.pixelsHigh) / a.size.height
+        var differing = 0
+        for y in Int(top * scale)..<min(a.pixelsHigh, b.pixelsHigh) {
+            var same = true
+            var x = 0
+            while x < min(a.pixelsWide, b.pixelsWide) {
+                if a.colorAt(x: x, y: y) != b.colorAt(x: x, y: y) {
+                    same = false
+                    break
+                }
+                x += 3
+            }
+            if !same { differing += 1 }
+        }
+        return differing
+    }
+
+    func testDropStripDoesNotPushTheList() async throws {
+        let still = try await snapshot(dragging: false)
+        let dragging = try await snapshot(dragging: true)
+        XCTAssertGreaterThan(differingRows(still, dragging, from: 0), 0, "拖动中出那条落点")
+        // 落点盖在搜索框下面那一截上（30pt 高）；再往下的列表一像素不动（以前整列往下推一行）。
+        let below = AgentHistorySessionList.headerHeight + 2 + 6 + 34
+        XCTAssertEqual(differingRows(still, dragging, from: below), 0, "落点出现时下面的列表不动")
+    }
+
+    /// 跟手的卡片：拍成图，看中间偏右（字的右边、没有字的地方）是不是不透明的底。
+    func testDragPreviewIsAnOpaqueCard() async throws {
+        let history = await history()
+        let file = try XCTUnwrap(history.files.first)
+        let card = AgentHistorySessionRowPreview(history: history, file: file)
+        let renderer = ImageRenderer(content: card)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.cgImage)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        // 卡片四周留了 10 的阴影边，取卡片里靠右的一个点。
+        let x = Int(Double(bitmap.pixelsWide) * 0.85), y = bitmap.pixelsHigh / 2
+        let alpha = try XCTUnwrap(bitmap.colorAt(x: x, y: y)).alphaComponent
+        XCTAssertEqual(alpha, 1, accuracy: 0.01, "卡片的底不透明：拖着走时不和别的行的字叠在一起")
+    }
+}

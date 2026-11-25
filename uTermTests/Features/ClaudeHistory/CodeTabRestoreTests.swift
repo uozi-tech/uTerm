@@ -340,10 +340,12 @@ final class CodeTabRestoreTests: XCTestCase {
         ], selectedRun: early.id), terminals: [early.id: early])
         early.codeCommandHasEnded = true
         second.checkRuns()
-        XCTAssertTrue(second.runs.isEmpty)
+        XCTAssertEqual(second.runs.first?.isEnded, true, "还不知道有没有对话记录：终端先留着")
         let later = await history(source)
         second.install(AgentHistoryConnection(history: later))
         second.applyRestoredState()
+        XCTAssertTrue(second.runs.isEmpty, "找回了有对话的记录：照常收尾")
+        XCTAssertTrue(early.disposed)
         XCTAssertEqual(later.selectedFile?.sessionID, "a1")
         XCTAssertEqual(second.detail, .transcript)
     }

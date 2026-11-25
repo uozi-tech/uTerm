@@ -48,11 +48,18 @@ struct CodeRunPane: View {
 
 /// 跑着的会话的标题行，一行：返回（窄屏）· 工具标记 · 标题与状态（各一行）…… 更多（⋯）。
 /// 「查看记录」「移到新标签页」「结束会话」都收在「更多」里，窄的格子（iPhone、Duo 分屏 330pt）也不折行。
-/// 程序已经退出（很快就退出、留着给人看输出的那种）时右边换成「回到记录」或「关闭」。
+/// 程序已经退出、终端留着最后的画面时（没有对话记录、或者很快就退出），第二行是「会话已结束」，右边换成「重新开始」与
+/// 「回到记录」（有记录时）或「关闭」。
 struct CodeRunHeader: View {
     let code: CodeTabRuns
     let run: CodeRunBoard<TermTab>.Run
     let showsBack: Bool
+
+    /// 对上的记录列表里会列出来（有对话可回去看）。
+    private var hasRecord: Bool {
+        guard let path = run.sessionPath else { return false }
+        return code.tab.connection.history?.metadata[path]?.isListed ?? true
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -107,11 +114,17 @@ struct CodeRunHeader: View {
             }
             .accessibilityLabel(Text("更多"))
         } else {
-            MBtn(title: run.sessionPath == nil ? String(localized: "关闭") : String(localized: "回到记录"),
-                 icon: run.sessionPath == nil ? "x" : "clock", kind: .tinted, height: 34) {
-                code.tab.endRun(run.id)
+            HStack(spacing: 6) {
+                MBtn(title: AgentHistoryText.restartSession, icon: "refresh", kind: .tinted, height: 34) {
+                    code.tab.restartRun(run.id)
+                }
+                .fixedSize()
+                MBtn(title: hasRecord ? String(localized: "回到记录") : AgentHistoryText.closeEndedSession,
+                     icon: hasRecord ? "clock" : "x", kind: .tinted, height: 34) {
+                    code.tab.endRun(run.id)
+                }
+                .fixedSize()
             }
-            .fixedSize()
             .padding(.trailing, 4)
         }
     }
@@ -134,7 +147,7 @@ struct CodeUnlistedRunRow: View {
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     let state = CodeRunText.listDetail(of: run, controller: run.terminal.controller)
-                    if run.isRunning, state.isConnected { CodeRunningMark() }
+                    if !run.isRunning || state.isConnected { CodeRunStatusMark(run: run) }
                     Text(verbatim: showsTool ? "\(run.tool.displayName) · \(state.text)" : state.text)
                         .font(M.sans(12.5)).foregroundStyle(run.isRunning ? M.text3 : M.warning)
                         .lineLimit(1).truncationMode(.middle)
@@ -152,7 +165,35 @@ struct CodeUnlistedRunRow: View {
     }
 }
 
-/// 列表行上的「运行中」：这份记录正在 Code 标签页里继续着。
+/// 列表行上一个跑着的会话的状态：程序报的状态用终端标签上同一套颜色与文字（`statusLabel`，颜色同标签圆点），
+/// 没报过是「运行中」，程序退出了是「已结束」。在自己的 `body` 里读状态：变了只重画这一小块（同 Mac 的
+/// `AgentHistoryRunStatusTag`）。
+struct CodeRunStatusMark: View {
+    let run: CodeRunBoard<TermTab>.Run
+    @Environment(\.mAccent) private var accent
+
+    var body: some View {
+        if !run.isRunning {
+            mark(color: M.text4, text: AgentHistoryText.sessionEnded, textColor: M.text3)
+        } else if let status = run.terminal.programStatus {
+            let color = WorkspaceTabChip.color(for: status.tone, accent: accent)
+            mark(color: color, text: status.statusLabel, textColor: color)
+        } else {
+            CodeRunningMark()
+        }
+    }
+
+    private func mark(color: Color, text: String, textColor: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(verbatim: text)
+                .font(M.sans(11.5, weight: .medium)).foregroundStyle(textColor)
+        }
+        .fixedSize()
+    }
+}
+
+/// 列表行上的「运行中」：这份记录正在 Code 标签页里继续着（程序还没报过状态）。
 struct CodeRunningMark: View {
     var body: some View {
         HStack(spacing: 4) {
@@ -178,7 +219,7 @@ enum CodeRunText {
 
     @MainActor
     static func state(of run: CodeRunBoard<TermTab>.Run, controller: MobileTerminalController) -> String {
-        if !run.isRunning { return String(localized: "程序已退出") }
+        if !run.isRunning { return AgentHistoryText.sessionEndedBanner }
         let place = (run.directory as NSString).lastPathComponent
         switch controller.state {
         case .idle, .connecting: return String(localized: "正在连接…")

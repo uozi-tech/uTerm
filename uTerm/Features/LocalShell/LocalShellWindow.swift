@@ -179,6 +179,7 @@ final class LocalShellPane: Identifiable {
 extension LocalShellPane: CodeTabTerminal {
     func runCodeCommand(_ command: String) { session.startCodeCommand(command) }
     var codeCommandHasEnded: Bool { session.codeCommandHasEnded }
+    var codeProgramStatus: ProgramStatusRecord? { session.programStatus }
     var codeCommandMarker: String? { session.codeCommandMarker }
     func restoreCodeCommand(marker: String?, startedAt: Date) {
         session.restoreCodeCommand(marker: marker, startedAt: startedAt)
@@ -750,8 +751,10 @@ struct LocalShellTerminalArea: View {
                                        followsCurrentProject: false, pinHost: { .local },
                                        connect: { _ in RemoteMacFileProvider.localShellAgent() })
             },
-            terminal: { terminal in
+            terminal: { terminal, ended in
                 guard let pane = terminal as? LocalShellPane else { return AnyView(EmptyView()) }
+                // 程序已经退出、留着最后的画面：只画终端本身（shell 也退出了的，面板会换成「shell 已退出」那一页）。
+                if ended { return AnyView(RemoteControlledTerminal(session: pane.session).background(background)) }
                 return AnyView(LocalShellPaneView(pane: pane, background: background) { _ = code.end(pane.id) })
             },
             onMoveToTab: { runID in model.moveCodeRunToTab(runID, fromCodeTab: tabID) })
@@ -760,7 +763,7 @@ struct LocalShellTerminalArea: View {
     /// 在每个 chip 自己的 body 里求值：`shellTitle` 可能高频变化，只让这一枚标签跟着重算。
     static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
         if let code = pane.codeTab {
-            let running = code.runs.count
+            let running = code.runningCount
             // 不放图标（同 SSH 终端区的 Code 标签）。绿点一直在：和旁边终端标签的圆点对齐，也不因会话结束而跳。
             return UPaneTabDescriptor(
                 title: TerminalArea.codeTabBaseTitle,

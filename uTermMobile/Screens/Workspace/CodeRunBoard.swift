@@ -16,8 +16,9 @@ import Observation
 ///   `matchSlack` 秒、还没被别的 run 认领的记录里，取修改时间最新的那份认下来（多个新会话按起来的先后依次认）。
 ///   认下来之后它就是那份记录的 run（再「继续」那份记录回到它），顶上那一行拿掉，回到那份记录平常的那一行（不自动置顶）；
 ///   对不上的一直留着占位（不丢），同一份记录不会被两个 run 认领（不重复）。
-/// - 程序退出（`ended`）：跑了不到 `quickExit` 的留着终端给人看报错（命令没找到、目录不在了），标成已退出，
-///   由用户「回到记录」或关掉；跑得够久的直接拿掉，详情回到那份记录（外面负责重新读到最新）。
+/// - 程序退出（`ended`）：规则同 Mac（`CodeRunExitPolicy`）。没有对话记录可看的（新会话没说话就退出）、跑了不到
+///   `quickExit` 的（多半是报错）留着终端，标成已结束，由用户「重新开始」「回到记录」或关掉；别的直接拿掉，
+///   详情回到那份记录（外面负责重新读到最新）。
 @MainActor
 @Observable
 final class CodeRunBoard<Terminal: AnyObject> {
@@ -151,11 +152,12 @@ final class CodeRunBoard<Terminal: AnyObject> {
         case unknown
     }
 
-    /// 终端里的程序退出了（shell 跟着结束、连接收尾）。
+    /// 终端里的程序退出了（shell 跟着结束、连接收尾）。`hasListedRecord`：它对上的记录列表里会列出来（有对话可看）。
     @discardableResult
-    func ended(_ id: UUID, now: Date = Date()) -> EndOutcome {
+    func ended(_ id: UUID, hasListedRecord: Bool, now: Date = Date()) -> EndOutcome {
         guard let index = runs.firstIndex(where: { $0.id == id }), runs[index].endedAt == nil else { return .unknown }
-        if now.timeIntervalSince(runs[index].startedAt) < quickExit {
+        if CodeRunExitPolicy.keepsTerminal(hasListedRecord: hasListedRecord && runs[index].sessionPath != nil,
+                                           ranFor: now.timeIntervalSince(runs[index].startedAt), quickExit: quickExit) {
             runs[index].endedAt = now
             return .kept
         }
@@ -191,7 +193,26 @@ final class CodeRunBoard<Terminal: AnyObject> {
         var modifiedAt: Date
     }
 
-    /// 让还没对上记录的新会话认领记录（规则见类型注释）。返回这一轮认下来的 run。
+    /// 已结束、留着画面的 run 换成一个新起的（「重新开始」）：放在原来的位置，详情看着旧的就看新的。返回被换掉的终端
+    ///（外面去关）；没有这个 run 为 nil。
+    @discardableResult
+    func replace(_ id: UUID, with run: Run) -> Terminal? {
+        guard let index = runs.firstIndex(where: { $0.id == id }) else { return nil }
+        let old = runs[index]
+        runs[index] = run
+        if focusedID == id || focusedID == nil { focusedID = run.id }
+        return old.terminal
+    }
+
+    /// 新起一个 run（不放进来，交给 `replace`）。
+    func makeRun(tool: AgentHistoryTool, directory: String, sessionPath: String?, sessionID: String?,
+                 now: Date = Date(), terminal: Terminal) -> Run {
+        Run(id: UUID(), tool: tool, directory: directory, startedAt: now, sessionPath: sessionPath, sessionID: sessionID,
+            terminal: terminal)
+    }
+
+    /// 让还没对上记录的新会话认领记录（规则见类型注释）。已结束、留着画面的也认（认上了有对话的，外面再把它收回记录）。
+    /// 返回这一轮认下来的 run。
     @discardableResult
     func reconcile(_ candidates: [Candidate]) -> [UUID] {
         var claimed = Set(runs.compactMap(\.sessionPath))
@@ -213,6 +234,14 @@ final class CodeRunBoard<Terminal: AnyObject> {
         }
         return matched
     }
+
+    #if DEBUG
+    /// 测试用：直接给一个 run 记上它对上的记录。
+    func setSessionForTesting(_ id: UUID, path: String) {
+        guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
+        runs[index].sessionPath = path
+    }
+    #endif
 
     /// 还有没对上记录的新会话（外面据此决定要不要定期去主机上看一眼）。
     var hasUnmatchedNewSessions: Bool { runs.contains { $0.isNewSession && $0.isRunning } }

@@ -8,7 +8,8 @@ import XCTest
 
 /// 「Code 标签页里一个会话退出后，整个 Code 标签页没了」的回归：真窗口里挂着终端区，窗口里一个普通标签页 + 一个
 /// Code 标签页（前台），Code 标签页里起会话，让它退出（程序退出、结束标记到；或者 shell 自己退出），
-/// Code 标签页要还在、还是前台，右边回到空态（继续的会话回到它的记录），旁边的普通标签页不动。
+/// Code 标签页要还在、还是前台，旁边的普通标签页不动。右边：继续的会话回到它的记录；没有对话记录的新会话不跳走，
+/// 终端留着最后的画面、标成已结束（顶上「会话已结束」，「重新开始」「关闭」见各自的用例）。
 ///
 /// 本机终端窗口用真的保持进程 + 真 shell，会话放在测试自己的命名空间里（同 `CodeTabHolderRestoreTests`），
 /// 不碰正式版与开发版的会话；「编码工具」换成一条等一行输入就退出的命令。SSH 终端窗口接假后端。
@@ -48,6 +49,11 @@ final class CodeTabRunExitTests: XCTestCase {
 
     /// 一个有一份记录（`a`，在 `directory` 里）的假列表；继续 / 新开都跑 `command`。
     private func fakeConnection(directory: String, command: String) async -> AgentHistoryConnection {
+        await fakeList(directory: directory, command: command).connection
+    }
+
+    private func fakeList(directory: String, command: String) async
+        -> (connection: AgentHistoryConnection, source: AgentHistoryFakeSource) {
         let source = AgentHistoryFakeSource(tool: .claude, sessions: [
             AgentHistoryFakeSource.Session(id: "a", projectID: ClaudeProjectPath.encode(directory),
                                            resumeDirectory: directory, title: "假的会话",
@@ -56,7 +62,12 @@ final class CodeTabRunExitTests: XCTestCase {
         let history = AgentHistoryModel(source: source, preferredDirectory: directory, followsCurrentProject: false)
         await history.start()
         for _ in 0..<200 where history.hasMore || history.isListing { try? await Task.sleep(for: .milliseconds(10)) }
-        return AgentHistoryConnection(history: history)
+        return (AgentHistoryConnection(history: history), source)
+    }
+
+    /// 等这个会话收尾：结束拿掉（回到记录），或者标成已结束、终端留着。
+    private func settled(_ code: CodeTabModel, _ id: UUID) -> Bool {
+        code.runs.first { $0.id == id }.map(\.isEnded) ?? true
     }
 
     private func wait(_ what: String, timeout: TimeInterval = 20, for condition: () async -> Bool) async {
@@ -152,18 +163,28 @@ final class CodeTabRunExitTests: XCTestCase {
         } else {
             run.session.writeRemoteInput(Data(input.replacingOccurrences(of: "\r", with: "\n").utf8))
         }
-        await wait("会话收尾") { !code.runs.contains { $0.id == run.id } }
-        // 收尾之后再看一会儿：视图拿掉终端那一下之后的事。
+        await wait("会话收尾") { settled(code, run.id) }
+        // 收尾之后再看一会儿：视图换掉终端那一下之后的事（也等已结束的那次重列跑完）。
         try await Task.sleep(for: .seconds(2))
 
         let expectedTabs = [shellID, codeID].compactMap { $0 }
         XCTAssertEqual(model.groups.allTabs.map(\.id), expectedTabs, "标签页都还在", file: file, line: line)
         XCTAssertEqual(model.active?.id, codeID, "Code 标签页还是前台", file: file, line: line)
         XCTAssertTrue(model.groups.tab(codeID)?.payload.codeTab === code, file: file, line: line)
-        XCTAssertEqual(code.detail, setup.resumes ? .transcript : .empty, "右边回到记录 / 空态", file: file, line: line)
-        XCTAssertTrue(run.isDisposed, "会话的 shell 结束了", file: file, line: line)
+        if setup.resumes {
+            XCTAssertEqual(code.detail, .transcript, "有对话记录：回到记录", file: file, line: line)
+            XCTAssertTrue(run.isDisposed, "会话的 shell 结束了", file: file, line: line)
+            XCTAssertFalse(code.runs.contains { $0.id == run.id }, file: file, line: line)
+        } else {
+            XCTAssertEqual(code.detail, .terminal(run.id), "没有对话记录：不跳走，留着那个终端", file: file, line: line)
+            XCTAssertEqual(code.runs.first { $0.id == run.id }?.isEnded, true, "标成已结束", file: file, line: line)
+            XCTAssertFalse(run.isDisposed, "终端留着最后的画面，等用户关", file: file, line: line)
+            XCTAssertTrue(run.session.ghostty.view.window === window, "最后的画面还挂在窗口里", file: file, line: line)
+            XCTAssertEqual(model.focusedSessionID, run.id, file: file, line: line)
+        }
+        XCTAssertEqual(code.runningCount, setup.keepsAnother ? 1 : 0, "已结束的不算在跑", file: file, line: line)
         if let other {
-            XCTAssertEqual(code.runs.map(\.id), [other.id], "另一个会话照跑", file: file, line: line)
+            XCTAssertTrue(code.runs.contains { $0.id == other.id && !$0.isEnded }, "另一个会话照跑", file: file, line: line)
             XCTAssertEqual(other.session.connectionState, .connected, file: file, line: line)
         }
         if let shellID {
@@ -222,6 +243,124 @@ final class CodeTabRunExitTests: XCTestCase {
         try await runLocal(.init(keepsAnother: true, shellExits: true))
     }
 
+    // MARK: 会话已结束：重新开始 / 关闭 / 有了记录就回到记录 / 侧栏不动
+
+    /// 起一个新会话，让它退出（没有对话记录），返回已结束的那个。
+    private func endedNewSession(_ model: LocalShellWindowModel, window: NSWindow, directory: String,
+                                 source: AgentHistoryFakeSource? = nil) async throws
+        -> (code: CodeTabModel, run: LocalShellPane, list: (connection: AgentHistoryConnection, source: AgentHistoryFakeSource)) {
+        let codeID = model.openCodeTab(directory: directory)
+        let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
+        let list = await fakeList(directory: directory, command: Self.fakeTool)
+        code.install(list.connection)
+        let started = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '\(directory)' && " + Self.fakeTool,
+                                                         directory: directory))
+        let run = try XCTUnwrap(model.pane(started.id))
+        await wait("会话里的命令跑起来") { await run.session.foregroundActivity() == .running("head") }
+        try await focus(run.session, in: window)
+        run.session.writeRemoteInput(Data("bye\n".utf8))
+        await wait("会话收尾") { settled(code, run.id) }
+        return (code, run, list)
+    }
+
+    func test_ended_session_restart_starts_the_same_command_again_in_place() async throws {
+        let model = localModel()
+        let window = window(LocalShellTerminalArea(model: model))
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
+        let (code, ended, _) = try await endedNewSession(model, window: window, directory: directory)
+        let before = code.runs.first { $0.id == ended.id }
+        XCTAssertEqual(before?.isEnded, true)
+
+        let restarted = try XCTUnwrap(code.restart(ended.id))
+        XCTAssertNotEqual(restarted.id, ended.id)
+        XCTAssertEqual(code.runs.map(\.id), [restarted.id], "换在原来的位置，已结束的那个拿掉")
+        XCTAssertTrue(ended.isDisposed, "已结束的终端随之结束")
+        XCTAssertEqual(code.detail, .terminal(restarted.id), "右边换成新起的")
+        XCTAssertEqual(restarted.tool, .claude)
+        XCTAssertEqual(restarted.directory, directory, "同一个目录")
+        XCTAssertNil(restarted.path, "新会话再新开一个，不继续空的那份")
+        let pane = try XCTUnwrap(model.pane(restarted.id))
+        await wait("新起的命令跑起来") { await pane.session.foregroundActivity() == .running("head") }
+        XCTAssertEqual(pane.session.trackedRun?.command, before?.command, "照原样再打一次")
+    }
+
+    func test_ended_session_close_disposes_and_goes_back_to_the_start_page() async throws {
+        let model = localModel()
+        let window = window(LocalShellTerminalArea(model: model))
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
+        let (code, ended, _) = try await endedNewSession(model, window: window, directory: directory)
+        // 留着的不会被看着各个终端的那一圈再处理一遍。
+        try await Task.sleep(for: CodeTabModel.checkInterval * 2)
+        XCTAssertEqual(code.runs.map(\.id), [ended.id])
+        XCTAssertFalse(ended.isDisposed)
+
+        code.dismissEnded(ended.id)
+        XCTAssertTrue(code.runs.isEmpty)
+        XCTAssertTrue(ended.isDisposed, "「关闭」这时才结束终端")
+        XCTAssertEqual(code.detail, .empty, "右边回到起始页")
+    }
+
+    /// 新会话里说过话、记录写出来了：照旧回到记录（不留终端）。
+    func test_new_session_with_a_conversation_goes_back_to_its_record() async throws {
+        let model = localModel()
+        let window = window(LocalShellTerminalArea(model: model))
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
+        let codeID = model.openCodeTab(directory: directory)
+        let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
+        let list = await fakeList(directory: directory, command: Self.fakeTool)
+        code.install(list.connection)
+        let started = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '\(directory)' && " + Self.fakeTool,
+                                                         directory: directory))
+        let run = try XCTUnwrap(model.pane(started.id))
+        await wait("会话里的命令跑起来") { await run.session.foregroundActivity() == .running("head") }
+        await list.source.add(AgentHistoryFakeSource.Session(
+            id: "fresh", projectID: ClaudeProjectPath.encode(directory), resumeDirectory: directory, title: "说过话的",
+            modifiedAt: Date().addingTimeInterval(5)))
+        run.session.writeRemoteInput(Data("bye\n".utf8))
+        await wait("回到它的记录") { code.runs.isEmpty }
+        XCTAssertTrue(run.isDisposed)
+        await wait("选中那份记录") { code.history?.selectedFile?.sessionID == "fresh" }
+        XCTAssertEqual(code.detail, .transcript)
+    }
+
+    /// 开新会话不改侧栏：列表照旧是全部项目、历史一行不少，新会话那一行在最顶上。
+    func test_starting_a_new_session_keeps_the_sidebar_history() async throws {
+        let model = localModel()
+        let window = window(LocalShellTerminalArea(model: model))
+        defer {
+            model.disposeAll()
+            close(window)
+        }
+        let directory = ClaudeProjectPath.normalized(NSTemporaryDirectory()) ?? NSTemporaryDirectory()
+        let codeID = model.openCodeTab(directory: directory)
+        let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
+        let list = await fakeList(directory: directory, command: Self.fakeTool)
+        code.install(list.connection)
+        let history = try XCTUnwrap(code.history)
+        let before = history.visibleFiles.map(\.path)
+        XCTAssertFalse(before.isEmpty)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let started = try XCTUnwrap(code.startNewSession(tool: .claude, command: "cd -- '\(home)' && sleep 600",
+                                                         directory: home))
+        await code.refreshList()
+        XCTAssertEqual(history.scope, .all, "不收窄到新会话的目录")
+        XCTAssertEqual(history.visibleFiles.map(\.path), before, "历史一行不少")
+        XCTAssertEqual(code.runs.map(\.id), [started.id], "新会话那一行在最顶上")
+        XCTAssertNil(code.reveal, "也不去定位到那个目录")
+    }
+
     // MARK: ⌘W（记下现在的行为，不是要求）
 
     /// Code 标签页在前台时按 ⌘W：关的是整个 Code 标签页（连同里面所有会话），不是右边那一个会话。
@@ -245,7 +384,7 @@ final class CodeTabRunExitTests: XCTestCase {
         await wait("会话里的命令跑起来") { await run.session.foregroundActivity() == .running("head") }
         try await focus(run.session, in: window)
         run.session.writeRemoteInput(Data("bye\n".utf8))
-        await wait("会话收尾") { code.runs.isEmpty }
+        await wait("会话收尾") { code.runs.allSatisfy(\.isEnded) }
         XCTAssertEqual(model.groups.allTabs.map(\.id), [shellID, codeID], "会话退出本身不关标签页")
 
         try commandW(window)
@@ -314,13 +453,17 @@ final class CodeTabRunExitTests: XCTestCase {
             let code = TerminalTrackedRun.oscCode
             await backend.emitOutput(Data("\u{1B}]\(code);S;\(id)\u{07}hi\r\n\u{1B}]\(code);D;\(id);0\u{07}".utf8))
         }
-        await wait("会话收尾") { code.runs.isEmpty }
+        await wait("会话收尾") { code.runs.allSatisfy(\.isEnded) }
         try await Task.sleep(for: .seconds(2))
 
         XCTAssertEqual(workspace.terminalGroups.allTabs.map(\.id), [terminalID, codeID], "标签页都还在",
                        file: file, line: line)
         XCTAssertEqual(workspace.terminalGroups.activeTab?.id, codeID, "Code 标签页还是前台", file: file, line: line)
-        XCTAssertEqual(code.detail, .empty, file: file, line: line)
+        XCTAssertEqual(code.detail, .terminal(pane.id), "没有对话记录：留着那个终端、标成已结束", file: file, line: line)
+        XCTAssertEqual(code.runningCount, 0, file: file, line: line)
+        code.dismissEnded(pane.id)
+        XCTAssertEqual(code.detail, .empty, "「关闭」之后回到起始页", file: file, line: line)
+        XCTAssertTrue(code.runs.isEmpty, file: file, line: line)
         XCTAssertEqual(workspace.terminalGroups.tab(terminalID)?.payload.session.connectionState, .connected,
                        file: file, line: line)
     }

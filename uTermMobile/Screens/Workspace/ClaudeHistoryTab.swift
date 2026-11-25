@@ -45,6 +45,10 @@ final class ClaudeHistoryTab: Identifiable {
     @ObservationIgnored var runTerminalFactory: @MainActor (ServerProfile) -> TermTab = { TermTab(host: $0) }
     /// 每个 run 要打进去的命令与在途的打字任务（重试时作废旧的，免得打两遍）。
     @ObservationIgnored var runCommands: [UUID: String] = [:]
+    /// 每个 run 起的时候的命令（不带后面接的 `; exit`）：「重新开始」照原样再起一次。重新打开后接回的没有（按记录现算）。
+    @ObservationIgnored var runStartCommands: [UUID: String] = [:]
+    /// 对新会话记录时在主机上看到的记录（列表里可能还没有），按路径。
+    @ObservationIgnored var matchedFiles: [String: AgentHistorySessionFile] = [:]
     @ObservationIgnored var runTyping: [UUID: Task<Void, Never>] = [:]
     /// 新会话还没对上记录时，隔一会儿去主机上看一眼。
     @ObservationIgnored var newSessionPoll: Task<Void, Never>?
@@ -561,7 +565,8 @@ private struct ClaudeHistoryList: View {
             let files = history.visibleFiles
             let pinned = history.pinnedFiles
             // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
-            if files.isEmpty && pinned.isEmpty && (history.isListing || history.hasMore) {
+            let hasRuns = !(code?.board.runs.isEmpty ?? true)
+            if files.isEmpty && pinned.isEmpty && !hasRuns && (history.isListing || history.hasMore) {
                 ClaudeHistoryProgress(text: String(localized: "正在读取会话列表…"))
             } else if files.isEmpty && pinned.isEmpty && (code?.board.runs.isEmpty ?? true) {
                 ClaudeHistoryState(icon: "clock", title: String(localized: "没有命令行会话"),
@@ -572,20 +577,35 @@ private struct ClaudeHistoryList: View {
         }
     }
 
-    private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
+    private func list(_ allFiles: [AgentHistorySessionFile], pinned allPinned: [AgentHistorySessionFile]) -> some View {
+        // 跑着的会话（含已结束、留着画面的）都在最顶上，置顶与下面的分组里不再出现（一个会话只出现一次，同 Mac）。
+        let runs = code?.board.runs ?? []
+        let runPaths = Set(runs.compactMap(\.sessionPath))
+        let (files, pinned) = AgentHistoryListing.excludingRunning(allFiles, pinned: allPinned, running: runPaths)
+        let byPath = Dictionary((allFiles + allPinned).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
-        let unlisted = code?.board.unlistedRuns(shown: Set(files.map(\.path)).union(pinned.map(\.path))) ?? []
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if let code {
-                        ForEach(unlisted) { run in
+                        ForEach(runs) { run in
                             Button { code.tab.focusRun(run.id) } label: {
-                                CodeUnlistedRunRow(code: code, run: run, showsTool: history.isMultiTool,
-                                                   selected: code.board.focusedID == run.id && run.showsTerminal)
+                                let selected = code.board.focusedID == run.id && run.showsTerminal
+                                if let file = run.sessionPath.flatMap({ byPath[$0] }) {
+                                    ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
+                                                     showsProject: true, showsTool: history.isMultiTool, run: run,
+                                                     isSelected: selected || history.selectedFile?.path == file.path)
+                                } else {
+                                    CodeUnlistedRunRow(code: code, run: run, showsTool: history.isMultiTool,
+                                                       selected: selected)
+                                }
                             }
                             .buttonStyle(MPressStyle())
+                        }
+                        if !runs.isEmpty, !groups.isEmpty {
+                            Rectangle().fill(M.divider).frame(height: 1)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
                         }
                     }
                     ForEach(groups) { group in
@@ -621,7 +641,6 @@ private struct ClaudeHistoryList: View {
         } label: {
             ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
                              showsProject: grouping != .project || group.kind == .pinned, showsTool: showsTool,
-                             isRunning: code?.tab.isRunning(file) ?? false,
                              isSelected: history.selectedFile?.path == file.path)
         }
         .buttonStyle(MPressStyle())
@@ -908,8 +927,8 @@ private struct ClaudeHistoryRow: View {
     let showsProject: Bool
     /// 组里不止一种工具：第二行最前面写工具名。
     var showsTool = false
-    /// 在 Code 标签页里继续着：第二行前面一个绿点「运行中」。
-    var isRunning = false
+    /// 在 Code 标签页里继续着的那个 run：第二行前面是它此刻的状态（`CodeRunStatusMark`）。
+    var run: CodeRunBoard<TermTab>.Run? = nil
     let isSelected: Bool
 
     var body: some View {
@@ -920,7 +939,7 @@ private struct ClaudeHistoryRow: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
-                    if isRunning { CodeRunningMark() }
+                    if let run { CodeRunStatusMark(run: run) }
                     AgentSessionTimeText(history: history, file: file) { activity in
                         AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
                                                          showsTool: showsTool, activity: activity)

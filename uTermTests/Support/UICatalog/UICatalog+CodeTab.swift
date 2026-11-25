@@ -34,6 +34,13 @@ extension UICatalog {
                            live: true) { stage in
                 try await codeTabRender(stage, .init(selects: false, newSession: true))
             },
+            // 新会话没说话就退出了（没有对话记录）：右边不跳走，终端留着最后的画面，顶上「会话已结束」与「重新开始」「关闭」；
+            // 侧栏顶上那一行写「已结束」。另一个会话在跑：它也在最顶上（不在下面的分组里）。
+            UICatalogEntry("终端窗口/Code 标签页_会话已结束", source: src, symbol: "CodeTabEndedBanner", size: size,
+                           live: true) { stage in
+                try await codeTabRender(stage, .init(selects: false, running: ["x-tests"], newSession: true,
+                                                     newSessionEnded: true))
+            },
             // 置顶了两个（一个 Codex、一个 Claude Code）：最上面一组「置顶」，原来那几组里不再出现；组里混着两种工具，写工具名。
             UICatalogEntry("终端窗口/Code 标签页_置顶", source: src, symbol: "AgentHistorySessionList", size: size) { stage in
                 try await codeTabRender(stage, .init(fixtures: .init(pinned: ["x-502", "c-nginx"]), running: ["x-tests"]))
@@ -149,6 +156,8 @@ extension UICatalog {
         var showsRun: String?
         /// 起一个还没对上记录的新会话，右边显示它。
         var newSession = false
+        /// 那个新会话里的程序退出了（没说话就退出、没有对话记录）：终端留着，顶上「会话已结束」。
+        var newSessionEnded = false
         var sidebarHidden = false
         var overlay = false
         /// 跑着的那个会话切到「查看记录」。
@@ -181,6 +190,7 @@ extension UICatalog {
                                              catalogModel: workspace))
         return UICatalogRender(view, after: { _ in
             await feed(terminals)
+            if setup.newSessionEnded { await endNewSession(code) }
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
             workspace.dispose()
@@ -266,6 +276,15 @@ extension UICatalog {
     private static func feed(_ terminals: [(TerminalSession, String)]) async {
         try? await Task.sleep(for: .milliseconds(400))
         for (session, script) in terminals { session.feedOutput(text: script) }
+        try? await Task.sleep(for: .milliseconds(300))
+    }
+
+    /// 新会话里的程序退出了：结束标记到（同 shell 里打出来的那样），Code 标签页把它标成已结束。
+    private static func endNewSession(_ code: CodeTabModel) async {
+        guard let run = code.runs.last, let session = session(of: run.terminal) else { return }
+        session.feedOutput(text: "\r\n\u{1B}[2m（Claude Code 已退出）\u{1B}[0m\r\n$ ")
+        session.trackedRun?.phase = .finished(0)
+        code.checkRuns()
         try? await Task.sleep(for: .milliseconds(300))
     }
 }

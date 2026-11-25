@@ -17,8 +17,9 @@ struct CodeTabView: View {
     let code: CodeTabModel
     /// 第一次显示时建文件通道。
     let makeConnection: () -> AgentHistoryConnection
-    /// 右边那个终端的面板（SSH 是 `PaneView`，本机是本机终端的面板）。
-    let terminal: (any CodeTabTerminal) -> AnyView
+    /// 右边那个终端的面板（SSH 是 `PaneView`，本机是本机终端的面板）。`ended`：程序已经退出、留着最后的画面
+    ///（只画终端本身，不要连接状态那几页）。
+    let terminal: (any CodeTabTerminal, _ ended: Bool) -> AnyView
     /// 「移到新标签页」；nil = 不出这个按钮。
     var onMoveToTab: ((UUID) -> Void)? = nil
 
@@ -55,7 +56,7 @@ struct CodeTabView: View {
 private struct CodeTabBrowser: View {
     let code: CodeTabModel
     let history: AgentHistoryModel
-    let terminal: (any CodeTabTerminal) -> AnyView
+    let terminal: (any CodeTabTerminal, _ ended: Bool) -> AnyView
     let onMoveToTab: ((UUID) -> Void)?
 
     @Environment(\.scenePhase) private var scenePhase
@@ -77,7 +78,7 @@ private struct CodeTabBrowser: View {
                     ColumnResizer(width: Binding(get: { code.sidebarWidth }, set: { code.sidebarWidth = $0 }),
                                   range: AgentHistoryBrowser.sidebarRange.lowerBound...upper, sign: 1)
                 } else {
-                    CodeTabRail(runningCount: code.runs.count) {
+                    CodeTabRail(runningCount: code.runningCount) {
                         if compact { code.sidebarOverlayShown = true } else { code.sidebarHidden = false }
                     }
                     Rectangle().fill(UD.border).frame(width: 1)
@@ -112,11 +113,18 @@ private struct CodeTabBrowser: View {
             // 「＋」不直接开：右边换成起始页，在那里选目录和工具。
             newSession: AgentHistoryNewSession(presenting: { code.showNewSessionPage() }),
             reveal: code.reveal,
-            running: AgentHistoryRunning(paths: Set(code.runs.compactMap(\.path)), unlisted: { shown in
+            running: AgentHistoryRunning(rows: {
                 let selected = code.displayedRun?.id
-                return code.unlistedRuns(shown: shown).map { run in
-                    AgentHistoryRunRow(id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
-                                       isSelected: run.id == selected)
+                return code.runs.map { run in
+                    let terminal = run.terminal
+                    let ended = run.isEnded
+                    return AgentHistoryRunRow(
+                        id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
+                        isSelected: run.id == selected, path: run.path,
+                        status: AgentHistoryRunStatus {
+                            if ended { return .ended }
+                            return terminal.codeProgramStatus.map { .program($0) } ?? .running
+                        })
                 }
             }) { id in
                 code.selectRun(id)
@@ -140,7 +148,8 @@ private struct CodeTabBrowser: View {
             if let run = code.runs.first(where: { $0.id == id }) {
                 VStack(spacing: 0) {
                     runHeader(run)
-                    terminal(run.terminal)
+                    if run.isEnded { CodeTabEndedBanner(code: code, runID: run.id) }
+                    terminal(run.terminal, run.isEnded)
                         // 每个会话一个面板：换会话就是换一个终端，不复用同一个视图。
                         .id(run.id)
                 }
@@ -202,6 +211,44 @@ private struct CodeTabBrowser: View {
 
     private static var moveToTab: String {
         String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
+    }
+}
+
+/// 程序已经退出、没有对话记录可看的会话：右边终端顶上一条「会话已结束」，带「重新开始」「关闭」。下面是终端最后的画面。
+/// 不自己跳走：用户看完了再决定。
+struct CodeTabEndedBanner: View {
+    let code: CodeTabModel
+    let runID: UUID
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(UD.text3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(AgentHistoryText.sessionEndedBanner)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(UD.text)
+                    Text(AgentHistoryText.sessionEndedDetail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                UDButton(title: AgentHistoryText.restartSession, systemImage: "arrow.clockwise") {
+                    code.restart(runID)
+                }
+                UDButton(title: AgentHistoryText.closeEndedSession, style: .secondary) {
+                    code.dismissEnded(runID)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(UD.fillSoft)
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(AgentHistoryText.sessionEndedBanner))
     }
 }
 

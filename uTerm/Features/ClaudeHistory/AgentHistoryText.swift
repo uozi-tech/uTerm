@@ -312,6 +312,31 @@ enum AgentHistoryText {
 
     static var newSession: String { String(localized: "新会话", comment: "历史会话列表顶上：新开一个编码会话") }
 
+    /// 跑着的会话里程序已经退出、终端留着最后的画面：侧栏那一行的状态。
+    static var sessionEnded: String {
+        String(localized: "已结束", comment: "Code 标签页：会话里的编码工具已经退出，终端还留着最后的画面")
+    }
+
+    /// 右边终端顶上那一条：程序退出了，没有对话记录可看。
+    static var sessionEndedBanner: String {
+        String(localized: "会话已结束", comment: "Code 标签页：会话里的编码工具已经退出，下面是终端最后的画面")
+    }
+
+    /// 那一条上的说明。
+    static var sessionEndedDetail: String {
+        String(localized: "这个会话没有留下对话记录。", comment: "Code 标签页「会话已结束」那一条上的说明")
+    }
+
+    /// 那一条上的按钮：同一种工具、同一个目录再开一次（继续的会话再继续同一份）。
+    static var restartSession: String {
+        String(localized: "重新开始", comment: "Code 标签页：会话结束后，同一个工具、同一个目录再开一次")
+    }
+
+    /// 那一条上的按钮：结束这个终端，右边回到起始页。
+    static var closeEndedSession: String {
+        String(localized: "关闭", comment: "Code 标签页：会话结束后，关掉留着的终端")
+    }
+
     static func newSessionHelp(directory: String?) -> String {
         guard let directory else { return String(localized: "不知道终端当前在哪个目录，无法新开会话") }
         return String(localized: "在 \(directory) 里新开一个会话")
