@@ -114,7 +114,7 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         let outcome = await peer.run(request)
         switch outcome {
         case .connected:
-            legacyGate.connectionSucceeded()
+            legacyGate.connectionSucceeded(hops: target.profile.legacyGateHops)
             return
         case .failed(let failure):
             failedOnLocalNetwork = failure.localNetworkUnreachable == true

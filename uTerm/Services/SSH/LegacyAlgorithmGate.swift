@@ -22,9 +22,14 @@ import USSHKit
 /// 它的 `KnownHost` 经 iCloud 同步到设备 B，B 第一次连时会问一次（同意记在本机，不同步）。
 ///
 /// 记下同意的时机：用户在提示里同意了，当场记；第一次连静默放行的，**连上之后**才记（`connectionSucceeded`）——
-/// 主机密钥没被信任、认证失败，都不该留下「这台本来就只会旧算法」。从来不清掉：主机后来升级了，用不上旧算法，
-/// 记着也不碍事；它再降回去也照旧不问（用户确认过「这台只能这样」）。在信任库里删掉这台主机时一起忘掉
-/// （`KnownHostLibrary.delete`）。
+/// 主机密钥没被信任、认证失败，都不该留下「这台本来就只会旧算法」。
+///
+/// 清掉同意的时机：某一跳**连上了**，而这次连接里 USSHKit 一次都没为那一跳调过 `legacyFallbackApproval`——
+/// 钩子只在要用旧算法时才调（第一次没有共同算法要再试、进程内记着需要旧算法要第一次就带上），没被调用又连上了，
+/// 就是协商到了现代算法，这是 USSHKit 给的确定信号，不靠 `legacyAlgorithmsInUse` 的名字去猜（加密是 AES-GCM、
+/// 服务器只报了 `hmac-sha1` 名字的那类服务器每次都会因为没有共同算法触发钩子，不会被误清）。于是服务器升级之后
+/// 又退回 SHA-1，会再问一次——这正是这个提示要拦的。跳板机与目标各按自己那一跳判断（`connectionSucceeded(hops:)`）。
+/// 在信任库里删掉这台主机时也一起忘掉（`KnownHostLibrary.delete`）。
 nonisolated final class LegacyAlgorithmGate: Sendable {
     enum Decision: Equatable, Sendable {
         /// 本机记着同意过：照常连。
@@ -48,6 +53,8 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
     private let coalesces: Bool
     /// 静默放行、等连上之后再记下同意的那几跳。
     private let pending = Mutex<Set<LegacyAlgorithmConsent.Address>>([])
+    /// 这次连接里 USSHKit 为哪几跳调过钩子（要用旧算法）。没在这里的跳连上了 = 用的是现代算法。
+    private let asked = Mutex<Set<LegacyAlgorithmConsent.Address>>([])
 
     /// - Parameters:
     ///   - approver: 问用户的出口，就是这条连接问主机密钥的那个（不能问的上下文它直接返回 false = 不同意）。
@@ -87,6 +94,7 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
     /// 某一跳要用旧算法了，同不同意。
     func approve(host: String, port: Int, isJumpHost: Bool) async -> Bool {
         let address = LegacyAlgorithmConsent.Address(host: host, port: port)
+        asked.withLock { _ = $0.insert(address) }
         let decision = Self.decide(consented: consent.contains(address),
                                    hasTrustRecord: await hasTrustRecord(host, port),
                                    verifiesHostKeys: verifiesHostKeys)
@@ -109,13 +117,19 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
         }
     }
 
-    /// 整条连接连上了：把静默放行的那几跳记成「本来就只会旧算法」。
-    func connectionSucceeded() {
+    /// 整条连接连上了（`hops` 是这次的每一跳：跳板机与目标）：把静默放行的那几跳记成「本来就只会旧算法」；
+    /// 没为它调过钩子的那几跳用的是现代算法，清掉它们的同意，之后再退回旧算法会再问。
+    func connectionSucceeded(hops: [(host: String, port: Int)]) {
         let addresses = pending.withLock { taken -> Set<LegacyAlgorithmConsent.Address> in
             defer { taken = [] }
             return taken
         }
         for address in addresses { consent.insert(address) }
+        let askedHops = asked.withLock { $0 }
+        for hop in hops {
+            let address = LegacyAlgorithmConsent.Address(host: hop.host, port: hop.port)
+            if !askedHops.contains(address) { consent.remove(address) }
+        }
     }
 }
 
@@ -178,7 +192,11 @@ nonisolated struct LegacyAlgorithmConsent: Sendable {
     }
 
     func remove(host: String, port: Int) {
-        let key = Address(host: host, port: port).key
+        remove(Address(host: host, port: port))
+    }
+
+    func remove(_ address: Address) {
+        let key = address.key
         Self.lock.withLock { _ in
             let hosts = stored
             guard hosts.contains(key) else { return }

@@ -80,12 +80,39 @@ final class LegacyAlgorithmGateTests: XCTestCase {
         XCTAssertTrue(approved)
         XCTAssertTrue(asker.challenges.isEmpty)
         XCTAssertFalse(consent.contains(host: "old.example", port: 22), "还没连上，不记")
-        first.connectionSucceeded()
+        first.connectionSucceeded(hops: [(host: "old.example", port: 22)])
         XCTAssertTrue(consent.contains(host: "old.example", port: 22))
 
         let failed = gate(hasRecord: false, asker: asker)
         _ = await failed.approve(host: "other.example", port: 22, isJumpHost: false)
         XCTAssertFalse(consent.contains(host: "other.example", port: 22), "连接没成功就没调 connectionSucceeded")
+    }
+
+    /// 某一跳连上了、这次 USSHKit 没为它调过钩子（协商到的是现代算法）：清掉它的同意，之后再退回旧算法会再问。
+    /// 调过钩子的那一跳（这次仍要旧算法）不动；跳板机与目标各按自己那一跳判断。
+    func testModernConnectionClearsConsentPerHop() async {
+        consent.insert(host: "bastion", port: 22)
+        consent.insert(host: "web", port: 22)
+        let gate = gate(hasRecord: true, asker: Asker(false))
+        // 跳板机这次还要旧算法（同意过，照常连），目标这次用的是现代算法（钩子没为它调）。
+        let approved = await gate.approve(host: "bastion", port: 22, isJumpHost: true)
+        XCTAssertTrue(approved)
+        gate.connectionSucceeded(hops: [(host: "bastion", port: 22), (host: "web", port: 22)])
+        XCTAssertTrue(consent.contains(host: "bastion", port: 22), "这次仍用旧算法的那一跳不清")
+        XCTAssertFalse(consent.contains(host: "web", port: 22), "现代算法连上的那一跳清掉")
+
+        // 之后它又退回旧算法：再问。
+        let asker = Asker(false)
+        let again = await self.gate(hasRecord: true, asker: asker).approve(host: "web", port: 22, isJumpHost: false)
+        XCTAssertFalse(again)
+        XCTAssertEqual(asker.challenges.count, 1)
+    }
+
+    /// 连接没成功（没调 `connectionSucceeded`）就什么也不清。
+    func testFailedConnectionClearsNothing() async {
+        consent.insert(host: "web", port: 22)
+        _ = gate(hasRecord: true, asker: Asker(false))
+        XCTAssertTrue(consent.contains(host: "web", port: 22))
     }
 
     /// 信任过的主机：问一次，拒绝不记、返回 false；同意记下，之后不再问。
@@ -323,6 +350,80 @@ final class LegacyAlgorithmGateTests: XCTestCase {
         let third = try await connect(server, verifier: verifier, approver: silent.approver)
         await third.close()
         XCTAssertTrue(silent.challenges.isEmpty, "同意过就不再问")
+    }
+
+    /// 服务器升级成现代算法、连上了：清掉同意；之后同一个地址又只给旧算法：再问。两台服务端先后占同一个端口、
+    /// 用同一把主机密钥（只是加密方式变了）。
+    func testUpgradeThenDowngradeAsksAgainAgainstInProcessServers() async throws {
+        guard SSHClientFactory.packageHostKeyPolicy() != .insecureAcceptAll else {
+            throw XCTSkip("本机设置关了主机密钥核对，闸门本来就不问")
+        }
+        let hostKey = NIOSSHPrivateKey(ed25519Key: .init())
+        var modernConfiguration = SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: .routes(["true": .scripted()]))
+        modernConfiguration.hostKey = hostKey
+        let modern = try await SSHTestServer.start(modernConfiguration)
+        let port = modern.port
+        let shared = LegacyAlgorithmConsent.shared
+        addTeardownBlock { shared.remove(host: "127.0.0.1", port: port) }
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
+
+        // 以前同意过旧算法，这次服务器只给现代算法：连上、钩子没调 → 同意清掉。
+        shared.insert(host: "127.0.0.1", port: port)
+        let first = Asker(true)
+        let client = try await connect(modern, verifier: verifier, approver: first.approver)
+        await client.close()
+        XCTAssertEqual(first.challenges.filter(\.isWeakAlgorithms).count, 0)
+        XCTAssertFalse(shared.contains(host: "127.0.0.1", port: port), "现代算法连上了，同意清掉")
+        await modern.stop()
+
+        // 同一个地址退回只给 group14-sha1：再问；拒绝就不连。
+        var legacyConfiguration = SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: .routes(["true": .scripted()]))
+        legacyConfiguration.hostKey = hostKey
+        legacyConfiguration.keyExchangeAlgorithms = [SSHDiffieHellmanAlgorithm.group14SHA1.name]
+        let legacy = try await SSHTestServer.start(legacyConfiguration, port: port)
+        addTeardownBlock { await legacy.stop() }
+        let asker = Asker(false)
+        do {
+            _ = try await connect(legacy, verifier: verifier, approver: asker.approver)
+            XCTFail("应当失败")
+        } catch SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(let refusal) {
+            XCTAssertEqual(refusal.port, port)
+        }
+        XCTAssertEqual(asker.challenges.map(\.isWeakAlgorithms), [true])
+    }
+
+    /// 加密是 AES-GCM、服务器的 MAC 只报 `hmac-sha1` 名字的那类服务器：连上之后 `legacyAlgorithmsInUse` 是空的
+    /// （MAC 不用），但每次都要旧算法才协商得成、都会调钩子——同意不会被误清，也不会反复问。
+    func testAESGCMWithSHA1MACNameIsNotMistakenForModern() async throws {
+        var configuration = SSHTestServer.Configuration(
+            authentication: .acceptAnyone, exec: .routes(["true": .scripted()]))
+        configuration.transportProtectionSchemes = NIOSSH.Constants.bundledTransportProtectionSchemes
+            + [SSHAESCTRTransportProtection<SSHAES128CTR, SSHHMACSHA1>.self]
+        let server = try await SSHTestServer.start(configuration)
+        addTeardownBlock { await server.stop() }
+        let shared = LegacyAlgorithmConsent.shared
+        shared.remove(host: "127.0.0.1", port: server.port)
+        addTeardownBlock { shared.remove(host: "127.0.0.1", port: server.port) }
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
+
+        let first = try await connect(server, verifier: verifier, approver: Asker(true).approver)
+        XCTAssertEqual(first.shared.legacyAlgorithmsInUse, [], "夹具对不对：加密是 GCM，MAC 名字不算在用")
+        await first.close()
+        XCTAssertTrue(shared.contains(host: "127.0.0.1", port: server.port), "第一次静默放行、连上记下")
+
+        for round in 0..<2 {
+            let asker = Asker(false)
+            let client = try await connect(server, verifier: verifier, approver: asker.approver)
+            await client.close()
+            XCTAssertTrue(asker.challenges.isEmpty, "第 \(round + 2) 次不问")
+            XCTAssertTrue(shared.contains(host: "127.0.0.1", port: server.port), "第 \(round + 2) 次连上也没被误清")
+        }
     }
 
     /// 经跳板机：跳板机只给旧算法、信任过、本机没同意过 → 问的是跳板机，拒绝后归成跳板机那一跳的失败。

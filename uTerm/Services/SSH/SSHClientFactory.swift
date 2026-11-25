@@ -202,7 +202,7 @@ nonisolated enum SSHClientFactory {
                 legacyFallbackApproval: legacyGate.approval,
                 logger: AppSSHLogger()
             )
-            legacyGate.connectionSucceeded()
+            legacyGate.connectionSucceeded(hops: profile.legacyGateHops)
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
             throw appError(error)
@@ -358,5 +358,12 @@ nonisolated enum SSHClientFactory {
     static func connectTimeoutSeconds() -> Int64 {
         let seconds = (UserDefaults.standard.object(forKey: DefaultsKey.sshConnectTimeout) as? Int) ?? 30
         return Int64(seconds)
+    }
+}
+
+nonisolated extension SSHConnection.ProfileSnapshot {
+    /// 这次连接的每一跳（跳板机在前），交给 `LegacyAlgorithmGate.connectionSucceeded(hops:)`。
+    var legacyGateHops: [(host: String, port: Int)] {
+        (jumpHost.map { [(host: $0.host, port: $0.port)] } ?? []) + [(host: host, port: port)]
     }
 }
