@@ -1,4 +1,7 @@
-# vendor/zstd
+# vendor/uterm-zstd
+
+目录不叫 `zstd`：SwiftPM 按目录名 / URL 末段定包身份，uTable 依赖远程 `github.com/facebook/zstd`（身份也是 `zstd`），
+两个 App 放进同一个 `uozi.xcworkspace` 时同名冲突，整个依赖图解析失败。
 
 上游：<https://github.com/facebook/zstd>，当前 v1.5.7（提交 `f8745da6ff1ad1e7bab384bd1f9d742439278e99`）。
 

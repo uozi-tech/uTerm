@@ -12,7 +12,7 @@ uTerm 以 AGPL-3.0 发布，使用了下列第三方组件，各自保留原许�
 | tree-sitter grammars（python / javascript / yaml / toml / ini） | 见 `scripts/sync-vendored-grammars.sh` | MIT；ini 为 Apache-2.0 | `vendor/tree-sitter-grammars/LICENSES.md` |
 | libjuice | github.com/paullouisageneau/libjuice | MPL-2.0 | `vendor/libjuice/LICENSE` |
 | kcp | github.com/skywind3000/kcp | MIT | `vendor/kcp/LICENSE` |
-| zstd（只有解压部分） | github.com/facebook/zstd | BSD-3-Clause（上游双许可 BSD / GPLv2，取 BSD） | `vendor/zstd/LICENSE` |
+| zstd（只有解压部分） | github.com/facebook/zstd | BSD-3-Clause（上游双许可 BSD / GPLv2，取 BSD） | `vendor/uterm-zstd/LICENSE` |
 
 ## Swift 包依赖（构建时由 SwiftPM 拉取，版本见 `Package.resolved`）
 

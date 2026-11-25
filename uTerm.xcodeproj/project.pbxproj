@@ -1309,7 +1309,7 @@
 				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
 				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
 				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
-				5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */,
+				5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/uterm-zstd" */,
 				4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm" */,
 				55535348535441434B0000A0 /* XCLocalSwiftPackageReference "Packages/USSHStack" */,
 			);
@@ -2496,9 +2496,9 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/USSHStack;
 		};
-		5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */ = {
+		5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/uterm-zstd" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/zstd;
+			relativePath = vendor/uterm-zstd;
 		};
 		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -2753,12 +2753,12 @@
 		};
 		5A53544400000000000000A1 /* CZstd */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */;
+			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/uterm-zstd" */;
 			productName = CZstd;
 		};
 		5A53544400000000000000A2 /* CZstd */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/zstd" */;
+			package = 5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/uterm-zstd" */;
 			productName = CZstd;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
