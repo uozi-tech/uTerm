@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 主机密钥信任弹层（设计稿 `HostKeyModal`）。首次连接（unknown）/ 密钥变化（mismatch）两态。
+/// 主机密钥信任弹层（设计稿 `HostKeyModal`）。首次连接（unknown）/ 密钥变化（mismatch）两态，外加
+/// 「加密方式变弱了」（`.weakAlgorithms`，不是主机密钥的问题，没有指纹，取消是醒目的那个）。
 /// 由根视图在 `HostKeyChallengeRelay.pendingChallenge` 非空时居中呈现；裁决经 relay 续延回 SSH 层。
 struct HostKeyTrustModal: View {
     let challenge: HostKeyChallenge
@@ -9,15 +10,65 @@ struct HostKeyTrustModal: View {
     @Environment(\.mAccent) private var accent
 
     private var unknown: Bool { if case .unknown = challenge.kind { return true }; return false }
-    private var tint: Color { unknown ? accent : M.danger }
+    private var weak: Bool { challenge.isWeakAlgorithms }
+    private var tint: Color { unknown ? accent : (weak ? M.warning : M.danger) }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            fingerprints
-            if !unknown { mismatchBanner }
-            buttons
+            if weak {
+                weakHeader
+                weakBanner
+                weakButtons
+            } else {
+                header
+                fingerprints
+                if !unknown { mismatchBanner }
+                buttons
+            }
         }
+    }
+
+    // MARK: - 加密方式变弱了（没有指纹；「取消」是醒目的那个，「仍然连接」在旁边）
+
+    private var weakHeader: some View {
+        HStack(alignment: .top, spacing: 13) {
+            MIcon(name: "warn", size: 19, color: tint)
+                .frame(width: 38, height: 38)
+                .background(tint.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.dialog, inset: 16)))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(WeakAlgorithmsCopy.title(challenge))
+                    .font(M.sans(16, weight: .semibold))
+                    .foregroundStyle(M.text)
+                Text(WeakAlgorithmsCopy.summary(challenge))
+                    .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+    }
+
+    private var weakBanner: some View {
+        Text(WeakAlgorithmsCopy.advice)
+            .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(11)
+            .background(tint.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
+            .padding(.horizontal, 18).padding(.top, 14)
+    }
+
+    private var weakButtons: some View {
+        HStack(spacing: 10) {
+            MBtn(title: String(localized: "仍然连接", comment: "加密方式变弱时照样连接"), kind: .secondary, full: true,
+                 height: 46, action: onTrust)
+            MBtn(title: String(localized: "取消"), kind: .primary, full: true, height: 46, action: onCancel)
+        }
+        .padding(.horizontal, 16).padding(.top, 30).padding(.bottom, 16)
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var header: some View {

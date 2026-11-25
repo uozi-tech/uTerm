@@ -16,6 +16,9 @@ nonisolated enum SSHBridgeMessage: Codable, Sendable {
     case verifyHostKey(id: Int, SSHBridgeHostKey)
     case rememberHostKey(id: Int, SSHBridgeHostKey)
     case approveHostKey(id: Int, SSHBridgeChallenge)
+    /// 某一跳只肯用 SHA-1 时代的旧算法，要不要照样连（App 按 `LegacyAlgorithmGate` 的规则答，答复是 `approval`）。
+    /// 只在 App 的 `connect` 带了 `asksLegacyAlgorithms` 时发。
+    case approveLegacyAlgorithms(id: Int, SSHBridgeLegacyRequest)
     case connected
     case failed(SSHBridgeFailure)
     // 连上之后经 holder 转发（`childRequest` / `childReply`）。App 重启后也还能用，不碰凭据、不握手。
@@ -51,6 +54,15 @@ nonisolated struct SSHBridgeConnectRequest: Codable, Sendable {
     var connectTimeoutSeconds: Int
     /// 交互 shell 和经 `exec` 跑的命令都带这些环境变量。
     var environment: [SSHBridgeEnvironmentVariable]
+    /// App 会回答 `approveLegacyAlgorithms`。没带（旧版 App）时 `uterm-ssh` 不问、照旧自动退到旧算法。只加不改。
+    var asksLegacyAlgorithms: Bool? = nil
+}
+
+/// 要用旧算法连的那一跳。
+nonisolated struct SSHBridgeLegacyRequest: Codable, Sendable, Equatable {
+    var host: String
+    var port: Int
+    var isJumpHost: Bool
 }
 
 nonisolated struct SSHBridgeHostKey: Codable, Sendable {
@@ -94,22 +106,28 @@ nonisolated struct SSHBridgeFailure: Codable, Sendable, LocalizedError {
     /// 与 `connectCauseRaw` 一起：不带「认证失败：」之类前缀的原话（`message` 带前缀，给旧 App 显示用）。
     /// App 用它组出和进程内建连一模一样的错误文案。
     var connectDetail: String? = nil
+    /// 没同意用旧算法而没连的那一跳（哪一跳都一样，`kind` 照旧是 `.jumpHost` / `.connect`，cause 是 `weakAlgorithms`）。
+    /// App 据此组出和进程内建连一样的 `weakAlgorithmsDeclined`。只加不改。
+    var legacyDeclined: SSHBridgeLegacyRequest? = nil
 
     enum CodingKeys: String, CodingKey {
         case kind, message, localNetworkUnreachable
         case jumpHostCauseRaw = "jumpHostCause"
         case connectCauseRaw = "connectCause"
         case connectDetail
+        case legacyDeclined
     }
 
     init(kind: Kind, message: String, localNetworkUnreachable: Bool? = nil, jumpHostCause: JumpHostFailureCause? = nil,
-         connectCause: JumpHostFailureCause? = nil, connectDetail: String? = nil) {
+         connectCause: JumpHostFailureCause? = nil, connectDetail: String? = nil,
+         legacyDeclined: SSHBridgeLegacyRequest? = nil) {
         self.kind = kind
         self.message = message
         self.localNetworkUnreachable = localNetworkUnreachable
         self.jumpHostCauseRaw = jumpHostCause?.rawValue
         self.connectCauseRaw = connectCause?.rawValue
         self.connectDetail = connectDetail
+        self.legacyDeclined = legacyDeclined
     }
 
     /// 直连失败的类别；旧辅助进程不带、或带了这版 App 不认识的值时是 nil（按网络问题处理）。

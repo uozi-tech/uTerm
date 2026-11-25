@@ -106,13 +106,22 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             connection.close()
             handshake = nil
         }
-        let peer = SSHBridgeAppPeer(connection: connection, verifier: target.hostKeyVerifier, approver: target.hostKeyApprover)
+        let legacyGate = LegacyAlgorithmGate(verifier: target.hostKeyVerifier,
+                                             hostKeyPolicy: SSHClientFactory.packageHostKeyPolicy(),
+                                             interactive: true, approver: target.hostKeyApprover)
+        let peer = SSHBridgeAppPeer(connection: connection, verifier: target.hostKeyVerifier,
+                                    approver: target.hostKeyApprover, legacyGate: legacyGate)
         let outcome = await peer.run(request)
         switch outcome {
         case .connected:
+            legacyGate.connectionSucceeded()
             return
         case .failed(let failure):
             failedOnLocalNetwork = failure.localNetworkUnreachable == true
+            if let declined = failure.legacyDeclined {
+                throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(LegacyAlgorithmRefusal(
+                    host: declined.host, port: declined.port, isJumpHost: declined.isJumpHost))
+            }
             switch failure.kind {
             case .jumpHost:
                 throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message,
@@ -154,7 +163,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
             host: target.profile.host, port: target.profile.port, username: material.username, credential: material.credential,
             jumpHost: jumpHost, hostKeyPolicy: SSHClientFactory.packageHostKeyPolicy().rawValue,
             connectTimeoutSeconds: Int(SSHClientFactory.connectTimeoutSeconds()),
-            environment: RemoteTrueColor.terminalEnvironment.map { SSHBridgeEnvironmentVariable(name: $0.name, value: $0.value) })
+            environment: RemoteTrueColor.terminalEnvironment.map { SSHBridgeEnvironmentVariable(name: $0.name, value: $0.value) },
+            asksLegacyAlgorithms: true)
     }
 
     private static func material(_ auth: ResolvedAuth) -> (username: String, credential: SSHBridgeCredential) {
@@ -286,13 +296,16 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
     private let connection: HolderConnection
     private let verifier: HostKeyVerifier
     private let approver: @Sendable (HostKeyChallenge) async -> Bool
+    private let legacyGate: LegacyAlgorithmGate
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Outcome, Never>?
 
-    init(connection: HolderConnection, verifier: HostKeyVerifier, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool) {
+    init(connection: HolderConnection, verifier: HostKeyVerifier, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+         legacyGate: LegacyAlgorithmGate) {
         self.connection = connection
         self.verifier = verifier
         self.approver = approver
+        self.legacyGate = legacyGate
     }
 
     func run(_ request: SSHBridgeConnectRequest) async -> Outcome {
@@ -328,6 +341,12 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
                     approver: approver)
                 send(.approval(id: id, approved))
             }
+        case .approveLegacyAlgorithms(let id, let legacy):
+            // 合并同一台主机同时在问的几个标签由 gate 自己做（`HostKeyApprovalCoalescer`），这里不再套一层。
+            Task { [self] in
+                let approved = await legacyGate.approve(host: legacy.host, port: legacy.port, isJumpHost: legacy.isJumpHost)
+                send(.approval(id: id, approved))
+            }
         case .connected:
             finish(.connected)
         case .failed(let failure):
@@ -356,38 +375,6 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
         case .unknown: return .unknown
         case .mismatch(let previous): return .mismatch(previousFingerprint: previous)
         }
-    }
-}
-
-/// 同时打开同一台新主机的几个标签，每个都各握一次手，但只问用户一次：一个窗口同时只能弹一个 sheet，
-/// 后来的弹不出来，那个标签就永远卡在「连接中」。
-actor HostKeyApprovalCoalescer {
-    static let shared = HostKeyApprovalCoalescer()
-
-    private enum Outcome { case approved, rejected, abandoned }
-    private struct Ask {
-        let token = UUID()
-        let task: Task<Outcome, Never>
-    }
-
-    private var inFlight: [String: Ask] = [:]
-
-    func approve(_ challenge: HostKeyChallenge, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool) async -> Bool {
-        let key = "\(challenge.host):\(challenge.port) \(challenge.newFingerprint)"
-        while let running = inFlight[key] {
-            let outcome = await running.task.value
-            if outcome != .abandoned { return outcome == .approved }
-            // 问的那个标签关掉了，用户没回答：撤掉这次询问，由还在等的标签重新问。
-            if inFlight[key]?.token == running.token { inFlight[key] = nil }
-        }
-        let ask = Ask(task: Task {
-            if await approver(challenge) { return .approved }
-            return HostKeyAbandonment.take(challenge.id) ? .abandoned : .rejected
-        })
-        inFlight[key] = ask
-        let outcome = await ask.task.value
-        if inFlight[key]?.token == ask.token { inFlight[key] = nil }
-        return outcome == .approved
     }
 }
 

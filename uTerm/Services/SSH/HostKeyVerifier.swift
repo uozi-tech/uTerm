@@ -26,8 +26,16 @@ extension HostKeyClassification: Equatable {
 }
 
 /// 向用户征询时所需的纯数据。
+///
+/// 除了主机密钥的两态，还有一种不是主机密钥的问题也走这条通路（`.weakAlgorithms`）：信任过的主机这次只肯用
+/// SHA-1 时代的旧算法，连之前问用户（`LegacyAlgorithmGate`）。它没有指纹，`newFingerprint` 是空串。
+/// 走同一条通路是为了复用现成的弹层、合并与「不能问用户就拒绝」的那些审批闭包——它们不认识这一种时也只会拒绝。
 struct HostKeyChallenge: Equatable, Sendable, Identifiable {
-    enum Kind: Sendable { case unknown, mismatch }
+    enum Kind: Sendable {
+        case unknown, mismatch
+        /// 以前用较新的加密方式连过，这次服务器只提供较旧的（SHA-1），要不要照样连。
+        case weakAlgorithms
+    }
     let id = UUID()
     let host: String
     let port: Int
@@ -35,6 +43,26 @@ struct HostKeyChallenge: Equatable, Sendable, Identifiable {
     let newFingerprint: String
     /// 仅 `.mismatch` 时非 nil。
     let oldFingerprint: String?
+    /// `.weakAlgorithms` 时：问的是跳板机（`host` / `port` 是跳板机的）。
+    var isJumpHost = false
+
+    /// 是不是「加密方式变弱了」那一问。`nonisolated`：审批闭包在 NIO 线程上调，`Kind` 的 Equatable 是主线程隔离的。
+    nonisolated var isWeakAlgorithms: Bool {
+        if case .weakAlgorithms = kind { return true }
+        return false
+    }
+
+    /// 同一个问题的合并键（`HostKeyApprovalCoalescer`）：主机密钥按「哪台 + 哪把钥匙」，加密方式按「哪台」。
+    nonisolated var coalescingKey: String {
+        if isWeakAlgorithms { return "\(host):\(port) weak-algorithms" }
+        return "\(host):\(port) \(newFingerprint)"
+    }
+
+    /// 「加密方式变弱了」那一问。
+    nonisolated static func weakAlgorithms(_ request: SSHLegacyFallbackRequest) -> HostKeyChallenge {
+        HostKeyChallenge(host: request.host, port: request.port, kind: .weakAlgorithms,
+                         newFingerprint: "", oldFingerprint: nil, isJumpHost: request.hop == .jumpHost)
+    }
 }
 
 /// known-hosts 存储与 TOFU 决策。`@ModelActor` 使其自带一个由 `ModelContainer`
@@ -101,6 +129,11 @@ actor HostKeyVerifier {
     /// 测试辅助：某 host:port 的记录条数。
     func knownHostCount(host: String, port: Int) -> Int {
         existing(host: host, port: port).count
+    }
+
+    /// 信任库里有没有这台 host:port 的记录（不管密钥对不对得上）。有就说明以前连上过它（`LegacyAlgorithmGate` 用）。
+    func hasTrustRecord(host: String, port: Int) -> Bool {
+        !existing(host: host, port: port).isEmpty
     }
 }
 

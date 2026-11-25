@@ -120,6 +120,17 @@ extension ControlHandler {
                 rules: [snap]
             )
 
+        case .hostKey(let challenge) where challenge.isWeakAlgorithms:
+            // 不是主机密钥的问题：加密方式变弱了。不记进池里（`trust` 管不了它），照连接池的说法回。
+            let error = ControlConnectError.weakAlgorithms(LegacyAlgorithmRefusal(
+                host: challenge.host, port: challenge.port, isJumpHost: challenge.isJumpHost))
+            return .failure(
+                id: request.id,
+                code: error.code,
+                message: error.message(host: profile.name),
+                rules: [snap]
+            )
+
         case .hostKey(let challenge):
             // 转发走的是自己的专用连接（不经连接池），挑战落在上面那个临时 relay 上。
             // 补记进池里，`trust --fingerprint <值>` 才配得上对 —— 否则技能文档教的

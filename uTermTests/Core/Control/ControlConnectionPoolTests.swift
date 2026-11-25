@@ -175,6 +175,31 @@ final class ControlConnectionPoolTests: XCTestCase {
         }
     }
 
+    /// 加密方式变弱了（信任过的主机这次只肯用 SHA-1 时代的旧算法）：命令行不能问人，拒绝 → `weak_algorithms`，
+    /// 不重试、并行传输整次停下，文案说清是哪台、怎么办。审批闭包记下的挑战与类型化错误两条路径结果一样。
+    func testWeakAlgorithmsMapToTheirOwnNonRetryableCode() {
+        let refusal = LegacyAlgorithmRefusal(host: "10.0.0.5", port: 2222, isJumpHost: false)
+        let fromError = ControlConnectionPool.mapConnectError(
+            SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(refusal), sink: HostKeyChallengeSink())
+        let sink = HostKeyChallengeSink()
+        sink.record(HostKeyChallenge(host: "10.0.0.5", port: 2222, kind: .weakAlgorithms,
+                                     newFingerprint: "", oldFingerprint: nil))
+        let fromChallenge = ControlConnectionPool.mapConnectError(
+            SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(refusal), sink: sink)
+        for error in [fromError, fromChallenge] {
+            guard case .weakAlgorithms(let mapped) = error else { return XCTFail("应归 weakAlgorithms，实得 \(error)") }
+            XCTAssertEqual(mapped, refusal)
+            XCTAssertEqual(error.code, .weak_algorithms)
+            XCTAssertFalse(error.isRetryableBorrowFailure)
+            XCTAssertTrue(ParallelTransfer.stopsAllWorkers(error))
+            XCTAssertNil(error.fingerprint, "没有指纹可 trust")
+            let message = error.message(host: "prod-web")
+            XCTAssertTrue(message.contains("prod-web") && message.contains("10.0.0.5:2222"), message)
+        }
+        let jump = ControlConnectError.weakAlgorithms(LegacyAlgorithmRefusal(host: "b", port: 22, isJumpHost: true))
+        XCTAssertTrue(jump.message(host: "prod-web").contains("b:22"))
+    }
+
     func testExecutorIsBuiltLazilyAndReusedPerHost() async throws {
         let factory = Factory()
         let clock = Clock()

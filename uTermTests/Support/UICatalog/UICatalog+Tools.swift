@@ -25,6 +25,21 @@ extension UICatalog {
                 let view = s.wrap(SFTPWindowView(windowID: SFTPWindowID(id: UUID(), serverID: server.id), catalogTabs: tabs))
                 return UICatalogRender(view, cleanup: { tabs.forEach { $0.model.dispose() } })
             },
+            // 信任过的主机这次只肯用 SHA-1 时代的旧算法：连之前问（`LegacyAlgorithmGate`）。直连与跳板机各一张。
+            UICatalogEntry("连接确认/加密方式变弱了", .sheet, source: "uTerm/Shared/Views/HostKeyPromptView.swift",
+                           symbol: "HostKeyPromptView", size: CGSize(width: 460, height: 260)) { stage in
+                let s = try stage.session()
+                let challenge = HostKeyChallenge(host: "prod-web-01.example.com", port: 22, kind: .weakAlgorithms,
+                                                 newFingerprint: "", oldFingerprint: nil)
+                return UICatalogRender(s.wrap(HostKeyPromptView(challenge: challenge) { _ in }))
+            },
+            UICatalogEntry("连接确认/加密方式变弱了 · 跳板机", .sheet, source: "uTerm/Shared/Views/HostKeyPromptView.swift",
+                           symbol: "HostKeyPromptView", size: CGSize(width: 460, height: 260)) { stage in
+                let s = try stage.session()
+                let challenge = HostKeyChallenge(host: "bastion.example.com", port: 2222, kind: .weakAlgorithms,
+                                                 newFingerprint: "", oldFingerprint: nil, isJumpHost: true)
+                return UICatalogRender(s.wrap(HostKeyPromptView(challenge: challenge) { _ in }))
+            },
             UICatalogEntry("密钥管理", source: "uTerm/Features/Keys/Views/KeyManagerView.swift",
                            symbol: "KeyManagerView", size: mid) { stage in
                 let s = try stage.session()

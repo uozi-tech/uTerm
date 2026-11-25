@@ -213,9 +213,13 @@ enum WorkspaceCommandExecutorFactory {
                 jumpHostAuth: resolvedJumpAuth,
                 hostKeyVerifier: HostKeyVerifier(modelContainer: container),
                 hostKeyApprover: { challenge in
-                    if !trustNewKeys { sink.record(challenge) }   // 记录指纹供「信任并重试」展示
-                    return trustNewKeys                           // false=拒绝（默认）；true=信任并继续
-                })
+                    // 「加密方式变弱了」不跟着 trustNewKeys 放行：用户点的「信任并重试」看的是主机密钥，不是这个。
+                    // 它有自己的卡片（`ParallelRunModel.trustAndRetry` 记下同意后照常重试）。
+                    let approves = trustNewKeys && !challenge.isWeakAlgorithms
+                    if !approves { sink.record(challenge) }   // 记录指纹供「信任并重试」展示
+                    return approves                           // false=拒绝（默认）；true=信任并继续
+                },
+                approvesInteractively: false)
         }
 
         if reuseConnection {

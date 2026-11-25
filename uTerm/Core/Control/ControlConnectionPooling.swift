@@ -89,6 +89,10 @@ nonisolated enum ControlConnectError: Error, Sendable {
     /// 重试也不会好，`borrow` 不重试、并行传输的其余通道一起停。对外的码和文案同 `connectFailed`。
     case connectRejected(String)
     case authFailed(String)
+    /// 信任过的主机（或它的跳板机）这次只肯用 SHA-1 时代的旧算法，以前没同意过（`LegacyAlgorithmGate`）。
+    /// 命令行不替用户放行，也没有选项能放行：没有指纹那样可以核对的东西，一个开关只会被顺手打开。
+    /// 由用户在界面里连一次、看过提示再决定；之后命令行照常连。重试不会好。
+    case weakAlgorithms(LegacyAlgorithmRefusal)
     /// 建连**成功了**，但这条连接刚建好就没人认领 —— 建连期间该主机被
     /// `disconnect` / `disconnectAll` 释放（用户关了主开关、或显式断开）。
     ///
@@ -105,6 +109,7 @@ extension ControlConnectError {
         case .hostKeyChanged: return .host_key_changed
         case .connectFailed, .connectRejected: return .connect_failed
         case .authFailed: return .auth_failed
+        case .weakAlgorithms: return .weak_algorithms
         // 「稍后重试」语义，回 `server_busy` —— 客户端对这个码有退避重试。
         case .released: return .server_busy
         }
@@ -121,6 +126,10 @@ extension ControlConnectError {
             return String(localized: "连接「\(host)」失败：\(reason)")
         case .authFailed(let reason):
             return String(localized: "「\(host)」认证失败：\(reason)")
+        case .weakAlgorithms(let refusal):
+            return refusal.isJumpHost
+                ? String(localized: "主机「\(host)」的跳板机（\(refusal.address)）以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。")
+                : String(localized: "主机「\(host)」（\(refusal.address)）以前用较新的加密方式连接，这次只提供较旧、安全性较低的方式（SHA-1）。命令行不会替用户放行：请让用户在 uTerm 里连接这台主机一次，看过提示后选「仍然连接」，再重试。")
         case .released(let reason):
             return String(localized: "「\(host)」的连接在建立过程中被释放（\(reason)），请重试。")
         }
@@ -130,7 +139,7 @@ extension ControlConnectError {
     var isRetryableBorrowFailure: Bool {
         switch self {
         case .connectFailed, .released: return true
-        case .authFailed, .connectRejected, .hostKeyUnknown, .hostKeyChanged: return false
+        case .authFailed, .connectRejected, .hostKeyUnknown, .hostKeyChanged, .weakAlgorithms: return false
         }
     }
 

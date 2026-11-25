@@ -892,7 +892,7 @@ def exercise(server, root, rejecting):
         ("host_not_found", 4), ("host_ambiguous", 4), ("rule_not_found", 4),
         ("terminal_ambiguous", 4), ("file_not_found", 4),
         ("connect_failed", 5), ("auth_failed", 5), ("host_key_unknown", 5),
-        ("host_key_changed", 5), ("forward_failed", 5),
+        ("host_key_changed", 5), ("weak_algorithms", 5), ("forward_failed", 5),
         ("command_timeout", 6), ("handler_timeout", 6), ("client_timeout", 6),
         ("operation_failed", 1), ("not_implemented", 1), ("invalid_request", 1),
     ]
@@ -1340,6 +1340,7 @@ def exercise_socket_path_too_long():
     check("更新" in (response or {}).get("message", ""), "消息让用户更新 uTerm")
     check("UTERM_CONTROL_SOCKET" not in (response or {}).get("message", ""), "消息不再给 UTERM_CONTROL_SOCKET 的办法")
     equal(client.exit_code_for(response or {}), client.EXIT_LOCAL, "socket_path_too_long 归本地这一档")
+    check(not client.is_retryable("weak_algorithms"), "weak_algorithms（加密方式变弱了，要用户确认）不重试")
 
     refused = "uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开……"
     check(client.socket_path_too_long_response(request, candidates("exampleuser"), refused) is None,

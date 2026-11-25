@@ -45,6 +45,10 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
         /// 经跳板机没连上。`cause` 说是哪一跳、哪一类的问题：不是网络问题时（认证、主机密钥、握手）和直连一样
         /// 「重试也不会好」，重连逻辑不在它上面打转。
         case jumpHostFailed(String, cause: JumpHostFailureCause = .unreachable)
+        /// 这一跳以前用现代算法连上过，这次只肯用 SHA-1 时代的旧算法，用户（或不能问用户的调用方）没有同意
+        /// （`LegacyAlgorithmGate`）。经跳板机时哪一跳都归到这里（`refusal.isJumpHost` 说是哪一跳）。
+        /// 是用户自己的决定，重连也只会再问一遍，所以和认证失败一样「重试也不会好」。
+        case weakAlgorithmsDeclined(LegacyAlgorithmRefusal)
 
         var errorDescription: String? {
             switch self {
@@ -60,6 +64,8 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
                 return String(localized: "SSH 连接失败：认证失败：\(message)")
             case .jumpHostFailed(let message, _):
                 return String(localized: "跳板机连接失败：\(message)")
+            case .weakAlgorithmsDeclined(let refusal):
+                return refusal.message
             }
         }
     }
@@ -505,13 +511,13 @@ actor SSHConnection: TerminalImageReceiving, TerminalVideoReceiving, TerminalTru
 nonisolated extension SSHConnection.SSHConnectionError: SSHFailureClassifying {
     var isPermanentConnectFailure: Bool {
         switch self {
-        case .authenticationFailed, .handshakeFailed, .hostKeyRejected: return true
+        case .authenticationFailed, .handshakeFailed, .hostKeyRejected, .weakAlgorithmsDeclined: return true
         case .jumpHostFailed(_, let cause): return cause != .unreachable
         case .notConnected, .alreadyClosed, .connectFailed: return false
         }
     }
 
-    /// 认证 / 主机密钥 / 握手失败时服务器在应答，传输是好的。其余（连不上、跳板机）看文案兜底。
+    /// 认证 / 主机密钥 / 握手失败、没同意用旧算法时服务器在应答，传输是好的。其余（连不上、跳板机）看文案兜底。
     var transportFailureVerdict: Bool? {
         isPermanentConnectFailure ? false : nil
     }

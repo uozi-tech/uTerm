@@ -48,6 +48,8 @@ final class ParallelRunModel {
     private var recordOnFinalize = true
     /// 每台一条在跑的任务 —— 只为 `cancel()`（探针拆窗、将来的「中途返回就停」）留把手。
     private var laneTasks: [Task<Void, Never>] = []
+    /// 「加密方式变弱了」卡片上点「仍然连接并重试」时记下同意的地方（测试换成单独的一份）。
+    var legacyConsent: LegacyAlgorithmConsent = .shared
 
     init(commandID: UUID, commandName: String, command: String, intent: String,
          aiAssisted: Bool, targets: [ServerProfile], doctor: ParallelAIDoctor?,
@@ -124,8 +126,12 @@ final class ParallelRunModel {
 
     func trustAndRetry(serverID: UUID) {
         guard let index = states.firstIndex(where: { $0.id == serverID }),
-              states[index].hostKeyUntrusted,
+              case .hostKeyUntrusted(let challenge)? = states[index].failure,
               let profile = targets.first(where: { $0.id == serverID }) else { return }
+        // 加密方式变弱了：用户在卡片上同意了，记下同意，照常（不信任新密钥）重连——之后主机密钥要是也变了，
+        // 还会再出一张主机密钥的卡片，不会被这一下顺手放过去。
+        let weakAlgorithms = challenge.isWeakAlgorithms
+        if weakAlgorithms { legacyConsent.insert(host: challenge.host, port: challenge.port) }
         // 首轮已经收尾、落过日志，补跑这一台才不再记第二条；首轮还在跑（别的台还没完）时
         // 点的，照常在最终收尾时记一次——改前一律置 false，整次运行就从日志里消失了。
         if finishedAt != nil { recordOnFinalize = false }
@@ -134,7 +140,7 @@ final class ParallelRunModel {
         generation += 1
         running = true
         laneTasks.append(Task {
-            let target = await makeExecTarget(profile: profile, trustNewKeys: true)
+            let target = await makeExecTarget(profile: profile, trustNewKeys: !weakAlgorithms)
             await self.runServer(at: index, target: target)
         })
     }
@@ -359,10 +365,15 @@ final class ParallelRunModel {
         states[index].tone = .failed
         states[index].exitCode = nil
         if let challenge = target.session.takeHostKeyChallenge() {
-            let mismatch: Bool = { if case .mismatch = challenge.kind { return true }; return false }()
             states[index].failure = .hostKeyUntrusted(challenge)
-            states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))
-            states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: mismatch)
+            switch challenge.kind {
+            case .weakAlgorithms:
+                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机只提供较旧的加密方式（SHA-1），连接被拒绝")))
+                states[index].summary = ParallelRunCopy.weakAlgorithms
+            case .unknown, .mismatch:
+                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))
+                states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: challenge.kind == .mismatch)
+            }
         } else if let stall = outcome.stall {
             // 连通性预检（`true`）都卡住：多半是连接半死不活。
             markStalled(at: index, stall: stall, streamed: false)

@@ -91,6 +91,13 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
         }
         let endpoint = USSHKit.SSHEndpoint(host: request.host, port: request.port, username: request.username, jumpHost: jumpHost)
         let control = self.control
+        // 用旧算法连之前问 App（它记着这台以前用不用旧算法）。旧版 App 不认这条消息，不问。
+        var legacyApproval: (@Sendable (SSHLegacyFallbackRequest) async -> Bool)?
+        if request.asksLegacyAlgorithms == true {
+            legacyApproval = { @Sendable legacy in
+                await control.requestLegacyApproval(SSHBridgeLegacyRequest(legacy))
+            }
+        }
         return try await USSHKitIntegration.connect(
             endpoint: endpoint,
             credential: Self.credential(request.credential),
@@ -104,6 +111,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
                     previousFingerprint: challenge.previousFingerprint))
             },
             maximumPacketSize: Self.maximumPacketSize,
+            legacyFallbackApproval: legacyApproval,
             logger: SSHBridgeLogger())
     }
 
@@ -121,6 +129,12 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     private static func failure(for error: Error, hasJumpHost: Bool) -> SSHBridgeFailure {
         if let error = error as? USSHKit.SSHConnectionError {
             switch error {
+            case .legacyFallbackDeclined(let request):
+                return SSHBridgeFailure(kind: .connect, message: error.errorDescription ?? FriendlyError.describe(error),
+                                        connectCause: .weakAlgorithms, legacyDeclined: SSHBridgeLegacyRequest(request))
+            case .jumpHostFailed(let message, .legacyFallbackDeclined(let request)?):
+                return SSHBridgeFailure(kind: .jumpHost, message: message, jumpHostCause: .weakAlgorithms,
+                                        legacyDeclined: SSHBridgeLegacyRequest(request))
             case .jumpHostFailed(let message, let cause):
                 return SSHBridgeFailure(kind: .jumpHost, message: message, jumpHostCause: JumpHostFailureCause(cause))
             case .connectFailed(let message):
@@ -421,6 +435,12 @@ nonisolated private struct SSHBridgeHostKeyStore: USSHKit.HostKeyStore {
     }
 }
 
+nonisolated private extension SSHBridgeLegacyRequest {
+    init(_ request: SSHLegacyFallbackRequest) {
+        self.init(host: request.host, port: request.port, isJumpHost: request.hop == .jumpHost)
+    }
+}
+
 nonisolated private extension SSHBridgeHostKey {
     init(_ key: USSHKit.SSHHostKey) {
         self.init(host: key.host, port: key.port, keyType: key.keyType, keyBlob: key.keyBlob, fingerprint: key.fingerprint)
@@ -576,6 +596,14 @@ nonisolated final class SSHBridgeControl: @unchecked Sendable {
     /// App 不在了就是不同意。
     func requestApproval(_ challenge: SSHBridgeChallenge) async -> Bool {
         guard case .approval(_, let approved)? = try? await request({ .approveHostKey(id: $0, challenge) }) else {
+            return false
+        }
+        return approved
+    }
+
+    /// 同上：App 不在了就是不同意。
+    func requestLegacyApproval(_ legacy: SSHBridgeLegacyRequest) async -> Bool {
+        guard case .approval(_, let approved)? = try? await request({ .approveLegacyAlgorithms(id: $0, legacy) }) else {
             return false
         }
         return approved

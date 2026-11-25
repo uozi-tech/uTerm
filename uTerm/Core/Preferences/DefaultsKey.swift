@@ -52,6 +52,8 @@ nonisolated enum DefaultsKey {
     static let terminalQuitBehavior = "terminalQuitBehavior"
     static let settingsTabSelection = "settingsTabSelection"
     static let trueColorOfferDismissedHosts = "trueColorOfferDismissedHosts"
+    /// 同意过用 SHA-1 时代的旧算法连的主机（`host:port` 的字符串数组，`LegacyAlgorithmConsent`）。只存本机。
+    static let sshLegacyAlgorithmHosts = "ssh.legacyAlgorithmHosts"
     static let externalOpenAppByExtension = "externalOpen.appByExtension"
     static let permissionGuidePresentedRevision = "permissionGuide.presentedRevision"
 

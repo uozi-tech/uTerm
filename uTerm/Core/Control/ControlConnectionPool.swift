@@ -700,6 +700,8 @@ extension ControlConnectionPool {
                 hostKeyApprover: { challenge in
                     // `HostKeyChallenge.Kind` 的 Equatable 合规是 MainActor 隔离的
                     //（模块默认隔离），这里在 NIO 线程上，只能用模式匹配比。
+                    // 加密方式变弱了（`.weakAlgorithms`）也走这里：记下、拒绝，`mapConnectError` 归成 `weak_algorithms`。
+                    // `trust` 路径也不放行它——钉住的是主机密钥，不是加密方式。
                     guard let pinnedFingerprint else {
                         sink.record(challenge)
                         return false
@@ -712,6 +714,7 @@ extension ControlConnectionPool {
                     }
                     return true
                 },
+                approvesInteractively: false,
                 maximumPacketSize: maximumPacketSize
             )
         }
@@ -729,16 +732,22 @@ extension ControlConnectionPool {
                 return .hostKeyUnknown(fingerprint: challenge.newFingerprint, algorithm: "")
             case .mismatch:
                 return .hostKeyChanged(fingerprint: challenge.newFingerprint, algorithm: "")
+            case .weakAlgorithms:
+                return .weakAlgorithms(LegacyAlgorithmRefusal(host: challenge.host, port: challenge.port,
+                                                              isJumpHost: challenge.isJumpHost))
             }
         }
         if let already = error as? ControlConnectError { return already }
         let text = FriendlyError.describe(error)
         if let error = error as? SSHConnection.SSHConnectionError {
             switch error {
+            case .weakAlgorithmsDeclined(let refusal):
+                return .weakAlgorithms(refusal)
             case .authenticationFailed, .jumpHostFailed(_, .authentication):
                 return .authFailed(text)
             // 握手 / 主机密钥：目标那一跳或跳板机那一跳都一样，重试不会好。
-            case .handshakeFailed, .hostKeyRejected, .jumpHostFailed(_, .hostKey), .jumpHostFailed(_, .handshake):
+            case .handshakeFailed, .hostKeyRejected, .jumpHostFailed(_, .hostKey), .jumpHostFailed(_, .handshake),
+                 .jumpHostFailed(_, .weakAlgorithms):
                 return .connectRejected(text)
             case .notConnected, .alreadyClosed, .connectFailed, .jumpHostFailed(_, .unreachable):
                 break

@@ -140,12 +140,19 @@ nonisolated enum SSHClientFactory {
         min(max(raw, maximumPacketSizeRange.lowerBound), maximumPacketSizeRange.upperBound)
     }
 
+    /// - Parameters:
+    ///   - hostKeyApprover: 问用户的出口。主机密钥之外，信任过的主机这次只肯用 SHA-1 时代的旧算法时也经它问
+    ///     （`HostKeyChallenge.Kind.weakAlgorithms`，规则见 `LegacyAlgorithmGate`）。不能问用户的调用方返回 false，
+    ///     这时抛 `SSHConnection.SSHConnectionError.weakAlgorithmsDeclined`。
+    ///   - approvesInteractively: `hostKeyApprover` 真的会问人。为 false 时同一台主机同时在问的连接不和它合并
+    ///     （它的「不」不能替正在弹框的标签答掉）。
     static func connect(
         profile: SSHConnection.ProfileSnapshot,
         auth: ResolvedAuth,
         jumpHostAuth: ResolvedAuth?,
         hostKeyVerifier: HostKeyVerifier,
         hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+        approvesInteractively: Bool = true,
         maximumPacketSize: Int = SSHClientFactory.channelMaximumPacketSize
     ) async throws -> ConnectedClient {
         LocalNetworkUse.markUsed()
@@ -179,39 +186,26 @@ nonisolated enum SSHClientFactory {
             await probe(profile: profile, auth: auth, timeline: timeline)
         }
 
+        let hostKeyPolicy = packageHostKeyPolicy()
+        let legacyGate = LegacyAlgorithmGate(verifier: hostKeyVerifier, hostKeyPolicy: hostKeyPolicy,
+                                             interactive: approvesInteractively, approver: hostKeyApprover)
         do {
             defer { timeline?.mark("handshake") }
             let shared = try await USSHKitIntegration.connect(
                 endpoint: endpoint,
                 credential: target.credential,
                 hostKeyStore: hostKeyVerifier,
-                hostKeyPolicy: packageHostKeyPolicy(),
+                hostKeyPolicy: hostKeyPolicy,
                 connectTimeout: .seconds(connectTimeoutSeconds()),
                 approver: packageApprover(hostKeyApprover),
                 maximumPacketSize: maximumPacketSize,
+                legacyFallbackApproval: legacyGate.approval,
                 logger: AppSSHLogger()
             )
+            legacyGate.connectionSucceeded()
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
-            // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
-            // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
-            switch error {
-            case .jumpHostFailed(let message, let cause):
-                // `cause` 是那一跳按直连规则归的类：认证 / 主机密钥 / 握手是配置问题，重连逻辑不在它上面打转。
-                throw SSHConnection.SSHConnectionError.jumpHostFailed(message, cause: JumpHostFailureCause(cause))
-            case .connectFailed(let message):
-                throw SSHConnection.SSHConnectionError.connectFailed(message)
-            case .authenticationFailed(let message):
-                throw SSHConnection.SSHConnectionError.authenticationFailed(message)
-            case .handshakeFailed(let message):
-                throw SSHConnection.SSHConnectionError.handshakeFailed(message)
-            case .hostKeyRejected(let message):
-                throw SSHConnection.SSHConnectionError.hostKeyRejected(message)
-            default:
-                throw SSHConnection.SSHConnectionError.connectFailed(
-                    error.errorDescription ?? FriendlyError.describe(error)
-                )
-            }
+            throw appError(error)
         } catch let error as CancellationError {
             // 取消（关窗口、关标签页）不是连接失败：原样交出去，调用方据此什么都不报。
             throw error
@@ -221,6 +215,30 @@ nonisolated enum SSHClientFactory {
                 throw SSHConnection.SSHConnectionError.jumpHostFailed(message)
             }
             throw SSHConnection.SSHConnectionError.connectFailed(message)
+        }
+    }
+
+    /// USSHKit 的建连错误 → App 的。`switch` 里有 `default`，USSHKit 新加的错误编译器不会提醒，这里逐个列。
+    static func appError(_ error: USSHKit.SSHConnectionError) -> SSHConnection.SSHConnectionError {
+        // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
+        // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
+        switch error {
+        case .legacyFallbackDeclined(let request), .jumpHostFailed(_, .legacyFallbackDeclined(let request)?):
+            // 没同意用旧算法（哪一跳都一样）：用户自己的决定，不是网络问题，重连逻辑不在它上面打转。
+            return .weakAlgorithmsDeclined(LegacyAlgorithmRefusal(request))
+        case .jumpHostFailed(let message, let cause):
+            // `cause` 是那一跳按直连规则归的类：认证 / 主机密钥 / 握手是配置问题，重连逻辑不在它上面打转。
+            return .jumpHostFailed(message, cause: JumpHostFailureCause(cause))
+        case .connectFailed(let message):
+            return .connectFailed(message)
+        case .authenticationFailed(let message):
+            return .authenticationFailed(message)
+        case .handshakeFailed(let message):
+            return .handshakeFailed(message)
+        case .hostKeyRejected(let message):
+            return .hostKeyRejected(message)
+        default:
+            return .connectFailed(error.errorDescription ?? FriendlyError.describe(error))
         }
     }
 
@@ -247,7 +265,8 @@ nonisolated enum SSHClientFactory {
                 auth: auth,
                 jumpHostAuth: jumpHostAuth,
                 hostKeyVerifier: hostKeyVerifier,
-                hostKeyApprover: hostKeyApprover)
+                hostKeyApprover: hostKeyApprover,
+                approvesInteractively: approvesInteractively)
         }
         if acquired.origin != .created {
             ConnectTimeline.current?.mark("handshake(\(acquired.origin.rawValue))")

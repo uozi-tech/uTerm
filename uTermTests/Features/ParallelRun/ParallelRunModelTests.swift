@@ -42,6 +42,39 @@ final class ParallelRunModelTests: XCTestCase {
         XCTAssertEqual(runs.first?.results.map(\.ok), [true, true])
     }
 
+    // MARK: - 加密方式变弱了
+
+    /// 卡片上的问题是「加密方式变弱了」：结论写的是它、按钮是「仍然连接并重试」；点了之后本机记下同意，
+    /// 重试**不**带「信任新密钥」——之后主机密钥要是也变了，还会再出一张主机密钥的卡片。
+    func testWeakAlgorithmsRetryRecordsConsentWithoutTrustingNewKeys() async throws {
+        let (store, container) = try makeStore()
+        let cmd = store.create(name: "uptime", serverIDs: [], command: "uptime", aiAssisted: false)
+        let a = host("a")
+        let challenge = HostKeyChallenge(host: "a.example", port: 22, kind: .weakAlgorithms,
+                                         newFingerprint: "", oldFingerprint: nil)
+        var calls: [Bool] = []
+        let executor = FakeExecutor { _, trustNewKeys in
+            calls.append(trustNewKeys)
+            return calls.count == 1 ? FakeSession(hostKey: challenge) : FakeSession()
+        }
+        let model = makeModel(commandID: cmd.id, command: "uptime", intent: "", aiAssisted: false,
+                              targets: [a], doctor: nil, store: store, container: container,
+                              executor: executor)
+        let consent = LegacyAlgorithmConsent(suiteName: "uTermTests.parallelLegacy.\(UUID().uuidString)")
+        defer { consent.removeAll() }
+        model.legacyConsent = consent
+        model.start()
+        try await waitUntil { model.states[0].hostKeyUntrusted }
+        XCTAssertTrue(model.states[0].weakAlgorithmsDeclined)
+        XCTAssertEqual(model.states[0].hostKeyRetryTitle, String(localized: "仍然连接并重试"))
+        XCTAssertEqual(model.states[0].summary, ParallelRunCopy.weakAlgorithms)
+
+        model.trustAndRetry(serverID: a.id)
+        try await waitUntil { model.states[0].tone == .ok }
+        XCTAssertEqual(calls, [false, false], "重试不信任新密钥")
+        XCTAssertTrue(consent.contains(host: "a.example", port: 22))
+    }
+
     // MARK: - 纯意图命令的退出码
 
     /// 没有等效命令的 AI 命令：日志里的退出码取 Agent 最后一条真实命令的（改前 macOS 恒为「—」）。

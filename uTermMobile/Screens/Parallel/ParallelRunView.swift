@@ -810,7 +810,7 @@ struct ParShellPane: View {
                 .font(M.mono(12.5))
             }
             if state.hostKeyUntrusted {
-                MBtn(title: String(localized: "信任并重试"), icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                MBtn(title: state.hostKeyRetryTitle, icon: "shield", kind: .tinted, height: 36, action: onTrust)
                     .fixedSize().padding(.top, 8)
             }
         }
@@ -952,7 +952,7 @@ struct ParAILane: View {
             VStack(alignment: .leading, spacing: 10) {
                 summaryText
                 if state.hostKeyUntrusted {
-                    MBtn(title: String(localized: "信任并重试"), icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                    MBtn(title: state.hostKeyRetryTitle, icon: "shield", kind: .tinted, height: 36, action: onTrust)
                         .fixedSize()
                 }
             }

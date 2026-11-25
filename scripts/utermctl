@@ -2418,7 +2418,7 @@ def exit_code_for(response):
         return EXIT_GATED
     if code.endswith("_not_found") or code.endswith("_ambiguous"):
         return EXIT_NOT_FOUND
-    if (code in ("connect_failed", "auth_failed", "forward_failed", "relay_unreachable")
+    if (code in ("connect_failed", "auth_failed", "weak_algorithms", "forward_failed", "relay_unreachable")
             or code.startswith("host_key_") or code.endswith("_refused")):
         return EXIT_REMOTE
     if code in ("command_timeout", "handler_timeout", "client_timeout"):
@@ -2446,12 +2446,12 @@ def exit_code_for(response):
 # 撞上可重试的错误（连接断了、服务端忙）也是这样自动续上的，不从头来。
 # ---------------------------------------------------------------------------
 
-# 这些码重试没有意义：门禁、找不到、参数不对、远端已存在、密钥没信任，以及本地磁盘 /
-# 本地文件问题（重试改变不了事实）。
+# 这些码重试没有意义：门禁、找不到、参数不对、远端已存在、密钥没信任、加密方式变弱了（要用户在
+# uTerm 里确认），以及本地磁盘 / 本地文件问题（重试改变不了事实）。
 PERMANENT_CODES = frozenset([
     "control_disabled", "mutations_disabled", "host_sftp_only",
     "invalid_request", "not_implemented", "file_exists", "file_too_large",
-    "permission_denied", "is_directory", "auth_failed", "request_too_large",
+    "permission_denied", "is_directory", "auth_failed", "weak_algorithms", "request_too_large",
     "local_read_failed", "local_write_failed", "local_failure",
     CODE_NOT_RUNNING, CODE_SOCKET_STALE,
 ])
