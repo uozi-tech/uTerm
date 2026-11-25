@@ -150,7 +150,7 @@ final class CodeTabRunTimeTests: XCTestCase {
         let list = AgentHistorySessionList(history: history, running: AgentHistoryRunning(rows: {
             code.runs.map { run in
                 AgentHistoryRunRow(id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
-                                   isSelected: false, path: run.path, status: AgentHistoryRunStatus { .running })
+                                   isSelected: false, path: run.path, status: AgentHistoryRunStatus { .unreported })
             }
         }, onSelect: { _ in }))
         let view = NSHostingView(rootView: list.frame(width: 320, height: 500))
