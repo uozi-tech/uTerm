@@ -248,6 +248,12 @@ final class CodeTabModel {
         }
     }
 
+    /// 侧栏那一行右键「查看记录」：选中它那份记录、右边看记录（不打断它）。没有记录的新会话同点一下那一行。
+    func showRecord(of id: UUID) {
+        selectRun(id)
+        setShowsTranscript(true, for: id)
+    }
+
     func requestReveal(directory: String?) {
         guard let directory else { return }
         revealGeneration += 1
@@ -459,6 +465,14 @@ final class CodeTabModel {
         guard let run = runs.first(where: { $0.id == id }) else { return false }
         finish(run)
         return true
+    }
+
+    /// 用户点的「结束会话」（终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×；要不要先问由宿主定，见
+    /// `TerminalCloseGuard.requestEndSession`）：同程序跑完一样收尾，有记录的回到记录、没有的回到起始页。
+    /// 已结束、留着画面的同「关闭」。
+    func endSession(_ id: UUID) {
+        guard let run = runs.first(where: { $0.id == id }) else { return }
+        if run.isEnded { dismissEnded(id) } else { finish(run) }
     }
 
     // MARK: 看着各个终端

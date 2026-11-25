@@ -24,6 +24,12 @@ extension UICatalog {
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login"))
             },
+            // 鼠标悬在顶上跑着的会话那几行上：右上角一个 ×（结束会话），盖在行上、不挤字。
+            UICatalogEntry("终端窗口/Code 标签页_跑着的会话悬停", source: src, symbol: "AgentHistoryRunEndButton", size: size,
+                           live: true) { stage in
+                try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login",
+                                                     hoversRuns: true))
+            },
             // 看着一个仍在跑的会话的记录：记录标题行上「继续这个会话」换成「返回终端」。
             UICatalogEntry("终端窗口/Code 标签页_跑着的会话看记录", source: src, symbol: "AgentHistoryTranscriptStack",
                            size: size) { stage in
@@ -162,6 +168,8 @@ extension UICatalog {
         var overlay = false
         /// 跑着的那个会话切到「查看记录」。
         var showsRecord = false
+        /// 顶上跑着的会话那几行摆成鼠标悬在上面的样子（右上角的 ×）。
+        var hoversRuns = false
         /// 摆成「正拖着这个会话（会话 ID）、落在这里」的样子。
         var pinDrag: (session: String, target: AgentHistoryPinDrop)?
         /// Code 标签页「新会话」的目录；nil = 照默认（项目 shop-api），`.some(nil)` = 不知道。
@@ -193,6 +201,7 @@ extension UICatalog {
             if setup.newSessionEnded { await endNewSession(code) }
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
+            AgentHistoryRunRowActions.catalogHovered = false
             workspace.dispose()
         })
     }
@@ -220,6 +229,7 @@ extension UICatalog {
             await feed(terminals)
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
+            AgentHistoryRunRowActions.catalogHovered = false
             model.disposeAll()
         })
     }
@@ -234,6 +244,7 @@ extension UICatalog {
         AgentHistoryPinDragModel.catalogPreset = setup.pinDrag.flatMap { drag in
             history.files.first { $0.sessionID == drag.session }.map { (AgentHistoryPinKey($0), drag.target) }
         }
+        AgentHistoryRunRowActions.catalogHovered = setup.hoversRuns
         code.sidebarHidden = setup.sidebarHidden
         code.sidebarOverlayShown = setup.overlay
         var terminals: [(TerminalSession, String)] = []

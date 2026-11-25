@@ -126,7 +126,8 @@ struct TerminalArea: View {
                 if ended { return AnyView(RemoteControlledTerminal(session: pane.session).background(background)) }
                 return AnyView(paneView(pane, profiles: profiles, profileCount: profileCount, background: background))
             },
-            onMoveToTab: { runID in workspace.moveCodeRunToTab(runID, fromCodeTab: tabID) })
+            onMoveToTab: { runID in workspace.moveCodeRunToTab(runID, fromCodeTab: tabID) },
+            onEndRun: { runID in TerminalCloseGuard.requestEndSession(runID, in: code) { ($0 as? PaneModel)?.session } })
     }
 
     /// Code 标签页的标题。一个窗口里可能有几台主机时（终端窗口）带上主机名。「Code」是名字，五种语言都不翻译。

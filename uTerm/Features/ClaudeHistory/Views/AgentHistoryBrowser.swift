@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UAppKitBridge
 import UDesignKit
 import UniformTypeIdentifiers
 
@@ -10,6 +11,20 @@ struct AgentHistoryRunning {
     /// 不再出现（一个会话只出现一次）；结束、拿掉之后回到它的记录平常的位置。
     let rows: () -> [AgentHistoryRunRow]
     let onSelect: (UUID) -> Void
+    /// 行上的操作（右键菜单、悬停的 ×）。nil = 没有（只能点一下回到它）。
+    var actions: AgentHistoryRunActions? = nil
+}
+
+/// 顶上跑着的会话那一行的操作，同终端顶上「⋯」菜单里的那几样。
+struct AgentHistoryRunActions {
+    /// 「结束会话」（右键菜单与悬停的 ×）。前台还有程序在跑时先问，由宿主管。
+    let end: (UUID) -> Void
+    /// 「查看记录」：有记录的会话右边看它的记录。
+    let showRecord: (UUID) -> Void
+    /// 「返回终端」：右边正看着它的记录时回到它的终端。
+    let showTerminal: (UUID) -> Void
+    /// 「移到新标签页」；nil = 不出这一项。
+    let moveToTab: ((UUID) -> Void)?
 }
 
 /// 列表最顶上的一行：一个跑着的会话。有记录、列表里有那份记录的，画成那份记录平常的样子；没有的（还没写出记录的新会话）
@@ -23,6 +38,8 @@ struct AgentHistoryRunRow: Identifiable {
     /// 对上的记录；新会话还没对上为 nil。
     let path: String?
     let status: AgentHistoryRunStatus
+    /// 右边正看着它的记录（右键菜单里是「返回终端」，否则「查看记录」）。
+    var showsRecord = false
 }
 
 /// 一个跑着的会话此刻的状态：程序经 OSC 7501 报的（同终端标签页上的圆点与文字），没报过就是「运行中」，程序退出了
@@ -377,7 +394,10 @@ struct AgentHistorySessionList: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(runs) { row in
-                            runRow(row, file: row.path.flatMap { byPath[$0] })
+                            let file = row.path.flatMap { byPath[$0] }
+                            runRow(row, file: file)
+                                .modifier(AgentHistoryRunRowActions(row: row, file: file, pins: pins,
+                                                                    actions: running?.actions))
                                 .onTapGesture { running?.onSelect(row.id) }
                         }
                         if !runs.isEmpty, !groups.isEmpty {
@@ -653,6 +673,85 @@ private struct AgentHistoryUnlistedRunRow: View {
     private var detail: String {
         let place = (row.directory as NSString).lastPathComponent
         return showsTool ? "\(row.tool.displayName) · \(place)" : place
+    }
+}
+
+/// 顶上跑着的会话那一行的操作：右键菜单（「查看记录」/「返回终端」、「移到新标签页」、有记录的「置顶」、「结束会话」），
+/// 悬停时右上角一个 ×（结束会话）。× 盖在行上、不占位置：出现消失这一行的字不挪。这几行不能拖（跑着的不进「置顶」那一套拖动）。
+struct AgentHistoryRunRowActions: ViewModifier {
+    let row: AgentHistoryRunRow
+    let file: AgentHistorySessionFile?
+    let pins: AgentHistoryPins?
+    let actions: AgentHistoryRunActions?
+
+    /// 界面画廊与测试用：建出来的行一开始就当作鼠标悬在上面（悬停拍不到）。App 里始终为 false。
+    static var catalogHovered = false
+
+    @State private var hovered = AgentHistoryRunRowActions.catalogHovered
+
+    func body(content: Content) -> some View {
+        if let actions {
+            content
+                .overlay(alignment: .topTrailing) {
+                    if hovered {
+                        AgentHistoryRunEndButton(isSelected: row.isSelected) { actions.end(row.id) }
+                            .padding(.top, 5)
+                            .padding(.trailing, 5)
+                    }
+                }
+                .hoverGated { hovered = $0 || Self.catalogHovered }
+                .contextMenu { menu(actions) }
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder private func menu(_ actions: AgentHistoryRunActions) -> some View {
+        if row.path != nil {
+            if row.showsRecord {
+                Button(String(localized: "返回终端")) { actions.showTerminal(row.id) }
+            } else {
+                Button(String(localized: "查看记录", comment: "Code 标签页：看这个正在跑的会话的对话记录")) {
+                    actions.showRecord(row.id)
+                }
+            }
+        }
+        if let move = actions.moveToTab {
+            Button(String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")) {
+                move(row.id)
+            }
+        }
+        if let file, let pins {
+            Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(AgentHistoryPinKey(file)))) { pins.toggle(file) }
+        }
+        Divider()
+        Button(AgentHistoryText.endSession, role: .destructive) { actions.end(row.id) }
+    }
+}
+
+/// 跑着的会话那一行悬停时右上角的 ×：结束会话。底色同这一行（盖住下面的字），悬在它上面时再深一点。
+struct AgentHistoryRunEndButton: View {
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(hovered ? UD.text : UD.text3)
+                .frame(width: 20, height: 20)
+                .background {
+                    RoundedRectangle(cornerRadius: 5).fill(UD.card)
+                        .overlay(RoundedRectangle(cornerRadius: 5).fill(isSelected ? UD.rowSelected : Color.clear))
+                        .overlay(RoundedRectangle(cornerRadius: 5).fill(hovered ? UD.panelHover : Color.clear))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.udPlain)
+        .hoverGated { hovered = $0 }
+        .help(AgentHistoryText.endSession)
+        .accessibilityLabel(Text(AgentHistoryText.endSession))
     }
 }
 
