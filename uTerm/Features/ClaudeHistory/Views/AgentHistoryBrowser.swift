@@ -1514,13 +1514,13 @@ private struct AgentTranscriptRow: View {
     @ViewBuilder private var content: some View {
         switch item.kind {
         case .userText(let text):
-            StreamingMarkdownView(text: text, isStreaming: false)
+            AgentTranscriptMarkdown(text: text)
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillSoft))
         case .assistantText(let text):
-            StreamingMarkdownView(text: text, isStreaming: false)
+            AgentTranscriptMarkdown(text: text)
                 .textSelection(.enabled)
         case .command(let command):
             Text(command)
@@ -1611,6 +1611,26 @@ private struct AgentTranscriptRow: View {
         Binding(get: { expanded.contains(key) },
                 set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
     }
+}
+
+/// 记录里的一段 Markdown：第一次排版就是解析好的样子。
+///
+/// 不用 `StreamingMarkdownView`：它在 `onAppear` 里才解析，没出现过的行懒栈都按空文档量高（几乎是 0），
+/// 整份对话量出来只有实际的五分之一（120 条：4957 vs 22751pt）。往回翻时一行行出现、一行行长到真实高度，
+/// 文档高度在滚动中一次变几百点，视口里的内容跟着往前跳几百点、或者整屏换到别处，滚动条滑块也跟着跳
+/// （`ClaudeTranscriptScrollProbeTests`）。记录里的文字是落定的，这里在 body 里同步取解析结果，第一次量高就是对的；
+/// 解析过的进缓存，回收后再出现不重解析。
+private struct AgentTranscriptMarkdown: View {
+    let text: String
+
+    var body: some View {
+        MarkdownBlocks(document: MarkdownDocumentCache.transcript.document(for: text), style: .chat)
+    }
+}
+
+extension MarkdownDocumentCache {
+    /// 对话记录（历史窗口 / Code 标签页）用的一份，和聊天那份分开：记录一页就有几十段，按全文为键。
+    static let transcript = MarkdownDocumentCache(capacity: 512)
 }
 
 /// 派子代理的调用下面的入口：点进去看那个子代理自己的记录。

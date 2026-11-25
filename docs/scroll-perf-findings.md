@@ -38,6 +38,7 @@
 | SSH config 导入复核表 | `Import/Views/SSHConfigImportView.swift` | B | 2000 行：挂载 432.1 → 4.6ms、hitTest 5566 → 260µs | 同上 | `50e7b533` |
 | **滚动期间的 hover（跨视图）** | `UAppKitBridge/ScrollHoverGate.swift` + 6 处接入 | B | 光标压在列表上滚：全局转发 1000 行 p50 10.00 → 3.74ms、超预算 73.5% → 5.5%、NSView 波动 46 → 2；欢迎页 2000 台 5.24 → 3.29ms、超预算 14.5% → 0.0% | `ScrollHoverGateProbeTests`（4 个类） | `18d48893`（+ `b959982f`） |
 | **行悬停：整表一个跟踪层（跨视图）** | `UAppKitBridge/RowHoverTracker.swift` + 5 处接入 | B | 光标压在列表上滚，**in/out 单帧 p50 比值** 欢迎页 1.15 → 1.01×、SFTP 1.32 → 1.01×、全局转发 2.27 → 0.98×（p50 −22% / −23% / −57%）；滚动期间行级 hover 事件 280~320 → 0 | `RowHoverTrackerProbeTests`（5 个类） | 本轮 |
+| **对话记录正文（Code 标签页 / 历史窗口）** | `ClaudeHistory/Views/AgentHistoryBrowser.swift`（`AgentTranscriptMarkdown`） | B | 120 条往回翻 4860pt：画面跳 16 次（单次最大 317pt）+ 整屏换 13 次 → 0 / 0；滚动中文档高变 11 次共 10437pt → 0；打开时文档高 4957 → 22751pt（改前是按空文档量的）；帧耗时两臂都在 0.4ms 以内（不是掉帧） | `ClaudeTranscriptScrollProbeTests` | 本轮 |
 | **uTermMobile 全端（iOS）** | `uTermMobile/**` + `Core/Models/ServerGrouping.swift` | B（10 处），**但只有一处有读数** | 2000 台 / 60 组「组名→台数」：47.882 → 0.852ms（56×）；其余 9 处是形态归因，iOS 无可用模拟器 runtime、平台组件未装，一条真窗口读数都没有 | `ServerGroupingTests` + `MobileRenderLintTests`（文本 lint） | 本轮 |
 | **终端屏 · 单会话输出压力（iOS）** | `uTermMobile/Screens/Terminal/*` | **A** | 1 会话 × 2000 行/秒 × 10s：单帧 p50 0.050ms、p95 5.751ms、超 8.33ms 0.0%、display 拍 599/600 | `TerminalScreenProbeTests` | 本轮 |
 | **终端屏 · 非活动会话仍全量渲染（iOS）** | 同上 | B | 4 会话各 2000 行/秒：单帧 p50 3.855 → 0.041ms、超 8.33ms 15.2% → 0.0%、主线程 CPU 6.771 → 5.910s，四片消费计数不变（不丢字节） | 同上 | 本轮 |
@@ -1795,6 +1796,36 @@ false），把「新建一行」的账又抬回来 —— 实测 200 步滚动�
 （`RowHoverState.isEnabledByDefault = false`）：它们量的是闸门，而产线这三处的悬停
 已经不走逐行 `.onHover` 了；关掉之后 `.rowHover` 逐字退回 `.hoverGated`，那几条断言
 的含义原样成立。
+
+### 对话记录正文（Code 标签页 / 历史窗口 · `uTerm/Features/ClaudeHistory/Views/AgentHistoryBrowser.swift`，2026-11-25）
+
+- **症状**（用户录屏，5.6 秒 288 帧）：往回翻一份长对话，画面在几处之间来回跳、滚动条滑块大幅跳。逐帧找相邻两帧的纵向位移：
+  1.16s、3.62s、4.39s 三处整屏换到别处（最佳对齐误差 > 15，前后两帧内容对不上），其中 3.62s 那次一下到了对话末尾。
+- **原因**：行里的 Markdown 用 `StreamingMarkdownView`，它在 `onAppear` 里才解析。`LazyVStack` 给没出现过的行量高时
+  文档是空的（几乎 0 高），整份对话的高度只量出实际的五分之一（120 条：4957 vs 22751pt）；往回翻时行一出现才长到真实高度，
+  文档高度在滚动中一次变几百点，视口里的内容跟着跳。**不是掉帧**：两臂每个事件之后交付布局 + 绘制都在 0.4ms 以内。
+- **读数**（`testScrollFollowsFingersWithoutJumps`，30 轮 / 120 条，760×620，打开停在底部，12 拨往回 + 12 拨往下，
+  每拨 began + 8 个 changed（15/30/60…pt）+ ended，16ms 一个事件；每个事件后截左边一条比对画面位移）：
+
+  | 臂 | 往回翻：画面 / 手指 | 跳（>24pt） | 整屏换 | 文档高变 | 往下翻：跳 / 整屏换 |
+  |---|---|---|---|---|---|
+  | 改前 | 8589 / 4860pt | 16 次，共 4173pt，最大 317pt | 13 | 11 次，共 10437pt | 0 / 0 |
+  | 改后 | 4860 / 4860pt | 0 | 0 | 0 | 0 / 0 |
+
+  只读了最后一页、翻到顶再按「加载更早的消息」（`testLoadingEarlierPageKeepsPositionAndStaysSmooth`，60 轮）：
+  改前翻到顶的路上跳 4、整屏换 7，加页后接着往回翻跳 14、整屏换 7；改后都是 0。按钮那一下画面上移 80pt 两臂一样
+  （`scrollTo(原来最上面那条, anchor: .top)` 把按钮那一截让出去，设计如此）。
+  打开（`testMountCost`，每次新文字，单跑，前后交替两轮）：120 条首屏 154.2 / 100.5 → 66.2 / 70.0ms、到停稳主线程 CPU
+  318.9 / 374.7 → 249.6 / 289.6ms；400 条首屏 119.3 / 55.4 → 31.5 / 30.3ms、CPU 226.0 / 124.2 → 128.4 / 140.9ms。
+  同步解析多出的钱被省掉的「出现后再解析、再重排」抵掉了，不变差。
+- **改法**：`AgentTranscriptMarkdown` 在 body 里同步取解析结果（`MarkdownDocumentCache.transcript`，512 段，按全文为键），
+  第一次量高就是对的。跟随最新（`AgentTranscriptTailFollow`）、锚点、懒栈都没动。
+- **夹具上的坑**：
+  - 合成的惯性事件（momentumPhase）SwiftUI 的滚动视图不认，实测一点不动，探针只发 began / changed / ended。
+  - 只看 clip view 的偏移量不到抖：文档改高时 SwiftUI 有时把坐标补一大截（画面照旧跟手），有时不补（画面跳），
+    所以判据是截图位移，坐标只打印。按 `.textSelection` 的交互层视图位置对位移也不行：短行一样高，投票会投错。
+  - 生成的假对话每轮结构一样，截图签名（每行墨量）分不清只差数字的两屏，比对只用在相邻两次采样之间。
+- **没做的**：iOS 的 `ClaudeHistoryTab`（`MStreamingMarkdown`，同样 `onAppear` 才解析）大概率同病，没量没改。
 
 ## uTermMobile（iOS 端，2026-09-08）
 
