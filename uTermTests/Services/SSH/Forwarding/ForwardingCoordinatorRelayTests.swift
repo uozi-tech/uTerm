@@ -58,6 +58,8 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
 
         let first = HostKeyChallengeRelay()
         let latest = HostKeyChallengeRelay()
+        first.presenterAppeared()
+        latest.presenterAppeared()
         coordinator.start(rule("pg"), on: server, relay: first, modelContainer: container)
         coordinator.start(rule("pg2"), on: server, relay: latest, modelContainer: container)
 
@@ -144,6 +146,7 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
         let coordinator = ForwardingCoordinator()
         coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
         let ui = HostKeyChallengeRelay()
+        ui.presenterAppeared()
         let cli = HostKeyChallengeRelay(interactive: false)
         coordinator.start(rule("pg"), on: server, relay: ui, modelContainer: container)
         coordinator.start(rule("pg2"), on: server, relay: cli, modelContainer: container)
@@ -164,6 +167,7 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
         coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
         let cli = HostKeyChallengeRelay(interactive: false)
         let ui = HostKeyChallengeRelay()
+        ui.presenterAppeared()
         coordinator.start(rule("pg"), on: server, relay: cli, modelContainer: container)
         coordinator.start(rule("pg2"), on: server, relay: ui, modelContainer: container)
         coordinator.releaseRelay(cli, serverID: server.id)
@@ -172,6 +176,28 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
         try await waitUntil { ui.pendingChallenge != nil }
         ui.resolve(false)
         _ = await decision.value
+        coordinator.teardown(serverID: server.id)
+    }
+
+    /// 界面的 relay 此刻没挂在屏幕上（后台启动、关掉了窗口）：问了也没人看得到，当场拒绝，不让建连干等到超时。
+    /// 窗口重新出现后照常问。
+    func testInteractiveRelayWithoutVisibleHostRefusesAtOnce() async throws {
+        let coordinator = ForwardingCoordinator()
+        coordinator.injectSessionForTesting(try makeSession(), serverID: server.id)
+        let hidden = HostKeyChallengeRelay()
+        coordinator.start(rule("pg"), on: server, relay: hidden, modelContainer: container)
+
+        let refused = await coordinator.approveHostKey(serverID: server.id, challenge: challenge)
+        XCTAssertFalse(refused)
+        XCTAssertNil(hidden.pendingChallenge, "没人看得到的 relay 上不该挂问题")
+
+        hidden.presenterAppeared()
+        let decision = Task { await coordinator.approveHostKey(serverID: self.server.id, challenge: self.challenge) }
+        try await waitUntil { hidden.pendingChallenge != nil }
+        hidden.resolve(true)
+        let approved = await decision.value
+        XCTAssertTrue(approved)
+        hidden.presenterDisappeared()
         coordinator.teardown(serverID: server.id)
     }
 

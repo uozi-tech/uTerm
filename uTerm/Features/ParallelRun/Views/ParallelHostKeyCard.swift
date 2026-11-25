@@ -19,7 +19,7 @@ struct HostKeyRetryCard: View {
     private var isMismatch: Bool { challenge.kind == .mismatch }
     private var isWeak: Bool { challenge.isWeakAlgorithms }
     private var tint: Color { isMismatch ? UD.danger : UD.caution }
-    private var address: String { "\(challenge.host):\(String(challenge.port))" }
+    private var address: String { challenge.address }
 
     private var icon: String {
         switch challenge.kind {
@@ -44,7 +44,9 @@ struct HostKeyRetryCard: View {
         case .mismatch:
             String(localized: "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后再信任。")
         case .weakAlgorithms:
-            String(localized: "\(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
+            challenge.isJumpHost
+                ? String(localized: "跳板机 \(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接；放行后经这台跳板机的连接都不再询问。如果你最近没有调整过这台跳板机（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
+                : String(localized: "\(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接。如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截。")
         }
     }
 

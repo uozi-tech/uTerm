@@ -553,6 +553,90 @@ final class LegacyAlgorithmGateTests: XCTestCase {
         }
     }
 
+    // MARK: - 审查补的几条
+
+    /// 设置里关了主机密钥核对：这次放行，但连上了也不记同意（对端身份没核实），否则恢复核对之后再也不问。
+    func testUnverifiedHostKeysNeverRecordConsent() async {
+        let asker = Asker(false)
+        let gate = gate(hasRecord: true, verifiesHostKeys: false, asker: asker)
+        let approved = await gate.approve(host: "lab", port: 22, isJumpHost: false)
+        XCTAssertTrue(approved)
+        gate.connectionSucceeded(profile: .init(host: "lab", port: 22, jumpHost: nil), target: true, jumpHost: nil)
+        XCTAssertFalse(consent.contains(host: "lab", port: 22), "身份没核实过，不记")
+
+        consent.insert(host: "lab", port: 22)
+        gate.connectionSucceeded(profile: .init(host: "lab", port: 22, jumpHost: nil), target: false, jumpHost: nil)
+        XCTAssertFalse(consent.contains(host: "lab", port: 22), "清照常：只会让之后多问一次")
+
+        // 恢复核对后：信任过、没同意过 → 问。
+        let later = Asker(false)
+        _ = await self.gate(hasRecord: true, asker: later).approve(host: "lab", port: 22, isJumpHost: false)
+        XCTAssertEqual(later.challenges.count, 1)
+    }
+
+    /// 同一台换个写法（大小写、IPv6 方括号、首尾空白）还是同一条同意记录。
+    func testConsentAddressIsNormalized() {
+        consent.insert(host: "Prod.Example.com", port: 22)
+        XCTAssertTrue(consent.contains(host: "prod.example.com", port: 22))
+        XCTAssertTrue(consent.contains(host: " PROD.example.COM ", port: 22))
+        consent.insert(host: "[FE80::1]", port: 22)
+        XCTAssertTrue(consent.contains(host: "fe80::1", port: 22))
+        XCTAssertEqual(UserDefaults(suiteName: consent.suiteName)?.stringArray(forKey: DefaultsKey.sshLegacyAlgorithmHosts),
+                       ["prod.example.com:22", "[fe80::1]:22"])
+        XCTAssertEqual(SSHAddressText.format(host: "fe80::1", port: 22), "[fe80::1]:22")
+        XCTAssertEqual(SSHAddressText.format(host: "[fe80::1]", port: 22), "[fe80::1]:22")
+        XCTAssertEqual(LegacyAlgorithmRefusal(host: "fe80::1", port: 2222, isJumpHost: false).address, "[fe80::1]:2222")
+    }
+
+    /// 信任库里记的写法和这次连接的写法大小写不同：仍然算信任过，不当成第一次连静默放行旧算法。
+    func testTrustRecordLookupIgnoresCaseAndBrackets() async throws {
+        let container = try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
+        let known = KnownHost()
+        known.host = "Prod.Example.com"
+        known.port = 22
+        container.mainContext.insert(known)
+        try container.mainContext.save()
+        let verifier = HostKeyVerifier(modelContainer: container)
+        let lower = await verifier.hasTrustRecord(host: "prod.example.com", port: 22)
+        let otherPort = await verifier.hasTrustRecord(host: "prod.example.com", port: 2222)
+        XCTAssertTrue(lower)
+        XCTAssertFalse(otherPort)
+    }
+
+    /// 用户在弹层上亲手点了「取消」：失败文案说已取消，不叫他回 uTerm 里再连一次。不能问人的地方替他拒的照旧。
+    func testUserDeclineIsReportedAsCanceled() async {
+        let relay = HostKeyChallengeRelay()
+        let gate = LegacyAlgorithmGate(consent: consent, verifiesHostKeys: true, interactive: true,
+                                       hasTrustRecord: { _, _ in true }, approver: relay.makeApprover())
+        let host = "declined-\(UUID().uuidString)"
+        let asking = Task { await gate.approve(host: host, port: 22, isJumpHost: false) }
+        for _ in 0..<200 where relay.pendingChallenge == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        relay.resolve(false, for: relay.pendingChallenge?.id, byUser: true)
+        let approved = await asking.value
+        XCTAssertFalse(approved)
+        let refusal = gate.marked(LegacyAlgorithmRefusal(host: host, port: 22, isJumpHost: false))
+        XCTAssertTrue(refusal.declinedByUser)
+        XCTAssertEqual(refusal.message,
+                       String(localized: "已取消连接 \(refusal.address)：没有同意改用较旧、安全性较低的连接方式（SHA-1）。"))
+        XCTAssertNotEqual(refusal.message, LegacyAlgorithmRefusal(host: host, port: 22, isJumpHost: false).message)
+
+        let robot = self.gate(hasRecord: true, interactive: false, asker: Asker(false))
+        _ = await robot.approve(host: host, port: 22, isJumpHost: false)
+        XCTAssertFalse(robot.marked(LegacyAlgorithmRefusal(host: host, port: 22, isJumpHost: false)).declinedByUser)
+    }
+
+    /// 辅助进程报了「没同意用旧算法」却没带是哪一跳：照样是不可重试的那类；USSHKit 的这类错误也不算传输断了。
+    func testBridgeWeakAlgorithmsWithoutDetailIsPermanent() {
+        let failure = SSHBridgeFailure(kind: .connect, message: "m", connectCause: .weakAlgorithms)
+        let error = HeldSSHBackend.connectError(failure)
+        XCTAssertTrue(SSHTransportFailure.isPermanentConnectFailure(error))
+        let request = SSHLegacyFallbackRequest(hop: .target, host: "h", port: 22, trigger: .noCommonAlgorithm, failure: nil)
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(USSHKit.SSHConnectionError.legacyFallbackDeclined(request)))
+        XCTAssertFalse(SSHTransportFailure.isTransportFailure(USSHKit.SSHConnectionError.authenticationFailed("x")))
+    }
+
     // MARK: - 历史会话的门
 
     /// 读历史会话不弹确认：连接方式那一问被拒时报连接方式那句，而不是「密钥还没有被信任」。

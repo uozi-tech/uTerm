@@ -235,7 +235,9 @@ final class ForwardingCoordinator {
     /// 那个 relay —— 于是「已有会话被复用」时挑战也能弹到最新的 sheet / CLI relay 上。
     /// 没有登记 relay（主机已 teardown）时一律拒绝，绝不静默 TOFU。
     func approveHostKey(serverID: UUID, challenge: HostKeyChallenge) async -> Bool {
-        guard let relay = relays[serverID] else { return false }
+        // 界面的 relay 此刻没挂在屏幕上（后台启动、窗口关了）：按不能问人处理，直接拒绝，规则落到 `.error`，
+        // 用户打开窗口点重试时再问。命令行的一次性 relay 由 forward-start 自己轮询，照常投。
+        guard let relay = relays[serverID], !relay.isInteractive || relay.isPresented else { return false }
         return await relay.makeApprover()(challenge)
     }
 

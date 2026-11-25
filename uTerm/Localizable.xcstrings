@@ -34191,6 +34191,34 @@
         }
       }
     },
+    "如果你最近没有调整过这台跳板机（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上经这台跳板机的连接都不再询问；它又用回更安全的连接方式时，这个许可自动作废。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If you haven't changed this jump host recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection, so it's safer to cancel. If you choose “Connect Anyway”, connections through this jump host won't ask again on this device; the permission is dropped automatically once it goes back to the more secure method."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近この踏み台ホストを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があるため、キャンセルをおすすめします。「このまま接続」を選ぶと、このデバイスではこの踏み台ホストを経由する接続で今後確認しません。踏み台ホストがより安全な接続方式に戻ると、この許可は自動的に無効になります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최근에 이 점프 호스트를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있으니 취소하는 것이 좋습니다. ‘그래도 연결’을 선택하면 이 기기에서 이 점프 호스트를 거치는 연결은 다시 묻지 않으며, 점프 호스트가 더 안전한 연결 방식으로 돌아가면 이 허용은 자동으로 무효가 됩니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果你最近沒有調整過這台跳板主機（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截，建議先取消。選「仍然連線」後，這台裝置上經這台跳板主機的連線都不再詢問；它又改回更安全的連線方式時，這個許可會自動失效。"
+          }
+        }
+      }
+    },
     "如果你最近没有重装这台主机，不要继续，先通过其他渠道与管理员确认。" : {
       "localizations" : {
         "en" : {
@@ -38173,6 +38201,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已取消（用戶端中斷連線或 uTerm 關閉了命令列介面）"
+          }
+        }
+      }
+    },
+    "已取消连接 %@：没有同意改用较旧、安全性较低的连接方式（SHA-1）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canceled connecting to %@: you didn't allow switching to an older, less secure connection method (SHA-1)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ への接続をキャンセルしました：古く安全性の低い接続方式（SHA-1）への切り替えを許可しませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 연결이 취소됨: 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꾸는 것을 허용하지 않았습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消連線 %@：沒有同意改用較舊、安全性較低的連線方式（SHA-1）。"
+          }
+        }
+      }
+    },
+    "已取消连接：没有同意跳板机 %@ 改用较旧、安全性较低的连接方式（SHA-1）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection canceled: you didn't allow the jump host %@ to switch to an older, less secure connection method (SHA-1)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続をキャンセルしました：踏み台ホスト %@ が古く安全性の低い接続方式（SHA-1）に切り替えることを許可しませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결이 취소됨: 점프 호스트 %@이(가) 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꾸는 것을 허용하지 않았습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消連線：沒有同意跳板主機 %@ 改用較舊、安全性較低的連線方式（SHA-1）。"
           }
         }
       }
@@ -50850,30 +50934,58 @@
         }
       }
     },
-    "无法连接：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。确认没问题后点「仍然连接并重试」。" : {
+    "无法连接：跳板机 %@ 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上；放行后经这台跳板机的连接都不再询问。确认没问题后选「仍然连接并重试」。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Couldn't connect: this host used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). If you're sure it's fine, click “Connect Anyway and Retry”."
+            "value" : "Couldn't connect: the jump host %@ used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). If you allow it, connections through this jump host won't ask again. If you're sure it's fine, choose “Connect Anyway and Retry”."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "接続できません：このホストは以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。問題がないことを確認したら「このまま接続して再試行」をクリックしてください。"
+            "value" : "接続できません：踏み台ホスト %@ は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。許可すると、この踏み台ホストを経由する接続では今後確認しません。問題がないことを確認したら「このまま接続して再試行」を選んでください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "연결할 수 없음: 이 호스트는 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. 문제가 없음을 확인했다면 ‘그래도 연결하고 다시 시도’를 클릭하십시오."
+            "value" : "연결할 수 없음: 점프 호스트 %@은(는) 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. 허용하면 이 점프 호스트를 거치는 연결은 다시 묻지 않습니다. 문제가 없음을 확인했다면 ‘그래도 연결하고 다시 시도’를 선택하십시오."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法連線：這台主機以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。確認沒問題後點「仍然連線並重試」。"
+            "value" : "無法連線：跳板主機 %@ 以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上；放行後經這台跳板主機的連線都不再詢問。確認沒問題後選「仍然連線並重試」。"
+          }
+        }
+      }
+    },
+    "无法连接：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。确认没问题后选「仍然连接并重试」。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't connect: this host used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1). If you're sure it's fine, choose “Connect Anyway and Retry”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続できません：このホストは以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できません。問題がないことを確認したら「このまま接続して再試行」を選んでください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결할 수 없음: 이 호스트는 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있습니다. 문제가 없음을 확인했다면 ‘그래도 연결하고 다시 시도’를 선택하십시오."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法連線：這台主機以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。確認沒問題後選「仍然連線並重試」。"
           }
         }
       }
@@ -72761,6 +72873,34 @@
         }
       }
     },
+    "跳板机 %@ 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上，因此并行执行时直接拒绝了连接；放行后经这台跳板机的连接都不再询问。如果你最近没有调整过这台跳板机（比如重装系统、换了 SSH 服务），可能有人在中间拦截。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The jump host %@ used to connect with a more secure method, but this time it can only connect with an older, less secure method (SHA-1), so the parallel run refused the connection. If you allow it, connections through this jump host won't ask again. If you haven't changed this jump host recently (for example, reinstalled the system or switched SSH servers), someone may be intercepting the connection."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "踏み台ホスト %@ は以前はより安全な接続方式で接続していましたが、今回は古く安全性の低い接続方式（SHA-1）に切り替えないと接続できないため、並列実行では接続を拒否しました。許可すると、この踏み台ホストを経由する接続では今後確認しません。最近この踏み台ホストを変更していない場合（システムの再インストールや SSH サーバの入れ替えなど）、誰かが通信を傍受している可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "점프 호스트 %@은(는) 이전에 더 안전한 연결 방식으로 연결했지만 이번에는 오래되고 보안성이 낮은 연결 방식(SHA-1)으로 바꿔야 연결할 수 있어 병렬 실행에서 연결을 거부했습니다. 허용하면 이 점프 호스트를 거치는 연결은 다시 묻지 않습니다. 최근에 이 점프 호스트를 변경한 적이 없다면(예: 시스템 재설치, SSH 서버 교체) 누군가 중간에서 가로채고 있을 수 있습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板主機 %@ 以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上，因此平行執行時直接拒絕了連線；放行後經這台跳板主機的連線都不再詢問。如果你最近沒有調整過這台跳板主機（例如重新安裝系統、換了 SSH 服務），可能有人在中間攔截。"
+          }
+        }
+      }
+    },
     "跳板机 %@ 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。" : {
       "localizations" : {
         "en" : {
@@ -72785,6 +72925,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "跳板主機 %@ 以前用更安全的連線方式，這次要改用較舊、安全性較低的連線方式（SHA-1）才能連上。"
+          }
+        }
+      }
+    },
+    "跳板机 %@ 要改用较旧的连接方式（SHA-1）才能连上，连接被拒绝" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The jump host %@ can only connect with an older method (SHA-1); connection refused"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "踏み台ホスト %@ が古い接続方式（SHA-1）でしか接続できないため、接続を拒否しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "점프 호스트 %@이(가) 오래된 연결 방식(SHA-1)으로만 연결할 수 있어 연결이 거부됨"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板主機 %@ 要改用較舊的連線方式（SHA-1）才能連上，連線被拒絕"
           }
         }
       }

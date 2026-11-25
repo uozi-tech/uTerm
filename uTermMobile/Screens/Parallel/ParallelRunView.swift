@@ -810,7 +810,13 @@ struct ParShellPane: View {
                 .font(M.mono(12.5))
             }
             if state.hostKeyUntrusted {
-                MBtn(title: state.hostKeyRetryTitle, icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                // 连接方式变弱了：窗格里只有一行「被拒绝」，补上为什么要小心（以前用过更安全的方式），图标是警告不是盾牌。
+                if state.weakAlgorithmsDeclined {
+                    Text(state.summary).font(M.sans(12.5)).foregroundStyle(M.text2)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
+                }
+                MBtn(title: state.hostKeyRetryTitle, icon: state.weakAlgorithmsDeclined ? "warn" : "shield",
+                     kind: .tinted, height: 36, action: onTrust)
                     .fixedSize().padding(.top, 8)
             }
         }
@@ -952,7 +958,8 @@ struct ParAILane: View {
             VStack(alignment: .leading, spacing: 10) {
                 summaryText
                 if state.hostKeyUntrusted {
-                    MBtn(title: state.hostKeyRetryTitle, icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                    MBtn(title: state.hostKeyRetryTitle, icon: state.weakAlgorithmsDeclined ? "warn" : "shield",
+                         kind: .tinted, height: 36, action: onTrust)
                         .fixedSize()
                 }
             }

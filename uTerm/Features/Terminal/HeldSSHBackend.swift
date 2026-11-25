@@ -119,8 +119,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         case .failed(let failure):
             failedOnLocalNetwork = failure.localNetworkUnreachable == true
             if let declined = failure.legacyDeclined {
-                throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(LegacyAlgorithmRefusal(
-                    host: declined.host, port: declined.port, isJumpHost: declined.isJumpHost))
+                throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(legacyGate.marked(LegacyAlgorithmRefusal(
+                    host: declined.host, port: declined.port, isJumpHost: declined.isJumpHost)))
             }
             switch failure.kind {
             case .jumpHost:
@@ -142,6 +142,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         case (.authentication?, let detail?): return .authenticationFailed(detail)
         case (.hostKey?, let detail?): return .hostKeyRejected(detail)
         case (.handshake?, let detail?): return .handshakeFailed(detail)
+        // 没同意用旧算法却没带 `legacyDeclined`（不该发生）：照样是「重试也不会好」的那类，别被当成网络问题重连。
+        case (.weakAlgorithms?, let detail): return .handshakeFailed(detail ?? failure.message)
         default: return .connectFailed(failure.message)
         }
     }
@@ -300,6 +302,9 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
     private let legacyGate: LegacyAlgorithmGate
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Outcome, Never>?
+    /// 在回答 `uterm-ssh` 的问题的任务。握手结束（连上、失败、关窗）时一并取消：relay 与合并器据此撤掉弹层，
+    /// 不留下没人收的回答。
+    private var pending: [Task<Void, Never>] = []
 
     init(connection: HolderConnection, verifier: HostKeyVerifier, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool,
          legacyGate: LegacyAlgorithmGate) {
@@ -334,7 +339,7 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
                 send(.rememberResult(id: id))
             }
         case .approveHostKey(let id, let challenge):
-            Task { [self] in
+            answer { [self] in
                 let approved = await HostKeyApprovalCoalescer.shared.approve(HostKeyChallenge(
                     host: challenge.hostKey.host, port: challenge.hostKey.port,
                     kind: challenge.isMismatch ? .mismatch : .unknown,
@@ -344,7 +349,7 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
             }
         case .approveLegacyAlgorithms(let id, let legacy):
             // 合并同一台主机同时在问的几个标签由 gate 自己做（`HostKeyApprovalCoalescer`），这里不再套一层。
-            Task { [self] in
+            answer { [self] in
                 let approved = await legacyGate.approve(host: legacy.host, port: legacy.port, isJumpHost: legacy.isJumpHost)
                 send(.approval(id: id, approved))
             }
@@ -366,8 +371,19 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
         lock.lock()
         let taken = continuation
         continuation = nil
+        let tasks = pending
+        pending = []
         lock.unlock()
+        for task in tasks { task.cancel() }
         taken?.resume(returning: outcome)
+    }
+
+    /// 起一个回答问题的任务，记下来以便握手结束时取消。握手已经结束就不起了。
+    private func answer(_ body: @escaping @Sendable () async -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard continuation != nil else { return }
+        pending.append(Task { await body() })
     }
 
     private static func verification(_ result: USSHKit.SSHHostKeyVerification) -> SSHBridgeVerification {

@@ -123,6 +123,49 @@ final class HostKeyChallengeRelayTests: XCTestCase {
         XCTAssertEqual(kept, true)
     }
 
+    /// 弹层晚到的「关掉了」回调（带着上一问的 id）不能把下一问答掉；按钮答的也只答它看到的那一问。
+    func testResolvingAStaleChallengeDoesNotAnswerTheNextOne() async {
+        let relay = HostKeyChallengeRelay()
+        let approver = relay.makeApprover()
+        let first = challenge("192.0.2.43")
+        let second = challenge("192.0.2.44")
+        let a = Task { await approver(first) }
+        await waitUntil { relay.pendingChallenge?.id == first.id }
+        let b = Task { await approver(second) }
+        try? await Task.sleep(for: .milliseconds(100))
+
+        relay.resolve(true, for: first.id)
+        let firstResult = await finished(a)
+        XCTAssertEqual(firstResult, true)
+        await waitUntil { relay.pendingChallenge?.id == second.id }
+        relay.resolve(false, for: first.id)
+        relay.dismiss(first.id)
+        XCTAssertEqual(relay.pendingChallenge?.id, second.id, "过期的回答落到了下一问上")
+        relay.resolve(true, for: second.id)
+        let secondResult = await finished(b)
+        XCTAssertEqual(secondResult, true)
+    }
+
+    /// 宿主视图卸下（不是用户点的）：按「没人回答」结束，合并在上面的别的标签会重新问，而不是跟着被拒。
+    func testDismissIsAbandonmentNotRejection() async {
+        let hidden = HostKeyChallengeRelay()
+        let visible = HostKeyChallengeRelay()
+        let coalescer = HostKeyApprovalCoalescer()
+        let asked = challenge()
+        let a = Task { await coalescer.approve(asked, approver: hidden.makeApprover()) }
+        await waitUntil { hidden.pendingChallenge != nil }
+        let b = Task { await coalescer.approve(asked, approver: visible.makeApprover()) }
+        try? await Task.sleep(for: .milliseconds(100))
+
+        hidden.dismiss(asked.id)
+        let originator = await finished(a)
+        XCTAssertEqual(originator, false, "发起的那个按没同意结束")
+        await waitUntil { visible.pendingChallenge != nil }
+        visible.resolve(true)
+        let joined = await finished(b)
+        XCTAssertEqual(joined, true, "合并进来的重新问，没有被连坐拒掉")
+    }
+
     // MARK: - 合并器
 
     func testCoalescedWaitersReturnWhenCancelledAndTheAskIsWithdrawn() async {

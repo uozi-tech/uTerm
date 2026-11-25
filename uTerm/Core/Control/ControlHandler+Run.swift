@@ -533,6 +533,15 @@ extension ControlHandler {
                     connectError: connectError
                 )
             }
+            // 复用的连接断了、在执行时重连，这次重连被拒（没同意用旧算法、认证失败……）：和建连失败一样归类，
+            // 别报成可重试的 `operation_failed`。
+            if SSHTransportFailure.isPermanentConnectFailure(failure.underlying) {
+                let connectError = ControlConnectionPool.mapConnectError(failure.underlying, sink: HostKeyChallengeSink())
+                return RunOutcome(
+                    result: failedResult(target, since: start, connectError, name: target.name),
+                    connectError: connectError
+                )
+            }
             return RunOutcome(
                 result: ControlRunResult(
                     host: target.name,

@@ -92,9 +92,10 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
         }
         let endpoint = USSHKit.SSHEndpoint(host: request.host, port: request.port, username: request.username, jumpHost: jumpHost)
         let control = self.control
-        // 用旧算法连之前问 App（它记着这台以前用不用旧算法）。旧版 App 不认这条消息，不问。
+        // 用旧算法连之前问 App（它记着这台以前用不用旧算法）。发请求的就是打包它的这一版 App，默认就问；
+        // 只有明确说了不问（false）才不问，免得哪个调用点漏写这个字段就静默放行了旧算法。
         var legacyApproval: (@Sendable (SSHLegacyFallbackRequest) async -> Bool)?
-        if request.asksLegacyAlgorithms == true {
+        if request.asksLegacyAlgorithms != false {
             legacyApproval = { @Sendable legacy in
                 await control.requestLegacyApproval(SSHBridgeLegacyRequest(legacy))
             }

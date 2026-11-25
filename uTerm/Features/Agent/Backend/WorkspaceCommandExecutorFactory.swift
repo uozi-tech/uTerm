@@ -115,6 +115,8 @@ actor ReusableSSHConnection {
             } catch {
                 lastError = error
                 if hostKeyChallenges.peek() != nil { throw error }
+                // 认证失败、主机密钥被拒、没同意用旧算法：再连只是又一次失败的登录。
+                if SSHTransportFailure.isPermanentConnectFailure(error) { throw error }
                 if attempt < Self.maxConnectAttempts - 1 {
                     try? await Task.sleep(for: Self.reconnectBackoff)
                 }
@@ -159,12 +161,12 @@ private nonisolated final class DeliveryFlag: @unchecked Sendable {
 /// 但仍按惯例在闭包内由捕获的 `ModelContainer` 重新构造，闭包不捕获任何
 /// MainActor-隔离状态。
 ///
-/// host-key 审批：默认（`trustNewKeys == false`）**记录质询并拒绝** —— 终端 / SFTP 先连过、
+/// host-key 审批：默认（`pin == nil`）**记录质询并拒绝** —— 终端 / SFTP 先连过、
 /// 已知主机密钥已写入信任库时校验直接放行；遇到未知 / 不匹配的主机密钥则**把质询写进
 /// `HostKeyChallengeSink`** 再拒绝、不弹 UI（Agent 侧没有交互入口）。调用方（并行窗口）
 /// 据此 sink 把真实指纹摆给用户、提供「信任并重试」。
-/// `trustNewKeys == true`（「信任并重试」重连时）则**信任并继续** —— 握手成功即把密钥写入
-/// 信任库（TOFU），实现一次性的内联信任。
+/// 给了 `pin`（「信任并重试」重连时）则只放行用户在卡片上看到的**那一问**（`HostKeyApprovalPin`：哪台、
+/// 哪个端口、什么问题、哪把钥匙都对得上）——握手成功即把那把密钥写入信任库。别的质询照常记录并拒绝。
 enum WorkspaceCommandExecutorFactory {
 
     /// 从 `server` 与 `container` 构造执行器；解析认证材料（可能抛错，调用方用
@@ -180,14 +182,14 @@ enum WorkspaceCommandExecutorFactory {
     static func make(
         server: ServerProfile,
         container: ModelContainer,
-        trustNewKeys: Bool = false,
+        approving pin: HostKeyApprovalPin? = nil,
         reuseConnection: Bool = false
     ) throws -> (executor: SSHCommandExecutor, hostKeyChallenges: HostKeyChallengeSink, connection: ReusableSSHConnection?) {
         // 1) 在 MainActor 上解析所有建连输入为 Sendable 值。
         let snapshot = SSHConnection.ProfileSnapshot(server)
         let resolved = try SSHAuthResolver.resolveForConnect(profile: server, keychain: KeychainStore())
         return make(snapshot: snapshot, auth: resolved.auth, jumpAuth: resolved.jump, container: container,
-                    trustNewKeys: trustNewKeys, reuseConnection: reuseConnection)
+                    approving: pin, reuseConnection: reuseConnection)
     }
 
     /// 认证材料已解析好的版本：调用方可以先在别的线程读完钥匙串（几台到几十台主机时，
@@ -198,14 +200,14 @@ enum WorkspaceCommandExecutorFactory {
         auth: ResolvedAuth,
         jumpAuth resolvedJumpAuth: ResolvedAuth?,
         container: ModelContainer,
-        trustNewKeys: Bool = false,
+        approving pin: HostKeyApprovalPin? = nil,
         reuseConnection: Bool = false
     ) -> (executor: SSHCommandExecutor, hostKeyChallenges: HostKeyChallengeSink, connection: ReusableSSHConnection?) {
         let sink = HostKeyChallengeSink()
 
         // 2) 建连闭包 @Sendable，仅捕获上面的 Sendable 值（sink 经 @unchecked Sendable）；
         //    HostKeyVerifier（actor）在闭包内由 container 构造。审批**仅在拒绝时记录质询**——
-        //    trustNewKeys=true 时握手成功不污染 sink（否则重连逻辑会误判为指纹问题）。
+        //    钉住的那一问放行时不污染 sink（否则重连逻辑会误判为指纹问题）。
         let connect: @Sendable () async throws -> ConnectedClient = {
             try await SSHClientFactory.connect(
                 profile: snapshot,
@@ -213,11 +215,10 @@ enum WorkspaceCommandExecutorFactory {
                 jumpHostAuth: resolvedJumpAuth,
                 hostKeyVerifier: HostKeyVerifier(modelContainer: container),
                 hostKeyApprover: { challenge in
-                    // 「连接方式变弱了」不跟着 trustNewKeys 放行：用户点的「信任并重试」看的是主机密钥，不是这个。
-                    // 它有自己的卡片（`ParallelRunModel.trustAndRetry` 记下同意后照常重试）。
-                    let approves = trustNewKeys && !challenge.isWeakAlgorithms
+                    // 只放行用户在卡片上看到的那一问（主机密钥或连接方式各是各的卡片）；别的记下、拒绝、另出卡片。
+                    let approves = pin?.matches(challenge) == true
                     if !approves { sink.record(challenge) }   // 记录指纹供「信任并重试」展示
-                    return approves                           // false=拒绝（默认）；true=信任并继续
+                    return approves
                 },
                 approvesInteractively: false)
         }

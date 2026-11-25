@@ -206,6 +206,9 @@ nonisolated enum SSHClientFactory {
                                            jumpHost: shared.bastionNeededLegacyTransport)
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
+            if case .weakAlgorithmsDeclined(let refusal) = appError(error) {
+                throw SSHConnection.SSHConnectionError.weakAlgorithmsDeclined(legacyGate.marked(refusal))
+            }
             throw appError(error)
         } catch let error as CancellationError {
             // 取消（关窗口、关标签页）不是连接失败：原样交出去，调用方据此什么都不报。

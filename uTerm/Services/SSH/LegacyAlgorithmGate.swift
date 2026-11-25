@@ -12,7 +12,7 @@ import USSHKit
 /// |---|---|---|---|
 /// | 是 | — | — | 照常连 |
 /// | 否 | 否（第一次连） | — | 照常连（之后照常走新主机的信任确认） |
-/// | 否 | — | 否（设置里关了核对） | 同上：中间人本来就能冒充它，问连接方式没有意义 |
+/// | 否 | — | 否（设置里关了核对） | 照常连，但连上了也不记：中间人本来就能冒充它，问连接方式没有意义 |
 /// | 否 | 是 | 是 | 问用户 |
 ///
 /// 旧栈（Citadel + Wellz 的 swift-nio-ssh，SSH 栈换成 USSHKit 之前）**协商不到**这些旧算法：它只带 NIOSSH
@@ -46,6 +46,8 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
     private let hasTrustRecord: @Sendable (String, Int) async -> Bool
     private let approver: @Sendable (HostKeyChallenge) async -> Bool
     private let coalesces: Bool
+    /// 这次连接里用户在弹层上亲手点了「取消」的那几跳（失败文案说「已取消」）。
+    private let declinedByUser = Mutex<Set<LegacyAlgorithmConsent.Address>>([])
 
     /// - Parameters:
     ///   - approver: 问用户的出口，就是这条连接问主机密钥的那个（不能问的上下文它直接返回 false = 不同意）。
@@ -97,9 +99,18 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
         let approved = coalesces
             ? await HostKeyApprovalCoalescer.shared.approve(challenge, approver: approver)
             : await approver(challenge)
+        if !approved, HostKeyUserDecline.take(challenge.id) { declinedByUser.withLock { _ = $0.insert(address) } }
         AppLogger.info("连接方式变弱的主机 \(address.key)：\(approved ? "用户同意用旧算法连接" : "没有同意，不连接")",
                        category: "ssh")
         return approved
+    }
+
+    /// 没连的那一跳是用户在弹层上亲手拒的：失败文案改说「已取消」（`LegacyAlgorithmRefusal.declinedByUser`）。
+    func marked(_ refusal: LegacyAlgorithmRefusal) -> LegacyAlgorithmRefusal {
+        var refusal = refusal
+        let address = LegacyAlgorithmConsent.Address(host: refusal.host, port: refusal.port)
+        refusal.declinedByUser = declinedByUser.withLock { $0.contains(address) }
+        return refusal
     }
 
     /// 整条连接连上了（含认证）：按 USSHKit 报的每一跳的结果写同意。`true` 记、`false` 清、`nil` 不动。
@@ -116,9 +127,13 @@ nonisolated final class LegacyAlgorithmGate: Sendable {
     }
 
     /// 连上之后：按这次连接的每一跳与 USSHKit 的三态结果写进这个门的同意记录。
+    ///
+    /// 设置里关了主机密钥核对时对端是谁没有核实过：这次放行，但**不记**同意（`true` 当作 `nil`），否则恢复核对之后
+    /// 这台会被当成「本来就只会旧算法」、再也不问。清（`false`）照常：那只会让之后多问一次。
     func connectionSucceeded(profile: SSHConnection.ProfileSnapshot, target: Bool?, jumpHost: Bool?) {
-        Self.record(target: (profile.host, profile.port, target),
-                    jumpHost: profile.jumpHost.map { ($0.host, $0.port, jumpHost) },
+        let recordable: (Bool?) -> Bool? = { [verifiesHostKeys] in verifiesHostKeys || $0 != true ? $0 : nil }
+        Self.record(target: (profile.host, profile.port, recordable(target)),
+                    jumpHost: profile.jumpHost.map { ($0.host, $0.port, recordable(jumpHost)) },
                     consent: consent)
     }
 }
@@ -133,10 +148,21 @@ nonisolated struct LegacyAlgorithmConsent: Sendable {
         let host: String
         let port: Int
 
-        /// 存进偏好的写法。IPv6 地址加方括号，免得和端口混在一起。
-        var key: String {
-            host.contains(":") ? "[\(host)]:\(String(port))" : "\(host):\(String(port))"
+        /// 主机名规整成小写、去掉首尾空白与 IPv6 的方括号：同一台换个写法（`Prod.Example.com`、`[fe80::1]`）
+        /// 还是同一条记录。
+        init(host: String, port: Int) {
+            self.host = Self.normalized(host)
+            self.port = port
         }
+
+        static func normalized(_ host: String) -> String {
+            var value = host.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.hasPrefix("["), value.hasSuffix("]") { value = String(value.dropFirst().dropLast()) }
+            return value.lowercased()
+        }
+
+        /// 存进偏好的写法。IPv6 地址加方括号，免得和端口混在一起。
+        var key: String { SSHAddressText.format(host: host, port: port) }
     }
 
     static let testHostSuiteName = "com.uozi.uTerm.tests.legacyAlgorithmConsent"
@@ -205,22 +231,30 @@ nonisolated struct LegacyAlgorithmRefusal: Sendable, Equatable {
     let host: String
     let port: Int
     let isJumpHost: Bool
+    /// 用户刚在弹层上点了「取消」（而不是没法问人的地方替他拒的）：文案只说已取消，不叫他回 uTerm 里再连一次。
+    var declinedByUser = false
 
-    init(host: String, port: Int, isJumpHost: Bool) {
+    init(host: String, port: Int, isJumpHost: Bool, declinedByUser: Bool = false) {
         self.host = host
         self.port = port
         self.isJumpHost = isJumpHost
+        self.declinedByUser = declinedByUser
     }
 
     init(_ request: SSHLegacyFallbackRequest) {
         self.init(host: request.host, port: request.port, isJumpHost: request.hop == .jumpHost)
     }
 
-    var address: String { "\(host):\(String(port))" }
+    var address: String { SSHAddressText.format(host: host, port: port) }
 
     /// 连接失败时给人看的那句：说清是怎么回事、怎么办。不能问用户的地方（Agent、历史会话）也是这句。
     var message: String {
-        isJumpHost
+        if declinedByUser {
+            return isJumpHost
+                ? String(localized: "已取消连接：没有同意跳板机 \(address) 改用较旧、安全性较低的连接方式（SHA-1）。")
+                : String(localized: "已取消连接 \(address)：没有同意改用较旧、安全性较低的连接方式（SHA-1）。")
+        }
+        return isJumpHost
             ? String(localized: "没有连接跳板机 \(address)：这台跳板机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。要继续连接，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
             : String(localized: "没有连接 \(address)：这台主机以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。要继续连接，请在 uTerm 里重新连接这台主机，在提示里选「仍然连接」。")
     }
@@ -236,13 +270,15 @@ nonisolated enum WeakAlgorithmsCopy {
     }
 
     static func summary(_ challenge: HostKeyChallenge) -> String {
-        let address = "\(challenge.host):\(String(challenge.port))"
+        let address = challenge.address
         return challenge.isJumpHost
             ? String(localized: "跳板机 \(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。")
             : String(localized: "\(address) 以前用更安全的连接方式，这次要改用较旧、安全性较低的连接方式（SHA-1）才能连上。")
     }
 
-    static var advice: String {
-        String(localized: "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回更安全的连接方式时，这个许可自动作废。")
+    static func advice(_ challenge: HostKeyChallenge) -> String {
+        challenge.isJumpHost
+            ? String(localized: "如果你最近没有调整过这台跳板机（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上经这台跳板机的连接都不再询问；它又用回更安全的连接方式时，这个许可自动作废。")
+            : String(localized: "如果你最近没有调整过这台服务器（比如重装系统、换了 SSH 服务），可能有人在中间拦截，建议先取消。选「仍然连接」后，这台设备上不再询问；它又用回更安全的连接方式时，这个许可自动作废。")
     }
 }

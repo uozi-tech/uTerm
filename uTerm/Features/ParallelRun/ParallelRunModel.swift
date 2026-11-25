@@ -48,8 +48,6 @@ final class ParallelRunModel {
     private var recordOnFinalize = true
     /// 每台一条在跑的任务 —— 只为 `cancel()`（探针拆窗、将来的「中途返回就停」）留把手。
     private var laneTasks: [Task<Void, Never>] = []
-    /// 「连接方式变弱了」卡片上点「仍然连接并重试」时记下同意的地方（测试换成单独的一份）。
-    var legacyConsent: LegacyAlgorithmConsent = .shared
 
     init(commandID: UUID, commandName: String, command: String, intent: String,
          aiAssisted: Bool, targets: [ServerProfile], doctor: ParallelAIDoctor?,
@@ -101,7 +99,7 @@ final class ParallelRunModel {
         laneTasks = [Task {
             var execTargets: [ExecTarget] = []
             for profile in targets {
-                execTargets.append(await makeExecTarget(profile: profile, trustNewKeys: false))
+                execTargets.append(await makeExecTarget(profile: profile, approving: nil))
             }
             guard !Task.isCancelled, gen == generation else { return }
             laneTasks += execTargets.enumerated().map { index, target in
@@ -128,10 +126,10 @@ final class ParallelRunModel {
         guard let index = states.firstIndex(where: { $0.id == serverID }),
               case .hostKeyUntrusted(let challenge)? = states[index].failure,
               let profile = targets.first(where: { $0.id == serverID }) else { return }
-        // 连接方式变弱了：用户在卡片上同意了，记下同意，照常（不信任新密钥）重连——之后主机密钥要是也变了，
-        // 还会再出一张主机密钥的卡片，不会被这一下顺手放过去。
-        let weakAlgorithms = challenge.isWeakAlgorithms
-        if weakAlgorithms { legacyConsent.insert(host: challenge.host, port: challenge.port) }
+        // 只放行用户在卡片上看到的那一问（哪台、哪一跳、什么问题、哪把钥匙）：跳板机后面的目标、换了一把钥匙、
+        // 连接方式之后主机密钥也变了，都会再出一张卡片，不会被这一下顺手放过去。连接方式那一问的同意也不在这里记：
+        // 连上之后按 USSHKit 报的结果记（`LegacyAlgorithmGate.connectionSucceeded`），连不上什么也不留。
+        let pin = HostKeyApprovalPin(challenge)
         // 首轮已经收尾、落过日志，补跑这一台才不再记第二条；首轮还在跑（别的台还没完）时
         // 点的，照常在最终收尾时记一次——改前一律置 false，整次运行就从日志里消失了。
         if finishedAt != nil { recordOnFinalize = false }
@@ -140,7 +138,7 @@ final class ParallelRunModel {
         generation += 1
         running = true
         laneTasks.append(Task {
-            let target = await makeExecTarget(profile: profile, trustNewKeys: !weakAlgorithms)
+            let target = await makeExecTarget(profile: profile, approving: pin)
             await self.runServer(at: index, target: target)
         })
     }
@@ -159,8 +157,8 @@ final class ParallelRunModel {
         states[i].failure = nil
     }
 
-    private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) async -> ExecTarget {
-        let session = await executor.makeSession(for: profile, trustNewKeys: trustNewKeys)
+    private func makeExecTarget(profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ExecTarget {
+        let session = await executor.makeSession(for: profile, approving: pin)
         return ExecTarget(id: profile.id, name: QuickCommandTargets.displayName(profile),
                           endpoint: QuickCommandTargets.endpoint(profile),
                           session: session)
@@ -368,8 +366,8 @@ final class ParallelRunModel {
             states[index].failure = .hostKeyUntrusted(challenge)
             switch challenge.kind {
             case .weakAlgorithms:
-                states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机要改用较旧的连接方式（SHA-1）才能连上，连接被拒绝")))
-                states[index].summary = ParallelRunCopy.weakAlgorithms
+                states[index].lines.append(ParallelTermLine(kind: .err, text: ParallelRunCopy.weakAlgorithmsLine(challenge)))
+                states[index].summary = ParallelRunCopy.weakAlgorithms(challenge)
             case .unknown, .mismatch:
                 states[index].lines.append(ParallelTermLine(kind: .err, text: String(localized: "主机指纹未信任，连接被拒绝")))
                 states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: challenge.kind == .mismatch)

@@ -56,7 +56,8 @@ nonisolated struct SSHBridgeConnectRequest: Codable, Sendable {
     var connectTimeoutSeconds: Int
     /// 交互 shell 和经 `exec` 跑的命令都带这些环境变量。
     var environment: [SSHBridgeEnvironmentVariable]
-    /// App 会回答 `approveLegacyAlgorithms`。没带（旧版 App）时 `uterm-ssh` 不问、照旧自动退到旧算法。只加不改。
+    /// App 会回答 `approveLegacyAlgorithms`。`uterm-ssh` 随 App 打包、每次连接现起，发请求的就是同一版 App，
+    /// 所以没带（nil）也照样问；只有明确写 false 才不问。只加不改。
     var asksLegacyAlgorithms: Bool? = nil
 }
 

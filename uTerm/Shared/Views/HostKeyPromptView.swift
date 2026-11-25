@@ -34,7 +34,7 @@ struct HostKeyPromptView: View {
                     .foregroundStyle(UD.caution)
                 Text(WeakAlgorithmsCopy.summary(challenge))
                     .fixedSize(horizontal: false, vertical: true)
-                Text(WeakAlgorithmsCopy.advice)
+                Text(WeakAlgorithmsCopy.advice(challenge))
                     .foregroundStyle(UD.text3)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -36,16 +36,44 @@ final class HostKeyChallengeRelay {
     /// 取消比入队先到的那几个（取消处理与入队是两个主线程任务，先后没有保证）。
     @ObservationIgnored private var cancelledBeforeQueued: Set<UUID> = []
 
+    /// 此刻挂着这个 relay 的弹层、而且在屏幕上的视图数（`hostKeySheet` 出现 / 消失时记）。为 0 = 问了也没人看得到。
+    @ObservationIgnored private var presenters = 0
+
     init(interactive: Bool = true) {
         isInteractive = interactive
     }
 
+    /// 有没有在屏幕上的视图会把问题弹出来。后台启动、窗口关了时为 false：不能问人的地方（端口转发的后台重连）
+    /// 据此直接拒绝，不把问题投进没人看的地方、干等到超时。
+    var isPresented: Bool { presenters > 0 }
+
+    func presenterAppeared() { presenters += 1 }
+    func presenterDisappeared() { presenters = max(0, presenters - 1) }
+
     /// host-key sheet 的裁决出口：回答队首那一问（并在它上面的每个等待者），然后亮出下一问。
-    func resolve(_ trusted: Bool) {
-        guard !queue.isEmpty else { return }
-        let ask = queue.removeFirst()
+    /// 给了 `id` 时只在队首正是那一问时才答：弹层关闭的回调晚到时，别把下一问也答掉。
+    /// `byUser`：是用户在弹层上点的（不是命令行之类替他答的）。点了「取消」的记进 `HostKeyUserDecline`，
+    /// 失败文案据此说「已取消」，而不是叫他回 uTerm 里再连一次。
+    func resolve(_ trusted: Bool, for id: UUID? = nil, byUser: Bool = false) {
+        guard let head = queue.first, id == nil || head.challenge.id == id else { return }
+        queue.removeFirst()
         pendingChallenge = queue.first?.challenge
-        for waiter in ask.waiters { waiter.continuation.resume(returning: trusted) }
+        for waiter in head.waiters {
+            if !trusted && byUser { HostKeyUserDecline.mark(waiter.id) }
+            waiter.continuation.resume(returning: trusted)
+        }
+    }
+
+    /// 弹层不是被用户点掉的（宿主视图卸下、切走标签、关表单）：队首那一问按「没人回答」结束，不算用户拒绝——
+    /// 合并在这一问上的别的标签（`HostKeyApprovalCoalescer`）会自己重新问，不跟着失败。
+    func dismiss(_ id: UUID) {
+        guard let head = queue.first, head.challenge.id == id else { return }
+        queue.removeFirst()
+        pendingChallenge = queue.first?.challenge
+        for waiter in head.waiters {
+            HostKeyAbandonment.mark(waiter.id)
+            waiter.continuation.resume(returning: false)
+        }
     }
 
     /// 持有者被关掉（标签 / 窗口 dispose）：挂着的挑战全部按「拒绝」结束，但记成「没人回答」而不是用户拒绝——
@@ -108,6 +136,21 @@ final class HostKeyChallengeRelay {
     }
 }
 
+/// 用户在弹层上点了「取消」的挑战（`resolve(false, byUser: true)`）。只活到 `LegacyAlgorithmGate` 取走为止。
+nonisolated enum HostKeyUserDecline {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var declined: Set<UUID> = []
+
+    static func mark(_ id: UUID) {
+        lock.withLock { _ = declined.insert(id) }
+    }
+
+    /// 取走并返回这次挑战是不是用户亲手拒的。
+    static func take(_ id: UUID) -> Bool {
+        lock.withLock { declined.remove(id) != nil }
+    }
+}
+
 /// 被 `abandon()` 结束的挑战。只活到合并器取走为止。
 nonisolated enum HostKeyAbandonment {
     private static let lock = NSLock()
@@ -139,6 +182,8 @@ actor HostKeyApprovalCoalescer {
         let token = UUID()
         var task: Task<Void, Never>?
         var outcome: Outcome?
+        /// 拒绝是用户在弹层上亲手点的：合并进来的每个人都转记一份（各自的挑战 id），失败文案一致。
+        var userDeclined = false
         var waiters: [UUID: CheckedContinuation<Outcome, Never>] = [:]
     }
 
@@ -163,7 +208,9 @@ actor HostKeyApprovalCoalescer {
             }
             switch outcome {
             case .approved: return true
-            case .rejected: return false
+            case .rejected:
+                if ask.userDeclined { HostKeyUserDecline.mark(challenge.id) }
+                return false
             // 问的那个标签关掉了，用户没回答：合并进来的、还在等的重新问（自己被取消的话循环条件会挡住）；
             // 发起这一问的就是关掉的那个，按没同意结束，不再用它那个已经没人看的 relay 问。
             case .abandoned:
@@ -181,13 +228,15 @@ actor HostKeyApprovalCoalescer {
         ask.task = Task {
             let approved = await approver(challenge)
             let outcome: Outcome = approved ? .approved : (HostKeyAbandonment.take(challenge.id) ? .abandoned : .rejected)
-            self.finish(key, ask, outcome)
+            let userDeclined = outcome == .rejected && HostKeyUserDecline.take(challenge.id)
+            self.finish(key, ask, outcome, userDeclined: userDeclined)
         }
         return ask
     }
 
-    private func finish(_ key: String, _ ask: Ask, _ outcome: Outcome) {
+    private func finish(_ key: String, _ ask: Ask, _ outcome: Outcome, userDeclined: Bool) {
         if inFlight[key]?.token == ask.token { inFlight[key] = nil }
+        ask.userDeclined = userDeclined
         ask.outcome = outcome
         let waiters = ask.waiters
         ask.waiters = [:]

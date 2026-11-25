@@ -51,7 +51,7 @@ struct HostKeyTrustModal: View {
     }
 
     private var weakBanner: some View {
-        Text(WeakAlgorithmsCopy.advice)
+        Text(WeakAlgorithmsCopy.advice(challenge))
             .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)

@@ -215,7 +215,7 @@ extension UICatalog {
 
 /// 按主机名回写好的输出；不连任何机器。
 struct UICatalogParallelExecutor: ParallelCommandExecuting {
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, approving pin: HostKeyApprovalPin?) async -> ParallelExecutionSession {
         UICatalogParallelSession(host: profile.name)
     }
 }

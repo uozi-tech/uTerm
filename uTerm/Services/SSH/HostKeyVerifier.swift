@@ -58,10 +58,47 @@ struct HostKeyChallenge: Equatable, Sendable, Identifiable {
         return "\(host):\(port) \(newFingerprint)"
     }
 
+    /// 给人看的「主机:端口」。IPv6 字面量加方括号（`[fe80::1]:22`），不然端口和地址混在一起。
+    nonisolated var address: String { SSHAddressText.format(host: host, port: port) }
+
     /// 「连接方式变弱了」那一问。
     nonisolated static func weakAlgorithms(_ request: SSHLegacyFallbackRequest) -> HostKeyChallenge {
         HostKeyChallenge(host: request.host, port: request.port, kind: .weakAlgorithms,
                          newFingerprint: "", oldFingerprint: nil, isJumpHost: request.hop == .jumpHost)
+    }
+}
+
+/// 给人看的「主机:端口」：IPv6 字面量加方括号，其余原样。
+nonisolated enum SSHAddressText {
+    static func format(host: String, port: Int) -> String {
+        host.contains(":") && !host.hasPrefix("[") ? "[\(host)]:\(String(port))" : "\(host):\(String(port))"
+    }
+}
+
+/// 用户在卡片上看过、点了放行的那一问（并行执行的「信任并重试」「仍然连接并重试」）。重连时只放行和它
+/// 一模一样的那一问——哪台、哪个端口、哪一跳、什么问题、哪把钥匙都对得上；别的（跳板机后面的目标、换了一把钥匙、
+/// 变成「密钥已变化」）照常拒绝、另出一张卡片，不会被这一下顺手放过去。
+nonisolated struct HostKeyApprovalPin: Sendable, Equatable {
+    let host: String
+    let port: Int
+    let isJumpHost: Bool
+    let kind: String
+    let fingerprint: String
+
+    init(_ challenge: HostKeyChallenge) {
+        host = challenge.host
+        port = challenge.port
+        isJumpHost = challenge.isJumpHost
+        switch challenge.kind {
+        case .unknown: kind = "unknown"
+        case .mismatch: kind = "mismatch"
+        case .weakAlgorithms: kind = "weak-algorithms"
+        }
+        fingerprint = challenge.newFingerprint
+    }
+
+    func matches(_ challenge: HostKeyChallenge) -> Bool {
+        HostKeyApprovalPin(challenge) == self
     }
 }
 
@@ -132,8 +169,15 @@ actor HostKeyVerifier {
     }
 
     /// 信任库里有没有这台 host:port 的记录（不管密钥对不对得上）。有就说明以前连上过它（`LegacyAlgorithmGate` 用）。
+    /// 这台以前信任过没有（「连接方式变弱了」那一问用）。主机名不分大小写、IPv6 方括号不算：同一台换个写法
+    /// 不能被当成第一次连、静默放行旧算法。
     func hasTrustRecord(host: String, port: Int) -> Bool {
-        !existing(host: host, port: port).isEmpty
+        if !existing(host: host, port: port).isEmpty { return true }
+        let wanted = LegacyAlgorithmConsent.Address.normalized(host)
+        let p = port
+        let descriptor = FetchDescriptor<KnownHost>(predicate: #Predicate { $0.port == p })
+        let all = (try? modelContext.fetch(descriptor)) ?? []
+        return all.contains { LegacyAlgorithmConsent.Address.normalized($0.host) == wanted }
     }
 }
 

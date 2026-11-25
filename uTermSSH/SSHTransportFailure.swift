@@ -102,6 +102,9 @@ nonisolated enum SSHTransportFailure {
             case .timeout:
                 return false
             }
+        case let error as USSHKit.SSHConnectionError:
+            // 不值得重试的那几种（认证、主机密钥、握手、没同意用旧算法）服务器在应答，传输是好的；网络问题交给后面兜底。
+            return error.isRetryable ? nil : false
         case let error as SSHClientError:
             switch error {
             case .connectionClosed(let reason):
