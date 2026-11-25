@@ -338,7 +338,9 @@ final class AgentHistoryModelTests: XCTestCase {
                         ClaudeFixture.entry("\(same).jsonl", size: UInt64(untouched.count), mtime: old)],
         ])
         await model.reload()
-        await waitUntil { !model.hasMore }
+        // 变了的那份不先消失：照旧显示上次读到的，后台重读完换成新的。
+        XCTAssertEqual(model.visibleFiles.count, 2)
+        await waitUntil { model.visibleFiles.compactMap { model.metadata[$0.path]?.title } == ["新标题", "没动过"] }
         XCTAssertEqual(model.visibleFiles.compactMap { model.metadata[$0.path]?.title }, ["新标题", "没动过"])
     }
 

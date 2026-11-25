@@ -227,6 +227,8 @@ enum CodeRunText {
         case .disconnected: return String(localized: "已断开")
         case .connected:
             if controller.isReconnecting { return String(localized: "正在重新连接…") }
+            // 程序报了状态（等待确认、空闲……）就写它，同侧栏那一行与终端标签。
+            if let status = run.terminal.programStatus { return "\(status.statusLabel) · \(place)" }
             return String(localized: "运行中 · \(place)", comment: "Code 标签页：会话正在跑，后面是工作目录的名字")
         }
     }

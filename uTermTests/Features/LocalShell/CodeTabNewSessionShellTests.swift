@@ -81,7 +81,8 @@ final class CodeTabNewSessionShellTests: XCTestCase {
         XCTAssertFalse(screen.contains("no such file"), "cd 没报错：\(screen)", file: file, line: line)
 
         run.session.writeRemoteInput(Data("bye\n".utf8))
-        await wait("会话收尾") { !code.runs.contains { $0.id == run.id } }
+        // 新会话没有对话记录：终端留着、标成已结束（见 `CodeTabRunExitTests`）。
+        await wait("会话收尾") { code.runs.first { $0.id == run.id }?.isEnded ?? true }
         XCTAssertEqual(model.groups.allTabs.map(\.id), [codeID], file: file, line: line)
         XCTAssertEqual(code.newSessionDirectory, directory, "选的目录留着，下次新开还在这里", file: file, line: line)
     }
