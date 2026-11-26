@@ -68656,6 +68656,7 @@
       }
     },
     "结果（出错）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

@@ -1,96 +1,134 @@
 import Foundation
 
-/// 对话记录排成的一行（两端共用）：一条普通消息，或连续几次工具调用折成的一组（同 Claude Code Desktop）。
-nonisolated enum AgentTranscriptEntry: Identifiable, Equatable, Sendable {
+/// 连续两次以上的工具调用，折成一行（同 Claude Code Desktop）。
+nonisolated struct AgentToolGroup: Equatable, Sendable {
+    let items: [AgentTranscriptItem]
+    /// 组里出现过的工具名，按第一次出现的先后，去重。
+    let names: [String]
+    /// 组里有出错的结果。
+    let hasError: Bool
+
+    init(items: [AgentTranscriptItem]) {
+        self.items = items
+        var seen: Set<String> = []
+        var names: [String] = []
+        var hasError = false
+        for item in items {
+            switch item.kind {
+            case .toolCall(let call):
+                if seen.insert(call.name).inserted { names.append(call.name) }
+                if call.result?.isError == true { hasError = true }
+            case .toolResult(let result):
+                if result.isError { hasError = true }
+            default:
+                break
+            }
+        }
+        self.names = names
+        self.hasError = hasError
+    }
+
+    /// 取组里第一条的 ID：往前加了一页、这一组又并进了更早的调用时，组的 ID 会变成更早那条的，
+    /// 所以找行一律经 `AgentTranscriptLayout.rowID(for:)`。
+    var id: String { items[0].id }
+
+    /// 展开状态（`expanded` 集合里的键）。
+    var expansionKey: String { "\(id).group" }
+}
+
+/// 对话记录排成的一行（两端共用）：一条普通消息，或连续几次工具调用折成的一组。
+nonisolated enum AgentTranscriptEntry: Equatable, Sendable {
     case item(AgentTranscriptItem)
-    /// 连续两次以上的工具调用。ID 取组里第一条的 ID：往前加了一页、这一组又并进了更早的调用时，
-    /// 组的 ID 会变成更早那条的，所以找行一律经 `AgentTranscriptLayout.rowID(for:)`。
-    case tools(id: String, items: [AgentTranscriptItem])
+    case tools(AgentToolGroup)
 
     var id: String {
         switch self {
         case .item(let item): return item.id
-        case .tools(let id, _): return id
+        case .tools(let group): return group.id
         }
     }
 
-    var role: AgentTranscriptItem.Role {
+    fileprivate var role: AgentTranscriptItem.Role {
         switch self {
         case .item(let item): return item.role
         case .tools: return .assistant
         }
     }
 
-    /// 展开状态（`expanded` 集合里的键）。
-    var groupKey: String { "\(id).group" }
+    fileprivate func contains(_ itemID: String) -> Bool {
+        switch self {
+        case .item(let item): return item.id == itemID
+        case .tools(let group): return group.items.contains { $0.id == itemID }
+        }
+    }
 }
 
-nonisolated struct AgentTranscriptLayout: Equatable, Sendable {
-    let rows: [AgentTranscriptEntry]
-    /// 每一条消息落在哪一行（不在组里的就是它自己）。
-    private let rowOfItem: [String: String]
-    /// 换了说话的一方的那几行：上面多空一点。
-    let runStarts: Set<String>
+nonisolated struct AgentTranscriptLayout: Sendable {
+    nonisolated struct Row: Identifiable, Equatable, Sendable {
+        let entry: AgentTranscriptEntry
+        /// 换了说话的一方。
+        let startsRun: Bool
+        /// 上面多空一截：换了说话的一方，且不是第一行（代替原来的「你」/「Claude」标签）。
+        let hasGapAbove: Bool
+
+        var id: String { entry.id }
+    }
+
+    let rows: [Row]
 
     /// - Parameter isGroupable: 这次工具调用能不能并进组。派出了子代理、找得到它记录的调用单独一行（入口要露在外面）。
     init(items: [AgentTranscriptItem], isGroupable: (AgentToolCall) -> Bool = { _ in true }) {
-        var rows: [AgentTranscriptEntry] = []
-        var rowOfItem: [String: String] = [:]
+        var entries: [AgentTranscriptEntry] = []
         var pending: [AgentTranscriptItem] = []
 
         func flush() {
-            guard let first = pending.first else { return }
             if pending.count == 1 {
-                rows.append(.item(first))
-            } else {
-                rows.append(.tools(id: first.id, items: pending))
+                entries.append(.item(pending[0]))
+            } else if pending.count > 1 {
+                entries.append(.tools(AgentToolGroup(items: pending)))
             }
-            for item in pending { rowOfItem[item.id] = first.id }
             pending.removeAll(keepingCapacity: true)
         }
 
         for item in items {
-            let groupable: Bool
             switch item.kind {
-            case .toolCall(let call): groupable = isGroupable(call)
-            case .toolResult: groupable = true
-            default: groupable = false
-            }
-            if groupable {
+            case .toolCall(let call) where isGroupable(call):
                 pending.append(item)
-            } else {
+            case .toolResult:
+                pending.append(item)
+            default:
                 flush()
-                rows.append(.item(item))
-                rowOfItem[item.id] = item.id
+                entries.append(.item(item))
             }
         }
         flush()
 
-        var starts: Set<String> = []
+        var rows: [Row] = []
+        rows.reserveCapacity(entries.count)
         var last: AgentTranscriptItem.Role?
-        for row in rows {
-            let role = row.role
-            if role != .system, role != last { starts.insert(row.id) }
+        for entry in entries {
+            let role = entry.role
+            let starts = role != .system && role != last
+            rows.append(Row(entry: entry, startsRun: starts, hasGapAbove: starts && !rows.isEmpty))
             last = role
         }
-
         self.rows = rows
-        self.rowOfItem = rowOfItem
-        self.runStarts = starts
     }
 
-    /// 这条消息所在的那一行；不认识的 ID 原样返回。
-    func rowID(for itemID: String) -> String { rowOfItem[itemID] ?? itemID }
+    /// 这条消息所在的那一行；不认识的 ID 原样返回。只在往前加页、搜索命中时用，现找即可。
+    func rowID(for itemID: String) -> String {
+        rows.first { $0.entry.contains(itemID) }?.id ?? itemID
+    }
 
-    /// 这条消息在一个折起来的组里：返回那一组展开用的键。
-    func groupKey(containing itemID: String) -> String? {
-        let rowID = rowID(for: itemID)
-        for case .tools(let id, _) in rows where id == rowID { return "\(id).group" }
-        return nil
+    /// 要露出这条消息：它在折起来的组里就把那一组展开。返回要滚到的那一行。
+    func reveal(_ itemID: String, expanding expanded: inout Set<String>) -> String {
+        guard let row = rows.first(where: { $0.entry.contains(itemID) }) else { return itemID }
+        if case .tools(let group) = row.entry { expanded.insert(group.expansionKey) }
+        return row.id
     }
 }
 
-/// 工具调用一行上的图标与组的摘要（两端共用）。名字按各家工具记录里的原样（Claude、Codex、Cursor……）。
+/// 工具调用一行上的图标（两端共用）。名字按各家工具记录里的原样（Claude、Codex、Cursor……）。
 nonisolated enum AgentToolSymbol {
     static func systemImage(for name: String) -> String {
         switch name.lowercased() {
@@ -110,28 +148,6 @@ nonisolated enum AgentToolSymbol {
             return "checklist"
         default:
             return name.hasPrefix("mcp__") ? "puzzlepiece.extension" : "wrench.and.screwdriver"
-        }
-    }
-
-    /// 组里出现过的工具名，按第一次出现的先后，去重。
-    static func distinctNames(_ items: [AgentTranscriptItem]) -> [String] {
-        var seen: Set<String> = []
-        var names: [String] = []
-        for item in items {
-            guard case .toolCall(let call) = item.kind, seen.insert(call.name).inserted else { continue }
-            names.append(call.name)
-        }
-        return names
-    }
-
-    /// 组里有没有出错的结果。
-    static func hasError(_ items: [AgentTranscriptItem]) -> Bool {
-        items.contains { item in
-            switch item.kind {
-            case .toolCall(let call): return call.result?.isError == true
-            case .toolResult(let result): return result.isError
-            default: return false
-            }
         }
     }
 }

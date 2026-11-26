@@ -115,6 +115,6 @@ final class MarkdownDocumentCache {
 
 extension MarkdownDocumentCache {
     /// 对话记录（Mac 的历史窗口 / Code 标签页、iOS 的历史会话标签，两端共用）的一份，和聊天那份分开：记录一页就有几十段。
-    /// 记录里的行在 body 里同步取解析结果（第一次量高就对，见 `AgentTranscriptMarkdown` / `MTranscriptMarkdown`）。
+    /// 记录里的行在 body 里同步取解析结果（第一次量高就对，见两端各一份的 `AgentTranscriptMarkdown`）。
     static let transcript = MarkdownDocumentCache(capacity: 512)
 }

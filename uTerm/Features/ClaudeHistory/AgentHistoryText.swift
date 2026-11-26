@@ -510,16 +510,15 @@ enum AgentHistoryText {
         return String(localized: "在这台主机上新开一个终端标签页，在里面继续这个会话")
     }
 
-    /// 说话的一方。子代理的记录里「用户」那一侧是派它的主代理交给它的任务，不是你。回答的一方是那种工具（Claude Code 照旧叫「Claude」）。
-    static func roleLabel(_ role: AgentTranscriptItem.Role, inSubagent: Bool = false, tool: AgentHistoryTool = .claude) -> String {
+    /// 搜索结果里说话的一方。回答的一方是那种工具（Claude Code 照旧叫「Claude」）。
+    static func roleLabel(_ role: AgentTranscriptItem.Role, tool: AgentHistoryTool = .claude) -> String {
         guard role == .user else { return tool == .claude ? "Claude" : tool.displayName }
-        return inSubagent ? String(localized: "任务", comment: "子代理记录里，派它的那一方交给它的话") : String(localized: "你")
+        return String(localized: "你")
     }
 
-    static func resultLabel(_ result: AgentToolResult) -> String {
-        var label = result.isError ? String(localized: "结果（出错）") : String(localized: "结果")
-        if result.imageCount > 0 { label += " · " + String(localized: "\(result.imageCount) 张图片（不显示）") }
-        return label
+    /// 子代理的记录里，派它的那一方交给它的话（不是你说的）。
+    static var subagentTask: String {
+        String(localized: "任务", comment: "子代理记录里，派它的那一方交给它的话")
     }
 
     /// 连续几次工具调用折成的那一行（同 Claude Code Desktop）。
@@ -547,18 +546,5 @@ enum AgentHistoryText {
 
     static func clippedNote(_ text: AgentClippedText) -> String {
         String(localized: "内容太长，只显示前 \(text.text.count) 字（共 \(text.totalCount) 字）。")
-    }
-}
-
-/// 哪些条目要带「你」/「Claude」的标签：换了说话的一方才带。
-nonisolated enum AgentTranscriptRuns {
-    static func starts(_ items: [AgentTranscriptItem]) -> Set<String> {
-        var result: Set<String> = []
-        var last: AgentTranscriptItem.Role?
-        for item in items {
-            if item.role != .system, item.role != last { result.insert(item.id) }
-            last = item.role
-        }
-        return result
     }
 }

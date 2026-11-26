@@ -49,6 +49,14 @@ nonisolated struct AgentTranscriptItem: Identifiable, Equatable, Sendable {
         }
     }
 
+    /// 有没有能拷贝的文字（图片占位、太大没读的那几条没有）。不拼字，重画时用。
+    var hasPlainText: Bool {
+        switch kind {
+        case .image, .oversized: return false
+        default: return true
+        }
+    }
+
     /// 拷贝用的纯文字。
     var plainText: String {
         switch kind {
@@ -85,6 +93,12 @@ nonisolated struct AgentClippedText: Equatable, Sendable {
     init(text: String, totalCount: Int) {
         self.text = text
         self.totalCount = max(totalCount, text.count)
+    }
+
+    /// 折起来那一行上的摘要：第一行非空的字，最多 200 字（后面的反正被截掉，整行排版白费）。
+    var firstLine: String {
+        let line = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
+        return String(line.prefix(200))
     }
 
     /// 折叠时显示的几行。

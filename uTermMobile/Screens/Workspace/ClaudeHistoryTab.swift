@@ -1209,9 +1209,6 @@ private struct ClaudeTranscriptView: View {
     var continuation: AgentHistoryContinuation.Link? = nil
     var onOpenPart: (AgentHistorySessionFile) -> Void = { _ in }
 
-    @State private var expanded: Set<String> = []
-    @State private var pendingAnchor: String?
-
     var body: some View {
         VStack(spacing: 0) {
             // 标题行下面不画横线（同 Mac 的 Code 标签页）。
@@ -1224,7 +1221,11 @@ private struct ClaudeTranscriptView: View {
                 continuationBanner(continuation)
                 Rectangle().fill(M.divider).frame(height: 1)
             }
-            messages
+            AgentTranscriptMessages(transcript: transcript, onOpenSubagent: onOpenSubagent) { loadEarlier in
+                top(loadEarlier)
+            } bottom: {
+                bottom
+            }
         }
     }
 
@@ -1352,65 +1353,8 @@ private struct ClaudeTranscriptView: View {
         }
     }
 
-    private var messages: some View {
-        let items = transcript.items
-        let runStarts = AgentTranscriptRuns.starts(items)
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    top
-                    ForEach(items) { item in
-                        ClaudeTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
-                                            tool: transcript.file.tool,
-                                            subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
-                                            isHighlighted: item.id == transcript.highlightedItemID,
-                                            expanded: $expanded)
-                            .id(item.id)
-                    }
-                    bottom
-                    if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
-                        Text("这个会话里没有可显示的消息。")
-                            .font(M.sans(13)).foregroundStyle(M.text3)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 24)
-                    }
-                    // 跟到底时滚到这里。底部留白由它和上面的间距承担（同原来的 14pt），锚点下面不再垫 padding。
-                    Color.clear.frame(height: 2).id(Self.bottomID)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-            }
-            .mKeepsScrollContentInSafeArea()
-            // 打开时停在最后一条（从末尾读起）；内容不满一屏时从顶上排起——只写 `.bottom` 的话短对话会贴着底、上面空一大片。
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .defaultScrollAnchor(.top, for: .alignment)
-            .onChange(of: transcript.prependGeneration) { old, _ in
-                // 往前加了一页：留在原来最上面那条，不跳到别处。第一页不用（默认停在底部）。
-                guard old > 0, let anchor = pendingAnchor else { return }
-                proxy.scrollTo(anchor, anchor: .top)
-            }
-            .onChange(of: transcript.focusGeneration) { _, _ in
-                // 搜索命中的那一条：滚到中间（等这一轮布局完）。
-                guard let id = transcript.highlightedItemID else { return }
-                Task { @MainActor in proxy.scrollTo(id, anchor: .center) }
-            }
-            .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
-            .overlay(alignment: .bottom) {
-                if transcript.hasNewBelow {
-                    ClaudeNewMessagesPill {
-                        transcript.setFollowsTail(true)
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-                    }
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-                }
-            }
-        }
-    }
-
-    private static let bottomID = "claude-transcript-bottom"
-
-    @ViewBuilder private var top: some View {
+    /// 列表最顶上：出错重试、读取中、「加载更早的消息」。
+    @ViewBuilder private func top(_ loadEarlier: @escaping () -> Void) -> some View {
         if let error = transcript.errorMessage {
             VStack(spacing: 8) {
                 Text(verbatim: error).font(M.sans(13)).foregroundStyle(M.warning)
@@ -1448,153 +1392,14 @@ private struct ClaudeTranscriptView: View {
             .frame(maxWidth: .infinity)
         }
     }
-
-    private func loadEarlier() {
-        pendingAnchor = transcript.firstItemID
-        // 要往前看：不再跟着末尾走。
-        transcript.setFollowsTail(false)
-        Task { await transcript.loadEarlier() }
-    }
-
-    private func subagentLink(_ item: AgentTranscriptItem) -> AgentSubagentLink? {
-        guard case .toolCall(let call) = item.kind else { return nil }
-        return transcript.subagentLink(for: call)
-    }
 }
 
-private struct ClaudeTranscriptRow: View {
-    let item: AgentTranscriptItem
-    let showsRole: Bool
-    /// 子代理的记录：「用户」那一侧标成「任务」。
-    var inSubagent = false
-    /// 回答的一方叫什么（Claude Code 照旧叫「Claude」，别的工具用产品名）。
-    var tool: AgentHistoryTool = .claude
-    /// 这次调用派出的子代理（找得到记录的才有）。
-    let subagent: AgentSubagentLink?
-    let onOpenSubagent: (AgentSubagentLink) -> Void
-    /// 搜索命中的那一条：整条带底色和左边一道线（画在边界外，不挤动排版）。同 Mac。
-    var isHighlighted = false
-    @Binding var expanded: Set<String>
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            if showsRole {
-                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent, tool: tool))
-                    .font(M.sans(12, weight: .semibold)).foregroundStyle(M.text3)
-                    .padding(.top, 6)
-            }
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            if isHighlighted {
-                RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
-                    .fill(M.accent.opacity(0.12))
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 1.5).fill(M.accent).frame(width: 3)
-                    }
-                    .padding(.horizontal, -8)
-                    .padding(.vertical, -5)
-            }
-        }
-        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
-    }
-
-    @ViewBuilder private var content: some View {
-        switch item.kind {
-        case .userText(let text):
-            MTranscriptMarkdown(text: text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous).fill(M.fillFaint))
-                .modifier(CopyMenu(text: item.plainText))
-        case .assistantText(let text):
-            MTranscriptMarkdown(text: text)
-                .textSelection(.enabled)
-        case .command(let command):
-            Text(verbatim: command)
-                .font(M.mono(13, weight: .medium)).foregroundStyle(M.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous).fill(M.fillFaint))
-        case .commandOutput(let output):
-            ClaudeClippedBlock(id: item.id, label: String(localized: "输出"), text: output, isError: false,
-                               expanded: $expanded)
-        case .notice(let text):
-            Label { Text(verbatim: text) } icon: { Image(systemName: "bell") }
-                .font(M.sans(12.5)).foregroundStyle(M.text3)
-                .lineLimit(3)
-        case .thinking(let text):
-            DisclosureGroup(isExpanded: binding("\(item.id).thinking")) {
-                Text(verbatim: text.text + (text.isClipped ? "\n…" : ""))
-                    .font(M.sans(13)).italic().foregroundStyle(M.text3)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            } label: {
-                Label(String(localized: "思考"), systemImage: "brain")
-                    .font(M.sans(12.5, weight: .medium)).foregroundStyle(M.text3)
-            }
-            .tint(M.text3)
-        case .toolCall(let call):
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 11)).foregroundStyle(M.text3)
-                    Text(verbatim: call.name)
-                        .font(M.mono(12.5, weight: .semibold)).foregroundStyle(M.text2)
-                    Text(verbatim: call.summary)
-                        .font(M.mono(12.5)).foregroundStyle(M.text3)
-                        .lineLimit(1).truncationMode(.tail)
-                }
-                if let subagent {
-                    ClaudeSubagentEntry(link: subagent) { onOpenSubagent(subagent) }
-                        .padding(.leading, 18)
-                }
-                if let result = call.result {
-                    ClaudeClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
-                                       isError: result.isError, expanded: $expanded)
-                        .padding(.leading, 18)
-                }
-            }
-        case .toolResult(let result):
-            ClaudeClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
-                               isError: result.isError, expanded: $expanded)
-        case .image:
-            Label(String(localized: "图片（不显示）"), systemImage: "photo")
-                .font(M.sans(12.5)).foregroundStyle(M.text3)
-        case .compactSummary(let summary):
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Rectangle().fill(M.divider).frame(height: 1)
-                    Text("上下文已压缩")
-                        .font(M.sans(12, weight: .medium)).foregroundStyle(M.text3)
-                        .fixedSize()
-                    Rectangle().fill(M.divider).frame(height: 1)
-                }
-                ClaudeClippedBlock(id: item.id, label: String(localized: "压缩摘要"), text: summary, isError: false,
-                                   expanded: $expanded)
-            }
-            .padding(.vertical, 6)
-        case .oversized(let bytes):
-            Label(AgentHistoryText.oversized(bytes), systemImage: "exclamationmark.circle")
-                .font(M.sans(12.5)).foregroundStyle(M.text3)
-        }
-    }
-
-    private func binding(_ key: String) -> Binding<Bool> {
-        Binding(get: { expanded.contains(key) },
-                set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
-    }
-}
-
-/// 派子代理的调用下面的入口：点进去看那个子代理自己的记录。同 Mac。
-/// 记录里的一段 Markdown：第一次排版就是解析好的样子（同 Mac 的 `AgentTranscriptMarkdown`）。
+/// 记录里的一段 Markdown：第一次排版就是解析好的样子（Mac 那份同名，用 `MarkdownBlocks`）。
 ///
 /// 不用 `MStreamingMarkdown`：它在 `onAppear` 里才解析，没出现过的行懒栈都按空文档量高（120 条：内容高 5471pt，实际一万五以上）。
 /// 往回翻时一行行出现、一行行长到真实高度，内容总高度在滚动中一次变上万点，偏移被拽到别处、画面整屏换掉
 /// （`ClaudeTranscriptScrollProbeTests`）。记录里的文字是落定的，这里在 body 里同步取解析结果；两端共用一份缓存。
-private struct MTranscriptMarkdown: View {
+struct AgentTranscriptMarkdown: View {
     let text: String
 
     var body: some View {
@@ -1602,7 +1407,8 @@ private struct MTranscriptMarkdown: View {
     }
 }
 
-private struct ClaudeSubagentEntry: View {
+/// 派子代理的调用下面的入口：点进去看那个子代理自己的记录（Mac 是一行小标签，这里是整行、留够点按的高度）。
+struct AgentSubagentEntry: View {
     let link: AgentSubagentLink
     let action: () -> Void
 
@@ -1651,7 +1457,7 @@ private struct ClaudeUpdatingBadge: View {
 }
 
 /// 往上翻着时末尾来了新内容：底部的「有新消息」，点了跳到底。同 Mac。
-private struct ClaudeNewMessagesPill: View {
+struct AgentNewMessagesPill: View {
     let action: () -> Void
 
     var body: some View {
@@ -1673,64 +1479,26 @@ private struct ClaudeNewMessagesPill: View {
     }
 }
 
-/// 长按拷贝一段消息的文字（文字选择在手机上不好拖到整段）。
-private struct CopyMenu: ViewModifier {
-    let text: String
+// MARK: - 对话正文的平台一层（Mac 在 `AgentHistoryBrowser.swift` 里有同名的一份，见 `AgentTranscriptMessages`）
 
-    func body(content: Content) -> some View {
-        content.mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
-            Button { UIPasteboard.general.string = text } label: {
+extension View {
+    /// 长按「拷贝文字」（文字选择在手机上不好拖到整段）。文字点了才取。
+    func agentTranscriptCopyMenu(_ text: @escaping () -> String) -> some View {
+        mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
+            Button { UIPasteboard.general.string = text() } label: {
                 Label("拷贝文字", systemImage: "doc.on.doc")
             }
         }
     }
-}
 
-/// 折叠的长文字（工具结果、命令输出、压缩摘要）：默认收起；展开先给前几行，再点才给全部（仍有上限）。同 Mac。
-private struct ClaudeClippedBlock: View {
-    let id: String
-    let label: String
-    let text: AgentClippedText
-    let isError: Bool
-    @Binding var expanded: Set<String>
-
-    private var openKey: String { "\(id).open" }
-    private var fullKey: String { "\(id).full" }
-
-    var body: some View {
-        DisclosureGroup(isExpanded: binding(openKey)) {
-            VStack(alignment: .leading, spacing: 6) {
-                let showsAll = expanded.contains(fullKey)
-                let preview = text.preview(lines: AgentTranscriptLimits.previewLines,
-                                           characters: AgentTranscriptLimits.previewCharacters)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(verbatim: showsAll ? text.text : preview)
-                        .font(M.mono(12)).foregroundStyle(isError ? M.danger : M.text2)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(8)
-                }
-                .background(RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous).fill(M.fillFaint))
-                if !showsAll, preview.count < text.text.count {
-                    Button(AgentHistoryText.showAll(text.text.count)) { expanded.insert(fullKey) }
-                        .font(M.sans(12.5))
-                }
-                if text.isClipped, showsAll || preview.count >= text.text.count {
-                    Text(AgentHistoryText.clippedNote(text))
-                        .font(M.sans(12)).foregroundStyle(M.text4)
-                }
-            }
-            .padding(.top, 4)
-        } label: {
-            Text(label)
-                .font(M.sans(12.5, weight: .medium)).foregroundStyle(isError ? M.danger : M.text3)
-        }
-        .tint(M.text3)
+    /// 可展开那一行的按钮：按下缩一点、轻震。
+    func agentTranscriptPressStyle() -> some View {
+        buttonStyle(MPressStyle())
     }
 
-    private func binding(_ key: String) -> Binding<Bool> {
-        Binding(get: { expanded.contains(key) },
-                set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    /// 横屏时侧边安全区里点不到：滚动内容留在安全区内。
+    func agentTranscriptScrollChrome() -> some View {
+        mKeepsScrollContentInSafeArea()
     }
 }
 

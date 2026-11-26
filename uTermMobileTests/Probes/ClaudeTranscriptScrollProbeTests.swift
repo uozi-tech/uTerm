@@ -7,7 +7,7 @@ import XCTest
 /// 往回翻，每一步截图比对「画面实际走了多少」和「这一步挪了多少」，同时看内容总高度在滚动中变不变。
 ///
 /// 原因同 Mac：行里的 Markdown 改前在 `onAppear` 才解析，懒栈给还没出现过的行按空文档量高，往回翻时行一出现才长到真实高度，
-/// 视口里的内容跟着跳。改法见 `MTranscriptMarkdown`（`ClaudeHistoryTab.swift`）。
+/// 视口里的内容跟着跳。改法见 `AgentTranscriptMarkdown`（iOS 那份在 `ClaudeHistoryTab.swift`）。
 /// 记录是手写的假数据（长 Markdown、代码块、工具调用、短行混排），不读用户真实记录。模拟器 60Hz，这里不断言帧率。
 @MainActor
 final class ClaudeTranscriptScrollProbeTests: XCTestCase {
