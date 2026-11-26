@@ -36,9 +36,7 @@ nonisolated enum TerminalPasteSource {
     }
 
     /// 本机临时拷贝放在这里，按次新建文件名。
-    static var copiesDirectory: URL {
-        FileManager.default.temporaryDirectory.appending(path: "uterm-paste", directoryHint: .isDirectory)
-    }
+    static var copiesDirectory: URL { TerminalVideo.copiesDirectory }
 
     /// 剪贴板里有没有视频（只看类型，不读内容）。
     @MainActor
@@ -170,16 +168,9 @@ nonisolated enum TerminalPasteSource {
         }
     }
 
-    /// 拷一份到 `copiesDirectory`。扩展名取原文件的，没有就按类型取。
+    /// 拷一份到 `copiesDirectory`（见 `TerminalVideo.privateCopy`）。
     static func privateCopy(of url: URL, type: UTType?, kind: TerminalVideo.Kind = .video) throws -> TerminalVideo {
-        let raw = url.pathExtension.isEmpty ? (type?.preferredFilenameExtension ?? "") : url.pathExtension
-        let fileExtension = TerminalVideo.remoteExtension(raw, kind: kind)
-        let directory = copiesDirectory
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let copy = directory.appending(path: "\(UUID().uuidString).\(fileExtension)")
-        try FileManager.default.copyItem(at: url, to: copy)
-        let size = try copy.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        return TerminalVideo(localURL: copy, fileExtension: fileExtension, size: Int64(size), kind: kind)
+        try TerminalVideo.privateCopy(of: url, type: type, kind: kind)
     }
 
     /// 相册里的视频按文件交过来（`.current` 编码，不转码）。收到的文件导入回调一返回就会被删，所以当场拷走。

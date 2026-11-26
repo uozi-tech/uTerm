@@ -88,7 +88,9 @@ final class GhosttyTerminalBridge {
         view.search = link.search
         view.onFocusGained = { [weak self] in self?.owner?.acknowledgeProgramStatus() }
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
+        view.onPasteVideo = { [weak self] in self?.owner?.pasteVideo($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
+        view.onControlVVideo = { [weak self] in self?.owner?.handleControlVVideo($0) ?? false }
         view.scrollsPagesLocally = { [weak self] in
             // 程序自己要翻页键的时候（全屏程序开了应用光标键、开了 kitty 键盘协议、在备用屏上）交给程序。
             guard let shadow = self?.owner?.shadow else { return false }
@@ -392,6 +394,9 @@ final class GhosttySurfaceView: AppTerminalView {
     var onFocusGained: (@MainActor () -> Void)?
     var onPasteImage: (@MainActor (TerminalImage) -> Bool)?
     var onControlVImage: (@MainActor (TerminalImage) -> Bool)?
+    /// 剪贴板里是视频时的 ⌘V / ⌃V（见 `TerminalClipboardVideo`）。返回 false = 照常粘贴 / 发键。
+    var onPasteVideo: (@MainActor (TerminalClipboardVideo) -> Bool)?
+    var onControlVVideo: (@MainActor (TerminalClipboardVideo) -> Bool)?
     /// ⌃↩。返回 true = 已经替程序发了回车；false = 交回 Ghostty 自己编码。
     var onControlReturn: (@MainActor () -> Bool)?
     /// 容器还在等尺寸停稳：这期间报来的网格不发给 PTY（见 `GhosttyContainerView.syncSurfaceFrame`）。
@@ -483,15 +488,22 @@ final class GhosttySurfaceView: AppTerminalView {
 
     override func paste(_ sender: Any?) {
         if let image = TerminalImage.fromPasteboard(pasteboard), onPasteImage?(image) == true { return }
+        if let video = TerminalClipboardVideo.fromPasteboard(pasteboard), onPasteVideo?(video) == true { return }
         super.paste(sender)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.type == .keyDown, window?.firstResponder === self, event.keyCode == kVK_ANSI_V,
-           let image = TerminalImage.fromPasteboard(pasteboard) {
+        if event.type == .keyDown, window?.firstResponder === self, event.keyCode == kVK_ANSI_V {
             let mods = event.modifierFlags.intersection([.control, .command, .option, .shift])
-            if mods == .command, onPasteImage?(image) == true { return true }
-            if mods == .control, onControlVImage?(image) == true { return true }
+            if mods == .command || mods == .control {
+                if let image = TerminalImage.fromPasteboard(pasteboard) {
+                    if mods == .command, onPasteImage?(image) == true { return true }
+                    if mods == .control, onControlVImage?(image) == true { return true }
+                } else if let video = TerminalClipboardVideo.fromPasteboard(pasteboard) {
+                    if mods == .command, onPasteVideo?(video) == true { return true }
+                    if mods == .control, onControlVVideo?(video) == true { return true }
+                }
+            }
         }
         // ⌃↩：Ghostty 自己接的话按 modifyOtherKeys 发 `CSI 27;5;13~`，没开 kitty 协议的程序（shell、Claude）不认。
         // macOS 15 起系统还把 ⌃↩ 绑成「显示上下文菜单」，所以只能在 key equivalent 这一层截（换引擎前也是这样）。
