@@ -743,6 +743,23 @@ A/B（同一个包里比）：`UTermScrollTrace.scrollWakeupSyncDraw` —— `ho
 （进程内采样）、等这一帧的耗时与超时。`auto:做法,做法…` 让 App 自己用合成手指按脚本滚（装不了 XCTest 的 vphone、无人值守的真机都能跑）；
 做法后面加 `+wait<毫秒>` 改等待时限（`+wait0` 关）。真正上屏的账要再配 xctrace 的 Animation Hitches（提交表 + 换屏表）。
 
+### 22. Mac：程序接管鼠标时 ⌘ 点链接照样打开
+
+文件：`Platform/AppKit/AppTerminalView+Input.swift`（`linkMods`、`flagsChanged`、左键与 `mouseMoved` 传的修饰键、
+`PointerSelectionState.lastSurfacePoint`）。
+
+程序开了鼠标上报（Claude Code、vim、tmux 的 `?1000h` / `?1002h` / `?1006h`）时，Ghostty 只在按着 Shift 时认链接
+（`Surface.zig` 的 `cursorPosCallback` / `mouseModsWithCapture`），⌘ 点下去被当成鼠标事件报给程序，链接打不开；
+Terminal.app、iTerm2 是 ⌘ 点照样打开。这里在**程序接管着鼠标、按着 ⌘ 没按 Shift** 时，把左键和指针移动的修饰键报成 ⌘⇧：
+Ghostty 认链接前会把这个 Shift 再去掉（只剩 ⌘，正好匹配链接），左键也就不报给程序。没接管鼠标时修饰键原样（上游行为）。
+副作用：接管鼠标时 ⌘ 拖动会在终端里选字，而不是报给程序（和 Shift 拖动一样）。
+
+鼠标不动、只按下 ⌘ 时，Ghostty 的按键回调在接管鼠标时不重查链接，所以 `flagsChanged` 里按最后一次的指针位置再报一次；
+`embedded.zig` 的 `cursorPosCallback` 会丢掉同一位置的重报（防幻影移动），要先挪 1 pt 再回来。
+
+回归用例：`uTermTests/Features/Terminal/GhosttyLinkHoverTests.swift`
+（`testCommandClickOpensPathWhileProgramCapturesTheMouse`、`testCommandHoverShowsLinkWhileProgramCapturesTheMouse`）。
+
 ## manifest 改动（相对上游的 `Package.swift`）
 
 1. `libghostty` 这个 binaryTarget 从 `url:` + `checksum:` 改成 `path: "BinaryTarget/GhosttyKit.xcframework"`（同上游的 `Package.local.swift`）。
