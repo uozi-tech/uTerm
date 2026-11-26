@@ -401,23 +401,14 @@ enum AgentHistoryText {
         String(localized: "拷贝会话名", comment: "历史会话列表的菜单：把会话的名字拷贝到剪贴板")
     }
 
-    /// 行的菜单：重命名（弹出输入框）。
+    /// 行的菜单：重命名（那一行原地换成输入框）。
     static var renameSession: String {
         String(localized: "重命名…", comment: "历史会话列表的菜单：改会话的名字")
     }
 
-    /// 重命名输入框的标题与说明。
+    /// 原地改名的输入框的占位与读屏名。
     static var renameTitle: String {
         String(localized: "重命名会话", comment: "历史会话：重命名输入框的标题")
-    }
-
-    static var renameMessage: String {
-        String(localized: "新名字写回这个会话的记录，在终端里继续时也用它。",
-               comment: "历史会话：重命名输入框的说明（同 Claude Code 的 /rename）")
-    }
-
-    static var renameButton: String {
-        String(localized: "重命名", comment: "历史会话：重命名输入框里确认的按钮")
     }
 
     static var renameFailedTitle: String {

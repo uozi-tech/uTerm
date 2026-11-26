@@ -505,8 +505,8 @@ private struct ClaudeHistoryList: View {
     @State private var pendingRunReveal: String?
     /// 点了「删除会话…」、等确认的那一份。
     @State private var pendingDelete: AgentHistorySessionFile?
-    /// 点了「重命名…」的那一份（共用的 `AgentHistoryRenamePrompt`）。
-    @State private var pendingRename: AgentHistorySessionFile?
+    /// 右键「重命名…」：那一行原地换成输入框（共用的 `AgentHistoryRenaming`）。
+    @State private var renaming = AgentHistoryRenaming()
 
     private var grouping: AgentHistoryGrouping {
         AgentHistoryListPreferences.effectiveGrouping(groupingRaw, isMultiTool: history.isMultiTool)
@@ -538,7 +538,7 @@ private struct ClaudeHistoryList: View {
         .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
         .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
         .modifier(AgentHistoryDeletePrompt(history: history, file: $pendingDelete))
-        .modifier(AgentHistoryRenamePrompt(history: history, file: $pendingRename))
+        .modifier(AgentHistoryRenameFailureAlert(renaming: renaming))
     }
 
     private var searchBar: some View {
@@ -777,27 +777,35 @@ private struct ClaudeHistoryList: View {
     private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
                      run: CodeRunBoard<TermTab>.Run?) -> some View {
         let showsItsTerminal = run.map { code?.board.focusedID == $0.id && $0.showsTerminal } ?? false
-        return Button {
-            if let code, let run {
-                code.tab.focusRun(run.id)
-            } else if let code {
-                code.tab.select(file)
+        let label = AgentHistorySessionRow(
+            history: history, file: file, metadata: history.metadata[file.path], showsTool: showsTool,
+            isSelected: showsItsTerminal || history.selectedFile?.path == file.path,
+            status: { run.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) } ?? .unreported },
+            renaming: renaming)
+        return Group {
+            // 正在原地改名的那一行不包在按钮里：点输入框是改字，不是打开会话。
+            if renaming.editing?.path == file.path {
+                label
             } else {
-                history.select(file)
+                Button {
+                    if let code, let run {
+                        code.tab.focusRun(run.id)
+                    } else if let code {
+                        code.tab.select(file)
+                    } else {
+                        history.select(file)
+                    }
+                } label: {
+                    label
+                }
+                .buttonStyle(MPressStyle())
             }
-        } label: {
-            AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                                   showsTool: showsTool,
-                                   isSelected: showsItsTerminal || history.selectedFile?.path == file.path,
-                                   status: { run.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) }
-                                       ?? .unreported })
         }
-        .buttonStyle(MPressStyle())
         .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true,
                                        canDelete: history.canDelete(file), canRename: history.canRename(file),
                                        title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]),
                                        onResume: onResume, onDelete: { pendingDelete = $0 },
-                                       onRename: { pendingRename = $0 }) {
+                                       onRename: { renaming.start($0) }) {
             if let code, let run { code.tab.endRun(run.id) }
         })
     }

@@ -105,13 +105,19 @@ struct AgentHistoryTitleRow<Trailing: View>: View {
     var indicator: AgentHistoryRunIndicator = .none
     /// 不占行、读屏要念的那些（时间、大小、分支、目录），排在状态后面。
     var detail: String? = nil
+    /// 原地改名时名字换成的输入框（`AgentHistoryRenaming`）。
+    var editor: AgentHistoryTitleEditor? = nil
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         let style = AgentHistoryListStyle.platform
         HStack(spacing: 8) {
             if let tool { AgentHistoryToolBadge(tool: tool, size: style.toolBadgeSize) }
-            AgentHistoryRowTitle(title: title)
+            if let editor {
+                AgentHistoryTitleField(editor: editor).id(editor.id)
+            } else {
+                AgentHistoryRowTitle(title: title)
+            }
             AgentHistoryRunMark(indicator: indicator)
             trailing()
             AgentHistoryRowChevron()
@@ -125,8 +131,10 @@ struct AgentHistoryTitleRow<Trailing: View>: View {
 
 extension AgentHistoryTitleRow where Trailing == EmptyView {
     init(title: String, tool: AgentHistoryTool? = nil, isSelected: Bool, indicator: AgentHistoryRunIndicator = .none,
-         detail: String? = nil) {
-        self.init(title: title, tool: tool, isSelected: isSelected, indicator: indicator, detail: detail) { EmptyView() }
+         detail: String? = nil, editor: AgentHistoryTitleEditor? = nil) {
+        self.init(title: title, tool: tool, isSelected: isSelected, indicator: indicator, detail: detail, editor: editor) {
+            EmptyView()
+        }
     }
 }
 
@@ -198,14 +206,21 @@ struct AgentHistorySessionRow: View {
     var showsTool = false
     let isSelected: Bool
     var status: () -> CodeRunStatus = { .unreported }
+    /// 原地改名（右键「重命名…」）：列表的 `AgentHistoryRenaming`；这一行在改名或正写回时才有用。
+    var renaming: AgentHistoryRenaming? = nil
 
     var body: some View {
         let activity = history.liveActivity(of: file)
-        AgentHistoryTitleRow(title: AgentHistoryText.sessionTitle(file, metadata: metadata),
-                             tool: showsTool ? file.tool : nil, isSelected: isSelected,
+        let rename = renaming?.state(of: file, in: history)
+        let title: String = if case .saving(let title) = rename { title } else {
+            AgentHistoryText.sessionTitle(file, metadata: metadata)
+        }
+        let editor: AgentHistoryTitleEditor? = if case .editing(let editor) = rename { editor } else { nil }
+        AgentHistoryTitleRow(title: title, tool: showsTool ? file.tool : nil, isSelected: isSelected,
                              indicator: AgentHistoryRunIndicator(status()),
                              detail: AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: true,
-                                                                      activity: activity))
+                                                                      activity: activity),
+                             editor: editor)
             .help(Text(verbatim: AgentHistoryText.sessionRowHelp(file, metadata: metadata, activity: activity)))
     }
 }
@@ -549,41 +564,123 @@ struct AgentHistoryDeletePrompt: ViewModifier {
 
 // MARK: - 重命名
 
-/// 「重命名…」的输入框和改不了时的提示，两端共用。`file` 非 nil 时弹出，输入框里先放现在的名字。
-struct AgentHistoryRenamePrompt: ViewModifier {
-    let history: AgentHistoryModel
-    @Binding var file: AgentHistorySessionFile?
-    @State private var text = ""
-    @State private var failure: String?
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: file?.path, initial: true) { _, _ in
-                if let file { text = AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]) }
-            }
-            .alert(AgentHistoryText.renameTitle, isPresented: Binding(get: { file != nil }, set: { if !$0 { file = nil } }),
-                   presenting: file) { target in
-                TextField(AgentHistoryText.renameTitle, text: $text)
-                Button(AgentHistoryText.renameButton) { rename(target, to: text) }
-                Button(String(localized: "取消"), role: .cancel) {}
-            } message: { _ in
-                Text(AgentHistoryText.renameMessage)
-            }
-            .alert(AgentHistoryText.renameFailedTitle, isPresented: Binding(get: { failure != nil },
-                                                                           set: { if !$0 { failure = nil } })) {
-                Button(String(localized: "好")) {}
-            } message: {
-                Text(verbatim: failure ?? "")
-            }
+/// 右键「重命名…」：那一行的名字原地换成输入框（同 Claude Code Desktop，不弹窗）。回车或点到别处写回，Esc 不改；
+/// 名字没变、清空了也不改。写回的那一会儿行上已经是新名字，写不回去时退回原来的名字、提示原因。两端共用，列表各持一个，
+/// 行照 `state(of:in:)` 画（`AgentHistorySessionRow.renaming`），失败的提示由 `AgentHistoryRenameFailureAlert` 弹。
+@MainActor @Observable
+final class AgentHistoryRenaming {
+    enum RowState: Equatable {
+        case editing(AgentHistoryTitleEditor)
+        case saving(String)
     }
 
-    private func rename(_ target: AgentHistorySessionFile, to title: String) {
+    /// 正在改名的那一行。一次只有一行。
+    private(set) var editing: AgentHistorySessionFile?
+    /// 正在写回的：记录路径 → 新名字。
+    private var saving: [String: String] = [:]
+    /// 写不回去的原因（弹提示）。
+    var failure: String?
+
+    func start(_ file: AgentHistorySessionFile) {
+        editing = file
+    }
+
+    func state(of file: AgentHistorySessionFile, in history: AgentHistoryModel) -> RowState? {
+        if editing?.path == file.path {
+            let initial = AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])
+            return .editing(AgentHistoryTitleEditor(
+                id: file.path, initial: initial,
+                commit: { [weak self] title in self?.commit(file, title: title, initial: initial, history: history) },
+                cancel: { [weak self] in self?.finishEditing(file) }))
+        }
+        return saving[file.path].map(RowState.saving)
+    }
+
+    private func finishEditing(_ file: AgentHistorySessionFile) {
+        if editing?.path == file.path { editing = nil }
+    }
+
+    private func commit(_ file: AgentHistorySessionFile, title: String, initial: String, history: AgentHistoryModel) {
+        guard editing?.path == file.path else { return }
+        finishEditing(file)
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != initial else { return }
+        saving[file.path] = trimmed
         Task {
+            defer { saving[file.path] = nil }
             do {
-                try await history.rename(target, to: title)
+                try await history.rename(file, to: trimmed)
             } catch {
                 failure = FriendlyError.describe(error)
             }
+        }
+    }
+}
+
+/// 原地改名的输入框收到的东西：一开始的名字、回车 / 点到别处时交回的新名字、Esc。
+struct AgentHistoryTitleEditor: Equatable {
+    /// 哪一行（记录路径）：换一行改名时输入框重来。
+    let id: String
+    let initial: String
+    let commit: (String) -> Void
+    let cancel: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id && lhs.initial == rhs.initial }
+}
+
+/// 行上原地改名的输入框：样子同名字（同样的字号、没有边框），出现时就有焦点（Mac 上全选着原来的名字）。
+struct AgentHistoryTitleField: View {
+    let editor: AgentHistoryTitleEditor
+    @State private var text: String
+    @State private var finished = false
+    @FocusState private var focused: Bool
+
+    init(editor: AgentHistoryTitleEditor) {
+        self.editor = editor
+        _text = State(initialValue: editor.initial)
+    }
+
+    var body: some View {
+        TextField(AgentHistoryText.renameTitle, text: $text)
+            .textFieldStyle(.plain)
+            .font(.system(size: AgentHistoryListStyle.platform.titleSize))
+            .foregroundStyle(UD.text)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .focused($focused)
+            // 等挂进窗口再要焦点：`onAppear` 里要的那一下常落空（右键菜单收起时也还在把焦点交回原处）。
+            .task {
+                await Task.yield()
+                focused = true
+            }
+            .onSubmit { finish { editor.commit(text) } }
+            .onKeyPress(.escape) {
+                finish { editor.cancel() }
+                return .handled
+            }
+            // 点到别处（失去焦点）也写回，同访达里改文件名。
+            .onChange(of: focused) { _, now in
+                if !now { finish { editor.commit(text) } }
+            }
+    }
+
+    private func finish(_ action: () -> Void) {
+        guard !finished else { return }
+        finished = true
+        action()
+    }
+}
+
+/// 写不回去时的提示（`AgentHistoryRenaming.failure`）。
+struct AgentHistoryRenameFailureAlert: ViewModifier {
+    let renaming: AgentHistoryRenaming
+
+    func body(content: Content) -> some View {
+        content.alert(AgentHistoryText.renameFailedTitle,
+                      isPresented: Binding(get: { renaming.failure != nil }, set: { if !$0 { renaming.failure = nil } })) {
+            Button(String(localized: "好")) {}
+        } message: {
+            Text(verbatim: renaming.failure ?? "")
         }
     }
 }

@@ -49480,6 +49480,7 @@
     },
     "新名字写回这个会话的记录，在终端里继续时也用它。" : {
       "comment" : "历史会话：重命名输入框的说明（同 Claude Code 的 /rename）",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

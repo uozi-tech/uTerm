@@ -181,8 +181,8 @@ struct AgentHistorySessionList: View {
     @State private var pendingRunReveal: String?
     /// 点了「删除会话…」、等确认的那一份。
     @State private var pendingDelete: AgentHistorySessionFile?
-    /// 点了「重命名…」的那一份（`AgentHistoryRenamePrompt`）。
-    @State private var pendingRename: AgentHistorySessionFile?
+    /// 右键「重命名…」：那一行原地换成输入框（共用的 `AgentHistoryRenaming`）。
+    @State private var renaming = AgentHistoryRenaming()
 
     /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
     private var grouping: AgentHistoryGrouping {
@@ -216,7 +216,7 @@ struct AgentHistorySessionList: View {
         // 别的窗口改了置顶：新置顶的那几个先读出来。
         .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
         .modifier(AgentHistoryDeletePrompt(history: history, file: $pendingDelete))
-        .modifier(AgentHistoryRenamePrompt(history: history, file: $pendingRename))
+        .modifier(AgentHistoryRenameFailureAlert(renaming: renaming))
     }
 
     private var header: some View {
@@ -462,7 +462,7 @@ struct AgentHistorySessionList: View {
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                           showsTool: showsTool,
                                           isSelected: history.selectedFile?.path == file.path || run?.isSelected == true,
-                                          status: { run?.status.read() ?? .unreported })
+                                          status: { run?.status.read() ?? .unreported }, renaming: renaming)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { rowWidth = $0 }
             .onTapGesture {
                 if let run, let running { running.onSelect(run.id) } else { history.select(file) }
@@ -473,7 +473,8 @@ struct AgentHistorySessionList: View {
                 .modifier(AgentHistoryPinDragRowState(drag: pinDrag, key: key, pinned: isPinned ? pinned : nil))
                 .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: isPinned ? .pinnedRow(key) : nil))
                 // 不用 `.onDrag`：它没有死区，点一下行时手一抖就起拖、冒出预览，这次点击也被吞掉（同标签页）。
-                .dragSource(item: {
+                // 正在改名的那一行不起拖（在输入框里拖着选字）。
+                .dragSource(canBegin: { renaming.editing?.path != file.path }, item: {
                     pinDrag.begin(key)
                     return AgentHistoryPinDragPayload.pasteboardItem()
                 }) {
@@ -488,7 +489,7 @@ struct AgentHistorySessionList: View {
     private func rowMenu(_ file: AgentHistorySessionFile, pins: AgentHistoryPins?, run: AgentHistoryRunRow?) -> AgentHistoryRowMenu {
         AgentHistoryRowMenu(file: file, pins: pins, run: run, actions: running?.actions,
                             drag: pins == nil ? nil : pinDrag, history: history, onResume: onResume,
-                            onDelete: { pendingDelete = $0 }, onRename: { pendingRename = $0 },
+                            onDelete: { pendingDelete = $0 }, onRename: { renaming.start($0) },
                             isSelected: history.selectedFile?.path == file.path || run?.isSelected == true)
     }
 
