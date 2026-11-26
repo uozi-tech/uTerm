@@ -748,6 +748,9 @@ private struct ClaudeHistoryList: View {
                 .padding(8)
             }
             .mKeepsScrollContentInSafeArea()
+            // 侧栏的行是懒加载的，内容高度边滚边估、边展开收起边变，滚动条的长短和位置一跳一跳的（用户报的）；
+            // 同 Mac 侧栏不显示滚动条。
+            .scrollIndicators(.never)
             // 下拉刷新：重新列项目与会话（读过的信息按缓存复用）。
             // 下拉刷新：列表不换成「正在读取…」（那样内容会消失一下、转圈跟着闪），安静地重列。
             .refreshable { await history.reload(showsLoading: false) }
