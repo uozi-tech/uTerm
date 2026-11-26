@@ -76,18 +76,21 @@ enum AgentHistoryStateIcon {
     case conversation
 }
 
-/// 选中的行：底色。两端同一个。
-private struct AgentHistoryRowBackground: ViewModifier {
+/// 选中的行：底色。两端同一个。用中性的灰（`UD.fillSoft`），不用跟着强调色的 `rowSelected`（同 Claude Code Desktop）；
+/// 比悬停的那一档（`rowHover`）深一点，看得出选中。
+struct AgentHistoryRowBackground: ViewModifier {
     let isSelected: Bool
 
     func body(content: Content) -> some View {
         content
             .background(RoundedRectangle(cornerRadius: AgentHistoryListStyle.platform.rowRadius, style: .continuous)
-                .fill(isSelected ? UD.rowSelected : Color.clear))
+                .fill(isSelected ? AgentHistoryRowBackground.selected : Color.clear))
             .contentShape(Rectangle())
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
+
+    static var selected: Color { UD.fillSoft }
 }
 
 // MARK: - 会话一行

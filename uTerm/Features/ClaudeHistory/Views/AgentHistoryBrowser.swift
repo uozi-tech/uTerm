@@ -723,7 +723,7 @@ struct AgentHistoryRowMoreButton<Items: View>: View {
         .background {
             // 右边两个角同这一行选中底色的圆角（6）。
             let strip = UnevenRoundedRectangle(bottomTrailingRadius: 6, topTrailingRadius: 6)
-            strip.fill(UD.card).overlay(strip.fill(isSelected ? UD.rowSelected : Color.clear))
+            strip.fill(UD.card).overlay(strip.fill(isSelected ? AgentHistoryRowBackground.selected : Color.clear))
         }
     }
 }
