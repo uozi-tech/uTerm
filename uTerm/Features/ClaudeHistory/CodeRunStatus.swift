@@ -51,9 +51,9 @@ nonisolated struct CodeRunGroupMark: Equatable, Sendable {
     }
 }
 
-/// 侧栏一行上跑着的会话怎么标（同 Claude Code Desktop）：只有等人处理（等确认、等回答、要登录）时右端一个黄点；
-/// 运行中是名字一明一暗（`AgentHistoryRowTitle`），不画点；出错是一个警示图标；空闲、已完成、已结束、没报过状态的
-/// 什么都不画——侧栏只在要人动手时提醒，其余时候安静。两端共用这一条规则，界面只画。
+/// 侧栏一行上跑着的会话怎么标（同 Claude Code Desktop），都在行的右端：运行中一个灰色的呼吸灯；等人处理（等确认、
+/// 等回答、要登录）一个黄点；出错一个警示图标；空闲、已完成、已结束、没报过状态的什么都不画。名字本身不变。
+/// 两端共用这一条规则，界面只画（`AgentHistoryRunMark`）。
 nonisolated enum AgentHistoryRunIndicator: Equatable, Sendable {
     case none
     case working

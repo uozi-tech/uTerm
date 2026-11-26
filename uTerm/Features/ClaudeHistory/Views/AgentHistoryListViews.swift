@@ -96,7 +96,7 @@ private struct AgentHistoryRowChevron: View {
 // MARK: - 会话一行
 
 /// 列表一行的样子（同 Claude Code Desktop 的侧栏）：只有一行名字；组里不止一种工具时前面一个小工具标记。
-/// 跑着的会话照 `AgentHistoryRunIndicator`：运行中名字一明一暗，等人处理时右端一个黄点，出错时一个警示图标
+/// 跑着的会话照 `AgentHistoryRunIndicator` 在右端标：运行中一个灰色的呼吸灯，等人处理时一个黄点，出错时一个警示图标
 /// （Mac 上悬停时右端由 × 盖住）。会话行、还没对上记录的跑着的会话那一行都用它。
 struct AgentHistoryTitleRow<Trailing: View>: View {
     let title: String
@@ -111,7 +111,7 @@ struct AgentHistoryTitleRow<Trailing: View>: View {
         let style = AgentHistoryListStyle.platform
         HStack(spacing: 8) {
             if let tool { AgentHistoryToolBadge(tool: tool, size: style.toolBadgeSize) }
-            AgentHistoryRowTitle(title: title, breathing: indicator == .working)
+            AgentHistoryRowTitle(title: title)
             AgentHistoryRunMark(indicator: indicator)
             trailing()
             AgentHistoryRowChevron()
@@ -130,49 +130,34 @@ extension AgentHistoryTitleRow where Trailing == EmptyView {
     }
 }
 
-/// 一行的名字。`breathing`（会话在运行）时一明一暗，同 Claude Code Desktop：底下是淡色的字，上面盖一层正常颜色、
-/// 透明度来回变的填充，裁成同样的字形。明暗由 Core Animation 插值（`UDMotionShape`），不用 SwiftUI 的常驻动画
-/// （会让整窗每帧重画、窗口不可见也照跑，见 `CAMotion.swift` 开头）。减弱动态效果时不动，照常显示。
+/// 一行的名字：一行，长了截断。
 struct AgentHistoryRowTitle: View {
     let title: String
-    var breathing = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// 一来一回的时长（秒）与最暗时盖着的那层还剩多少。
-    static let breath = UDMotion(opacity: .init(from: 1, to: 0.2), duration: 1.1, autoreverses: true,
-                                 timing: .easeInEaseOut)
 
     var body: some View {
-        if breathing, !reduceMotion {
-            label.foregroundStyle(UD.text4)
-                .overlay {
-                    UDMotionShape(color: UD.text, content: .fill(cornerRadius: 0, size: nil), motion: Self.breath)
-                        .mask { label }
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-        } else {
-            label.foregroundStyle(UD.text)
-        }
-    }
-
-    private var label: some View {
         Text(verbatim: title)
             .font(.system(size: AgentHistoryListStyle.platform.titleSize))
+            .foregroundStyle(UD.text)
             .lineLimit(1)
             .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// 行右端的标记：等人处理一个黄点，出错一个警示图标，别的什么都不画。说明放进悬停提示与读屏。
+/// 行右端的标记：运行中一个灰色的呼吸灯，等人处理一个黄点，出错一个警示图标，别的什么都不画。说明放进悬停提示与读屏。
+/// 呼吸灯是 uAppKit 的 `UDBreathingDot`（Core Animation 插值，不用 SwiftUI 的常驻动画；减弱动态效果时常亮）。
 struct AgentHistoryRunMark: View {
     let indicator: AgentHistoryRunIndicator
 
     var body: some View {
         switch indicator {
-        case .none, .working:
+        case .none:
             EmptyView()
+        case .working:
+            UDBreathingDot(color: UD.text3, size: 7, dimOpacity: 0.25, duration: 1.1)
+                .padding(.horizontal, 3)
+                .help(Text(verbatim: indicator.label ?? ""))
+                .accessibilityHidden(true)
         case .needsInput(let record):
             AgentHistoryRunDot(color: UD.warning, label: record.statusLabel, help: record.tabHelp)
         case .error(let record):
