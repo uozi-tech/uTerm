@@ -29,6 +29,8 @@ struct CodeTabView: View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(UD.card)
+            // 侧栏、终端、对话记录顶上那一行下面都不画横线（试效果）。
+            .environment(\.agentHistoryHeaderDivider, false)
             .task { await code.open(makeConnection) }
     }
 
@@ -188,7 +190,6 @@ private struct CodeTabBrowser: View {
             .padding(.leading, 12)
             .padding(.trailing, 8)
             .frame(height: AgentHistorySessionList.headerHeight)
-            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 

@@ -181,10 +181,12 @@ struct AgentHistorySessionList: View {
         AgentHistoryListPreferences.groupingChoices(isMultiTool: history.isMultiTool)
     }
 
+    @Environment(\.agentHistoryHeaderDivider) private var showsHeaderDivider
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(UD.border).frame(height: 1)
+            if showsHeaderDivider { Rectangle().fill(UD.border).frame(height: 1) }
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
                 content
@@ -1220,11 +1222,12 @@ struct AgentTranscriptPane: View {
     var onJumpToLatest: () -> Void = {}
 
     @State private var expanded: Set<String> = []
+    @Environment(\.agentHistoryHeaderDivider) private var showsHeaderDivider
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(UD.border).frame(height: 1)
+            if showsHeaderDivider { Rectangle().fill(UD.border).frame(height: 1) }
             if transcript.opensAtHit, !transcript.reachedEnd {
                 hitBanner
                 Rectangle().fill(UD.border).frame(height: 1)
@@ -1755,4 +1758,10 @@ struct AgentHistoryPinDragPreview: ViewModifier {
             .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
             .padding(10)
     }
+}
+
+extension EnvironmentValues {
+    /// 会话列表、对话记录顶上那一行下面画不画横线。Code 标签页里不画（侧栏与右边的标题行连成一片）；
+    /// 独立的历史会话窗口照旧画。
+    @Entry var agentHistoryHeaderDivider = true
 }
