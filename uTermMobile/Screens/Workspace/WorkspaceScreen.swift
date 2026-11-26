@@ -40,6 +40,14 @@ struct WorkspaceScreen: View {
 
     private var visible: Bool { store.showWorkspace }
 
+    /// 侧列按钮移进状态栏那一列，并把中线挪到状态栏内容的中线上。
+    private func sideControlsOffset(_ column: (edge: HorizontalEdge, width: CGFloat, statusBottom: CGFloat)) -> CGFloat {
+        let center = chrome.statusColumnControlCenter ?? column.width / 2
+        // 列中线 → 状态栏中线：往屏幕里挪。
+        let inward = center - column.width / 2
+        return column.edge == .leading ? -column.width + inward : column.width - inward
+    }
+
     var body: some View {
         ZStack {
             // 只在连接请求刚到、标签还没开出来的一瞬为空（连接中页正盖着），什么也不画。
@@ -60,7 +68,8 @@ struct WorkspaceScreen: View {
                     onToggleSplit: toggleSplit)
                     .frame(width: column.width)
                     .padding(.top, column.statusBottom)
-                    .offset(x: column.edge == .leading ? -column.width : column.width)
+                    // 与状态栏里的时间对齐（见 statusColumnControlCenter），不是按列宽居中。
+                    .offset(x: sideControlsOffset(column))
             }
         }
         .onChange(of: store.openTarget) { _, t in consume(t) }

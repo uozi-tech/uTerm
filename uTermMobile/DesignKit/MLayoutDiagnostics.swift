@@ -42,6 +42,7 @@ struct MLayoutDiagnosticsOverlay: View {
         lines.append("container \(e(chrome.containerMargins))")
         lines.append("topBar \(chrome.topBar.map(r) ?? "nil")")
         lines.append("cornerSafeH \(chrome.cornerSafeArea.map(r) ?? "nil")")
+        lines.append("sideBar \(chrome.sideBar.map(r) ?? "nil")  controlCenter \(chrome.statusColumnControlCenter.map { "\($0)" } ?? "nil")")
         lines.append("unfolded \(chrome.isUnfoldedPhone)  row \(chrome.statusRowHeight.map { "\($0)" } ?? "nil")  column \(chrome.statusColumn.map { "\($0.width)/\($0.statusBottom)" } ?? "nil")")
         for (i, tab) in workspace.terminalTabs.enumerated() {
             let view = tab.controller.terminal.view

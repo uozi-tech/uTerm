@@ -33,6 +33,10 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
     /// 把屏幕角上的系统元素（Duo 竖屏右上角的状态栏）当「角」，在横向让开它、纵向不再整条让出顶边。
     /// 它伸进顶部安全区时，右沿就是状态栏左侧能用到的位置。iOS 26 以下为 nil。
     var cornerSafeArea: CGRect?
+    /// 系统在侧边竖栏那一边（`verticalBarEdge`）给「贴边的自绘竖条（宽 `topBarExtent`）」划的区域（全局坐标，
+    /// UIKit `UIView.LayoutRegion.bar(onEdge:extent:)`，iOS 27.1）。状态栏里的时间、信号按它的中线排，
+    /// 见 `statusColumnControlCenter`。没有竖栏时为 nil。
+    var sideBar: CGRect?
     /// 这台设备是展开的 iPhone Duo（见 `isUnfoldedPhone(idiom:screenSize:)`）。
     var isUnfoldedPhone = false
 
@@ -104,6 +108,20 @@ nonisolated extension MChromeGeometry {
         let width = inset(edge)
         guard width > 0, abs(bar.width - width) <= 2 else { return nil }
         return (edge, width, bar.maxY - root.minY)
+    }
+
+    /// 放在侧列里的按钮的横向中心，离状态栏那一侧屏幕边多远。
+    ///
+    /// 系统状态栏里的时间、信号不在安全区那一列的正中，而在系统给侧边竖栏划的区域的中线上，往屏幕里偏约 6pt
+    /// （Duo 实测：列宽 84，竖栏区域 x 24–72，中线离边 48）。按列宽居中的按钮看着比状态栏偏外。
+    /// 量不到竖栏区域、或它的中线不在这一列里时，退回列的中线。
+    var statusColumnControlCenter: CGFloat? {
+        guard let column = statusColumn else { return nil }
+        let fallback = column.width / 2
+        guard let sideBar, sideBar.width > 0 else { return fallback }
+        let screen = screen
+        let distance = column.edge == .leading ? sideBar.midX - screen.minX : screen.maxX - sideBar.midX
+        return distance > 0 && distance < column.width ? distance : fallback
     }
 
     /// 状态栏占侧边一整列、顶边没有安全区（Duo 外屏竖握 / 横握、Duo 展开横屏）。
@@ -202,6 +220,7 @@ extension MChromeGeometry {
         var g = self
         g.topBar = probe.topBar
         g.cornerSafeArea = probe.cornerSafeArea
+        g.sideBar = probe.sideBar
         g.isUnfoldedPhone = probe.isUnfoldedPhone
         g.verticalBarEdge = probe.verticalBarEdge
         g.reportsVerticalBarEdge = probe.reportsVerticalBarEdge
@@ -220,6 +239,7 @@ extension MChromeGeometry {
 nonisolated struct MChromeProbeResult: Equatable, Sendable {
     var topBar: CGRect?
     var cornerSafeArea: CGRect?
+    var sideBar: CGRect?
     var isUnfoldedPhone = false
     /// 全部遮挡保留区（窗口坐标，含非活动）。状态栏从活动的里挑，见 `MChromeGeometry.statusBar(among:)`。
     var occlusion: [MChromeGeometry.RawRegion] = []
@@ -287,6 +307,12 @@ private struct MTopBarProbe: UIViewRepresentable {
                 case .leading: .leading
                 case .trailing: .trailing
                 default: nil
+                }
+                if let edge = result.verticalBarEdge {
+                    let leftToRight = effectiveUserInterfaceLayoutDirection == .leftToRight
+                    let rectEdge: UIRectEdge = (edge == .leading) == leftToRight ? .left : .right
+                    let insets = edgeInsets(for: .bar(onEdge: rectEdge, extent: MChromeGeometry.topBarExtent))
+                    result.sideBar = convert(bounds.inset(by: insets), to: window)
                 }
             }
             guard last != result else { return }

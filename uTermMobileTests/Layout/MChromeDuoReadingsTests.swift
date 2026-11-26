@@ -14,7 +14,8 @@ final class MChromeDuoReadingsTests: XCTestCase {
     /// 按整屏尺寸与安全区造几何值，再叠上 UIKit 探针的遮挡区与竖栏。
     private func chrome(screen: CGSize, top: CGFloat = 0, leading: CGFloat = 0, bottom: CGFloat = 34,
                         trailing: CGFloat = 0, occlusion: [MChromeGeometry.RawRegion],
-                        verticalBar: HorizontalEdge? = nil, reportsVerticalBar: Bool = true) -> MChromeGeometry {
+                        verticalBar: HorizontalEdge? = nil, reportsVerticalBar: Bool = true,
+                        sideBar: CGRect? = nil) -> MChromeGeometry {
         let base = MChromeGeometry(
             root: CGRect(x: leading, y: top, width: screen.width - leading - trailing,
                          height: screen.height - top - bottom),
@@ -23,6 +24,7 @@ final class MChromeDuoReadingsTests: XCTestCase {
         probe.occlusion = occlusion
         probe.verticalBarEdge = verticalBar
         probe.reportsVerticalBarEdge = reportsVerticalBar
+        probe.sideBar = sideBar
         return base.merging(probe)
     }
 
@@ -40,6 +42,38 @@ final class MChromeDuoReadingsTests: XCTestCase {
     private var foldedLandscape: MChromeGeometry {
         chrome(screen: CGSize(width: 678, height: 466), leading: 84,
                occlusion: [region(29, 29, 37, 37), region(0, 0, 84, 82)], verticalBar: .leading)
+    }
+
+    // MARK: - 侧列按钮与状态栏对齐
+
+    /// 实机反馈：展开横屏侧列里的分屏按钮比上面的时间、信号偏外约 6pt。系统的状态栏内容按侧边竖栏区域的
+    /// 中线排（Duo 模拟器折叠横握实测 `bar(onEdge: .left)` = (24,82 48×350)，中线离边 48；列宽 84）。
+    func testSideControlsFollowTheVerticalBarNotTheColumnMiddle() throws {
+        let folded = chrome(screen: CGSize(width: 678, height: 466), leading: 84,
+                            occlusion: [region(29, 29, 37, 37), region(0, 0, 84, 82)], verticalBar: .leading,
+                            sideBar: CGRect(x: 24, y: 82, width: 48, height: 350))
+        XCTAssertEqual(folded.statusColumnControlCenter, 48)
+
+        let unfolded = chrome(screen: CGSize(width: 951, height: 669), trailing: 84,
+                              occlusion: [region(867, 0, 84, 124)], verticalBar: .trailing,
+                              sideBar: CGRect(x: 879, y: 124, width: 48, height: 500))
+        XCTAssertEqual(unfolded.statusColumnControlCenter, 48, "右边一列从右沿量")
+    }
+
+    func testSideControlsFallBackToTheColumnMiddle() {
+        XCTAssertEqual(unfoldedLandscape.statusColumnControlCenter, 42, "没量到竖栏区域")
+        let outside = chrome(screen: CGSize(width: 951, height: 669), trailing: 84,
+                             occlusion: [region(867, 0, 84, 124)], verticalBar: .trailing,
+                             sideBar: CGRect(x: 0, y: 0, width: 951, height: 669))
+        XCTAssertEqual(outside.statusColumnControlCenter, 42, "竖栏区域的中线不在这一列里就不认")
+    }
+
+    func testNoSideColumnMeansNoControlCenter() {
+        // 普通 iPhone 竖屏：顶部有安全区，没有侧列。
+        let phone = chrome(screen: CGSize(width: 402, height: 874), top: 62,
+                           occlusion: [region(0, 0, 402, 62)], verticalBar: nil,
+                           sideBar: CGRect(x: 24, y: 62, width: 48, height: 700))
+        XCTAssertNil(phone.statusColumnControlCenter)
     }
 
     func testUnfoldedLandscapeColumnSitsBelowTheStatusBar() throws {
