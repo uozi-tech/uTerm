@@ -682,3 +682,24 @@ struct AgentHistoryRenameFailureAlert: ViewModifier {
         }
     }
 }
+
+// MARK: - 主机上正在运行的会话
+
+/// 列表露着时隔几秒读一次主机上在跑的会话（`AgentHistoryModel.setLiveSessionsVisible`）：出现时开始、消失时停，
+/// App 进了后台也停，回来马上读一次。两端的列表各挂一个（Mac 的 `AgentHistorySessionList`、iOS 的 `ClaudeHistoryList`）。
+/// `active`：平台另外知道的「列表其实不在屏上」（iOS 窄屏上详情盖着列表、标签不在前台）。
+struct AgentHistoryLiveSessionsPolling: ViewModifier {
+    let history: AgentHistoryModel
+    var active = true
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var visible: Bool { active && scenePhase != .background }
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { history.setLiveSessionsVisible(visible) }
+            .onDisappear { history.setLiveSessionsVisible(false) }
+            .onChange(of: visible) { _, visible in history.setLiveSessionsVisible(visible) }
+    }
+}

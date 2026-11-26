@@ -67,9 +67,16 @@ nonisolated extension AgentHistoryListing {
     /// 等人处理 > 正在干活 / 出错 > 停在输入框（空闲、没报过）；同一档照原来的先后。组按组里最靠前的那一档排。
     /// 已结束、留着画面的不往前挪。「置顶」一组照旧在最上面，组里是用户自己排的顺序，不挪。组的 ID 不变，
     /// `placement` 照样能用。`status` 在列表的 body 里读：状态变了列表重排。
+    ///
+    /// `host`：记录路径 → 主机上那个会话此刻的状态（`AgentHistoryLiveRuns`；在别处开的、另一台设备开的也在里面）。
+    /// 一行算不算在跑、排哪一档，本设备的与主机上的两路取更要紧的（`CodeRunStatus.listRank(local:host:)`）：
+    /// 同一台主机上，手机和电脑读到的是同一张表，排出来一样。
     static func prioritizingRuns<Run>(_ groups: [AgentHistoryGroup], placement: AgentHistoryRunPlacement<Run>,
-                                      status: (Run) -> CodeRunStatus) -> [AgentHistoryGroup] {
-        func rank(_ path: String) -> Int { placement.inList[path].map { status($0).listRank } ?? 0 }
+                                      status: (Run) -> CodeRunStatus,
+                                      host: (String) -> CodeRunStatus? = { _ in nil }) -> [AgentHistoryGroup] {
+        func rank(_ path: String) -> Int {
+            CodeRunStatus.listRank(local: placement.inList[path].map(status), host: host(path))
+        }
         var ranked: [(rank: Int, index: Int, group: AgentHistoryGroup)] = []
         var pinned: [AgentHistoryGroup] = []
         for (index, var group) in groups.enumerated() {

@@ -222,6 +222,27 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     func subagents(of target: AgentTranscriptTarget) async throws -> [AgentSubagentFile] { [] }
 
+    // MARK: 主机上正在运行的会话
+
+    /// 主机上此刻在跑的会话（`liveSessions` 照它回）；`liveError` 不为 nil 时抛它（断线）。
+    private var live: [AgentLiveSession] = []
+    private var liveError: (any Error)?
+    /// 读过几次。
+    private(set) var liveReads = 0
+    func setLiveSessions(_ sessions: [AgentLiveSession]) { live = sessions }
+    func setLiveError(_ error: (any Error)?) { liveError = error }
+
+    /// 一个在跑的会话（这种工具的，进程号随便给）。
+    nonisolated func liveSession(_ id: String, _ state: AgentLiveSession.State) -> AgentLiveSession {
+        AgentLiveSession(tool: tool, sessionID: id, pid: 100, directory: nil, state: state)
+    }
+
+    func liveSessions() async throws -> [AgentLiveSession] {
+        liveReads += 1
+        if let liveError { throw liveError }
+        return live
+    }
+
     func info(of subagent: AgentSubagentFile) async -> AgentSubagentInfo? { nil }
 
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {

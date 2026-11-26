@@ -217,6 +217,7 @@ struct AgentHistorySessionList: View {
         .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
         .modifier(AgentHistoryDeletePrompt(history: history, file: $pendingDelete))
         .modifier(AgentHistoryRenameFailureAlert(renaming: renaming))
+        .modifier(AgentHistoryLiveSessionsPolling(history: history))
     }
 
     private var header: some View {
@@ -377,7 +378,10 @@ struct AgentHistorySessionList: View {
         // 哪一组都对不上的才在列表最顶上。跑着的排在组的最前面、它那一组排在前面。
         let placement = AgentHistoryRunPlacement(runs: runs, path: \.path, directory: \.directory, tool: \.tool,
                                                  groups: listed)
-        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: { $0.status.read() })
+        // 主机上在跑的会话（在别处开的也算）：同样排前面、行右端标状态；和本设备跑着的两路合起来（`CodeRunStatus.merging`）。
+        let host = history.hostRunStatuses
+        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: { $0.status.read() },
+                                                          host: { host[$0] })
         let selectedRunPath = runs.first(where: \.isSelected)?.path
         // 选中的新会话放在哪一组（它那一组收着就打开）。
         let selectedLeadingGroup = placement.groupID(ofLeading: \.isSelected)
@@ -400,9 +404,10 @@ struct AgentHistorySessionList: View {
                         ForEach(groups) { group in
                             let collapsed = history.collapsedGroups.contains(group.id)
                             if AgentHistoryListing.showsHeader(group, in: groups) {
-                                let statuses = collapsed ? placement.runs(in: group).map(\.status) : []
-                                AgentHistoryGroupHeader(group: group, collapsed: collapsed,
-                                                        runs: { statuses.map { $0.read() } }) {
+                                AgentHistoryGroupHeader(group: group, collapsed: collapsed, runs: {
+                                    guard collapsed else { return [] }
+                                    return placement.statuses(in: group, status: { $0.status.read() }, host: { host[$0] })
+                                }) {
                                     toggle(group.id)
                                 }
                                 .id(group.id)
@@ -417,7 +422,7 @@ struct AgentHistorySessionList: View {
                                 }
                                 ForEach(group.files) { file in
                                     row(file, in: group, showsTool: showsTool, pins: pins, pinned: pinned,
-                                        run: placement.inList[file.path])
+                                        run: placement.inList[file.path], host: host[file.path])
                                 }
                             }
                         }
@@ -458,14 +463,17 @@ struct AgentHistorySessionList: View {
     /// 一行会话：点一下选中；Mac 上能拖进 / 拖出「置顶」，右键「置顶」/「取消置顶」（同一件事，菜单好找）。
     /// `run`：这份记录正在 Code 标签页里跑着——行上写它此刻的状态，点一下回到它的终端，右键是跑着的会话那几样操作
     ///（含置顶），悬停出 ×。照样能拖进 / 拖出「置顶」。
+    /// `host`：主机上那个会话此刻的状态（在别处开的也有）：只影响行右端的标记，操作照旧只对 `run` 有。
     @ViewBuilder
     private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
-                     pins: AgentHistoryPins?, pinned: [AgentHistorySessionFile], run: AgentHistoryRunRow?) -> some View {
+                     pins: AgentHistoryPins?, pinned: [AgentHistorySessionFile], run: AgentHistoryRunRow?,
+                     host: CodeRunStatus?) -> some View {
         let key = AgentHistoryPinKey(file)
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                           showsTool: showsTool,
                                           isSelected: history.selectedFile?.path == file.path || run?.isSelected == true,
-                                          status: { run?.status.read() ?? .unreported }, renaming: renaming)
+                                          status: { CodeRunStatus.merging(run?.status.read(), host: host) },
+                                          renaming: renaming)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { rowWidth = $0 }
             .onTapGesture {
                 if let run, let running { running.onSelect(run.id) } else { history.select(file) }

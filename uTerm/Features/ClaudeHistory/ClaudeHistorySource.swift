@@ -327,6 +327,14 @@ actor ClaudeHistorySource: AgentHistorySource {
         return await AgentStatusLineBridge.readSnapshot(.claude, provider: provider, home: home)
     }
 
+    // MARK: - 主机上正在运行的会话
+
+    /// 读 `~/.claude/sessions`（见 `ClaudeLiveSessions`）：一次 exec。
+    func liveSessions() async throws -> [AgentLiveSession] {
+        let directory = ClaudeLiveSessions.directory(home: try await homeDirectory())
+        return try ClaudeLiveSessions.parse(try await provider.exec(ClaudeLiveSessions.command(sessionsDirectory: directory)))
+    }
+
     private func homeDirectory() async throws -> String {
         if let home { return home }
         let resolved = try await provider.realPath(".")

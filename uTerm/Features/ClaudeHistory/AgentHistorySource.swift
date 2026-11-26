@@ -229,6 +229,9 @@ protocol AgentHistorySource: Actor {
     nonisolated var supportsRename: Bool { get }
     /// 把会话的名字改成 `title`（已去掉首尾空白、非空）。改不了照常抛。
     func rename(_ file: AgentHistorySessionFile, to title: String) async throws
+    /// 主机上此刻正在运行的会话（不管在哪开的），侧栏据此排序、在行的右端标状态（`AgentHistoryLiveRuns`）。
+    /// 读不了照常抛（断线、跑不了命令），模型留着上一次的。不知道哪些在跑的工具用默认的（空）。
+    func liveSessions() async throws -> [AgentLiveSession]
 }
 
 extension AgentHistorySource {
@@ -245,6 +248,7 @@ extension AgentHistorySource {
     func delete(_ file: AgentHistorySessionFile) async throws { throw AgentHistoryDeleteError.unsupported }
     nonisolated var supportsRename: Bool { false }
     func rename(_ file: AgentHistorySessionFile, to title: String) async throws { throw AgentHistoryDeleteError.renameUnsupported }
+    func liveSessions() async throws -> [AgentLiveSession] { [] }
 }
 
 nonisolated enum AgentHistoryDeleteError: LocalizedError {

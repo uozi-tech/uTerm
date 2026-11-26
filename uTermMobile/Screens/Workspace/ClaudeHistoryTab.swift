@@ -394,6 +394,8 @@ struct ClaudeHistoryBrowser: View {
         return ZStack(alignment: .topLeading) {
             ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal, code: code,
                               onResume: canResume ? onResume : nil, onCollapse: collapse)
+                // 主机上在跑的会话：列表在屏上（窄屏上没被详情盖住）、标签在前台时才读。
+                .modifier(AgentHistoryLiveSessionsPolling(history: history, active: isActive && showsList))
                 .frame(width: wide ? Self.listWidth : size.width, height: size.height)
                 .offset(x: showsList ? 0 : -100_000)
                 .allowsHitTesting(showsList)
@@ -697,9 +699,11 @@ private struct ClaudeHistoryList: View {
         let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, directory: \.directory,
                                                  tool: \.tool, groups: listed)
         // 跑着的排在组的最前面、它那一组排在前面（同 Mac）。
+        // 主机上在跑的会话（在别处开的也算）同样排前面、行右端标状态，两路合起来（同 Mac）。
+        let host = history.hostRunStatuses
         let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: {
             CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport)
-        })
+        }, host: { host[$0] })
         let focusedRunPath = code?.board.focused?.sessionPath
         // 看着的新会话放在哪一组（它那一组收着就打开）。
         let focusedID = code?.board.focusedID
@@ -715,9 +719,11 @@ private struct ClaudeHistoryList: View {
                     ForEach(groups) { group in
                         let collapsed = history.collapsedGroups.contains(group.id)
                         if AgentHistoryListing.showsHeader(group, in: groups) {
-                            let runs = collapsed ? placement.runs(in: group) : []
                             AgentHistoryGroupHeader(group: group, collapsed: collapsed, runs: {
-                                runs.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) }
+                                guard collapsed else { return [] }
+                                return placement.statuses(in: group, status: {
+                                    CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport)
+                                }, host: { host[$0] })
                             }) {
                                 toggle(group.id)
                             }
@@ -732,7 +738,8 @@ private struct ClaudeHistoryList: View {
                                 }
                             }
                             ForEach(group.files) { file in
-                                row(file, in: group, showsTool: showsTool, run: placement.inList[file.path])
+                                row(file, in: group, showsTool: showsTool, run: placement.inList[file.path],
+                                    host: host[file.path])
                             }
                         }
                     }
@@ -774,13 +781,17 @@ private struct ClaudeHistoryList: View {
 
     /// 一行会话：点一下看它；长按菜单「置顶」/「取消置顶」（iOS 不做拖动排序：会和滚动、标签拖动抢手势），在跑的还有「结束会话」。
     /// `run`：这份记录正在 Code 标签页里跑着——行上写它此刻的状态，点一下回到它的终端（同最顶上那几行）。
+    /// `host`：主机上那个会话此刻的状态（在别处开的也有）：只影响行右端的标记，操作照旧只对 `run` 有。
     private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
-                     run: CodeRunBoard<TermTab>.Run?) -> some View {
+                     run: CodeRunBoard<TermTab>.Run?, host: CodeRunStatus?) -> some View {
         let showsItsTerminal = run.map { code?.board.focusedID == $0.id && $0.showsTerminal } ?? false
         let label = AgentHistorySessionRow(
             history: history, file: file, metadata: history.metadata[file.path], showsTool: showsTool,
             isSelected: showsItsTerminal || history.selectedFile?.path == file.path,
-            status: { run.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) } ?? .unreported },
+            status: {
+                CodeRunStatus.merging(run.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) },
+                                      host: host)
+            },
             renaming: renaming)
         return Group {
             // 正在原地改名的那一行不包在按钮里：点输入框是改字，不是打开会话。

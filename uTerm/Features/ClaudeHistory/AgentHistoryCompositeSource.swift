@@ -94,6 +94,13 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
         try await source.rename(file, to: title)
     }
 
+    /// 各种工具在跑的会话合在一起（只有 Claude Code 读得出来，别的是空的）。有一种读不了就整个抛：模型留着上一次的。
+    func liveSessions() async throws -> [AgentLiveSession] {
+        var found: [AgentLiveSession] = []
+        for source in sources { found += try await source.liveSessions() }
+        return AgentLiveSession.ordered(found)
+    }
+
     // MARK: 列表
 
     func projects() async throws -> [AgentHistoryProject] {

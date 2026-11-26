@@ -105,6 +105,7 @@ final class AgentHistoryModel {
 
     isolated deinit {
         searchTask?.cancel()
+        livePolling?.cancel()
     }
 
     init(source: any AgentHistorySource, preferredDirectory: String?,
@@ -946,6 +947,54 @@ final class AgentHistoryModel {
         if error is CancellationError { return }
         search?.phase = .failed(AgentHistoryText.searchFailure(error))
     }
+
+    // MARK: - 主机上正在运行的会话
+
+    /// 主机上正在运行的会话（`AgentHistorySource.liveSessions`，不管在哪开的）。列表露着时隔几秒读一次
+    /// （`setLiveSessionsVisible`）；读不到（断线、辅助程序重启）留着上一次的，不清空。只用来排序与在行的右端标状态。
+    private(set) var liveSessions: [AgentLiveSession] = []
+    /// 多久读一次（测试换成不真睡的）。
+    @ObservationIgnored var liveTiming = AgentHistoryLiveTiming.standard
+    @ObservationIgnored private var livePolling: Task<Void, Never>?
+
+    /// 记录路径 → 主机上那个会话此刻的状态。列表与本设备 Code 标签页里的状态合起来用（`CodeRunStatus.merging`、
+    /// `AgentHistoryListing.prioritizingRuns`）。
+    var hostRunStatuses: [String: CodeRunStatus] {
+        AgentHistoryLiveRuns.statuses(liveSessions, files: files, metadata: metadata)
+    }
+
+    /// 读一次。读到了返回 true（没变就不动 `liveSessions`，列表不重画）；读不到留着上一次的，返回 false。
+    @discardableResult
+    func refreshLiveSessions() async -> Bool {
+        guard let found = try? await source.liveSessions() else { return false }
+        let ordered = AgentLiveSession.ordered(found)
+        if ordered != liveSessions { liveSessions = ordered }
+        return true
+    }
+
+    /// 平台告诉它列表现在露没露着：Mac 是侧栏摆着（收成窄轨、切走了标签页、App 进了后台都不算），iOS 是标签在前台、
+    /// 列表在屏上、App 不在后台。露着时马上读一次，之后隔 `liveTiming.interval` 读一次，读不到逐次拉长；不露就停。
+    /// 跑不了命令的主机（`allowsSearch` 为 false）不读。
+    func setLiveSessionsVisible(_ visible: Bool) {
+        guard visible, allowsSearch else {
+            livePolling?.cancel()
+            livePolling = nil
+            return
+        }
+        guard livePolling == nil else { return }
+        let timing = liveTiming
+        livePolling = Task { [weak self] in
+            var failures = 0
+            while !Task.isCancelled {
+                guard let succeeded = await self?.refreshLiveSessions() else { return }
+                failures = succeeded ? 0 : failures + 1
+                do { try await timing.sleep(timing.delay(afterFailures: failures)) } catch { return }
+            }
+        }
+    }
+
+    /// 正在定时读（测试看）。
+    var isPollingLiveSessions: Bool { livePolling != nil }
 
     // MARK: - 实时跟随
 
