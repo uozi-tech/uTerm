@@ -66,6 +66,9 @@ final class LocalShellPane: Identifiable {
     @ObservationIgnored private(set) var isDisposed = false
     /// Code 标签页（`CodeTabModel`）：不是 shell，不起、不登记；里面跑着的会话各有自己的 `LocalShellPane`，不在标签树里。
     let codeTab: CodeTabModel?
+    /// 文件标签：⌘ 点的 Markdown、程序请求预览的文件，在终端旁边打开、能改、自动保存（同 SSH 终端窗口的文件标签）。
+    /// 不是 shell；文档归窗口的 `FilePreviewModel`，最后一个引用它的标签关掉时由窗口放掉。
+    let fileBuffer: FileBuffer?
 
     /// `cd` 没有事件可等，只能隔一阵问一次。只是一次系统调用，开销可以忽略；短暂路过的目录也不会被记进最近列表。
     private static let directoryPollInterval: Duration = .seconds(3)
@@ -73,16 +76,19 @@ final class LocalShellPane: Identifiable {
     /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
     var defaultTitle: String {
         if codeTab != nil { return TerminalArea.codeTabBaseTitle }
+        if let fileBuffer { return fileBuffer.displayName }
         return ordinal > 1 ? "\(shellName) \(ordinal)" : shellName
     }
 
-    /// 是 shell 标签（不是 Code 标签页）。
-    var isTerminal: Bool { codeTab == nil }
+    /// 是 shell 标签（不是 Code 标签页、文件标签）。
+    var isTerminal: Bool { codeTab == nil && fileBuffer == nil }
 
-    init(id: UUID = UUID(), ordinal: Int = 1, directory: String? = nil, codeTab: CodeTabModel? = nil) {
+    init(id: UUID = UUID(), ordinal: Int = 1, directory: String? = nil, codeTab: CodeTabModel? = nil,
+         fileBuffer: FileBuffer? = nil) {
         self.id = id
         self.ordinal = ordinal
         self.codeTab = codeTab
+        self.fileBuffer = fileBuffer
         workingDirectory = directory
         session.onConnectionStateChange = { [weak self] state in
             self?.syncRegistration(state)
@@ -150,6 +156,7 @@ final class LocalShellPane: Identifiable {
             codeTab.close()
             return
         }
+        guard isTerminal else { return }
         directoryTracking?.cancel()
         registrar?.unregister(paneID: id)
         session.closeForDisposal()
@@ -201,13 +208,16 @@ final class LocalShellWindowModel {
     @ObservationIgnored private var layoutWriter: HeldLayoutWriter<LocalShellPane>?
     /// 窗口的位置跟布局一起存；接回时照它还原。
     @ObservationIgnored let windowTracker = HeldWindowTracker()
+    /// 文件标签的文档：读写经辅助程序（App 在沙盒里，读不到主目录），⌘S、自动保存、关窗前存都同 SSH 终端窗口。
+    let filePreviewModel: FilePreviewModel
+    private let fileProvider: @MainActor () -> any SFTPProviding
     private let startShell: @MainActor (LocalShellPane) -> Void
 
     /// 窗口里所有的 shell：shell 标签，加上 Code 标签页里跑着的（它们不在标签树里）。
     var panes: [LocalShellPane] {
         groups.allTabs.flatMap { tab -> [LocalShellPane] in
             if let code = tab.payload.codeTab { return code.runs.compactMap { $0.terminal as? LocalShellPane } }
-            return [tab.payload]
+            return tab.payload.fileBuffer == nil ? [tab.payload] : []
         }
     }
     /// 活动组的前台标签（可能是 Code 标签页）。
@@ -218,20 +228,39 @@ final class LocalShellWindowModel {
 
     /// 写进保持进程布局的标签 id：shell 标签是会话 id，Code 标签页是它自己的 id（它是什么、里面跑着哪些会话记在
     /// `HeldSessionLayout.codeTabs`），重启后都在原位接回。
-    static let layoutTabID: (UPaneTab<LocalShellPane>) -> UUID? = { $0.payload.id }
+    /// 文件标签不进布局：重启后不开回来（没有会话可接）。
+    static let layoutTabID: (UPaneTab<LocalShellPane>) -> UUID? = { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
 
     /// 按会话 id 找 shell（含 Code 标签页里跑着的）。
     func pane(_ id: UUID) -> LocalShellPane? { panes.first { $0.id == id } }
 
-    init(startShell: @escaping @MainActor (LocalShellPane) -> Void = { pane in
+    init(fileProvider: @escaping @MainActor () -> any SFTPProviding = { RemoteMacFileProvider.localShellAgent() },
+         startShell: @escaping @MainActor (LocalShellPane) -> Void = { pane in
         Task { await pane.start() }
     }) {
         self.startShell = startShell
-        groups.onTabRemoved = { removed, _ in removed.payload.dispose() }
-        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个；Code 标签页不克隆
-        //（这台 Mac 只开一个，`openCodeTab`），拖到本组边缘不分屏。
+        self.fileProvider = fileProvider
+        // 文档都是游离的（`openDetached`），不进最近打开：给一份用完即弃的记录文件。
+        let recents = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uTerm-local-files-\(UUID().uuidString)", isDirectory: true)
+        filePreviewModel = FilePreviewModel(recentsStore: RecentFilesStore(rootDirectory: recents, fileName: "recents.json"),
+                                            sftpProvider: { nil })
+        groups.onTabRemoved = { [weak self] removed, remaining in
+            removed.payload.dispose()
+            // 最后一个引用这份文档的标签关掉时放掉它（克隆出来的标签共用同一个）。
+            if let buffer = removed.payload.fileBuffer,
+               !remaining.contains(where: { $0.payload.fileBuffer === buffer }) {
+                self?.filePreviewModel.releaseDetached(buffer.id)
+            }
+        }
+        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个；文件标签克隆成同一份文档；
+        // Code 标签页不克隆（这台 Mac 只开一个，`openCodeTab`），拖到本组边缘不分屏。
         groups.cloneTab = { [weak self] tab in
             if tab.payload.codeTab != nil { return nil }
+            if let buffer = tab.payload.fileBuffer {
+                let pane = LocalShellPane(ordinal: 0, fileBuffer: buffer)
+                return UPaneTab(id: pane.id, payload: pane)
+            }
             return self?.makeTab()
         }
         // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
@@ -281,6 +310,16 @@ final class LocalShellWindowModel {
 
     /// 用户要关一个标签：前台还有程序在跑时先确认。手机远控关闭走 `close(_:)`，手机上已经确认过。
     func requestClose(_ id: UUID, window: NSWindow? = NSApp.keyWindow) {
+        if let buffer = groups.tab(id)?.payload.fileBuffer {
+            // 文件标签：要问的是改过没存的内容。另一个标签还开着同一份文档就直接关。
+            let close: @MainActor () -> Void = { [weak self] in _ = self?.close(id) }
+            if groups.allTabs.contains(where: { $0.id != id && $0.payload.fileBuffer === buffer }) {
+                close()
+            } else {
+                filePreviewModel.closeAfterSaving(buffer, close: close)
+            }
+            return
+        }
         if let code = groups.tab(id)?.payload.codeTab {
             // Code 标签页：里面跑着的会话有前台程序时问一次，确认后一起结束（`onTabRemoved` → `dispose`）。
             TerminalCloseGuard.requestClose(code.terminals.compactMap { ($0 as? LocalShellPane)?.session },
@@ -380,7 +419,7 @@ final class LocalShellWindowModel {
 
     /// 前台的 shell 会话：Code 标签页取右边正显示的那个终端，看着记录时没有。
     var focusedSessionID: UUID? {
-        guard let active else { return nil }
+        guard let active, active.fileBuffer == nil else { return nil }
         guard let code = active.codeTab else { return active.id }
         guard case .terminal(let id) = code.detail else { return nil }
         return id
@@ -436,6 +475,7 @@ final class LocalShellWindowModel {
     func moveCodeRunToTab(_ runID: UUID, fromCodeTab tabID: UUID) {
         guard let code = groups.tab(tabID)?.payload.codeTab, let at = groups.locateTab(tabID),
               let pane = code.detach(runID) as? LocalShellPane else { return }
+        wireFileOpening(pane)
         groups.openTab({ UPaneTab(id: pane.id, payload: pane) }, in: at.groupID)
     }
 
@@ -491,8 +531,61 @@ final class LocalShellWindowModel {
     private func makeTab(id: UUID = UUID(), ordinal: Int? = nil, directory: String? = nil) -> UPaneTab<LocalShellPane> {
         let pane = LocalShellPane(id: id, ordinal: ordinal ?? nextOrdinal(), directory: directory)
         if let registrar { pane.attach(registrar) }
+        wireFileOpening(pane)
         startShell(pane)
         return UPaneTab(id: id, payload: pane)
+    }
+
+    // MARK: 文件标签
+
+    /// shell 标签里 ⌘ 点的 Markdown、程序请求预览的文件（OSC 6975）开在旁边（`TerminalSession.openTerminalLink`）。
+    private func wireFileOpening(_ pane: LocalShellPane) {
+        pane.session.onFilePreviewRequest = { [weak self, weak pane] path in
+            guard let self, let pane else { return }
+            Task { await self.openFile(path, besidePane: pane.id) }
+        }
+    }
+
+    /// 终端旁边打开一个本机文件（同 SSH 终端窗口的 `WorkspaceModel.openInTerminalArea`）：放进发起那个标签以外的组，
+    /// 只有一组时往右分出一组；以临时标签打开，下一个顶替它；焦点留在发起的终端上。已经开着就带到前台并重读
+    ///（程序刚改过它）。不是普通文件（目录、不存在）不开。
+    func openFile(_ path: String, besidePane paneID: UUID?) async {
+        let provider = fileProvider()
+        guard let stat = try? await provider.stat(path), TerminalLinkTarget.isOpenableFile(stat) else { return }
+        let source = paneID.flatMap { groups.locateTab($0) }
+
+        if let existing = groups.allTabs.first(where: { $0.payload.fileBuffer?.remotePath == path }),
+           let at = groups.locateTab(existing.id), let buffer = existing.payload.fileBuffer {
+            groups.activateTab(groupID: at.groupID, index: at.index)
+            restoreFocus(to: paneID)
+            await filePreviewModel.reloadDetached(buffer)
+            return
+        }
+
+        let buffer = await filePreviewModel.openDetached(path: path, provider: provider)
+        let otherGroup = groups.groupIDs.first { $0 != source?.groupID }
+        let targetGroup = otherGroup ?? source?.groupID ?? groups.activeGroupID
+        let displaced = targetGroup.flatMap { groups.groups[$0]?.tabs.first(where: \.isTransient)?.payload }
+        let tabID = groups.openTab({
+            let pane = LocalShellPane(ordinal: 0, fileBuffer: buffer)
+            return UPaneTab(id: pane.id, payload: pane)
+        }, asTransient: true, in: targetGroup)
+        // 被顶替的临时标签是就地覆盖的，组件不发 `onTabRemoved`：它的文档在这里放掉。
+        if let old = displaced?.fileBuffer, !groups.allTabs.contains(where: { $0.payload.fileBuffer === old }) {
+            filePreviewModel.releaseDetached(old.id)
+        }
+        if otherGroup == nil, let group = targetGroup, (groups.groups[group]?.tabs.count ?? 0) > 1 {
+            groups.moveTab(tabID, toGroup: group, zone: .trailing)
+        }
+        restoreFocus(to: paneID)
+    }
+
+    /// 活动组前台的文件标签的文档（⌘S 没带文档 id 时存它）。
+    var activeFileBufferID: UUID? { active?.fileBuffer?.id }
+
+    private func restoreFocus(to tabID: UUID?) {
+        guard let tabID, let at = groups.locateTab(tabID) else { return }
+        groups.activateTab(groupID: at.groupID, index: at.index)
     }
 
     /// 最小的没人用的序号。
@@ -663,6 +756,8 @@ struct LocalShellWindowView: View {
         .background(WorkspaceCloseShortcutInstaller { window in
             model.handleCloseShortcut(window: window) { window.performClose(nil) }
         })
+        // 关窗前先存文件标签里改了没存的（自动保存还没到点的那一秒也算）。
+        .background(EditorWindowCloseGuardInstaller(models: { [model.filePreviewModel] }))
         .background(TerminalWindowCloseGuardInstaller(sessions: { model.panes.map(\.session) }))
         .frame(minWidth: 560, minHeight: 360)
         .task {
@@ -718,6 +813,13 @@ struct LocalShellWindowView: View {
         }
         .onChange(of: model.focusedSessionID) { _, _ in model.syncFocus() }
         // 全局 CommandGroup 的通知广播到所有窗口，只让前台窗口响应。
+        // ⌘S：文件标签。编辑器聚焦时通知里带着正在编辑的文档。
+        .onReceive(NotificationCenter.default.publisher(for: .savePreviewBuffer)) { note in
+            guard controlActiveState == .key else { return }
+            let requested = note.userInfo?[SavePreviewBufferKey.bufferID] as? UUID
+            guard let id = requested ?? model.activeFileBufferID, model.filePreviewModel.owns(id) else { return }
+            Task { await model.filePreviewModel.saveInteractively(id) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
             if controlActiveState == .key { model.addTab() }
         }
@@ -769,6 +871,11 @@ struct LocalShellTerminalArea: View {
             content: { tab, _ in
                 if let code = tab.payload.codeTab {
                     codeTab(code, tabID: tab.id, background: background)
+                } else if let buffer = tab.payload.fileBuffer {
+                    PreviewBufferBody(buffer: buffer, onLoadMarkdownImage: { source, buffer in
+                        try await model.filePreviewModel.loadMarkdownImage(source: source, referencedBy: buffer)
+                    })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     LocalShellPaneView(pane: tab.payload, background: background) { model.close(tab.id) }
                 }
@@ -812,6 +919,10 @@ struct LocalShellTerminalArea: View {
 
     /// 在每个 chip 自己的 body 里求值：`shellTitle` 可能高频变化，只让这一枚标签跟着重算。
     static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
+        if let buffer = pane.fileBuffer {
+            return UPaneTabDescriptor(title: buffer.displayName, icon: .system("doc.text"), isDirty: buffer.isDirty,
+                                      help: buffer.remotePath)
+        }
         if let code = pane.codeTab {
             let running = code.runningCount
             // 不放图标（同 SSH 终端区的 Code 标签）。绿点一直在：和旁边终端标签的圆点对齐，也不因会话结束而跳。
