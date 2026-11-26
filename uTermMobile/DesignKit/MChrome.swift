@@ -426,13 +426,23 @@ extension View {
     /// 见 `MScreenCentering`。
     func mCentersOnScreen() -> some View { modifier(MScreenCentering()) }
 
-    /// 挂在横向 ScrollView 上：内容不进侧边安全区。
+    /// 挂在 ScrollView 上：内容不进侧边安全区。
     ///
     /// ScrollView 默认把内容画进安全区。Duo 横屏时右侧安全区是状态栏那一列，内容滚进去看得见、
-    /// 却点不到（实机反馈）。画面和命中区都收到安全区边界：`clipped` 只裁画面，不限制命中。
+    /// 却点不到（实机反馈）。画面和命中区都收到左右的安全区边界：`clipShape` 只裁画面，不限制命中。
     /// 滚到底时最后一项正好停在边界上，不会缺内容。
+    ///
+    /// 只裁左右：竖向列表照常滚进底部 Home 条那一截（系统列表的样子），裁上下的话列表底下空一整条
+    ///（实机反馈）。路径可以比自身大，SwiftUI 不拿它和自身的范围求交。
     func mKeepsScrollContentInSafeArea() -> some View {
-        clipped().contentShape(Rectangle())
+        clipShape(MHorizontalClip()).contentShape(MHorizontalClip())
+    }
+}
+
+/// 只在左右两边裁的形状：上下伸出去很远，不裁。
+struct MHorizontalClip: Shape {
+    nonisolated func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: 0, dy: -10_000))
     }
 }
 
