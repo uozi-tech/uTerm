@@ -153,13 +153,13 @@ final class TerminalKeyBindingTests: XCTestCase {
             ("⌘←", "\u{01}"), ("⌘→", "\u{05}"), ("⌘⌫", "\u{15}"),
             ("⌘↑", nil), ("⌘↓", nil), ("⌘↩", nil), ("⌘⇧↩", nil),
             ("⌘K", nil), ("⌘T", nil), ("⌘N", nil), ("⌘D", nil), ("⌘⇧D", nil), ("⌘F", nil), ("⌘G", nil),
-            ("⌘E", nil), ("⌘J", nil), ("⌘Z", nil), ("⌘=", nil), ("⌘-", nil), ("⌘0", nil), ("⌘1", nil),
+            ("⌘E", nil), ("⌘J", nil), ("⌘Z", "\u{1F}"), ("⌘=", nil), ("⌘-", nil), ("⌘0", nil), ("⌘1", nil),
             ("⌘[", nil), ("⌘]", nil), ("⌘⇧[", nil), ("⌘⇧P", nil), ("⌘⌥←", nil), ("⌘⌥I", nil), ("⌘⌃F", nil),
             ("⌃←", "\(e)[1;5D"), ("⌃→", "\(e)[1;5C"), ("⇧←", "\(e)[1;2D"), ("⇧→", "\(e)[1;2C"),
             ("⌘Home", nil), ("⌘End", nil), ("⌘PageUp", nil), ("⌘PageDown", nil),
             ("⇧PageUp", "\(e)[5;2~"), ("Home", "\(e)[H"), ("End", "\(e)[F"), ("←", "\(e)[D"),
             ("⌃C", "\u{03}"), ("Esc", e),
-        ], bindings: ["⌘←", "⌘→", "⌘⌫", "⌘Home", "⌘End", "⌘PageUp", "⌘PageDown", "⌘F", "⌘G"], mode: "legacy")
+        ], bindings: ["⌘←", "⌘→", "⌘⌫", "⌘Z", "⌘Home", "⌘End", "⌘PageUp", "⌘PageDown", "⌘F", "⌘G"], mode: "legacy")
     }
 
     /// kitty 键盘协议（Claude Code 这类程序会开）：没有绑定的 ⌘ 组合按协议编码交给程序；
@@ -170,11 +170,11 @@ final class TerminalKeyBindingTests: XCTestCase {
         XCTAssertEqual(rig.session.shadow.kittyKeyboardFlags, 1)
         await check([
             ("⌥←", "\(e)b"), ("⌥→", "\(e)f"),
-            ("⌘←", "\u{01}"), ("⌘⌫", "\u{15}"),
+            ("⌘←", "\u{01}"), ("⌘⌫", "\u{15}"), ("⌘Z", "\u{1F}"),
             ("⌘↩", "\(e)[13;9u"), ("⌘K", "\(e)[107;9u"), ("⌘T", "\(e)[116;9u"), ("⌘↑", "\(e)[1;9A"),
             ("←", "\(e)[D"), ("PageUp", "\(e)[5~"), ("PageDown", "\(e)[6~"),
             ("⌘Home", nil), ("⌃C", "\(e)[99;5u"), ("Esc", "\(e)[27u"),
-        ], bindings: ["⌘←", "⌘⌫", "⌘Home"], mode: "kitty")
+        ], bindings: ["⌘←", "⌘⌫", "⌘Z", "⌘Home"], mode: "kitty")
     }
 
     /// PageUp / PageDown 不带修饰键：停在 shell 提示符上翻一页回滚、不发给程序；程序开了应用光标键或在备用屏上时发给程序。
@@ -197,6 +197,16 @@ final class TerminalKeyBindingTests: XCTestCase {
         await rig.feed("\(e)[?1l\(e)[?1049h")
         let alt = await press(chord("PageDown"))
         XCTAssertEqual(Self.describe(alt.bytes), Self.describe(Array("\(e)[6~".utf8)), "备用屏上 PageDown 发给程序")
+    }
+
+    /// 「编辑 ▸ 撤销」（⌘Z 平时走的那条路）：终端有焦点时撤销的是程序里的编辑——Claude Code 输入框里选中删掉一段，
+    /// ⌘Z 要能撤回来。菜单的 `undo:` 沿响应链先到终端视图，发 `^_`，不落到窗口的 undoManager。
+    func testEditMenuUndoSendsControlUnderscore() async {
+        let before = await rig.sent(expecting: 0, timeout: 0).count
+        XCTAssertTrue(rig.window.firstResponder === rig.view)
+        XCTAssertTrue(rig.view.tryToPerform(Selector(("undo:")), with: nil), "撤销应当由终端视图接")
+        let all = await rig.sent(expecting: before + 1)
+        XCTAssertEqual(Self.describe(Array(all.dropFirst(before))), Self.describe([0x1F]))
     }
 
     /// ⌘A 由终端的绑定全选（没有菜单接时）。

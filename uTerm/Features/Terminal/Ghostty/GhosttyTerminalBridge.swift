@@ -486,6 +486,12 @@ final class GhosttySurfaceView: AppTerminalView {
         return ok
     }
 
+    /// 「编辑 ▸ 撤销」（⌘Z）：终端有焦点时撤销的是程序里的编辑（Claude Code 输入框、shell 命令行），发 `^_` 给程序；
+    /// 不接的话这一下会落到窗口的 undoManager，撤掉窗口里别的输入框。菜单接不了时由绑定表里的 ⌘Z 兜底（`TerminalKeyBindings`）。
+    @IBAction func undo(_ sender: Any?) {
+        _ = performBindingAction(TerminalKeyBindings.undoAction)
+    }
+
     override func paste(_ sender: Any?) {
         if let image = TerminalImage.fromPasteboard(pasteboard), onPasteImage?(image) == true { return }
         if let video = TerminalClipboardVideo.fromPasteboard(pasteboard), onPasteVideo?(video) == true { return }

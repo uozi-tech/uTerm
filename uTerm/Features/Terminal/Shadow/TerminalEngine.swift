@@ -62,8 +62,13 @@ nonisolated struct TerminalScrollbackLimits: Equatable, Sendable {
 ///   这是 Ghostty 在 macOS 上的默认值，和 Terminal.app 一致，shell 默认的 emacs 键位下不用任何配置就生效。
 ///   旧引擎发的不是这几串（⌥← / ⌥→ 是 `CSI 1;3D` / `CSI 1;3C`，⌘← / ⌘→ 是 Home / End，⌘⌫ 不发），
 ///   在没配过键位的 zsh / bash 里不起作用；这里取能用的那一种。⌥⌫（`ESC DEL`）、⌥字母（`ESC` + 字母）两边相同，不需要绑定。
+///   ⌘Z 撤销发 `^_`（`undoAction`）：Claude Code 输入框、zsh / bash 的 emacs 键位里都是撤销上一次编辑。平时由「编辑 ▸ 撤销」走到 `GhosttySurfaceView.undo(_:)`，这一条是菜单接不了时的兜底；
+///   不这样做 ⌘Z 一个字节都不发，菜单的撤销还会去撤窗口里别的输入框。
 /// - 翻回滚：⌘Home / ⌘End 到顶 / 到底，⌘PageUp / ⌘PageDown 翻一页。
 nonisolated enum TerminalKeyBindings {
+    /// ⌘Z / 「编辑 ▸ 撤销」发给程序的那一下：`^_`（0x1F），Claude Code 与 shell 的撤销键。
+    static let undoAction = "text:\\x1f"
+
     /// Ghostty 配置项（键名、取值），按顺序写进配置：第一条 `keybind = clear` 必须在最前。
     /// 配置里有一条写错，引擎会拒收整份配置（退回默认值）——`TerminalKeyBindingTests` 核配置被接受。
     static let ghosttyConfiguration: [(key: String, value: String)] = [
@@ -76,6 +81,7 @@ nonisolated enum TerminalKeyBindings {
         ("keybind", "super+arrow_left=text:\\x01"),
         ("keybind", "super+arrow_right=text:\\x05"),
         ("keybind", "super+backspace=text:\\x15"),
+        ("keybind", "super+z=\(undoAction)"),
         ("keybind", "super+home=scroll_to_top"),
         ("keybind", "super+end=scroll_to_bottom"),
         ("keybind", "super+page_up=scroll_page_up"),
