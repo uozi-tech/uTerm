@@ -48,6 +48,9 @@ private struct MBottomPanelPresenter<Item: Identifiable, Panel: View>: ViewModif
     }
 
     private func present(_ value: Item) {
+        // 底下的视图（终端等）若开着键盘，先收起：透明的 fullScreenCover 不换第一响应者，键盘会留着挡住面板。
+        // 这里是全局收起，不记成用户点了「收起键盘」，之后切回终端照常弹回。
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { presented = value }
