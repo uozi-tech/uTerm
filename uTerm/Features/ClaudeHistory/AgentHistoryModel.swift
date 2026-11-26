@@ -237,6 +237,8 @@ final class AgentHistoryModel {
         let snapshot = statusLines[transcript.file.tool]
         let window = snapshot?.sessionID == transcript.file.sessionID.lowercased() ? snapshot?.contextWindow : nil
         if transcript.knownContextWindow != window { transcript.knownContextWindow = window }
+        let models = snapshot?.modelWindows ?? [:]
+        if transcript.knownModelWindows != models { transcript.knownModelWindows = models }
     }
 
     /// 合在一起的数据源拆开（不是合成的就是它自己）。
@@ -1182,15 +1184,20 @@ final class AgentTranscriptModel {
     var latestUsage: (usage: AgentTurnUsage, at: Date?)? {
         for item in items.reversed() {
             if case .usage(var usage) = item.kind {
-                if usage.contextWindow == nil { usage.contextWindow = knownContextWindow }
+                if usage.contextWindow == nil {
+                    usage.contextWindow = knownContextWindow
+                        ?? usage.model.flatMap { knownModelWindows[AgentStatusLineBridge.modelKey($0)] }
+                }
                 return (usage, item.timestamp)
             }
         }
         return nil
     }
 
-    /// 记录里不写、状态栏告诉了的上下文窗口大小（`AgentHistoryModel.applyStatusLineWindow`）。
+    /// 记录里不写、状态栏告诉了的上下文窗口大小（`AgentHistoryModel.applyStatusLineWindow`）：这个会话自己的；
+    /// 没有就按它用的模型最近一次报的（`knownModelWindows`）。
     var knownContextWindow: Int?
+    var knownModelWindows: [String: Int] = [:]
 
     func loadEarlier() async {
         guard !isLoading, !reachedStart else { return }

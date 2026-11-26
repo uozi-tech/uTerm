@@ -385,11 +385,16 @@ private struct AgentHistoryAccountLimits: View {
 
     var body: some View {
         let rows = hidden ? [] : history.accountLimits()
+        // 最后一行是正在看的会话的上下文（标题旁那个标记滚不到、或者右边露着终端时也看得到）。
+        let context = hidden ? nil : history.transcript?.latestUsage?.usage
         VStack(spacing: 0) {
-            if !rows.isEmpty {
+            if !rows.isEmpty || context != nil {
                 Rectangle().fill(UD.border).frame(height: 1)
                 ForEach(rows, id: \.tool) { row in
                     AgentAccountLimitsRow(row: row)
+                }
+                if let context {
+                    AgentContextUsageRow(usage: context)
                 }
             }
         }
@@ -419,6 +424,7 @@ private struct AgentAccountLimitsRow: View {
                     Text(AgentHistoryText.rateLimitWindow(window))
                         .lineLimit(1)
                         .foregroundStyle(UD.text3)
+                        .frame(minWidth: AgentHistoryListStyle.footerLabelWidth, alignment: .leading)
                     AgentRateLimitBar(usedPercent: window.usedPercent, level: level)
                         .frame(width: 48, height: 4)
                     Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
@@ -437,6 +443,42 @@ private struct AgentAccountLimitsRow: View {
             AgentAccountLimitsDetail(row: row)
                 .presentationCompactAdaptation(.popover)
         }
+    }
+}
+
+/// 侧栏底部最后一行：正在看的会话的上下文。知道窗口多大画一根细条写百分比（颜色按程度），不知道只写 token 数。
+private struct AgentContextUsageRow: View {
+    let usage: AgentTurnUsage
+
+    var body: some View {
+        let style = AgentHistoryListStyle.platform
+        let level = usage.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal
+        HStack(spacing: 8) {
+            Image(systemName: "text.alignleft")
+                .font(.system(size: style.noteSize, weight: .medium))
+                .foregroundStyle(UD.text3)
+                .frame(width: style.toolBadgeSize, height: style.toolBadgeSize)
+            Text(AgentHistoryText.usageContext)
+                .lineLimit(1)
+                .foregroundStyle(UD.text3)
+                .frame(minWidth: AgentHistoryListStyle.footerLabelWidth, alignment: .leading)
+            if let fraction = usage.contextFraction {
+                AgentRateLimitBar(usedPercent: fraction * 100, level: level)
+                    .frame(width: 48, height: 4)
+                Text(verbatim: "\(Int((fraction * 100).rounded()))%")
+                    .monospacedDigit()
+                    .foregroundStyle(level == .normal ? UD.text2 : level.color)
+            } else {
+                Text(verbatim: AgentHistoryText.tokenCount(usage.contextTokens))
+                    .monospacedDigit()
+                    .foregroundStyle(UD.text2)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: style.noteSize))
+        .padding(style.accountLimitsPadding)
+        .help(AgentHistoryText.usageContextValue(usage))
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -11,7 +11,9 @@ import Synchronization
 /// - `statusline.sh`：转接脚本（每次连上都按 App 里的这一份重写，改了脚本不会留着旧的）；
 /// - `<工具>.settings.json`：传给 `--settings` 的那一份；
 /// - `<工具>.original`：你原来配的状态栏命令（连上时从你的 settings.json 里读出来）；没配就没有这个文件；
-/// - `<工具>.last.json`：最近一次状态栏的数据，App 读它。
+/// - `<工具>.last.json`：最近一次状态栏的数据，App 读它；
+/// - `<工具>.windows/<模型>`：每个模型最近一次状态栏报的上下文窗口多大（Claude 的记录里只有模型名、不写窗口，同一个
+///   模型 Opus 5.5 默认就是 1M）。之后看这个模型的任何会话（不是 uTerm 起的也行）都按它算上下文的百分比。
 nonisolated enum AgentStatusLineBridge {
     static let relativeDirectory = ".local/share/uterm/statusline"
 
@@ -45,6 +47,13 @@ nonisolated enum AgentStatusLineBridge {
     input=$(cat)
     tmp="$dir/$tool.last.json.$$"
     printf '%s\\n' "$input" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dir/$tool.last.json" 2>/dev/null
+    flat=$(printf '%s' "$input" | tr -d '\\n')
+    win=$(printf '%s' "$flat" | sed -n 's/.*"context_window_size"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')
+    model=$(printf '%s' "$flat" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+    if [ -n "$win" ] && [ "$win" != 0 ] && [ -n "$model" ]; then
+      key=$(printf '%s' "$model" | sed 's/\\[.*//' | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '_')
+      mkdir -p "$dir/$tool.windows" 2>/dev/null && printf '%s\\n' "$win" > "$dir/$tool.windows/$key" 2>/dev/null
+    fi
     if [ -s "$dir/$tool.original" ]; then
       printf '%s\\n' "$input" | sh -c "$(cat "$dir/$tool.original")"
     fi
@@ -99,12 +108,43 @@ nonisolated enum AgentStatusLineBridge {
         }
     }
 
-    /// 读最近一次状态栏的数据；没有（还没起过、没装上）为 nil。
+    /// 读最近一次状态栏的数据与各模型的上下文窗口；都没有（还没起过、没装上）为 nil。
     static func readSnapshot(_ tool: Tool, provider: any SFTPProviding, home: String) async -> AgentStatusLineSnapshot? {
         let path = snapshotPath(tool, home: home)
-        guard let stat = try? await provider.stat(path),
-              let data = try? await provider.download(remotePath: path, maximumBytes: 1 << 20) else { return nil }
-        return AgentStatusLineSnapshot.parse(data, at: stat.mtime)
+        var snapshot: AgentStatusLineSnapshot?
+        if let stat = try? await provider.stat(path),
+           let data = try? await provider.download(remotePath: path, maximumBytes: 1 << 20) {
+            snapshot = AgentStatusLineSnapshot.parse(data, at: stat.mtime)
+        }
+        let windows = await readModelWindows(tool, provider: provider, home: home)
+        guard snapshot != nil || !windows.isEmpty else { return nil }
+        var result = snapshot ?? AgentStatusLineSnapshot()
+        result.modelWindows = windows
+        return result
+    }
+
+    static func modelWindowsPath(_ tool: Tool, home: String) -> String { directory(home: home) + "/\(tool.rawValue).windows" }
+
+    /// `<工具>.windows/` 下每个模型一个文件，内容是窗口大小。
+    static func readModelWindows(_ tool: Tool, provider: any SFTPProviding, home: String) async -> [String: Int] {
+        let directory = modelWindowsPath(tool, home: home)
+        guard let entries = try? await provider.list(path: directory) else { return [:] }
+        var windows: [String: Int] = [:]
+        for entry in entries.prefix(64) where !entry.isDirectory {
+            guard let data = try? await provider.download(remotePath: directory + "/" + entry.name, maximumBytes: 64),
+                  let size = Int(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
+                  size > 0 else { continue }
+            windows[entry.name] = size
+        }
+        return windows
+    }
+
+    /// 模型名在 `<工具>.windows/` 里的文件名：去掉 `[1m]` 这类后缀、小写、别的字符换成 `_`（同脚本里的那一句）。
+    static func modelKey(_ model: String) -> String {
+        let base = model.split(separator: "[", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? model
+        return String(base.lowercased().map { ch in
+            ch.isASCII && (ch.isLetter || ch.isNumber || ch == "." || ch == "_" || ch == "-") ? ch : "_"
+        })
     }
 
     private static func createDirectories(_ directory: String, provider: any SFTPProviding) async throws {
@@ -124,12 +164,14 @@ nonisolated enum AgentStatusLineBridge {
 
 /// 状态栏数据里我们要的几样。
 nonisolated struct AgentStatusLineSnapshot: Equatable, Sendable {
-    var sessionID: String?
+    var sessionID: String? = nil
     /// 上下文窗口多大（Claude 的状态栏才有）。
-    var contextWindow: Int?
-    var rateLimits: AgentRateLimits?
+    var contextWindow: Int? = nil
+    var rateLimits: AgentRateLimits? = nil
     /// 这份数据是几时写的（文件的修改时间）。
-    var at: Date?
+    var at: Date? = nil
+    /// 各模型最近一次报的上下文窗口（`<工具>.windows/`，键是 `AgentStatusLineBridge.modelKey`）。
+    var modelWindows: [String: Int] = [:]
 
     /// Claude Code：`rate_limits.five_hour` / `seven_day` 的 `used_percentage`（0–100）与 `resets_at`（秒）。
     /// Antigravity：`quota` 里每个 bucket 的 `remaining_fraction`（0–1，或只给 `remaining_amount`，那就不知道用了几成，不显示）

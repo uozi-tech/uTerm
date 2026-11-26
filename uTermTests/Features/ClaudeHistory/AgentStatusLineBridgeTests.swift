@@ -116,6 +116,22 @@ final class AgentStatusLineBridgeTests: XCTestCase {
         XCTAssertNil(rows[1].windows[0].resetsAt)
     }
 
+    /// 每个模型最近一次报的窗口：文件名同脚本（去掉 `[1m]`、小写、别的字符换成 `_`），内容是窗口大小。
+    func testModelWindows() async throws {
+        XCTAssertEqual(B.modelKey("claude-opus-5-5"), "claude-opus-5-5")
+        XCTAssertEqual(B.modelKey("Claude-Fable-5-2[1m]"), "claude-fable-5-2")
+        XCTAssertEqual(B.modelKey("Gemini 4 Argon (Medium)"), "gemini_4_argon__medium_")
+        let dir = B.modelWindowsPath(.claude, home: home)
+        let sftp = MockSFTP(tree: [dir: [ClaudeFixture.entry("claude-opus-5-5", size: 8, mtime: Date()),
+                                         ClaudeFixture.entry("broken", size: 3, mtime: Date())]])
+        await sftp.setFile(dir + "/claude-opus-5-5", data: Data("1000000\n".utf8), mtime: Date())
+        await sftp.setFile(dir + "/broken", data: Data("x\n".utf8), mtime: Date())
+        let read = await B.readSnapshot(.claude, provider: sftp, home: home)
+        let snapshot = try XCTUnwrap(read)
+        XCTAssertEqual(snapshot.modelWindows, ["claude-opus-5-5": 1_000_000])
+        XCTAssertNil(snapshot.rateLimits, "只有窗口、还没有状态栏数据")
+    }
+
     /// 不是订阅账号（没有 `rate_limits`）：没有额度，窗口照样有；窗口 0 当不知道。
     func testClaudeSnapshotWithoutRateLimits() throws {
         let json = #"{"session_id":"a","context_window":{"context_window_size":0}}"#

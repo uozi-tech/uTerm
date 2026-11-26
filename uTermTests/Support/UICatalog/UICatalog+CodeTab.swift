@@ -377,7 +377,7 @@ enum UICatalogCodeMode {
         await claude.setStatusLine(AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
             primary: .init(usedPercent: 16, windowMinutes: 300, resetsAt: Date().addingTimeInterval(3600 * 3)),
             secondary: .init(usedPercent: 86, windowMinutes: 7 * 24 * 60, resetsAt: Date().addingTimeInterval(86_400 * 2)),
-            plan: nil), at: Date()))
+            plan: nil), at: Date(), modelWindows: ["claude-opus-5-5": 1_000_000]))
         let sources: [any AgentHistorySource] = setup.tools.compactMap { tool in
             switch tool {
             case .claude: return claude
