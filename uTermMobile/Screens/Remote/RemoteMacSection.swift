@@ -325,14 +325,25 @@ struct RemoteMacSheet: View {
                 if client.sessions.isEmpty {
                     MInsetRow(icon: "term", label: String(localized: "Mac 上没有已连接的终端"), sub: String(localized: "在 Mac 上打开一个终端后会出现在这里"), last: true)
                 } else {
-                    ForEach(client.sessions) { session in
+                    // Mac 的 Code 标签页收成一行（里面的会话接管后也是手机上的一个 Code 标签页），排在它在 Mac 上的位置。
+                    let rows = RemoteMacSessionRow.rows(sessions: client.sessions, codeTab: client.codeTabs?.mirrored())
+                    ForEach(rows) { row in
                         // 分隔线交给 List（`last: true` 关掉行自带的），滑动时才会跟着行走。
-                        MInsetRow(icon: "term", label: session.displayTitle, sub: subtitle(session),
-                                  chevron: true, last: true) {
-                            takeOver(focus: session.id)
+                        switch row {
+                        case .session(let session):
+                            MInsetRow(icon: "term", label: session.displayTitle, sub: subtitle(session),
+                                      chevron: true, last: true) {
+                                takeOver(focus: session.id)
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) { closeAction(session) }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) { closeAction(session) }
+                        case .codeTab(let info, let sessions):
+                            // 一个会话都没有时接管落在别的终端上；整台 Mac 一个终端都没有就不能点。
+                            let focus = row.focus ?? client.sessions.first?.id
+                            MInsetRow(icon: "code", label: "Code", sub: codeSubtitle(info, sessions: sessions),
+                                      chevron: focus != nil, last: true,
+                                      onTap: focus.map { focus in { takeOver(focus: focus) } })
                         }
-                        .swipeActions(edge: .leading, allowsFullSwipe: false) { closeAction(session) }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) { closeAction(session) }
                     }
                 }
                 if workspace.followedClients.contains(where: { $0 === client }) {
@@ -381,9 +392,21 @@ struct RemoteMacSheet: View {
 
     private func subtitle(_ session: RemoteSessionInfo) -> String {
         var parts = [session.serverName]
-        // 在 Mac 的 Code 标签页里跑着：点下去打开手机上的 Code 标签页并选中它（产品名，不翻译）。
-        if client.codeRunSessionIDs.contains(session.id) { parts.append("Code") }
         if let controller = session.controlledBy { parts.append(String(localized: "\(controller) 正在接管")) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Code 那一行：哪台主机、几个会话在跑、谁在接管（里面任一个被接管就写）。
+    private func codeSubtitle(_ info: RemoteCodeTabInfo, sessions: [RemoteSessionInfo]) -> String {
+        var parts = [info.serverName]
+        let listed = Set(sessions.map(\.id))
+        let running = info.runs.filter { $0.endedAt == nil && listed.contains($0.session) }.count
+        if running > 0 {
+            parts.append(String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数"))
+        }
+        if let controller = sessions.lazy.compactMap(\.controlledBy).first {
+            parts.append(String(localized: "\(controller) 正在接管"))
+        }
         return parts.joined(separator: " · ")
     }
 
