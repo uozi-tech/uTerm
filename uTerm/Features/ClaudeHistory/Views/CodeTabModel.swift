@@ -254,7 +254,7 @@ final class CodeTabModel {
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
         restoredSelection = nil
         runs[index].showsTranscript = false
-        if let path = runs[index].path, let file = history?.files.first(where: { $0.path == path }) {
+        if let file = history?.file(at: runs[index].path) {
             selectedRunID = nil
             history?.select(file)
         } else {
@@ -271,22 +271,18 @@ final class CodeTabModel {
         restoredSelection = nil
     }
 
-    /// 「终端 / 记录」切换。没有记录的新会话只有终端。
-    func setShowsTranscript(_ showsTranscript: Bool, for id: UUID) {
-        guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
-        runs[index].showsTranscript = showsTranscript && runs[index].path != nil
-        // 从新会话那一格切到记录：改由列表选中那份记录。
-        if runs[index].showsTranscript, selectedRunID == id, let path = runs[index].path,
-           let file = history?.files.first(where: { $0.path == path }) {
-            selectedRunID = nil
-            history?.select(file)
-        }
+    /// 这个跑着的会话现在能不能切到看记录（侧栏右键菜单里出不出「查看记录」）：对上了记录、列表里列到了它。
+    /// 没列到的选不中记录，切过去右边什么都换不了。规则同 iOS 的 `ClaudeHistoryTab.canShowRecord`。
+    func canShowRecord(_ run: Run) -> Bool {
+        history?.file(at: run.path) != nil
     }
 
-    /// 侧栏那一行右键「查看记录」：选中它那份记录、右边看记录（不打断它）。没有记录的新会话同点一下那一行。
+    /// 侧栏那一行右键「查看记录」：选中它那份记录（`selectRun`）、右边看记录（不打断它）。看不了记录的（`canShowRecord`）
+    /// 同点一下那一行。
     func showRecord(of id: UUID) {
         selectRun(id)
-        setShowsTranscript(true, for: id)
+        guard let index = runs.firstIndex(where: { $0.id == id }), canShowRecord(runs[index]) else { return }
+        runs[index].showsTranscript = true
     }
 
     func requestReveal(directory: String?) {
@@ -331,9 +327,7 @@ final class CodeTabModel {
     func resume(path: String?, tool: AgentHistoryTool, sessionID: String?, directory: String?) -> Run? {
         guard let history else { return nil }
         let key = sessionID.map { AgentHistoryPinKey(tool: tool, sessionID: $0) }
-        let listed = history.files.first { $0.path == path }
-            ?? key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key } }
-        if let listed { return resume(listed) }
+        if let listed = history.file(at: path) ?? history.file(for: key) { return resume(listed) }
         if let running = runs.first(where: { run in
             (path != nil && run.path == path) || (key != nil && run.key == key)
         }) {
@@ -469,19 +463,17 @@ final class CodeTabModel {
         switch wanted {
         case .run(let id):
             guard let run = runs.first(where: { $0.id == id }) else { return selectFirstRunOrNothing() }
-            if run.showsTranscript, let path = run.path, let file = history.files.first(where: { $0.path == path }) {
+            if run.showsTranscript, let file = history.file(at: run.path) {
                 selectedRunID = nil
                 history.select(file)
             } else {
-                let showsTranscript = run.showsTranscript
+                // 看终端，或者看记录但记录没找到（只能看终端）。
                 selectRun(id)
-                // 看记录但记录没找到：只能看终端（`selectRun` 已经切回终端）。
-                if showsTranscript, run.path != nil { setShowsTranscript(true, for: id) }
             }
         case .record(let key):
             if let run = runs.first(where: { $0.key == key }), !run.showsTranscript {
                 selectRun(run.id)
-            } else if let file = history.files.first(where: { AgentHistoryPinKey($0) == key }) {
+            } else if let file = history.file(for: key) {
                 selectedRunID = nil
                 history.select(file)
             } else {
@@ -497,8 +489,7 @@ final class CodeTabModel {
     /// 接回的会话按工具 + 会话 ID 找回列表里的记录。找不到的（记录没列出来）留着，下次重列再找，不当新会话去对别的记录。
     func resolveRestoredRuns() {
         guard let history, runs.contains(where: { $0.path == nil && $0.key != nil }) else { return }
-        var byKey: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
-        for file in history.files where byKey[AgentHistoryPinKey(file)] == nil { byKey[AgentHistoryPinKey(file)] = file }
+        let byKey = AgentHistoryPinKey.firstFiles(in: history.files)
         let claimed = Set(runs.compactMap(\.path))
         for index in runs.indices where runs[index].path == nil && !runs[index].isMirrored {
             guard let key = runs[index].key, let file = byKey[key], !claimed.contains(file.path) else { continue }
@@ -650,8 +641,8 @@ final class CodeTabModel {
     /// 已结束的会话重列之后再看一次：对上了有对话的记录就照常收尾、回到记录；还是没有就留着。
     private func settleEnded(_ id: UUID) async {
         guard let history, let run = runs.first(where: { $0.id == id }), run.isEnded else { return }
-        let path = run.path ?? run.key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key }?.path }
-        guard let path, let file = history.files.first(where: { $0.path == path }) else { return }
+        guard let file = history.file(at: run.path ?? history.file(for: run.key)?.path) else { return }
+        let path = file.path
         // 记录的信息按文件现在的样子读（侧栏那份可能是会话刚开始、还没对话时读的）。
         var listed = history.metadata[path]?.isListed == true
         if !listed { listed = (try? await history.source.metadata(for: file))?.isListed ?? false }
@@ -676,8 +667,7 @@ final class CodeTabModel {
             restartOnRemote(id)
             return nil
         }
-        let file = (old.path ?? old.key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key }?.path })
-            .flatMap { path in history.files.first { $0.path == path } }
+        let file = history.file(at: old.path ?? history.file(for: old.key)?.path)
         let resumes = old.resumesRecord && file != nil
         let command = old.command
             ?? (resumes ? file.flatMap { history.resumeCommand(for: $0)?.command }
@@ -736,13 +726,12 @@ final class CodeTabModel {
             // 跑完了才列到的新会话（或者接回后还没找回记录的）：右边没在看别的就打开那份记录。
             let path: String?
             if let key = pending.key {
-                path = history.files.first { AgentHistoryPinKey($0) == key }?.path
+                path = history.file(for: key)?.path
             } else {
                 path = Self.match([pending], files: history.files, metadata: history.metadata,
                                   claimed: Set(self.runs.compactMap(\.path)))[pending.id]
             }
-            if let path, history.selectedFile == nil, self.selectedRunID == nil,
-               let file = history.files.first(where: { $0.path == path }) {
+            if history.selectedFile == nil, self.selectedRunID == nil, let file = history.file(at: path) {
                 history.select(file)
             }
         }
@@ -773,8 +762,9 @@ final class CodeTabModel {
         for (id, path) in matches {
             guard let index = runs.firstIndex(where: { $0.id == id }) else { continue }
             runs[index].path = path
-            runs[index].key = history.files.first { $0.path == path }.map { AgentHistoryPinKey($0) }
-            if selectedRunID == id, let file = history.files.first(where: { $0.path == path }) {
+            let file = history.file(at: path)
+            runs[index].key = file.map { AgentHistoryPinKey($0) }
+            if selectedRunID == id, let file {
                 selectedRunID = nil
                 history.select(file)
             }
@@ -835,7 +825,7 @@ final class CodeTabModel {
         if run.isMirrored, let title = run.title { return title }
         if let path = run.path, let metadata = history?.metadata[path] {
             if let title = metadata.title { return title }
-            let sessionID = run.key?.sessionID ?? history?.files.first { $0.path == path }?.sessionID
+            let sessionID = run.key?.sessionID ?? history?.file(at: path)?.sessionID
                 ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension
             return String(localized: "（无标题）\(String(sessionID.prefix(8)))")
         }

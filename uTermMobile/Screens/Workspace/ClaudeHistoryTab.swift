@@ -1237,7 +1237,7 @@ private struct ClaudeTranscriptView: View {
             .accessibilityLabel(Text("拷贝"))
             // 子代理的记录只读：不能单独继续。
             if let onBackToTerminal {
-                MBtn(title: String(localized: "返回终端"), icon: "term", kind: .tinted, height: 34, action: onBackToTerminal)
+                MBtn(title: AgentHistoryText.backToTerminal, icon: "term", kind: .tinted, height: 34, action: onBackToTerminal)
                     .fixedSize()
                     .padding(.trailing, 10)
             } else if transcript.subagent == nil {

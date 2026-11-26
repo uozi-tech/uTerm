@@ -125,7 +125,8 @@ private struct CodeTabBrowser: View {
                         id: run.id, title: code.title(of: run), tool: run.tool, directory: run.directory,
                         isSelected: run.id == selected, path: run.path,
                         status: AgentHistoryRunStatus { run.status },
-                        showsRecord: showsRecord && run.id == selected)
+                        showsRecord: showsRecord && run.id == selected,
+                        canShowRecord: code.canShowRecord(run))
                 }
             }, onSelect: { id in
                 code.selectRun(id)
@@ -170,7 +171,7 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（查看记录、移到新标签页、结束会话）。
+    /// 跑着的会话的终端顶上那一条：工具标记、标题，右端一个「⋯」菜单（移到新标签页、结束会话）。
     /// 右边显示着终端本身就说明在跑，不再写「运行中」。与侧栏顶部那一行等高，中间的竖线上下贯通。
     private func runHeader(_ run: CodeTabModel.Run) -> some View {
         let title = code.title(of: run)
@@ -192,21 +193,16 @@ private struct CodeTabBrowser: View {
         }
     }
 
-    /// 「⋯」：「查看记录」/「返回终端」（看当前显示的是哪个）、「移到新标签页」、「结束会话」。没对上记录的新会话没有记录可看。
+    /// 「⋯」：「移到新标签页」、「结束会话」。这一行只在右边露着终端时才有；看记录在侧栏那一行的右键菜单里，
+    /// 看记录时回终端的按钮在记录的标题行上。
     @ViewBuilder private func runMenu(_ run: CodeTabModel.Run) -> some View {
-        let showsRecord = code.detail == .transcript
-        if run.path != nil || onMoveToTab != nil || onEndRun != nil {
+        if onMoveToTab != nil || onEndRun != nil {
             Menu {
-                if run.path != nil {
-                    Button(showsRecord ? String(localized: "返回终端") : Self.viewRecord) {
-                        code.setShowsTranscript(!showsRecord, for: run.id)
-                    }
-                }
                 if let onMoveToTab {
-                    Button(Self.moveToTab) { onMoveToTab(run.id) }
+                    Button(AgentHistoryText.moveToTab) { onMoveToTab(run.id) }
                 }
                 if let onEndRun {
-                    Divider()
+                    if onMoveToTab != nil { Divider() }
                     Button(AgentHistoryText.endSession, role: .destructive) { onEndRun(run.id) }
                 }
             } label: {
@@ -220,14 +216,6 @@ private struct CodeTabBrowser: View {
             .help(String(localized: "更多"))
             .accessibilityLabel(Text("更多"))
         }
-    }
-
-    private static var viewRecord: String {
-        String(localized: "查看记录", comment: "Code 标签页：看这个正在跑的会话的对话记录")
-    }
-
-    private static var moveToTab: String {
-        String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
     }
 }
 

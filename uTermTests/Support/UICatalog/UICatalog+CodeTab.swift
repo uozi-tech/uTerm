@@ -278,7 +278,7 @@ extension UICatalog {
         if let id = setup.showsRun, let file = history.files.first(where: { $0.sessionID == id }) {
             history.select(file)
             if setup.showsRecord, let run = code.run(for: file.path) {
-                code.setShowsTranscript(true, for: run.id)
+                code.showRecord(of: run.id)
                 for _ in 0..<100 where history.transcript?.reachedStart != true {
                     try? await Task.sleep(for: .milliseconds(10))
                 }
