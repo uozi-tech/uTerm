@@ -261,7 +261,7 @@ final class TerminalSession: NSObject {
     /// 清掉屏幕与回滚，不断开后端：之后的输出照常流进同一个终端。
     func clearOutput() {
         // 走泵的分流：影子、镜像、检查点、画面按同一个顺序看到这几个字节。
-        outputPump.route(Data("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8))
+        outputPump.routeLocal(Data("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8))
     }
 
     func detach() {

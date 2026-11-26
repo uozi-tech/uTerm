@@ -184,6 +184,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     /// 见 `whenFed`。`watchCarry` 是上一片末尾不到一整串的那几个字节（串可能被切在两片之间）。
     private var watch: (pattern: Data, body: @Sendable () -> Void)?
     private var watchCarry = Data()
+    /// 见 `streamBytesFed`。
+    private var streamBytes: UInt64 = 0
 
     /// 保护闸门。surface 的 backlog 回调可能就在 `surface.receive` 里同步回来（那时 `stateLock` 在手上），
     /// 所以闸门另用一把锁，并且拿着它时不调 surface、不拿 `stateLock`（顺序只能是 stateLock → gateLock）。
@@ -228,6 +230,11 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         get { stateLock.withLock { fedHandler } }
         set { stateLock.withLock { fedHandler = newValue } }
     }
+
+    /// 从后端的输出流进了影子的字节数（累计，换连接不清零）。本端加进泵的字节（`routeLocal`：清屏、改写回显、换连接时的
+    /// 复位）不算——它们不在后端那条流里。要和影子的状态对上（拍检查点时算「这张快照对应流上的哪个位置」），在泵的锁里读
+    /// （tap、`performWhileFeedingPaused`）：tap 里读到的已经含刚喂进去的这一片。
+    var streamBytesFed: UInt64 { stateLock.withLock { streamBytes } }
 
     /// 影子的状态整个回放进了 surface（重新开始吃字节、收到整屏快照）之后调，在回放的那条线程上。
     var onReplayed: (@Sendable () -> Void)? {
@@ -341,12 +348,19 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         if generation == currentGeneration { body() }
     }
 
-    /// 不经闸门直接分流一片字节（测试直接喂字节、`clearOutput` 这类不走后端的字节用）。
+    /// 不经闸门直接分流一片后端的输出（测试直接喂字节用）。本端自己加的字节走 `routeLocal`。
     func route(_ slice: Data) {
         route(slice, generation: nil)
     }
 
-    private func route(_ slice: Data, generation: Int?, asHistory: Bool = false) {
+    /// 分流一片本端加进字节流的字节（清屏、改写回显、换连接时的复位）：影子、tap、surface 按同一个先后看到它们，
+    /// 但它们不是后端输出的，不算进 `streamBytesFed`。持有 PTY 的后端按那个数给检查点定位，把它们算进去的话，
+    /// 接回时保持进程会从靠后的位置补字节，检查点之后的头几个字节就丢了，剩下的从一个序列的半中间开始、当成文字画出来。
+    func routeLocal(_ slice: Data) {
+        route(slice, generation: nil, isLocal: true)
+    }
+
+    private func route(_ slice: Data, generation: Int?, asHistory: Bool = false, isLocal: Bool = false) {
         guard !slice.isEmpty else { return }
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -356,12 +370,12 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
             // 在串的末尾切开：前半片进去、调 `body`（它 route 的字节排在这里）、再进后半片。
             self.watch = nil
             watchCarry = Data()
-            feedLocked(slice[..<cut], asHistory: false)
+            feedLocked(slice[..<cut], asHistory: false, isLocal: isLocal)
             watch.body()
-            feedLocked(slice[cut...], asHistory: false)
+            feedLocked(slice[cut...], asHistory: false, isLocal: isLocal)
             return
         }
-        feedLocked(slice, asHistory: asHistory)
+        feedLocked(slice, asHistory: asHistory, isLocal: isLocal)
     }
 
     /// 等字节流里来一串 `pattern`：它整串进了影子之后、同一片里排在它后面的字节之前，调一次 `body`
@@ -398,11 +412,13 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         return nil
     }
 
-    /// 调用方持 `stateLock`。一片字节：影子 → tap → surface。
-    private func feedLocked(_ slice: Data, asHistory: Bool) {
+    /// 调用方持 `stateLock`。一片字节：影子 → tap → surface。`isLocal`：本端加的，不算后端输出流的字节。
+    private func feedLocked(_ slice: Data, asHistory: Bool, isLocal: Bool) {
         guard !slice.isEmpty else { return }
         let erase = scanner.scan(slice)
         shadow.feed(slice, asHistory: asHistory)
+        // 先记数再调 tap：tap 里拍的检查点已经含这一片。
+        if !isLocal { streamBytes &+= UInt64(slice.count) }
         fedHandler?(slice)
         if feedsSurface, !holdIfGridMismatchedLocked() {
             // 刚放行时回放已经带上了这一片。
@@ -599,7 +615,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     /// 全新的终端（影子没内容）不送：模式本来就是默认的，也免得空终端被当成有内容、surface 挂上时白回放一次。
     func resetModesForNewConnection() {
         guard shadow.hasContent else { return }
-        route(Self.resetForNewConnection(onAlternateScreen: shadow.isOnAlternateScreen))
+        routeLocal(Self.resetForNewConnection(onAlternateScreen: shadow.isOnAlternateScreen))
     }
 
     /// 影子被不经过泵的方式改过（从检查点还原、直接喂了历史）：surface 要重新对齐。正在吃字节就当场回放，

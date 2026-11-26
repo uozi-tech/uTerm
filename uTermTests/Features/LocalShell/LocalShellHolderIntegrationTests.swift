@@ -239,6 +239,35 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         XCTAssertTrue(fresh.recentLines(50).lines.contains("QUIT_46"), fresh.recentLines(50).lines.joined(separator: "\n"))
     }
 
+    /// 检查点声称的位置不能超出 holder 的输出流。清屏的那几个字节（和 Code 标签页起会话时改写回显的那一百多个一样）是 App
+    /// 自己加进输出泵的，不在 holder 的流里：原来按 tap 数字节，位置每清一次屏就多算 11，接回时 holder 从偏后的地方补，
+    /// 检查点之后的头几个字节被跳过，剩下的从一个序列的半中间开始、被当成文字画在光标那里（Claude Code 的输入框里多出
+    /// `3;3H`、`?2026l`）。
+    /// 假 holder 的那一条在 `HeldCheckpointOffsetTests`；这里是真的 holder。
+    func test_checkpoint_position_stays_within_the_holder_stream_after_local_clear() async throws {
+        let id = makeSession()
+        let (first, firstBackend) = try await connected(id)
+        await firstBackend.write(Data("echo CLEAR_$((40+7))\n".utf8))
+        let printed = await wait { self.screen(first).contains("CLEAR_47") }
+        XCTAssertTrue(printed, screen(first))
+        // 提示符异步重画（git 状态之类）也算检查点之后的输出，会把多算的那一点盖过去：清够多次，差得出来。
+        for _ in 0..<200 { first.clearOutput() }
+        try await Task.sleep(for: .milliseconds(500))
+        first.saveHeldCheckpointNow()
+        first.dispose()
+        await firstBackend.detach()
+        try await Task.sleep(for: .milliseconds(300))
+
+        let raw = backend(id)
+        try await raw.connect()
+        let taken = await raw.takeReplay()
+        let replay = try XCTUnwrap(taken)
+        await raw.close()
+        XCTAssertFalse(replay.checkpoint.blob.isEmpty, "用例前提：检查点存进了 holder")
+        XCTAssertLessThanOrEqual(replay.checkpoint.offset, replay.endOffset,
+                                 "检查点的位置（\(replay.checkpoint.offset)）超出了 holder 的输出流（\(replay.endOffset)）")
+    }
+
     /// 历史里的终端查询不能被再回答一遍，否则回答会打进正在跑的程序。
     func test_replay_does_not_answer_terminal_queries_from_history() async throws {
         let id = makeSession()

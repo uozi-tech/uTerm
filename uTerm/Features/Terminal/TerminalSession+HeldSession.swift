@@ -161,6 +161,11 @@ enum HeldTerminalSessions {
 ///
 /// 线程：`noteFed` 在输出泵喂字节的那条线程上调（泵的锁在手上），其余在主线程上；拍快照和算字节位置都借泵的锁做，
 /// 所以检查点和它声称的位置严格对应。
+///
+/// 位置按泵数的「后端输出流进了影子多少字节」算（`TerminalOutputPump.streamBytesFed`），不数 tap 的字节：tap 里还有本端
+/// 加进泵的字节（Code 标签页起会话时改写回显、清屏、换连接时的复位），它们不在 holder 的输出流里。算进去的话位置偏后，
+/// 重启后接回时 holder 从偏后的地方补，检查点之后的头几十到一百多个字节被跳过，剩下的从一个序列的半中间开始，被当成文字
+/// 画在光标那里（Claude Code 的输入框里多出 `3;3H`、`?2026l`，`HeldCheckpointOffsetTests`）。
 nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
     private static let resizeDelay = 0.3
     private static let minPendingBytes = 4 * 1024 * 1024
@@ -169,9 +174,10 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
     private let link: HolderLink
     private let pump: TerminalOutputPump
     private let baseOffset: UInt64
+    /// 建出来时泵已经数到的后端字节数：`baseOffset` 对应的就是这一刻。
+    private let streamBase: UInt64
     private let programStatus: @Sendable () -> Data?
     private let lock = NSLock()
-    private var fedBytes: UInt64 = 0
     private var bytesSinceCapture = 0
     private var lastBlobBytes = 0
     private var isDirty = false
@@ -183,13 +189,13 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
         self.link = link
         self.pump = pump
         self.baseOffset = baseOffset
+        streamBase = pump.streamBytesFed
         self.programStatus = programStatus
     }
 
-    /// 影子终端又吃进去 `count` 字节（泵的 tap）。
+    /// 影子终端又吃进去 `count` 字节（泵的 tap；含本端加的字节，只用来判断该不该存，位置不按它算）。
     func noteFed(_ count: Int) {
         lock.lock()
-        fedBytes += UInt64(count)
         bytesSinceCapture += count
         isDirty = true
         let due = bytesSinceCapture >= min(Self.maxPendingBytes, max(Self.minPendingBytes, lastBlobBytes))
@@ -235,8 +241,9 @@ nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
                 lock.unlock()
                 return
             }
-            let offset = baseOffset + fedBytes
             lock.unlock()
+            // 泵的锁在手上：这个数和下面拍的快照对应字节流上的同一个位置。
+            let offset = baseOffset + (pump.streamBytesFed - streamBase)
             guard let snapshot = try? pump.shadow.snapshot() else { return }
             let size = pump.shadow.size
             // 回放流拍不出来不影响二进制快照照存。

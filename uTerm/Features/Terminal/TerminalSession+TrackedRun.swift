@@ -221,7 +221,7 @@ extension TerminalSession {
         pump.whenFed(run.startMarkerBytes) { @Sendable [weak pump] in
             guard let pump, let span = shadow.locateEcho(prefix: prefix, suffix: suffix),
                   let plan = TrackedRunEchoRewrite.plan(span: span, command: command) else { return }
-            pump.route(plan.bytes)
+            pump.routeLocal(plan.bytes)
             box.marker = shadow.markRow(plan.outputRow)
         }
     }
