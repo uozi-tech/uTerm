@@ -62,30 +62,30 @@ nonisolated struct AgentHistoryRunPlacement<Run> {
 }
 
 nonisolated extension AgentHistoryListing {
-    /// 运行中的会话始终排在前面（用户要的）：每一组里有它记录行的那几个挪到组的最前面（彼此照原来的先后），
-    /// 有跑着的会话的组（含只放着还没对上记录的新会话的）排在没有的前面，其余照原来的先后。
-    /// 「置顶」一组照旧在最上面，组里是用户自己排的顺序，不挪。组的 ID 不变，`placement` 照样能用。
-    static func prioritizingRuns<Run>(_ groups: [AgentHistoryGroup],
-                                      placement: AgentHistoryRunPlacement<Run>) -> [AgentHistoryGroup] {
-        var withRuns: [AgentHistoryGroup] = []
-        var rest: [AgentHistoryGroup] = []
+    /// 运行中的会话始终排在前面（用户要的）：每一组里有它记录行的那几个挪到组的最前面，有跑着的会话的组（含只放着
+    /// 还没对上记录的新会话的）排在没有的前面，其余照原来的先后。跑着的会话之间按 `CodeRunStatus.listRank`：
+    /// 等人处理 > 正在干活 / 出错 > 停在输入框（空闲、没报过）；同一档照原来的先后。组按组里最靠前的那一档排。
+    /// 已结束、留着画面的不往前挪。「置顶」一组照旧在最上面，组里是用户自己排的顺序，不挪。组的 ID 不变，
+    /// `placement` 照样能用。`status` 在列表的 body 里读：状态变了列表重排。
+    static func prioritizingRuns<Run>(_ groups: [AgentHistoryGroup], placement: AgentHistoryRunPlacement<Run>,
+                                      status: (Run) -> CodeRunStatus) -> [AgentHistoryGroup] {
+        func rank(_ path: String) -> Int { placement.inList[path].map { status($0).listRank } ?? 0 }
+        var ranked: [(rank: Int, index: Int, group: AgentHistoryGroup)] = []
         var pinned: [AgentHistoryGroup] = []
-        for var group in groups {
+        for (index, var group) in groups.enumerated() {
             if group.kind == .pinned {
                 pinned.append(group)
                 continue
             }
-            let running = group.files.filter { placement.inList[$0.path] != nil }
-            if !running.isEmpty {
-                group.files = running + group.files.filter { placement.inList[$0.path] == nil }
-            }
-            if !running.isEmpty || !placement.leading(in: group).isEmpty {
-                withRuns.append(group)
-            } else {
-                rest.append(group)
-            }
+            let ranks = Dictionary(group.files.map { ($0.path, rank($0.path)) }, uniquingKeysWith: max)
+            // 稳定排序：同一档照原来的先后。
+            group.files = group.files.enumerated()
+                .sorted { (ranks[$0.element.path]!, -$0.offset) > (ranks[$1.element.path]!, -$1.offset) }
+                .map(\.element)
+            let leading = placement.leading(in: group).map { status($0).listRank }
+            ranked.append(((leading + ranks.values).max() ?? 0, index, group))
         }
-        return pinned + withRuns + rest
+        return pinned + ranked.sorted { ($0.rank, -$0.index) > ($1.rank, -$1.index) }.map(\.group)
     }
 
     /// 这份记录在哪一组（置顶了是「置顶」）。不在任何一组里为 nil。

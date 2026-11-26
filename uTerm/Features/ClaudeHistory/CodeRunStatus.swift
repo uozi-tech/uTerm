@@ -13,6 +13,21 @@ nonisolated enum CodeRunStatus: Equatable, Sendable {
 
     /// `report`：程序报的状态里最需要人处理的那条，含空闲（`TerminalSession.programReport`，不是只给标签用、
     /// 空闲时为 nil 的 `programStatus`）。
+    /// 侧栏里往前排的档（`AgentHistoryListing.prioritizingRuns`）：等人处理 4 > 正在干活 3 = 出错 3 >
+    /// 停在输入框（空闲、已完成、没报过）1 > 已结束 0（不往前挪）。
+    var listRank: Int {
+        switch self {
+        case .ended: 0
+        case .unreported: 1
+        case .program(let record):
+            switch record.state {
+            case .blocked: 4
+            case .working, .error: 3
+            case .idle, .done: 1
+            }
+        }
+    }
+
     static func of(isEnded: Bool, report: ProgramStatusRecord?) -> CodeRunStatus {
         if isEnded { return .ended }
         return report.map { .program($0) } ?? .unreported

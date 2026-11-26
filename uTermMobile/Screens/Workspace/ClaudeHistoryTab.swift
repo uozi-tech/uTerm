@@ -664,7 +664,9 @@ private struct ClaudeHistoryList: View {
         let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, directory: \.directory,
                                                  tool: \.tool, groups: listed)
         // 跑着的排在组的最前面、它那一组排在前面（同 Mac）。
-        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement)
+        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: {
+            CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport)
+        })
         let focusedRunPath = code?.board.focused?.sessionPath
         // 看着的新会话放在哪一组（它那一组收着就打开）。
         let focusedID = code?.board.focusedID

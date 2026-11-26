@@ -377,7 +377,7 @@ struct AgentHistorySessionList: View {
         // 哪一组都对不上的才在列表最顶上。跑着的排在组的最前面、它那一组排在前面。
         let placement = AgentHistoryRunPlacement(runs: runs, path: \.path, directory: \.directory, tool: \.tool,
                                                  groups: listed)
-        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement)
+        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: { $0.status.read() })
         let selectedRunPath = runs.first(where: \.isSelected)?.path
         // 选中的新会话放在哪一组（它那一组收着就打开）。
         let selectedLeadingGroup = placement.groupID(ofLeading: \.isSelected)
