@@ -31,7 +31,7 @@ struct TerminalActivityWidget: Widget {
                     TerminalHeadline(state: state, size: 15)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 5) {
                         ForEach(state.rows) { row in
                             Link(destination: TerminalActivityAttributes.link(tab: row.id)) {
                                 TerminalRowView(row: row, state: state, compact: true)
@@ -111,6 +111,7 @@ private struct TerminalHeadline: View {
 
 /// 一行：状态点 + 标签页标题，右边是运行时长（运行中）或短状态（等人 / 完成 / 出错）；
 /// 第二行只写标题行里没提到的：程序、运行中的状态、主机。全提到标题行了就只有一行。
+/// 展开的灵动岛（`compact`）里这些跟在标题后面、同一行。
 private struct TerminalRowView: View {
     let row: TerminalActivityAttributes.Row
     let state: TerminalActivityAttributes.ContentState
@@ -124,15 +125,31 @@ private struct TerminalRowView: View {
                 .fill(paused ? Color.secondary : row.tone.color)
                 .frame(width: 8, height: 8)
                 .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: row.title)
-                    .font(.system(size: compact ? 14 : 15, weight: .semibold))
-                    .lineLimit(1)
-                if let detail {
-                    Text(verbatim: detail)
-                        .font(.system(size: compact ? 12 : 13))
-                        .foregroundStyle(.secondary)
+            if compact {
+                // 展开的灵动岛有固定的最大高度：标题行加三行两行字的会把第三行切掉一半，这里每行只占一行，
+                // 程序 / 主机跟在标题后面（放不下先截它们）。
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(verbatim: row.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .layoutPriority(1)
+                    if let detail {
+                        Text(verbatim: detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .lineLimit(1)
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: row.title)
+                        .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
+                    if let detail {
+                        Text(verbatim: detail)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             Spacer(minLength: 4)
