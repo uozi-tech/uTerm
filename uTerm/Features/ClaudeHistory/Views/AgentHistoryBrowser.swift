@@ -350,7 +350,7 @@ struct AgentHistorySessionList: View {
 
     private var optionsMenuItems: [UDMenuItem] {
         var items = groupingChoices.map { choice in
-            UDMenuItem(label: AgentHistoryText.groupingName(choice), active: choice == grouping) {
+            UDMenuItem(label: AgentHistoryText.groupingName(choice), checked: choice == grouping) {
                 groupingRaw = choice.rawValue
             }
         }
@@ -359,7 +359,7 @@ struct AgentHistorySessionList: View {
             let effective = history.effectiveTools
             for tool in history.availableTools {
                 // 只剩这一种勾着时点了不变（`toggling` 不许一种都不勾）。
-                items.append(UDMenuItem(label: tool.displayName, active: effective.contains(tool)) {
+                items.append(UDMenuItem(label: tool.displayName, checked: effective.contains(tool)) {
                     let next = AgentHistoryListing.toggling(tool, shown: history.shownTools, available: history.availableTools)
                     shownToolsRaw = AgentHistoryListPreferences.encodeTools(next)
                 })
