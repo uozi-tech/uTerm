@@ -351,7 +351,7 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    // MARK: - 历史会话：只有 Claude Code（假的 ~/.claude/projects，四种工具的数据源都建，只有它有记录）
+    // MARK: - 历史会话：只有 Claude Code（假的 ~/.claude/projects，几种工具的数据源都建，只有它有记录）
 
     /// 列表、对话、空态。宽屏（展开的 Duo、iPad）列表与对话左右并排，窄屏点进对话、左上角返回。
     func testClaudeHistoryTab() async throws {
@@ -452,8 +452,8 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    /// 几种编码工具混排的历史会话标签（手写的假数据源，Claude Code / Codex / Cursor）：按项目分组（定位到终端目录那一组）、
-    /// 按工具、按日期、只看其中几种、搜索结果（Cursor 不参与搜索的说明）、某种工具读不出来、对话。
+    /// 几种编码工具混排的历史会话标签（手写的假数据源，Claude Code / Codex / Antigravity）：按项目分组（定位到终端目录那一组）、
+    /// 按工具、按日期、只看其中几种、搜索结果（Antigravity 不参与搜索的说明）、某种工具读不出来、对话。
     /// 只有 Claude Code 的样子见 `testClaudeHistoryTab`（`claude-history-*`）。
     func testAgentHistoryMixedTools() async throws {
         defer { MobileProbeWindow.closeAll() }
@@ -497,7 +497,7 @@ final class StyleGalleryTests: XCTestCase {
             let (byDate, _) = try await open(MobileAgentHistoryFixture.source(), grouping: .date)
             try await shoot("agent-history-by-date", on: device, settle: .milliseconds(600)) { mount(byDate) }
 
-            let (filtered, _) = try await open(MobileAgentHistoryFixture.source(), shown: "codex,cursor")
+            let (filtered, _) = try await open(MobileAgentHistoryFixture.source(), shown: "codex,antigravity")
             try await shoot("agent-history-filtered", on: device, settle: .milliseconds(600)) { mount(filtered) }
 
             let (failing, _) = try await open(MobileAgentHistoryFixture.source(antigravityFails: true))

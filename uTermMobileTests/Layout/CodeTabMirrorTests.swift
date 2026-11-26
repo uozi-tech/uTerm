@@ -369,16 +369,16 @@ final class CodeTabMirrorTests: XCTestCase {
         let actions = macActions(code)
         let fresh = UUID()
         actions.reply = { _ in fresh }
-        try await code.startOnMac(tool: .cursor, directory: "/Users/me/other")
+        try await code.startOnMac(tool: .antigravity, directory: "/Users/me/other")
         let sent = try XCTUnwrap(actions.sent.first)
         XCTAssertEqual(sent.knownAction, .start)
         XCTAssertEqual(sent.tab, macTab)
-        XCTAssertEqual(sent.tool, AgentHistoryTool.cursor.rawValue)
+        XCTAssertEqual(sent.tool, AgentHistoryTool.antigravity.rawValue)
         XCTAssertEqual(sent.directory, "/Users/me/other")
         XCTAssertNil(sent.path)
 
         mac(client, sessions: [shell, a, fresh],
-            codeTabs: [codeTab(macTab, runs: [run(a), run(fresh, tool: AgentHistoryTool.cursor.rawValue)])])
+            codeTabs: [codeTab(macTab, runs: [run(a), run(fresh, tool: AgentHistoryTool.antigravity.rawValue)])])
         _ = follow(ws, client)
         XCTAssertEqual(code.runs.focusedID, fresh)
     }

@@ -34,7 +34,6 @@ nonisolated enum SQLiteRemoteReadError: Error, Equatable, Sendable, LocalizedErr
 /// 读的上限。
 nonisolated struct SQLiteReadLimits: Equatable, Sendable {
     /// 主文件 + `-wal` 最多多大。整份读进内存（再加一份盖好 WAL 的库），所以要有个数。
-    /// 本机实测 Cursor 命令行的 5 份记录（主文件 + WAL）在 1.0–5.3 MB（见报告）。
     var maxTotalBytes: Int
     /// 前后对不上 / 校验失败时一共试几次。
     var attempts: Int
@@ -79,7 +78,6 @@ nonisolated struct SQLiteRemoteReadStats: Equatable, Sendable {
 /// 只读上次最后一个提交帧之后新长出来的那段；主文件变了或 WAL 被重置才整份重读。
 ///
 /// 不管旧式的回滚日志（`-journal`）：写的一方正在提交时读到的主文件可能不完整，`quick_check` 不一定看得出来。
-/// 现在接的 Cursor 命令行的库都是 WAL。
 actor SQLiteRemoteReader {
     let provider: any SFTPProviding
     let path: String

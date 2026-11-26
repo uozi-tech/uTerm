@@ -172,7 +172,7 @@ final class AgentHistoryGroupingTests: XCTestCase {
         let both: [AgentHistoryTool] = [.claude, .codex]
         XCTAssertEqual(AgentHistoryListing.effectiveTools(shown: nil, available: both), [.claude, .codex])
         XCTAssertEqual(AgentHistoryListing.effectiveTools(shown: [.codex], available: both), [.codex])
-        XCTAssertEqual(AgentHistoryListing.effectiveTools(shown: [.cursor], available: both), [.claude, .codex],
+        XCTAssertEqual(AgentHistoryListing.effectiveTools(shown: [.antigravity], available: both), [.claude, .codex],
                        "勾的这台上一种都没有：按全部")
         XCTAssertEqual(AgentHistoryListing.effectiveTools(shown: [.codex], available: [.claude]), [.claude],
                        "只有一种工具：不筛")

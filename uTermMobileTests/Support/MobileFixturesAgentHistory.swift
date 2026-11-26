@@ -162,7 +162,7 @@ actor MobileFakeAgentPager: AgentTranscriptPaging {
     func loadNewer() async throws -> AgentTranscriptGrowth { .unchanged }
 }
 
-/// 几种工具混排的一台假主机：Claude Code、Codex、Cursor 三种，`shop-api` 下三种都有，另有 `infra`、`blog`。
+/// 几种工具混排的一台假主机：Claude Code、Codex、Antigravity 三种，`shop-api` 下三种都有，另有 `infra`、`blog`。
 @MainActor
 enum MobileAgentHistoryFixture {
     static let shop = "/home/user/projects/shop-api"
@@ -171,9 +171,9 @@ enum MobileAgentHistoryFixture {
 
     private typealias Session = MobileFakeAgentSource.Session
 
-    /// `tools`：这台主机上有记录的工具；`cursorSearches`：Cursor 的记录能不能在主机上搜（假设不能，看结果上方那句说明）。
-    /// `antigravityFails`：再带一种列不出来的 Antigravity（列表底下那句「读不出来」）。
-    static func source(tools: [AgentHistoryTool] = [.claude, .codex, .cursor], cursorSearches: Bool = false,
+    /// `tools`：这台主机上有记录的工具；`antigravitySearches`：Antigravity 的记录能不能在主机上搜（假设不能，看结果上方那句说明）。
+    /// `antigravityFails`：Antigravity 换成列不出来的那一份（列表底下那句「读不出来」）。
+    static func source(tools: [AgentHistoryTool] = [.claude, .codex, .antigravity], antigravitySearches: Bool = false,
                        antigravityFails: Bool = false, now: Date = Date()) -> any AgentHistorySource {
         func ago(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(-seconds) }
         let claude = MobileFakeAgentSource(tool: .claude, sessions: [
@@ -197,12 +197,12 @@ enum MobileAgentHistoryFixture {
             Session(id: "x-cert", projectID: "2026-11-15", projectDirectory: infra, resumeDirectory: infra,
                     title: "证书续期脚本", modifiedAt: ago(86_400 * 8), branch: nil),
         ])
-        let cursor = MobileFakeAgentSource(tool: .cursor, sessions: [
+        let antigravity = MobileFakeAgentSource(tool: .antigravity, sessions: [
             Session(id: "u-readme", projectID: "ws-1", projectDirectory: shop, resumeDirectory: shop,
                     title: "补 README 的部署一节", modifiedAt: ago(3600 * 7)),
-        ], supportsSearch: cursorSearches)
-        let all: [AgentHistoryTool: any AgentHistorySource] = [.claude: claude, .codex: codex, .cursor: cursor]
-        var sources = tools.compactMap { all[$0] }
+        ], supportsSearch: antigravitySearches)
+        let all: [AgentHistoryTool: any AgentHistorySource] = [.claude: claude, .codex: codex, .antigravity: antigravity]
+        var sources = tools.filter { !(antigravityFails && $0 == .antigravity) }.compactMap { all[$0] }
         if antigravityFails {
             sources.append(MobileFakeAgentSource(tool: .antigravity, sessions: [], projectsError: MobileFakeAgentError.unreadable))
         }

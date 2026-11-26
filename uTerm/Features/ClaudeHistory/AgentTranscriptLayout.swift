@@ -128,7 +128,7 @@ nonisolated struct AgentTranscriptLayout: Sendable {
     }
 }
 
-/// 工具调用一行上的图标（两端共用）。名字按各家工具记录里的原样（Claude、Codex、Cursor……）。
+/// 工具调用一行上的图标（两端共用）。名字按各家工具记录里的原样（Claude、Codex、Antigravity……）。
 nonisolated enum AgentToolSymbol {
     static func systemImage(for name: String) -> String {
         switch name.lowercased() {

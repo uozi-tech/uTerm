@@ -12,7 +12,7 @@ import XCTest
 ///   会话留着，可是四种工具都有记录时「显示」那一步又按「这一趟有记录的工具」把它们筛掉了。
 ///
 /// 改法：「没用过」只认明确的「不存在」（`AgentHistoryMissingPath`），说不清的照常报错；一种工具这一趟列不出来，它仍算
-/// 有记录的工具，留着的会话不被筛掉；Codex / Cursor / Antigravity 列不出来的项目报出来，同 Claude Code。
+/// 有记录的工具，留着的会话不被筛掉；Codex / Antigravity 列不出来的项目报出来，同 Claude Code。
 @MainActor
 final class AgentHistoryTransientFailureTests: XCTestCase {
     private static let home = "/home/user"
@@ -76,9 +76,9 @@ final class AgentHistoryTransientFailureTests: XCTestCase {
         XCTAssertEqual(none, [], "确实没有 ~/.claude/projects：没用过")
     }
 
-    /// 另外三种工具同一条规矩：整个主目录一时连不上时报错；什么都没有的主机上回空。
+    /// 另外两种工具同一条规矩：整个主目录一时连不上时报错；什么都没有的主机上回空。
     func testOtherToolsReportAnUnreachableHomeInsteadOfNoHistory() async throws {
-        for tool in [AgentHistoryTool.codex, .cursor, .antigravity] {
+        for tool in [AgentHistoryTool.codex, .antigravity] {
             let host = SQLiteTestHost(home: Self.home)
             let source = try XCTUnwrap(AgentHistorySources.make(tool, provider: host, home: Self.home))
             let none = try await source.projects()
@@ -141,8 +141,7 @@ final class AgentHistoryTransientFailureTests: XCTestCase {
             Fake(id: "c2", projectID: ClaudeProjectPath.encode(Self.shop), resumeDirectory: Self.shop, title: "支付回调",
                  modifiedAt: Date().addingTimeInterval(-120)),
         ])
-        let source = AgentHistoryCompositeSource([claude, fake(.codex, "x1", ago: 600), fake(.cursor, "u1", ago: 900),
-                                                  fake(.antigravity, "g1", ago: 1200)])
+        let source = AgentHistoryCompositeSource([claude, fake(.codex, "x1", ago: 600), fake(.antigravity, "g1", ago: 1200)])
         let history = AgentHistoryModel(source: source, preferredDirectory: nil, followsCurrentProject: false)
         history.pins = AgentHistoryPins(host: .local, defaults: defaults)
         await history.start()
@@ -150,7 +149,7 @@ final class AgentHistoryTransientFailureTests: XCTestCase {
         history.pins?.toggle(try XCTUnwrap(history.files.first { $0.sessionID == "c2" }))
         await settle(history)
         let before = history.visibleFiles.map(\.sessionID)
-        XCTAssertEqual(before, ["c1", "c2", "x1", "u1", "g1"])
+        XCTAssertEqual(before, ["c1", "c2", "x1", "g1"])
         XCTAssertEqual(history.pinnedFiles.map(\.sessionID), ["c2"])
 
         await claude.setProjectsError(AgentHistoryFakeError.offline)
@@ -172,15 +171,14 @@ final class AgentHistoryTransientFailureTests: XCTestCase {
 
     /// Code 标签页里一个会话在跑，「＋」新开一个会话；新会话还没对上记录，标签页每隔一会儿整个重列一次，正赶上
     /// 辅助程序一时连不上：侧栏的分组与置顶都留着，不是只剩顶上跑着的两行。连上之后照常。
-    /// Claude Code 走真的数据源（读内存里的假主机），另外三种工具是假的、照常。
+    /// Claude Code 走真的数据源（读内存里的假主机），另外两种工具是假的、照常。
     func testStartingANewSessionWhileTheHelperHiccupsKeepsTheSidebar() async throws {
         let host = SQLiteTestHost(home: Self.home)
         await putClaude(host, Self.shop, Self.running, title: "Code 视图侧边栏与 Desktop 差异", ago: 30)
         await putClaude(host, Self.shop, Self.pinned, title: "支付回调", ago: 4000)
         await putClaude(host, Self.blog, Self.draft, title: "写一篇博客", ago: 8000)
         let source = AgentHistoryCompositeSource([ClaudeHistorySource(provider: host, home: Self.home),
-                                                  fake(.codex, "x1", ago: 600), fake(.cursor, "u1", ago: 900),
-                                                  fake(.antigravity, "g1", ago: 1200)])
+                                                  fake(.codex, "x1", ago: 600), fake(.antigravity, "g1", ago: 1200)])
         let history = AgentHistoryModel(source: source, preferredDirectory: Self.shop, followsCurrentProject: false)
         history.pins = AgentHistoryPins(host: .local, defaults: defaults)
         await history.start()
@@ -194,7 +192,7 @@ final class AgentHistoryTransientFailureTests: XCTestCase {
         code.install(AgentHistoryConnection(history: history))
         _ = try XCTUnwrap(code.resume(try XCTUnwrap(history.files.first { $0.sessionID == Self.running })))
         let listed = Set(history.visibleFiles.map(\.sessionID))
-        XCTAssertEqual(listed, [Self.running, Self.pinned, Self.draft, "x1", "u1", "g1"])
+        XCTAssertEqual(listed, [Self.running, Self.pinned, Self.draft, "x1", "g1"])
 
         // 辅助程序断了一下的时候点了「＋」→ 开始：新会话还没对上记录，标签页整个重列。
         await host.setUnreachable([Self.home])

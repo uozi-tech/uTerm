@@ -39,7 +39,7 @@ nonisolated struct AgentHistoryGroup: Identifiable, Equatable, Sendable {
         /// 这时 `name` 是记录目录的名字。
         /// `name` 是组标题：目录最后一段，有同名的目录时往上多带一段（`a/api`、`b/api`）。
         case project(directory: String?, name: String)
-        /// 这种工具没有记下工作目录的会话（Antigravity 没开文件夹的会话、Cursor 对不上目录的）：一种工具一组。
+        /// 这种工具没有记下工作目录的会话（Antigravity 没开文件夹的会话）：一种工具一组。
         case noDirectory(AgentHistoryTool)
         case date(AgentHistoryDateBucket)
         case tool(AgentHistoryTool)

@@ -20,7 +20,6 @@ nonisolated struct AgentHistoryToolMark: Equatable, Sendable {
         switch tool {
         case .claude: return AgentHistoryToolMark(glyph: .letter("C"), red: 0.80, green: 0.42, blue: 0.29)
         case .codex: return AgentHistoryToolMark(glyph: .letter("X"), red: 0.13, green: 0.50, blue: 0.40)
-        case .cursor: return AgentHistoryToolMark(glyph: .symbol("cursorarrow"), red: 0.30, green: 0.33, blue: 0.42)
         case .antigravity: return AgentHistoryToolMark(glyph: .letter("A"), red: 0.33, green: 0.38, blue: 0.85)
         }
     }

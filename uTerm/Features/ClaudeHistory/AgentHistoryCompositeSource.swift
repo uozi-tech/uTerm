@@ -21,8 +21,6 @@ nonisolated enum AgentHistorySources {
             return ClaudeHistorySource(provider: provider, home: home)
         case .codex:
             return CodexHistorySource(provider: provider, home: home)
-        case .cursor:
-            return CursorHistorySource(provider: provider, home: home)
         case .antigravity:
             // 工作区和标题在它的 SQLite 摘要库里，读不出来时数据源自己退回只靠记录。
             return AntigravityHistorySource(provider: provider, home: home, index: AntigravitySummaryIndex())
@@ -100,7 +98,7 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
 
     func projects() async throws -> [AgentHistoryProject] {
         // 几种工具同时列，谁先列完谁先回来。每份结果带着它是哪种工具，按工具对号入座，不按回来的先后、也不靠排序还原：
-        // build 1548–1556 实测装着的 Release 版里，Codex 那一格拿到的是 Cursor 列出来的项目（后面两格依次错开），
+        // build 1548–1556 实测装着的 Release 版里，Codex 那一格拿到的是别的工具列出来的项目（后面两格依次错开），
         // Claude Code 慢一步时它的项目也被当成 Codex 的，交给 Codex 去列，列出空的、不报错，侧栏整个空掉。
         let results = await collectProjects()
         var found: [AgentHistoryProject] = []

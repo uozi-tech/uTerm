@@ -42,7 +42,7 @@ final class ClaudeHistoryTabTests: XCTestCase {
         let model = try XCTUnwrap(history.connection.history)
         XCTAssertEqual(model.scope, .all, "一直列全部项目（按项目分组，定位到终端目录那一组）")
         XCTAssertEqual(history.pendingReveal?.directory, MobileClaudeFixture.directory)
-        XCTAssertEqual(model.configuredTools, AgentHistoryTool.allCases, "四种工具都读")
+        XCTAssertEqual(model.configuredTools, AgentHistoryTool.allCases, "几种工具都读")
         XCTAssertEqual(model.availableTools, [.claude], "树里只有 Claude Code 的记录：别的工具目录不存在，列出空的")
         XCTAssertFalse(model.isMultiTool)
         XCTAssertEqual(model.toolFailures, [:], "没有记录目录不算读不出来")
@@ -311,7 +311,7 @@ final class ClaudeHistoryTabTests: XCTestCase {
 
     // MARK: - 几种工具
 
-    /// App 里建的两种标签：四种工具都读、一直列全部项目；直连主机记下终端目录并要求定位，配对的 Mac 没有目录、不定位。
+    /// App 里建的两种标签：几种工具都读、一直列全部项目；直连主机记下终端目录并要求定位，配对的 Mac 没有目录、不定位。
     func testTabsReadEveryToolAndOnlyDirectHostsReveal() throws {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
@@ -325,7 +325,7 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertNil(picked.pendingReveal)
 
         let mac = ClaudeHistoryTab(pairedMac: unreachableMac())
-        XCTAssertEqual(mac.connection.tools, AgentHistoryTool.allCases, "配对的 Mac 同样四种工具")
+        XCTAssertEqual(mac.connection.tools, AgentHistoryTool.allCases, "配对的 Mac 同样几种工具")
         XCTAssertNil(mac.pendingReveal)
     }
 
@@ -340,11 +340,11 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertTrue(settled)
         let model = try XCTUnwrap(tab.connection.history)
         XCTAssertTrue(model.isMultiTool)
-        XCTAssertEqual(model.availableTools, [.claude, .codex, .cursor])
+        XCTAssertEqual(model.availableTools, [.claude, .codex, .antigravity])
         let groups = AgentHistoryListing.groups(model.visibleFiles, by: .project, metadata: model.metadata)
         let shopID = "project:" + MobileAgentHistoryFixture.shop
         let shop = try XCTUnwrap(groups.first { $0.id == shopID })
-        XCTAssertEqual(Set(shop.files.map(\.tool)), [.claude, .codex, .cursor], "同一个目录下几种工具并成一组")
+        XCTAssertEqual(Set(shop.files.map(\.tool)), [.claude, .codex, .antigravity], "同一个目录下几种工具并成一组")
         XCTAssertEqual(groups.count, 3)
 
         model.collapsedGroups = [shopID]
@@ -366,7 +366,7 @@ final class ClaudeHistoryTabTests: XCTestCase {
     func testListPreferencesDriveTheListAndFallBackWithOneTool() async throws {
         let (defaults, suite) = privateDefaults()
         defer { UserDefaults().removePersistentDomain(forName: suite) }
-        defaults.set("codex,cursor", forKey: DefaultsKey.agentHistoryShownTools)
+        defaults.set("codex,antigravity", forKey: DefaultsKey.agentHistoryShownTools)
         let ws = MobileWorkspace()
         let tab = ws.openHistory(MobileAgentHistoryFixture.tab(host: host(), source: MobileAgentHistoryFixture.source()))
         let settled = await MobileFakeClaudeHistory.settle(tab)
@@ -377,10 +377,10 @@ final class ClaudeHistoryTabTests: XCTestCase {
             ClaudeHistorySessionBody(tab: tab) { _, _ in }.defaultAppStorage(defaults))
 
         let filtered = await MobileFakeTerminal.waitUntil {
-            model.shownTools == [.codex, .cursor] && !model.hasMore && !model.visibleFiles.isEmpty
+            model.shownTools == [.codex, .antigravity] && !model.hasMore && !model.visibleFiles.isEmpty
         }
         XCTAssertTrue(filtered, "挂上列表就按存的「显示」筛")
-        XCTAssertEqual(Set(model.visibleFiles.map(\.tool)), [.codex, .cursor])
+        XCTAssertEqual(Set(model.visibleFiles.map(\.tool)), [.codex, .antigravity])
 
         defaults.set("", forKey: DefaultsKey.agentHistoryShownTools)
         let all = await MobileFakeTerminal.waitUntil { model.shownTools == nil && model.visibleFiles.count == 7 }
@@ -401,7 +401,7 @@ final class ClaudeHistoryTabTests: XCTestCase {
         let settled = await MobileFakeClaudeHistory.settle(tab)
         XCTAssertTrue(settled)
         let model = try XCTUnwrap(tab.connection.history)
-        XCTAssertEqual(model.searchExcludedTools, [.cursor])
+        XCTAssertEqual(model.searchExcludedTools, [.antigravity])
         model.searchText = "订单"
         model.submitSearch()
         let finished = await MobileFakeTerminal.waitUntil { model.search?.phase == .finished }
@@ -409,9 +409,9 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertEqual(model.search?.sessions.map(\.metadata.title), ["登录接口偶发 500", "订单服务测试与慢查询", "给订单接口加分页"],
                        "按会话的新旧排，Claude Code 与 Codex 的混在一起")
         // 不拿中文字面量比文案（换了界面语言就红）：比结构化的字段，文案只核点到了那种工具。
-        XCTAssertEqual(model.searchExcludedTools, [.cursor])
+        XCTAssertEqual(model.searchExcludedTools, [.antigravity])
         let note = AgentHistoryText.searchUnsupported(model.searchExcludedTools)
-        XCTAssertTrue(note.contains(AgentHistoryTool.cursor.displayName), note)
+        XCTAssertTrue(note.contains(AgentHistoryTool.antigravity.displayName), note)
         XCTAssertFalse(note.contains(AgentHistoryTool.claude.displayName), note)
     }
 
@@ -434,12 +434,12 @@ final class ClaudeHistoryTabTests: XCTestCase {
         XCTAssertEqual(store.openTarget?.command, plan.command)
         XCTAssertEqual(store.connecting?.allowDuplicate, true, "总是新开一个终端标签页")
 
-        XCTAssertEqual(model.newSessionTools(directory: tab.directory), [.claude, .codex, .cursor], "不止一种：先选工具")
+        XCTAssertEqual(model.newSessionTools(directory: tab.directory), [.claude, .codex, .antigravity], "不止一种：先选工具")
         let directory = try XCTUnwrap(tab.directory)
-        let newCommand = try XCTUnwrap(model.newSessionCommand(tool: .cursor, directory: directory))
+        let newCommand = try XCTUnwrap(model.newSessionCommand(tool: .antigravity, directory: directory))
         let fresh = MobileStore()
         try await tab.runInNewTerminal(newCommand, directory: directory, store: fresh)
-        XCTAssertEqual(fresh.openTarget?.command, "cd -- '\(MobileAgentHistoryFixture.shop)' && cursor")
+        XCTAssertEqual(fresh.openTarget?.command, "cd -- '\(MobileAgentHistoryFixture.shop)' && antigravity")
 
         let picked = ws.openHistory(MobileAgentHistoryFixture.tab(host: host("db-01"), source: MobileAgentHistoryFixture.source(),
                                                                   directory: nil))

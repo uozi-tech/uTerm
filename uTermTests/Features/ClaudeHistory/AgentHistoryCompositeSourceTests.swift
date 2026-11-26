@@ -56,7 +56,7 @@ final class AgentHistoryCompositeSourceTests: XCTestCase {
     // MARK: 分派
 
     /// 几种工具列完的先后与注册的顺序不同：每种工具的项目仍落在它自己名下，按工具列会话各自列得出来。
-    /// 2026-11-26 实测（build 1548–1556）：Codex 那一格拿到 Cursor 的项目、后面依次错开，Claude Code 慢一步时
+    /// 2026-11-26 实测（build 1548–1556）：Codex 那一格拿到别的工具的项目、后面依次错开，Claude Code 慢一步时
     /// 它的项目被交给 Codex 去列，列出空的、不报错，Code 标签页的侧栏整个空掉。
     func testProjectsStayWithTheirToolWhenToolsFinishOutOfOrder() async throws {
         func source(_ tool: AgentHistoryTool, projects: Int) -> AgentHistoryFakeSource {
@@ -64,22 +64,21 @@ final class AgentHistoryCompositeSourceTests: XCTestCase {
                 Session(id: "\(tool.rawValue)-\(index)", projectID: "p\(index)", title: "t", modifiedAt: now)
             })
         }
-        let sources = [source(.claude, projects: 5), source(.codex, projects: 2), source(.cursor, projects: 4),
-                       source(.antigravity, projects: 3)]
-        // 注册的顺序是 Claude Code、Codex、Cursor、Antigravity，列完的先后正好倒过来（同实测里 Claude Code 最慢）。
-        for (source, delay) in zip(sources, [120, 80, 40, 0]) { await source.setProjectsDelay(.milliseconds(delay)) }
+        let sources = [source(.claude, projects: 5), source(.codex, projects: 2), source(.antigravity, projects: 3)]
+        // 注册的顺序是 Claude Code、Codex、Antigravity，列完的先后正好倒过来（同实测里 Claude Code 最慢）。
+        for (source, delay) in zip(sources, [120, 60, 0]) { await source.setProjectsDelay(.milliseconds(delay)) }
         let composite = AgentHistoryCompositeSource(sources)
 
         let projects = try await composite.projects()
         for source in sources {
             let mine = projects.filter { $0.tool == source.tool }
-            XCTAssertEqual(mine.count, ["claude": 5, "codex": 2, "cursor": 4, "antigravity": 3][source.tool.rawValue],
+            XCTAssertEqual(mine.count, ["claude": 5, "codex": 2, "antigravity": 3][source.tool.rawValue],
                            "\(source.tool.rawValue) 的项目数")
             XCTAssertTrue(mine.allSatisfy { $0.path.hasPrefix("/fake/\(source.tool.rawValue)/") },
                           "\(source.tool.rawValue) 名下只有它自己的项目")
         }
         let listing = await composite.listAllSessions(in: projects)
-        XCTAssertEqual(listing.files.count, 14, "每种工具都列得出自己的会话")
+        XCTAssertEqual(listing.files.count, 10, "每种工具都列得出自己的会话")
         XCTAssertTrue(listing.failedProjects.isEmpty)
     }
 
@@ -148,11 +147,11 @@ final class AgentHistoryCompositeSourceTests: XCTestCase {
 
     func testMissingToolFailsInsteadOfMisrouting() async throws {
         let composite = AgentHistoryCompositeSource([claude()])
-        let stray = AgentHistoryProject(id: "p", path: "/p", modifiedAt: nil, tool: .cursor)
+        let stray = AgentHistoryProject(id: "p", path: "/p", modifiedAt: nil, tool: .antigravity)
         let file = AgentHistorySessionFile(sessionID: "s", project: stray, path: "/p/s", size: 1, modifiedAt: now)
         do {
             _ = try await composite.sessions(in: stray)
-            XCTFail("没有 Cursor 的数据源，不该交给 Claude 的")
+            XCTFail("没有 Antigravity 的数据源，不该交给 Claude 的")
         } catch {}
         do {
             _ = try await composite.transcript(for: file).loadPrevious()

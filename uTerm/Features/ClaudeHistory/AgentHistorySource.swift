@@ -212,7 +212,7 @@ protocol AgentHistorySource: Actor {
     /// 在这个目录里新开一个会话要敲的命令；目录不合法、或者这种工具不是在终端里用的为 nil。
     nonisolated func newSessionCommand(directory: String) -> String?
     /// 能不能删掉一个会话的记录。一个会话就是一个（或一组）只属于它的文件的工具能；好几个会话存在同一个数据库里的
-    /// （Cursor、Antigravity）不能：删文件会连别的会话一起删掉。
+    /// （Antigravity）不能：删文件会连别的会话一起删掉。
     nonisolated var supportsDelete: Bool { get }
     /// 删掉这个会话在主机上的记录（用户在列表里点了「删除」、确认过）。删不掉照常抛；主记录删了、附带的文件
     /// （子代理的记录等）没删干净不算失败。

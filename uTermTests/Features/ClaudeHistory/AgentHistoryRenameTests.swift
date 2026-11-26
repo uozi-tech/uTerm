@@ -81,11 +81,11 @@ final class AgentHistoryRenameTests: XCTestCase {
     }
 
     func testToolsWithoutRenameAreNotOffered() async throws {
-        let cursor = AgentHistoryFakeSource(tool: .cursor, sessions: [
+        let antigravity = AgentHistoryFakeSource(tool: .antigravity, sessions: [
             Session(id: "c", projectID: "/srv/shop", projectDirectory: "/srv/shop", resumeDirectory: "/srv/shop",
-                    title: "Cursor 的会话", modifiedAt: Date()),
+                    title: "Antigravity 的会话", modifiedAt: Date()),
         ], supportsRename: false)
-        let history = await start(cursor)
+        let history = await start(antigravity)
         let file = try XCTUnwrap(history.visibleFiles.first)
         XCTAssertFalse(history.canRename(file))
     }

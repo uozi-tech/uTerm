@@ -3,7 +3,7 @@ import XCTest
 @testable import uTerm
 
 /// 历史会话的「删除会话」（用户报的：历史消息删不掉）：删的是主机上的记录，删掉后列表、置顶、选中、搜索结果一起跟上；
-/// 删不掉时列表不动；会话存在共享数据库里的工具（Cursor、Antigravity）不出这一项。
+/// 删不掉时列表不动；会话存在共享数据库里的工具（Antigravity）不出这一项。
 @MainActor
 final class AgentHistoryDeleteTests: XCTestCase {
     private typealias Session = AgentHistoryFakeSource.Session
@@ -82,20 +82,20 @@ final class AgentHistoryDeleteTests: XCTestCase {
 
     func testToolsThatShareADatabaseCannotDelete() async throws {
         let claude = AgentHistoryFakeSource(tool: .claude, sessions: sessions(["a"]))
-        let cursor = AgentHistoryFakeSource(tool: .cursor, sessions: [
+        let antigravity = AgentHistoryFakeSource(tool: .antigravity, sessions: [
             Session(id: "chat", projectID: "/srv/shop", projectDirectory: "/srv/shop", resumeDirectory: "/srv/shop",
-                    title: "Cursor 的会话", modifiedAt: Date()),
+                    title: "Antigravity 的会话", modifiedAt: Date()),
         ], supportsDelete: false)
-        let history = await start(AgentHistoryCompositeSource([claude, cursor]))
+        let history = await start(AgentHistoryCompositeSource([claude, antigravity]))
         let claudeFile = try XCTUnwrap(history.visibleFiles.first { $0.tool == .claude })
-        let cursorFile = try XCTUnwrap(history.visibleFiles.first { $0.tool == .cursor })
+        let antigravityFile = try XCTUnwrap(history.visibleFiles.first { $0.tool == .antigravity })
         XCTAssertTrue(history.canDelete(claudeFile))
-        XCTAssertFalse(history.canDelete(cursorFile), "Cursor 的会话在共享的数据库里，不能单独删")
+        XCTAssertFalse(history.canDelete(antigravityFile), "Antigravity 的会话在共享的数据库里，不能单独删")
         do {
-            try await history.delete(cursorFile)
+            try await history.delete(antigravityFile)
             XCTFail("不能删的工具要拒绝")
         } catch {}
-        let deleted = await cursor.deleted
+        let deleted = await antigravity.deleted
         XCTAssertTrue(deleted.isEmpty)
     }
 

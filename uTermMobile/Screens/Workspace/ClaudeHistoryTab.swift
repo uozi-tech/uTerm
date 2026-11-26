@@ -4,7 +4,7 @@ import SwiftData
 import Observation
 import UIKit
 
-/// 「Code」标签页：左边一台主机（或一台配对过的 Mac）上编码工具（Claude Code、Codex、Cursor、Antigravity）在命令行里的
+/// 「Code」标签页：左边一台主机（或一台配对过的 Mac）上编码工具（Claude Code、Codex、Antigravity）在命令行里的
 /// 会话列表，右边看记录（只读）或继续聊天。连接、列表、分组、翻页都在两端共用的 `AgentHistoryConnection` /
 /// `AgentHistoryModel` / `AgentHistoryListing` 里，这里只是标签与画面。
 ///
@@ -95,7 +95,7 @@ final class ClaudeHistoryTab: Identifiable {
     }
 
     /// 已保存的主机（经 SFTP，与同主机的终端共用一条 SSH 连接）。`directory` 是终端当前目录：列表按项目分组，定位到它那一组。
-    /// 四种工具都读、一直列全部项目（同 Mac 的 Code 模式）。
+    /// 几种工具都读、一直列全部项目（同 Mac 的 Code 模式）。
     convenience init(server host: ServerProfile, directory: String?, container: ModelContainer) {
         self.init(host: host, connection: AgentHistoryConnection(
             preferredDirectory: directory, allowsCommands: { !host.sftpOnly }, tools: AgentHistoryTool.allCases,
