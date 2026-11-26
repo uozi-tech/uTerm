@@ -161,8 +161,21 @@ final class UICatalogRecordingAnchor {}
 /// 写好的终端输出（带 ANSI 颜色）。只用常见命令的真实输出格式。
 enum UICatalogTerminalScripts {
     private static let e = "\u{1B}["
-    private static func prompt(_ host: String = "prod-web-01", _ dir: String = "~") -> String {
-        "\(e)1;32mdeploy@\(host)\(e)0m:\(e)1;34m\(dir)\(e)0m$ "
+    /// zsh + powerlevel10k 的提示符，照维护者自己的 `~/.p10k.zsh`（向导选项 compatible / classic / light / blurred tails /
+    /// 1 line / compact / concise；左边 dir、vcs）用真的 p10k 跑出来的字节写：深灰底、两头 ░▒▓ 渐隐、目录首尾两级加粗、
+    /// `|` 之后是分支。右边的 ✔ 不画：写好的输出改尺寸时不会像真 zsh 那样重画右提示符，窄屏上会折行。
+    private static func prompt(_ dir: String = "~", branch: String? = nil) -> String {
+        // "/srv/www/shop" → 根下的 srv、www、shop；"~/code/shop" → ~、code、shop。首尾两级是锚点（加粗、亮蓝）。
+        let parts = dir.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let names = parts.first == "" ? Array(parts.dropFirst()) : parts
+        var line = "\(e)0m\(e)38;5;238m░▒▓\(e)48;5;238m\(e)38;5;31m " + (parts.first == "" ? "/" : "")
+        for (index, name) in names.enumerated() {
+            if index > 0 { line += "\(e)38;5;31m/" }
+            line += index == 0 || index == names.count - 1 ? "\(e)1m\(e)38;5;39m\(name)\(e)22m" : "\(e)38;5;31m\(name)"
+        }
+        line += "\(e)38;5;31m "
+        if let branch { line += "\(e)38;5;246m|\(e)38;5;76m \(branch) " }
+        return line + "\(e)0m\(e)38;5;238m▓▒░\(e)0m "
     }
 
     static let nginx: String = {

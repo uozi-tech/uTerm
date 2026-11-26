@@ -25,8 +25,8 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 rm -f "$out"/ready-* "$out"/done-* "$out"/signal-* "$out"/signaled-*
 
-if [ "$device" = iphone ]; then
-    # 系统语言（锁屏的日期、主屏幕的 App 名字）跟着截图语言；改了要重开机才生效。
+if [ "$device" = iphone ] || [ "$device" = ipad ]; then
+    # 系统语言（锁屏与 iPad 状态栏的日期、主屏幕的 App 名字）跟着截图语言；改了要重开机才生效。
     case "$lang" in zh-Hans) locale=zh_CN ;; zh-Hant) locale=zh_TW ;; ja) locale=ja_JP ;; ko) locale=ko_KR ;; *) locale=en_US ;; esac
     xcrun simctl boot "$udid" 2>/dev/null || true
     xcrun simctl bootstatus "$udid" -b >/dev/null
@@ -40,6 +40,11 @@ fi
 
 xcrun simctl boot "$udid" 2>/dev/null || true
 xcrun simctl bootstatus "$udid" -b >/dev/null
+# iPad 横握拍：App 在 iPad 上改不了自己的方向，由 devicectl 转模拟器（重开机会回到竖屏，所以每次都转）。
+if [ "$device" = ipad ]; then
+    xcrun devicectl device orientation set --device "$udid" landscapeLeft >/dev/null
+    sleep 2
+fi
 xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
     --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
 [ "${UTERM_APPSTORE_DARK:-0}" = 1 ] && xcrun simctl ui "$udid" appearance dark || xcrun simctl ui "$udid" appearance light

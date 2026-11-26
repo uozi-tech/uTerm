@@ -320,16 +320,22 @@ final class AppStoreScreenshotTests: XCTestCase {
 
     // MARK: - 摆一屏，等外面拍
 
-    /// iPad 要横握拍。App 改不了自己的方向（iPad 的多任务窗口模式下 `requestGeometryUpdate` 报 UISceneErrorDomain 101），
-    /// 模拟器也没有转屏的命令：先在 Xcode 的 DeviceHub 里把「uTerm Shots iPad 13」转成横屏（转一次，开着就一直是横的）。
+    /// iPad 要横握拍。App 在 iPad 上改不了自己的方向（`requestGeometryUpdate` 报 UISceneErrorDomain 101），由外面的脚本用
+    /// `devicectl device orientation set` 把模拟器转成横屏；这里等它转好，没转就跳过并说明。
     private func rotateToLandscape() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let deadline = Date().addingTimeInterval(3)
+        let refusal = UncheckedSendable(NSMutableString())
+        if !scene.effectiveGeometry.interfaceOrientation.isLandscape {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
+                refusal.value.setString(error.localizedDescription)
+            }
+        }
+        let deadline = Date().addingTimeInterval(5)
         while !scene.effectiveGeometry.interfaceOrientation.isLandscape, Date() < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
         guard scene.effectiveGeometry.interfaceOrientation.isLandscape else {
-            throw XCTSkip("iPad 模拟器是竖着的：在 DeviceHub 里把它转成横屏再拍（App 自己转不了）")
+            throw XCTSkip("iPad 不是横屏（\(refusal.value)）：先 `xcrun devicectl device orientation set --device <模拟器> landscapeLeft`")
         }
     }
 
@@ -681,15 +687,32 @@ final class AppStoreScreenshotTests: XCTestCase {
 
     /// 真的 Claude Code（录制见 `Support/Recordings/`），106×35 正好是 Duo 横握时终端的行列数。
     private static let claudeTranscript: String = {
-        let e = "\u{1B}["
-        let prompt = "\(e)1;32mdeploy@prod-web-01\(e)0m:\(e)1;34m~\(e)0m$ "
+        let prompt = p10k(dir: "/srv/www/shop", branch: "main")
         guard let url = Bundle(for: AppStoreScreenshotTests.self).url(forResource: "claude-code-106x35", withExtension: "raw"),
               let data = try? Data(contentsOf: url) else { return prompt + "缺录制文件 claude-code-106x35.raw\r\n" }
         return prompt + "claude\r\n" + String(decoding: data, as: UTF8.self)
     }()
 
-    private static func macPrompt(_ dir: String) -> String {
-        "\u{1B}[1;36mdev@MacBook-Pro\u{1B}[0m \u{1B}[1;34m\(dir)\u{1B}[0m % "
+    /// zsh + powerlevel10k 的提示符，照维护者自己的 `~/.p10k.zsh`（向导选项 compatible / classic / light / blurred tails /
+    /// 1 line / compact / concise；左边 dir、vcs）用真的 p10k 跑出来的字节写：深灰底、两头 ░▒▓ 渐隐、目录首尾两级加粗、
+    /// `|` 之后是分支。右边的 ✔ 不画：写好的输出改尺寸时不会像真 zsh 那样重画右提示符，窄屏上会折行。
+    nonisolated static func p10k(dir: String, branch: String?) -> String {
+        let e = "\u{1B}["
+        // "/srv/www/shop" → 根下的 srv、www、shop；"~/code/shop" → ~、code、shop。首尾两级是锚点（加粗、亮蓝）。
+        let parts = dir.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let names = parts.first == "" ? Array(parts.dropFirst()) : parts
+        var line = "\(e)0m\(e)38;5;238m░▒▓\(e)48;5;238m\(e)38;5;31m " + (parts.first == "" ? "/" : "")
+        for (index, name) in names.enumerated() {
+            if index > 0 { line += "\(e)38;5;31m/" }
+            line += index == 0 || index == names.count - 1 ? "\(e)1m\(e)38;5;39m\(name)\(e)22m" : "\(e)38;5;31m\(name)"
+        }
+        line += "\(e)38;5;31m "
+        if let branch { line += "\(e)38;5;246m|\(e)38;5;76m \(branch) " }
+        return line + "\(e)0m\(e)38;5;238m▓▒░\(e)0m "
+    }
+
+    nonisolated private static func macPrompt(_ dir: String, branch: String = "main") -> String {
+        p10k(dir: dir, branch: branch)
     }
 
     /// Mac 上跑着的开发服务器。
@@ -717,11 +740,11 @@ final class AppStoreScreenshotTests: XCTestCase {
     private static let macTestTranscript: String = {
         let e = "\u{1B}["
         return [
-            macPrompt("~/code/shop") + "git status -sb",
+            macPrompt("~/code/shop", branch: "main ⇡2") + "git status -sb",
             "## main...origin/main [ahead 2]",
             " \(e)31mM\(e)0m src/routes/orders.tsx",
             " \(e)31mM\(e)0m src/styles.css",
-            macPrompt("~/code/shop") + "npm test",
+            macPrompt("~/code/shop", branch: "main ⇡2") + "npm test",
             "",
             " \(e)32m✓\(e)0m src/cart.test.ts \(e)2m(12 tests)\(e)0m 38ms",
             " \(e)32m✓\(e)0m src/orders.test.ts \(e)2m(9 tests)\(e)0m 51ms",
@@ -731,44 +754,40 @@ final class AppStoreScreenshotTests: XCTestCase {
             " \(e)2mTest Files\(e)0m  \(e)1;32m4 passed\(e)0m (4)",
             " \(e)2m     Tests\(e)0m  \(e)1;32m41 passed\(e)0m (41)",
             " \(e)2m  Duration\(e)0m  1.21s",
-            macPrompt("~/code/shop"),
+            macPrompt("~/code/shop", branch: "main ⇡2"),
         ].joined(separator: "\r\n")
     }()
 
     private static let terminalTranscript: String = {
         let e = "\u{1B}["
-        let prompt = "\(e)1;32mdeploy@prod-web-01\(e)0m:\(e)1;34m~\(e)0m$ "
+        let prompt = p10k(dir: "/srv/www/shop", branch: "main")
         return [
             prompt + "systemctl status nginx",
             "\(e)1;32m●\(e)0m nginx.service - nginx web server",
             "     Loaded: loaded (enabled)",
             "     Active: \(e)1;32mactive (running)\(e)0m since 09:12",
             "   Main PID: 1042 (nginx)",
-            "      Tasks: 5 (limit: 4557)",
             "     Memory: 12.4M",
             prompt + "df -h /",
             "Filesystem  Size  Used Avail Use% Mounted on",
             "/dev/vda1    40G   12G   27G  31% /",
-            prompt + "git -C /srv/www/shop log --oneline -5",
+            prompt + "git log --oneline -5",
             "\(e)33ma1c3e9f\(e)0m fix: retry upstream on 502",
             "\(e)33m7d02b41\(e)0m feat: order export to CSV",
             "\(e)33m3f9a6c0\(e)0m chore: bump node to 22",
             "\(e)33me51b7d2\(e)0m perf: cache product list",
             "\(e)33m0c8d9aa\(e)0m fix: timezone in invoices",
-            prompt + "tail -n 8 /var/log/nginx/access.log",
+            prompt + "tail -n 6 /var/log/nginx/access.log",
             "10.0.1.5 GET /api/products 200 12ms",
-            "10.0.1.5 GET /api/cart 200 8ms",
             "10.0.1.7 POST /api/orders \(e)32m201\(e)0m 41ms",
             "10.0.1.5 GET /healthz 200 1ms",
             "10.0.1.9 GET /api/products?page=2 200 15ms",
-            "10.0.1.7 GET /static/app.js 304 2ms",
             "10.0.1.5 GET /api/user \(e)33m401\(e)0m 3ms",
             "10.0.1.9 POST /api/orders \(e)32m201\(e)0m 38ms",
             prompt + "free -h",
             "       total   used   free  shared  cache",
             "Mem:   3.8Gi  1.2Gi  1.1Gi   12Mi  1.5Gi",
-            "Swap:     0B     0B     0B",
-            prompt + "ls /srv/www/shop",
+            prompt + "ls",
             "\(e)1;34mlogs\(e)0m  \(e)1;34mpublic\(e)0m  \(e)1;34msrc\(e)0m  Dockerfile  README.md",
             "docker-compose.yml  \(e)1;32mdeploy.sh\(e)0m  nginx.conf",
             prompt,
