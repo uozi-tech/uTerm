@@ -168,19 +168,23 @@ private struct AgentTranscriptUsageBadge: View {
     }
 }
 
-/// 上下文占了几成的小圆环。
-private struct AgentUsageRing: View {
+/// 用了几成的小圆环（标题旁的上下文、侧栏底部那一行）。底环中性，进度弧的颜色按程度（`AgentUsageLevel`）。
+struct AgentUsageRing: View {
     let fraction: Double
+    var level: AgentUsageLevel? = nil
+    var size: CGFloat = 9
+    var lineWidth: CGFloat = 1.5
 
     var body: some View {
+        let level = level ?? AgentUsageLevel.of(percent: fraction * 100)
         ZStack {
-            Circle().stroke(UD.border, lineWidth: 1.5)
-            Circle().trim(from: 0, to: fraction)
-                .stroke(AgentUsageLevel.of(percent: fraction * 100).color,
-                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            Circle().stroke(UD.fillSoft, lineWidth: lineWidth)
+            Circle().trim(from: 0, to: min(1, max(0, fraction)))
+                .stroke(level.color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
-        .frame(width: 9, height: 9)
+        .padding(lineWidth / 2)
+        .frame(width: size, height: size)
     }
 }
 
@@ -368,34 +372,42 @@ struct AgentHistoryListContent<List: View>: View {
                 AgentHistoryStateView(icon: .empty, title: String(localized: "没有命令行会话"),
                                       detail: AgentHistoryText.emptyListDetail(hidden: history.hiddenCount))
             } else {
-                VStack(spacing: 0) {
-                    list()
-                    AgentHistoryAccountLimits(history: history)
-                }
+                list()
+                    .agentHistoryBottomBar { AgentHistoryAccountLimits(history: history) }
             }
         }
     }
 }
 
-/// 侧栏最底下：账号额度，每种工具一行（`AgentHistoryModel.accountLimits`）。一行里最多写两个时间窗，点开是全部：
-/// 各时间窗用了几成、几时重置，套餐，截至几时。露着的时候每分钟重读一次状态栏的数据（跑着的会话一直在写）。
+/// 侧栏最底下一行：每种工具的账号额度（只放最接近 100% 的那个时间窗，`AgentAccountLimits.headline`），最后是正在看的
+/// 会话的上下文（占了几成，再写用了多少 / 窗口多大）。每一项是一个小圆环（颜色按程度蓝 / 黄 / 红）、数字、名字；
+/// 字不上色，只有圆环带颜色，不抢列表的眼。一行放不下时上下文另起一行，再放不下去掉名字（悬停照样看得到）。
+/// 点额度那一项弹出全部明细。露着的时候每分钟重读一次状态栏的数据。
 private struct AgentHistoryAccountLimits: View {
     let history: AgentHistoryModel
     @Environment(\.agentHistoryHidesAccountLimits) private var hidden
 
     var body: some View {
         let rows = hidden ? [] : history.accountLimits()
-        // 最后一行是正在看的会话的上下文（标题旁那个标记滚不到、或者右边露着终端时也看得到）。
+        // 标题旁那个标记滚不到、或者右边露着终端时也看得到上下文。
         let context = hidden ? nil : history.transcript?.latestUsage?.usage
+        let style = AgentHistoryListStyle.platform
+        // 上面不画分割线：贴在列表底部的条（`agentHistoryBottomBar`），列表从它下面滚过时系统做滚动边缘效果，
+        // 没东西在下面时它和列表是同一块底（同 Apple 的做法、也同「填充即边界」）。
         VStack(spacing: 0) {
             if !rows.isEmpty || context != nil {
-                Rectangle().fill(UD.border).frame(height: 1)
-                ForEach(rows, id: \.tool) { row in
-                    AgentAccountLimitsRow(row: row)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        limits(rows, labeled: true)
+                        contextItem(context, labeled: true)
+                    }
+                    .fixedSize()
+                    stacked(rows, context: context, labeled: true)
+                    stacked(rows, context: context, labeled: false)
                 }
-                if let context {
-                    AgentContextUsageRow(usage: context)
-                }
+                .font(.system(size: style.noteSize))
+                .padding(style.accountLimitsPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .task {
@@ -406,39 +418,64 @@ private struct AgentHistoryAccountLimits: View {
             }
         }
     }
+
+    private func limits(_ rows: [AgentAccountLimits], labeled: Bool) -> some View {
+        ForEach(rows, id: \.tool) { row in
+            if let window = row.headline {
+                AgentAccountLimitsItem(row: row, window: window, labeled: labeled)
+            }
+        }
+    }
+
+    @ViewBuilder private func contextItem(_ context: AgentTurnUsage?, labeled: Bool) -> some View {
+        if let context { AgentContextUsageItem(usage: context, labeled: labeled) }
+    }
+
+    /// 额度一行、上下文一行。上下文那一行让出工具图标的宽度，两行的圆环对齐。
+    private func stacked(_ rows: [AgentAccountLimits], context: AgentTurnUsage?, labeled: Bool) -> some View {
+        let style = AgentHistoryListStyle.platform
+        return VStack(alignment: .leading, spacing: 8) {
+            if !rows.isEmpty {
+                HStack(spacing: 14) { limits(rows, labeled: labeled) }
+            }
+            contextItem(context, labeled: labeled)
+                .padding(.leading, rows.isEmpty ? 0 : AgentAccountLimitsItem.badgeSize(style) + AgentAccountLimitsItem.spacing)
+        }
+        .fixedSize()
+    }
 }
 
-private struct AgentAccountLimitsRow: View {
+/// 侧栏底部一项：工具的小图标、圆环、用了几成、时间窗名字。点开是这种工具的全部额度。
+private struct AgentAccountLimitsItem: View {
     let row: AgentAccountLimits
+    let window: AgentRateLimits.Window
+    let labeled: Bool
 
     @State private var showsDetail = false
+
+    static let spacing: CGFloat = 5
+    static func badgeSize(_ style: AgentHistoryListStyle) -> CGFloat { style.toolBadgeSize - 2 }
 
     var body: some View {
         let style = AgentHistoryListStyle.platform
         Button { showsDetail.toggle() } label: {
-            HStack(spacing: 8) {
-                AgentHistoryToolBadge(tool: row.tool, size: 14)
-                // 只显示最接近 100% 的那一个，点开看全部。
-                if let window = row.headline {
-                    let level = AgentUsageLevel.of(window)
+            HStack(spacing: Self.spacing) {
+                AgentHistoryToolBadge(tool: row.tool, size: Self.badgeSize(style))
+                AgentUsageRing(fraction: window.usedPercent / 100, level: AgentUsageLevel.of(window),
+                               size: style.noteSize + 2, lineWidth: 2)
+                Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
+                    .monospacedDigit()
+                    .foregroundStyle(UD.text2)
+                if labeled {
                     Text(AgentHistoryText.rateLimitWindow(window))
                         .lineLimit(1)
                         .foregroundStyle(UD.text3)
-                        .frame(minWidth: AgentHistoryListStyle.footerLabelWidth, alignment: .leading)
-                    AgentRateLimitBar(usedPercent: window.usedPercent, level: level)
-                        .frame(width: 48, height: 4)
-                    Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
-                        .monospacedDigit()
-                        .foregroundStyle(level == .normal ? UD.text2 : level.color)
                 }
-                Spacer(minLength: 0)
             }
-            .font(.system(size: style.noteSize))
-            .padding(style.accountLimitsPadding)
             .contentShape(Rectangle())
         }
         .agentHistoryPressStyle()
-        .help(AgentHistoryText.accountLimitsTitle(row.tool))
+        .help(AgentHistoryText.accountLimitsTitle(row.tool) + " · " + AgentHistoryText.rateLimitWindow(window))
         .popover(isPresented: $showsDetail) {
             AgentAccountLimitsDetail(row: row)
                 .presentationCompactAdaptation(.popover)
@@ -446,38 +483,38 @@ private struct AgentAccountLimitsRow: View {
     }
 }
 
-/// 侧栏底部最后一行：正在看的会话的上下文。知道窗口多大画一根细条写百分比（颜色按程度），不知道只写 token 数。
-private struct AgentContextUsageRow: View {
+/// 侧栏底部最后一项：正在看的会话的上下文。知道窗口多大画圆环写百分比，不知道只写 token 数。
+private struct AgentContextUsageItem: View {
     let usage: AgentTurnUsage
+    let labeled: Bool
 
     var body: some View {
         let style = AgentHistoryListStyle.platform
-        let level = usage.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal
-        HStack(spacing: 8) {
-            Image(systemName: "text.alignleft")
-                .font(.system(size: style.noteSize, weight: .medium))
-                .foregroundStyle(UD.text3)
-                .frame(width: style.toolBadgeSize, height: style.toolBadgeSize)
-            Text(AgentHistoryText.usageContext)
-                .lineLimit(1)
-                .foregroundStyle(UD.text3)
-                .frame(minWidth: AgentHistoryListStyle.footerLabelWidth, alignment: .leading)
+        HStack(spacing: 5) {
             if let fraction = usage.contextFraction {
-                AgentRateLimitBar(usedPercent: fraction * 100, level: level)
-                    .frame(width: 48, height: 4)
+                AgentUsageRing(fraction: fraction, size: style.noteSize + 2, lineWidth: 2)
                 Text(verbatim: "\(Int((fraction * 100).rounded()))%")
                     .monospacedDigit()
-                    .foregroundStyle(level == .normal ? UD.text2 : level.color)
+                    .foregroundStyle(UD.text2)
             } else {
                 Text(verbatim: AgentHistoryText.tokenCount(usage.contextTokens))
                     .monospacedDigit()
                     .foregroundStyle(UD.text2)
             }
-            Spacer(minLength: 0)
+            if labeled {
+                Text(AgentHistoryText.usageContext)
+                    .lineLimit(1)
+                    .foregroundStyle(UD.text3)
+            }
+            // 用了多少 / 窗口多大（不知道窗口时前面已经写了用了多少）。
+            if let window = usage.contextWindow {
+                Text(verbatim: AgentHistoryText.tokenCount(usage.contextTokens) + " / " + AgentHistoryText.tokenCount(window))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .foregroundStyle(UD.text3)
+            }
         }
-        .font(.system(size: style.noteSize))
-        .padding(style.accountLimitsPadding)
-        .help(AgentHistoryText.usageContextValue(usage))
+        .help(AgentHistoryText.usageContext + " · " + AgentHistoryText.usageContextValue(usage))
         .accessibilityElement(children: .combine)
     }
 }
@@ -579,5 +616,24 @@ extension AgentUsageLevel {
         case .warning: return UD.warning
         case .critical: return UD.danger
         }
+    }
+}
+
+private extension View {
+    /// 贴在会话列表底部的条（账号额度、上下文）：macOS 26 / iOS 26 起用 `safeAreaBar`，列表滚到它下面时系统做柔和的
+    /// 滚动边缘效果，不画常驻的分割线；iOS 26 以前没有边缘效果，退回 `safeAreaInset`（同样不画线，底色同列表）。
+    @ViewBuilder
+    func agentHistoryBottomBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        #if os(macOS)
+        safeAreaBar(edge: .bottom, spacing: 0, content: bar)
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
+        #else
+        if #available(iOS 26.0, *) {
+            safeAreaBar(edge: .bottom, spacing: 0, content: bar)
+                .scrollEdgeEffectStyle(.soft, for: .bottom)
+        } else {
+            safeAreaInset(edge: .bottom, spacing: 0, content: bar)
+        }
+        #endif
     }
 }

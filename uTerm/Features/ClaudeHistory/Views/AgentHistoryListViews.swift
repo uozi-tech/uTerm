@@ -35,8 +35,6 @@ nonisolated struct AgentHistoryListStyle: Sendable {
     var hidesScrollIndicators: Bool
     /// 列表底部那几句（正在读取、隐藏了几份）。
     var footerPadding: EdgeInsets
-    /// 侧栏底部额度、上下文几行的名字至少这么宽：几行的细条对得齐（名字更长的照常撑开）。
-    static let footerLabelWidth: CGFloat = 44
     /// 侧栏最底下账号额度那一行。Mac 上列表一直伸到卡片的圆角底边下面、最底下几点被卡片盖住，上边多留 2pt
     /// 它在看得见的那一截里才居中（画廊量的：额度行上下各 10pt）。
     var accountLimitsPadding: EdgeInsets {

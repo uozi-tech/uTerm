@@ -26,6 +26,13 @@ struct WorkspaceSideAccountLimits: View {
                     Text(AgentHistoryText.usageContext)
                         .font(M.sans(10)).foregroundStyle(M.text3)
                         .lineLimit(1).minimumScaleFactor(0.7)
+                    // 用了多少 / 窗口多大（不知道窗口时圆环里已经写了用了多少）。
+                    if let window = usage.contextWindow {
+                        Text(verbatim: AgentHistoryText.tokenCount(usage.contextTokens) + "/" + AgentHistoryText.tokenCount(window))
+                            .font(M.mono(9.5)).foregroundStyle(M.text3)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                            .padding(.horizontal, 4)
+                    }
                 }
                 .frame(width: width)
                 .accessibilityElement(children: .combine)
