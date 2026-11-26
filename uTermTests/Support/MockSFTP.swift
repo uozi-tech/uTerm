@@ -77,6 +77,14 @@ actor MockSFTP: SFTPProviding {
     /// 只对这些路径抛的列目录错误（`listError` 对所有路径生效）。
     private var listErrorsByPath: [String: Error] = [:]
 
+    /// 清掉记下的调用（跑命令、列目录、读区间、取属性），数下一步各用了几次。
+    func resetCallCounters() {
+        execCommands.removeAll()
+        listCalls.removeAll()
+        rangeReads.removeAll()
+        statCalls.removeAll()
+    }
+
     func holdList(_ path: String) { heldListPaths.insert(path) }
     func releaseList(_ path: String) { heldListPaths.remove(path) }
     func setListError(_ error: Error, at path: String) { listErrorsByPath[path] = error }

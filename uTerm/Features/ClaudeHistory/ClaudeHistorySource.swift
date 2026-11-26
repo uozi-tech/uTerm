@@ -33,9 +33,13 @@ actor ClaudeHistorySource: AgentHistorySource {
     /// 测试给一个临时目录。
     /// 搜索时一批交多少份（测试换成小的，好看出分批）。
     let searchBatching: ClaudeSearchBatching
+    /// 读索引（`history.jsonl`、按偏移增量读标题）；false = 原来的读法（每次都列全部目录、读末尾），对照测试用。
+    let readsIndex: Bool
 
-    init(provider: any SFTPProviding, home: String? = nil, searchBatching: ClaudeSearchBatching = .standard) {
+    init(provider: any SFTPProviding, home: String? = nil, searchBatching: ClaudeSearchBatching = .standard,
+         readsIndex: Bool = true) {
         self.provider = provider
+        self.readsIndex = readsIndex
         self.home = home
         self.searchBatching = searchBatching
     }

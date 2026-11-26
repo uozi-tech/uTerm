@@ -106,6 +106,10 @@ protocol SFTPProviding: Actor {
     /// （名字里碰巧有转义的样子也原样传）。默认 false。
     nonisolated var escapesRawNames: Bool { get }
 
+    /// `exec` 一次最多能带回多少字节的输出，超了整条失败（SSH 是 64 000 字节，见 `SSHClientFactory`）。
+    /// 一条命令要回很多行的（历史会话读索引）按它分批。默认按 SSH 的算。
+    nonisolated var execOutputLimit: Int { get }
+
     func list(path: String) async throws -> [RemoteEntry]
     func realPath(_ path: String) async throws -> String
 
@@ -179,6 +183,7 @@ protocol SFTPProviding: Actor {
 
 extension SFTPProviding {
     nonisolated var escapesRawNames: Bool { false }
+    nonisolated var execOutputLimit: Int { 64_000 }
 
     /// 通用实现先 stat 拦截已知超限文件，再对返回值复核。真实 `SFTPSession`
     /// 另有流式实现，可覆盖 stat 竞态/未知大小；测试 mock 复用这里即可。

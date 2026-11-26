@@ -292,6 +292,9 @@ actor RemoteMacFileProvider: SFTPProviding {
         return collected
     }
 
+    /// 辅助程序一次最多回这么多输出（见 `exec`）。
+    nonisolated var execOutputLimit: Int { RemoteFileLimits.maxChunkBytes }
+
     func exec(_ command: String) async throws -> String {
         var request = RemoteFileRequest(op: .exec)
         request.command = command

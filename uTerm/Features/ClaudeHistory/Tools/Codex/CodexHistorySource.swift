@@ -22,6 +22,8 @@ actor CodexHistorySource: AgentHistorySource {
     private var home: String?
     let searchBatching: ClaudeSearchBatching
     let listing: CodexListing
+    /// 读 Codex 自己的索引（`state_*.sqlite`）；false = 原来的读法（每次都列全部日期目录），对照测试用。
+    let readsIndex: Bool
 
     /// 第一行的字段，按记录的明文路径（去掉 `.zst`）记：压缩前后是同一份。
     private var headers: [String: CodexSessionHeader] = [:]
@@ -41,10 +43,24 @@ actor CodexHistorySource: AgentHistorySource {
     /// 子代理记录开头抄进来的父会话上下文从第几条起不算（`subagent_history_start_ordinal`），按路径记。
     private var subagentStart: [String: Int?] = [:]
 
+    // MARK: 读索引（`readsIndex`）
+
+    /// 上一次查过的库（路径、主文件与 `-wal` 的大小与时间）：没变就不再查。
+    private var indexDatabase: CodexStateIndex.Database?
+    /// 查到的线程里最新的 `updated_at_ms`：下一次只查这之后变过的。
+    private var indexWatermark: Int64?
+    /// 这台主机上查不了库（没有 `sqlite3`、跑不了命令、表结构不认识）：之后一直用原来的读法。
+    private(set) var indexUnavailable = false
+    /// 日期目录列出来的记录，连同列它时目录的修改时间（没变的不再列；新建、删除、压缩都会改目录的修改时间）。
+    private var dayListings: [String: (modifiedAt: Date?, files: [CodexRecordFile])] = [:]
+    /// 上一次列完的时刻（`sessions(in:)` 隔得很近的几次共用一趟）。
+    private var scannedAt: ContinuousClock.Instant?
+
     /// `home`：主目录。不给就问 `provider`（`realPath(".")`），测试给一个临时目录。
     init(provider: any SFTPProviding, home: String? = nil, listing: CodexListing = .standard,
-         searchBatching: ClaudeSearchBatching = .standard) {
+         searchBatching: ClaudeSearchBatching = .standard, readsIndex: Bool = true) {
         self.provider = provider
+        self.readsIndex = readsIndex
         self.home = home
         self.listing = listing
         self.searchBatching = searchBatching
@@ -97,8 +113,17 @@ actor CodexHistorySource: AgentHistorySource {
     }
 
     func sessions(in project: AgentHistoryProject) async throws -> [AgentHistorySessionFile] {
-        let snapshot = try await current()
+        let snapshot = try await (usesIndex ? recent() : current())
         return snapshot.sessions[project.id] ?? []
+    }
+
+    /// 读着索引：重列只查变了的（见 `scanIndexed`），跑着的会话隔一会儿就能重列一次（标题、时间跟着它走）。
+    private var usesIndex: Bool { readsIndex && !indexUnavailable && indexDatabase != nil }
+
+    /// 一秒内列过就用那一趟（`refreshProjects` 一次问好几个项目）。
+    private func recent() async throws -> Snapshot {
+        if let snapshot, let scannedAt, ContinuousClock.now - scannedAt < .seconds(1) { return snapshot }
+        return try await rescan()
     }
 
     func allSessions(in projects: [AgentHistoryProject]) async -> [AgentHistorySessionFile] {
@@ -128,12 +153,18 @@ actor CodexHistorySource: AgentHistorySource {
         defer { scanning = nil }
         let result = try await task.value
         snapshot = result
+        scannedAt = .now
         return result
     }
 
     private func scan() async throws -> Snapshot {
         let root = try await sessionsRoot()
-        let files = try await listRecordFiles(root: root)
+        let files: [CodexRecordFile]
+        if readsIndex, !indexUnavailable, let changed = await refreshIndex() {
+            files = try await listRecordFilesIncrementally(root: root, restat: changed)
+        } else {
+            files = try await listRecordFiles(root: root)
+        }
         await readNames()
         try await readHeaders(files, root: root)
 
@@ -192,15 +223,10 @@ for key in children.keys { children[key]?.sort(by: AgentSubagentFile.newestFirst
                 entries.filter { $0.isDirectory && Self.isDigits($0.name) }.map { path + "/" + $0.name }
             }
         }
-        var byPlainPath: [String: CodexRecordFile] = [:]
-        for (directory, entries) in try await listAll(directories) {
-            for entry in entries where !entry.isDirectory {
-                guard let file = CodexRecordFile(directory: directory, entry: entry) else { continue }
-                if let existing = byPlainPath[file.plainPath], !existing.isCompressed { continue }
-                byPlainPath[file.plainPath] = file
-            }
-        }
-        return byPlainPath.values.sorted { $0.modifiedAt != $1.modifiedAt ? $0.modifiedAt > $1.modifiedAt : $0.path < $1.path }
+        let listed = try await listAll(directories)
+        return Self.newestPerRecord(listed.flatMap { directory, entries in
+            entries.filter { !$0.isDirectory }.compactMap { CodexRecordFile(directory: directory, entry: $0) }
+        })
     }
 
     private nonisolated static func isDigits(_ name: String) -> Bool {
@@ -363,6 +389,149 @@ for key in children.keys { children[key]?.sort(by: AgentSubagentFile.newestFirst
         return output
     }
 
+    // MARK: 索引
+
+    /// 库变了就查一次（第一次查全部，之后只查上次之后变过的），把查到的开头字段记下（`headers`）。
+    /// 返回这次查到的记录（明文路径）：它们的大小、修改时间要重新取。库没变返回空；没有库、查不了返回 nil（这一趟用原来的读法）。
+    private func refreshIndex() async -> Set<String>? {
+        guard let home = try? await codexHome(), let entries = try? await provider.list(path: home),
+              let database = CodexStateIndex.database(in: entries, home: home) else { return nil }
+        if database == indexDatabase { return [] }
+        let since = database.path == indexDatabase?.path ? indexWatermark : nil
+        guard let rows = await queryIndex(database.path, since: since) else { return nil }
+        var changed: Set<String> = []
+        for row in rows {
+            let plain = CodexRecordFile(path: row.rolloutPath, size: 0, modifiedAt: .distantPast).plainPath
+            headers[plain] = row.header
+            changed.insert(plain)
+            indexWatermark = max(indexWatermark ?? row.updatedAtMs, row.updatedAtMs)
+        }
+        indexDatabase = database
+        AppLogger.debug("历史会话：Codex 索引查到 \(rows.count) 行（\(since == nil ? "全部" : "增量")）", category: AgentHistoryLog.category)
+        return changed
+    }
+
+    /// 一页一页查（一页的输出不超过 `exec` 能带回的）。第一页同时报一共多少行，剩下的几页同时最多查
+    /// `listing.execConcurrency` 条。输出被截了就把页缩小重查一次；还不行、或者查不了，返回 nil。从没查成过就跑不了命令
+    /// （只许 SFTP 的主机）、主机上没有 `sqlite3`、表结构不认识的，记下来之后不再试。
+    private func queryIndex(_ database: String, since: Int64?) async -> [CodexStateIndex.Row]? {
+        var pageSize = CodexStateIndex.pageSize(outputLimit: provider.execOutputLimit)
+        var rows: [CodexStateIndex.Row] = []
+        var offset = 0
+        var total: Int?
+        var shrunk = false
+        while true {
+            let size = pageSize
+            let remaining = total.map { max(1, ($0 - offset + size - 1) / size) } ?? 1
+            let starts = (0..<min(remaining, max(1, listing.execConcurrency))).map { offset + $0 * size }
+            let pages = await withTaskGroup(of: (Int, Result<(CodexStateIndex.Outcome, Int?), any Error>).self) { group in
+                for start in starts {
+                    let command = CodexStateIndex.command(
+                        database: database, sql: CodexStateIndex.query(updatedSince: since, limit: size, offset: start))
+                    group.addTask {
+                        do {
+                            let output = try await self.provider.exec(command)
+                            return (start, .success((try CodexStateIndex.parse(output), CodexStateIndex.total(in: output))))
+                        } catch {
+                            return (start, .failure(error))
+                        }
+                    }
+                }
+                var pages: [Int: Result<(CodexStateIndex.Outcome, Int?), any Error>] = [:]
+                for await (start, page) in group { pages[start] = page }
+                return pages
+            }
+            var next = offset + starts.count * size
+            pageLoop: for start in starts {
+                switch pages[start] {
+                case .success((.rows(let found), let count))?:
+                    rows += found
+                    if let count { total = count }
+                    if found.count < size || (total.map { start + size >= $0 } ?? false) { return rows }
+                case .success((.missingTool, _))?, .success((.failed, _))?:
+                    indexUnavailable = true
+                    return nil
+                case .failure(let error)?:
+                    if error as? CodexStateIndex.OutputError == .incomplete, !shrunk, size > 1 {
+                        // 一页的输出超了上限（路径特别长）：缩小一次，从这一页重查（后面几页丢掉）。
+                        shrunk = true
+                        pageSize = max(1, size / 4)
+                        next = start
+                        break pageLoop
+                    }
+                    if indexDatabase == nil { indexUnavailable = true }
+                    return nil
+                case nil:
+                    return nil
+                }
+            }
+            offset = next
+        }
+    }
+
+    /// 同 `listRecordFiles`，但没变的日期目录不再列：年、月照列（没几个），日期目录只列修改时间变了的、新出现的、
+    /// 最近的两个（新记录都写在当天的目录里；同一秒里又新建的，修改时间看不出来）。`restat` 里的（库里刚变过的记录，
+    /// 往已有的文件后面追加不改目录的修改时间）在没重列的目录里的，重新取一次大小与修改时间。
+    func listRecordFilesIncrementally(root: String, restat: Set<String>) async throws -> [CodexRecordFile] {
+        let years: [RemoteEntry]
+        do {
+            years = try await provider.list(path: root)
+        } catch {
+            if await AgentHistoryMissingPath.confirmsAbsent(root, after: error, provider: provider) {
+                dayListings = [:]
+                return []
+            }
+            throw error
+        }
+        var directories = years.filter { $0.isDirectory && Self.isDigits($0.name) }.map { root + "/" + $0.name }
+        let months = try await listAll(directories)
+        directories = months.flatMap { path, entries in
+            entries.filter { $0.isDirectory && Self.isDigits($0.name) }.map { path + "/" + $0.name }
+        }
+        var days: [String: Date?] = [:]
+        for (path, entries) in try await listAll(directories) {
+            for entry in entries where entry.isDirectory && Self.isDigits(entry.name) {
+                days[path + "/" + entry.name] = entry.modifiedAt
+            }
+        }
+        let newest = Set(days.keys.sorted().suffix(2))
+        let stale = days.filter { path, modified in
+            guard let cached = dayListings[path], let modified, cached.modifiedAt == modified else { return true }
+            return newest.contains(path)
+        }
+        for (path, entries) in try await listAll(Array(stale.keys)) {
+            dayListings[path] = (stale[path] ?? nil, entries.filter { !$0.isDirectory }.compactMap { CodexRecordFile(directory: path, entry: $0) })
+        }
+        for path in dayListings.keys where days[path] == nil { dayListings[path] = nil }
+
+        // 没重列的目录里，库说变过的记录：重新取大小与修改时间。取不到（刚被压缩、改了名）就把那个目录重列一次。
+        var relist: Set<String> = []
+        for (path, listing) in dayListings where stale[path] == nil {
+            for (index, file) in listing.files.enumerated() where restat.contains(file.plainPath) {
+                guard let stat = try? await provider.stat(file.path) else {
+                    relist.insert(path)
+                    continue
+                }
+                dayListings[path]?.files[index] = CodexRecordFile(path: file.path, size: UInt64(max(0, stat.size)),
+                                                                   modifiedAt: stat.mtime)
+            }
+        }
+        for (path, entries) in try await listAll(Array(relist)) {
+            dayListings[path] = (days[path] ?? nil, entries.filter { !$0.isDirectory }.compactMap { CodexRecordFile(directory: path, entry: $0) })
+        }
+        return Self.newestPerRecord(dayListings.values.flatMap(\.files))
+    }
+
+    /// 同一份记录正在压缩 / 解压时明文与压缩的会同时在：用明文的。新的在前。
+    nonisolated static func newestPerRecord(_ files: [CodexRecordFile]) -> [CodexRecordFile] {
+        var byPlainPath: [String: CodexRecordFile] = [:]
+        for file in files {
+            if let existing = byPlainPath[file.plainPath], !existing.isCompressed { continue }
+            byPlainPath[file.plainPath] = file
+        }
+        return byPlainPath.values.sorted { $0.modifiedAt != $1.modifiedAt ? $0.modifiedAt > $1.modifiedAt : $0.path < $1.path }
+    }
+
     // MARK: 会话名
 
     private func readNames() async {
@@ -481,6 +650,8 @@ for key in children.keys { children[key]?.sort(by: AgentSubagentFile.newestFirst
     func delete(_ file: AgentHistorySessionFile) async throws {
         try await provider.removeFile(file.path)
         cache[file.cacheKey] = nil
+        let directory = (file.path as NSString).deletingLastPathComponent
+        dayListings[directory]?.files.removeAll { $0.path == file.path }
         if var snapshot {
             snapshot.sessions[file.project.id]?.removeAll { $0.path == file.path }
             self.snapshot = snapshot
