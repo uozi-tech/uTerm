@@ -598,6 +598,11 @@ enum AgentHistoryText {
     static var usageRateLimits: String { String(localized: "账号额度", comment: "用量明细：订阅的用量额度（Codex 记录里有）") }
 
     /// 额度的时间窗：每周、5 小时……
+    static func rateLimitWindow(_ window: AgentRateLimits.Window) -> String {
+        if let label = window.label, window.windowMinutes == nil { return label }
+        return rateLimitWindow(minutes: window.windowMinutes)
+    }
+
     static func rateLimitWindow(minutes: Int?) -> String {
         guard let minutes, minutes > 0 else { return String(localized: "额度", comment: "用量明细：不知道时间窗多长的额度") }
         if minutes == 7 * 24 * 60 { return String(localized: "每周", comment: "用量明细：按周算的额度") }

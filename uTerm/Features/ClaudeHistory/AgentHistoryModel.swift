@@ -170,6 +170,63 @@ final class AgentHistoryModel {
 
     // MARK: - 几种工具
 
+    // MARK: - 账号额度
+
+    /// 各种工具最近一次状态栏的数据（Claude Code、Antigravity，经状态栏转接，`AgentStatusLineBridge`）。
+    private(set) var statusLines: [AgentHistoryTool: AgentStatusLineSnapshot] = [:]
+    @ObservationIgnored private var statusLinePrepared = false
+
+    /// 侧栏底部的账号额度：每种工具一行，取最新的一份。Codex 取列表读到的记录里最后一次记下的（`metadata.rateLimits`），
+    /// Claude Code、Antigravity 取状态栏转接存下的。过了重置时间的时间窗不算（重置后用了多少不知道），一个都不剩的工具不列。
+    func accountLimits(now: Date = Date()) -> [AgentAccountLimits] {
+        var latest: [AgentHistoryTool: (limits: AgentRateLimits, at: Date?)] = [:]
+        let withLimits = metadata.filter { $0.value.rateLimits != nil }
+        let toolByPath = withLimits.isEmpty ? [:]
+            : Dictionary(listedFiles.map { ($0.path, $0.tool) }, uniquingKeysWith: { first, _ in first })
+        for (path, metadata) in withLimits {
+            guard let limits = metadata.rateLimits, let tool = toolByPath[path] else { continue }
+            if latest[tool] == nil || (metadata.rateLimitsAt ?? .distantPast) > (latest[tool]?.at ?? .distantPast) {
+                latest[tool] = (limits, metadata.rateLimitsAt)
+            }
+        }
+        for (tool, snapshot) in statusLines {
+            guard let limits = snapshot.rateLimits else { continue }
+            latest[tool] = (limits, snapshot.at)
+        }
+        return AgentHistoryTool.allCases.compactMap { tool in
+            guard let entry = latest[tool] else { return nil }
+            let live = entry.limits.windows.filter { ($0.resetsAt ?? .distantFuture) > now }
+            return live.isEmpty ? nil : AgentAccountLimits(tool: tool, limits: entry.limits, windows: live, at: entry.at)
+        }
+    }
+
+    /// 装好状态栏转接（每个列表一次，之后起的会话才带 `--settings`），再读一遍状态栏的数据。列完会话后调。
+    func prepareStatusLines() async {
+        if !statusLinePrepared {
+            statusLinePrepared = true
+            for part in parts { await part.prepareStatusLine() }
+        }
+        await refreshStatusLines()
+    }
+
+    /// 重读状态栏的数据（侧栏底部露着时隔一会儿调一次：跑着的会话一直在写）。
+    func refreshStatusLines() async {
+        var found: [AgentHistoryTool: AgentStatusLineSnapshot] = [:]
+        for part in parts {
+            if let snapshot = await part.statusLineSnapshot() { found[part.tool] = snapshot }
+        }
+        if found != statusLines { statusLines = found }
+        applyStatusLineWindow()
+    }
+
+    /// 状态栏知道窗口多大（Claude 的）而记录里不写：正在看的就是那个会话时，标题旁的上下文按它算百分比。
+    private func applyStatusLineWindow() {
+        guard let transcript else { return }
+        let snapshot = statusLines[transcript.file.tool]
+        let window = snapshot?.sessionID == transcript.file.sessionID.lowercased() ? snapshot?.contextWindow : nil
+        if transcript.knownContextWindow != window { transcript.knownContextWindow = window }
+    }
+
     /// 合在一起的数据源拆开（不是合成的就是它自己）。
     var parts: [any AgentHistorySource] {
         (source as? AgentHistoryCompositeSource)?.sources ?? [source]
@@ -330,6 +387,7 @@ final class AgentHistoryModel {
             }
             phase = .ready
             await setScope(nextScope)
+            Task { await self.prepareStatusLines() }
         } catch {
             AppLogger.notice("历史会话：重列失败（\(AgentHistoryLog.kind(of: error))）", category: AgentHistoryLog.category)
             // 后台重列失败（断线、辅助程序重启）：列表照旧显示上一次列到的，下次再列。
@@ -697,6 +755,7 @@ final class AgentHistoryModel {
         let model = AgentTranscriptModel(file: file, pager: pager, source: source, target: .session(file),
                                          followTiming: followTiming, opensAt: hit?.itemID)
         transcript = model
+        applyStatusLineWindow()
         updateFollowing()
         Task { await model.loadEarlier() }
     }
@@ -1056,10 +1115,16 @@ final class AgentTranscriptModel {
     /// 已经读到的最后一次用量（标题块显示上下文、Codex 的额度）。从命中处打开、还没读到末尾时是读到那里为止的。
     var latestUsage: (usage: AgentTurnUsage, at: Date?)? {
         for item in items.reversed() {
-            if case .usage(let usage) = item.kind { return (usage, item.timestamp) }
+            if case .usage(var usage) = item.kind {
+                if usage.contextWindow == nil { usage.contextWindow = knownContextWindow }
+                return (usage, item.timestamp)
+            }
         }
         return nil
     }
+
+    /// 记录里不写、状态栏告诉了的上下文窗口大小（`AgentHistoryModel.applyStatusLineWindow`）。
+    var knownContextWindow: Int?
 
     func loadEarlier() async {
         guard !isLoading, !reachedStart else { return }

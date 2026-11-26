@@ -351,27 +351,44 @@ actor AntigravityHistorySource: AgentHistorySource {
     /// 只有命令行（`~/.gemini/antigravity-cli`）写的会话能继续；桌面版的要先在 `agy` 里导入（会复制成新会话），没法直接接上。
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {
         guard cliState.withLock({ $0.sessionIDs.contains(sessionID.lowercased()) }) else { return nil }
-        return AntigravityResumeCommand.resume(sessionID: sessionID, directory: directory)
+        return AntigravityResumeCommand.resume(sessionID: sessionID, directory: directory, settings: statusLine.settingsPath)
     }
 
     /// 这台主机上用过命令行才给。
     nonisolated func newSessionCommand(directory: String) -> String? {
         guard cliState.withLock({ $0.isInstalled }) else { return nil }
-        return AntigravityResumeCommand.newSession(directory: directory)
+        return AntigravityResumeCommand.newSession(directory: directory, settings: statusLine.settingsPath)
+    }
+
+    // MARK: - 状态栏转接（账号额度、上下文窗口）
+
+    nonisolated let statusLine = AgentStatusLineState()
+
+    /// 只有命令行 `agy` 能起会话，才装（桌面版的会话在终端里继续不了）。
+    func prepareStatusLine() async {
+        guard cliState.withLock({ $0.isInstalled }), let home = try? await homeDirectory() else { return }
+        let path = try? await AgentStatusLineBridge.install(.antigravity, provider: provider, home: home)
+        statusLine.installed(at: path)
+    }
+
+    func statusLineSnapshot() async -> AgentStatusLineSnapshot? {
+        guard let home = try? await homeDirectory() else { return nil }
+        return await AgentStatusLineBridge.readSnapshot(.antigravity, provider: provider, home: home)
     }
 }
 
 /// 在终端里接着用 / 新开 `agy`。会话 ID 只收 UUID 的形状，目录按 POSIX shell 的单引号规则引起来（同 `ClaudeResumeCommand`）。
 nonisolated enum AntigravityResumeCommand {
-    static func resume(sessionID: String, directory: String) -> String? {
+    /// `settings`：状态栏转接装好了时传给 `--settings` 的文件（`AgentStatusLineBridge`）。
+    static func resume(sessionID: String, directory: String, settings: String? = nil) -> String? {
         guard ClaudeResumeCommand.isSessionID(sessionID),
               let quoted = ClaudeResumeCommand.quotedDirectory(directory) else { return nil }
-        return "cd -- \(quoted) && agy --conversation \(sessionID.lowercased())"
+        return "cd -- \(quoted) && agy\(ClaudeResumeCommand.settingsArgument(settings)) --conversation \(sessionID.lowercased())"
     }
 
-    static func newSession(directory: String) -> String? {
+    static func newSession(directory: String, settings: String? = nil) -> String? {
         guard let quoted = ClaudeResumeCommand.quotedDirectory(directory) else { return nil }
-        return "cd -- \(quoted) && agy"
+        return "cd -- \(quoted) && agy\(ClaudeResumeCommand.settingsArgument(settings))"
     }
 }
 

@@ -104,21 +104,26 @@ nonisolated struct AgentTurnUsage: Equatable, Sendable {
     }
 }
 
-/// 账号额度：一个或两个时间窗（Codex 的 primary / secondary），各自用了几成、什么时候重置。
+/// 账号额度：几个时间窗（Codex 的 primary / secondary；Claude 的 5 小时与每周；Antigravity 的各个 bucket），
+/// 各自用了几成、什么时候重置。
 nonisolated struct AgentRateLimits: Equatable, Sendable {
     nonisolated struct Window: Equatable, Sendable {
         /// 0–100。
         var usedPercent: Double
         var windowMinutes: Int?
         var resetsAt: Date?
+        /// 时间窗的名字（Antigravity 的 bucket 名，原样）；有窗长的按窗长起名（`AgentHistoryText.rateLimitWindow`）。
+        var label: String? = nil
     }
 
     var primary: Window?
     var secondary: Window?
     /// 套餐名（记录里的原样，如 `prolite`）。
     var plan: String?
+    /// 不止两个时间窗的（Antigravity）。
+    var extra: [Window] = []
 
-    var windows: [Window] { [primary, secondary].compactMap { $0 } }
+    var windows: [Window] { [primary, secondary].compactMap { $0 } + extra }
 }
 
 /// 截断过的长文字：只留前面一段，记下原来多长。

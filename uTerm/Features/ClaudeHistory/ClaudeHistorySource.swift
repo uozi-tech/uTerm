@@ -305,11 +305,33 @@ actor ClaudeHistorySource: AgentHistorySource {
     }
 
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String? {
-        ClaudeResumeCommand.make(sessionID: sessionID, directory: directory)
+        ClaudeResumeCommand.make(sessionID: sessionID, directory: directory, settings: statusLine.settingsPath)
     }
 
     nonisolated func newSessionCommand(directory: String) -> String? {
-        ClaudeResumeCommand.makeNew(directory: directory)
+        ClaudeResumeCommand.makeNew(directory: directory, settings: statusLine.settingsPath)
+    }
+
+    // MARK: - 状态栏转接（账号额度、上下文窗口）
+
+    nonisolated let statusLine = AgentStatusLineState()
+
+    func prepareStatusLine() async {
+        guard let home = try? await homeDirectory() else { return }
+        let path = try? await AgentStatusLineBridge.install(.claude, provider: provider, home: home)
+        statusLine.installed(at: path)
+    }
+
+    func statusLineSnapshot() async -> AgentStatusLineSnapshot? {
+        guard let home = try? await homeDirectory() else { return nil }
+        return await AgentStatusLineBridge.readSnapshot(.claude, provider: provider, home: home)
+    }
+
+    private func homeDirectory() async throws -> String {
+        if let home { return home }
+        let resolved = try await provider.realPath(".")
+        home = resolved
+        return resolved
     }
 
     // MARK: - 删除
@@ -553,15 +575,22 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
 /// 会话 ID 只收 UUID 的形状，目录按 POSIX shell 的单引号规则引起来；任何一样不合规矩就不给命令，
 /// 不会拼出能注入别的命令的东西。
 nonisolated enum ClaudeResumeCommand {
-    static func make(sessionID: String, directory: String) -> String? {
+    /// `settings`：状态栏转接装好了时传给 `--settings` 的文件（`AgentStatusLineBridge`）。
+    static func make(sessionID: String, directory: String, settings: String? = nil) -> String? {
         guard isSessionID(sessionID), let quoted = quotedDirectory(directory) else { return nil }
-        return "cd -- \(quoted) && claude --resume \(sessionID.lowercased())"
+        return "cd -- \(quoted) && claude\(settingsArgument(settings)) --resume \(sessionID.lowercased())"
     }
 
     /// 在这个目录里新开一个会话：`cd -- '<目录>' && claude`。目录的规矩同上。
-    static func makeNew(directory: String) -> String? {
+    static func makeNew(directory: String, settings: String? = nil) -> String? {
         guard let quoted = quotedDirectory(directory) else { return nil }
-        return "cd -- \(quoted) && claude"
+        return "cd -- \(quoted) && claude\(settingsArgument(settings))"
+    }
+
+    /// ` --settings '<文件>'`；没装上为空。
+    static func settingsArgument(_ settings: String?) -> String {
+        guard let settings, let quoted = quotedDirectory(settings) else { return "" }
+        return " --settings \(quoted)"
     }
 
     /// 8-4-4-4-12 的十六进制。

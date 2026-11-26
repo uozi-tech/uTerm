@@ -176,6 +176,11 @@ nonisolated enum AgentTranscriptTarget: Hashable, Sendable {
 /// `AgentHistorySessionFile.path` 是那份记录的文件，`AgentTranscriptAnchor.lineOffset` 是数据源自己定的位置
 /// （按行写的文件是行的偏移，别的可以是第几条），条目 ID 在一份记录里唯一且稳定即可。
 protocol AgentHistorySource: Actor {
+    /// 装好（或刷新）状态栏转接（`AgentStatusLineBridge`），装好之后起会话的命令带 `--settings`。没有状态栏的工具什么都不做。
+    /// 连上主机、列完会话后调；失败不报（只是拿不到额度）。
+    func prepareStatusLine() async
+    /// 最近一次状态栏的数据（额度、上下文窗口）；没有为 nil。
+    func statusLineSnapshot() async -> AgentStatusLineSnapshot?
     /// 这份实现读的是哪种工具的记录。它建出来的项目、子代理记录都要带上（`AgentHistoryProject.tool` /
     /// `AgentSubagentFile.tool`），几种工具合在一起列的时候靠它分给对应的数据源。
     nonisolated var tool: AgentHistoryTool { get }
@@ -227,6 +232,9 @@ protocol AgentHistorySource: Actor {
 }
 
 extension AgentHistorySource {
+    func prepareStatusLine() async {}
+    func statusLineSnapshot() async -> AgentStatusLineSnapshot? { nil }
+
     func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         AgentHistorySessionListing(files: await allSessions(in: projects))
     }

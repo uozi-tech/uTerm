@@ -252,7 +252,7 @@ struct AgentRateLimitRow: View {
         let style = AgentTranscriptStyle.platform
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text(AgentHistoryText.rateLimitWindow(minutes: window.windowMinutes))
+                Text(AgentHistoryText.rateLimitWindow(window))
                     .font(style.font(11))
                     .foregroundStyle(UD.text2)
                 Spacer(minLength: 8)
@@ -370,83 +370,90 @@ struct AgentHistoryListContent<List: View>: View {
     }
 }
 
-/// 侧栏最底下：账号额度（目前只有 Codex 的记录里有），取所有会话里最新记下的一份；已经过了重置时间的那个时间窗不显示
-///（重置后用了多少不知道）。点开是明细：各时间窗、套餐、截至几时。
+/// 侧栏最底下：账号额度，每种工具一行（`AgentHistoryModel.accountLimits`）。一行里最多写两个时间窗，点开是全部：
+/// 各时间窗用了几成、几时重置，套餐，截至几时。露着的时候每分钟重读一次状态栏的数据（跑着的会话一直在写）。
 private struct AgentHistoryAccountLimits: View {
     let history: AgentHistoryModel
+
+    var body: some View {
+        let rows = history.accountLimits()
+        VStack(spacing: 0) {
+            if !rows.isEmpty {
+                Rectangle().fill(UD.border).frame(height: 1)
+                ForEach(rows, id: \.tool) { row in
+                    AgentAccountLimitsRow(row: row)
+                }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                await history.refreshStatusLines()
+            }
+        }
+    }
+}
+
+private struct AgentAccountLimitsRow: View {
+    let row: AgentAccountLimits
 
     @State private var showsDetail = false
 
     var body: some View {
-        if let latest = latestLimits() {
-            let style = AgentHistoryListStyle.platform
-            VStack(spacing: 0) {
-                Rectangle().fill(UD.border).frame(height: 1)
-                Button { showsDetail.toggle() } label: {
-                    HStack(spacing: 8) {
-                        AgentHistoryToolBadge(tool: .codex, size: 14)
-                        ForEach(Array(latest.windows.enumerated()), id: \.offset) { _, window in
-                            HStack(spacing: 4) {
-                                Text(AgentHistoryText.rateLimitWindow(minutes: window.windowMinutes))
-                                    .foregroundStyle(UD.text3)
-                                AgentRateLimitBar(usedPercent: window.usedPercent)
-                                    .frame(width: 36, height: 4)
-                                Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
-                                    .monospacedDigit()
-                                    .foregroundStyle(window.usedPercent >= 90 ? UD.warning : UD.text2)
-                            }
-                        }
-                        Spacer(minLength: 0)
+        let style = AgentHistoryListStyle.platform
+        Button { showsDetail.toggle() } label: {
+            HStack(spacing: 8) {
+                AgentHistoryToolBadge(tool: row.tool, size: 14)
+                ForEach(Array(row.windows.prefix(2).enumerated()), id: \.offset) { _, window in
+                    HStack(spacing: 4) {
+                        Text(AgentHistoryText.rateLimitWindow(window))
+                            .lineLimit(1)
+                            .foregroundStyle(UD.text3)
+                        AgentRateLimitBar(usedPercent: window.usedPercent)
+                            .frame(width: 32, height: 4)
+                        Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
+                            .monospacedDigit()
+                            .foregroundStyle(window.usedPercent >= 90 ? UD.warning : UD.text2)
                     }
-                    .font(.system(size: style.noteSize))
-                    .padding(style.footerPadding)
-                    .contentShape(Rectangle())
                 }
-                .agentHistoryPressStyle()
-                .help(AgentHistoryText.accountLimitsTitle(.codex))
-                .popover(isPresented: $showsDetail) {
-                    AgentAccountLimitsDetail(limits: latest.limits, windows: latest.windows, at: latest.at)
-                        .presentationCompactAdaptation(.popover)
+                if row.windows.count > 2 {
+                    Text(verbatim: "+\(row.windows.count - 2)")
+                        .foregroundStyle(UD.text3)
                 }
+                Spacer(minLength: 0)
             }
+            .font(.system(size: style.noteSize))
+            .padding(style.footerPadding)
+            .contentShape(Rectangle())
         }
-    }
-
-    private func latestLimits() -> (limits: AgentRateLimits, windows: [AgentRateLimits.Window], at: Date?)? {
-        var best: (limits: AgentRateLimits, at: Date?)?
-        for metadata in history.metadata.values {
-            guard let limits = metadata.rateLimits else { continue }
-            if best == nil || (metadata.rateLimitsAt ?? .distantPast) > (best?.at ?? .distantPast) {
-                best = (limits, metadata.rateLimitsAt)
-            }
+        .agentHistoryPressStyle()
+        .help(AgentHistoryText.accountLimitsTitle(row.tool))
+        .popover(isPresented: $showsDetail) {
+            AgentAccountLimitsDetail(row: row)
+                .presentationCompactAdaptation(.popover)
         }
-        guard let best else { return nil }
-        let now = Date()
-        let live = best.limits.windows.filter { ($0.resetsAt ?? .distantFuture) > now }
-        return live.isEmpty ? nil : (best.limits, live, best.at)
     }
 }
 
 private struct AgentAccountLimitsDetail: View {
-    let limits: AgentRateLimits
-    let windows: [AgentRateLimits.Window]
-    let at: Date?
+    let row: AgentAccountLimits
 
     var body: some View {
         let style = AgentTranscriptStyle.platform
         VStack(alignment: .leading, spacing: 8) {
-            Text(AgentHistoryText.accountLimitsTitle(.codex))
+            Text(AgentHistoryText.accountLimitsTitle(row.tool))
                 .font(style.font(12, weight: .semibold))
                 .foregroundStyle(UD.text)
-            ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
+            ForEach(Array(row.windows.enumerated()), id: \.offset) { _, window in
                 AgentRateLimitRow(window: window)
             }
-            if let plan = limits.plan {
+            if let plan = row.limits.plan {
                 Text(AgentHistoryText.rateLimitPlan(plan))
                     .font(style.font(10.5))
                     .foregroundStyle(UD.text3)
             }
-            if let at {
+            if let at = row.at {
                 Text(AgentHistoryText.usageAsOf(at))
                     .font(style.font(10.5))
                     .foregroundStyle(UD.text4)
