@@ -178,7 +178,8 @@ final class AgentHistoryModel {
     @ObservationIgnored private var statusLineInstall: Task<Void, Never>?
 
     /// 侧栏底部的账号额度：每种工具一行，取最新的一份。Codex 取列表读到的记录里最后一次记下的（`metadata.rateLimits`），
-    /// Claude Code、Antigravity 取状态栏转接存下的。过了重置时间的时间窗不算（重置后用了多少不知道），一个都不剩的工具不列。
+    /// Claude Code、Antigravity 取状态栏转接存下的。取的是这种工具最后一次记下的，之后没再用过：过了重置时间的时间窗
+    /// 按用了 0 算（`didReset`），不藏起来。时间窗最紧的在前（`AgentRateLimits.tightestFirst`）。
     func accountLimits(now: Date = Date()) -> [AgentAccountLimits] {
         var latest: [AgentHistoryTool: (limits: AgentRateLimits, at: Date?)] = [:]
         let withLimits = metadata.filter { $0.value.rateLimits != nil }
@@ -195,9 +196,17 @@ final class AgentHistoryModel {
             latest[tool] = (limits, snapshot.at)
         }
         return AgentHistoryTool.allCases.compactMap { tool in
-            guard let entry = latest[tool] else { return nil }
-            let live = entry.limits.windows.filter { ($0.resetsAt ?? .distantFuture) > now }
-            return live.isEmpty ? nil : AgentAccountLimits(tool: tool, limits: entry.limits, windows: live, at: entry.at)
+            guard let entry = latest[tool], !entry.limits.windows.isEmpty else { return nil }
+            let windows = entry.limits.windows.map { window -> AgentRateLimits.Window in
+                guard let resets = window.resetsAt, resets <= now else { return window }
+                var reset = window
+                reset.usedPercent = 0
+                reset.resetsAt = nil
+                reset.didReset = true
+                return reset
+            }
+            return AgentAccountLimits(tool: tool, limits: entry.limits, windows: AgentRateLimits.tightestFirst(windows),
+                                      at: entry.at)
         }
     }
 

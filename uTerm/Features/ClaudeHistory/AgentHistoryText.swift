@@ -589,9 +589,16 @@ enum AgentHistoryText {
     static var usageRateLimits: String { String(localized: "账号额度", comment: "用量明细：订阅的用量额度（Codex 记录里有）") }
 
     /// 额度的时间窗：每周、5 小时……
+    /// 时间窗的名字；只管某个模型的带上模型名：「每周 · Fable」。
     static func rateLimitWindow(_ window: AgentRateLimits.Window) -> String {
-        if let label = window.label, window.windowMinutes == nil { return label }
-        return rateLimitWindow(minutes: window.windowMinutes)
+        let base = (window.windowMinutes == nil ? window.label : nil) ?? rateLimitWindow(minutes: window.windowMinutes)
+        guard let scope = window.scope else { return base }
+        return String(localized: "\(base) · \(scope)", comment: "额度时间窗的名字加上它只管的模型名，如「每周 · Fable」")
+    }
+
+    /// 过了重置时间、之后没再用过的时间窗。
+    static var rateLimitDidReset: String {
+        String(localized: "已重置", comment: "账号额度：最后一次记录之后已经过了重置时间，按用了 0 算")
     }
 
     static func rateLimitWindow(minutes: Int?) -> String {

@@ -263,7 +263,11 @@ struct AgentRateLimitRow: View {
             }
             AgentRateLimitBar(usedPercent: window.usedPercent)
                 .frame(height: 4)
-            if let resets = window.resetsAt {
+            if window.didReset {
+                Text(AgentHistoryText.rateLimitDidReset)
+                    .font(style.font(10.5))
+                    .foregroundStyle(UD.text3)
+            } else if let resets = window.resetsAt {
                 Text(AgentHistoryText.rateLimitResets(resets))
                     .font(style.font(10.5))
                     .foregroundStyle(UD.text3)
@@ -425,7 +429,7 @@ private struct AgentAccountLimitsRow: View {
                 Spacer(minLength: 0)
             }
             .font(.system(size: style.noteSize))
-            .padding(style.footerPadding)
+            .padding(style.accountLimitsPadding)
             .contentShape(Rectangle())
         }
         .agentHistoryPressStyle()

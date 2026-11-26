@@ -114,6 +114,10 @@ nonisolated struct AgentRateLimits: Equatable, Sendable {
         var resetsAt: Date?
         /// 时间窗的名字（Antigravity 的 bucket 名，原样）；有窗长的按窗长起名（`AgentHistoryText.rateLimitWindow`）。
         var label: String? = nil
+        /// 只管某个模型的额度（Claude 的 `seven_day_fable` 之类，记录里的原样，首字母大写）；管全部的为 nil。
+        var scope: String? = nil
+        /// 记下之后已经过了重置时间：之后再没用过（这是最后一次记录），按用了 0 算（`AgentHistoryModel.accountLimits`）。
+        var didReset = false
     }
 
     var primary: Window?
@@ -124,6 +128,15 @@ nonisolated struct AgentRateLimits: Equatable, Sendable {
     var extra: [Window] = []
 
     var windows: [Window] { [primary, secondary].compactMap { $0 } + extra }
+
+    /// 最紧的在前：用了最多（剩得最少）的那个最先碰到上限，窄的地方只放得下一两个时先放它。一样多时短的时间窗在前。
+    static func tightestFirst(_ windows: [Window]) -> [Window] {
+        windows.enumerated().sorted { a, b in
+            if a.element.usedPercent != b.element.usedPercent { return a.element.usedPercent > b.element.usedPercent }
+            let left = a.element.windowMinutes ?? .max, right = b.element.windowMinutes ?? .max
+            return left != right ? left < right : a.offset < b.offset
+        }.map(\.element)
+    }
 }
 
 /// 截断过的长文字：只留前面一段，记下原来多长。

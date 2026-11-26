@@ -140,11 +140,12 @@ nonisolated struct AgentStatusLineSnapshot: Equatable, Sendable {
         let window = ((object["context_window"] as? [String: Any])?["context_window_size"] as? NSNumber)?.intValue
         var windows: [AgentRateLimits.Window] = []
         if let limits = object["rate_limits"] as? [String: Any] {
-            for (key, minutes) in [("five_hour", 300), ("seven_day", 7 * 24 * 60)] {
+            // 有哪几个就列哪几个：有的账号没有 5 小时的，有的另有只管某个模型的每周额度（`seven_day_fable` 之类）。
+            for key in limits.keys.sorted() {
                 guard let entry = limits[key] as? [String: Any],
                       let used = (entry["used_percentage"] as? NSNumber)?.doubleValue else { continue }
                 let resets = (entry["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
-                windows.append(AgentRateLimits.Window(usedPercent: used, windowMinutes: minutes, resetsAt: resets))
+                windows.append(claudeWindow(key: key, used: used, resetsAt: resets))
             }
         }
         if let quota = object["quota"] as? [String: Any] {
@@ -162,7 +163,22 @@ nonisolated struct AgentStatusLineSnapshot: Equatable, Sendable {
     }
 }
 
-/// 侧栏底部一种工具的账号额度（`AgentHistoryModel.accountLimits`）。`windows` 是还没过重置时间的那几个。
+nonisolated extension AgentStatusLineSnapshot {
+    /// Claude 状态栏里 `rate_limits` 的一项：`five_hour` / `seven_day` 是全部模型合计的，后面再跟模型名的
+    /// （`seven_day_fable`、`seven_day_opus`）只管那个模型。认不出前缀的照原样当名字。
+    static func claudeWindow(key: String, used: Double, resetsAt: Date?) -> AgentRateLimits.Window {
+        for (prefix, minutes) in [("five_hour", 300), ("seven_day", 7 * 24 * 60)] where key.hasPrefix(prefix) {
+            let rest = key.dropFirst(prefix.count).drop { $0 == "_" }
+            let scope = rest.isEmpty ? nil : rest.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: " ")
+            return AgentRateLimits.Window(usedPercent: used, windowMinutes: minutes, resetsAt: resetsAt, scope: scope)
+        }
+        return AgentRateLimits.Window(usedPercent: used, windowMinutes: nil, resetsAt: resetsAt, label: key)
+    }
+}
+
+/// 侧栏底部一种工具的账号额度（`AgentHistoryModel.accountLimits`）。`windows` 最紧的在前（`tightestFirst`），
+/// 过了重置时间的按用了 0 算（`didReset`）。
 nonisolated struct AgentAccountLimits: Equatable, Sendable {
     var tool: AgentHistoryTool
     var limits: AgentRateLimits

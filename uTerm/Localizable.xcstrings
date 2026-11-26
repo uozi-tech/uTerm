@@ -2059,6 +2059,7 @@
       }
     },
     "%@ · %@" : {
+      "comment" : "额度时间窗的名字加上它只管的模型名，如「每周 · Fable」",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -40739,6 +40740,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已重新命名 %1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "已重置" : {
+      "comment" : "账号额度：最后一次记录之后已经过了重置时间，按用了 0 算",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リセット済み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "초기화됨"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已重設"
           }
         }
       }

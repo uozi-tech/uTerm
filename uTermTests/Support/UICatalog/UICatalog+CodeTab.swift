@@ -373,6 +373,11 @@ enum UICatalogCodeMode {
             Session(id: "x-cert", projectID: "2026-11-15", projectDirectory: infra, resumeDirectory: infra,
                     title: "证书续期脚本", modifiedAt: ago(86_400 * 8), branch: nil),
         ], supportsSearch: setup.codexSearches)
+        // 侧栏底部的账号额度：Claude Code 经状态栏转接存下的 5 小时 / 每周。
+        await claude.setStatusLine(AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
+            primary: .init(usedPercent: 16, windowMinutes: 300, resetsAt: Date().addingTimeInterval(3600 * 3)),
+            secondary: .init(usedPercent: 86, windowMinutes: 7 * 24 * 60, resetsAt: Date().addingTimeInterval(86_400 * 2)),
+            plan: nil), at: Date()))
         let sources: [any AgentHistorySource] = setup.tools.compactMap { tool in
             switch tool {
             case .claude: return claude
@@ -383,6 +388,7 @@ enum UICatalogCodeMode {
         let source: any AgentHistorySource = sources.count == 1 ? sources[0] : AgentHistoryCompositeSource(sources)
         let history = AgentHistoryModel(source: source, preferredDirectory: shop, followsCurrentProject: false)
         await history.start()
+        await history.prepareStatusLines()
         for _ in 0..<100 where history.hasMore || history.isListing {
             try? await Task.sleep(for: .milliseconds(10))
         }

@@ -83,6 +83,39 @@ final class AgentStatusLineBridgeTests: XCTestCase {
         ])
     }
 
+    /// 有哪几个列哪几个：没有 5 小时的账号、只管某个模型的每周额度（`seven_day_fable`）都认；认不出前缀的照原样当名字。
+    func testClaudeSnapshotWithModelLimitsAndNoFiveHour() throws {
+        let json = #"{"rate_limits":{"seven_day":{"used_percentage":30,"resets_at":1795600000},"seven_day_fable":{"used_percentage":92,"resets_at":1795600000},"monthly_extra":{"used_percentage":5}}}"#
+        let windows = try XCTUnwrap(AgentStatusLineSnapshot.parse(Data(json.utf8), at: nil)?.rateLimits?.windows)
+        XCTAssertEqual(windows.map(\.windowMinutes), [nil, 10080, 10080])
+        XCTAssertEqual(windows.map(\.scope), [nil, nil, "Fable"])
+        XCTAssertEqual(windows.map(AgentHistoryText.rateLimitWindow), ["monthly_extra", "每周", "每周 · Fable"])
+        // 最紧的在前。
+        XCTAssertEqual(AgentRateLimits.tightestFirst(windows).map(\.usedPercent), [92, 30, 5])
+    }
+
+    /// 侧栏底部：每种工具取最后一次记下的；过了重置时间的按用了 0 算、标「已重置」，不藏起来；最紧的在前。
+    func testAccountLimitsKeepResetWindowsAndSortTightestFirst() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let claude = AgentHistoryFakeSource(tool: .claude, sessions: [])
+        await claude.setStatusLine(AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
+            primary: .init(usedPercent: 18, windowMinutes: 300, resetsAt: now.addingTimeInterval(3600)),
+            secondary: .init(usedPercent: 87, windowMinutes: 10080, resetsAt: now.addingTimeInterval(86_400)),
+            plan: nil), at: now))
+        let antigravity = AgentHistoryFakeSource(tool: .antigravity, sessions: [])
+        await antigravity.setStatusLine(AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
+            primary: .init(usedPercent: 40, windowMinutes: 10080, resetsAt: now.addingTimeInterval(-60)), secondary: nil,
+            plan: nil), at: now.addingTimeInterval(-86_400)))
+        let model = AgentHistoryModel(source: AgentHistoryCompositeSource([claude, antigravity]), preferredDirectory: nil)
+        await model.prepareStatusLines()
+        let rows = model.accountLimits(now: now)
+        XCTAssertEqual(rows.map(\.tool), [.claude, .antigravity])
+        XCTAssertEqual(rows[0].windows.map(\.usedPercent), [87, 18])
+        XCTAssertEqual(rows[1].windows.map(\.usedPercent), [0])
+        XCTAssertEqual(rows[1].windows.map(\.didReset), [true])
+        XCTAssertNil(rows[1].windows[0].resetsAt)
+    }
+
     /// 不是订阅账号（没有 `rate_limits`）：没有额度，窗口照样有；窗口 0 当不知道。
     func testClaudeSnapshotWithoutRateLimits() throws {
         let json = #"{"session_id":"a","context_window":{"context_window_size":0}}"#

@@ -97,8 +97,12 @@ nonisolated enum CodexTranscriptParser {
             return AgentRateLimits.Window(usedPercent: used, windowMinutes: (window["window_minutes"] as? NSNumber)?.intValue,
                                           resetsAt: resets)
         }
-        let limits = AgentRateLimits(primary: window("primary"), secondary: window("secondary"),
-                                     plan: object["plan_type"] as? String)
+        // `limit_name`：只管某几个模型的额度才有名字（管全部的是 nil）。
+        let scope = (object["limit_name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        var primary = window("primary"), secondary = window("secondary")
+        primary?.scope = scope
+        secondary?.scope = scope
+        let limits = AgentRateLimits(primary: primary, secondary: secondary, plan: object["plan_type"] as? String)
         return limits.windows.isEmpty ? nil : limits
     }
 

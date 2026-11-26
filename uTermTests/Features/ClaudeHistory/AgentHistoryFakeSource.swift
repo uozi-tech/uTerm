@@ -71,6 +71,11 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     func setProjectsError(_ error: (any Error)?) { projectsError = error }
 
+    /// 状态栏转接存下的数据（账号额度）；nil = 没有。
+    private var statusLine: AgentStatusLineSnapshot?
+    func setStatusLine(_ snapshot: AgentStatusLineSnapshot?) { statusLine = snapshot }
+    func statusLineSnapshot() async -> AgentStatusLineSnapshot? { statusLine }
+
     /// 列项目前先等这么久（几种工具列完的先后跟注册的顺序不一样）。
     private var projectsDelay: Duration?
     func setProjectsDelay(_ delay: Duration?) { projectsDelay = delay }
