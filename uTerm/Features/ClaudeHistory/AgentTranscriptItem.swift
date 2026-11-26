@@ -142,13 +142,13 @@ nonisolated struct AgentRateLimits: Equatable, Sendable {
 /// 用量到了什么程度（额度、上下文共用）：蓝（正常）、黄（快满了）、红（满了或差不多满了）。
 ///
 /// - 红：用了 90% 以上。
-/// - 黄：用了 70% 以上；或者额度照这个时间窗里到现在的速度，到重置前会用完（用了至少 20%、窗口过了至少一成时才算，
+/// - 黄：用了 75% 以上；或者额度照这个时间窗里到现在的速度，到重置前会用完（用了至少 20%、窗口过了至少一成时才算，
 ///   刚开头的一点用量算不出速度）。
 /// - 上下文只看用了几成（没有重置时间）。
 nonisolated enum AgentUsageLevel: Int, Comparable, Sendable {
     case normal, warning, critical
 
-    static let warningPercent: Double = 70
+    static let warningPercent: Double = 75
     static let criticalPercent: Double = 90
 
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }

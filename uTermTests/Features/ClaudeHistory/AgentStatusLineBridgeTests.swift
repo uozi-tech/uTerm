@@ -144,8 +144,8 @@ final class AgentUsageLevelTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testPercentThresholds() {
-        XCTAssertEqual(AgentUsageLevel.of(percent: 69.9), .normal)
-        XCTAssertEqual(AgentUsageLevel.of(percent: 70), .warning)
+        XCTAssertEqual(AgentUsageLevel.of(percent: 74.9), .normal)
+        XCTAssertEqual(AgentUsageLevel.of(percent: 75), .warning)
         XCTAssertEqual(AgentUsageLevel.of(percent: 89.9), .warning)
         XCTAssertEqual(AgentUsageLevel.of(percent: 90), .critical)
     }
