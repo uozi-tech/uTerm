@@ -210,8 +210,10 @@ final class AgentHistoryModelTests: XCTestCase {
         XCTAssertEqual(model.hiddenCount, 1)
 
         let file = try XCTUnwrap(model.visibleFiles.first)
+        // 列完会话就装状态栏转接（账号额度），装好之后继续的命令带 --settings（只换这一次启动的状态栏）。
+        await model.prepareStatusLines()
         XCTAssertEqual(model.resumeCommand(for: file)?.command,
-                       "cd -- '/home/user/projects/demo' && claude --resume \(cli)")
+                       "cd -- '/home/user/projects/demo' && claude --settings '/home/user/.local/share/uterm/statusline/claude.settings.json' --resume \(cli)")
         model.select(file)
         let transcript = try XCTUnwrap(model.transcript)
         await waitUntil { transcript.reachedStart }

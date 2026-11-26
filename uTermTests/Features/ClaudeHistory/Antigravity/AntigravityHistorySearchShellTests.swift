@@ -251,7 +251,9 @@ final class AntigravityHistorySearchShellTests: XCTestCase {
         let session = try XCTUnwrap(found.first)
         let hit = try XCTUnwrap(session.hits.first)
         let page = try await source.transcript(for: session.file, around: hit.anchor).loadPrevious()
-        XCTAssertEqual(page.items.last?.id, hit.itemID)
-        XCTAssertEqual(page.items.last?.kind, .assistantText("Mixed Case Answer，中文回答"))
+        // 命中那一行最后还跟着这一步的用量（不画），停在画出来的最后一条上。
+        let shown = page.items.last(where: \.isDisplayed)
+        XCTAssertEqual(shown?.id, hit.itemID)
+        XCTAssertEqual(shown?.kind, .assistantText("Mixed Case Answer，中文回答"))
     }
 }

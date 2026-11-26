@@ -174,7 +174,8 @@ final class AgentHistoryModel {
 
     /// 各种工具最近一次状态栏的数据（Claude Code、Antigravity，经状态栏转接，`AgentStatusLineBridge`）。
     private(set) var statusLines: [AgentHistoryTool: AgentStatusLineSnapshot] = [:]
-    @ObservationIgnored private var statusLinePrepared = false
+    /// 装转接的那一趟（每个列表只装一次；同时来的几次都等它装完，之后拼的命令才确定带 `--settings`）。
+    @ObservationIgnored private var statusLineInstall: Task<Void, Never>?
 
     /// 侧栏底部的账号额度：每种工具一行，取最新的一份。Codex 取列表读到的记录里最后一次记下的（`metadata.rateLimits`），
     /// Claude Code、Antigravity 取状态栏转接存下的。过了重置时间的时间窗不算（重置后用了多少不知道），一个都不剩的工具不列。
@@ -202,10 +203,11 @@ final class AgentHistoryModel {
 
     /// 装好状态栏转接（每个列表一次，之后起的会话才带 `--settings`），再读一遍状态栏的数据。列完会话后调。
     func prepareStatusLines() async {
-        if !statusLinePrepared {
-            statusLinePrepared = true
-            for part in parts { await part.prepareStatusLine() }
+        if statusLineInstall == nil {
+            let parts = parts
+            statusLineInstall = Task { for part in parts { await part.prepareStatusLine() } }
         }
+        await statusLineInstall?.value
         await refreshStatusLines()
     }
 
