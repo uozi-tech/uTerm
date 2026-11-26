@@ -546,7 +546,9 @@ final class AgentHistoryModel {
             }
         }
         advanceResolved()
-        targetRows = max(pageRows, shownBefore > 0 ? visibleFiles.count : 0)
+        // 同一个范围里重列（后台）：接着读到原来要读到的行数。不能压回当时的行数：滚到底读下一批的途中赶上一次重列，
+        // 这一批就停在半路，底下的「正在读取」一直露着、不再叫 `loadMore`，转圈卡住（用户报的）。
+        targetRows = shownBefore > 0 ? max(pageRows, visibleFiles.count, targetRows) : pageRows
         // 已经显示的那一段里没读过的、文件变了的，先读。
         for file in files.prefix(resolvedCount).reversed() where needsRead(file) {
             guard !inFlight.contains(file.path) else { continue }
