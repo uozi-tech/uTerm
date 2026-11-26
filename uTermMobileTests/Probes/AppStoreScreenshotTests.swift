@@ -230,7 +230,7 @@ final class AppStoreScreenshotTests: XCTestCase {
             let term = terminal(web, Self.terminalTranscript)
             opened.append(term)
             workspace.open(.terminal(term))
-            let code = workspace.openHistory(MobileAgentHistoryFixture.tab(host: web, source: Self.codeSource(),
+            let code = workspace.openHistory(MobileAgentHistoryFixture.tab(host: web, source: Self.codeSource(long: device == .ipad),
                                                                            directory: Self.shopDir))
             code.runTerminalFactory = { MobileFakeTerminal.tab(host: $0, .transcript(Self.codexRunTranscript)).0 }
             _ = await MobileFakeClaudeHistory.settle(code)
@@ -473,14 +473,14 @@ final class AppStoreScreenshotTests: XCTestCase {
     private static let blogDir = "/home/deploy/blog"
 
     /// 三种编码工具的会话（手写，按界面语言）：shop-api 下三种都有，另有 infra、blog。
-    private static func codeSource() -> any AgentHistorySource {
+    private static func codeSource(long: Bool = false) -> any AgentHistorySource {
         typealias Session = MobileFakeAgentSource.Session
         func ago(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(-seconds) }
         let claude = MobileFakeAgentSource(tool: .claude, sessions: [
             Session(id: "c-login", projectID: ClaudeProjectPath.encode(shopDir), resumeDirectory: shopDir,
                     title: text("登录接口偶发 500", en: "Login API returns 500 at times", hant: "登入介面偶發 500",
                                 ja: "ログイン API がときどき 500", ko: "로그인 API 간헐적 500"),
-                    modifiedAt: ago(60 * 3), branch: "fix/login-timeout", items: loginConversation(at: ago(60 * 3))),
+                    modifiedAt: ago(60 * 3), branch: "fix/login-timeout", items: loginConversation(at: ago(60 * 3), long: long)),
             Session(id: "c-page", projectID: ClaudeProjectPath.encode(shopDir), resumeDirectory: shopDir,
                     title: text("给订单接口加分页", en: "Paginate the orders API", hant: "幫訂單介面加分頁",
                                 ja: "注文 API にページングを追加", ko: "주문 API에 페이지네이션 추가"),
@@ -517,8 +517,8 @@ final class AppStoreScreenshotTests: XCTestCase {
         return AgentHistoryCompositeSource([claude, codex, antigravity])
     }
 
-    /// Claude Code 修登录超时的一次对话。
-    private static func loginConversation(at date: Date) -> [AgentTranscriptItem] {
+    /// Claude Code 修登录超时的一次对话。`long`：多一轮（加索引、跑测试、总结改了什么），竖握的 iPad 上才铺得满。
+    private static func loginConversation(at date: Date, long: Bool = false) -> [AgentTranscriptItem] {
         func call(_ id: String, _ name: String, _ summary: String, _ output: String, error: Bool = false) -> AgentToolCall {
             AgentToolCall(toolUseID: id, name: name, summary: summary,
                           result: AgentToolResult(toolUseID: id, content: AgentClippedText(output, limit: 4000),
@@ -526,7 +526,7 @@ final class AppStoreScreenshotTests: XCTestCase {
         }
         let fail = "--- FAIL: TestLoginTimeout (2.01s)\n    handler_test.go:88: context deadline exceeded\nFAIL"
         let pass = "ok  \tshop-api/internal/auth\t0.84s"
-        return [
+        var items: [AgentTranscriptItem] = [
             AgentTranscriptItem(id: "u1", kind: .userText(text(
                 "登录接口偶尔返回 500，日志里是 `context deadline exceeded`。帮我找找原因。",
                 en: "Login sometimes returns 500 with `context deadline exceeded`. Can you find out why?",
@@ -600,9 +600,29 @@ final class AppStoreScreenshotTests: XCTestCase {
                 ja: "`orders.created_at` にインデックスがなく、毎回 120 万行を全件スキャンしています。インデックスを張ると **1.8 s → 12 ms** になります：\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```",
                 ko: "`orders.created_at`에 인덱스가 없어 매번 120만 행을 전체 스캔해요. 인덱스를 추가하면 **1.8 s → 12 ms**로 줄어요:\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```")),
                                 timestamp: date),
-            AgentTranscriptItem(id: "usage", kind: .usage(AgentTurnUsage(model: "claude-opus-4-5", contextTokens: 48_210,
-                                                                       outputTokens: 1_284)), timestamp: date),
         ]
+        if long {
+            let migration = "migrations/0042_orders_created_at.sql"
+            items += [
+                AgentTranscriptItem(id: "u4", kind: .userText(text(
+                    "把索引写成迁移，再把全部测试跑一遍。", en: "Add the index as a migration and run all the tests.",
+                    hant: "把索引寫成遷移，再把全部測試跑一遍。", ja: "インデックスをマイグレーションにして、テストを全部流してください。",
+                    ko: "인덱스를 마이그레이션으로 추가하고 전체 테스트를 돌려 주세요.")), timestamp: date),
+                AgentTranscriptItem(id: "t5", kind: .toolCall(call("t5", "Write", migration, "")), timestamp: date),
+                AgentTranscriptItem(id: "t6", kind: .toolCall(call("t6", "Bash", "go test ./...", "ok  \tshop-api/...\t(37 packages)")),
+                                    timestamp: date),
+                AgentTranscriptItem(id: "a5", kind: .assistantText(text(
+                    "全部 37 个包的测试都通过了。这次改了：\n\n- `internal/auth/handler.go`：复用连接池\n- `config/db.go`：`MaxOpenConns` 调到 20\n- `\(migration)`：`orders.created_at` 的索引",
+                    en: "All 37 packages pass. Changes in this session:\n\n- `internal/auth/handler.go`: reuse the connection pool\n- `config/db.go`: `MaxOpenConns` raised to 20\n- `\(migration)`: index on `orders.created_at`",
+                    hant: "全部 37 個套件的測試都通過了。這次改了：\n\n- `internal/auth/handler.go`：共用連線池\n- `config/db.go`：`MaxOpenConns` 調到 20\n- `\(migration)`：`orders.created_at` 的索引",
+                    ja: "37 パッケージすべてのテストが通りました。今回の変更：\n\n- `internal/auth/handler.go`：接続プールを共有\n- `config/db.go`：`MaxOpenConns` を 20 に\n- `\(migration)`：`orders.created_at` のインデックス",
+                    ko: "37개 패키지 테스트가 모두 통과했어요. 이번 변경 사항:\n\n- `internal/auth/handler.go`: 커넥션 풀 재사용\n- `config/db.go`: `MaxOpenConns`를 20으로\n- `\(migration)`: `orders.created_at` 인덱스")),
+                                    timestamp: date),
+            ]
+        }
+        items.append(AgentTranscriptItem(id: "usage", kind: .usage(AgentTurnUsage(model: "claude-opus-4-5", contextTokens: 48_210,
+                                                                       outputTokens: 1_284)), timestamp: date))
+        return items
     }
 
     /// Code 标签页里跑着的 Codex 会话：终端里的样子，程序经 OSC 7501 报「运行中」。
