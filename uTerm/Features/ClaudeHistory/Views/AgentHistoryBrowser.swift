@@ -409,10 +409,13 @@ struct AgentHistorySessionList: View {
                         ForEach(groups) { group in
                             let collapsed = history.collapsedGroups.contains(group.id)
                             if AgentHistoryListing.showsHeader(group, in: groups) {
-                                AgentHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
-                                    .id(group.id)
-                                    .modifier(AgentHistoryPinFrameProbe(drag: pinDrag,
-                                                                        slot: group.kind == .pinned ? .pinnedHeader : nil))
+                                AgentHistoryGroupHeader(group: group, collapsed: collapsed,
+                                                        runs: collapsed ? placement.runs(in: group).map(\.status) : []) {
+                                    toggle(group.id)
+                                }
+                                .id(group.id)
+                                .modifier(AgentHistoryPinFrameProbe(drag: pinDrag,
+                                                                    slot: group.kind == .pinned ? .pinnedHeader : nil))
                             }
                             if !collapsed {
                                 let showsTool = group.mixesTools
@@ -545,13 +548,16 @@ struct AgentHistorySessionList: View {
     }
 }
 
-/// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。
+/// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。收起时组里有跑着的会话，会话数前面一个状态点（`CodeRunGroupMark`）。
 private struct AgentHistoryGroupHeader: View {
     let group: AgentHistoryGroup
     let collapsed: Bool
+    /// 组里跑着的会话的状态（收起时才给）。在这里读：状态变了只重画组标题。
+    var runs: [AgentHistoryRunStatus] = []
     let toggle: () -> Void
 
     var body: some View {
+        let mark = CodeRunGroupMark(runs.map { $0.read() })
         Button(action: toggle) {
             HStack(spacing: 5) {
                 Image(systemName: "chevron.right")
@@ -565,6 +571,10 @@ private struct AgentHistoryGroupHeader: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
+                if let mark {
+                    Circle().fill(Self.dot(mark)).frame(width: 6, height: 6)
+                        .help(Text(verbatim: AgentHistoryText.groupRunsNote(mark)))
+                }
                 Text(verbatim: "\(group.files.count)")
                     .font(.system(size: 11))
                     .monospacedDigit()
@@ -578,8 +588,14 @@ private struct AgentHistoryGroupHeader: View {
         .padding(.top, 4)
         .help(AgentHistoryText.groupHelp(group).map { Text(verbatim: $0) } ?? Text(verbatim: ""))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed)))
+        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed, runs: mark)))
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// 同行上状态的圆点颜色（`AgentHistoryRunStatusTag`）；都没报过状态是灰的。
+    static func dot(_ mark: CodeRunGroupMark) -> Color {
+        if case .program(let record) = mark.status { return record.tabDot }
+        return UD.text4
     }
 }
 

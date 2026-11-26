@@ -608,13 +608,21 @@ private struct ClaudeHistoryList: View {
                                                    selected: code.board.focusedID == run.id && run.showsTerminal)
                             }
                             .buttonStyle(MPressStyle())
+                            .modifier(ClaudeHistoryRowMenu(pins: nil, file: nil, isRunning: run.isRunning) {
+                                code.tab.endRun(run.id)
+                            })
                         }
                     }
                     ForEach(groups) { group in
                         let collapsed = history.collapsedGroups.contains(group.id)
                         if AgentHistoryListing.showsHeader(group, in: groups) {
-                            ClaudeHistoryGroupHeader(group: group, collapsed: collapsed) { toggle(group.id) }
-                                .id(group.id)
+                            ClaudeHistoryGroupHeader(group: group, collapsed: collapsed,
+                                                     runs: collapsed ? placement.runs(in: group).map {
+                                                         CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport)
+                                                     } : []) {
+                                toggle(group.id)
+                            }
+                            .id(group.id)
                         }
                         if !collapsed {
                             let showsTool = group.mixesTools
@@ -644,7 +652,7 @@ private struct ClaudeHistoryList: View {
         }
     }
 
-    /// 一行会话：点一下看它；长按菜单「置顶」/「取消置顶」（iOS 不做拖动排序：会和滚动、标签拖动抢手势）。
+    /// 一行会话：点一下看它；长按菜单「置顶」/「取消置顶」（iOS 不做拖动排序：会和滚动、标签拖动抢手势），在跑的还有「结束会话」。
     /// `run`：这份记录正在 Code 标签页里跑着——行上写它此刻的状态，点一下回到它的终端（同最顶上那几行）。
     private func row(_ file: AgentHistorySessionFile, in group: AgentHistoryGroup, showsTool: Bool,
                      run: CodeRunBoard<TermTab>.Run?) -> some View {
@@ -663,7 +671,9 @@ private struct ClaudeHistoryList: View {
                              run: run, isSelected: showsItsTerminal || history.selectedFile?.path == file.path)
         }
         .buttonStyle(MPressStyle())
-        .modifier(ClaudeHistoryPinMenu(pins: history.pins, file: file))
+        .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true) {
+            if let code, let run { code.tab.endRun(run.id) }
+        })
     }
 
     /// 看着的那个跑着的会话那一行在一个收着的组里：打开那一组、滚到它（不收着就不动）。那份记录还没列到的，等列表变了再试。
@@ -716,21 +726,52 @@ private struct ClaudeHistoryList: View {
     }
 }
 
-/// 行的长按菜单：「置顶」/「取消置顶」。这个列表不能置顶（没有主机标识）时没有菜单。
-private struct ClaudeHistoryPinMenu: ViewModifier {
+/// 行的长按菜单：有记录的「置顶」/「取消置顶」，在 Code 标签页里跑着的「结束会话」（同 Mac 行上的右键菜单与 ×）。
+/// 两样都没有（不能置顶、也不在跑）时没有菜单。
+struct ClaudeHistoryRowMenu: ViewModifier {
+    enum Item: Hashable {
+        case pin(isPinned: Bool)
+        case endSession
+    }
+
+    /// nil = 这个列表不能置顶（没有主机标识）。
     let pins: AgentHistoryPins?
-    let file: AgentHistorySessionFile
+    /// nil = 没有记录的行（列表最顶上还没对上记录的新会话），不能置顶。
+    let file: AgentHistorySessionFile?
+    /// 在 Code 标签页里跑着（已结束的那一行上有「回到记录」「关闭」，不再出「结束会话」）。
+    let isRunning: Bool
+    let onEnd: () -> Void
+
+    static func items(canPin: Bool, isPinned: Bool, isRunning: Bool) -> [Item] {
+        var items: [Item] = []
+        if canPin { items.append(.pin(isPinned: isPinned)) }
+        if isRunning { items.append(.endSession) }
+        return items
+    }
 
     func body(content: Content) -> some View {
-        if let pins {
-            let pinned = pins.isPinned(file)
+        let pinned = file.map { pins?.isPinned($0) ?? false } ?? false
+        let items = Self.items(canPin: pins != nil && file != nil, isPinned: pinned, isRunning: isRunning)
+        if items.isEmpty {
+            content
+        } else {
             content.mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
-                Button { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } } label: {
-                    Label(AgentHistoryText.pinAction(isPinned: pinned), systemImage: pinned ? "pin.slash" : "pin")
+                ForEach(items, id: \.self) { item in
+                    switch item {
+                    case .pin(let isPinned):
+                        Button {
+                            if let pins, let file { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } }
+                        } label: {
+                            Label(AgentHistoryText.pinAction(isPinned: isPinned), systemImage: isPinned ? "pin.slash" : "pin")
+                        }
+                    case .endSession:
+                        if items.count > 1 { Divider() }
+                        Button(role: .destructive, action: onEnd) {
+                            Label(AgentHistoryText.endSession, systemImage: "xmark.circle")
+                        }
+                    }
                 }
             }
-        } else {
-            content
         }
     }
 }
@@ -739,9 +780,13 @@ private struct ClaudeHistoryPinMenu: ViewModifier {
 private struct ClaudeHistoryGroupHeader: View {
     let group: AgentHistoryGroup
     let collapsed: Bool
+    /// 组里跑着的会话的状态（收起时才给）：会话数前面画一个状态点（`CodeRunGroupMark`，同 Mac）。
+    var runs: [CodeRunStatus] = []
     let toggle: () -> Void
+    @Environment(\.mAccent) private var accent
 
     var body: some View {
+        let mark = CodeRunGroupMark(runs)
         Button(action: toggle) {
             HStack(spacing: 7) {
                 Image(systemName: "chevron.right")
@@ -755,6 +800,9 @@ private struct ClaudeHistoryGroupHeader: View {
                     .font(M.sans(13.5, weight: .semibold)).foregroundStyle(M.text2)
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 6)
+                if let mark {
+                    Circle().fill(dot(mark)).frame(width: 7, height: 7)
+                }
                 Text(verbatim: "\(group.files.count)")
                     .font(M.mono(12)).foregroundStyle(M.text4)
             }
@@ -765,9 +813,15 @@ private struct ClaudeHistoryGroupHeader: View {
         .buttonStyle(MPressStyle())
         .padding(.top, 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed)))
+        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed, runs: mark)))
         .accessibilityHint(Text(verbatim: AgentHistoryText.groupHelp(group) ?? ""))
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// 同行上状态的圆点颜色（`CodeRunStatusMark`）；都没报过状态是灰的。
+    private func dot(_ mark: CodeRunGroupMark) -> Color {
+        if case .program(let record) = mark.status { return WorkspaceTabChip.color(for: record.tone, accent: accent) }
+        return M.text4
     }
 }
 

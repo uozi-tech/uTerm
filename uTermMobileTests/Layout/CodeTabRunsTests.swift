@@ -213,6 +213,40 @@ final class CodeTabRunsTests: XCTestCase {
         XCTAssertEqual(ended.inList["/p/a.jsonl"]?.id, resumed.id)
     }
 
+    func testCollapsedGroupMarksItsRunningSessions() throws {
+        // 收起的组标题上那个点：组里那几行上跑着的会话（不含顶上没记录的、别的组的），已结束的不算。
+        let board = CodeRunBoard<FakeTerminal>()
+        let start = Date(timeIntervalSince1970: 30_000)
+        _ = board.startNew(tool: .claude, directory: "/w", now: start, terminal: FakeTerminal())
+        let resumed = try XCTUnwrap(board.resume(sessionPath: "/p/a.jsonl", sessionID: "a", tool: .claude,
+                                                 directory: "/w", now: start) { FakeTerminal() })
+        var project = AgentHistoryProject(id: ClaudeProjectPath.encode("/w"), path: "/p", modifiedAt: nil)
+        project.directory = "/w"
+        let files = ["a", "c"].map {
+            AgentHistorySessionFile(sessionID: $0, project: project, path: "/p/\($0).jsonl", size: 1, modifiedAt: start)
+        }
+        let groups = AgentHistoryListing.groups(files, by: .project, metadata: [:], pinned: [])
+        let group = try XCTUnwrap(groups.first)
+        func mark() -> CodeRunGroupMark? {
+            let placement = AgentHistoryRunPlacement(runs: board.runs, path: \.sessionPath, groups: groups)
+            return CodeRunGroupMark(placement.runs(in: group).map { CodeRunStatus.of(isEnded: !$0.isRunning, report: nil) })
+        }
+        XCTAssertEqual(mark()?.running, 1, "只算这一组那几行上的，顶上的新会话不算")
+        XCTAssertEqual(mark()?.status, .unreported)
+        XCTAssertEqual(board.ended(resumed.id, hasListedRecord: false, now: start.addingTimeInterval(1)), .kept)
+        XCTAssertNil(mark(), "结束了、留着画面的不算在跑")
+    }
+
+    func testLongPressMenuEndsRunningSessions() {
+        // 长按菜单：在跑的多一项「结束会话」（同 Mac 行上的右键菜单）；已结束的、没在跑的没有。
+        typealias Menu = ClaudeHistoryRowMenu
+        XCTAssertEqual(Menu.items(canPin: true, isPinned: false, isRunning: true), [.pin(isPinned: false), .endSession])
+        XCTAssertEqual(Menu.items(canPin: true, isPinned: true, isRunning: false), [.pin(isPinned: true)])
+        XCTAssertEqual(Menu.items(canPin: false, isPinned: false, isRunning: true), [.endSession],
+                       "顶上没记录的新会话不能置顶，但能结束")
+        XCTAssertEqual(Menu.items(canPin: false, isPinned: false, isRunning: false), [], "什么都没有就不出菜单")
+    }
+
     // MARK: - 接到真终端
 
     private func container() throws -> (ModelContainer, ServerProfile) {

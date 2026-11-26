@@ -33,6 +33,11 @@ nonisolated struct AgentHistoryRunPlacement<Run> {
     init(runs: [Run], path: (Run) -> String?, groups: [AgentHistoryGroup]) {
         self.init(runs: runs, path: path, listed: Set(groups.flatMap { $0.files.map(\.path) }))
     }
+
+    /// 在这一组里（那几行上）跑着的会话，按组里的先后：收起的组标题上那个点照它们画（`CodeRunGroupMark`）。
+    func runs(in group: AgentHistoryGroup) -> [Run] {
+        group.files.compactMap { inList[$0.path] }
+    }
 }
 
 nonisolated extension AgentHistoryListing {

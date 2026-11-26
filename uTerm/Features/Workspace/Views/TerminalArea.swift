@@ -262,7 +262,7 @@ struct TerminalArea: View {
         workspace.openCodeTab(in: groupID, fallbackServerID: server.id) { id in names[id] ?? fallback }
     }
 
-    /// 标签条上「＋」旁边的「新建 Code 标签页」。
+    /// 标签条上「＋」旁边的「打开 Code 标签页」。
     private func codeTabButton(_ groupID: UUID) -> some View {
         CodeTabButton { openCodeTab(in: groupID) }
     }
@@ -350,10 +350,11 @@ struct TerminalTabContextMenu: View {
     }
 }
 
-/// 标签条上「＋」旁边的「新建 Code 标签页」按钮，SSH 终端区与本机终端窗口共用。
+/// 标签条上「＋」旁边的「打开 Code 标签页」按钮，SSH 终端区与本机终端窗口共用。每台主机只有一个 Code 标签页：
+/// 还没有就新开，已经开着就切过去，所以叫「打开」不叫「新建」。
 struct CodeTabButton: View {
     static let icon = "chevron.left.forwardslash.chevron.right"
-    static var title: String { String(localized: "新建 Code 标签页") }
+    static var title: String { String(localized: "打开 Code 标签页") }
 
     let action: () -> Void
 

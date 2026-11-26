@@ -305,6 +305,20 @@ enum AgentHistoryText {
             : String(localized: "\(title)，\(group.files.count) 个会话")
     }
 
+    /// 收起的组标题上那个点（`CodeRunGroupMark`）的说明（悬停提示、读屏）：几个会话在跑，报过状态的带上最要紧的那个。
+    static func groupRunsNote(_ mark: CodeRunGroupMark) -> String {
+        let running = String(localized: "\(mark.running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")
+        guard case .program(let record) = mark.status else { return running }
+        return String(localized: "\(running)：\(record.statusLabel)", comment: "几个会话在运行：最要紧那个的状态（等待确认、运行中……）")
+    }
+
+    /// 组标题的读屏文字带上里面跑着的会话（收起时才有）。
+    static func groupAccessibility(_ group: AgentHistoryGroup, collapsed: Bool, runs: CodeRunGroupMark?) -> String {
+        let base = groupAccessibility(group, collapsed: collapsed)
+        guard let runs else { return base }
+        return String(localized: "\(base)，\(groupRunsNote(runs))", comment: "组标题的读屏文字，后面接里面跑着的会话")
+    }
+
     /// 「＋」新会话菜单的标题：在哪个目录里新开。
     static func newSessionTitle(directory: String) -> String {
         String(localized: "在「\((directory as NSString).lastPathComponent)」里新开")

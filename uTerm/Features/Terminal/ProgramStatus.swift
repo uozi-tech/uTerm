@@ -7,7 +7,7 @@ nonisolated enum ProgramState: String, Equatable, Sendable, Codable {
     case idle, working, done, blocked, error
 
     /// 一条会话有多条记录时，标签显示最需要人处理的那条。
-    fileprivate var priority: Int {
+    var priority: Int {
         switch self {
         case .blocked: 4
         case .error: 3

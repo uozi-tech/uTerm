@@ -43465,6 +43465,34 @@
         }
       }
     },
+    "打开 Code 标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Code Tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code タブを開く"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code 탭 열기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟 Code 分頁"
+          }
+        }
+      }
+    },
     "打开 uTerm 时，%lld 条「保持连接」的隧道会自动建立" : {
       "localizations" : {
         "en" : {
@@ -49222,34 +49250,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增 %1$lld · 更新 %2$lld · 匯入金鑰 %3$lld · 關聯現有金鑰 %4$lld · 略過金鑰 %5$lld"
-          }
-        }
-      }
-    },
-    "新建 Code 标签页" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Code Tab"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新規 Code タブ"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "새 Code 탭"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新增 Code 分頁"
           }
         }
       }
