@@ -371,12 +371,13 @@ struct AgentHistorySessionList: View {
 
     private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile],
                       runs: [AgentHistoryRunRow]) -> some View {
-        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
+        let listed = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
         // 跑着的会话不另起一块：有记录的在那一行上（置顶或它那一组）；还没有记录行的（刚开的新会话）在它那一组的最上面，
-        // 哪一组都对不上的才在列表最顶上。
+        // 哪一组都对不上的才在列表最顶上。跑着的排在组的最前面、它那一组排在前面。
         let placement = AgentHistoryRunPlacement(runs: runs, path: \.path, directory: \.directory, tool: \.tool,
-                                                 groups: groups)
+                                                 groups: listed)
+        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement)
         let selectedRunPath = runs.first(where: \.isSelected)?.path
         // 选中的新会话放在哪一组（它那一组收着就打开）。
         let selectedLeadingGroup = placement.groupID(ofLeading: \.isSelected)
@@ -487,7 +488,8 @@ struct AgentHistorySessionList: View {
     private func rowMenu(_ file: AgentHistorySessionFile, pins: AgentHistoryPins?, run: AgentHistoryRunRow?) -> AgentHistoryRowMenu {
         AgentHistoryRowMenu(file: file, pins: pins, run: run, actions: running?.actions,
                             drag: pins == nil ? nil : pinDrag, history: history, onResume: onResume,
-                            onDelete: { pendingDelete = $0 }, onRename: { pendingRename = $0 })
+                            onDelete: { pendingDelete = $0 }, onRename: { pendingRename = $0 },
+                            isSelected: history.selectedFile?.path == file.path || run?.isSelected == true)
     }
 
     /// 跑着、列表里没有它记录行的会话那一行（列表最顶上，或者它那一组的最上面）。
@@ -548,37 +550,26 @@ private struct AgentHistoryUnlistedRunRow: View {
     }
 }
 
-/// 跑着的会话那一行的操作：右键菜单（「查看记录」/「返回终端」、「移到新标签页」、有记录的「置顶」、「结束会话」），
-/// 悬停时右端一个 ×（结束会话），上下居中。× 盖在行上、不占位置：出现消失这一行的字不挪。
+/// 跑着的会话那一行的操作：菜单（右键与悬停时右端的「⋯」，见 `AgentHistoryRowActions`）里跑着的会话那几样
+///（「查看记录」/「返回终端」、「移到新标签页」）在共用的条目前面，最后是「结束会话」。
 /// 有记录的那一行在置顶或它那一组里，照样能拖进 / 拖出「置顶」；最顶上没有记录的那几行不能置顶。
 struct AgentHistoryRunRowActions: ViewModifier {
     let row: AgentHistoryRunRow
     let file: AgentHistorySessionFile?
     let pins: AgentHistoryPins?
     let actions: AgentHistoryRunActions?
-    /// 这一行能拖动置顶时那个列表的拖动状态：拖起来的时候不出 ×（这一行淡下去了，× 和它后面不透明的垫底不淡，
-    /// 看着是一块方底）。
+    /// 这一行能拖动置顶时那个列表的拖动状态：拖起来的时候不出「⋯」。
     var drag: AgentHistoryPinDragModel? = nil
     /// 这一行显示的名字（「拷贝会话名」）；没有记录的新会话为 nil 时拷的是行上的标题。
     var title: String? = nil
     /// 能改名时「重命名…」点了交给列表弹输入框；nil = 不出这一项。
     var onRename: ((AgentHistorySessionFile) -> Void)? = nil
 
-    /// 界面画廊与测试用：建出来的行一开始就当作鼠标悬在上面（悬停拍不到）。App 里始终为 false。
-    static var catalogHovered = false
-
-    @State private var hovered = AgentHistoryRunRowActions.catalogHovered
-
     func body(content: Content) -> some View {
         if let actions {
-            content
-                .overlay(alignment: .trailing) {
-                    if hovered, !isLifted {
-                        AgentHistoryRunEndButton(isSelected: row.isSelected) { actions.end(row.id) }
-                    }
-                }
-                .hoverGated { hovered = $0 || Self.catalogHovered }
-                .agentHistoryRowMenu { menu(actions) }
+            content.modifier(AgentHistoryRowActions(isSelected: row.isSelected, isLifted: isLifted, isRun: true) {
+                menu(actions)
+            })
         } else {
             content
         }
@@ -611,8 +602,8 @@ struct AgentHistoryRunRowActions: ViewModifier {
     }
 }
 
-/// 列表里一行记录的右键菜单：在跑的（`run`）是跑着的会话那几样操作（含「置顶」，悬停出 ×），否则是
-/// `AgentHistorySessionMenuItem` 那几项（继续、置顶、拷贝会话 ID、删除）。
+/// 列表里一行记录的菜单（右键与悬停的「⋯」）：在跑的（`run`）是跑着的会话那几样操作，否则是
+/// `AgentHistorySessionMenuItem` 那几项（继续、置顶、重命名、拷贝、删除）。
 private struct AgentHistoryRowMenu: ViewModifier {
     let file: AgentHistorySessionFile
     let pins: AgentHistoryPins?
@@ -628,6 +619,8 @@ private struct AgentHistoryRowMenu: ViewModifier {
     var onDelete: (AgentHistorySessionFile) -> Void = { _ in }
     /// 点了「重命名…」：交给列表弹输入框。
     var onRename: (AgentHistorySessionFile) -> Void = { _ in }
+    /// 这一行选中着（悬停时「⋯」后面垫的底色跟它一样）。
+    var isSelected = false
 
     func body(content: Content) -> some View {
         if let run, actions != nil {
@@ -640,35 +633,78 @@ private struct AgentHistoryRowMenu: ViewModifier {
                 hasRecord: true, canResume: onResume != nil && history.resumeCommand(for: file) != nil,
                 canPin: pins != nil, isPinned: pins?.isPinned(file) ?? false, isRunning: false,
                 canDelete: history.canDelete(file), canRename: history.canRename(file))
-            content.agentHistoryRowMenu {
+            content.modifier(AgentHistoryRowActions(isSelected: isSelected,
+                                                    isLifted: drag?.isLifted(AgentHistoryPinKey(file)) ?? false) {
                 AgentHistoryRowMenuContent(items: items, file: file,
                                            title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]),
                                            pins: pins, onResume: onResume, onRename: onRename, onDelete: onDelete)
-            }
+            })
         }
     }
 }
 
-/// 跑着的会话那一行悬停时右端的 ×：结束会话，在这一行里上下居中。它后面垫一条整行高、颜色同这一行的底，
-/// 把两行字的行尾都盖住（只垫按钮那一小块的话，居中之后上下各露出半截字）；悬在 × 上时按钮那一块再深一点。
-struct AgentHistoryRunEndButton: View {
+/// 列表一行的操作（同 Claude Code Desktop）：右键弹菜单；鼠标悬在这一行上时右端出「⋯」，点它弹同一份菜单。
+/// 跑着的和没在跑的会话、还没对上记录的新会话都一样。「⋯」盖在行上、不占位置：出现消失这一行的字不挪。
+/// 拖起来的那一行不出（这一行淡下去了，按钮和它后面不透明的垫底不淡，看着是一块方底）。
+struct AgentHistoryRowActions<Menu: View>: ViewModifier {
     let isSelected: Bool
-    let action: () -> Void
+    var isLifted = false
+    /// 跑着的会话那一行（画廊与测试只把这种行摆成悬停时用）。
+    var isRun = false
+    @ViewBuilder let menu: () -> Menu
+
+    @State private var hovered = false
+
+    func body(content: Content) -> some View {
+        let hovered = hovered || AgentHistoryRowActionsCatalog.hovers(isRun: isRun)
+        content
+            .overlay(alignment: .trailing) {
+                if hovered, !isLifted {
+                    AgentHistoryRowMoreButton(isSelected: isSelected, menu: menu)
+                }
+            }
+            .hoverGated { self.hovered = $0 }
+            .agentHistoryRowMenu(menu)
+    }
+}
+
+/// 界面画廊与测试用：`AgentHistoryRowActions` 建出来的行一开始就当作鼠标悬在上面（悬停拍不到）。App 里始终为 false。
+/// 单独一个类型：泛型的 `AgentHistoryRowActions` 不能有存储的静态属性。
+enum AgentHistoryRowActionsCatalog {
+    enum Hover { case none, runs, all }
+    static var hover = Hover.none
+
+    static func hovers(isRun: Bool) -> Bool {
+        switch hover {
+        case .none: false
+        case .runs: isRun
+        case .all: true
+        }
+    }
+}
+
+/// 行右端的「⋯」：点了弹这一行的菜单，在这一行里上下居中。它后面垫一条整行高、颜色同这一行的底，盖住名字的行尾；
+/// 悬在按钮上时那一块再深一点。
+struct AgentHistoryRowMoreButton<Items: View>: View {
+    let isSelected: Bool
+    @ViewBuilder let menu: () -> Items
     @State private var hovered = false
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(hovered ? UD.text : UD.text3)
-                .frame(width: 20, height: 20)
+        SwiftUI.Menu(content: menu) {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(hovered ? UD.text : UD.text2)
+                .frame(width: 22, height: 22)
                 .background(RoundedRectangle(cornerRadius: 5).fill(hovered ? UD.panelHover : Color.clear))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.udPlain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .hoverGated { hovered = $0 }
-        .help(AgentHistoryText.endSession)
-        .accessibilityLabel(Text(AgentHistoryText.endSession))
+        .help(String(localized: "更多操作"))
+        .accessibilityLabel(Text(String(localized: "更多操作")))
         .padding(.horizontal, 5)
         .frame(maxHeight: .infinity)
         .background {

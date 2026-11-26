@@ -657,12 +657,14 @@ private struct ClaudeHistoryList: View {
     }
 
     private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
-        let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
+        let listed = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
         // 跑着的会话（含已结束、留着画面的）不另起一块：有记录的在那一行上（置顶或它那一组）；还没有记录行的（刚开的
         // 新会话）在它那一组的最上面，哪一组都对不上的才在最顶上（同 Mac）。
         let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, directory: \.directory,
-                                                 tool: \.tool, groups: groups)
+                                                 tool: \.tool, groups: listed)
+        // 跑着的排在组的最前面、它那一组排在前面（同 Mac）。
+        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement)
         let focusedRunPath = code?.board.focused?.sessionPath
         // 看着的新会话放在哪一组（它那一组收着就打开）。
         let focusedID = code?.board.focusedID

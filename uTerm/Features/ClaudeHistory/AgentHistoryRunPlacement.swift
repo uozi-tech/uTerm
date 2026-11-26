@@ -4,7 +4,8 @@ import Foundation
 /// 界面只画。
 ///
 /// 不另起一块「正在运行」：列表里有它那份记录的，就在那份记录平常的位置——置顶了在「置顶」，否则在它那一组——
-/// 行上标它此刻的状态（`CodeRunStatus`）。状态变了不挪，组里照列表平常的先后排。
+/// 行上标它此刻的状态（`AgentHistoryRunIndicator`）。跑着的会话排在组的最前面、它那一组排在前面
+/// （`AgentHistoryListing.prioritizingRuns`）；状态变了不挪。
 /// 列表里没有它那份记录的（还没对上记录的新会话；对上了但还没列出来、被「显示」筛掉、还没翻到；结束了也没有记录的）：
 /// 知道它该在哪一组的（按它的目录、工具，见 `AgentHistoryListing.groupID(forRunIn:tool:in:)`）放在那一组的最上面，
 /// 对上记录之后就是组里它那一行；哪一组都对不上的（在一个列表里还没有的目录里开的）放在列表最顶上。一个都不丢，也不重复。
@@ -61,6 +62,32 @@ nonisolated struct AgentHistoryRunPlacement<Run> {
 }
 
 nonisolated extension AgentHistoryListing {
+    /// 运行中的会话始终排在前面（用户要的）：每一组里有它记录行的那几个挪到组的最前面（彼此照原来的先后），
+    /// 有跑着的会话的组（含只放着还没对上记录的新会话的）排在没有的前面，其余照原来的先后。
+    /// 「置顶」一组照旧在最上面，组里是用户自己排的顺序，不挪。组的 ID 不变，`placement` 照样能用。
+    static func prioritizingRuns<Run>(_ groups: [AgentHistoryGroup],
+                                      placement: AgentHistoryRunPlacement<Run>) -> [AgentHistoryGroup] {
+        var withRuns: [AgentHistoryGroup] = []
+        var rest: [AgentHistoryGroup] = []
+        var pinned: [AgentHistoryGroup] = []
+        for var group in groups {
+            if group.kind == .pinned {
+                pinned.append(group)
+                continue
+            }
+            let running = group.files.filter { placement.inList[$0.path] != nil }
+            if !running.isEmpty {
+                group.files = running + group.files.filter { placement.inList[$0.path] == nil }
+            }
+            if !running.isEmpty || !placement.leading(in: group).isEmpty {
+                withRuns.append(group)
+            } else {
+                rest.append(group)
+            }
+        }
+        return pinned + withRuns + rest
+    }
+
     /// 这份记录在哪一组（置顶了是「置顶」）。不在任何一组里为 nil。
     static func groupID(ofRecord path: String, in groups: [AgentHistoryGroup]) -> String? {
         groups.first { group in group.files.contains { $0.path == path } }?.id

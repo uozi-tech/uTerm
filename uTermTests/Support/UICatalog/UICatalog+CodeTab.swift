@@ -26,7 +26,7 @@ extension UICatalog {
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"], showsRun: "c-login"))
             },
             // 鼠标悬在跑着的会话那几行上（各在自己那一组里）：右端一个 ×（结束会话，上下居中），盖在行上、不挤字。
-            UICatalogEntry("终端窗口/Code 标签页_跑着的会话悬停", source: src, symbol: "AgentHistoryRunEndButton", size: size,
+            UICatalogEntry("终端窗口/Code 标签页_跑着的会话悬停", source: src, symbol: "AgentHistoryRowMoreButton", size: size,
                            live: true) { stage in
                 try await codeTabRender(stage, .init(running: ["c-login", "x-tests"],
                                                      runStates: ["c-login": "idle", "x-tests": "working"],
@@ -215,7 +215,7 @@ extension UICatalog {
             if setup.newSessionEnded { await endNewSession(code) }
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
-            AgentHistoryRunRowActions.catalogHovered = false
+            AgentHistoryRowActionsCatalog.hover = .none
             workspace.dispose()
         })
     }
@@ -243,7 +243,7 @@ extension UICatalog {
             await feed(terminals)
         }, cleanup: {
             AgentHistoryPinDragModel.catalogPreset = nil
-            AgentHistoryRunRowActions.catalogHovered = false
+            AgentHistoryRowActionsCatalog.hover = .none
             model.disposeAll()
         })
     }
@@ -258,7 +258,7 @@ extension UICatalog {
         AgentHistoryPinDragModel.catalogPreset = setup.pinDrag.flatMap { drag in
             history.files.first { $0.sessionID == drag.session }.map { (AgentHistoryPinKey($0), drag.target) }
         }
-        AgentHistoryRunRowActions.catalogHovered = setup.hoversRuns
+        AgentHistoryRowActionsCatalog.hover = setup.hoversRuns ? .runs : .none
         code.sidebarHidden = setup.sidebarHidden
         code.sidebarOverlayShown = setup.overlay
         var terminals: [(TerminalSession, String)] = []

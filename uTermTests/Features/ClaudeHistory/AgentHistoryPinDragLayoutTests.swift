@@ -107,7 +107,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         let plain = try await runRowSnapshot(hovered: false)
         let hovered = try await runRowSnapshot(hovered: true)
         let changed = changedBox(plain, hovered)
-        let box = try XCTUnwrap(changed, "悬停时出 ×")
+        let box = try XCTUnwrap(changed, "悬停时出「⋯」")
         let scale = CGFloat(plain.pixelsWide) / plain.size.width
         XCTAssertGreaterThan(box.minX, (300 - 40) * scale, "变的只在右端：行里的字没挪")
         XCTAssertLessThan(box.height, 26 * scale, "只有那个 × 的高度：下面的行没被推动")
@@ -120,7 +120,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         let selected = try await runRowSnapshot(hovered: false, selected: true)
         let hovered = try await runRowSnapshot(hovered: true)
         let rowBox = try XCTUnwrap(changedBox(plain, selected), "选中时这一行有底色")
-        let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出 ×")
+        let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出「⋯」")
         let scale = CGFloat(plain.pixelsWide) / plain.size.width
         XCTAssertGreaterThanOrEqual(rowBox.height, 29 * scale, "一行名字的行高")
         XCTAssertLessThan(rowBox.height, 34 * scale, "只有一行：时间、大小、分支不占行（同 Claude Code Desktop 的侧栏）")
@@ -134,7 +134,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         let selected = try await runRowSnapshot(hovered: false, selected: true, title: title)
         let hovered = try await runRowSnapshot(hovered: true, title: title)
         let rowBox = try XCTUnwrap(changedBox(plain, selected))
-        let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出 ×")
+        let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出「⋯」")
         let scale = CGFloat(plain.pixelsWide) / plain.size.width
         XCTAssertGreaterThan(buttonBox.minX, (300 - 40) * scale, "变的只在右端")
         XCTAssertEqual(buttonBox.midY, rowBox.midY, accuracy: 1.5 * scale, "盖住的那一块也上下居中")
@@ -146,7 +146,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
     func testListedRunRowEndButtonDoesNotShiftTheRow() async throws {
         let plain = try await runRowSnapshot(hovered: false, record: "infra-1")
         let hovered = try await runRowSnapshot(hovered: true, record: "infra-1")
-        let box = try XCTUnwrap(changedBox(plain, hovered), "悬停时出 ×")
+        let box = try XCTUnwrap(changedBox(plain, hovered), "悬停时出「⋯」")
         let scale = CGFloat(plain.pixelsWide) / plain.size.width
         XCTAssertGreaterThan(box.minX, (300 - 40) * scale, "变的只在右端：行里的字没挪")
         XCTAssertLessThan(box.height, 60 * scale, "只有那一行：上下的行没被推动")
@@ -157,7 +157,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
     func testLiftedRunRowHidesEndButton() async throws {
         let plain = try await runRowSnapshot(hovered: false, record: "infra-1", lifted: true)
         let hovered = try await runRowSnapshot(hovered: true, record: "infra-1", lifted: true)
-        XCTAssertNil(changedBox(plain, hovered), "拖起来的行悬停时不出 ×")
+        XCTAssertNil(changedBox(plain, hovered), "拖起来的行悬停时不出「⋯」")
     }
 
     /// `record`：跑着的会话对上的记录（会话 ID），在列表里它那一行上；nil = 还没对上记录的新会话，在最顶上。
@@ -165,8 +165,8 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
     private func runRowSnapshot(hovered: Bool, selected: Bool = false, title: String = AgentHistoryText.newSession,
                                 record: String? = nil, lifted: Bool = false) async throws -> NSBitmapImageRep {
         let history = await history()
-        AgentHistoryRunRowActions.catalogHovered = hovered
-        defer { AgentHistoryRunRowActions.catalogHovered = false }
+        AgentHistoryRowActionsCatalog.hover = hovered ? .runs : .none
+        defer { AgentHistoryRowActionsCatalog.hover = .none }
         let path = record.flatMap { id in history.files.first { $0.sessionID == id }?.path }
         if lifted, let file = history.files.first(where: { $0.path == path }) {
             AgentHistoryPinDragModel.catalogPreset = (AgentHistoryPinKey(file), .pin(index: 0))
@@ -236,6 +236,49 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
             let image = try XCTUnwrap(renderer.cgImage)
             XCTAssertEqual(CGFloat(image.width), width + 20, accuracy: 1, "行宽 \(width) 时卡片不缩小")
         }
+    }
+
+
+    /// 悬停时右端是「⋯」（同 Claude Code Desktop），没在跑的会话那一行也有（用户报的：以前只有跑着的会话悬停才出东西，
+    /// 而且出的是 ×）。和没悬停时比，变了的像素只在右端那一小块里、行里的字不挪。
+    func testEveryRowShowsTheMoreButtonOnHover() async throws {
+        let plain = try await plainListSnapshot(hovered: false)
+        let hovered = try await plainListSnapshot(hovered: true)
+        let box = try XCTUnwrap(changedBox(plain, hovered), "没在跑的会话悬停时也出「⋯」")
+        let scale = CGFloat(plain.pixelsWide) / plain.size.width
+        XCTAssertGreaterThan(box.minX, (300 - 40) * scale, "只在右端：行里的字没挪")
+    }
+
+    /// 只有一个没在跑的会话的列表，`hovered` 时当作鼠标悬在每一行上（`catalogHovered`）。
+    private func plainListSnapshot(hovered: Bool) async throws -> NSBitmapImageRep {
+        let source = AgentHistoryFakeSource(tool: .claude, sessions: [
+            AgentHistoryFakeSource.Session(id: "only", projectID: ClaudeProjectPath.encode("/srv/shop"),
+                                           resumeDirectory: "/srv/shop", title: "唯一的会话", modifiedAt: Date()),
+        ])
+        let history = AgentHistoryModel(source: source, preferredDirectory: nil, followsCurrentProject: false)
+        history.pins = AgentHistoryPins(host: .local, defaults: defaults)
+        await history.start()
+        for _ in 0..<200 where history.hasMore || history.isListing { try? await Task.sleep(for: .milliseconds(5)) }
+        AgentHistoryRowActionsCatalog.hover = hovered ? .all : .none
+        defer { AgentHistoryRowActionsCatalog.hover = .none }
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
+                                      key: true, placement: .transparentOnScreen)
+        let host = NSHostingView(rootView: AgentHistorySessionList(history: history)
+            .frame(width: 300, height: 600)
+            .background(UD.card))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
+        window.contentView = host
+        defer {
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+        for _ in 0..<6 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return rep
     }
 
 }

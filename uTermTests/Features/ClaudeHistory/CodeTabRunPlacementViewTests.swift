@@ -83,7 +83,8 @@ final class CodeTabRunPlacementViewTests: XCTestCase {
                       file: file, line: line)
     }
 
-    /// 跑着的会话在它那一组里（infra 组标题之后、blog 组标题之前），只出现一次；顶上没有它。
+    /// 跑着的会话在它那一组里、排在组的最前面，它那一组排在别的组前面（运行中的会话始终高优先级）；只出现一次，
+    /// 不另起一块放在最顶上。
     func testRunningSessionStaysInItsGroup() async throws {
         let history = await history()
         let labels = try await drawnLabels(history, runs: [runRow(history, "infra-1", title: "infra 的第 1 个会话")])
@@ -91,9 +92,11 @@ final class CodeTabRunPlacementViewTests: XCTestCase {
         let infraHeader = try index(labels, "infra，")
         let blogHeader = try index(labels, "blog，")
         let row = try index(labels, "infra 的第 1 个会话")
+        let other = try index(labels, "infra 的第 0 个会话")
         XCTAssertGreaterThan(row, infraHeader, "在 infra 那一组里")
-        XCTAssertLessThan(row, blogHeader, "在 infra 那一组里")
-        XCTAssertGreaterThan(row, shopHeader, "不在最顶上")
+        XCTAssertLessThan(row, other, "排在组的最前面")
+        XCTAssertLessThan(infraHeader, shopHeader, "有跑着的会话的组排在前面")
+        XCTAssertLessThan(shopHeader, blogHeader, "其余的组照原来的先后")
         XCTAssertEqual(labels.filter { $0.contains("infra 的第 1 个会话") }.count, 1, "只出现一次")
         XCTAssertFalse(labels[row].contains(ProgramStatusRecord(state: .idle, app: "claude-code").statusLabel),
                        "空闲不标（同 Claude Code Desktop，只在等人处理时提醒）：\(labels[row])")
