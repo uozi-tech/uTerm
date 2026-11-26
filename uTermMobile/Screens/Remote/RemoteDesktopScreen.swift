@@ -54,6 +54,8 @@ struct RemoteDesktopScreen: View {
     /// 窗口模式下看着的时候请 Mac 把那个窗口保持在最前。
     @AppStorage(DefaultsKey.remoteDesktopWindowKeepFront) private var keepsWindowFront = false
     @AppStorage(DefaultsKey.remoteDesktopWindowIndependentInput) private var independentWindowInput = true
+    /// 手机键盘的触控板（长按空格键滑动）移动文字光标还是鼠标指针。
+    @AppStorage(DefaultsKey.remoteDesktopKeyboardTrackpad) private var keyboardTrackpadValue = RemoteKeyboardTrackpadMode.defaultValue.rawValue
     @State private var pickedPhoto: PhotosPickerItem?
     /// 粘贴的进度（读取 / 压缩 / 发送，带进度条）与结果（「已粘贴到 Mac」/「已复制到手机」/ 失败原因）；
     /// 结果几秒后自己消失。
@@ -126,6 +128,7 @@ struct RemoteDesktopScreen: View {
                                             onSystemPaste: { Task { await pasteClipboard() } }, fitToken: fitToken,
                                             displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) },
                                             contentFraction: session.contentFraction, touchMode: touchMode,
+                                            keyboardTrackpad: RemoteKeyboardTrackpadMode(stored: keyboardTrackpadValue),
                                             streamPixels: session.info.map { CGSize(width: $0.streamWidth, height: $0.streamHeight) })
                         overlay(session)
                         lockOverlay(session)
@@ -496,7 +499,12 @@ struct RemoteDesktopScreen: View {
     /// 那台 Mac 的 uTerm 能不能只看一个窗口（老版本不能）。
     private var canPickWindow: Bool { session?.supportsWindows == true }
 
-    private var hasMoreActions: Bool { !displays.isEmpty || canPickWindow || canCurtain || canManagePassword }
+    /// 触摸屏模式下没有指针，键盘触控板只能移动文字光标，不给选。
+    private var canPickKeyboardTrackpad: Bool { session?.canControl == true && !touchMode }
+
+    private var hasMoreActions: Bool {
+        !displays.isEmpty || canPickWindow || canPickKeyboardTrackpad || canCurtain || canManagePassword
+    }
 
     /// 「更多」菜单。**要矮**：横握时屏幕只有六百多点高，以前十行（两块显示器各占两行、操作方式两行、密码两行）
     /// 比屏幕还高，系统把菜单顶出屏幕外，上下都点不全（2026-11-18 Duo 录屏）。所以成组的选项收进子菜单，
@@ -531,6 +539,19 @@ struct RemoteDesktopScreen: View {
                 Toggle(isOn: $windowTouchMode) {
                     Label("触摸屏模式", systemImage: "hand.tap")
                 }
+            }
+            if canPickKeyboardTrackpad {
+                // 两选一收进子菜单，菜单只多一行（见上面「要矮」）。
+                Picker(selection: $keyboardTrackpadValue) {
+                    Label("移动文字光标", systemImage: "character.cursor.ibeam")
+                        .tag(RemoteKeyboardTrackpadMode.caret.rawValue)
+                    Label("移动鼠标指针", systemImage: "cursorarrow")
+                        .tag(RemoteKeyboardTrackpadMode.pointer.rawValue)
+                } label: {
+                    // 子菜单的副标题由系统显示当前选中的那一项。
+                    Label("键盘触控板", systemImage: "keyboard")
+                }
+                .pickerStyle(.menu)
             }
         }
         Section {

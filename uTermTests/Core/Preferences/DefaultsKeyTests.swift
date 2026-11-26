@@ -83,6 +83,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteDesktopWindowTouchMode, "remote.desktop.windowTouchMode"),
         (DefaultsKey.remoteDesktopWindowKeepFront, "remote.desktop.windowKeepFront"),
         (DefaultsKey.remoteDesktopWindowIndependentInput, "remote.desktop.windowIndependentInput"),
+        (DefaultsKey.remoteDesktopKeyboardTrackpad, "remote.desktop.keyboardTrackpad"),
         (DefaultsKey.remoteRelayManagedHosts, "remote.relay.managedHosts"),
         (DefaultsKey.remoteRelayLatestVersion, "remote.relay.latestVersion"),
         (DefaultsKey.remoteRelayPendingRevocations, "remote.relay.pendingRevocations"),

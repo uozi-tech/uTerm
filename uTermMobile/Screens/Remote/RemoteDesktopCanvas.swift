@@ -35,6 +35,8 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
     var contentFraction = CGSize(width: 1, height: 1)
     /// 触摸屏模式：点哪里就是哪里、不画指针（见 `RemoteTrackpadGesture.Mode.touch`）。
     var touchMode = false
+    /// 键盘触控板（长按空格键滑动）移动什么。触摸屏模式下没有指针，一律移动文字光标。
+    var keyboardTrackpad: RemoteKeyboardTrackpadMode = .defaultValue
     /// 视频帧的像素尺寸（开流后才有）。画面接近一比一时按它排（`RemoteDesktopViewport.nativeSize`）。
     var streamPixels: CGSize?
 
@@ -56,6 +58,7 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
         view.updateContentFraction(contentFraction)
         view.updateStreamPixels(streamPixels)
         view.setTouchMode(touchMode)
+        view.setKeyboardTrackpad(touchMode ? .caret : keyboardTrackpad)
     }
 
     static func dismantleUIView(_ view: RemoteDesktopCanvasView, coordinator: ()) {
@@ -171,6 +174,7 @@ final class RemoteDesktopCanvasView: UIView {
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
         keyInput.onPaste = { [weak self] in self?.onSystemPaste?() }
+        keyInput.movePointer = { [weak self] delta, speed in self?.moveWithKeyboardTrackpad(by: delta, speed: speed) }
         session.attachCanvas(displayLayer, regionSpace: regionSpace, upscaler: upscaler) { [weak self] cursor in
             self?.macCursor(cursor)
         }
@@ -294,6 +298,17 @@ final class RemoteDesktopCanvasView: UIView {
     }
 
     private var touchMode: Bool { gesture.mode == .touch }
+
+    func setKeyboardTrackpad(_ mode: RemoteKeyboardTrackpadMode) {
+        keyInput.trackpadMode = mode
+    }
+
+    /// 键盘触控板移动指针：和单指滑动同一条路（本地先动光标，之后按帧发给 Mac）。
+    private func moveWithKeyboardTrackpad(by delta: CGSize, speed: CGFloat) {
+        noteLocalInput()
+        stopMomentum()
+        moveOrPan(by: delta, speed: speed)
+    }
 
     // MARK: - 放大后要区域
 

@@ -84,6 +84,10 @@ final class RemoteKeyInputView: UIView, UITextInput {
     }
     /// 只给测试用：模拟器里切不了真实键盘。
     var languageOverride: String?
+    /// 键盘触控板（长按空格键滑动）移动什么。没接 `movePointer` 时一律移动文字光标。
+    var trackpadMode: RemoteKeyboardTrackpadMode = .defaultValue
+    /// 键盘触控板在「移动鼠标指针」时交出的位移与速度（点 / 秒）。
+    var movePointer: ((CGSize, CGFloat) -> Void)?
 
     private var composition: String?
     /// 组字里的选区（组字内的偏移）。
@@ -96,6 +100,10 @@ final class RemoteKeyInputView: UIView, UITextInput {
     private var observesInputMode = false
     /// 按下时留给系统的外接键盘按键，抬起也要交给系统，否则系统那边这个键一直按着。
     private var keysLeftToSystem: Set<Int> = []
+    /// 正按着的键盘触控板，以及它这一次走的是哪种。组字时按下的不归我们管（交给输入法移动组字里的光标）。
+    private var floating: (trackpad: RemoteKeyboardTrackpad, mode: RemoteKeyboardTrackpadMode)?
+    /// 这一次触控板已经按过方向键：松手时才取走键盘条上膛的修饰键。
+    private var floatingSentArrows = false
     private let compositionLabel = UILabel()
 
     override init(frame: CGRect) {
@@ -415,6 +423,42 @@ final class RemoteKeyInputView: UIView, UITextInput {
     func closestPosition(to point: CGPoint) -> UITextPosition? { endOfDocument }
     func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { range.end }
     func characterRange(at point: CGPoint) -> UITextRange? { nil }
+
+    // MARK: - 键盘触控板（长按空格键滑动）
+
+    /// 长按空格键时系统把手指的位置报给这三个方法。我们这边的文档是空的（字都在 Mac 上），
+    /// 不接它们的话键盘照样变灰进入触控板，但手指怎么滑都没有反应。换算见 `RemoteKeyboardTrackpad`。
+    func beginFloatingCursor(at point: CGPoint) {
+        floatingSentArrows = false
+        guard composition == nil else {
+            floating = nil
+            return
+        }
+        let mode = movePointer == nil ? .caret : trackpadMode
+        floating = (RemoteKeyboardTrackpad(at: point, time: CACurrentMediaTime()), mode)
+    }
+
+    func updateFloatingCursor(at point: CGPoint) {
+        guard var current = floating else { return }
+        switch current.mode {
+        case .caret:
+            let codes = current.trackpad.arrows(to: point)
+            // 键盘条上膛的修饰键作用于整次拖动：⇧ 是边拖边选，⌥ 是按词走，⌘ 是到行首行尾。松手时才熄灭。
+            let modifiers = keys?.modifiers ?? []
+            for code in codes { tap(code, modifiers: modifiers) }
+            if !codes.isEmpty { floatingSentArrows = true }
+        case .pointer:
+            let move = current.trackpad.pointerMove(to: point, time: CACurrentMediaTime())
+            if move.delta != .zero { movePointer?(move.delta, move.speed) }
+        }
+        floating = current
+    }
+
+    func endFloatingCursor() {
+        if floatingSentArrows { _ = keys?.consume() }
+        floating = nil
+        floatingSentArrows = false
+    }
 
     // MARK: - 外接键盘
 

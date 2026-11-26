@@ -135,6 +135,9 @@ nonisolated enum DefaultsKey {
     /// 窗口模式下鼠标键盘直接投给那个窗口所在的进程，不动 Mac 上的指针、不占 Mac 的键鼠。默认开；个别 App
     /// 不吃这样投来的事件时关掉。只存本机。
     static let remoteDesktopWindowIndependentInput = "remote.desktop.windowIndependentInput"
+    /// iOS：远程桌面里手机键盘的触控板（长按空格键滑动）移动什么（`RemoteKeyboardTrackpadMode` 的 rawValue，
+    /// 默认移动文字光标）。只存本机。
+    static let remoteDesktopKeyboardTrackpad = "remote.desktop.keyboardTrackpad"
     /// macOS：中继 relayID → 装着它的已保存主机（ServerProfile.id），本机自己管，不同步。
     static let remoteRelayManagedHosts = "remote.relay.managedHosts"
     /// macOS：最近一次从 OSS 取到的中继最新版本与取的时间。
