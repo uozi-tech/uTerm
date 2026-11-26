@@ -103,6 +103,7 @@ final class AntigravityHistoryLocalLiveTests: XCTestCase {
                 case .oversized: key = "oversized"
                 case .image: key = "image"
                 case .command, .commandOutput: key = "command"
+                case .usage: key = "usage"
                 }
                 counts[key, default: 0] += 1
             }

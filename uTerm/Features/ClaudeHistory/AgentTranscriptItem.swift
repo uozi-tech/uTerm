@@ -24,6 +24,8 @@ nonisolated struct AgentTranscriptItem: Identifiable, Equatable, Sendable {
         case compactSummary(AgentClippedText)
         /// 这一行太大，没有读进来。
         case oversized(bytes: Int)
+        /// 一次回答用了多少（不显示成一行，标题块取最后一条，`AgentTranscriptModel.latestUsage`）。
+        case usage(AgentTurnUsage)
     }
 
     nonisolated enum Role: Equatable, Sendable {
@@ -45,14 +47,14 @@ nonisolated struct AgentTranscriptItem: Identifiable, Equatable, Sendable {
         switch kind {
         case .userText, .command, .commandOutput, .image, .toolResult: return .user
         case .assistantText, .thinking, .toolCall: return .assistant
-        case .notice, .compactSummary, .oversized: return .system
+        case .notice, .compactSummary, .oversized, .usage: return .system
         }
     }
 
     /// 有没有能拷贝的文字（图片占位、太大没读的那几条没有）。不拼字，重画时用。
     var hasPlainText: Bool {
         switch kind {
-        case .image, .oversized: return false
+        case .image, .oversized, .usage: return false
         default: return true
         }
     }
@@ -70,10 +72,53 @@ nonisolated struct AgentTranscriptItem: Identifiable, Equatable, Sendable {
             return head + "\n" + result.content.text
         case .toolResult(let result):
             return result.content.text
-        case .image, .oversized:
+        case .image, .oversized, .usage:
             return ""
         }
     }
+}
+
+nonisolated extension AgentTranscriptItem {
+    /// 会画成一行（用量只是记账，不画）。分页凑够一页、「有新消息」都只数这些。
+    var isDisplayed: Bool {
+        if case .usage = kind { return false }
+        return true
+    }
+}
+
+/// 一次回答的用量。各家记录里写的不一样，解析器各自换算成这几样（`ClaudeTranscriptParser` 等）。
+nonisolated struct AgentTurnUsage: Equatable, Sendable {
+    var model: String?
+    /// 这一次模型看到的上下文：输入加缓存（读与写）。每次回答都把整段上下文重新算一遍，所以不能把各次加起来。
+    var contextTokens: Int
+    var outputTokens: Int
+    /// 上下文窗口多大。记录里写了的才有（Codex）；只有模型名的不猜（同一个模型有不同窗口）。
+    var contextWindow: Int?
+    /// 账号的额度（Codex 每次都随用量记一份）。
+    var rateLimits: AgentRateLimits?
+
+    /// 上下文占了窗口的几成；不知道窗口为 nil。
+    var contextFraction: Double? {
+        guard let contextWindow, contextWindow > 0 else { return nil }
+        return min(1, Double(contextTokens) / Double(contextWindow))
+    }
+}
+
+/// 账号额度：一个或两个时间窗（Codex 的 primary / secondary），各自用了几成、什么时候重置。
+nonisolated struct AgentRateLimits: Equatable, Sendable {
+    nonisolated struct Window: Equatable, Sendable {
+        /// 0–100。
+        var usedPercent: Double
+        var windowMinutes: Int?
+        var resetsAt: Date?
+    }
+
+    var primary: Window?
+    var secondary: Window?
+    /// 套餐名（记录里的原样，如 `prolite`）。
+    var plan: String?
+
+    var windows: [Window] { [primary, secondary].compactMap { $0 } }
 }
 
 /// 截断过的长文字：只留前面一段，记下原来多长。

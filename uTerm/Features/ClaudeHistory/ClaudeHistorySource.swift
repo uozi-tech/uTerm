@@ -453,7 +453,7 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
                 let items = self.items(from: line)
                 if !items.isEmpty {
                     newestFirst.append(items)
-                    count += items.count
+                    count += items.filter(\.isDisplayed).count
                 }
             }
             if scanner.nextRange(chunkSize: chunkBytes) == nil, let first = scanner.finish() {
@@ -497,7 +497,7 @@ actor ClaudeTranscriptPager: AgentTranscriptPaging {
         }
         var items: [AgentTranscriptItem] = []
         var bytesRead = 0
-        while forward.position < size, items.count < pageItems, bytesRead < pageBytes {
+        while forward.position < size, items.filter(\.isDisplayed).count < pageItems, bytesRead < pageBytes {
             let length = Int(min(UInt64(chunkBytes), size - forward.position))
             let chunk = try await provider.readRange(path, offset: forward.position, length: length)
             guard epoch == self.epoch else { return .unchanged }

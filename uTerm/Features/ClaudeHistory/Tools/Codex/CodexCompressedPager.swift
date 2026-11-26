@@ -72,7 +72,7 @@ actor CodexCompressedPager: AgentTranscriptPaging {
                 let items = parseLine(line)
                 if !items.isEmpty {
                     newestFirst.append(items)
-                    count += items.count
+                    count += items.filter(\.isDisplayed).count
                 }
             }
             if scanner.nextRange(chunkSize: chunkBytes) == nil, let first = scanner.finish() {
@@ -90,7 +90,7 @@ actor CodexCompressedPager: AgentTranscriptPaging {
         let size = UInt64(data.count)
         var items: [AgentTranscriptItem] = []
         var bytesRead = 0
-        while forward.position < size, items.count < pageItems, bytesRead < pageBytes {
+        while forward.position < size, items.filter(\.isDisplayed).count < pageItems, bytesRead < pageBytes {
             let start = Int(forward.position)
             let end = min(data.count, start + chunkBytes)
             let chunk = data.subdata(in: start..<end)

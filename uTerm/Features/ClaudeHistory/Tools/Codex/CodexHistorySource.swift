@@ -399,7 +399,8 @@ for key in children.keys { children[key]?.sort(by: AgentSubagentFile.newestFirst
             lastDirectory: scan.lastDirectory ?? header?.cwd,
             resumeDirectory: header?.cwd ?? file.project.directory,
             gitBranch: scan.gitBranch,
-            lastActivity: scan.lastTimestamp ?? (record.isCompressed ? file.modifiedAt : nil))
+            lastActivity: scan.lastTimestamp ?? (record.isCompressed ? file.modifiedAt : nil),
+            rateLimits: scan.rateLimits, rateLimitsAt: scan.rateLimitsAt)
         cache[file.cacheKey] = metadata
         return metadata
     }

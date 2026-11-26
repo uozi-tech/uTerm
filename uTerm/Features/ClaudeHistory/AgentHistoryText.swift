@@ -551,6 +551,81 @@ enum AgentHistoryText {
         return String(localized: "你")
     }
 
+    // MARK: 用量
+
+    /// token 数的简写（232K、23.2万，跟着界面语言）。
+    static func tokenCount(_ count: Int) -> String {
+        count.formatted(.number.notation(.compactName).precision(.significantDigits(1...3)))
+    }
+
+    /// 标题旁的用量标记：知道窗口多大写占了几成，不知道写 token 数。
+    static func usageBadge(_ usage: AgentTurnUsage) -> String {
+        if let fraction = usage.contextFraction {
+            return String(localized: "上下文 \(String(Int((fraction * 100).rounded())))%",
+                          comment: "对话标题旁：最后一次回答时上下文占了窗口的百分之几")
+        }
+        return String(localized: "上下文 \(tokenCount(usage.contextTokens))",
+                      comment: "对话标题旁：最后一次回答时上下文有多少 token（如 232K）")
+    }
+
+    static var usageTitle: String {
+        String(localized: "用量", comment: "对话标题旁用量明细的标题")
+    }
+
+    static var usageModel: String { String(localized: "模型", comment: "用量明细：哪个模型") }
+    static var usageContext: String { String(localized: "上下文", comment: "用量明细：这一次模型看到的上下文") }
+    static var usageOutput: String { String(localized: "最后一次输出", comment: "用量明细：最后一次回答输出了多少 token") }
+
+    /// 「232K / 828K（28%）」或只有「232K」。
+    static func usageContextValue(_ usage: AgentTurnUsage) -> String {
+        guard let window = usage.contextWindow, let fraction = usage.contextFraction else {
+            return tokenCount(usage.contextTokens)
+        }
+        return String(localized: "\(tokenCount(usage.contextTokens)) / \(tokenCount(window))（\(String(Int((fraction * 100).rounded())))%）",
+                      comment: "用量明细：上下文 / 窗口（百分比）")
+    }
+
+    /// 没写窗口多大的工具：说一句为什么没有百分比。
+    static var usageNoWindow: String {
+        String(localized: "记录里没有上下文窗口的大小，只显示 token 数。", comment: "用量明细：Claude Code、Antigravity 的记录不写窗口大小")
+    }
+
+    /// 侧栏底部额度的标题：「Codex 账号额度」。
+    static func accountLimitsTitle(_ tool: AgentHistoryTool) -> String {
+        String(localized: "\(tool.displayName) 账号额度", comment: "侧栏底部：某种编码工具的订阅额度")
+    }
+
+    static var usageRateLimits: String { String(localized: "账号额度", comment: "用量明细：订阅的用量额度（Codex 记录里有）") }
+
+    /// 额度的时间窗：每周、5 小时……
+    static func rateLimitWindow(minutes: Int?) -> String {
+        guard let minutes, minutes > 0 else { return String(localized: "额度", comment: "用量明细：不知道时间窗多长的额度") }
+        if minutes == 7 * 24 * 60 { return String(localized: "每周", comment: "用量明细：按周算的额度") }
+        if minutes % (24 * 60) == 0 { return String(localized: "\(String(minutes / (24 * 60))) 天", comment: "用量明细：按几天算的额度") }
+        if minutes % 60 == 0 { return String(localized: "\(String(minutes / 60)) 小时", comment: "用量明细：按几小时算的额度") }
+        return String(localized: "\(String(minutes)) 分钟", comment: "用量明细：按几分钟算的额度")
+    }
+
+    /// 「已用 22%」。
+    static func rateLimitUsed(_ percent: Double) -> String {
+        String(localized: "已用 \(String(Int(percent.rounded())))%", comment: "用量明细：额度用了百分之几")
+    }
+
+    /// 「11月21日 13:00 重置」。
+    static func rateLimitResets(_ date: Date) -> String {
+        String(localized: "\(date.formatted(.dateTime.month().day().hour().minute())) 重置", comment: "用量明细：额度几时重置")
+    }
+
+    static func rateLimitPlan(_ plan: String) -> String {
+        String(localized: "套餐：\(plan)", comment: "用量明细：订阅套餐（记录里的原名，不翻译）")
+    }
+
+    /// 「截至 13:05」：用量是最后一次回答时的。
+    static func usageAsOf(_ date: Date) -> String {
+        String(localized: "截至 \(date.formatted(.dateTime.month().day().hour().minute()))",
+               comment: "用量明细：这是哪一次回答时的数")
+    }
+
     /// 子代理的记录里，派它的那一方交给它的话（不是你说的）。
     static var subagentTask: String {
         String(localized: "任务", comment: "子代理记录里，派它的那一方交给它的话")

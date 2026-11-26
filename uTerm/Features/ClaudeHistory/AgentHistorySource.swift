@@ -80,6 +80,9 @@ nonisolated struct AgentHistorySessionMetadata: Equatable, Sendable {
     /// 这段对话后来接着在哪一份记录里往下聊（那一份的会话 ID）。Claude Code 上下文满了接着来时不往原来的文件里续写，
     /// 另起一份新记录，在旧的末尾记一行 `continued-in`。没有为 nil。
     var continuedIn: String? = nil
+    /// 记录里最后一次记下的账号额度与它的时间（Codex 每次回答都带一份）。侧栏底部取所有会话里最新的一份。
+    var rateLimits: AgentRateLimits? = nil
+    var rateLimitsAt: Date? = nil
 }
 
 /// 「接着往下聊」串起来的几份记录（Claude Code 上下文满了另起一份新记录，标题照抄）：列表里只出最新那一份，

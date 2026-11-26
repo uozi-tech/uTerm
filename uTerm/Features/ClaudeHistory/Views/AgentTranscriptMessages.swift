@@ -33,7 +33,7 @@ struct AgentTranscriptMessages: View {
                             .id(row.id)
                     }
                     AgentTranscriptLoadLater(transcript: transcript)
-                    if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
+                    if layout.rows.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
                         Text("这个会话里没有可显示的消息。")
                             .font(style.font(11))
                             .foregroundStyle(UD.text3)
@@ -285,6 +285,8 @@ private struct AgentTranscriptRow: View {
             Label(AgentHistoryText.oversized(bytes), systemImage: "exclamationmark.circle")
                 .font(style.font(11.5))
                 .foregroundStyle(UD.text3)
+        case .usage:
+            EmptyView()
         }
     }
 }

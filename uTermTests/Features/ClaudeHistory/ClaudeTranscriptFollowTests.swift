@@ -301,6 +301,31 @@ final class ClaudeTranscriptFollowTests: XCTestCase {
 
     // MARK: - 状态
 
+    /// 标题块的用量取最后一次回答的；末尾只来了用量（不画成一行）时不亮「有新消息」。
+    func testLatestUsageFollowsTailWithoutNewMessagesHint() async throws {
+        func answer(_ text: String, context: Int, uuid: String) -> String {
+            ClaudeFixture.assistant(ClaudeFixture.textBlock(text), uuid: uuid).replacingOccurrences(
+                of: #""content":["#, with: #""usage":{"input_tokens":\#(context),"output_tokens":5},"content":["#)
+        }
+        let (sftp, _, transcript) = try await open([ClaudeFixture.userText("问"), answer("答", context: 1000, uuid: "a-1")])
+        await transcript.followOnce()
+        XCTAssertEqual(transcript.latestUsage?.usage.contextTokens, 1000)
+
+        transcript.setFollowsTail(false)
+        // 只有用量的一行（回答只有一个空的思考块）：用量更新了，但没有新的一行可看。
+        let thinkingOnly = ClaudeFixture.assistant(ClaudeFixture.thinkingBlock(""), uuid: "a-2").replacingOccurrences(
+            of: #""content":["#, with: #""usage":{"input_tokens":2000,"output_tokens":5},"content":["#)
+        try await append(sftp, line(thinkingOnly))
+        await transcript.followOnce()
+        XCTAssertEqual(transcript.latestUsage?.usage.contextTokens, 2000)
+        XCTAssertFalse(transcript.hasNewBelow)
+
+        try await append(sftp, line(answer("再答", context: 3000, uuid: "a-3")))
+        await transcript.followOnce()
+        XCTAssertEqual(transcript.latestUsage?.usage.contextTokens, 3000)
+        XCTAssertTrue(transcript.hasNewBelow)
+    }
+
     /// 「正在更新」：最近 60 秒里读到过新内容；「有新消息」：往上翻着时末尾来了新条目，回到底部就消掉。
     func testUpdatingMarkAndNewMessagesHint() async throws {
         let clock = FollowClock()

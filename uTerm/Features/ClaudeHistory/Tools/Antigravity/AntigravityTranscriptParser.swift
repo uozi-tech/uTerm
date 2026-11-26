@@ -67,6 +67,8 @@ nonisolated enum AntigravityTranscriptParser {
                     toolUseID: step.map { resultID(step: $0 + 1 + index) }, name: name,
                     summary: AntigravityToolSummary.summary(name: name, args: args), result: nil)))
             }
+            // 放在最后：前面几条的 ID（行内序号）不受影响。
+            if let usage = usage(of: object) { kinds.append(.usage(usage)) }
         case "GENERIC":
             let status = object["status"] as? String
             let error = object["error"] as? String
@@ -92,6 +94,14 @@ nonisolated enum AntigravityTranscriptParser {
         return kinds.enumerated().map { index, kind in
             AgentTranscriptItem(id: "\(idPrefix).\(index)", kind: kind, timestamp: timestamp)
         }
+    }
+
+    /// 模型这一步的用量：`input_tokens` + `cache_read_tokens` 是它看到的上下文（没有缓存写入这一项）。记录里没有窗口多大。
+    static func usage(of object: [String: Any]) -> AgentTurnUsage? {
+        func count(_ key: String) -> Int { (object[key] as? NSNumber)?.intValue ?? 0 }
+        let context = count("input_tokens") + count("cache_read_tokens")
+        guard context > 0 else { return nil }
+        return AgentTurnUsage(model: object["model"] as? String, contextTokens: context, outputTokens: count("output_tokens"))
     }
 
     /// 调用和它的结果共用的 ID：结果那一步的步号。

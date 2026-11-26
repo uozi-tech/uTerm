@@ -17,6 +17,9 @@ nonisolated struct CodexSessionScan: Equatable, Sendable {
     var gitBranch: String?
     var lastDirectory: String?
     var lastTimestamp: Date?
+    /// 最后一次记下的账号额度（`token_count` 每次都带一份）与它的时间。侧栏底部取所有会话里最新的一份。
+    var rateLimits: AgentRateLimits?
+    var rateLimitsAt: Date?
 
     /// 第一行最多多大（实测最大 49 KB）。
     static let firstLineLimit = 256 * 1024
@@ -80,6 +83,10 @@ nonisolated struct CodexSessionScan: Equatable, Sendable {
             tailScan.absorb(ClaudeReverseLineScanner.Line(offset: 1, length: line.count, bytes: line, isTruncated: false))
         }
         scan.lastUserText = tailScan.lastUserText
+        if tailScan.rateLimits != nil {
+            scan.rateLimits = tailScan.rateLimits
+            scan.rateLimitsAt = tailScan.rateLimitsAt
+        }
         scan.hasConversation = scan.hasConversation || tailScan.hasConversation
         scan.lastTimestamp = tailTracker.timestamp
         scan.lastDirectory = tailTracker.directory
@@ -100,6 +107,11 @@ nonisolated struct CodexSessionScan: Equatable, Sendable {
                 hasConversation = true
             case .assistantText, .toolCall:
                 hasConversation = true
+            case .usage(let usage):
+                if let limits = usage.rateLimits {
+                    rateLimits = limits
+                    rateLimitsAt = item.timestamp
+                }
             default:
                 break
             }

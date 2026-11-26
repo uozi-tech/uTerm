@@ -90,7 +90,7 @@ nonisolated struct AgentTranscriptLayout: Sendable {
             pending.removeAll(keepingCapacity: true)
         }
 
-        for item in items {
+        for item in items where item.isDisplayed {
             switch item.kind {
             case .toolCall(let call) where isGroupable(call):
                 pending.append(item)

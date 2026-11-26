@@ -74,10 +74,24 @@ nonisolated enum ClaudeTranscriptParser {
                     if let kind = assistantBlock(block) { kinds.append(kind) }
                 }
             }
+            // 放在最后：前面几条的 ID（行内序号）不受影响。一次回答拆成好几行时每行都带同一份，取最后一条即可。
+            if let usage = usage(of: message) { kinds.append(.usage(usage)) }
         }
         return kinds.enumerated().map { index, kind in
             AgentTranscriptItem(id: "\(idPrefix).\(index)", kind: kind, timestamp: timestamp)
         }
+    }
+
+    /// 一次回答的用量：`message.usage` 的输入 + 缓存写入 + 缓存读取是这一次模型看到的上下文。记录里没有窗口多大
+    ///（同一个模型有 200k 与 1M 两种），不填。出错时 Claude Code 自己补的回答（`model` 为 `<synthetic>`）不算。
+    static func usage(of message: [String: Any]?) -> AgentTurnUsage? {
+        guard let message, let usage = message["usage"] as? [String: Any] else { return nil }
+        let model = message["model"] as? String
+        guard model != "<synthetic>" else { return nil }
+        func count(_ key: String) -> Int { (usage[key] as? NSNumber)?.intValue ?? 0 }
+        let context = count("input_tokens") + count("cache_creation_input_tokens") + count("cache_read_input_tokens")
+        guard context > 0 else { return nil }
+        return AgentTurnUsage(model: model, contextTokens: context, outputTokens: count("output_tokens"))
     }
 
     /// 派子代理那次调用的结果：行顶层的 `toolUseResult.agentId` 是子代理的 ID。一行只有一个工具结果时才认

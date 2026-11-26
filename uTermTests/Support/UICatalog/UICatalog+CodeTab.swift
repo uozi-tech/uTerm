@@ -440,6 +440,10 @@ enum UICatalogCodeMode {
                                 timestamp: date.addingTimeInterval(-120)),
             AgentTranscriptItem(id: "c-login.a3", kind: .assistantText("改好了，`TestLoginTimeout` 现在能过。订单列表慢是因为 `orders.created_at` 没有索引。"),
                                 timestamp: date),
+            // 最后一次回答的用量：标题旁「上下文 …」（Claude Code 的记录不写窗口多大，只有 token 数）。
+            AgentTranscriptItem(id: "c-login.a3u", kind: .usage(AgentTurnUsage(model: "claude-opus-5-5", contextTokens: 232_006,
+                                                                               outputTokens: 1_208)),
+                                timestamp: date),
         ]
     }
 }

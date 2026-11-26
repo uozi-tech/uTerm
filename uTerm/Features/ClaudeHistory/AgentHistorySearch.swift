@@ -116,7 +116,7 @@ nonisolated enum AgentHistorySearchMatcher {
             return text
         case .toolCall(let call):
             return call.summary.isEmpty ? call.name : call.name + " " + call.summary
-        case .commandOutput, .notice, .thinking, .toolResult, .image, .compactSummary, .oversized:
+        case .commandOutput, .notice, .thinking, .toolResult, .image, .compactSummary, .oversized, .usage:
             return nil
         }
     }

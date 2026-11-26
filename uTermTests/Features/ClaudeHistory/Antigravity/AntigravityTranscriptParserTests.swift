@@ -38,8 +38,10 @@ final class AntigravityTranscriptParserTests: XCTestCase {
         let line = F.planner(5, thinking: "想一想", content: "这是回答",
                              calls: [F.command("make test"), F.readFile("/home/user/projects/demo/b.swift")])
         let items = AntigravityTranscriptParser.items(fromJSON: Data(line.utf8), idPrefix: "9")
-        XCTAssertEqual(items.map(\.id), ["9.0", "9.1", "9.2", "9.3"])
-        guard items.count == 4 else { return XCTFail() }
+        // 最后一条是这一步的用量（不画），放在最后，前面几条的 ID 不变。
+        XCTAssertEqual(items.map(\.id), ["9.0", "9.1", "9.2", "9.3", "9.4"])
+        guard items.count == 5 else { return XCTFail() }
+        XCTAssertEqual(items[4].kind, .usage(AgentTurnUsage(model: "test-model", contextTokens: 10, outputTokens: 5)))
         XCTAssertEqual(items[0].kind, .thinking(AgentClippedText("想一想", limit: 100)))
         XCTAssertEqual(items[1].kind, .assistantText("这是回答"))
         // 第 5 步的第 0、1 个调用，结果在第 6、7 步。
@@ -67,7 +69,7 @@ final class AntigravityTranscriptParserTests: XCTestCase {
             "Showing lines 1-2 of 2\n1: alpha\n2: beta", "Command exited with code 0.\n\nCommand output:\nfile.txt",
         ])
         XCTAssertFalse(assembled.contains { if case .toolResult = $0.kind { return true } else { return false } })
-        XCTAssertEqual(assembled.last?.kind, .assistantText("做完了"))
+        XCTAssertEqual(assembled.last(where: \.isDisplayed)?.kind, .assistantText("做完了"))
     }
 
     func testFailedAndInvalidResultsAreErrors() {

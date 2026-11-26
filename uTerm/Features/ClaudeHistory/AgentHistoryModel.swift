@@ -1053,6 +1053,14 @@ final class AgentTranscriptModel {
     /// 已经加载的部分里最早的一条（往前加一页后滚回它）。
     var firstItemID: String? { items.first?.id }
 
+    /// 已经读到的最后一次用量（标题块显示上下文、Codex 的额度）。从命中处打开、还没读到末尾时是读到那里为止的。
+    var latestUsage: (usage: AgentTurnUsage, at: Date?)? {
+        for item in items.reversed() {
+            if case .usage(let usage) = item.kind { return (usage, item.timestamp) }
+        }
+        return nil
+    }
+
     func loadEarlier() async {
         guard !isLoading, !reachedStart else { return }
         isLoading = true
@@ -1202,7 +1210,8 @@ final class AgentTranscriptModel {
         noteActivity(fresh, arrivedNow: true)
         items = AgentTranscriptAssembler.attachResults(items + fresh)
         appendGeneration += 1
-        if !followsTail { hasNewBelow = true }
+        // 只来了用量（不画成一行）不算新消息。
+        if !followsTail, fresh.contains(where: \.isDisplayed) { hasNewBelow = true }
         let spawnsChanged = fresh.contains { item in
             switch item.kind {
             case .toolCall(let call): return call.spawn != nil

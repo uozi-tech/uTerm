@@ -25,9 +25,16 @@ nonisolated enum CodexTranscriptParser {
     static func isMessageCandidate(head: Data) -> Bool {
         let head = head.prefix(headBytes)
         if ClaudeJSONLScan.contains("\"type\":\"compacted\"", in: head) { return true }
+        if isTokenCount(head: head) { return true }
         guard ClaudeJSONLScan.contains("\"type\":\"response_item\"", in: head) else { return false }
         return !ClaudeJSONLScan.contains("\"role\":\"developer\"", in: head)
             && !Self.skippedPayloadTypes.contains { ClaudeJSONLScan.contains("\"payload\":{\"type\":\"\($0)\"", in: head) }
+    }
+
+    /// 用量（`event_msg` 里的 `token_count`）：不显示成一行，标题块取最后一条。
+    static func isTokenCount(head: Data) -> Bool {
+        ClaudeJSONLScan.contains("\"type\":\"event_msg\"", in: head)
+            && ClaudeJSONLScan.contains("\"payload\":{\"type\":\"token_count\"", in: head)
     }
 
     /// 不显示的 `payload.type`（`payload` 的第一个键就是 `type`）：加密的压缩记录、工具清单、配置变更、快照。
@@ -38,6 +45,8 @@ nonisolated enum CodexTranscriptParser {
         let idPrefix = String(line.offset)
         guard isMessageCandidate(head: line.bytes) else { return [] }
         if line.isTruncated {
+            // 用量那一行没有大的：截断了就不要，不占一行「太大」。
+            if isTokenCount(head: line.bytes) { return [] }
             if let minimumOrdinal, let ordinal = ordinal(inHead: line.bytes), ordinal < minimumOrdinal { return [] }
             return [AgentTranscriptItem(id: idPrefix + ".0", kind: .oversized(bytes: line.length))]
         }
@@ -55,11 +64,42 @@ nonisolated enum CodexTranscriptParser {
         switch type {
         case "response_item": kinds = responseItem(payload)
         case "compacted": kinds = compacted(payload)
+        case "event_msg": kinds = usage(of: payload).map { [.usage($0)] } ?? []
         default: kinds = []
         }
         return kinds.enumerated().map { index, kind in
             AgentTranscriptItem(id: "\(idPrefix).\(index)", kind: kind, timestamp: timestamp)
         }
+    }
+
+    /// `token_count`：`info.last_token_usage` 是这一次的（`input_tokens` 已含缓存）；窗口大小与账号额度记录里都有。
+    static func usage(of payload: [String: Any]) -> AgentTurnUsage? {
+        guard payload["type"] as? String == "token_count" else { return nil }
+        let info = payload["info"] as? [String: Any]
+        let last = info?["last_token_usage"] as? [String: Any]
+        func count(_ object: [String: Any]?, _ key: String) -> Int { (object?[key] as? NSNumber)?.intValue ?? 0 }
+        let rateLimits = rateLimits(payload["rate_limits"] as? [String: Any])
+        let context = count(last, "input_tokens")
+        // 只有额度、还没有用量的那种（会话刚开）也留着：额度照样有用。
+        guard context > 0 || rateLimits != nil else { return nil }
+        let window = (info?["model_context_window"] as? NSNumber)?.intValue
+        return AgentTurnUsage(model: nil, contextTokens: context, outputTokens: count(last, "output_tokens"),
+                              contextWindow: window.flatMap { $0 > 0 ? $0 : nil }, rateLimits: rateLimits)
+    }
+
+    /// `rate_limits`：`primary` / `secondary` 各一个时间窗（用了几成、窗多长、几时重置），`plan_type` 是套餐。
+    static func rateLimits(_ object: [String: Any]?) -> AgentRateLimits? {
+        guard let object else { return nil }
+        func window(_ key: String) -> AgentRateLimits.Window? {
+            guard let window = object[key] as? [String: Any],
+                  let used = (window["used_percent"] as? NSNumber)?.doubleValue else { return nil }
+            let resets = (window["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+            return AgentRateLimits.Window(usedPercent: used, windowMinutes: (window["window_minutes"] as? NSNumber)?.intValue,
+                                          resetsAt: resets)
+        }
+        let limits = AgentRateLimits(primary: window("primary"), secondary: window("secondary"),
+                                     plan: object["plan_type"] as? String)
+        return limits.windows.isEmpty ? nil : limits
     }
 
     /// 截断的大行只有开头：从里面读 `ordinal`。

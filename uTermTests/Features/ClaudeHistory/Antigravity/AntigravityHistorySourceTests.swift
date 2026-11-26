@@ -110,7 +110,7 @@ final class AntigravityHistorySourceTests: XCTestCase {
         let fallback = try XCTUnwrap(files.first { $0.sessionID == F.sessionID(2) })
         XCTAssertTrue(fallback.path.hasSuffix("/transcript.jsonl"))
         let page = try await source.transcript(for: fallback).loadPrevious()
-        XCTAssertEqual(page.items.map(\.kind), [.userText("只有删节版"), .assistantText("好")])
+        XCTAssertEqual(page.items.filter(\.isDisplayed).map(\.kind), [.userText("只有删节版"), .assistantText("好")])
     }
 
     func testEmptyRecordsAreNotListed() async throws {
@@ -176,7 +176,8 @@ final class AntigravityHistorySourceTests: XCTestCase {
         }
         XCTAssertGreaterThan(pages, 3)
         XCTAssertEqual(Set(items.map(\.id)).count, items.count)
-        let assembled = AgentTranscriptAssembler.attachResults(items)
+        // 用量不画，不算在内。
+        let assembled = AgentTranscriptAssembler.attachResults(items).filter(\.isDisplayed)
         XCTAssertEqual(assembled.count, 30 * 3, "每轮：问、带结果的调用、答")
         XCTAssertEqual(assembled.first?.kind, .userText("第 0 问"))
         guard case .toolCall(let call) = assembled[1].kind else { return XCTFail() }
@@ -205,7 +206,7 @@ final class AntigravityHistorySourceTests: XCTestCase {
         XCTAssertEqual(page.items.last?.kind, .userText("二问"))
         XCTAssertEqual(page.items.last?.id, "\(offset).0")
         guard case .appended(let rest, hasMore: false) = try await pager.loadNext() else { return XCTFail() }
-        XCTAssertEqual(rest.map(\.kind), [.assistantText("二答")])
+        XCTAssertEqual(rest.filter(\.isDisplayed).map(\.kind), [.assistantText("二答")])
         let whole = try await source.transcript(for: file).loadPrevious()
         XCTAssertTrue(whole.items.contains { $0.id == "\(offset).0" })
     }
@@ -224,7 +225,7 @@ final class AntigravityHistorySourceTests: XCTestCase {
             items = page.items + items
             done = page.reachedStart
         }
-        XCTAssertEqual(items.map(\.kind), [.userText("前面"), .oversized(bytes: big.utf8.count), .assistantText("后面")])
+        XCTAssertEqual(items.filter(\.isDisplayed).map(\.kind), [.userText("前面"), .oversized(bytes: big.utf8.count), .assistantText("后面")])
     }
 
     // MARK: 子会话

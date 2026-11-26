@@ -2183,6 +2183,35 @@
         }
       }
     },
+    "%@ / %@（%@%%）" : {
+      "comment" : "用量明细：上下文 / 窗口（百分比）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@ (%@%%)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@（%@%%）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@(%@%%)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@（%@%%）"
+          }
+        }
+      }
+    },
     "%@ %@" : {
       "comment" : "无障碍标签：权限类别 + 读 / 写 / 执行",
       "localizations" : {
@@ -2582,6 +2611,35 @@
         }
       }
     },
+    "%@ 分钟" : {
+      "comment" : "用量明细：按几分钟算的额度",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ min"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 分"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@분"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 分鐘"
+          }
+        }
+      }
+    },
     "%@ 副本" : {
       "comment" : "复制主机时新主机的默认名称：原名 + 副本",
       "localizations" : {
@@ -2897,6 +2955,35 @@
         }
       }
     },
+    "%@ 天" : {
+      "comment" : "用量明细：按几天算的额度",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@d"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 日"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@일"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 天"
+          }
+        }
+      }
+    },
     "%@ 失败 · %@" : {
       "comment" : "CloudKit 同步事件：kind 是 setup / import / export，后面是错误说明",
       "localizations" : {
@@ -2951,6 +3038,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ 完成 · %2$@"
+          }
+        }
+      }
+    },
+    "%@ 小时" : {
+      "comment" : "用量明细：按几小时算的额度",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@h"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 時間"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@시간"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 小時"
           }
         }
       }
@@ -3628,6 +3744,35 @@
         }
       }
     },
+    "%@ 账号额度" : {
+      "comment" : "侧栏底部：某种编码工具的订阅额度",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ account limits"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のアカウント利用上限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 계정 한도"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 帳號額度"
+          }
+        }
+      }
+    },
     "%@ 走并行传输通道" : {
       "localizations" : {
         "en" : {
@@ -3736,6 +3881,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ 裡要替換的文字出現了 %2$lld 次：多帶幾行上下文讓它唯一，或者指定全部替換"
+          }
+        }
+      }
+    },
+    "%@ 重置" : {
+      "comment" : "用量明细：额度几时重置",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resets %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ にリセット"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 초기화"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 重設"
           }
         }
       }
@@ -15051,6 +15225,7 @@
       }
     },
     "上下文" : {
+      "comment" : "用量明细：这一次模型看到的上下文",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -15074,6 +15249,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "上下文"
+          }
+        }
+      }
+    },
+    "上下文 %@" : {
+      "comment" : "对话标题旁：最后一次回答时上下文有多少 token（如 232K）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキスト %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컨텍스트 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文 %@"
+          }
+        }
+      }
+    },
+    "上下文 %@%%" : {
+      "comment" : "对话标题旁：最后一次回答时上下文占了窗口的百分之几",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context %@%%"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキスト %@%%"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컨텍스트 %@%%"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文 %@%%"
           }
         }
       }
@@ -24398,6 +24631,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "再次匯入"
+          }
+        }
+      }
+    },
+    "最后一次输出" : {
+      "comment" : "用量明细：最后一次回答输出了多少 token",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last output"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直近の出力"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 출력"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最後一次輸出"
           }
         }
       }
@@ -34271,6 +34533,35 @@
         }
       }
     },
+    "套餐：%@" : {
+      "comment" : "用量明细：订阅套餐（记录里的原名，不翻译）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プラン：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "요금제: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "方案：%@"
+          }
+        }
+      }
+    },
     "好" : {
       "comment" : "确认提示的按钮（OK）",
       "localizations" : {
@@ -39623,6 +39914,35 @@
         }
       }
     },
+    "已用 %@%%" : {
+      "comment" : "用量明细：额度用了百分之几",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@%% used"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@%% 使用"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@%% 사용"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已用 %@%%"
+          }
+        }
+      }
+    },
     "已用完 %lld 轮仍未得出结论" : {
       "localizations" : {
         "en" : {
@@ -43085,6 +43405,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "截斷本機檔案失敗"
+          }
+        }
+      }
+    },
+    "截至 %@" : {
+      "comment" : "用量明细：这是哪一次回答时的数",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As of %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 時点"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 기준"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截至 %@"
           }
         }
       }
@@ -56641,6 +56990,7 @@
       }
     },
     "模型" : {
+      "comment" : "用量明细：哪个模型",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -59400,6 +59750,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此類檔案不支援預覽。可以用本機 App 打開，儲存後會自動上傳回主機。"
+          }
+        }
+      }
+    },
+    "每周" : {
+      "comment" : "用量明细：按周算的额度",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weekly"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "週間"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주간"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每週"
           }
         }
       }
@@ -63038,6 +63417,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用自然語言操作 %@"
+          }
+        }
+      }
+    },
+    "用量" : {
+      "comment" : "对话标题旁用量明细的标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usage"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用量"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용량"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用量"
           }
         }
       }
@@ -71352,6 +71760,35 @@
         }
       }
     },
+    "记录里没有上下文窗口的大小，只显示 token 数。" : {
+      "comment" : "用量明细：Claude Code、Antigravity 的记录不写窗口大小",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The record doesn't include the context window size, so only the token count is shown."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録にコンテキストウィンドウのサイズがないため、トークン数のみ表示します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록에 컨텍스트 창 크기가 없어 토큰 수만 표시합니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "紀錄裡沒有上下文視窗的大小，只顯示 token 數。"
+          }
+        }
+      }
+    },
     "记进每条结果，如「公司 Wi-Fi ↔ 家里电信」。" : {
       "localizations" : {
         "en" : {
@@ -72780,6 +73217,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "負載 %@"
+          }
+        }
+      }
+    },
+    "账号额度" : {
+      "comment" : "用量明细：订阅的用量额度（Codex 记录里有）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account limits"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アカウントの利用上限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정 한도"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帳號額度"
           }
         }
       }
@@ -84063,6 +84529,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顏色 %@"
+          }
+        }
+      }
+    },
+    "额度" : {
+      "comment" : "用量明细：不知道时间窗多长的额度",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用上限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "한도"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "額度"
           }
         }
       }
