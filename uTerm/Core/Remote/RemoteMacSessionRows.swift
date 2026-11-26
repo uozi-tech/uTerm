@@ -14,17 +14,29 @@ nonisolated enum RemoteMacSessionRow: Identifiable, Equatable, Sendable {
         }
     }
 
-    /// 排好的行。`sessions` 是 Mac 推来的会话列表（按 Mac 的标签顺序）；`codeTab` 是设备会开成 Code 标签页的那一个
-    /// （`Array.mirrored`，老 Mac 为 nil）。归它的会话 = 它报的、认得出工具的那几个（同 `RemoteMacClient.codeRunSessionIDs`；
-    /// 认不出的照旧各一行）。它排在第 `slot` 个普通终端前面（没报位置时排在最后），里面一个会话都没有也照样有这一行。
-    static func rows(sessions: [RemoteSessionInfo], codeTab: RemoteCodeTabInfo?) -> [RemoteMacSessionRow] {
-        guard let codeTab else { return sessions.map(RemoteMacSessionRow.session) }
-        let owned = Set(codeTab.runs.filter { AgentHistoryTool(rawValue: $0.tool) != nil }.map(\.session))
-        let plain = sessions.filter { !owned.contains($0.id) }
-        var rows = plain.map(RemoteMacSessionRow.session)
-        let index = min(max(codeTab.slot ?? rows.count, 0), rows.count)
-        rows.insert(.codeTab(codeTab, sessions: sessions.filter { owned.contains($0.id) }), at: index)
-        return rows
+    /// 排好的行。`sessions` 是 Mac 推来的会话列表（按 Mac 的标签顺序）；`codeTabs` 是 Mac 的 Code 标签页（63，老 Mac 为 nil），
+    /// 每台主机一行（`mirroredPerHost`：本机的、各台 SSH 主机的）。归它的会话 = 它报的、认得出工具的那几个（同
+    /// `RemoteMacClient.codeRunSessionIDs(serverIDs:)`；认不出的照旧各一行）。每个排在第 `slot` 个普通终端前面（没报位置的排在
+    /// 最后，`insertingCodeTabs`），里面一个会话都没有也照样有这一行。
+    static func rows(sessions: [RemoteSessionInfo], codeTabs: [RemoteCodeTabInfo]?) -> [RemoteMacSessionRow] {
+        let tabs = (codeTabs ?? []).mirroredPerHost
+        guard !tabs.isEmpty else { return sessions.map(RemoteMacSessionRow.session) }
+        var owner: [UUID: UUID] = [:]
+        for tab in tabs {
+            for run in tab.runs where AgentHistoryTool(rawValue: run.tool) != nil && owner[run.session] == nil {
+                owner[run.session] = tab.id
+            }
+        }
+        let plain = sessions.filter { owner[$0.id] == nil }
+        let byID = Dictionary(plain.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let tabByID = Dictionary(tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // 没报位置的排在最后（按 Mac 报的先后）。
+        let order = plain.map(\.id).insertingCodeTabs(tabs.map { ($0.id, $0.slot ?? plain.count) })
+        return order.compactMap { id in
+            if let session = byID[id] { return .session(session) }
+            guard let tab = tabByID[id] else { return nil }
+            return .codeTab(tab, sessions: sessions.filter { owner[$0.id] == tab.id })
+        }
     }
 
     /// 点这一行接管时落在哪个会话：普通终端是它自己；Code 标签页是 Mac 右边看着的那个会话，没在看哪个就是里面第一个

@@ -325,8 +325,8 @@ struct RemoteMacSheet: View {
                 if client.sessions.isEmpty {
                     MInsetRow(icon: "term", label: String(localized: "Mac 上没有已连接的终端"), sub: String(localized: "在 Mac 上打开一个终端后会出现在这里"), last: true)
                 } else {
-                    // Mac 的 Code 标签页收成一行（里面的会话接管后也是手机上的一个 Code 标签页），排在它在 Mac 上的位置。
-                    let rows = RemoteMacSessionRow.rows(sessions: client.sessions, codeTab: client.codeTabs?.mirrored())
+                    // Mac 的 Code 标签页每台主机收成一行（里面的会话接管后也是手机上那台主机的 Code 标签页），排在它在 Mac 上的位置。
+                    let rows = RemoteMacSessionRow.rows(sessions: client.sessions, codeTabs: client.codeTabs)
                     ForEach(rows) { row in
                         // 分隔线交给 List（`last: true` 关掉行自带的），滑动时才会跟着行走。
                         switch row {
