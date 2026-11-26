@@ -48,8 +48,8 @@ final class CodeTabRunPlacementViewTests: XCTestCase {
     }
 
     private func runRow(_ history: AgentHistoryModel, _ id: String?, title: String,
-                        selected: Bool = false) -> AgentHistoryRunRow {
-        AgentHistoryRunRow(id: UUID(), title: title, tool: .claude, directory: "/srv/infra", isSelected: selected,
+                        selected: Bool = false, directory: String = "/srv/infra") -> AgentHistoryRunRow {
+        AgentHistoryRunRow(id: UUID(), title: title, tool: .claude, directory: directory, isSelected: selected,
                            path: id.flatMap { id in history.files.first { $0.sessionID == id }?.path },
                            status: AgentHistoryRunStatus {
                                .program(ProgramStatusRecord(state: .idle, app: "claude-code"))
@@ -122,11 +122,26 @@ final class CodeTabRunPlacementViewTests: XCTestCase {
         XCTAssertLessThan(back, try index(unpinned, "blog，"), "回到 infra 那一组")
     }
 
-    /// 列表里没有记录的（还没对上记录的新会话）：没有组可放，在最顶上（第一个组标题之前）。
-    func testUnlistedRunStaysOnTop() async throws {
+    /// 列表里还没有记录的新会话：在它目录那一组的最上面（组标题之后、组里原来的行之前），不单独摆在列表最顶上
+    ///（2026-11-26 实测：在 uTerm 目录里开的新会话摆在「置顶」上面，看着不属于任何项目）。
+    func testNewRunSitsAtTheTopOfItsProjectGroup() async throws {
         let history = await history()
         let labels = try await drawnLabels(history, runs: [
             runRow(history, nil, title: AgentHistoryText.newSession),
+            runRow(history, "infra-1", title: "infra 的第 1 个会话"),
+        ])
+        let fresh = try index(labels, AgentHistoryText.newSession)
+        XCTAssertGreaterThan(fresh, try index(labels, "infra，"), "在 infra 那一组里")
+        XCTAssertLessThan(fresh, try index(labels, "infra 的第 1 个会话"), "在组里原来的行之前")
+        XCTAssertLessThan(fresh, try index(labels, "blog，"), "在 infra 那一组里")
+        XCTAssertEqual(labels.filter { $0.contains(AgentHistoryText.newSession) }.count, 1, "只出现一次")
+    }
+
+    /// 对不上任何一组的（在列表里还没有的目录里开的）：在最顶上（第一个组标题之前）。
+    func testNewRunInAnUnknownDirectoryStaysOnTop() async throws {
+        let history = await history()
+        let labels = try await drawnLabels(history, runs: [
+            runRow(history, nil, title: AgentHistoryText.newSession, directory: "/srv/brand-new"),
             runRow(history, "infra-1", title: "infra 的第 1 个会话"),
         ])
         let fresh = try index(labels, AgentHistoryText.newSession)
@@ -150,6 +165,18 @@ final class CodeTabRunPlacementViewTests: XCTestCase {
         XCTAssertTrue(history.collapsedGroups.contains(blog), "没选中的不动用户收起的组")
         XCTAssertTrue(labels.contains { $0.contains("infra 的第 1 个会话") }, "看得到它那一行：\(labels)")
         XCTAssertFalse(labels.contains { $0.contains("blog 的第 0 个会话") }, "收着的组里的行照旧不画")
+    }
+
+    /// 选中的新会话（还没有记录）放进了一个收着的组：那一组自己打开，看得到它。
+    func testSelectedNewRunInACollapsedGroupIsRevealed() async throws {
+        let history = await history()
+        let infra = "project:/srv/infra"
+        history.collapsedGroups.insert(infra)
+        let labels = try await drawnLabels(history, runs: [
+            runRow(history, nil, title: AgentHistoryText.newSession, selected: true),
+        ])
+        XCTAssertFalse(history.collapsedGroups.contains(infra), "它那一组打开了")
+        XCTAssertTrue(labels.contains { $0.contains(AgentHistoryText.newSession) }, "看得到它那一行：\(labels)")
     }
 
     /// 子树里所有无障碍元素的 label / value（同 `CodeTabRunTimeTests`）。

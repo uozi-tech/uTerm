@@ -670,22 +670,20 @@ private struct ClaudeHistoryList: View {
     private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
         let groups = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
                                                 date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
-        // 跑着的会话（含已结束、留着画面的）不另起一块：有记录的在那一行上（置顶或它那一组），只有没记录的在最顶上（同 Mac）。
-        let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, groups: groups)
+        // 跑着的会话（含已结束、留着画面的）不另起一块：有记录的在那一行上（置顶或它那一组）；还没有记录行的（刚开的
+        // 新会话）在它那一组的最上面，哪一组都对不上的才在最顶上（同 Mac）。
+        let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, directory: \.directory,
+                                                 tool: \.tool, groups: groups)
         let focusedRunPath = code?.board.focused?.sessionPath
+        // 看着的新会话放在哪一组（它那一组收着就打开）。
+        let focusedID = code?.board.focusedID
+        let focusedLeadingGroup = placement.groupID(ofLeading: { $0.id == focusedID })
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if let code {
                         ForEach(placement.top) { run in
-                            Button { code.tab.focusRun(run.id) } label: {
-                                CodeUnlistedRunRow(code: code, run: run, showsTool: history.isMultiTool,
-                                                   selected: code.board.focusedID == run.id && run.showsTerminal)
-                            }
-                            .buttonStyle(MPressStyle())
-                            .modifier(ClaudeHistoryRowMenu(pins: nil, file: nil, isRunning: run.isRunning) {
-                                code.tab.endRun(run.id)
-                            })
+                            unlistedRunRow(run, code: code, showsTool: history.isMultiTool)
                         }
                     }
                     ForEach(groups) { group in
@@ -701,6 +699,12 @@ private struct ClaudeHistoryList: View {
                         }
                         if !collapsed {
                             let showsTool = group.mixesTools
+                            if let code {
+                                ForEach(placement.leading(in: group)) { run in
+                                    unlistedRunRow(run, code: code,
+                                                   showsTool: showsTool || group.files.contains { $0.tool != run.tool })
+                                }
+                            }
                             ForEach(group.files) { file in
                                 row(file, in: group, showsTool: showsTool, run: placement.inList[file.path])
                             }
@@ -720,11 +724,26 @@ private struct ClaudeHistoryList: View {
                 pendingRunReveal = path
                 tryRevealRun(groups, proxy: proxy)
             }
+            .onChange(of: focusedLeadingGroup, initial: true) { _, id in
+                if let id { history.collapsedGroups.remove(id) }
+            }
             .onChange(of: groups.map(\.id)) { _, _ in
                 tryReveal(groups, proxy: proxy)
                 tryRevealRun(groups, proxy: proxy)
             }
         }
+    }
+
+    /// 跑着、列表里没有它记录行的会话那一行（列表最顶上，或者它那一组的最上面）。
+    private func unlistedRunRow(_ run: CodeRunBoard<TermTab>.Run, code: CodeTabRuns, showsTool: Bool) -> some View {
+        Button { code.tab.focusRun(run.id) } label: {
+            CodeUnlistedRunRow(code: code, run: run, showsTool: showsTool,
+                               selected: code.board.focusedID == run.id && run.showsTerminal)
+        }
+        .buttonStyle(MPressStyle())
+        .modifier(ClaudeHistoryRowMenu(pins: nil, file: nil, isRunning: run.isRunning) {
+            code.tab.endRun(run.id)
+        })
     }
 
     /// 一行会话：点一下看它；长按菜单「置顶」/「取消置顶」（iOS 不做拖动排序：会和滚动、标签拖动抢手势），在跑的还有「结束会话」。

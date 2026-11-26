@@ -193,31 +193,34 @@ final class CodeTabRunsTests: XCTestCase {
         func placement(pinned: [AgentHistorySessionFile] = []) -> (AgentHistoryRunPlacement<CodeRunBoard<FakeTerminal>.Run>,
                                                                   [AgentHistoryGroup]) {
             let groups = AgentHistoryListing.groups(files, by: .project, metadata: [:], pinned: pinned)
-            return (AgentHistoryRunPlacement(runs: board.runs, path: \.sessionPath, groups: groups), groups)
+            return (AgentHistoryRunPlacement(runs: board.runs, path: \.sessionPath, directory: \.directory, tool: \.tool, groups: groups), groups)
         }
 
         let (plain, groups) = placement()
-        XCTAssertEqual(plain.top.map(\.id), [fresh.id], "只有没记录的新会话在顶上")
+        XCTAssertTrue(plain.top.isEmpty, "没记录的新会话不在列表最顶上")
+        let w = try XCTUnwrap(groups.first { $0.id == "project:/w" })
+        XCTAssertEqual(plain.leading(in: w).map(\.id), [fresh.id], "在它目录那一组的最上面")
         XCTAssertEqual(plain.inList["/p/a.jsonl"]?.id, resumed.id, "继续的在它自己那一行上")
         XCTAssertEqual(AgentHistoryListing.groupID(ofRecord: "/p/a.jsonl", in: groups), "project:/w", "在它那一组里")
 
         let (pinned, pinnedGroups) = placement(pinned: [files[1]])
-        XCTAssertEqual(pinned.top.map(\.id), [fresh.id])
+        XCTAssertEqual(pinned.groupID(ofLeading: { $0.id == fresh.id }), "project:/w", "不进「置顶」")
         XCTAssertEqual(AgentHistoryListing.groupID(ofRecord: "/p/a.jsonl", in: pinnedGroups), AgentHistoryGroup.pinnedID,
                        "置顶了在「置顶」里")
         XCTAssertEqual(pinnedGroups.flatMap(\.files).filter { $0.path == "/p/a.jsonl" }.count, 1, "只在那里")
 
         XCTAssertEqual(board.ended(resumed.id, hasListedRecord: false, now: start.addingTimeInterval(1)), .kept)
         let (ended, _) = placement()
-        XCTAssertEqual(ended.top.map(\.id), [fresh.id], "已结束不挪")
+        XCTAssertEqual(ended.leading(in: w).map(\.id), [fresh.id], "已结束不挪")
         XCTAssertEqual(ended.inList["/p/a.jsonl"]?.id, resumed.id)
     }
 
     func testCollapsedGroupMarksItsRunningSessions() throws {
-        // 收起的组标题上那个点：组里那几行上跑着的会话（不含顶上没记录的、别的组的），已结束的不算。
+        // 收起的组标题上那个点：这一组里跑着的会话（组里最上面没记录的新会话、那几行上的，不含别的组的），已结束的不算。
         let board = CodeRunBoard<FakeTerminal>()
         let start = Date(timeIntervalSince1970: 30_000)
         _ = board.startNew(tool: .claude, directory: "/w", now: start, terminal: FakeTerminal())
+        _ = board.startNew(tool: .claude, directory: "/elsewhere", now: start, terminal: FakeTerminal())
         let resumed = try XCTUnwrap(board.resume(sessionPath: "/p/a.jsonl", sessionID: "a", tool: .claude,
                                                  directory: "/w", now: start) { FakeTerminal() })
         var project = AgentHistoryProject(id: ClaudeProjectPath.encode("/w"), path: "/p", modifiedAt: nil)
@@ -228,13 +231,13 @@ final class CodeTabRunsTests: XCTestCase {
         let groups = AgentHistoryListing.groups(files, by: .project, metadata: [:], pinned: [])
         let group = try XCTUnwrap(groups.first)
         func mark() -> CodeRunGroupMark? {
-            let placement = AgentHistoryRunPlacement(runs: board.runs, path: \.sessionPath, groups: groups)
+            let placement = AgentHistoryRunPlacement(runs: board.runs, path: \.sessionPath, directory: \.directory, tool: \.tool, groups: groups)
             return CodeRunGroupMark(placement.runs(in: group).map { CodeRunStatus.of(isEnded: !$0.isRunning, report: nil) })
         }
-        XCTAssertEqual(mark()?.running, 1, "只算这一组那几行上的，顶上的新会话不算")
+        XCTAssertEqual(mark()?.running, 2, "这一组的新会话与那一行上的；别的目录里的（在最顶上）不算")
         XCTAssertEqual(mark()?.status, .unreported)
         XCTAssertEqual(board.ended(resumed.id, hasListedRecord: false, now: start.addingTimeInterval(1)), .kept)
-        XCTAssertNil(mark(), "结束了、留着画面的不算在跑")
+        XCTAssertEqual(mark()?.running, 1, "结束了、留着画面的不算在跑")
     }
 
     func testLongPressMenuEndsRunningSessions() {

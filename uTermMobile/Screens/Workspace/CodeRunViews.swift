@@ -137,7 +137,8 @@ struct CodeRunHeader: View {
     }
 }
 
-/// 列表最顶上的一行：跑着、但列表里没有它那份记录的会话（多半是还没写出记录的新会话，见 `CodeRunBoard.unlistedRuns`）。
+/// 跑着、但列表里没有它那份记录的会话那一行（多半是还没写出记录的新会话）：在它那一组的最上面，对不上任何一组时
+/// 在列表最顶上（见 `AgentHistoryRunPlacement`）。
 /// 标题（新会话就是「新会话」），第二行程序报的状态 + 目录名（连接中、已退出时换成那句状态）。点一下回到它的终端。
 struct CodeUnlistedRunRow: View {
     let code: CodeTabRuns
