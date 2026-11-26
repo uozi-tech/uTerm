@@ -489,9 +489,9 @@ private struct ClaudeHistoryList: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // 顶上那一行下面不画横线（同 Mac 的 Code 标签页）。
             header
             searchBar
-            Rectangle().fill(M.divider).frame(height: 1)
             // 搜索结果盖在列表上，列表一直挂着：清空搜索后选中的会话、滚动位置都还在。
             ZStack {
                 content
@@ -1209,8 +1209,8 @@ private struct ClaudeTranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // 标题行下面不画横线（同 Mac 的 Code 标签页）。
             header
-            Rectangle().fill(M.divider).frame(height: 1)
             if transcript.opensAtHit, !transcript.reachedEnd {
                 hitBanner
                 Rectangle().fill(M.divider).frame(height: 1)

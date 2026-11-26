@@ -18,8 +18,8 @@ struct CodeRunPane: View {
     var body: some View {
         let cover = code.tab.runCovers[run.id]
         VStack(spacing: 0) {
+            // 标题行下面不画横线（同 Mac 的 Code 标签页）。
             CodeRunHeader(code: code, run: run, showsBack: showsBack)
-            Rectangle().fill(M.divider).frame(height: 1)
             ZStack {
                 TerminalSessionBody(tab: run.terminal, isActive: isActive && cover == nil,
                                     isFocused: code.isFocused && shown && cover == nil,
