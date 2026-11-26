@@ -37,7 +37,7 @@ final class TerminalColorSchemeTests: XCTestCase {
         let fg = scheme.foregroundColor.usingColorSpace(.sRGB)!
         let bg = scheme.backgroundColor.usingColorSpace(.sRGB)!
         let secondary = NSColor(srgbRed: 0x66 / 255.0, green: 0x66 / 255.0, blue: 0x66 / 255.0, alpha: 1)
-        XCTAssertGreaterThanOrEqual(contrast(fg, secondary), 2.5, "正文与 #666666 次要文字的对比 \(contrast(fg, secondary))")
+        XCTAssertGreaterThanOrEqual(contrast(fg, secondary), 3.5, "正文与 #666666 次要文字的对比 \(contrast(fg, secondary))")
         XCTAssertGreaterThanOrEqual(contrast(fg, bg), 15, "正文对底色的对比 \(contrast(fg, bg))")
         XCTAssertEqual(scheme.cursorColor.usingColorSpace(.sRGB), fg, "块光标与正文同色")
     }
