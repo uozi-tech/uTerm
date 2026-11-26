@@ -432,10 +432,13 @@ extension View {
     /// 却点不到（实机反馈）。画面和命中区都收到左右的安全区边界：`clipShape` 只裁画面，不限制命中。
     /// 滚到底时最后一项正好停在边界上，不会缺内容。
     ///
-    /// 只裁左右：竖向列表照常滚进底部 Home 条那一截（系统列表的样子），裁上下的话列表底下空一整条
+    /// 画面只裁左右：竖向列表照常滚进底部 Home 条那一截（系统列表的样子），裁上下的话列表底下空一整条
     ///（实机反馈）。路径可以比自身大，SwiftUI 不拿它和自身的范围求交。
+    ///
+    /// 命中区仍是自身的矩形。**别把命中区也换成上下伸出去的形状**：那样每个挂了它的横向滚动区（标签条、
+    /// 键盘条）都会接住整屏上下所有的触摸，整个 App 点不动、滚不动（实机事故，`MBottomSafeAreaTests` 拦着）。
     func mKeepsScrollContentInSafeArea() -> some View {
-        clipShape(MHorizontalClip()).contentShape(MHorizontalClip())
+        clipShape(MHorizontalClip()).contentShape(Rectangle())
     }
 }
 
