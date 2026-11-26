@@ -131,4 +131,23 @@ final class LocalShellFileTabTests: XCTestCase {
         try await waitUntil("开在旁边") { !self.fileTabs(model).isEmpty }
         XCTAssertEqual(model.active?.id, shell)
     }
+
+    /// 用户报的：在 Code 标签页里跑着的 Claude Code 里 ⌘ 点 Markdown 还是交给了 App。Code 标签页里的 shell 也要接上，
+    /// 开在 Code 标签页旁边，焦点留在 Code 标签页上。
+    func testShellsRunningInsideTheCodeTabOpenFilesBesideIt() async throws {
+        let model = makeModel()
+        let codeID = model.openCodeTab(directory: "/Users/me/repo")
+        let code = try XCTUnwrap(model.groups.tab(codeID)?.payload.codeTab)
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: "/Users/me/repo"))
+        let pane = try XCTUnwrap(model.pane(run.id))
+        let handler = try XCTUnwrap(pane.session.onFilePreviewRequest, "Code 标签页里的 shell 接好了打开文件的入口")
+
+        handler("/Users/me/repo/plan.md")
+
+        try await waitUntil("开在旁边") { !self.fileTabs(model).isEmpty }
+        let file = try XCTUnwrap(fileTabs(model).first)
+        XCTAssertNotEqual(model.groups.locateTab(file.id)?.groupID, model.groups.locateTab(codeID)?.groupID,
+                          "不和 Code 标签页挤在同一组")
+        XCTAssertEqual(model.active?.id, codeID, "焦点留在 Code 标签页")
+    }
 }

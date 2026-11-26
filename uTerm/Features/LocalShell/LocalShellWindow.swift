@@ -518,6 +518,7 @@ final class LocalShellWindowModel {
     private func makeCodeRun(id: UUID = UUID(), ordinal: Int? = nil, directory: String) -> LocalShellPane {
         let pane = LocalShellPane(id: id, ordinal: ordinal ?? nextOrdinal(), directory: directory)
         if let registrar { pane.attach(registrar) }
+        wireFileOpening(pane)
         startShell(pane)
         return pane
     }
@@ -538,7 +539,8 @@ final class LocalShellWindowModel {
 
     // MARK: 文件标签
 
-    /// shell 标签里 ⌘ 点的 Markdown、程序请求预览的文件（OSC 6975）开在旁边（`TerminalSession.openTerminalLink`）。
+    /// shell 标签（含 Code 标签页里跑着的）里 ⌘ 点的 Markdown、程序请求预览的文件（OSC 6975）开在旁边
+    ///（`TerminalSession.openTerminalLink`）。
     private func wireFileOpening(_ pane: LocalShellPane) {
         pane.session.onFilePreviewRequest = { [weak self, weak pane] path in
             guard let self, let pane else { return }
@@ -552,6 +554,8 @@ final class LocalShellWindowModel {
     func openFile(_ path: String, besidePane paneID: UUID?) async {
         let provider = fileProvider()
         guard let stat = try? await provider.stat(path), TerminalLinkTarget.isOpenableFile(stat) else { return }
+        // Code 标签页里跑着的 shell 不在标签树里：按它所在的 Code 标签页摆。
+        let paneID = paneID.map { id in groups.locateTab(id) == nil ? codeTab(running: id)?.tab.id ?? id : id }
         let source = paneID.flatMap { groups.locateTab($0) }
 
         if let existing = groups.allTabs.first(where: { $0.payload.fileBuffer?.remotePath == path }),
