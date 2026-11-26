@@ -9,6 +9,9 @@
 # 目录由 MAC_SHOTS 指定，默认 build/ui-gallery/latest。LANGUAGE_CODE（默认 zh-Hans）选界面语言；
 # 默认日间，UTERM_APPSTORE_DARK=1 拍夜间。
 # 截出来的是带透明圆角的原始整屏，商店图由 internal/appstore/compose/ 加标题与底色后再上传。
+# 灵动岛（只在 iphone 拍，`10-live`）：测试摆好终端后，这里把 App 切到后台、停在主屏幕上拍收起的灵动岛，再请测试
+# 推一次带提醒的更新、拍展开的灵动岛。主屏幕上的 App 名字跟着模拟器的系统语言，所以 iphone 会先把模拟器的系统语言
+# 改成 LANGUAGE_CODE 再开机。
 set -euo pipefail
 device="$1"; sim="$2"; out="$3"; shift 3
 case "$device" in iphone|ipad|duo) ;; *) echo "设备只能是 iphone / ipad / duo：$device" >&2; exit 1 ;; esac
@@ -20,7 +23,20 @@ udid="$(xcrun simctl list devices available | grep -F "    $sim (" | head -1 | g
 [ -n "$udid" ] || { echo "找不到模拟器：$sim" >&2; exit 1; }
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
-rm -f "$out"/ready-* "$out"/done-*
+rm -f "$out"/ready-* "$out"/done-* "$out"/signal-* "$out"/signaled-*
+
+if [ "$device" = iphone ]; then
+    # 系统语言（锁屏的日期、主屏幕的 App 名字）跟着截图语言；改了要重开机才生效。
+    case "$lang" in zh-Hans) locale=zh_CN ;; zh-Hant) locale=zh_TW ;; ja) locale=ja_JP ;; ko) locale=ko_KR ;; *) locale=en_US ;; esac
+    xcrun simctl boot "$udid" 2>/dev/null || true
+    xcrun simctl bootstatus "$udid" -b >/dev/null
+    current="$(xcrun simctl spawn "$udid" defaults read -g AppleLanguages 2>/dev/null | tr -d ' \n()"' | cut -d, -f1)"
+    if [ "$current" != "$lang" ]; then
+        xcrun simctl spawn "$udid" defaults write -g AppleLanguages -array "$lang"
+        xcrun simctl spawn "$udid" defaults write -g AppleLocale "$locale"
+        xcrun simctl shutdown "$udid"
+    fi
+fi
 
 xcrun simctl boot "$udid" 2>/dev/null || true
 xcrun simctl bootstatus "$udid" -b >/dev/null
@@ -36,8 +52,19 @@ xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMo
             name="${ready##*/ready-}"
             [ -e "$out/done-$name" ] && continue
             sleep 0.5
-            xcrun simctl io "$udid" screenshot --type=png --mask=alpha ${display_args[@]+"${display_args[@]}"} \
-                "$out/$name.png" >/dev/null 2>&1
+            shoot() { xcrun simctl io "$udid" screenshot --type=png --mask=alpha ${display_args[@]+"${display_args[@]}"} \
+                "$out/$1.png" >/dev/null 2>&1; }
+            if [ "$name" = 10-live ]; then
+                # App 回到后台：开一下「设置」再关掉，停在主屏幕上（Face ID 机型的 Home 键 HID 事件不管用），拍收起的灵动岛。
+                xcrun simctl launch "$udid" com.apple.Preferences >/dev/null; sleep 1.5
+                xcrun simctl terminate "$udid" com.apple.Preferences; sleep 2.5; shoot "$name-island"
+                # 请测试推一次带提醒的更新：灵动岛展开几秒，隔一会儿拍几张，挑展开完整的那张。
+                touch "$out/signal-$name"
+                for _ in $(seq 50); do [ -e "$out/signaled-$name" ] && break; sleep 0.1; done
+                for i in 1 2 3 4; do sleep 0.6; shoot "$name-expanded-$i"; done
+            else
+                shoot "$name"
+            fi
             touch "$out/done-$name"
         done
         sleep 0.3
@@ -52,6 +79,6 @@ TEST_RUNNER_UTERM_PROMO_MAC_SHOTS="$mac_shots" \
 xcodebuild test-without-building -project uTerm.xcodeproj -scheme uTermMobile -configuration Debug \
     -destination "id=$udid" -testLanguage "$lang" -enableCodeCoverage NO \
     -only-testing:uTermMobileTests/AppStoreScreenshotTests "$@" | grep -E "error:|Test Case|TEST (SUCC|FAIL)" || true
-rm -f "$out"/ready-* "$out"/done-*
+rm -f "$out"/ready-* "$out"/done-* "$out"/signal-* "$out"/signaled-*
 xcrun simctl status_bar "$udid" clear
 ls -1 "$out"/*.png

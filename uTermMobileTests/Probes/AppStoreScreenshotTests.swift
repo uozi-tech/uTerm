@@ -1,3 +1,4 @@
+import ActivityKit
 import CoreVideo
 import Network
 import SwiftData
@@ -220,6 +221,40 @@ final class AppStoreScreenshotTests: XCTestCase {
             controller.cancel()
         }
 
+        // Code 标签页：三种编码工具的会话按项目分组，Codex 那个会话正在这个标签页里跑（行上标着状态），
+        // 右边（窄屏是详情那一层）是 Claude Code 一次对话的记录。iPhone 另拍一张列表。
+        do {
+            defaults.set(AgentHistoryGrouping.project.rawValue, forKey: DefaultsKey.agentHistoryGrouping)
+            defaults.removeObject(forKey: DefaultsKey.agentHistoryShownTools)
+            let workspace = MobileWorkspace()
+            let term = terminal(web, Self.terminalTranscript)
+            opened.append(term)
+            workspace.open(.terminal(term))
+            let code = workspace.openHistory(MobileAgentHistoryFixture.tab(host: web, source: Self.codeSource(),
+                                                                           directory: Self.shopDir))
+            code.runTerminalFactory = { MobileFakeTerminal.tab(host: $0, .transcript(Self.codexRunTranscript)).0 }
+            _ = await MobileFakeClaudeHistory.settle(code)
+            let model = try XCTUnwrap(code.connection.history)
+            let codex = try XCTUnwrap(model.visibleFiles.first { $0.sessionID == "x-tests" })
+            let plan = try XCTUnwrap(model.resumeCommand(for: codex))
+            code.resumeInPlace(codex, command: plan.command, directory: plan.directory, container: container, relay: relay)
+            for run in code.runs.runs {
+                _ = await MobileFakeTerminal.waitUntilConnected(run.terminal.controller)
+                code.finishCover(run.id)
+            }
+            let login = try XCTUnwrap(model.visibleFiles.first { $0.sessionID == "c-login" })
+            code.select(login)
+            _ = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { model.transcript?.reachedStart == true }
+            let store = MobileStore()
+            store.showWorkspace = true
+            try await present("9-code", settle: .seconds(2)) { shell(store, workspace).defaultAppStorage(defaults) }
+            if device == .iphone {
+                code.backToList()
+                try await present("9-code-list", settle: .seconds(1)) { shell(store, workspace).defaultAppStorage(defaults) }
+            }
+            code.close()
+        }
+
         // 主机：顶上是体验主机，下面是「我的 Mac」与分组。
         do {
             let store = MobileStore()
@@ -228,12 +263,66 @@ final class AppStoreScreenshotTests: XCTestCase {
                 shell(store, MobileWorkspace())
             }
         }
+
+        // 灵动岛（只拍 iPhone，放最后：拍的时候 App 被外面切到后台，之后不再回到前台）。
+        // 三个终端标签页报着程序状态（OSC 7501）：Claude Code 等待确认、Codex 运行中、另一个 Claude Code 已完成。
+        if device == .iphone {
+            let workspace = MobileWorkspace()
+            let rows: [(String, String, String)] = [
+                ("prod-web-01", Self.text("修复登录超时", en: "Fix login timeout", hant: "修復登入逾時", ja: "ログインのタイムアウト修正",
+                                          ko: "로그인 시간 초과 수정"), "state=blocked:app=claude-code:kind=permission"),
+                ("staging", Self.text("订单服务集成测试", en: "Order service tests", hant: "訂單服務整合測試", ja: "注文サービスのテスト",
+                                      ko: "주문 서비스 테스트"), "state=working:app=codex"),
+                ("k3s-lab", Self.text("升级 nginx 到 1.27", en: "Upgrade nginx to 1.27", hant: "升級 nginx 到 1.27",
+                                      ja: "nginx を 1.27 に更新", ko: "nginx 1.27로 업그레이드"), "state=done:app=claude-code"),
+            ]
+            var front: TermTab?
+            for (name, title, status) in rows {
+                guard let host = hosts[name] else { continue }
+                let text = Self.terminalTranscript + "\u{1B}]2;\(title)\u{07}\u{1B}]7501;\(status)\u{1B}\\"
+                let tab = terminal(host, text)
+                opened.append(tab)
+                workspace.open(.terminal(tab))
+                front = front ?? tab
+            }
+            if let front { workspace.activate(front.id) }
+            let center = TerminalActivityCenter()
+            center.start(workspace: workspace)
+            let store = MobileStore()
+            store.showWorkspace = true
+            try await present("10-live", settle: .seconds(3), timeout: 120, onSignal: { _ in
+                await Self.alertLiveActivity()
+            }) {
+                shell(store, workspace).environment(center)
+            }
+        }
+    }
+
+    /// 外面把 App 按到后台之后，给实时活动推一次带提醒的更新：系统会把灵动岛展开几秒（拍展开态）。
+    /// 内容不变，只是让系统提醒一下；App 自己不这么推（它在后台改发本地通知）。
+    private static func alertLiveActivity() async {
+        guard let activity = Activity<TerminalActivityAttributes>.activities.first else { return }
+        let handle = UncheckedSendable(activity)
+        let alert = AlertConfiguration(
+            title: LocalizedStringResource(stringLiteral: "Claude Code"),
+            body: LocalizedStringResource(stringLiteral: text("等待确认", en: "Waiting for approval", hant: "等待確認",
+                                                              ja: "承認待ち", ko: "승인 대기")),
+            sound: .default)
+        await pushAlert(handle, alert)
+    }
+
+    private nonisolated static func pushAlert(_ handle: UncheckedSendable<Activity<TerminalActivityAttributes>>,
+                                              _ alert: AlertConfiguration) async {
+        await handle.value.update(handle.value.content, alertConfiguration: alert)
     }
 
     // MARK: - 摆一屏，等外面拍
 
     /// 整屏挂在宿主 App 的主窗口上（临时换掉它的根控制器，拍完换回），排好后请外面截屏。
-    private func present<V: View>(_ name: String, settle: Duration = .milliseconds(900),
+    /// `onSignal`：外面拍的途中写 `signal-<名字>` 时调一次（灵动岛：App 已经在后台了，推一次带提醒的更新），
+    /// 做完写回 `signaled-<名字>`。
+    private func present<V: View>(_ name: String, settle: Duration = .milliseconds(900), timeout: TimeInterval = 60,
+                                  onSignal: ((String) async -> Void)? = nil,
                                   before: () -> Void = {}, _ view: () -> V) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = try XCTUnwrap(scene.windows.first { $0.isKeyWindow } ?? scene.windows.first)
@@ -262,9 +351,18 @@ final class AppStoreScreenshotTests: XCTestCase {
         let done = dir.appendingPathComponent("done-\(name)")
         try? FileManager.default.removeItem(at: done)
         try Data().write(to: ready)
-        let deadline = Date().addingTimeInterval(60)
+        let signal = dir.appendingPathComponent("signal-\(name)")
+        let signaled = dir.appendingPathComponent("signaled-\(name)")
+        try? FileManager.default.removeItem(at: signal)
+        try? FileManager.default.removeItem(at: signaled)
+        let deadline = Date().addingTimeInterval(timeout)
         while !FileManager.default.fileExists(atPath: done.path), Date() < deadline {
-            try await Task.sleep(for: .milliseconds(200))
+            if let onSignal, FileManager.default.fileExists(atPath: signal.path),
+               !FileManager.default.fileExists(atPath: signaled.path) {
+                await onSignal(name)
+                try Data().write(to: signaled)
+            }
+            try await Task.sleep(for: .milliseconds(100))
         }
         try? FileManager.default.removeItem(at: ready)
         XCTAssertTrue(FileManager.default.fileExists(atPath: done.path), "外面没拍 \(name)")
@@ -367,6 +465,164 @@ final class AppStoreScreenshotTests: XCTestCase {
         try ctx.save()
         return (c, hosts)
     }
+
+    // MARK: Code 标签页的示例数据
+
+    static let shopDir = "/home/deploy/shop-api"
+    private static let infraDir = "/home/deploy/infra"
+    private static let blogDir = "/home/deploy/blog"
+
+    /// 三种编码工具的会话（手写，按界面语言）：shop-api 下三种都有，另有 infra、blog。
+    private static func codeSource() -> any AgentHistorySource {
+        typealias Session = MobileFakeAgentSource.Session
+        func ago(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(-seconds) }
+        let claude = MobileFakeAgentSource(tool: .claude, sessions: [
+            Session(id: "c-login", projectID: ClaudeProjectPath.encode(shopDir), resumeDirectory: shopDir,
+                    title: text("登录接口偶发 500", en: "Login API returns 500 at times", hant: "登入介面偶發 500",
+                                ja: "ログイン API がときどき 500", ko: "로그인 API 간헐적 500"),
+                    modifiedAt: ago(60 * 3), branch: "fix/login-timeout", items: loginConversation(at: ago(60 * 3))),
+            Session(id: "c-page", projectID: ClaudeProjectPath.encode(shopDir), resumeDirectory: shopDir,
+                    title: text("给订单接口加分页", en: "Paginate the orders API", hant: "幫訂單介面加分頁",
+                                ja: "注文 API にページングを追加", ko: "주문 API에 페이지네이션 추가"),
+                    modifiedAt: ago(86_400 * 2 + 600), branch: "feat/paging"),
+            Session(id: "c-nginx", projectID: ClaudeProjectPath.encode(infraDir), resumeDirectory: infraDir,
+                    title: text("升级 nginx 到 1.27", en: "Upgrade nginx to 1.27", hant: "升級 nginx 到 1.27",
+                                ja: "nginx を 1.27 に更新", ko: "nginx 1.27로 업그레이드"),
+                    modifiedAt: ago(86_400 + 3600 * 2)),
+            Session(id: "c-font", projectID: ClaudeProjectPath.encode(blogDir), resumeDirectory: blogDir,
+                    title: text("首页换一套字体", en: "New fonts for the home page", hant: "首頁換一套字型",
+                                ja: "トップページのフォントを変更", ko: "홈페이지 글꼴 변경"),
+                    modifiedAt: ago(86_400 * 6), branch: nil),
+        ])
+        let codex = MobileFakeAgentSource(tool: .codex, sessions: [
+            Session(id: "x-tests", projectID: "2026-11-26", projectDirectory: shopDir, resumeDirectory: shopDir,
+                    title: text("订单服务补集成测试", en: "Integration tests for orders", hant: "訂單服務補整合測試",
+                                ja: "注文サービスの結合テスト", ko: "주문 서비스 통합 테스트"),
+                    modifiedAt: ago(60 * 20)),
+            Session(id: "x-cert", projectID: "2026-11-21", projectDirectory: infraDir, resumeDirectory: infraDir,
+                    title: text("证书续期脚本", en: "Certificate renewal script", hant: "憑證續期腳本",
+                                ja: "証明書の更新スクリプト", ko: "인증서 갱신 스크립트"),
+                    modifiedAt: ago(86_400 * 4), branch: nil),
+        ])
+        let antigravity = MobileFakeAgentSource(tool: .antigravity, sessions: [
+            Session(id: "u-readme", projectID: "ws-1", projectDirectory: shopDir, resumeDirectory: shopDir,
+                    title: text("补 README 的部署一节", en: "Add a deploy section to README", hant: "補 README 的部署一節",
+                                ja: "README にデプロイ手順を追加", ko: "README에 배포 절차 추가"),
+                    modifiedAt: ago(3600 * 5)),
+            Session(id: "u-lazy", projectID: "ws-2", projectDirectory: blogDir, resumeDirectory: blogDir,
+                    title: text("图片懒加载", en: "Lazy-load images", hant: "圖片延遲載入",
+                                ja: "画像の遅延読み込み", ko: "이미지 지연 로딩"),
+                    modifiedAt: ago(86_400 * 9), branch: nil),
+        ])
+        return AgentHistoryCompositeSource([claude, codex, antigravity])
+    }
+
+    /// Claude Code 修登录超时的一次对话。
+    private static func loginConversation(at date: Date) -> [AgentTranscriptItem] {
+        func call(_ id: String, _ name: String, _ summary: String, _ output: String, error: Bool = false) -> AgentToolCall {
+            AgentToolCall(toolUseID: id, name: name, summary: summary,
+                          result: AgentToolResult(toolUseID: id, content: AgentClippedText(output, limit: 4000),
+                                                  isError: error, imageCount: 0))
+        }
+        let fail = "--- FAIL: TestLoginTimeout (2.01s)\n    handler_test.go:88: context deadline exceeded\nFAIL"
+        let pass = "ok  \tshop-api/internal/auth\t0.84s"
+        return [
+            AgentTranscriptItem(id: "u1", kind: .userText(text(
+                "登录接口偶尔返回 500，日志里是 `context deadline exceeded`。帮我找找原因。",
+                en: "Login sometimes returns 500 with `context deadline exceeded`. Can you find out why?",
+                hant: "登入介面偶爾回傳 500，日誌裡是 `context deadline exceeded`。幫我找找原因。",
+                ja: "ログイン API がときどき 500（`context deadline exceeded`）。原因を調べてください。",
+                ko: "로그인 API가 가끔 500(`context deadline exceeded`)을 반환해요. 원인을 찾아 주세요.")),
+                                timestamp: date.addingTimeInterval(-600)),
+            AgentTranscriptItem(id: "t1", kind: .toolCall(call("t1", "Bash", "go test ./internal/auth/... -run TestLogin",
+                                                              fail, error: true)),
+                                timestamp: date.addingTimeInterval(-580)),
+            AgentTranscriptItem(id: "a2", kind: .assistantText(text(
+                """
+                复现了。`Login` 每次请求都新建数据库连接，连接池上限只有 **5**，高峰时排队超过 2 秒就超时。
+
+                1. 复用全局的 `db.Pool`，不在 handler 里 `Open`
+                2. 把 `MaxOpenConns` 调到 20
+                """,
+                en: """
+                Reproduced. `Login` opens a new database connection on every request, and the pool is capped at **5**, \
+                so requests queue for over 2 seconds at peak and time out.
+
+                1. Reuse the shared `db.Pool` instead of calling `Open` in the handler
+                2. Raise `MaxOpenConns` to 20
+                """,
+                hant: """
+                重現了。`Login` 每次請求都新建資料庫連線，連線池上限只有 **5**，尖峰時排隊超過 2 秒就逾時。
+
+                1. 共用全域的 `db.Pool`，不在 handler 裡 `Open`
+                2. 把 `MaxOpenConns` 調到 20
+                """,
+                ja: """
+                再現しました。`Login` がリクエストごとに DB 接続を開いていて、プールの上限が **5** しかないため、\
+                ピーク時に 2 秒以上待たされてタイムアウトします。
+
+                1. handler で `Open` せず、共有の `db.Pool` を使う
+                2. `MaxOpenConns` を 20 に上げる
+                """,
+                ko: """
+                재현됐어요. `Login`이 요청마다 DB 연결을 새로 열고, 커넥션 풀 상한이 **5**라서 \
+                피크 때 2초 넘게 기다리다 시간 초과가 납니다.
+
+                1. 핸들러에서 `Open`하지 말고 공용 `db.Pool` 재사용
+                2. `MaxOpenConns`를 20으로 상향
+                """)), timestamp: date.addingTimeInterval(-500)),
+            AgentTranscriptItem(id: "u2", kind: .userText(text(
+                "两条都改吧。", en: "Go ahead with both.", hant: "兩條都改吧。", ja: "両方やってください。", ko: "둘 다 해 주세요.")),
+                                timestamp: date.addingTimeInterval(-200)),
+            AgentTranscriptItem(id: "t2", kind: .toolCall(call("t2", "Edit", "internal/auth/handler.go", "")),
+                                timestamp: date.addingTimeInterval(-150)),
+            AgentTranscriptItem(id: "t3", kind: .toolCall(call("t3", "Bash", "go test ./internal/auth/...", pass)),
+                                timestamp: date.addingTimeInterval(-60)),
+            AgentTranscriptItem(id: "a3", kind: .assistantText(text(
+                "改好了，`TestLoginTimeout` 现在能过，压测 200 并发也没有再超时。",
+                en: "Done. `TestLoginTimeout` passes now, and a 200-concurrency load test no longer times out.",
+                hant: "改好了，`TestLoginTimeout` 現在能過，壓測 200 併發也沒有再逾時。",
+                ja: "修正しました。`TestLoginTimeout` が通り、同時 200 の負荷試験でもタイムアウトしなくなりました。",
+                ko: "수정했어요. 이제 `TestLoginTimeout`이 통과하고, 동시 200 부하 테스트에서도 시간 초과가 없어요.")),
+                                timestamp: date),
+            AgentTranscriptItem(id: "u3", kind: .userText(text(
+                "顺便看看订单列表为什么慢。", en: "Also, why is the order list so slow?", hant: "順便看看訂單列表為什麼慢。",
+                ja: "ついでに注文一覧が遅い理由も見てください。", ko: "주문 목록이 느린 이유도 봐 주세요.")),
+                                timestamp: date.addingTimeInterval(-40)),
+            AgentTranscriptItem(id: "t4", kind: .toolCall(call("t4", "Bash",
+                                                              "psql -c \"EXPLAIN ANALYZE SELECT * FROM orders ORDER BY created_at DESC LIMIT 50\"",
+                                                              "Seq Scan on orders  (rows=1204331)\nExecution Time: 1812.4 ms")),
+                                timestamp: date.addingTimeInterval(-30)),
+            AgentTranscriptItem(id: "a4", kind: .assistantText(text(
+                "`orders.created_at` 没有索引，每次都扫全表（120 万行）。加上索引后从 **1.8 s 降到 12 ms**：\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```",
+                en: "`orders.created_at` has no index, so every query scans the whole table (1.2M rows). With an index it drops from **1.8 s to 12 ms**:\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```",
+                hant: "`orders.created_at` 沒有索引，每次都掃全表（120 萬列）。加上索引後從 **1.8 s 降到 12 ms**：\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```",
+                ja: "`orders.created_at` にインデックスがなく、毎回 120 万行を全件スキャンしています。インデックスを張ると **1.8 s → 12 ms** になります：\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```",
+                ko: "`orders.created_at`에 인덱스가 없어 매번 120만 행을 전체 스캔해요. 인덱스를 추가하면 **1.8 s → 12 ms**로 줄어요:\n\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_created_at ON orders (created_at DESC);\n```")),
+                                timestamp: date),
+            AgentTranscriptItem(id: "usage", kind: .usage(AgentTurnUsage(model: "claude-opus-4-5", contextTokens: 48_210,
+                                                                       outputTokens: 1_284)), timestamp: date),
+        ]
+    }
+
+    /// Code 标签页里跑着的 Codex 会话：终端里的样子，程序经 OSC 7501 报「运行中」。
+    private static let codexRunTranscript: String = {
+        let e = "\u{1B}["
+        return [
+            "\(e)1m>_ Codex\(e)0m  \(e)2m(resumed · ~/shop-api)\(e)0m",
+            "",
+            "\(e)36m›\(e)0m " + text("给订单服务补上集成测试：下单、取消、退款各两条。",
+                                        en: "Add integration tests for orders: two each for create, cancel and refund.",
+                                        hant: "給訂單服務補上整合測試：下單、取消、退款各兩條。",
+                                        ja: "注文サービスに結合テストを追加：作成・取消・返金を 2 件ずつ。",
+                                        ko: "주문 서비스에 통합 테스트 추가: 생성, 취소, 환불 각각 두 개."),
+            "",
+            "\(e)32m•\(e)0m Ran \(e)1mgo test ./internal/order/...\(e)0m",
+            "  \(e)2m└ ok   shop-api/internal/order  1.42s\(e)0m",
+            "",
+            "\(e)33m•\(e)0m Working (12s • esc to interrupt)",
+        ].joined(separator: "\r\n") + "\u{1B}]7501;state=working:app=codex\u{1B}\\"
+    }()
 
     /// 一个小网站项目的目录（文件页用）。
     private static func siteFileSystem() -> DemoFileSystem {
