@@ -23,6 +23,10 @@ struct MKeyBar<Panel: Hashable, Leading: View, Row: View, Trailing: View, PanelC
     @ViewBuilder let trailing: () -> Trailing
     @ViewBuilder let content: (Panel) -> PanelContent
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    /// 键盘条底下的安全区（SwiftUI 的，键盘也算在里面）与窗口根视图的底部安全区（UIKit 的，只有 Home 条那一截）。
+    /// 两个相等才说明下面只有 Home 条，见 `MKeyBarBottomInset`。
+    @State private var bottomSafeArea: CGFloat = 0
+    @State private var windowBottomSafeArea: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,6 +62,14 @@ struct MKeyBar<Panel: Hashable, Leading: View, Row: View, Trailing: View, PanelC
         // 与正文同一个工作面，只用顶边 hairline 分区（「线或底色差，二选一」）。
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
+        // 往下伸进 Home 条那一截：报给外面的高度少这么多，正文就多这么多；键自己画在安全区里。
+        .padding(.bottom, softKeyboardUp ? 0 : -MKeyBarBottomInset.reclaimed(safeAreaBottom: bottomSafeArea,
+                                                                              containerBottom: windowBottomSafeArea))
+        // 量的是收回之后、仍在安全区内的这一块：它的下沿贴着安全区边界，读到的就是整段安全区，不会和上面那行互相牵动。
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomSafeArea = $0 }
+        // 不能拿 `.ignoresSafeArea(.keyboard)` 的视图量「不算键盘」的那份：它读到的照样含键盘（实机：键盘条躲到了
+        // 键盘后面）。改问 UIKit：根视图的安全区没有键盘。
+        .background { MWindowBottomInsetProbe { windowBottomSafeArea = $0 } }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
                   let screen = note.object as? UIScreen else { return }
@@ -397,5 +409,66 @@ final class KeyRepeater {
     func release() {
         task?.cancel()
         task = nil
+    }
+}
+
+/// 报窗口根视图的底部安全区（UIKit 的安全区不含键盘，只有 Home 条那一截）。
+private struct MWindowBottomInsetProbe: UIViewRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.isUserInteractionEnabled = false
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(_ view: ProbeView, context: Context) {
+        view.onChange = onChange
+        view.report()
+    }
+
+    final class ProbeView: UIView {
+        var onChange: ((CGFloat) -> Void)?
+        private var reported: CGFloat?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            report()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            report()
+        }
+
+        override func safeAreaInsetsDidChange() {
+            super.safeAreaInsetsDidChange()
+            report()
+        }
+
+        func report() {
+            guard let root = window?.rootViewController?.view else { return }
+            let bottom = root.safeAreaInsets.bottom
+            guard bottom != reported else { return }
+            reported = bottom
+            // 布局途中不改 SwiftUI 的状态，下一轮再交出去。
+            DispatchQueue.main.async { [weak self] in self?.onChange?(bottom) }
+        }
+    }
+}
+
+/// 键盘条贴着屏幕底边时，Home 条那一截安全区只留一点，其余还给正文。
+///
+/// 全面屏的底部安全区是 34pt（横握 21pt），整段空着太浪费（实机反馈：Duo 上键盘条下面空出一大条）。
+/// Home 条本身只占最下面约 13pt；最后一行的命中区（键帽上下各多 5pt）下面再留 10pt，
+/// 看得见的键帽就停在 15pt 处，不压 Home 条。安全区本来就比这小（或者键盘弹着、不贴底边）时照原样。
+nonisolated enum MKeyBarBottomInset {
+    static let kept: CGFloat = 10
+
+    /// 从底部安全区里收回多少点。`containerBottom` 是窗口的（不算键盘）：比键盘条读到的小，说明下面是键盘，一点都不收。
+    static func reclaimed(safeAreaBottom: CGFloat, containerBottom: CGFloat) -> CGFloat {
+        guard safeAreaBottom <= containerBottom + 0.5 else { return 0 }
+        return max(safeAreaBottom - kept, 0)
     }
 }
