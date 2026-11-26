@@ -69,12 +69,15 @@ final class AgentSessionTimeTextTests: XCTestCase {
         guard depth < 60 else { return [] }
         var out: [String] = []
         let object = root as AnyObject
-        if let label = object.accessibilityLabel?(), !label.isEmpty { out.append(label) }
+        // 一个元素的 label 与 value 并成一条：侧栏一行只写名字，时间在 value 里（同 Claude Code Desktop）。
+        var parts: [String] = []
+        if let label = object.accessibilityLabel?(), !label.isEmpty { parts.append(label) }
         let valueSelector = NSSelectorFromString("accessibilityValue")
         if object.responds?(to: valueSelector) == true,
            let value = object.perform(valueSelector)?.takeUnretainedValue() as? String, !value.isEmpty {
-            out.append(value)
+            parts.append(value)
         }
+        if !parts.isEmpty { out.append(parts.joined(separator: " ")) }
         if let children = object.accessibilityChildren?() {
             for child in children { out += axStrings(child, depth: depth + 1) }
         }

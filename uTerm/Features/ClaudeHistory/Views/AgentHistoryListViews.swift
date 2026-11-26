@@ -216,12 +216,15 @@ struct AgentHistorySessionRow: View {
             AgentHistoryText.sessionTitle(file, metadata: metadata)
         }
         let editor: AgentHistoryTitleEditor? = if case .editing(let editor) = rename { editor } else { nil }
-        AgentHistoryTitleRow(title: title, tool: showsTool ? file.tool : nil, isSelected: isSelected,
-                             indicator: AgentHistoryRunIndicator(status()),
-                             detail: AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: true,
-                                                                      activity: activity),
-                             editor: editor)
-            .help(Text(verbatim: AgentHistoryText.sessionRowHelp(file, metadata: metadata, activity: activity)))
+        // 悬停提示与读屏里的「几分钟前」到点重算（数据没变也会过时），同各处的时间（`AgentSessionTimeText`）。
+        TimelineView(AgentSessionTimeSchedule(interval: AgentSessionTimeText.refreshInterval)) { _ in
+            AgentHistoryTitleRow(title: title, tool: showsTool ? file.tool : nil, isSelected: isSelected,
+                                 indicator: AgentHistoryRunIndicator(status()),
+                                 detail: AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: true,
+                                                                          activity: activity),
+                                 editor: editor)
+                .help(Text(verbatim: AgentHistoryText.sessionRowHelp(file, metadata: metadata, activity: activity)))
+        }
     }
 }
 
