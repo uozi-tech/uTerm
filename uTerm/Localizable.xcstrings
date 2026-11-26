@@ -45798,6 +45798,35 @@
         }
       }
     },
+    "拷贝会话名" : {
+      "comment" : "历史会话列表的菜单：把会话的名字拷贝到剪贴板",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Session Name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション名をコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 이름 복사"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷貝工作階段名稱"
+          }
+        }
+      }
+    },
     "拷贝全部" : {
       "localizations" : {
         "en" : {
@@ -49473,6 +49502,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新群組…"
+          }
+        }
+      }
+    },
+    "新名字写回这个会话的记录，在终端里继续时也用它。" : {
+      "comment" : "历史会话：重命名输入框的说明（同 Claude Code 的 /rename）",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The new name is saved to this session's record and is also used when you continue it in the terminal."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しい名前はこのセッションの記録に保存され、ターミナルで再開するときにも使われます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 이름은 이 세션의 기록에 저장되며, 터미널에서 이어서 할 때도 사용됩니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新名稱會寫回這個工作階段的紀錄，在終端機裡繼續時也會用它。"
           }
         }
       }
@@ -61268,6 +61326,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒能把驗證框切到前景，密碼沒有輸入（免得打進別的 App）。可以在畫面上點一下那個框再試。"
+          }
+        }
+      }
+    },
+    "没能重命名这个会话" : {
+      "comment" : "历史会话：重命名失败的提示标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Rename This Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションの名前を変更できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션의 이름을 바꾸지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法重新命名這個工作階段"
           }
         }
       }
@@ -78764,6 +78851,34 @@
         }
       }
     },
+    "这种工具的会话不能在 uTerm 里重命名" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessions from this tool can't be renamed in uTerm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このツールのセッションは uTerm で名前を変更できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 도구의 세션은 uTerm에서 이름을 바꿀 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這種工具的工作階段無法在 uTerm 裡重新命名"
+          }
+        }
+      }
+    },
     "这里的 %lld 个会话没有列出：不是在命令行里起的（例如桌面版），或者没有对话内容。" : {
       "localizations" : {
         "en" : {
@@ -83502,6 +83617,7 @@
       }
     },
     "重命名…" : {
+      "comment" : "历史会话列表的菜单：改会话的名字",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -83525,6 +83641,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重新命名…"
+          }
+        }
+      }
+    },
+    "重命名会话" : {
+      "comment" : "历史会话：重命名输入框的标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rename Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション名を変更"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 이름 바꾸기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名工作階段"
           }
         }
       }

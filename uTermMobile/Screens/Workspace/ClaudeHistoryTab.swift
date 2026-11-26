@@ -484,6 +484,8 @@ private struct ClaudeHistoryList: View {
     @State private var pendingDelete: AgentHistorySessionFile?
     /// 删不掉时的原因。
     @State private var deleteFailure: String?
+    /// 点了「重命名…」的那一份（共用的 `AgentHistoryRenamePrompt`）。
+    @State private var pendingRename: AgentHistorySessionFile?
 
     private var grouping: AgentHistoryGrouping {
         AgentHistoryListPreferences.effectiveGrouping(groupingRaw, isMultiTool: history.isMultiTool)
@@ -528,6 +530,7 @@ private struct ClaudeHistoryList: View {
         } message: {
             Text(verbatim: deleteFailure ?? "")
         }
+        .modifier(AgentHistoryRenamePrompt(history: history, file: $pendingRename))
     }
 
     private func delete(_ file: AgentHistorySessionFile) {
@@ -794,15 +797,17 @@ private struct ClaudeHistoryList: View {
             }
         } label: {
             AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                                   showsProject: grouping != .project || group.kind == .pinned, showsTool: showsTool,
+                                   showsTool: showsTool,
                                    isSelected: showsItsTerminal || history.selectedFile?.path == file.path) {
                 if let run { CodeRunStatusMark(run: run) }
             }
         }
         .buttonStyle(MPressStyle())
         .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true,
-                                       canDelete: history.canDelete(file), onResume: onResume,
-                                       onDelete: { pendingDelete = $0 }) {
+                                       canDelete: history.canDelete(file), canRename: history.canRename(file),
+                                       title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]),
+                                       onResume: onResume, onDelete: { pendingDelete = $0 },
+                                       onRename: { pendingRename = $0 }) {
             if let code, let run { code.tab.endRun(run.id) }
         })
     }
@@ -857,8 +862,8 @@ private struct ClaudeHistoryList: View {
     }
 }
 
-/// 行的长按菜单（项目与顺序见共享的 `AgentHistorySessionMenuItem`，同 Mac 的右键菜单）：有记录的「继续这个会话」
-/// 「置顶」/「取消置顶」「拷贝会话 ID」「删除会话…」，在 Code 标签页里跑着的「置顶」「结束会话」。一项都没有时没有菜单。
+/// 行的长按菜单：条目见共享的 `AgentHistorySessionMenuItem`，按钮是共享的 `AgentHistoryRowMenuContent`（同 Mac 的右键菜单）。
+/// 这里只把 iOS 列表手上的东西交过去。一项都没有时没有菜单。
 struct ClaudeHistoryRowMenu: ViewModifier {
     typealias Item = AgentHistorySessionMenuItem
 
@@ -870,57 +875,28 @@ struct ClaudeHistoryRowMenu: ViewModifier {
     let isRunning: Bool
     /// 能不能删这一份（它那种工具的数据源能删）。
     var canDelete = false
+    /// 能不能改名（它那种工具的数据源能改）。
+    var canRename = false
+    /// 这一行显示的名字（「拷贝会话名」）。
+    var title: String? = nil
     /// 继续这个会话；nil = 不出这一项。
     var onResume: ((AgentHistorySessionFile) -> Void)? = nil
     /// 点了「删除会话…」：交给列表去确认。
     var onDelete: (AgentHistorySessionFile) -> Void = { _ in }
+    /// 点了「重命名…」：交给列表弹输入框。
+    var onRename: (AgentHistorySessionFile) -> Void = { _ in }
     let onEnd: () -> Void
 
     func body(content: Content) -> some View {
         let pinned = file.map { pins?.isPinned($0) ?? false } ?? false
         let items = Item.items(hasRecord: file != nil, canResume: onResume != nil, canPin: pins != nil && file != nil,
-                               isPinned: pinned, isRunning: isRunning, canDelete: canDelete)
+                               isPinned: pinned, isRunning: isRunning, canDelete: canDelete, canRename: canRename)
         if items.isEmpty {
             content
         } else {
-            content.mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
-                ForEach(items, id: \.self) { item in
-                    if item.isDestructive, items.count > 1 { Divider() }
-                    button(item)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private func button(_ item: Item) -> some View {
-        switch item {
-        case .resume:
-            Button {
-                if let file { onResume?(file) }
-            } label: {
-                Label(AgentHistoryText.resumeSession, systemImage: "play")
-            }
-        case .pin(let isPinned):
-            Button {
-                if let pins, let file { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } }
-            } label: {
-                Label(AgentHistoryText.pinAction(isPinned: isPinned), systemImage: isPinned ? "pin.slash" : "pin")
-            }
-        case .copySessionID:
-            Button {
-                if let file { AgentHistoryPasteboard.copy(file.sessionID) }
-            } label: {
-                Label(AgentHistoryText.copySessionID, systemImage: "doc.on.doc")
-            }
-        case .delete:
-            Button(role: .destructive) {
-                if let file { onDelete(file) }
-            } label: {
-                Label(AgentHistoryText.deleteSession, systemImage: "trash")
-            }
-        case .endSession:
-            Button(role: .destructive, action: onEnd) {
-                Label(AgentHistoryText.endSession, systemImage: "xmark.circle")
+            content.agentHistoryRowMenu {
+                AgentHistoryRowMenuContent(items: items, file: file, title: title ?? "", pins: pins, onResume: onResume,
+                                           onRename: onRename, onDelete: onDelete, onEnd: onEnd)
             }
         }
     }
@@ -1275,6 +1251,11 @@ extension View {
     /// 可展开那一行的按钮：按下缩一点、轻震。
     func agentHistoryPressStyle() -> some View {
         buttonStyle(MPressStyle())
+    }
+
+    /// 列表一行的菜单（`AgentHistoryRowMenuContent`）：iOS 上是长按菜单。
+    func agentHistoryRowMenu<Menu: View>(@ViewBuilder _ menu: () -> Menu) -> some View {
+        mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous), items: menu)
     }
 
     /// 横屏时侧边安全区里点不到：滚动内容留在安全区内。

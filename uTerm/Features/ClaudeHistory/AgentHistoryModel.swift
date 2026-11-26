@@ -591,11 +591,37 @@ final class AgentHistoryModel {
     }
 
     /// 删掉一个会话在主机上的记录（用户确认过），删掉了就从列表、置顶、搜索结果里拿掉；正开着的关掉。
-    /// 删不掉照常抛，列表不动。
+    /// 列表上的一行可能是「接着往下聊」串起来的几份（`AgentHistoryContinuation`）：前面那几份一起删，不然删了这一行，
+    /// 之前那段又冒出来。删不掉照常抛，列表不动（前面那几份删到一半失败的，删掉了的照样拿掉）。
     func delete(_ file: AgentHistorySessionFile) async throws {
         guard let part = source(for: file.tool), part.supportsDelete else { throw AgentHistoryDeleteError.unsupported }
+        var parts: [AgentHistorySessionFile] = []
+        var current = file
+        while let previous = AgentHistoryContinuation.previous(of: current, in: files, metadata: metadata),
+              !parts.contains(where: { $0.path == previous.path }) {
+            parts.append(previous)
+            current = previous
+        }
         try await part.delete(file)
         forget(file)
+        for previous in parts {
+            try await part.delete(previous)
+            forget(previous)
+        }
+    }
+
+    func canRename(_ file: AgentHistorySessionFile) -> Bool {
+        source(for: file.tool)?.supportsRename ?? false
+    }
+
+    /// 改会话的名字（写回记录）。列表那一行、对话顶上的标题马上换，不等重读；空的名字不改。改不了照常抛，标题不动。
+    func rename(_ file: AgentHistorySessionFile, to title: String) async throws {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let part = source(for: file.tool), part.supportsRename else { throw AgentHistoryDeleteError.renameUnsupported }
+        try await part.rename(file, to: trimmed)
+        metadata[file.path]?.title = trimmed
+        storeInCache()
     }
 
     /// 一份记录已经从主机上删掉了：内存里关于它的都拿掉，不等下一次重列。

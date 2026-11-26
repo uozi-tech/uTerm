@@ -38,6 +38,11 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     private(set) var deleted: [String] = []
     private var deleteError: (any Error)?
     func setDeleteError(_ error: (any Error)?) { deleteError = error }
+    nonisolated let supportsRename: Bool
+    /// 改过的名字（会话 ID、新名字，按先后）。
+    private(set) var renames: [String] = []
+    private var renameError: (any Error)?
+    func setRenameError(_ error: (any Error)?) { renameError = error }
 
     private var sessionList: [Session]
     private var projectsError: (any Error)?
@@ -48,8 +53,9 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     init(tool: AgentHistoryTool, sessions: [Session], supportsSearch: Bool = true, resumable: Bool = true,
          startsSessions: Bool = true, projectsError: (any Error)? = nil, searchError: (any Error)? = nil,
-         command: String? = nil, supportsDelete: Bool = true) {
+         command: String? = nil, supportsDelete: Bool = true, supportsRename: Bool = true) {
         self.command = command
+        self.supportsRename = supportsRename
         self.supportsDelete = supportsDelete
         self.tool = tool
         sessionList = sessions
@@ -170,6 +176,16 @@ actor AgentHistoryFakeSource: AgentHistorySource {
         if let deleteError { throw deleteError }
         sessionList.removeAll { sessionPath($0) == file.path }
         deleted.append(file.sessionID)
+    }
+
+    func rename(_ file: AgentHistorySessionFile, to title: String) async throws {
+        guard supportsRename else { throw AgentHistoryDeleteError.renameUnsupported }
+        if let renameError { throw renameError }
+        guard let index = sessionList.firstIndex(where: { sessionPath($0) == file.path }) else {
+            throw AgentHistoryFakeError.missing
+        }
+        sessionList[index].title = title
+        renames.append("\(file.sessionID)=\(title)")
     }
 
     func search(_ query: AgentHistorySearchQuery, in files: [AgentHistorySessionFile], limits: AgentHistorySearchLimits,

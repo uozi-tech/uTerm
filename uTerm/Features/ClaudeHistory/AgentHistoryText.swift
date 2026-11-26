@@ -396,6 +396,41 @@ enum AgentHistoryText {
         String(localized: "拷贝会话 ID", comment: "历史会话列表的菜单：把会话 ID 拷贝到剪贴板")
     }
 
+    /// 行的菜单：拷贝列表上显示的会话名。
+    static var copySessionTitle: String {
+        String(localized: "拷贝会话名", comment: "历史会话列表的菜单：把会话的名字拷贝到剪贴板")
+    }
+
+    /// 行的菜单：重命名（弹出输入框）。
+    static var renameSession: String {
+        String(localized: "重命名…", comment: "历史会话列表的菜单：改会话的名字")
+    }
+
+    /// 重命名输入框的标题与说明。
+    static var renameTitle: String {
+        String(localized: "重命名会话", comment: "历史会话：重命名输入框的标题")
+    }
+
+    static var renameMessage: String {
+        String(localized: "新名字写回这个会话的记录，在终端里继续时也用它。",
+               comment: "历史会话：重命名输入框的说明（同 Claude Code 的 /rename）")
+    }
+
+    static var renameButton: String {
+        String(localized: "重命名", comment: "历史会话：重命名输入框里确认的按钮")
+    }
+
+    static var renameFailedTitle: String {
+        String(localized: "没能重命名这个会话", comment: "历史会话：重命名失败的提示标题")
+    }
+
+    /// 列表一行只写名字；时间、大小、分支、项目放进悬停提示与读屏（同 `sessionSubtitle`）。
+    static func sessionRowHelp(_ file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?,
+                               activity: Date?) -> String {
+        sessionTitle(file, metadata: metadata) + "\n"
+            + sessionSubtitle(file, metadata: metadata, showsProject: true, showsTool: true, activity: activity)
+    }
+
     /// 行的菜单：删除会话（点了先确认）。
     static var deleteSession: String {
         String(localized: "删除会话…", comment: "历史会话列表的菜单：删除这个会话的记录，点了先确认")

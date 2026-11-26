@@ -181,6 +181,8 @@ struct AgentHistorySessionList: View {
     @State private var pendingDelete: AgentHistorySessionFile?
     /// 删不掉时的原因。
     @State private var deleteFailure: String?
+    /// 点了「重命名…」的那一份（`AgentHistoryRenamePrompt`）。
+    @State private var pendingRename: AgentHistorySessionFile?
 
     /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
     private var grouping: AgentHistoryGrouping {
@@ -227,6 +229,7 @@ struct AgentHistorySessionList: View {
         } message: {
             Text(verbatim: deleteFailure ?? "")
         }
+        .modifier(AgentHistoryRenamePrompt(history: history, file: $pendingRename))
     }
 
     private func delete(_ file: AgentHistorySessionFile) {
@@ -502,7 +505,6 @@ struct AgentHistorySessionList: View {
                      pins: AgentHistoryPins?, pinned: [AgentHistorySessionFile], run: AgentHistoryRunRow?) -> some View {
         let key = AgentHistoryPinKey(file)
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                                          showsProject: grouping != .project || group.kind == .pinned,
                                           showsTool: showsTool,
                                           isSelected: history.selectedFile?.path == file.path || run?.isSelected == true) {
             if let status = run?.status { AgentHistoryRunStatusTag(status: status) }
@@ -531,7 +533,7 @@ struct AgentHistorySessionList: View {
     private func rowMenu(_ file: AgentHistorySessionFile, pins: AgentHistoryPins?, run: AgentHistoryRunRow?) -> AgentHistoryRowMenu {
         AgentHistoryRowMenu(file: file, pins: pins, run: run, actions: running?.actions,
                             drag: pins == nil ? nil : pinDrag, history: history, onResume: onResume,
-                            onDelete: { pendingDelete = $0 })
+                            onDelete: { pendingDelete = $0 }, onRename: { pendingRename = $0 })
     }
 
     /// 跑着、列表里没有它记录行的会话那一行（列表最顶上，或者它那一组的最上面）。
@@ -618,48 +620,25 @@ struct AgentHistoryRunStatusTag: View {
     }
 
     private func tag(dot: Color, text: String, textColor: Color, help: String) -> some View {
-        HStack(spacing: 3) {
-            Circle().fill(dot).frame(width: 6, height: 6)
-            Text(verbatim: text)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(textColor)
-        }
-        .fixedSize()
-        .help(Text(verbatim: help))
+        AgentHistoryRunDot(color: dot, label: text, help: help)
     }
 }
 
 /// 跑着、但列表里没有它那份记录的会话那一行（多半是还没写出记录的新会话）：在它那一组的最上面，对不上任何一组时
 /// 在列表最顶上（见 `AgentHistoryRunPlacement`）。
-/// 标题（新会话就是「新会话」），第二行状态（程序报过的话）+ 目录名。点一下回到它的终端。
+/// 同会话那一行（`AgentHistoryTitleRow`）：名字（新会话就是「新会话」），右端状态圆点；工具名与目录放进悬停提示与读屏。
+/// 点一下回到它的终端。
 private struct AgentHistoryUnlistedRunRow: View {
     let row: AgentHistoryRunRow
-    /// 这台主机上不止一种工具：写出是哪种（「新会话」本身看不出来）。
+    /// 这台主机上不止一种工具：名字前面一个工具标记（「新会话」本身看不出是哪种）。
     let showsTool: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(row.title)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(UD.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 5) {
-                AgentHistoryRunStatusTag(status: row.status)
-                Text(verbatim: detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(UD.text3)
-                    .lineLimit(1)
-            }
+        AgentHistoryTitleRow(title: row.title, tool: showsTool ? row.tool : nil, isSelected: row.isSelected) {
+            AgentHistoryRunStatusTag(status: row.status)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 6).fill(row.isSelected ? UD.rowSelected : Color.clear))
-        .contentShape(Rectangle())
         .help(Text(verbatim: row.directory))
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(row.isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(Text(verbatim: detail))
     }
 
     private var detail: String {
@@ -679,6 +658,10 @@ struct AgentHistoryRunRowActions: ViewModifier {
     /// 这一行能拖动置顶时那个列表的拖动状态：拖起来的时候不出 ×（这一行淡下去了，× 和它后面不透明的垫底不淡，
     /// 看着是一块方底）。
     var drag: AgentHistoryPinDragModel? = nil
+    /// 这一行显示的名字（「拷贝会话名」）；没有记录的新会话为 nil 时拷的是行上的标题。
+    var title: String? = nil
+    /// 能改名时「重命名…」点了交给列表弹输入框；nil = 不出这一项。
+    var onRename: ((AgentHistorySessionFile) -> Void)? = nil
 
     /// 界面画廊与测试用：建出来的行一开始就当作鼠标悬在上面（悬停拍不到）。App 里始终为 false。
     static var catalogHovered = false
@@ -694,7 +677,7 @@ struct AgentHistoryRunRowActions: ViewModifier {
                     }
                 }
                 .hoverGated { hovered = $0 || Self.catalogHovered }
-                .contextMenu { menu(actions) }
+                .agentHistoryRowMenu { menu(actions) }
         } else {
             content
         }
@@ -705,22 +688,25 @@ struct AgentHistoryRunRowActions: ViewModifier {
         return drag.isLifted(AgentHistoryPinKey(file))
     }
 
-    @ViewBuilder private func menu(_ actions: AgentHistoryRunActions) -> some View {
-        if row.canShowRecord {
-            if row.showsRecord {
-                Button(AgentHistoryText.backToTerminal) { actions.showTerminal(row.id) }
-            } else {
-                Button(AgentHistoryText.viewRecord) { actions.showRecord(row.id) }
+    /// 跑着的会话那几样放在共用的菜单前面（`AgentHistoryRowMenuContent`）。
+    private func menu(_ actions: AgentHistoryRunActions) -> some View {
+        let items = AgentHistorySessionMenuItem.items(
+            hasRecord: file != nil, canResume: false, canPin: pins != nil && file != nil,
+            isPinned: file.map { pins?.isPinned($0) ?? false } ?? false, isRunning: true, canDelete: false,
+            canRename: onRename != nil)
+        return AgentHistoryRowMenuContent(items: items, file: file, title: title ?? row.title, pins: pins,
+                                          onRename: { onRename?($0) }, onEnd: { actions.end(row.id) }) {
+            if row.canShowRecord {
+                if row.showsRecord {
+                    Button(AgentHistoryText.backToTerminal) { actions.showTerminal(row.id) }
+                } else {
+                    Button(AgentHistoryText.viewRecord) { actions.showRecord(row.id) }
+                }
+            }
+            if let move = actions.moveToTab {
+                Button(AgentHistoryText.moveToTab) { move(row.id) }
             }
         }
-        if let move = actions.moveToTab {
-            Button(AgentHistoryText.moveToTab) { move(row.id) }
-        }
-        if let file, let pins {
-            Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(AgentHistoryPinKey(file)))) { pins.toggle(file) }
-        }
-        Divider()
-        Button(AgentHistoryText.endSession, role: .destructive) { actions.end(row.id) }
     }
 }
 
@@ -739,36 +725,25 @@ private struct AgentHistoryRowMenu: ViewModifier {
     var onResume: ((AgentHistorySessionFile) -> Void)? = nil
     /// 点了「删除会话…」：交给列表去确认。
     var onDelete: (AgentHistorySessionFile) -> Void = { _ in }
+    /// 点了「重命名…」：交给列表弹输入框。
+    var onRename: (AgentHistorySessionFile) -> Void = { _ in }
 
     func body(content: Content) -> some View {
         if let run, actions != nil {
-            content.modifier(AgentHistoryRunRowActions(row: run, file: file, pins: pins, actions: actions, drag: drag))
+            content.modifier(AgentHistoryRunRowActions(
+                row: run, file: file, pins: pins, actions: actions, drag: drag,
+                title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]),
+                onRename: history.canRename(file) ? onRename : nil))
         } else {
             let items = AgentHistorySessionMenuItem.items(
                 hasRecord: true, canResume: onResume != nil && history.resumeCommand(for: file) != nil,
                 canPin: pins != nil, isPinned: pins?.isPinned(file) ?? false, isRunning: false,
-                canDelete: history.canDelete(file))
-            content.contextMenu {
-                ForEach(items, id: \.self) { item in
-                    if item.isDestructive, items.count > 1 { Divider() }
-                    button(item)
-                }
+                canDelete: history.canDelete(file), canRename: history.canRename(file))
+            content.agentHistoryRowMenu {
+                AgentHistoryRowMenuContent(items: items, file: file,
+                                           title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]),
+                                           pins: pins, onResume: onResume, onRename: onRename, onDelete: onDelete)
             }
-        }
-    }
-
-    @ViewBuilder private func button(_ item: AgentHistorySessionMenuItem) -> some View {
-        switch item {
-        case .resume:
-            Button(AgentHistoryText.resumeSession) { onResume?(file) }
-        case .pin(let isPinned):
-            Button(AgentHistoryText.pinAction(isPinned: isPinned)) { pins?.toggle(file) }
-        case .copySessionID:
-            Button(AgentHistoryText.copySessionID) { AgentHistoryPasteboard.copy(file.sessionID) }
-        case .delete:
-            Button(AgentHistoryText.deleteSession, role: .destructive) { onDelete(file) }
-        case .endSession:
-            EmptyView()
         }
     }
 }
@@ -1397,6 +1372,11 @@ extension View {
         buttonStyle(.udPlain)
     }
 
+    /// 列表一行的菜单（`AgentHistoryRowMenuContent`）：Mac 上是右键菜单。
+    func agentHistoryRowMenu<Menu: View>(@ViewBuilder _ menu: () -> Menu) -> some View {
+        contextMenu(menuItems: menu)
+    }
+
     func agentHistoryScrollChrome() -> some View { self }
 }
 
@@ -1408,7 +1388,7 @@ struct AgentHistorySessionRowPreview: View {
 
     var body: some View {
         AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
-                               showsProject: false, showsTool: showsTool, isSelected: false)
+                               showsTool: showsTool, isSelected: false)
             .frame(width: AgentHistoryPinDragPreview.width, alignment: .leading)
             .modifier(AgentHistoryPinDragPreview())
     }

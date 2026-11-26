@@ -11,6 +11,10 @@ import UDesignKit
 /// 两端排版上的差别（同 `HostAvatar` 按平台取默认值）：手机上字大、行高、行尾带进入的箭头。
 nonisolated struct AgentHistoryListStyle: Sendable {
     var titleSize: CGFloat
+    /// 会话一行（只有一行名字）的最小高度。
+    var rowMinHeight: CGFloat
+    /// 组里不止一种工具时名字前面那个工具标记的大小。
+    var toolBadgeSize: CGFloat
     var detailSize: CGFloat
     var roleSize: CGFloat
     var snippetSize: CGFloat
@@ -35,16 +39,16 @@ nonisolated struct AgentHistoryListStyle: Sendable {
 
     #if os(macOS)
     static let platform = AgentHistoryListStyle(
-        titleSize: 12.5, detailSize: 11, roleSize: 10.5, snippetSize: 12, noteSize: 11,
-        rowPadding: EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10),
+        titleSize: 13, rowMinHeight: 30, toolBadgeSize: 14, detailSize: 11, roleSize: 10.5, snippetSize: 12, noteSize: 11,
+        rowPadding: EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10),
         hitRowPadding: EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10),
         rowRadius: 6, showsRowChevron: false, hitRowMinHeight: nil,
         headerSize: 11.5, headerChevronSize: 9, headerHeight: 26, headerPadding: 8, headerShowsToolBadge: false,
         searchSpacing: 10, searchPadding: 6, stopButtonMinHeight: nil, hidesScrollIndicators: true)
     #else
     static let platform = AgentHistoryListStyle(
-        titleSize: 15, detailSize: 12.5, roleSize: 11.5, snippetSize: 14, noteSize: 12.5,
-        rowPadding: EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12),
+        titleSize: 15, rowMinHeight: 44, toolBadgeSize: 16, detailSize: 12.5, roleSize: 11.5, snippetSize: 14, noteSize: 12.5,
+        rowPadding: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12),
         hitRowPadding: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12),
         rowRadius: 10, showsRowChevron: true, hitRowMinHeight: 44,
         headerSize: 13.5, headerChevronSize: 11, headerHeight: 40, headerPadding: 10, headerShowsToolBadge: true,
@@ -84,52 +88,78 @@ private struct AgentHistoryRowChevron: View {
 
 // MARK: - 会话一行
 
-/// 会话一行：标题，第二行（组里不止一种工具时）工具名 · 时间 · 大小 · 分支 ·（不按项目分组时）项目。
-/// 行前不画工具标记：一组里只有一种工具时它是噪音，混着的时候第二行的字说得清。
-/// `status`：在 Code 标签页里跑着时第二行最前面它此刻的状态（两端的状态对象不同，各自给）。
+/// 列表一行的样子（同 Claude Code Desktop 的侧栏）：只有一行名字；组里不止一种工具时前面一个小工具标记，
+/// 右端放状态（跑着的会话的圆点 `AgentHistoryRunDot`，Mac 上悬停时由 × 盖住）。会话行、还没对上记录的跑着的会话
+/// 那一行都用它。
+struct AgentHistoryTitleRow<Trailing: View>: View {
+    let title: String
+    var tool: AgentHistoryTool? = nil
+    let isSelected: Bool
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        let style = AgentHistoryListStyle.platform
+        HStack(spacing: 8) {
+            if let tool { AgentHistoryToolBadge(tool: tool, size: style.toolBadgeSize) }
+            Text(verbatim: title)
+                .font(.system(size: style.titleSize))
+                .foregroundStyle(UD.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            trailing()
+            AgentHistoryRowChevron()
+        }
+        .padding(style.rowPadding)
+        .frame(minHeight: style.rowMinHeight)
+        .modifier(AgentHistoryRowBackground(isSelected: isSelected))
+    }
+}
+
+/// 跑着的会话在列表一行右端的状态圆点：颜色与文字由各端给（两端的配色出处不同），文字放进悬停提示与读屏。
+struct AgentHistoryRunDot: View {
+    let color: Color
+    let label: String
+    var help: String? = nil
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .padding(.horizontal, 3)
+            .help(Text(verbatim: help ?? label))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: label))
+    }
+}
+
+/// 会话一行：只有名字（`AgentHistoryTitleRow`）。时间、大小、分支、项目不占列表的地方，悬停提示与读屏里有。
+/// `status`：在 Code 标签页里跑着时行右端它此刻的状态（两端的状态对象不同，各自给，画成 `AgentHistoryRunDot`）。
 struct AgentHistorySessionRow<Status: View>: View {
     let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
-    let showsProject: Bool
-    /// 组里不止一种工具：第二行最前面写工具名。
+    /// 组里不止一种工具：名字前面一个工具标记。
     var showsTool = false
     let isSelected: Bool
     @ViewBuilder var status: () -> Status
 
     var body: some View {
-        let style = AgentHistoryListStyle.platform
-        HStack(alignment: .top, spacing: 9) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(AgentHistoryText.sessionTitle(file, metadata: metadata))
-                    .font(.system(size: style.titleSize, weight: .medium))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 5) {
-                    status()
-                    AgentSessionTimeText(history: history, file: file) { activity in
-                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
-                                                         showsTool: showsTool, activity: activity)
-                    }
-                    .font(.system(size: style.detailSize))
-                    .foregroundStyle(UD.text3)
-                    .lineLimit(1)
-                }
-            }
-            AgentHistoryRowChevron()
-        }
-        .padding(style.rowPadding)
-        .modifier(AgentHistoryRowBackground(isSelected: isSelected))
+        let activity = history.liveActivity(of: file)
+        AgentHistoryTitleRow(title: AgentHistoryText.sessionTitle(file, metadata: metadata),
+                             tool: showsTool ? file.tool : nil, isSelected: isSelected, trailing: status)
+            .help(Text(verbatim: AgentHistoryText.sessionRowHelp(file, metadata: metadata, activity: activity)))
+            .accessibilityHint(Text(verbatim: AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: true,
+                                                                             activity: activity)))
     }
 }
 
 extension AgentHistorySessionRow where Status == EmptyView {
     init(history: AgentHistoryModel, file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?,
-         showsProject: Bool, showsTool: Bool = false, isSelected: Bool) {
-        self.init(history: history, file: file, metadata: metadata, showsProject: showsProject, showsTool: showsTool,
-                  isSelected: isSelected) { EmptyView() }
+         showsTool: Bool = false, isSelected: Bool) {
+        self.init(history: history, file: file, metadata: metadata, showsTool: showsTool, isSelected: isSelected) {
+            EmptyView()
+        }
     }
 }
 
@@ -357,5 +387,117 @@ private struct AgentHistorySearchHitRow: View {
         .padding(style.hitRowPadding)
         .frame(minHeight: style.hitRowMinHeight)
         .modifier(AgentHistoryRowBackground(isSelected: isSelected))
+    }
+}
+
+// MARK: - 行的菜单
+
+/// 列表一行的菜单内容，两端共用（Mac 右键、iOS 长按；怎么弹出来由各端的 `agentHistoryRowMenu`）。
+/// 条目与顺序见 `AgentHistorySessionMenuItem`；Mac 上跑着的会话另有的几样（查看记录 / 返回终端、移到新标签页）
+/// 由 `extras` 放在最前面。
+struct AgentHistoryRowMenuContent<Extras: View>: View {
+    let items: [AgentHistorySessionMenuItem]
+    /// 这一行的记录；还没对上记录的新会话为 nil（只有「结束会话」）。
+    let file: AgentHistorySessionFile?
+    /// 这一行显示的名字（「拷贝会话名」）。
+    let title: String
+    let pins: AgentHistoryPins?
+    var onResume: ((AgentHistorySessionFile) -> Void)? = nil
+    var onRename: (AgentHistorySessionFile) -> Void = { _ in }
+    var onDelete: (AgentHistorySessionFile) -> Void = { _ in }
+    var onEnd: () -> Void = {}
+    @ViewBuilder var extras: () -> Extras
+
+    var body: some View {
+        extras()
+        ForEach(items, id: \.self) { item in
+            if item.isDestructive, items.count > 1 { Divider() }
+            button(item)
+        }
+    }
+
+    @ViewBuilder private func button(_ item: AgentHistorySessionMenuItem) -> some View {
+        switch item {
+        case .resume:
+            Button { if let file { onResume?(file) } } label: {
+                Label(AgentHistoryText.resumeSession, systemImage: "play")
+            }
+        case .pin(let isPinned):
+            Button {
+                if let pins, let file { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } }
+            } label: {
+                Label(AgentHistoryText.pinAction(isPinned: isPinned), systemImage: isPinned ? "pin.slash" : "pin")
+            }
+        case .rename:
+            Button { if let file { onRename(file) } } label: {
+                Label(AgentHistoryText.renameSession, systemImage: "pencil")
+            }
+        case .copyTitle:
+            Button { AgentHistoryPasteboard.copy(title) } label: {
+                Label(AgentHistoryText.copySessionTitle, systemImage: "textformat")
+            }
+        case .copySessionID:
+            Button { if let file { AgentHistoryPasteboard.copy(file.sessionID) } } label: {
+                Label(AgentHistoryText.copySessionID, systemImage: "doc.on.doc")
+            }
+        case .delete:
+            Button(role: .destructive) { if let file { onDelete(file) } } label: {
+                Label(AgentHistoryText.deleteSession, systemImage: "trash")
+            }
+        case .endSession:
+            Button(role: .destructive, action: onEnd) {
+                Label(AgentHistoryText.endSession, systemImage: "xmark.circle")
+            }
+        }
+    }
+}
+
+extension AgentHistoryRowMenuContent where Extras == EmptyView {
+    init(items: [AgentHistorySessionMenuItem], file: AgentHistorySessionFile?, title: String, pins: AgentHistoryPins?,
+         onResume: ((AgentHistorySessionFile) -> Void)? = nil, onRename: @escaping (AgentHistorySessionFile) -> Void = { _ in },
+         onDelete: @escaping (AgentHistorySessionFile) -> Void = { _ in }, onEnd: @escaping () -> Void = {}) {
+        self.init(items: items, file: file, title: title, pins: pins, onResume: onResume, onRename: onRename,
+                  onDelete: onDelete, onEnd: onEnd) { EmptyView() }
+    }
+}
+
+// MARK: - 重命名
+
+/// 「重命名…」的输入框和改不了时的提示，两端共用。`file` 非 nil 时弹出，输入框里先放现在的名字。
+struct AgentHistoryRenamePrompt: ViewModifier {
+    let history: AgentHistoryModel
+    @Binding var file: AgentHistorySessionFile?
+    @State private var text = ""
+    @State private var failure: String?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: file?.path, initial: true) { _, _ in
+                if let file { text = AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path]) }
+            }
+            .alert(AgentHistoryText.renameTitle, isPresented: Binding(get: { file != nil }, set: { if !$0 { file = nil } }),
+                   presenting: file) { target in
+                TextField(AgentHistoryText.renameTitle, text: $text)
+                Button(AgentHistoryText.renameButton) { rename(target, to: text) }
+                Button(String(localized: "取消"), role: .cancel) {}
+            } message: { _ in
+                Text(AgentHistoryText.renameMessage)
+            }
+            .alert(AgentHistoryText.renameFailedTitle, isPresented: Binding(get: { failure != nil },
+                                                                           set: { if !$0 { failure = nil } })) {
+                Button(String(localized: "好")) {}
+            } message: {
+                Text(verbatim: failure ?? "")
+            }
+    }
+
+    private func rename(_ target: AgentHistorySessionFile, to title: String) {
+        Task {
+            do {
+                try await history.rename(target, to: title)
+            } catch {
+                failure = FriendlyError.describe(error)
+            }
+        }
     }
 }

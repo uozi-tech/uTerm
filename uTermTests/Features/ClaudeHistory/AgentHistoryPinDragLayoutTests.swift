@@ -122,11 +122,12 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         let rowBox = try XCTUnwrap(changedBox(plain, selected), "选中时这一行有底色")
         let buttonBox = try XCTUnwrap(changedBox(plain, hovered), "悬停时出 ×")
         let scale = CGFloat(plain.pixelsWide) / plain.size.width
-        XCTAssertGreaterThan(rowBox.height, 30 * scale, "行高两行字")
+        XCTAssertGreaterThanOrEqual(rowBox.height, 29 * scale, "一行名字的行高")
+        XCTAssertLessThan(rowBox.height, 34 * scale, "只有一行：时间、大小、分支不占行（同 Claude Code Desktop 的侧栏）")
         XCTAssertEqual(buttonBox.midY, rowBox.midY, accuracy: 1.5 * scale, "× 上下居中")
     }
 
-    /// 标题很长时 × 盖住两行字的行尾，上下不露半截字：悬停时变了的像素从行顶到行底是一整条。
+    /// 标题很长时也只有一行（截断，不折行），× 盖住行尾、上下居中、不出这一行。
     func testRunRowEndButtonCoversBothLineEnds() async throws {
         let title = String(repeating: "很长的标题", count: 20)
         let plain = try await runRowSnapshot(hovered: false, title: title)
@@ -138,6 +139,7 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         XCTAssertGreaterThan(buttonBox.minX, (300 - 40) * scale, "变的只在右端")
         XCTAssertEqual(buttonBox.midY, rowBox.midY, accuracy: 1.5 * scale, "盖住的那一块也上下居中")
         XCTAssertLessThanOrEqual(buttonBox.height, rowBox.height, "不出这一行")
+        XCTAssertLessThan(rowBox.height, 34 * scale, "长名字不折成两行")
     }
 
     /// 跑着的会话有记录、在它那一组里自己那一行上（不在顶上单独一块）：悬停同样出 ×，只在右端、不挪字。

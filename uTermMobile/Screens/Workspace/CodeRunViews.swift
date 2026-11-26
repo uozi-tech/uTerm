@@ -139,37 +139,28 @@ struct CodeRunHeader: View {
 
 /// 跑着、但列表里没有它那份记录的会话那一行（多半是还没写出记录的新会话）：在它那一组的最上面，对不上任何一组时
 /// 在列表最顶上（见 `AgentHistoryRunPlacement`）。
-/// 标题（新会话就是「新会话」），第二行程序报的状态 + 目录名（连接中、已退出时换成那句状态）。点一下回到它的终端。
+/// 同会话那一行（共用的 `AgentHistoryTitleRow`）：名字（新会话就是「新会话」），右端程序报的状态圆点；
+/// 连接中、断开、已退出时右端换成那句状态（这时没有终端可回）。目录与工具名放进读屏。点一下回到它的终端。
 struct CodeUnlistedRunRow: View {
     let code: CodeTabRuns
     let run: CodeRunBoard<TermTab>.Run
-    /// 这台主机上不止一种工具：写出是哪种（「新会话」本身看不出来）。
+    /// 这台主机上不止一种工具：名字前面一个工具标记（「新会话」本身看不出是哪种）。
     let showsTool: Bool
     let selected: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(code.tab.title(of: run))
-                    .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
+        let state = CodeRunText.listDetail(of: run, controller: run.terminal.controller)
+        AgentHistoryTitleRow(title: code.tab.title(of: run), tool: showsTool ? run.tool : nil, isSelected: selected) {
+            if state.isConnected {
+                CodeRunStatusMark(run: run)
+            } else {
+                Text(verbatim: state.text)
+                    .font(M.sans(12.5)).foregroundStyle(run.isRunning ? M.text3 : M.warning)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    let state = CodeRunText.listDetail(of: run, controller: run.terminal.controller)
-                    if !run.isRunning || state.isConnected { CodeRunStatusMark(run: run) }
-                    Text(verbatim: showsTool ? "\(run.tool.displayName) · \(state.text)" : state.text)
-                        .font(M.sans(12.5)).foregroundStyle(run.isRunning ? M.text3 : M.warning)
-                        .lineLimit(1).truncationMode(.middle)
-                }
+                    .fixedSize()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
-            .fill(selected ? M.rowSelected : Color.clear))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(Text(verbatim: showsTool ? "\(run.tool.displayName) · \(state.text)" : state.text))
     }
 }
 
@@ -193,12 +184,7 @@ struct CodeRunStatusMark: View {
     }
 
     private func mark(color: Color, text: String, textColor: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(verbatim: text)
-                .font(M.sans(11.5, weight: .medium)).foregroundStyle(textColor)
-        }
-        .fixedSize()
+        AgentHistoryRunDot(color: color, label: text)
     }
 }
 

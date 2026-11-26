@@ -148,11 +148,11 @@ final class AgentHistoryDeleteTests: XCTestCase {
     func testMenuItemsForAHistoryRow() {
         typealias Item = AgentHistorySessionMenuItem
         XCTAssertEqual(Item.items(hasRecord: true, canResume: true, canPin: true, isPinned: false, isRunning: false,
-                                  canDelete: true), [.resume, .pin(isPinned: false), .copySessionID, .delete])
+                                  canDelete: true), [.resume, .pin(isPinned: false), .copyTitle, .copySessionID, .delete])
         XCTAssertEqual(Item.items(hasRecord: true, canResume: false, canPin: false, isPinned: false, isRunning: false,
-                                  canDelete: false), [.copySessionID], "继续不了、不能置顶、不能删的只剩拷贝 ID")
+                                  canDelete: false), [.copyTitle, .copySessionID], "继续不了、不能置顶、不能删的只剩拷贝")
         XCTAssertEqual(Item.items(hasRecord: true, canResume: true, canPin: true, isPinned: true, isRunning: true,
-                                  canDelete: true), [.pin(isPinned: true), .endSession], "跑着的会话不能删")
+                                  canDelete: true), [.pin(isPinned: true), .copyTitle, .endSession], "跑着的会话不能删")
         XCTAssertTrue(Item.delete.isDestructive)
         XCTAssertFalse(Item.copySessionID.isDestructive)
     }

@@ -217,6 +217,10 @@ protocol AgentHistorySource: Actor {
     /// 删掉这个会话在主机上的记录（用户在列表里点了「删除」、确认过）。删不掉照常抛；主记录删了、附带的文件
     /// （子代理的记录等）没删干净不算失败。
     func delete(_ file: AgentHistorySessionFile) async throws
+    /// 能不能改会话的名字（写回记录，这种工具自己也认）。
+    nonisolated var supportsRename: Bool { get }
+    /// 把会话的名字改成 `title`（已去掉首尾空白、非空）。改不了照常抛。
+    func rename(_ file: AgentHistorySessionFile, to title: String) async throws
 }
 
 extension AgentHistorySource {
@@ -228,15 +232,20 @@ extension AgentHistorySource {
     nonisolated func newSessionCommand(directory: String) -> String? { nil }
     nonisolated var supportsDelete: Bool { false }
     func delete(_ file: AgentHistorySessionFile) async throws { throw AgentHistoryDeleteError.unsupported }
+    nonisolated var supportsRename: Bool { false }
+    func rename(_ file: AgentHistorySessionFile, to title: String) async throws { throw AgentHistoryDeleteError.renameUnsupported }
 }
 
 nonisolated enum AgentHistoryDeleteError: LocalizedError {
     /// 这种工具的会话不能单独删（见 `AgentHistorySource.supportsDelete`）。
     case unsupported
+    /// 这种工具的会话不能在 uTerm 里改名（见 `AgentHistorySource.supportsRename`）。
+    case renameUnsupported
 
     var errorDescription: String? {
         switch self {
         case .unsupported: return String(localized: "这种工具的会话不能在 uTerm 里删除")
+        case .renameUnsupported: return String(localized: "这种工具的会话不能在 uTerm 里重命名")
         }
     }
 }

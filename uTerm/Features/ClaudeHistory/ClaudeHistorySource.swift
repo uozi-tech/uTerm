@@ -327,6 +327,31 @@ actor ClaudeHistorySource: AgentHistorySource {
         try? await RemoteFileOperations.removeTree(at: directory, provider: provider)
     }
 
+    nonisolated var supportsRename: Bool { true }
+
+    /// 同 Claude Code 的 `/rename`：往记录末尾追加一行 `custom-title`（它自己 `/resume` 时也认这一行，列表标题以它为准）。
+    /// 会话可能正开着、Claude Code 还在往里写：用 shell 的 `>>`（O_APPEND，一行一次写完）追加，不按大小定位写，
+    /// 免得盖掉它刚写进去的字节。
+    func rename(_ file: AgentHistorySessionFile, to title: String) async throws {
+        _ = try await provider.exec(Self.renameCommand(path: file.path, sessionID: file.sessionID, title: title))
+        cache[file.cacheKey] = nil
+        names[file.path] = nil
+    }
+
+    /// 追加 `custom-title` 那一行的命令。文件末尾不是换行（最后一行正写到一半）时先补一个换行。
+    /// 路径和那一行都作为参数交给 `RemotePath.shScript`（名字不进命令文字；登录 shell 是 csh / fish 也照样跑）。
+    nonisolated static func renameCommand(path: String, sessionID: String, title: String) -> String {
+        let line = #"{"type":"custom-title","customTitle":"# + jsonString(title) + #","sessionId":"# + jsonString(sessionID) + "}"
+        return RemotePath.shScript(
+            "tail -c 1 \(argument: 0) | od -c | grep -q '\\\\n' || printf '\\n' >> \(argument: 0); printf '%s\\n' \(argument: 1) >> \(argument: 0)",
+            arguments: [path, line], escapedNames: false)
+    }
+
+    private nonisolated static func jsonString(_ value: String) -> String {
+        let data = (try? JSONEncoder().encode(value)) ?? Data("\"\"".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// 一份记录旁边属于它的目录：`…/<会话 ID>.jsonl` → `…/<会话 ID>`。不是 `.jsonl` 为 nil。
     nonisolated static func companionDirectory(of path: String) -> String? {
         guard path.hasSuffix(".jsonl"), path.count > ".jsonl".count else { return nil }

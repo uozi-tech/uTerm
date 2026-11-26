@@ -87,6 +87,15 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
         try await source.delete(file)
     }
 
+    nonisolated var supportsRename: Bool { sources.contains { $0.supportsRename } }
+
+    func rename(_ file: AgentHistorySessionFile, to title: String) async throws {
+        guard let source = source(for: file.tool), source.supportsRename else {
+            throw AgentHistoryDeleteError.renameUnsupported
+        }
+        try await source.rename(file, to: title)
+    }
+
     // MARK: 列表
 
     func projects() async throws -> [AgentHistoryProject] {
