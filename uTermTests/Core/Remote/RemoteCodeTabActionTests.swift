@@ -148,6 +148,45 @@ final class RemoteCodeTabActionTests: XCTestCase {
         let listed = await waitUntil { client.sessions.contains { $0.id == id } }
         XCTAssertTrue(listed, "会话列表里也有它（设备按 63 认出它归 Code 标签页）")
     }
+
+    /// SSH 主机的 Code 标签页（64 号消息带 `server`）：真的工作区窗口里起会话，带着主机出现在 Mac 推来的 Code 标签页（63）
+    /// 里；那台主机没有窗口时回原因、不断开，也不落到本机终端上。
+    func test_ssh_host_session_reaches_the_phone_in_code_tabs() async throws {
+        let registry = TerminalSessionRegistry()
+        let ssh = SSHCodeTabWindowRig(registry: registry)
+        defer { ssh.dispose() }
+        let made1 = await ssh.openCodeTab(directory: "/srv/shop")
+        let (codeID, code) = try XCTUnwrap(made1)
+        let actor = RemoteCodeTabActor { [weak registry] action in
+            await RemoteCodeTabActor.route(action, localWindows: [], workspaces: registry?.codeTabWorkspaces() ?? [],
+                                           openLocalWindow: { _ in .failure(.init(message: "不该开本机终端窗口")) })
+        }
+        let (server, client) = try await pairedClient(registry: registry, actor: actor)
+        defer { server.stop() }
+        XCTAssertTrue(client.supportsCodeTabHosts)
+        let mirrored = await waitUntil { client.codeTabs?.mirrored(serverID: ssh.host)?.id == codeID }
+        XCTAssertTrue(mirrored, "SSH 主机的 Code 标签页也报了")
+        XCTAssertNil(client.codeTabs?.mirrored(), "没有本机的")
+
+        let id = try await client.performCodeTabAction(RemoteCodeTabAction(
+            action: .start, tab: codeID, tool: AgentHistoryTool.claude.rawValue, directory: "/srv/shop", server: ssh.host))
+        XCTAssertEqual(code.runs.map(\.id), [id])
+        let arrived = await waitUntil {
+            client.codeTabs?.mirrored(serverID: ssh.host)?.runs.contains { $0.session == id } == true
+        }
+        XCTAssertTrue(arrived, "63 号消息里有新会话")
+        XCTAssertEqual(client.codeRunSessionIDs(serverIDs: [ssh.host]), [id])
+        XCTAssertTrue(client.codeRunSessionIDs.isEmpty, "老的认法（只认本机的）不变")
+
+        do {
+            _ = try await client.performCodeTabAction(RemoteCodeTabAction(
+                action: .start, tool: AgentHistoryTool.claude.rawValue, directory: "/srv/shop", server: UUID()))
+            XCTFail("应当失败")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, WorkspaceCodeTabText.noHostWindow)
+        }
+        XCTAssertEqual(client.state, .connected)
+    }
 }
 
 /// 落点收到的请求（测试里读）。

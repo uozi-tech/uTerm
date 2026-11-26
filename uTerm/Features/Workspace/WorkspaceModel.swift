@@ -46,8 +46,8 @@ final class WorkspaceModel {
     /// 本窗口绑定的服务器。没有活动标签时（区域空掉、或分屏按钮开在空组上）的
     /// 回落来源，由 `TerminalArea` 注入。
     /// `@ObservationIgnored`：是接线不是状态，改它不该让任何视图失效。
-    @ObservationIgnored private var defaultServerProfileID: UUID?
-    @ObservationIgnored private var defaultServerTitle: String = String(localized: "终端", comment: "终端标签页的默认标题")
+    @ObservationIgnored private(set) var defaultServerProfileID: UUID?
+    @ObservationIgnored private(set) var defaultServerTitle: String = String(localized: "终端", comment: "终端标签页的默认标题")
 
     /// 三栏 UI 状态：sidebar 折叠 / inspector 显隐 / 预览-终端比例。持久化进 snapshot。
     var uiState = WorkspaceUIState()
@@ -380,6 +380,9 @@ final class WorkspaceModel {
                 .bringToFront()
             return id
         }
+        // 手机远控把这个窗口的 Code 标签页（SSH 主机的）镜像过去（63 号消息），请 Mac 在里面做事时在这里找（64 号）。
+        registry.setCodeTabs(forWindow: windowID) { [weak self] in self?.remoteCodeTabs() ?? [] }
+        registry.setCodeTabWorkspace(forWindow: windowID, self)
         syncTerminalTitles()
     }
 

@@ -5,7 +5,8 @@ import UPaneGroups
 // App 进程里的落点；远控进程经 XPC 转到这里（`RemoteHostAgentBridge`）。
 
 extension RemoteCodeTabActor {
-    /// App 里接上本机终端窗口：要打开「允许打开本机终端」；Mac 上还没有本机终端窗口时开一个，只留 Code 标签页。
+    /// App 里接上 Mac 的窗口：要打开「允许打开本机终端」（SSH 主机的也是这个开关）。本机的交给本机终端窗口，Mac 上还没有
+    /// 本机终端窗口时开一个，只留 Code 标签页；SSH 主机的（`action.server`）交给那台主机的工作区 / 终端窗口，见 `route`。
     @MainActor
     static func live(settings: RemoteControlSettings, registry: TerminalSessionRegistry) -> RemoteCodeTabActor {
         RemoteCodeTabActor { [weak settings, weak registry] action in
@@ -13,10 +14,24 @@ extension RemoteCodeTabActor {
             guard settings.isLocalShellEnabled else {
                 return .failure(action, String(localized: "Mac 上没有打开「允许打开本机终端」。在 Mac 的 uTerm 里打开「设置 › 远程控制」。"))
             }
-            return await LocalShellCodeTabActions.perform(
-                action, windows: LocalShellWindowRouter.shared.modelsByRecency,
-                openWindow: { directory in await openWindow(directory: directory, registry: registry) })
+            return await route(action, localWindows: LocalShellWindowRouter.shared.modelsByRecency,
+                               workspaces: registry.codeTabWorkspaces(),
+                               openLocalWindow: { directory in await openWindow(directory: directory, registry: registry) })
         }
+    }
+
+    /// 按 `action.server` 分：没带或是本机的照旧交给本机终端窗口（`LocalShellCodeTabActions.perform`）；SSH 主机的只交给
+    /// 那台主机的窗口（`WorkspaceCodeTabActions.perform`），那台主机一个窗口都没有时回错误，绝不落到本机终端上。
+    @MainActor
+    static func route(_ action: RemoteCodeTabAction, localWindows: [LocalShellWindowModel], workspaces: [WorkspaceModel],
+                      openLocalWindow: @MainActor (String?) async
+                          -> Result<LocalShellCodeTabActions.OpenedWindow, RemoteLocalShellOpener.Failure>,
+                      historyWait: Duration? = nil) async -> RemoteCodeTabActionResult {
+        if let host = action.sshServer {
+            return await WorkspaceCodeTabActions.perform(action, host: host, workspaces: workspaces, historyWait: historyWait)
+        }
+        return await LocalShellCodeTabActions.perform(action, windows: localWindows, openWindow: openLocalWindow,
+                                                      historyWait: historyWait)
     }
 
     /// 开一个本机终端窗口（同手机「新建本机终端」），等它的 shell 登记、窗口的 model 出现。
@@ -60,7 +75,7 @@ enum LocalShellCodeTabActions {
     ///   由它新开一个。一个本机终端窗口都没有时开一个（`openWindow`），做完关掉它起的那个 shell，窗口里只留 Code 标签页。
     static func perform(_ action: RemoteCodeTabAction, windows: [LocalShellWindowModel],
                         openWindow: @MainActor (String?) async -> Result<OpenedWindow, RemoteLocalShellOpener.Failure>,
-                        historyWait: Duration = LocalShellWindowModel.codeTabHistoryWait) async -> RemoteCodeTabActionResult {
+                        historyWait: Duration? = nil) async -> RemoteCodeTabActionResult {
         guard let kind = action.knownAction else { return .failure(action, LocalShellCodeTabText.unknownAction) }
         switch kind {
         case .restart, .moveToTab:
@@ -89,37 +104,51 @@ enum LocalShellCodeTabActions {
     }
 }
 
-extension LocalShellWindowModel {
-    /// 新开的 Code 标签页等文件通道接好、列表列出来的上限（`CodeTabModel.waitForHistory`）。
-    static let codeTabHistoryWait: Duration = .seconds(10)
+/// 一个能在它的 Code 标签页里替设备做事的窗口：本机终端窗口（`LocalShellWindowModel`），SSH 主机的工作区 / 终端窗口
+///（`WorkspaceModel`，见 `WorkspaceCodeTabActions`）。做法两边一样（`performCodeTabAction`），只是标签树不同。
+@MainActor
+protocol CodeTabActionHost: AnyObject {
+    /// 跑着 `session` 这个会话的 Code 标签页：标签 id 与它的模型。
+    func codeTabHolding(_ session: UUID) -> (tabID: UUID, code: CodeTabModel)?
+    /// 把这个标签切到前台。
+    func activateCodeTab(_ tabID: UUID)
+    /// 「移到新标签页」。
+    func moveCodeRunToTab(_ runID: UUID, fromCodeTab tabID: UUID)
+    /// 有一个跑着 `session` 的普通终端标签页（「移到新标签页」之后用来核对）。
+    func hasTerminalTab(_ session: UUID) -> Bool
+    /// 做「继续」「新会话」的那个 Code 标签页，切到前台（已经有的不改它「新会话」的目录）；没有就新开一个（开在
+    /// `action.directory`）。开不了为 nil。
+    func codeTabForRemote(_ action: RemoteCodeTabAction) -> CodeTabModel?
+}
 
-    /// 这个窗口里有 Code 标签页。
-    var hasCodeTab: Bool { groups.allTabs.contains { $0.payload.codeTab != nil } }
+extension CodeTabActionHost {
+    /// 新开的 Code 标签页等文件通道接好、列表列出来的上限（`CodeTabModel.waitForHistory`）。
+    static var codeTabHistoryWait: Duration { .seconds(10) }
 
     /// 在这个窗口的 Code 标签页里做设备请的一件事，回做完之后的那个会话或失败原因。Mac 上照本机点的那样显示：
     /// 切到 Code 标签页、右边是那个会话（「移到新标签页」切到挪出去的那个标签）。窗口里还没有 Code 标签页时，「继续」
-    /// 「新会话」先开一个，等它接好列表再做。做完照常推 63 / 20 号消息（注册表的观察）。
-    func performCodeTabAction(_ action: RemoteCodeTabAction,
-                              historyWait: Duration = LocalShellWindowModel.codeTabHistoryWait) async
+    /// 「新会话」先开一个，等它接好列表再做。做完照常推 63 / 20 号消息（注册表的观察）。`historyWait` 为 nil 时等
+    /// `codeTabHistoryWait`。
+    func performCodeTabAction(_ action: RemoteCodeTabAction, historyWait: Duration? = nil) async
         -> RemoteCodeTabActionResult {
         guard let kind = action.knownAction else { return .failure(action, LocalShellCodeTabText.unknownAction) }
         switch kind {
         case .restart:
-            guard let id = action.session, let (tab, code) = codeTab(running: id),
+            guard let id = action.session, let (tabID, code) = codeTabHolding(id),
                   let old = code.runs.first(where: { $0.id == id }) else {
                 return .failure(action, LocalShellCodeTabText.sessionGone)
             }
             guard old.isEnded else { return .failure(action, LocalShellCodeTabText.stillRunning) }
             guard let run = code.restart(id) else { return .failure(action, LocalShellCodeTabText.restartFailed) }
-            activateTab(tab.id)
+            activateCodeTab(tabID)
             code.selectRun(run.id)
             return .success(action, session: run.id)
         case .moveToTab:
-            guard let id = action.session, let (tab, _) = codeTab(running: id) else {
+            guard let id = action.session, let (tabID, _) = codeTabHolding(id) else {
                 return .failure(action, LocalShellCodeTabText.sessionGone)
             }
-            moveCodeRunToTab(id, fromCodeTab: tab.id)
-            guard codeTab(running: id) == nil, groups.locateTab(id) != nil else {
+            moveCodeRunToTab(id, fromCodeTab: tabID)
+            guard codeTabHolding(id) == nil, hasTerminalTab(id) else {
                 return .failure(action, LocalShellCodeTabText.moveFailed)
             }
             return .success(action, session: id)
@@ -127,8 +156,8 @@ extension LocalShellWindowModel {
             guard let tool = action.tool.flatMap(AgentHistoryTool.init(rawValue:)) else {
                 return .failure(action, LocalShellCodeTabText.unsupportedTool)
             }
-            guard let code = codeTabForRemote(directory: action.directory),
-                  await code.waitForHistory(timeout: historyWait) != nil else {
+            guard let code = codeTabForRemote(action),
+                  await code.waitForHistory(timeout: historyWait ?? Self.codeTabHistoryWait) != nil else {
                 return .failure(action, LocalShellCodeTabText.notReady)
             }
             if kind == .resume {
@@ -147,15 +176,25 @@ extension LocalShellWindowModel {
             return .success(action, session: run.id)
         }
     }
+}
 
-    /// 这个窗口的 Code 标签页，切到前台（已经有的不改它「新会话」的目录）；没有就新开一个（开在 `directory`）。
+extension LocalShellWindowModel: CodeTabActionHost {
+    /// 这个窗口里有 Code 标签页。
+    var hasCodeTab: Bool { groups.allTabs.contains { $0.payload.codeTab != nil } }
+
+    func codeTabHolding(_ session: UUID) -> (tabID: UUID, code: CodeTabModel)? {
+        codeTab(running: session).map { ($0.tab.id, $0.code) }
+    }
+
+    func hasTerminalTab(_ session: UUID) -> Bool { groups.locateTab(session) != nil }
+
     /// 这台 Mac 的 Code 标签页在别的窗口里时为 nil（`LocalShellCodeTabActions.perform` 不会这样交过来）。
-    private func codeTabForRemote(directory: String?) -> CodeTabModel? {
-        let id = hasCodeTab ? focusCodeTab(directory: nil) : Optional(openCodeTab(directory: directory))
+    func codeTabForRemote(_ action: RemoteCodeTabAction) -> CodeTabModel? {
+        let id = hasCodeTab ? focusCodeTab(directory: nil) : Optional(openCodeTab(directory: action.directory))
         return id.flatMap { groups.tab($0)?.payload.codeTab }
     }
 
-    private func activateTab(_ id: UUID) {
+    func activateCodeTab(_ id: UUID) {
         guard let at = groups.locateTab(id) else { return }
         groups.activateTab(groupID: at.groupID, index: at.index)
     }

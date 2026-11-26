@@ -294,6 +294,68 @@ final class RemoteCodeTabsTests: XCTestCase {
         XCTAssertTrue(ended)
         XCTAssertLessThan(Date().timeIntervalSince(endedAt), 0.5, "结束马上到")
     }
+
+    // MARK: - SSH 主机的 Code 标签页（真的工作区窗口）
+
+    /// SSH 主机窗口里的 Code 标签页新起一个会话：同本机的一样，设备先收到它归哪个 Code 标签页（63，带着主机），
+    /// 再收到列着它的会话列表（20）；挪出去之后先收到它不归 Code 标签页了，再收到它当标签排在哪的列表。
+    func test_ssh_host_run_reaches_the_phone_in_code_tabs_before_the_list() async throws {
+        let registry = TerminalSessionRegistry()
+        let ssh = SSHCodeTabWindowRig(registry: registry)
+        defer { ssh.dispose() }
+        let made1 = await ssh.openTerminal()
+        let terminal = try XCTUnwrap(made1)
+        let made2 = await ssh.openCodeTab(directory: "/srv/shop")
+        let (codeID, code) = try XCTUnwrap(made2)
+        let server = RemoteHostServer(registry: registry,
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
+                                      localName: "测试 Mac", localID: UUID(), advertises: false,
+                                      localFeatures: RemoteConstants.localFeatures)
+        server.start()
+        defer { server.stop() }
+        _ = await waitUntil { server.port != nil }
+        let phone = try await rawPhone(server, features: Self.base + [RemoteFeature.codeTabs])
+        defer { phone.link.close() }
+        let first = try XCTUnwrap(phone.inbox.codeTabs.first?.first)
+        XCTAssertEqual(first.id, codeID)
+        XCTAssertEqual(first.serverID, ssh.host)
+        XCTAssertEqual(first.serverName, ssh.hostName)
+        XCTAssertEqual(first.slot, 1, "排在终端标签页后面")
+
+        let run = try XCTUnwrap(code.startNewSession(tool: .claude, in: "/srv/shop"))
+        let listed = await waitUntil { phone.inbox.firstIndex(ofSessionsListing: run.id) != nil }
+        XCTAssertTrue(listed)
+        let list = try XCTUnwrap(phone.inbox.firstIndex(ofSessionsListing: run.id))
+        let owner = try XCTUnwrap(phone.inbox.firstIndex(ofCodeTabsWith: run.id), "列表之前先发归属")
+        XCTAssertLessThan(owner, list)
+        let sessions = try XCTUnwrap(phone.inbox.of(.sessions).last.flatMap {
+            try? RemoteJSON.decode([RemoteSessionInfo].self, from: $0.payload)
+        })
+        XCTAssertEqual(sessions.first { $0.id == run.id }?.serverID, ssh.host)
+
+        let before = phone.inbox.all.count
+        let codeTab = try XCTUnwrap(ssh.workspace.terminalGroups.allTabs.first { $0.payload.id == codeID }?.id)
+        ssh.workspace.moveCodeRunToTab(run.id, fromCodeTab: codeTab)
+        // 挪出去的标签排到最前（同 Mac 上拖过去）：列表顺序变了才重推。
+        let terminalTab = try XCTUnwrap(ssh.workspace.terminalGroups.allTabs.first { $0.payload.id == terminal }?.id)
+        ssh.workspace.terminalGroups.arrangeTabs(by: [run.id, codeTab, terminalTab]) { $0.id }
+        let reordered = await waitUntil {
+            phone.inbox.index(after: before) { message in
+                message.kind == .sessions
+                    && (try? RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload))?.macTabOrder == [run.id, terminal]
+            } != nil
+        }
+        XCTAssertTrue(reordered)
+        let reorderedList = try XCTUnwrap(phone.inbox.index(after: before) { message in
+            message.kind == .sessions
+                && (try? RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload))?.macTabOrder == [run.id, terminal]
+        })
+        let released = try XCTUnwrap(phone.inbox.index(after: before) { message in
+            message.kind == .codeTabs
+                && (try? RemoteJSON.decode(RemoteCodeTabsUpdate.self, from: message.payload))?.tabs.first?.runs.isEmpty == true
+        })
+        XCTAssertLessThan(released, reorderedList)
+    }
 }
 
 /// 原始手机收到的消息（连接队列上写，测试读）。
