@@ -185,6 +185,12 @@ final class AgentHistoryModel {
     private func applyToolFilter() {
         let filtered = listedFiles.filter(passesToolFilter)
         guard filtered.map(\.path) != files.map(\.path) else { return }
+        if !files.isEmpty, filtered.isEmpty {
+            let message = "历史会话：按「显示」筛完一份都不剩（列到 \(listedFiles.count) 份，工具 "
+                + "\(availableTools.map(\.rawValue).joined(separator: ","))，只看 "
+                + "\(effectiveTools.map(\.rawValue).sorted().joined(separator: ","))）"
+            AppLogger.notice(message, category: AgentHistoryLog.category)
+        }
         files = filtered
         queued.removeAll()
         resolvedCount = 0
@@ -249,6 +255,17 @@ final class AgentHistoryModel {
     /// 重新列项目与会话。读过的信息按缓存键复用（文件没变就不再读）。
     /// `showsLoading: false`：列表照旧显示着、列完再换（Mac 的 Code 标签页在后台对新会话的记录时用，不让列表闪一下「正在读取」）。
     func reload(showsLoading: Bool = true) async {
+        // 落盘的诊断（只有条数、耗时，没有路径与标题）：侧栏一下子空掉时，事后查是哪一趟重列、列到了什么。
+        let started = ContinuousClock.now
+        let shownBefore = visibleFiles.count
+        let filesBefore = files.count
+        AppLogger.notice("历史会话：重列开始（\(showsLoading ? "前台" : "后台")，显示着 \(shownBefore) 行 / \(filesBefore) 份）",
+                         category: AgentHistoryLog.category)
+        defer {
+            let message = "历史会话：重列结束（\(Self.elapsed(since: started))，\(phase.logName)，项目 \(projects.count)，"
+                + "记录 \(filesBefore) → \(files.count)，显示 \(shownBefore) → \(visibleFiles.count)）"
+            AppLogger.notice(message, category: AgentHistoryLog.category)
+        }
         if showsLoading || phase != .ready { phase = .loading }
         do {
             let found = try await source.projects()
@@ -296,6 +313,13 @@ final class AgentHistoryModel {
         }
     }
 
+    /// 日志里的耗时（毫秒）。
+    nonisolated private static func elapsed(since start: ContinuousClock.Instant) -> String {
+        let duration = ContinuousClock.now - start
+        let ms = Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+        return String(format: "%.0f ms", ms)
+    }
+
     /// 等着列表列完的搜索：列不出来就跟着失败。
     private func failWaitingSearch() {
         if search?.phase == .waiting { search?.phase = .failed(AgentHistoryText.searchListFailed) }
@@ -336,8 +360,19 @@ final class AgentHistoryModel {
                 listed = (listed + kept.filter { !present.contains($0.path) }).sorted { $0.modifiedAt > $1.modifiedAt }
             }
         }
-        guard generation == listGeneration else { return }
+        guard generation == listGeneration else {
+            AppLogger.notice("历史会话：这一趟列表作废（又有一趟重列或换了范围），列到 \(listed.count) 份",
+                             category: AgentHistoryLog.category)
+            return
+        }
+        let shownBefore = visibleFiles.count
         adopt(listed, shownBefore: previousScope.isSameRange(as: newScope) ? resolvedCount : 0)
+        if shownBefore > 0, visibleFiles.isEmpty {
+            let message = "历史会话：换上新列表后一行都不显示了（\(newScope == .all ? "全部" : "一个项目")，"
+                + "列到 \(listed.count) 份，筛完 \(files.count) 份，已读 \(resolvedCount)，"
+                + "工具 \(availableTools.map(\.rawValue).joined(separator: ","))）"
+            AppLogger.notice(message, category: AgentHistoryLog.category)
+        }
         // 范围跟着项目选择器走：有搜索就在新的范围里重搜（列完了，不用等上面的 `defer`）。
         isListing = false
         if let query = search?.query { startSearch(query) }
@@ -370,8 +405,14 @@ final class AgentHistoryModel {
         // 这期间整个重列过（或换了范围）：那一趟的结果更新，这一份作废。
         guard generation == listGeneration, !isListing, !refreshed.isEmpty else { return }
         let kept = listedFiles.filter { !refreshed.contains(AgentHistoryProjectKey($0.project)) }
+        let shownBefore = visibleFiles.count
         adopt((kept + fresh).sorted { $0.modifiedAt > $1.modifiedAt }, shownBefore: resolvedCount,
               refreshed: Set(fresh.map(\.path)))
+        if shownBefore > 0, visibleFiles.isEmpty {
+            let message = "历史会话：重读 \(refreshed.count) 个项目后一行都不显示了（留着 \(kept.count) 份、新列 \(fresh.count) 份，"
+                + "筛完 \(files.count) 份，已读 \(resolvedCount)）"
+            AppLogger.notice(message, category: AgentHistoryLog.category)
+        }
     }
 
     /// 换上新列出来的记录。`shownBefore`：原来显示到第几份（同一个范围重列时），0 = 从头显示。
@@ -1178,5 +1219,17 @@ final class AgentTranscriptModel {
     private func link(_ toolUseID: String, file: AgentSubagentFile, request: AgentSpawnRequest, info: AgentSubagentInfo?) {
         subagentLinks[toolUseID] = AgentSubagentLink(file: file, agentType: request.agentType ?? info?.agentType,
                                                      description: request.description ?? info?.description)
+    }
+}
+
+extension AgentHistoryModel.Phase {
+    /// 日志里的写法：失败的原因里可能带路径，不写。
+    nonisolated var logName: String {
+        switch self {
+        case .loading: "loading"
+        case .empty: "empty"
+        case .failed: "failed"
+        case .ready: "ready"
+        }
     }
 }

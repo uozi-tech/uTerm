@@ -49873,6 +49873,7 @@
       }
     },
     "新建本机终端（⌘T）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

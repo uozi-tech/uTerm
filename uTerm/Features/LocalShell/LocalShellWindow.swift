@@ -776,10 +776,8 @@ struct LocalShellTerminalArea: View {
             emptyGroup: { _ in background },
             onRequestClose: { tab in model.requestClose(tab.id) },
             stripAccessory: { groupID in
-                HStack(spacing: 2) {
-                    LocalShellNewTabButton(model: model, groupID: groupID)
-                    CodeTabButton { model.openCodeTab(in: groupID) }
-                }
+                // 「打开 Code 标签页」在「＋」的菜单里，标签条上不另放按钮。
+                LocalShellNewTabButton(model: model, groupID: groupID)
             },
             tabMenu: { tab in
                 let pane = tab.payload
@@ -836,31 +834,19 @@ struct LocalShellTerminalArea: View {
     }
 }
 
-/// 标签条上的「＋」：有最近的工作区时弹菜单选开在哪，没有就直接开主目录。⌘T 总是直接开主目录。
+/// 标签条上的「＋」：一个菜单，开主目录、打开 Code 标签页，有最近的工作区时也列在里面。⌘T 总是直接开主目录。
 private struct LocalShellNewTabButton: View {
     let model: LocalShellWindowModel
     let groupID: UUID
 
     var body: some View {
         let directories = LocalShellWorkspaces.shared.list(open: LocalShellWindowRouter.shared.openDirectories)
-        if directories.isEmpty {
-            Button {
-                model.addTab(in: groupID)
-            } label: {
-                Image(systemName: "plus")
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
+        Menu {
+            Button("主目录") { model.addTab(in: groupID) }
+            Button { model.openCodeTab(in: groupID) } label: {
+                Label(CodeTabButton.title, systemImage: CodeTabButton.icon)
             }
-            .buttonStyle(.udPlain)
-            .iconButtonHover(cornerRadius: 6)
-            .help("新建本机终端（⌘T）")
-            .accessibilityLabel(Text("新建本机终端"))
-        } else {
-            Menu {
-                Button("主目录") { model.addTab(in: groupID) }
-                Button { model.openCodeTab(in: groupID) } label: {
-                    Label(CodeTabButton.title, systemImage: CodeTabButton.icon)
-                }
+            if !directories.isEmpty {
                 Section("最近的工作区") {
                     ForEach(directories, id: \.self) { directory in
                         Button(RemoteLocalWorkspaces.displayPath(directory, home: LocalShellWorkspaces.home)) {
@@ -868,17 +854,17 @@ private struct LocalShellNewTabButton: View {
                         }
                     }
                 }
-            } label: {
-                Image(systemName: "plus")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 26, height: 26)
-            .contentShape(Rectangle())
-            .iconButtonHover(cornerRadius: 6)
-            .help("新建本机终端")
-            .accessibilityLabel(Text("新建本机终端"))
+        } label: {
+            Image(systemName: "plus")
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 26, height: 26)
+        .contentShape(Rectangle())
+        .iconButtonHover(cornerRadius: 6)
+        .help("新建本机终端")
+        .accessibilityLabel(Text("新建本机终端"))
     }
 }
 
