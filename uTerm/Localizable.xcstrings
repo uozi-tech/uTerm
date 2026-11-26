@@ -50854,6 +50854,34 @@
         }
       }
     },
+    "无法新开会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Start New Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッションを開始できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 세션을 시작할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法新開工作階段"
+          }
+        }
+      }
+    },
     "无法替换既有的 ~/.local/bin/%@（%@）" : {
       "localizations" : {
         "en" : {

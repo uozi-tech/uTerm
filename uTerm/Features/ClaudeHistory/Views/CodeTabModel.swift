@@ -52,8 +52,8 @@ final class CodeTabModel {
         var path: String?
         /// 起的时候列表里已经有的记录：新会话对记录时不考虑它们。重启后接回的新会话不知道（不存记录的路径），为空。
         let knownPaths: Set<String>
-        /// 起的时候那份记录的标题（继续的会话）；新会话为 nil。
-        let title: String?
+        /// 起的时候那份记录的标题（继续的会话）；新会话为 nil。镜像着另一台 Mac 的会话是那台 Mac 侧栏上的名字，跟着它改。
+        var title: String?
         /// 右边现在看的是它的记录（「终端 / 记录」切到「记录」）。
         var showsTranscript = false
         /// 对应的是哪份记录（工具 + 会话 ID，同置顶的认法）：和 `path` 一起填上，存进布局的就是它。重启后接回的会话
@@ -65,6 +65,9 @@ final class CodeTabModel {
         var resumesRecord: Bool
         /// 程序已经退出、终端留着给人看（没有对话记录可显示）的时刻。还在跑为 nil。
         var endedAt: Date?
+        /// 镜像着另一台 Mac 的 Code 标签页里的会话（`CodeTabModel+Mirror`）：起止、对上的记录、标题都照那台 Mac 报的，
+        /// 这里不去认记录、不看程序退出；结束、重新开始请那台 Mac 做。
+        var isMirrored = false
 
         init(terminal: any CodeTabTerminal, tool: AgentHistoryTool, directory: String, startedAt: Date, path: String?,
              knownPaths: Set<String>, title: String?, showsTranscript: Bool = false, key: AgentHistoryPinKey? = nil,
@@ -82,8 +85,8 @@ final class CodeTabModel {
             self.key = key
         }
 
-        /// 还没对上任何记录的新会话（接回后等着找回记录的不算）。
-        var isUnmatched: Bool { path == nil && key == nil }
+        /// 还没对上任何记录的新会话（接回后等着找回记录的不算；镜像的由那台 Mac 去对）。
+        var isUnmatched: Bool { path == nil && key == nil && !isMirrored }
         /// 程序已经退出（留着最后的画面）。
         var isEnded: Bool { endedAt != nil }
         /// 侧栏那一行上的状态（规则见 `CodeRunStatus`）。读终端的程序状态：在显示它的那一小块视图里读，变了只重画那一行。
@@ -151,10 +154,14 @@ final class CodeTabModel {
     @ObservationIgnored private var revealGeneration = 0
     @ObservationIgnored private var watcher: Task<Void, Never>?
     @ObservationIgnored private var isClosed = false
+    /// 这个标签页显示的是另一台 Mac 上的 Code 标签页（Mac 控制 Mac 的窗口，`CodeTabModel+Mirror`）：继续、新开、重新开始、
+    /// 结束都请那台 Mac 做，里面的会话是镜像过来的。nil = 本机或 SSH 主机上的普通 Code 标签页。
+    let remote: CodeTabRemote?
 
     init(hostName: String, directory: String?, directoryChooser: CodeTabDirectoryChooser = .typedPath,
-         recentDirectories: @escaping @MainActor () -> [String] = { [] },
+         recentDirectories: @escaping @MainActor () -> [String] = { [] }, remote: CodeTabRemote? = nil,
          makeTerminal: @escaping @MainActor (_ directory: String) -> (any CodeTabTerminal)?) {
+        self.remote = remote
         self.hostName = hostName
         newSessionDirectory = directory
         self.directoryChooser = directoryChooser
@@ -182,6 +189,7 @@ final class CodeTabModel {
     /// 关标签页：里面的终端一起结束，文件通道放掉。
     func close() {
         isClosed = true
+        remote?.dropPendingFocus()
         watcher?.cancel()
         watcher = nil
         for run in runs { run.terminal.dispose() }
@@ -301,6 +309,10 @@ final class CodeTabModel {
             return runs[index]
         }
         guard let plan = history.resumeCommand(for: file) else { return nil }
+        if remote != nil {
+            resumeOnRemote(file, command: plan.command, directory: plan.directory)
+            return nil
+        }
         let title = AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])
         guard let run = start(plan.command, tool: file.tool, directory: plan.directory, path: file.path, title: title,
                               key: AgentHistoryPinKey(file), resumesRecord: true) else {
@@ -382,6 +394,10 @@ final class CodeTabModel {
     /// 新会话：在右边起一个终端跑新会话的命令。它在列表里还没有行，单独选中，等对上记录（`matchNewSessions`）。
     @discardableResult
     func startNewSession(tool: AgentHistoryTool, command: String, directory: String) -> Run? {
+        if remote != nil {
+            startOnRemote(tool: tool, command: command, directory: directory)
+            return nil
+        }
         guard let run = start(command, tool: tool, directory: directory, path: nil, title: nil, key: nil,
                               resumesRecord: false) else { return nil }
         restoredSelection = nil
@@ -444,7 +460,8 @@ final class CodeTabModel {
         guard let history, history.phase == .ready || history.phase == .empty else { return }
         resolveRestoredRuns()
         // 列表读出来之前就认出程序退出了、当时还不知道有没有记录的：找回了有对话的记录就照常收尾（要还原的选中随之改成那份记录）。
-        for run in runs where run.isEnded {
+        // 镜像的归那台 Mac 收尾。
+        for run in runs where run.isEnded && !run.isMirrored {
             if let path = run.path, history.metadata[path]?.isListed == true { finish(run) }
         }
         guard let wanted = restoredSelection else { return }
@@ -483,7 +500,7 @@ final class CodeTabModel {
         var byKey: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
         for file in history.files where byKey[AgentHistoryPinKey(file)] == nil { byKey[AgentHistoryPinKey(file)] = file }
         let claimed = Set(runs.compactMap(\.path))
-        for index in runs.indices where runs[index].path == nil {
+        for index in runs.indices where runs[index].path == nil && !runs[index].isMirrored {
             guard let key = runs[index].key, let file = byKey[key], !claimed.contains(file.path) else { continue }
             runs[index].path = file.path
         }
@@ -530,6 +547,10 @@ final class CodeTabModel {
     @discardableResult
     func end(_ id: UUID) -> Bool {
         guard let run = runs.first(where: { $0.id == id }) else { return false }
+        if run.isMirrored {
+            remote?.end(id)
+            return true
+        }
         finish(run)
         return true
     }
@@ -539,7 +560,43 @@ final class CodeTabModel {
     /// 已结束、留着画面的同「关闭」。
     func endSession(_ id: UUID) {
         guard let run = runs.first(where: { $0.id == id }) else { return }
-        if run.isEnded { dismissEnded(id) } else { finish(run) }
+        if run.isMirrored {
+            remote?.end(id)
+        } else if run.isEnded {
+            dismissEnded(id)
+        } else {
+            finish(run)
+        }
+    }
+
+    // MARK: 镜像（另一台 Mac 的 Code 标签页，规则见 `CodeTabModel+Mirror`）
+
+    /// 放进一个镜像过来的会话（`isMirrored`）。已经有这个会话、标签页已经关了时什么都不做，返回 false。
+    @discardableResult
+    func insertMirrored(_ run: Run) -> Bool {
+        guard !isClosed, run.isMirrored, !runs.contains(where: { $0.id == run.id }) else { return false }
+        runs.append(run)
+        return true
+    }
+
+    /// 拿掉一个镜像着的会话，交回它（由调用方断开接入）。不是镜像的不动。
+    func removeMirrored(_ id: UUID) -> Run? {
+        guard let index = runs.firstIndex(where: { $0.id == id && $0.isMirrored }) else { return nil }
+        if selectedRunID == id { selectedRunID = nil }
+        if case .run(id)? = restoredSelection { restoredSelection = nil }
+        return runs.remove(at: index)
+    }
+
+    /// 照那台 Mac 改一个镜像着的会话。
+    func updateMirrored(_ id: UUID, _ change: (inout Run) -> Void) {
+        guard let index = runs.firstIndex(where: { $0.id == id && $0.isMirrored }) else { return }
+        change(&runs[index])
+    }
+
+    /// 照那台 Mac 右边看着的那份记录选：列表还没列出来就等列出来再选（同重启后接回的选中）。
+    func selectRecordWhenListed(_ key: AgentHistoryPinKey) {
+        restoredSelection = .record(key)
+        applyRestoredState()
     }
 
     // MARK: 看着各个终端
@@ -550,7 +607,7 @@ final class CodeTabModel {
             var sinceRefresh = Duration.zero
             while !Task.isCancelled {
                 try? await Task.sleep(for: self?.timing.check ?? CodeTabModel.checkInterval)
-                guard let self, !Task.isCancelled, self.runs.contains(where: { !$0.isEnded }) else { break }
+                guard let self, !Task.isCancelled, self.runs.contains(where: { !$0.isEnded && !$0.isMirrored }) else { break }
                 self.checkRuns()
                 sinceRefresh += self.timing.check
                 if sinceRefresh >= self.timing.refresh {
@@ -568,7 +625,7 @@ final class CodeTabModel {
 
     /// 跑完的收尾（`programExited`）；新会话试着对上记录。已结束、留着画面的不再看。
     func checkRuns() {
-        for run in runs where !run.isEnded && run.terminal.codeCommandHasEnded { programExited(run) }
+        for run in runs where !run.isEnded && !run.isMirrored && run.terminal.codeCommandHasEnded { programExited(run) }
         matchNewSessions()
     }
 
@@ -615,6 +672,10 @@ final class CodeTabModel {
     @discardableResult
     func restart(_ id: UUID) -> Run? {
         guard let old = runs.first(where: { $0.id == id }), old.isEnded, let history else { return nil }
+        if old.isMirrored {
+            restartOnRemote(id)
+            return nil
+        }
         let file = (old.path ?? old.key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key }?.path })
             .flatMap { path in history.files.first { $0.path == path } }
         let resumes = old.resumesRecord && file != nil
@@ -648,6 +709,10 @@ final class CodeTabModel {
     /// 「会话已结束」那一条上的「关闭」：结束那个终端，右边回到起始页（侧栏里它那一行随之拿掉）。
     func dismissEnded(_ id: UUID) {
         guard let run = runs.first(where: { $0.id == id }), run.isEnded else { return }
+        if run.isMirrored {
+            remote?.end(id)
+            return
+        }
         let wasLooking = displayedRun?.id == id
         finish(run, revealsRecord: false)
         if wasLooking { history?.select(nil) }
@@ -767,6 +832,7 @@ final class CodeTabModel {
     /// 记录的信息按路径取，不经 `files`：后台重列偶尔漏掉一份记录（那一趟没列出它）时，读过的信息还在，标题不退回
     /// 「（无标题）」。
     func title(of run: Run) -> String {
+        if run.isMirrored, let title = run.title { return title }
         if let path = run.path, let metadata = history?.metadata[path] {
             if let title = metadata.title { return title }
             let sessionID = run.key?.sessionID ?? history?.files.first { $0.path == path }?.sessionID
