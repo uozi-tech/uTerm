@@ -92,6 +92,7 @@ struct ColumnResizer: View {
                 .fill(startWidth != nil ? UD.accent : UD.text4)
                 .frame(width: 2, height: 24)
                 .opacity(hot ? 1 : 0)
+                .animation(UDPaneDividerHighlight.animation, value: hot)
                 .frame(width: UD.Layout.wellGap)
                 .frame(maxHeight: .infinity)
                 .allowsHitTesting(false)
@@ -136,7 +137,7 @@ struct ColumnResizer: View {
 struct PaneDividerLine: View {
     enum Axis { case vertical, horizontal }
     /// 悬停 / 拖动时线的粗细。
-    static let hotThickness: CGFloat = 3
+    static let hotThickness: CGFloat = UDPaneDividerHighlight.thickness
     let axis: Axis
     let hot: Bool
 
@@ -147,15 +148,10 @@ struct PaneDividerLine: View {
                    height: axis == .horizontal ? 1 : nil)
             .frame(maxWidth: axis == .horizontal ? .infinity : nil,
                    maxHeight: axis == .vertical ? .infinity : nil)
-            // 悬停 / 拖动时加粗到 3pt 并转浅 accent（1pt 太细、不像能拖，实机反馈）。只画在
+            // 悬停 / 拖动时淡入一条 3pt 的浅 accent（1pt 太细、不像能拖，实机反馈）。只画在
             // overlay 里，布局仍按 1pt 算，两侧的栏不会跟着挤动。
             .overlay {
-                if hot {
-                    Rectangle()
-                        .fill(UD.accentDivider)
-                        .frame(width: axis == .vertical ? Self.hotThickness : nil,
-                               height: axis == .horizontal ? Self.hotThickness : nil)
-                }
+                UDPaneDividerHighlight(axis == .vertical ? .vertical : .horizontal, active: hot)
             }
             .allowsHitTesting(false)
     }

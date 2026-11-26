@@ -94,6 +94,7 @@ struct SplitterHandle: View {
                 .frame(width: orientation == .vertical ? 2 : 24,
                        height: orientation == .vertical ? 24 : 2)
                 .opacity(dragging || hovering ? 1 : 0)
+                .animation(UDPaneDividerHighlight.animation, value: dragging || hovering)
         }
     }
 }
