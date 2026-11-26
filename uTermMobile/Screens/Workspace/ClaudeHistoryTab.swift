@@ -948,7 +948,10 @@ private struct ClaudeTranscriptView: View {
             }
             // 子代理的记录只有拷贝一个按钮，窄的格子里也放得下一行。主对话的按钮短（「继续」/「返回终端」），
             // iPhone 竖屏（402–440pt）放得下一行；Duo 分屏的窄格子（330pt）标题会只剩几个字，仍分两行。
-            .frame(minWidth: transcript.subagent == nil ? 380 : 0, minHeight: 52)
+            // `ViewThatFits` 按理想宽度挑：标题块的理想宽度是整行路径 · 分支 · 时间（三百来点），不压下来 iPhone 上永远挑不中
+            // 这一行。理想宽度定成门槛，放下之后标题自己截断。
+            .frame(minWidth: transcript.subagent == nil ? 380 : 0, idealWidth: transcript.subagent == nil ? 380 : nil,
+                   minHeight: 52)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     backButton
