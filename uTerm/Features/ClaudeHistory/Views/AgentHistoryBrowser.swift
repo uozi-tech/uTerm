@@ -430,6 +430,9 @@ struct AgentHistorySessionList: View {
                     .coordinateSpace(.named(AgentHistoryPinDragModel.space))
                     .modifier(AgentHistoryPinDropTarget(drag: pinDrag, pins: pins, pinned: pinned,
                                                         pinnedCollapsed: history.collapsedGroups.contains(AgentHistoryGroup.pinnedID)))
+                    // 滚动期间行的悬停（右端的「⋯」）不跟着指针一行行亮起又灭，停下后光标底下那一行再亮（同端口转发、
+                    // Agent 列表）。行里的悬停都走 `hoverGated`，闸门经环境传下去。
+                    .scrollHoverGate()
                 }
                 // 展开 / 收起分组时内容高度在变，滚动条一会儿出现一会儿消失，看着像列表在跳；侧栏不显示滚动条（`.never`：接着鼠标时 `.hidden` 仍会显示常驻滚动条）。
                 .scrollIndicators(.never)

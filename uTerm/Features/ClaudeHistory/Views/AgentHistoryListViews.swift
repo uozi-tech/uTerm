@@ -7,7 +7,7 @@ import UDesignKit
 /// 两端的差别只在尺寸，放在 `AgentHistoryListStyle`；真正不同的几个小件两端各有一份同名的：
 /// `AgentHistoryStateView`（空状态）、`AgentHistoryWarningNote`（警示一句），以及 `agentHistoryPressStyle` / `agentHistoryScrollChrome` 两个修饰。
 
-/// 两端排版上的差别（同 `HostAvatar` 按平台取默认值）：手机上字大、行高、行尾带进入的箭头。
+/// 两端排版上的差别（同 `HostAvatar` 按平台取默认值）：手机上字大、行高（行尾不画进入的箭头，同 Claude Code Desktop）。
 nonisolated struct AgentHistoryListStyle: Sendable {
     var titleSize: CGFloat
     /// 会话一行（只有一行名字）的最小高度。
@@ -21,8 +21,6 @@ nonisolated struct AgentHistoryListStyle: Sendable {
     var rowPadding: EdgeInsets
     var hitRowPadding: EdgeInsets
     var rowRadius: CGFloat
-    /// 行尾画一个进入的箭头（手机上点一行是进到下一页）。
-    var showsRowChevron: Bool
     var hitRowMinHeight: CGFloat?
     var headerSize: CGFloat
     var headerChevronSize: CGFloat
@@ -43,7 +41,7 @@ nonisolated struct AgentHistoryListStyle: Sendable {
         titleSize: 13, rowMinHeight: 30, toolBadgeSize: 14, detailSize: 11, roleSize: 10.5, snippetSize: 12, noteSize: 11,
         rowPadding: EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10),
         hitRowPadding: EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10),
-        rowRadius: 6, showsRowChevron: false, hitRowMinHeight: nil,
+        rowRadius: 6, hitRowMinHeight: nil,
         headerSize: 11.5, headerChevronSize: 9, headerHeight: 26, headerPadding: 8, headerShowsToolBadge: false,
         searchSpacing: 10, searchPadding: 6, stopButtonMinHeight: nil, hidesScrollIndicators: true,
         footerPadding: EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
@@ -52,7 +50,7 @@ nonisolated struct AgentHistoryListStyle: Sendable {
         titleSize: 15, rowMinHeight: 44, toolBadgeSize: 16, detailSize: 12.5, roleSize: 11.5, snippetSize: 14, noteSize: 12.5,
         rowPadding: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12),
         hitRowPadding: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12),
-        rowRadius: 10, showsRowChevron: true, hitRowMinHeight: 44,
+        rowRadius: 10, hitRowMinHeight: 44,
         headerSize: 13.5, headerChevronSize: 11, headerHeight: 40, headerPadding: 10, headerShowsToolBadge: true,
         searchSpacing: 12, searchPadding: 8, stopButtonMinHeight: 44, hidesScrollIndicators: false,
         footerPadding: EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
@@ -79,17 +77,6 @@ private struct AgentHistoryRowBackground: ViewModifier {
             .contentShape(Rectangle())
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// 行尾进入的箭头（只在手机上画）。
-private struct AgentHistoryRowChevron: View {
-    var body: some View {
-        if AgentHistoryListStyle.platform.showsRowChevron {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(UD.text4)
-        }
     }
 }
 
@@ -120,7 +107,6 @@ struct AgentHistoryTitleRow<Trailing: View>: View {
             }
             AgentHistoryRunMark(indicator: indicator)
             trailing()
-            AgentHistoryRowChevron()
         }
         .padding(style.rowPadding)
         .frame(minHeight: style.rowMinHeight)
@@ -448,7 +434,6 @@ private struct AgentHistorySearchHitRow: View {
                     .multilineTextAlignment(.leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            AgentHistoryRowChevron()
         }
         .padding(style.hitRowPadding)
         .frame(minHeight: style.hitRowMinHeight)

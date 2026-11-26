@@ -60,6 +60,12 @@ final class AgentHistoryRowDragDeadZoneTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(60))
         }
 
+        func scrollGates(in view: NSView) -> Int {
+            (view is ScrollActivityObserverView ? 1 : 0) + view.subviews.map(scrollGates).reduce(0, +)
+        }
+        XCTAssertEqual(scrollGates(in: host), 1,
+                       "列表挂着滚动的悬停闸门：滚动时行的悬停（「⋯」）不跟着指针一行行亮（用户要的，同项目里别的列表）")
+
         let found = probes(in: host)
         XCTAssertEqual(found.count, 4, "每一行一个带死区的拖拽源")
         for probe in found {
