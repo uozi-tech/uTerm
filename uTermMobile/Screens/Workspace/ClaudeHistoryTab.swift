@@ -9,7 +9,8 @@ import UIKit
 /// `AgentHistoryModel` / `AgentHistoryListing` 里，这里只是标签与画面。
 ///
 /// 直连的主机上「继续这个会话」「＋新会话」就在这个标签页里起一个活终端（`runs`，见 `ClaudeHistoryTab+Runs`）；
-/// 配对的 Mac 照旧经接管开终端标签页（接管会把那台 Mac 的终端都镜像成标签页，放进这里会重复）。
+/// 配对的 Mac 认得 `codeTabAction` 时请它在它自己的 Code 标签页里开，再经镜像出现在这里（`ClaudeHistoryTab+MacActions`）；
+/// 老 Mac 照旧经接管开终端标签页（接管会把那台 Mac 的终端都镜像成标签页，放进这里会重复）。
 ///
 /// 列表与记录只在内存里：不落盘、不进 iCloud。直连主机的 Code 标签页连同里面跑着的会话记进归档
 /// （`MobileTerminalTabArchive`，只记是哪台主机、哪些会话、看着哪一个），App 被系统结束后照原样开回来、会话接回它里面
@@ -63,6 +64,18 @@ final class ClaudeHistoryTab: Identifiable {
     var opensForMirror = false
     /// 镜像着的会话上点了「结束会话」：请那台 Mac 结束它（`RemoteMacClient.closeSessionOnMac`，消息 8）。测试换成记下来的。
     @ObservationIgnored var endOnMac: @MainActor (UUID) -> Void = { _ in }
+    /// 请那台 Mac 在它的 Code 标签页里做一件事（`RemoteMacClient.performCodeTabAction`，消息 64），返回做完之后的会话 id。
+    /// 测试换成假的（`ClaudeHistoryTab+MacActions`）。
+    @ObservationIgnored var macCodeTabAction: @MainActor (RemoteCodeTabAction) async throws -> UUID = { _ in
+        throw RemoteProtocolError.closed
+    }
+    /// 那台 Mac 认不认得 `codeTabAction`（`RemoteMacClient.supportsCodeTabActions`，握手时定）。测试换成固定的。
+    @ObservationIgnored var macSupportsCodeTabActions: @MainActor () -> Bool = { false }
+    /// 有一个请 Mac 做的事还没回复：这时再点不再发（`ClaudeHistoryTab+MacActions`）。
+    var macActionInFlight = false
+    /// 请 Mac 做完了、回复里的那个会话还没出现在这里（Mac 推来的 Code 标签页晚于回复到）：出现时选上它。
+    var pendingMacFocus: UUID?
+    @ObservationIgnored var pendingMacFocusExpiry: Task<Void, Never>?
 
     init(host: ServerProfile, connection: AgentHistoryConnection, remoteMac: RemoteMacClient? = nil) {
         self.host = host
@@ -91,11 +104,16 @@ final class ClaudeHistoryTab: Identifiable {
                                                      connect: AgentHistoryAccess.pairedMac(client)),
                   remoteMac: client)
         endOnMac = { [weak client] session in client?.closeSessionOnMac(session) }
+        macCodeTabAction = { [weak client] action in
+            guard let client else { throw RemoteProtocolError.closed }
+            return try await client.performCodeTabAction(action)
+        }
+        macSupportsCodeTabActions = { [weak client] in client?.supportsCodeTabActions ?? false }
     }
 
     /// 能不能「继续这个会话」「＋新会话」：要在那台主机上开终端。仅 SFTP 的主机开不了；配对的 Mac 要认得「新建本机终端」。
     var canResume: Bool {
-        if let remoteMac { return remoteMac.supportsLocalShell }
+        if let remoteMac { return remoteMac.supportsLocalShell || runsOnMacCodeTab }
         return !host.sftpOnly
     }
 
@@ -168,13 +186,17 @@ struct ClaudeHistorySessionBody: View {
     var isFocused = true
     /// 用户点了这片终端（分屏时据此把焦点切到它所在的格）。
     var onInteract: (() -> Void)? = nil
+    /// 请 Mac 在它的 Code 标签页里做的事没做成（`ClaudeHistoryTab+MacActions`）：由工作区屏提示。
+    var onFailure: ((CodeActionFailure) -> Void)? = nil
     /// 配对的 Mac 上「继续这个会话」「＋」新会话：在那台 Mac 上开终端标签页跑这条命令（直连的主机就在这个标签页里跑）。
+    /// Mac 认得 `codeTabAction` 时不走这里，请它在它的 Code 标签页里开。
     var onRun: (_ command: String, _ directory: String) -> Void
 
     @Environment(\.modelContext) private var context
     /// 可选：只挂列表的用例里没有注入。没有就退回 `onRun`。
     @Environment(HostKeyChallengeRelay.self) private var relay: HostKeyChallengeRelay?
     @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
+    @Environment(MobileStore.self) private var store: MobileStore?
 
     var body: some View {
         Group {
@@ -192,10 +214,7 @@ struct ClaudeHistorySessionBody: View {
                     // 「＋」不直接开：弹出新会话面板选目录、选工具（见 `CodeNewSessionPanel`）。
                     newSession: tab.canResume ? AgentHistoryNewSession(presenting: { tab.presentNewSession() }) : nil,
                     reveal: Binding(get: { tab.pendingReveal }, set: { tab.pendingReveal = $0 }),
-                    code: CodeTabRuns(tab: tab, isFocused: isFocused, onInteract: onInteract,
-                                      onMoveToTab: workspace.map { workspace in { id in
-                                          _ = tab.moveRunToTab(id, in: workspace)
-                                      } })) { file in
+                    code: codeRuns) { file in
                     resume(file, in: history)
                 }
             }
@@ -212,7 +231,26 @@ struct ClaudeHistorySessionBody: View {
         }
     }
 
-    /// 面板里点了「开始」：收起面板，在选的目录里起选的工具（直连主机在这个标签页里，配对的 Mac 开终端标签页）。
+    /// 交给列表与详情的跑着的会话。「移到新标签页」：镜像那台 Mac 的请 Mac 挪（`moveMirroredRunToTab`），其余就地挪。
+    private var codeRuns: CodeTabRuns {
+        let runs = CodeTabRuns(tab: tab, isFocused: isFocused, onInteract: onInteract, onFailure: onFailure)
+        guard let workspace else { return runs }
+        var withMove = runs
+        withMove.onMoveToTab = { [weak workspace] id in
+            guard let workspace else { return }
+            if tab.runs.run(id: id)?.isMirrored == true {
+                runs.perform(failureTitle: String(localized: "无法移到新标签页")) {
+                    try await tab.moveMirroredRunToTab(id, in: workspace)
+                }
+            } else {
+                _ = tab.moveRunToTab(id, in: workspace)
+            }
+        }
+        return withMove
+    }
+
+    /// 面板里点了「开始」：收起面板，在选的目录里起选的工具（直连主机在这个标签页里，配对的 Mac 在它的 Code 标签页里
+    /// 或者开终端标签页）。
     private func startNewSession(_ tool: AgentHistoryTool, in directory: String, history: AgentHistoryModel) {
         guard let command = history.newSessionCommand(tool: tool, directory: directory) else { return }
         tab.chooseNewSessionDirectory(directory)
@@ -220,15 +258,18 @@ struct ClaudeHistorySessionBody: View {
         startNew(tool, command: command, directory: directory)
     }
 
-    /// 直连主机：就在这个标签页里起终端；配对的 Mac（或者没注入主机密钥裁决的用例）：交给 `onRun` 开终端标签页。
+    /// 直连主机：就在这个标签页里起终端；配对的 Mac 认得 `codeTabAction` 就请它在它的 Code 标签页里开
+    /// （`ClaudeHistoryTab+MacActions`），否则（或者没注入主机密钥裁决的用例）交给 `onRun` 开终端标签页。
     private func resume(_ file: AgentHistorySessionFile, in history: AgentHistoryModel) {
         // 这份记录正在那台 Mac 的 Code 标签页里跑着（镜像过来的）：回到它的终端，不在 Mac 上再开一个。
-        if let run = tab.runs.run(forSession: file.path), run.isMirrored, run.isRunning {
-            tab.focusRun(run.id)
-            return
-        }
+        if tab.focusRunningMirror(for: file) { return }
         guard let plan = history.resumeCommand(for: file) else { return }
-        if tab.runsInPlace, let relay {
+        if tab.runsOnMacCodeTab {
+            let (workspace, store) = (workspace, store)
+            CodeTabRuns(tab: tab, onFailure: onFailure).perform(failureTitle: String(localized: "无法继续这个会话")) {
+                try await tab.resumeOnMac(file, directory: plan.directory, workspace: workspace, store: store)
+            }
+        } else if tab.runsInPlace, let relay {
             tab.resumeInPlace(file, command: plan.command, directory: plan.directory,
                               container: context.container, relay: relay)
         } else {
@@ -237,7 +278,12 @@ struct ClaudeHistorySessionBody: View {
     }
 
     private func startNew(_ tool: AgentHistoryTool, command: String, directory: String) {
-        if tab.runsInPlace, let relay {
+        if tab.runsOnMacCodeTab {
+            let (workspace, store) = (workspace, store)
+            CodeTabRuns(tab: tab, onFailure: onFailure).perform(failureTitle: String(localized: "无法继续这个会话")) {
+                try await tab.startOnMac(tool: tool, directory: directory, workspace: workspace, store: store)
+            }
+        } else if tab.runsInPlace, let relay {
             tab.startNewInPlace(tool: tool, command: command, directory: directory,
                                 container: context.container, relay: relay)
         } else {
@@ -253,6 +299,8 @@ struct CodeTabRuns {
     var onInteract: (() -> Void)? = nil
     /// 「移到新标签页」；nil = 不出这一项（没有工作区可放）。
     var onMoveToTab: ((UUID) -> Void)? = nil
+    /// 请 Mac 做的事没做成（`ClaudeHistoryTab+MacActions`）。
+    var onFailure: ((CodeActionFailure) -> Void)? = nil
 
     var board: CodeRunBoard<TermTab> { tab.runs }
 }

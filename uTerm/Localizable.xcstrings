@@ -11128,6 +11128,34 @@
         }
       }
     },
+    "Mac 上的 Code 标签页没能完成这个操作" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Code tab on the Mac couldn’t complete this action."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac の Code タブでこの操作を完了できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 Code 탭에서 이 작업을 완료하지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 Code 分頁無法完成這個操作"
+          }
+        }
+      }
+    },
     "Mac 上的 SSH 终端还不能贴文件，只能贴图片" : {
       "localizations" : {
         "en" : {
@@ -50742,6 +50770,34 @@
         }
       }
     },
+    "无法移到新标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Move to New Tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいタブに移動できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 탭으로 이동할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法移到新分頁"
+          }
+        }
+      }
+    },
     "无法绑定该地址（地址不属于本机）" : {
       "localizations" : {
         "en" : {
@@ -51439,6 +51495,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法配對"
+          }
+        }
+      }
+    },
+    "无法重新开始这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Start Session Again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションをもう一度開始できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션을 다시 시작할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法重新開始這個工作階段"
           }
         }
       }
@@ -76674,6 +76758,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這台 Mac 上的 uTerm 版本太舊，不支援遠端存取檔案。將 Mac 上的 uTerm 更新到最新版後再試"
+          }
+        }
+      }
+    },
+    "这台 Mac 上的 uTerm 版本太旧，不能在它的 Code 标签页里开会话。把 Mac 上的 uTerm 更新到最新版后再试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The version of uTerm on this Mac is too old to open sessions in its Code tab. Update uTerm on the Mac to the latest version and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac の uTerm はバージョンが古すぎるため、Code タブでセッションを開けません。Mac の uTerm を最新バージョンにアップデートしてからもう一度お試しください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Mac의 uTerm 버전이 너무 오래되어 Code 탭에서 세션을 열 수 없습니다. Mac의 uTerm을 최신 버전으로 업데이트한 후 다시 시도하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台 Mac 上的 uTerm 版本太舊，無法在它的 Code 分頁裡開啟工作階段。請將 Mac 上的 uTerm 更新到最新版後再試"
           }
         }
       }

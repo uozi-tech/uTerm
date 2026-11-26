@@ -100,10 +100,12 @@ struct CodeRunHeader: View {
                               systemImage: run.showsTerminal ? "clock" : "terminal")
                     }
                 }
-                if let move = code.onMoveToTab, !run.isMirrored {
+                // 镜像那台 Mac 的会话请 Mac 挪（Mac 要认得 `codeTabAction`，见 `ClaudeHistoryTab+MacActions`）。
+                if let move = code.onMoveToTab, code.canMoveToTab(run) {
                     Button { move(run.id) } label: {
                         Label("移到新标签页", systemImage: "rectangle.portrait.and.arrow.right")
                     }
+                    .disabled(code.tab.macActionInFlight)
                 }
                 Button(role: .destructive) { code.tab.endRun(run.id) } label: {
                     Label("结束会话", systemImage: "xmark.circle")
@@ -116,12 +118,13 @@ struct CodeRunHeader: View {
             .accessibilityLabel(Text("更多"))
         } else {
             HStack(spacing: 6) {
-                // 镜像那台 Mac 的会话由 Mac 起，这边重新开始不了（P1）。
-                if !run.isMirrored {
+                // 镜像那台 Mac 的会话请 Mac 重新开始；老 Mac 不认得 `codeTabAction`，不给。
+                if code.canRestart(run) {
                     MBtn(title: AgentHistoryText.restartSession, icon: "refresh", kind: .tinted, height: 34) {
-                        code.tab.restartRun(run.id)
+                        code.restart(run.id)
                     }
                     .fixedSize()
+                    .disabled(run.isMirrored && code.tab.macActionInFlight)
                 }
                 MBtn(title: hasRecord ? String(localized: "回到记录") : AgentHistoryText.closeEndedSession,
                      icon: hasRecord ? "clock" : "x", kind: .tinted, height: 34) {

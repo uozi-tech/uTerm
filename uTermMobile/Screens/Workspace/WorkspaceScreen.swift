@@ -36,7 +36,7 @@ struct WorkspaceScreen: View {
     /// 「+」菜单选了「Code」：先选主机。
     @State private var pickingHistoryHost = false
     /// 「继续这个会话」没开成（那台 Mac 不能新建终端等）。
-    @State private var resumeError: String?
+    @State private var resumeError: CodeActionFailure?
 
     private var visible: Bool { store.showWorkspace }
 
@@ -314,7 +314,8 @@ struct WorkspaceScreen: View {
             do {
                 try await history.runInNewTerminal(command, directory: directory, store: store)
             } catch {
-                resumeError = error.localizedDescription
+                resumeError = CodeActionFailure(title: String(localized: "无法继续这个会话"),
+                                                message: error.localizedDescription)
             }
         }
     }
@@ -671,7 +672,8 @@ struct WorkspaceScreen: View {
         case .preview(let preview):
             FilePreviewSessionBody(tab: preview, onClose: { closeTab(preview.id) })
         case .history(let history):
-            ClaudeHistorySessionBody(tab: history, isActive: front && visible) { command, directory in
+            ClaudeHistorySessionBody(tab: history, isActive: front && visible,
+                                     onFailure: { resumeError = $0 }) { command, directory in
                 runInNewTerminal(history, command: command, directory: directory)
             }
         }
@@ -776,7 +778,7 @@ struct WorkspaceScreen: View {
 /// 「Code」的选主机抽屉、「继续这个会话」失败的提示、Code 标签页里键盘换主（单独成一层：工作区屏的修饰链已经长到类型检查超时）。
 private struct ClaudeHistoryOverlays<Sheet: View>: ViewModifier {
     @Binding var picking: Bool
-    @Binding var resumeError: String?
+    @Binding var resumeError: CodeActionFailure?
     /// 前台 Code 标签页此刻露着的终端：换了看的会话、在终端与记录之间切换、连接中页撤下时，键盘跟着换主。
     var codeKeyboardTerminal: UUID?
     /// 键盘归属要重新裁决（选主机抽屉开关、Code 标签页露着的终端变了）。
@@ -788,11 +790,11 @@ private struct ClaudeHistoryOverlays<Sheet: View>: ViewModifier {
             .sheet(isPresented: $picking) { sheet() }
             .onChange(of: picking) { _, _ in onPickingChanged() }
             .onChange(of: codeKeyboardTerminal) { _, _ in onPickingChanged() }
-            .alert("无法继续这个会话", isPresented: Binding(get: { resumeError != nil },
-                                                    set: { if !$0 { resumeError = nil } })) {
+            .alert(Text(verbatim: resumeError?.title ?? ""),
+                   isPresented: Binding(get: { resumeError != nil }, set: { if !$0 { resumeError = nil } })) {
                 Button("好", role: .cancel) { resumeError = nil }
             } message: {
-                Text(resumeError ?? "")
+                Text(verbatim: resumeError?.message ?? "")
             }
     }
 }
