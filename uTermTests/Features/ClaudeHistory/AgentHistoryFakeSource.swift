@@ -96,7 +96,11 @@ actor AgentHistoryFakeSource: AgentHistorySource {
                                    directory: members.first?.projectDirectory, tool: tool)
     }
 
+    /// 列过几次项目。
+    private(set) var projectsCalls = 0
+
     func projects() async throws -> [AgentHistoryProject] {
+        projectsCalls += 1
         if let projectsDelay { try? await Task.sleep(for: projectsDelay) }
         if let projectsError { throw projectsError }
         var seen: Set<String> = []

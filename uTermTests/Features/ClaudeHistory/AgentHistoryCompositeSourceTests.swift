@@ -83,6 +83,52 @@ final class AgentHistoryCompositeSourceTests: XCTestCase {
         XCTAssertTrue(listing.failedProjects.isEmpty)
     }
 
+    /// 首次启动时 Codex 要读两千多份记录的开头（实测 2.4 s），Claude Code 几毫秒（用户报的：侧栏首次加载很慢）。
+    /// 等够了就先交出列完的那几种，慢的在后台接着列；下一次接着等同一趟，不重新列。
+    func testSlowToolDoesNotHoldBackTheOthers() async throws {
+        let fast = claude()
+        let slow = codex()
+        await slow.setProjectsDelay(.milliseconds(800))
+        let composite = AgentHistoryCompositeSource([fast, slow], patience: .milliseconds(50))
+        let clock = ContinuousClock()
+
+        let started = clock.now
+        let first = try await composite.projects()
+        XCTAssertLessThan(clock.now - started, .milliseconds(500), "不陪着慢的那一种等")
+        XCTAssertEqual(Set(first.map(\.tool)), [.claude])
+        let pending = await composite.pendingTools
+        XCTAssertEqual(pending, [.codex])
+        let failures = await composite.failures
+        XCTAssertTrue(failures.isEmpty, "没列完不算失败")
+
+        await composite.waitForPending()
+        let second = try await composite.projects()
+        XCTAssertEqual(Set(second.map(\.tool)), [.claude, .codex])
+        let pendingAfter = await composite.pendingTools
+        XCTAssertTrue(pendingAfter.isEmpty)
+        let slowCalls = await slow.projectsCalls
+        XCTAssertEqual(slowCalls, 1, "接着等上一趟，没有重新列")
+    }
+
+    /// 列表先出列完的那几种，慢的列完后并进来；先出来的行不动。
+    func testListShowsFastToolsFirstAndMergesTheSlowOneLater() async throws {
+        let slow = codex()
+        await slow.setProjectsDelay(.milliseconds(600))
+        let model = AgentHistoryModel(source: AgentHistoryCompositeSource([claude(), slow], patience: .milliseconds(50)),
+                                      preferredDirectory: nil, followsCurrentProject: false)
+        let clock = ContinuousClock()
+        let started = clock.now
+        await model.start()
+        XCTAssertLessThan(clock.now - started, .milliseconds(450), "不等慢的那一种")
+        await drainMetadata(model)
+        XCTAssertEqual(model.visibleFiles.map(\.sessionID), ["c-new", "c-old"], "Claude Code 的先出来")
+        XCTAssertEqual(model.phase, .ready)
+
+        try await waitUntil { model.visibleFiles.count == 3 }
+        XCTAssertEqual(model.visibleFiles.map(\.sessionID), ["c-new", "x-mid", "c-old"], "Codex 列完并进来")
+        XCTAssertTrue(model.toolFailures.isEmpty)
+    }
+
     func testDispatchesByTool() async throws {
         let composite = AgentHistoryCompositeSource([claude(), codex()])
         let projects = try await composite.projects()

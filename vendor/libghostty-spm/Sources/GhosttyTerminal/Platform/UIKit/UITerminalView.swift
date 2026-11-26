@@ -35,6 +35,8 @@
         #endif
         /// uTerm 本地补丁：宿主把 surface 放掉了（见 +UTermHost）。放掉期间视图照常挂着，只是不重建 surface。
         var uTermSurfaceReleased = false
+        /// uTerm 本地补丁：键盘当触控板（长按空格）这一次走到哪儿了，nil = 没在用（见 +FloatingCursor）。
+        var floatingCursor: TerminalFloatingCursorTracker?
 
         lazy var selectionContextMenuInteraction = UIContextMenuInteraction(delegate: self)
         lazy var inputHandler = TerminalTextInputHandler(view: self)

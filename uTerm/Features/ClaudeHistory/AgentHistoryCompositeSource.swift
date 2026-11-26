@@ -38,12 +38,31 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
     nonisolated let sources: [any AgentHistorySource]
     /// 上一次 `projects()` 里列不出来的工具 → 给用户看的原因。
     private(set) var failures: [AgentHistoryTool: String] = [:]
+    /// 上一次 `projects()` 没等它列完的工具：还在后台接着列（`running`），列完由 `waitForPending` 告诉列表再列一次。
+    /// 不算失败，不给用户看原因。
+    private(set) var pendingTools: Set<AgentHistoryTool> = []
+    /// 正在列项目的工具。没等完的留在这里，下一次 `projects()` 接着等同一趟，不重新起。
+    private var running: [AgentHistoryTool: Task<[AgentHistoryProject], any Error>] = [:]
+    /// 有一种列完之后，别的再等多久就先交出去。nil = 等齐了再交。
+    nonisolated let patience: Duration?
 
     /// 同一种工具只留第一份。`sources` 不能为空。
-    init(_ sources: [any AgentHistorySource]) {
+    ///
+    /// `patience`：几种工具快慢差得很远——首次启动时 Codex 要把两千多份记录的开头都读一遍（实测 2.4 s），
+    /// Claude Code 只要几毫秒；等齐了再交，侧栏就陪着最慢的那一种空着。所以从开始列算起过了这么久、已经有列完的，
+    /// 就先把列完的交出去，慢的在后台接着列。
+    init(_ sources: [any AgentHistorySource], patience: Duration? = .milliseconds(300)) {
         precondition(!sources.isEmpty, "合成的数据源至少要有一份")
         var seen: Set<AgentHistoryTool> = []
         self.sources = sources.filter { seen.insert($0.tool).inserted }
+        self.patience = patience
+    }
+
+    /// 等上一次 `projects()` 没等完的那几种列完（列完了还没被取走的结果留着，下一次 `projects()` 直接用）。
+    func waitForPending() async {
+        for tool in pendingTools {
+            _ = await running[tool]?.result
+        }
     }
 
     /// 协议要一个「哪种工具」：合成的没有单一的工具，报第一份的。按工具分派一律看 `source(for:)`。
@@ -74,26 +93,18 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
         // 几种工具同时列，谁先列完谁先回来。每份结果带着它是哪种工具，按工具对号入座，不按回来的先后、也不靠排序还原：
         // build 1548–1556 实测装着的 Release 版里，Codex 那一格拿到的是 Cursor 列出来的项目（后面两格依次错开），
         // Claude Code 慢一步时它的项目也被当成 Codex 的，交给 Codex 去列，列出空的、不报错，侧栏整个空掉。
-        let results = await withTaskGroup(of: (AgentHistoryTool, Result<[AgentHistoryProject], any Error>).self) { group in
-            for source in sources {
-                group.addTask {
-                    do { return (source.tool, .success(try await source.projects())) } catch { return (source.tool, .failure(error)) }
-                }
-            }
-            var collected: [AgentHistoryTool: Result<[AgentHistoryProject], any Error>] = [:]
-            for await (tool, result) in group { collected[tool] = result }
-            return collected
-        }
+        let results = await collectProjects()
         var found: [AgentHistoryProject] = []
         var errors: [(AgentHistoryTool, any Error)] = []
         // 诊断：每种工具的数据源各回了几个项目、路径是不是在它自己的目录下（`.claude/`、`.codex/` 这类，只记对错）。
         var perTool: [String] = []
-        for source in sources {
-            switch results[source.tool] {
+        for source in sources where !pendingTools.contains(source.tool) {
+            let elapsed = results[source.tool].map { Int($0.1.components.seconds * 1000 + $0.1.components.attoseconds / 1_000_000_000_000_000) }
+            switch results[source.tool]?.0 {
             case .success(let projects)?:
                 let marker = "/." + source.tool.rawValue
                 let own = projects.filter { $0.path.contains(marker) }.count
-                perTool.append("\(source.tool.rawValue) \(projects.count)（自己目录下 \(own)，回来时标的 "
+                perTool.append("\(source.tool.rawValue) \(projects.count)（\(elapsed ?? -1) ms，自己目录下 \(own)，回来时标的 "
                                + "\(Set(projects.map(\.tool.rawValue)).sorted().joined(separator: "/"))）")
                 // 数据源该自己填 `tool`；万一漏了，按它是哪一份补上，免得分派到别的工具去。
                 found += projects.map { project in
@@ -107,11 +118,56 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
                 errors.append((source.tool, AgentHistoryCompositeError.noSource(source.tool)))
             }
         }
+        if !pendingTools.isEmpty {
+            perTool.append("还在列 " + pendingTools.map(\.rawValue).sorted().joined(separator: ","))
+        }
         let message = "历史会话：各工具列项目 " + perTool.joined(separator: "，")
         AppLogger.notice(message, category: AgentHistoryLog.category)
         failures = Dictionary(errors.map { ($0.0, FriendlyError.describe($0.1)) }, uniquingKeysWith: { first, _ in first })
-        if found.isEmpty, let first = errors.first { throw first.1 }
+        // 还有没列完的：先不报错，等它列完再说（它可能有记录）。
+        if found.isEmpty, pendingTools.isEmpty, let first = errors.first { throw first.1 }
         return found.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+    }
+
+    private enum CollectEvent: Sendable {
+        case done(AgentHistoryTool, Result<[AgentHistoryProject], any Error>)
+        case patienceOver
+    }
+
+    /// 每种工具列项目（上一次没等完的接着等同一趟），等齐或者等够了（`patience`）就交出列完的那些，带着各自用了多久
+    /// （诊断：从这一次开始等算起）。没列完的记进 `pendingTools`。
+    private func collectProjects() async -> [AgentHistoryTool: (Result<[AgentHistoryProject], any Error>, Duration)] {
+        let clock = ContinuousClock()
+        let start = clock.now
+        for source in sources where running[source.tool] == nil {
+            running[source.tool] = Task { try await source.projects() }
+        }
+        let waiting = running
+        let (events, sink) = AsyncStream.makeStream(of: CollectEvent.self)
+        for (tool, task) in waiting {
+            Task { sink.yield(.done(tool, await task.result)) }
+        }
+        if let patience {
+            Task {
+                try? await Task.sleep(for: patience)
+                sink.yield(.patienceOver)
+            }
+        }
+        var collected: [AgentHistoryTool: (Result<[AgentHistoryProject], any Error>, Duration)] = [:]
+        var patienceOver = false
+        for await event in events {
+            switch event {
+            case .done(let tool, let result):
+                collected[tool] = (result, clock.now - start)
+                running[tool] = nil
+            case .patienceOver:
+                patienceOver = true
+            }
+            if collected.count == waiting.count || (patienceOver && !collected.isEmpty) { break }
+        }
+        sink.finish()
+        pendingTools = Set(waiting.keys).subtracting(collected.keys)
+        return collected
     }
 
     /// 协议要一个同步的版本，合成的数据源没法在这里等每一份：只按项目上已知的工作目录找（自己或最近的上级）。

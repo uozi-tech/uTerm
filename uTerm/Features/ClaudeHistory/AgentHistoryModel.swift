@@ -86,6 +86,10 @@ final class AgentHistoryModel {
     @ObservationIgnored private var queued: [AgentHistorySessionFile] = []
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var failed: Set<String> = []
+    /// 上一趟重列时还没列完的工具（合成的数据源先交出了列完的那几种，见 `AgentHistoryCompositeSource.patience`）：
+    /// 它们上一次列到的会话留着，列完了再列一次。
+    @ObservationIgnored private var pendingTools: Set<AgentHistoryTool> = []
+    @ObservationIgnored private var followsPendingTools = false
     @ObservationIgnored private var listGeneration = 0
     /// 看过的会话里读到的最新时间（按路径）：切到别的会话之后，列表那一行还用它。重新列一次就清掉。
     private var seenActivity: [String: Date] = [:]
@@ -270,18 +274,23 @@ final class AgentHistoryModel {
         do {
             let found = try await source.projects()
             projects = found
-            toolFailures = await (source as? AgentHistoryCompositeSource)?.failures ?? [:]
+            let composite = source as? AgentHistoryCompositeSource
+            toolFailures = await composite?.failures ?? [:]
+            pendingTools = await composite?.pendingTools ?? []
             let present = Set(found.map(\.tool))
-            // 这一趟列不出来的工具，上一次列到的会话留着（`setScope`）：它也照旧算这台主机上有记录的工具。不然几种工具
-            // 都有记录时，按「显示」筛的那一步（`passesToolFilter`）又把留着的会话筛掉了，侧栏照样一下子空掉。
-            let retained = Set(listedFiles.map(\.tool)).intersection(toolFailures.keys)
+            // 这一趟列不出来的工具、还没列完的工具，上一次列到的会话留着（`setScope`）：它也照旧算这台主机上有记录的工具。
+            // 不然几种工具都有记录时，按「显示」筛的那一步（`passesToolFilter`）又把留着的会话筛掉了，侧栏照样一下子空掉。
+            let retained = Set(listedFiles.map(\.tool)).intersection(Set(toolFailures.keys).union(pendingTools))
             availableTools = AgentHistoryTool.allCases.filter { present.contains($0) || retained.contains($0) }
             if !toolFailures.isEmpty {
                 // 落盘，事后查「侧栏怎么一下子空了」用。只写工具名，原因里可能有路径，不写。
                 let tools = toolFailures.keys.map(\.rawValue).sorted().joined(separator: ",")
                 AppLogger.notice("历史会话：重列时 \(tools) 列不出来，留着上一次列到的", category: AgentHistoryLog.category)
             }
+            if !pendingTools.isEmpty { followPendingTools() }
             guard !found.isEmpty else {
+                // 列完的几种一个项目都没有，还有没列完的：接着显示「正在读取」，等它列完。
+                if !pendingTools.isEmpty { return }
                 phase = .empty
                 files = []
                 listedFiles = []
@@ -310,6 +319,18 @@ final class AgentHistoryModel {
             guard showsLoading || phase != .ready else { return }
             phase = .failed(error.localizedDescription)
             failWaitingSearch()
+        }
+    }
+
+    /// 还没列完的工具列完了：再列一次（不闪「正在读取」），把它的会话并进来。同时只等一回。
+    private func followPendingTools() {
+        guard !followsPendingTools, let composite = source as? AgentHistoryCompositeSource else { return }
+        followsPendingTools = true
+        Task { [weak self] in
+            await composite.waitForPending()
+            guard let self else { return }
+            self.followsPendingTools = false
+            await self.reload(showsLoading: false)
         }
     }
 
@@ -358,7 +379,7 @@ final class AgentHistoryModel {
             AppLogger.notice(message, category: AgentHistoryLog.category)
             // 这一趟有项目没列出来（断线、辅助程序重启）：它们上一次列到的会话留着，不能一下子从侧栏上消失。
             // 一种工具这一趟连项目都没列出来（`toolFailures`）也一样：它的会话留着上一次列到的。
-            let failedTools = Set(toolFailures.keys)
+            let failedTools = Set(toolFailures.keys).union(pendingTools)
             if !listing.failedProjects.isEmpty || !failedTools.isEmpty, previousScope == .all {
                 let kept = listedFiles.filter {
                     listing.failedProjects.contains(AgentHistoryProjectKey($0.project)) || failedTools.contains($0.tool)

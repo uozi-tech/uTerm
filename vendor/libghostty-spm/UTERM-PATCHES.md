@@ -101,7 +101,7 @@ uTerm 的终端引擎只有这一套：画面由 GhosttyKit（完整的 libghost
 
 | 路径 | 内容 |
 |---|---|
-| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 25 个文件、加了 7 个文件，见「Swift 层补丁」 |
+| `Sources/GhosttyKit`、`Sources/GhosttyTerminal` | 上游的两个 Swift target。`GhosttyKit` 没改；`GhosttyTerminal` 改了 25 个文件、加了 8 个文件，见「Swift 层补丁」 |
 | `Package.swift` | 见「manifest 改动」 |
 | `ENGINE.lock` | 两个二进制的清单：引擎版本串、zip 文件名、sha256 |
 | `BinaryTarget/` | `GhosttyKit.xcframework`、`ghostty-vt.xcframework` 解在这里，**不进版本库**（`.gitignore`），由 `make engine` 放进来 |
@@ -760,6 +760,19 @@ Ghostty 认链接前会把这个 Shift 再去掉（只剩 ⌘，正好匹配链�
 回归用例：`uTermTests/Features/Terminal/GhosttyLinkHoverTests.swift`
 （`testCommandClickOpensPathWhileProgramCapturesTheMouse`、`testCommandHoverShowsLinkWhileProgramCapturesTheMouse`）。
 
+### 23. iOS：键盘当触控板挪光标（长按空格键 / 长按键盘）
+
+文件：`Platform/UIKit/UITerminalView+FloatingCursor.swift`（新增：`TerminalFloatingCursorTracker` 与 UITextInput 的
+`beginFloatingCursor(at:)` / `updateFloatingCursor(at:)` / `endFloatingCursor()`）、`Platform/UIKit/UITerminalView.swift`
+（存这一次拖动的 `floatingCursor`）。
+
+上游没实现这三个可选方法，UIKit 就改去动 `selectedTextRange`；终端的输入文档只有正在组的字（平时是空的），光标一格都不动
+（用户报的：Claude Code 输入框里长按键盘调不了光标位置）。终端里的光标归程序管，只能发方向键：从起点算手指横着过了几个格宽就发几个
+← / →，竖着过了几个行高就发几个 ↑ / ↓（按「该走到第几格」累计，来回抖不多发、慢慢挪也会动）。走 `sendInputKey`，不用掉键盘条上的
+粘滞修饰键；组字期间不动（光标归输入法）。副作用：shell 提示符上竖着挪是翻历史，和程序自己对 ↑ / ↓ 的理解一致。
+
+回归用例：`uTermMobileTests/GhosttyFloatingCursorTests.swift`。
+
 ## manifest 改动（相对上游的 `Package.swift`）
 
 1. `libghostty` 这个 binaryTarget 从 `url:` + `checksum:` 改成 `path: "BinaryTarget/GhosttyKit.xcframework"`（同上游的 `Package.local.swift`）。
@@ -782,7 +795,7 @@ binaryTarget 要换回 `url:` + `checksum:`（按 tag 消费的远程包不能�
 
 1. 读上游新 tag 的变更，对照本文件看哪些补丁上游已经有了（`gh pr list -R Lakr233/libghostty-spm --author @me` 看我们提的 PR）。
 2. Swift 层：把上游新 tag 的 `Sources/GhosttyKit`、`Sources/GhosttyTerminal` 和基线 tag 做三方合并（我们的改动都标着「uTerm 本地补丁」，
-   7 个新文件直接留着）。做法：临时仓库里提交基线 tag、我们这份、上游新 tag 三个快照，`git merge`（`merge.conflictstyle diff3`）。
+   8 个新文件直接留着）。做法：临时仓库里提交基线 tag、我们这份、上游新 tag 三个快照，`git merge`（`merge.conflictstyle diff3`）。
    上游收了我们 PR 的地方，冲突块一律取上游的版本（审过、改过名、常常还多了修正），再把那条补丁里上游没收的部分接回去；
    这时自动合并成功的文件也要和上游逐个比一遍，PR 的代码和我们原来那份往往放在不同位置，两份会同时留下来。
    `Package.swift` 按「manifest 改动」重做。
