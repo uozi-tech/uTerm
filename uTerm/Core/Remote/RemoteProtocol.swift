@@ -50,7 +50,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopWindowFront, RemoteFeature.desktopWindowRefit,
                                           RemoteFeature.desktopWindowInput, RemoteFeature.desktopAuthPrompt,
                                           RemoteFeature.arrangeSessions, RemoteFeature.terminalReplay,
-                                          RemoteFeature.codeTabs, RemoteFeature.codeTabActions]
+                                          RemoteFeature.codeTabs, RemoteFeature.codeTabActions,
+                                          RemoteFeature.codeTabHosts]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -180,6 +181,10 @@ nonisolated enum RemoteFeature {
     /// 设备请 Mac 在它的 Code 标签页里继续、新开、重新开始一个会话，或把会话移到新标签页：Mac 认得 `codeTabAction`。
     /// 老 Mac 收到会断开整条连接，所以设备只对声明了的 Mac 发；老 Mac 照旧是开一个本机终端标签页跑命令。
     static let codeTabActions = "code-tab-actions"
+    /// Mac 也报 SSH 主机的 Code 标签页（`RemoteCodeTabInfo.serverID` 是那台主机），并且认得 `RemoteCodeTabAction.server`
+    /// （在那台主机的 Code 标签页里做）。之前的 Mac 不读 `server`，会把 SSH 主机的请求当成本机的做，所以设备只对声明了的
+    /// Mac 发 SSH 主机的请求。
+    static let codeTabHosts = "code-tab-hosts"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。

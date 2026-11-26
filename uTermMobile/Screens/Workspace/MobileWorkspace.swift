@@ -488,11 +488,9 @@ final class MobileWorkspace {
 
     /// Mac 的标签顺序里插进 Code 标签页（按它报的 `slot`），镜像着它的那个标签页跟着排。没镜像、没报位置时原样。
     private func withCodeTab(_ order: [UUID], of client: RemoteMacClient) -> [UUID] {
-        guard let info = client.codeTabs?.mirrored(), let slot = info.slot,
+        guard let info = client.codeTabs?.mirrored(), info.slot != nil,
               mirroredCodeTab(of: client)?.mirroredMacTabID == info.id else { return order }
-        var result = order.filter { $0 != info.id }
-        result.insert(info.id, at: min(max(slot, 0), result.count))
-        return result
+        return order.insertingCodeTabs([(info.id, info.slot)])
     }
 
     /// 这个标签在 Mac 的标签顺序里是谁：远控终端标签是它接着的会话，镜像着这台 Mac 的 Code 标签页是 Mac 上那个 Code 标签页。

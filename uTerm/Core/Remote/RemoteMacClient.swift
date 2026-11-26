@@ -175,10 +175,16 @@ final class RemoteMacClient: Identifiable {
 
     /// 设备上开成 Code 标签页的那一个里面跑着的会话（`Array.mirrored`；认不出工具的不算，它们照旧开成终端标签页）。
     /// 还没收到 Mac 的 Code 标签页时为空。
-    var codeRunSessionIDs: Set<UUID> {
-        guard let tab = codeTabs?.mirrored() else { return [] }
-        return Set(tab.runs.filter { AgentHistoryTool(rawValue: $0.tool) != nil }.map(\.session))
+    var codeRunSessionIDs: Set<UUID> { codeRunSessionIDs(serverIDs: [RemoteConstants.localShellServerID]) }
+
+    /// 这几台主机（`RemoteCodeTabInfo.serverID`）开成 Code 标签页的那一个（每台一个，`mirroredPerHost`）里面跑着的会话。
+    func codeRunSessionIDs(serverIDs: Set<UUID>) -> Set<UUID> {
+        let tabs = (codeTabs ?? []).mirroredPerHost.filter { serverIDs.contains($0.serverID) }
+        return Set(tabs.flatMap { $0.runs.filter { AgentHistoryTool(rawValue: $0.tool) != nil }.map(\.session) })
     }
+
+    /// Mac 也报 SSH 主机的 Code 标签页、能在它们里面做事（`code-tab-hosts`）。
+    var supportsCodeTabHosts: Bool { macFeatures.contains(RemoteFeature.codeTabHosts) }
 
     /// Mac 能在它的 Code 标签页里继续、新开、重新开始会话，能把会话移到新标签页（`codeTabAction`）。
     var supportsCodeTabActions: Bool { macFeatures.contains(RemoteFeature.codeTabActions) }

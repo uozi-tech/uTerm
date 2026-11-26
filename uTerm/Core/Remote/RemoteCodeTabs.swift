@@ -67,6 +67,32 @@ extension Array where Element == RemoteCodeTabInfo {
     nonisolated func mirrored(serverID: UUID = RemoteConstants.localShellServerID) -> RemoteCodeTabInfo? {
         first { $0.serverID == serverID }
     }
+
+    /// 每台主机一个（同 `mirrored(serverID:)`，按 Mac 报的先后）：本机的和各台 SSH 主机的。
+    nonisolated var mirroredPerHost: [RemoteCodeTabInfo] {
+        var seen: Set<UUID> = []
+        return filter { seen.insert($0.serverID).inserted }
+    }
+}
+
+extension Array where Element == UUID {
+    /// 往 Mac 的标签顺序（只有会话）里插进 Code 标签页：每个排在第 `slot` 个会话之前（`RemoteCodeTabInfo.slot`，数的是会话，
+    /// 不数别的 Code 标签页；超出范围排在最后），同一个位置的按给的先后。顺序里已经有它的先拿掉再插。没报位置（nil）的不插。
+    nonisolated func insertingCodeTabs(_ tabs: [(id: UUID, slot: Int?)]) -> [UUID] {
+        let ids = Set(tabs.map(\.id))
+        let sessions = filter { !ids.contains($0) }
+        let placed = tabs.enumerated().compactMap { index, tab in tab.slot.map { (index, tab.id, Swift.min(Swift.max($0, 0), sessions.count)) } }
+            .sorted { ($0.2, $0.0) < ($1.2, $1.0) }
+        var result: [UUID] = []
+        var next = placed.makeIterator()
+        var pending = next.next()
+        for (position, id) in sessions.enumerated() {
+            while let tab = pending, tab.2 == position { result.append(tab.1); pending = next.next() }
+            result.append(id)
+        }
+        while let tab = pending { result.append(tab.1); pending = next.next() }
+        return result
+    }
 }
 
 /// 64 号消息的负载：设备请 Mac 在它的 Code 标签页里做一件事（设备 → Mac，通道 0）。Mac 回 65 号
@@ -104,9 +130,12 @@ nonisolated struct RemoteCodeTabAction: Codable, Equatable, Sendable {
     var sessionID: String?
     /// `resume`：继续的目录；`start`：新开在哪个目录。
     var directory: String?
+    /// 哪台主机的 Code 标签页（`RemoteCodeTabInfo.serverID`）；nil 或 `localShellServerID` = Mac 本机。SSH 主机的只发给声明了
+    /// `code-tab-hosts` 的 Mac（之前的 Mac 不读这个键，会当成本机的做）。
+    var server: UUID?
 
     init(requestID: UUID = UUID(), action: Action, tab: UUID? = nil, session: UUID? = nil, path: String? = nil,
-         tool: String? = nil, sessionID: String? = nil, directory: String? = nil) {
+         tool: String? = nil, sessionID: String? = nil, directory: String? = nil, server: UUID? = nil) {
         self.requestID = requestID
         self.action = action.rawValue
         self.tab = tab
@@ -115,6 +144,7 @@ nonisolated struct RemoteCodeTabAction: Codable, Equatable, Sendable {
         self.tool = tool
         self.sessionID = sessionID
         self.directory = directory
+        self.server = server
     }
 
     /// 认不出的动作（更新的设备发来的）为 nil。
