@@ -4,17 +4,13 @@ import UDesignKit
 /// 历史会话对话记录的正文（两端共用一份）：滚动列表、每一行、工具调用折成的组。样子同 Claude Code Desktop：
 /// 你说的话靠右一块气泡、回答直接排、工具调用 / 思考 / 输出都是一行可展开的灰字，不标「你」「Claude」。
 ///
-/// 标题行、顶上的横条各端自己画（Mac 是 `AgentTranscriptPane`，iOS 是 `ClaudeTranscriptView`）。两端的差别只有
+/// 标题行各端自己画（Mac 是 `AgentTranscriptPane`，iOS 是 `ClaudeTranscriptView`）。两端的差别只有
 /// 尺寸与几处交互，放在 `AgentTranscriptStyle`；真正不同的几个小件两端各有一份同名的：
 /// `AgentTranscriptMarkdown`（两端的 Markdown 排版不是同一套）、`AgentSubagentEntry`、`AgentNewMessagesPill`，
 /// 以及 `agentTranscriptCopyMenu` / `agentHistoryPressStyle` / `agentHistoryScrollChrome` 三个修饰。
-struct AgentTranscriptMessages<Top: View, Bottom: View>: View {
+struct AgentTranscriptMessages: View {
     let transcript: AgentTranscriptModel
     let onOpenSubagent: (AgentSubagentLink) -> Void
-    /// 列表最顶上：出错重试、读取中、「加载更早的消息」。参数是往前读一页的动作（记下锚点、不再跟着末尾）。
-    @ViewBuilder let top: (_ loadEarlier: @escaping () -> Void) -> Top
-    /// 列表最底下：从命中处打开、后面还没读到时的「加载更晚的消息」。
-    @ViewBuilder let bottom: () -> Bottom
 
     @State private var expanded: Set<String> = []
     @State private var pendingAnchor: String?
@@ -29,14 +25,14 @@ struct AgentTranscriptMessages<Top: View, Bottom: View>: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    top(loadEarlier)
+                    AgentTranscriptLoadEarlier(transcript: transcript, loadEarlier: loadEarlier)
                     ForEach(layout.rows) { row in
                         rowView(row.entry, showsTaskLabel: row.startsRun && transcript.subagent != nil)
                             // 换了说话的一方：上面多空一点（代替原来的「你」/「Claude」标签）。
                             .padding(.top, row.hasGapAbove ? 12 : 0)
                             .id(row.id)
                     }
-                    bottom()
+                    AgentTranscriptLoadLater(transcript: transcript)
                     if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
                         Text("这个会话里没有可显示的消息。")
                             .font(style.font(11))
@@ -113,6 +109,10 @@ struct AgentTranscriptMessages<Top: View, Bottom: View>: View {
 nonisolated struct AgentTranscriptStyle: Sendable {
     /// 比 Mac 大几号。
     var textBump: CGFloat
+    /// 对话页标题行的标题。
+    var titleSize: CGFloat
+    /// 标题行下面的横条前面画图标、只排一行（Mac）；手机上不画图标、字多折两行。
+    var bannerShowsIcon: Bool
     var columnPadding: CGFloat
     var topPadding: CGFloat
     var bottomAnchorHeight: CGFloat
@@ -147,13 +147,13 @@ nonisolated struct AgentTranscriptStyle: Sendable {
 
     #if os(macOS)
     static let platform = AgentTranscriptStyle(
-        textBump: 0, columnPadding: 24, topPadding: 16, bottomAnchorHeight: 4,
+        textBump: 0, titleSize: 13, bannerShowsIcon: true, columnPadding: 24, topPadding: 16, bottomAnchorHeight: 4,
         iconWidth: 14, lineSpacing: 7, lineMinHeight: nil, revealsChevronOnHover: true,
         bubbleInset: 64, bubbleRadius: 14, cardRadius: 8, surface: UD.fillSoft,
         wrapsLongLines: true, copiesEveryRow: true, noticeLineLimit: 2, anchorsGrowthToEnd: true)
     #else
     static let platform = AgentTranscriptStyle(
-        textBump: 1, columnPadding: 16, topPadding: 14, bottomAnchorHeight: 2,
+        textBump: 1, titleSize: 14.5, bannerShowsIcon: false, columnPadding: 16, topPadding: 14, bottomAnchorHeight: 2,
         iconWidth: 15, lineSpacing: 8, lineMinHeight: 32, revealsChevronOnHover: false,
         bubbleInset: 40, bubbleRadius: 16, cardRadius: 10, surface: UD.fillFaint,
         wrapsLongLines: false, copiesEveryRow: false, noticeLineLimit: 3, anchorsGrowthToEnd: false)

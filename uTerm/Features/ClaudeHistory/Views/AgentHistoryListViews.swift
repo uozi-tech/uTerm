@@ -36,6 +36,8 @@ nonisolated struct AgentHistoryListStyle: Sendable {
     /// 停止搜索的按钮留够点按的高度。
     var stopButtonMinHeight: CGFloat?
     var hidesScrollIndicators: Bool
+    /// 列表底部那几句（正在读取、隐藏了几份）。
+    var footerPadding: EdgeInsets
 
     #if os(macOS)
     static let platform = AgentHistoryListStyle(
@@ -44,7 +46,8 @@ nonisolated struct AgentHistoryListStyle: Sendable {
         hitRowPadding: EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10),
         rowRadius: 6, showsRowChevron: false, hitRowMinHeight: nil,
         headerSize: 11.5, headerChevronSize: 9, headerHeight: 26, headerPadding: 8, headerShowsToolBadge: false,
-        searchSpacing: 10, searchPadding: 6, stopButtonMinHeight: nil, hidesScrollIndicators: true)
+        searchSpacing: 10, searchPadding: 6, stopButtonMinHeight: nil, hidesScrollIndicators: true,
+        footerPadding: EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
     #else
     static let platform = AgentHistoryListStyle(
         titleSize: 15, rowMinHeight: 44, toolBadgeSize: 16, detailSize: 12.5, roleSize: 11.5, snippetSize: 14, noteSize: 12.5,
@@ -52,13 +55,18 @@ nonisolated struct AgentHistoryListStyle: Sendable {
         hitRowPadding: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12),
         rowRadius: 10, showsRowChevron: true, hitRowMinHeight: 44,
         headerSize: 13.5, headerChevronSize: 11, headerHeight: 40, headerPadding: 10, headerShowsToolBadge: true,
-        searchSpacing: 12, searchPadding: 8, stopButtonMinHeight: 44, hidesScrollIndicators: false)
+        searchSpacing: 12, searchPadding: 8, stopButtonMinHeight: 44, hidesScrollIndicators: false,
+        footerPadding: EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
     #endif
 }
 
 /// 空状态用的图标（两端的图标出处不同，`AgentHistoryStateView` 各自对应）。
 enum AgentHistoryStateIcon {
     case warning, search
+    /// 没有会话。
+    case empty
+    /// 还没选会话（右边的空态）。
+    case conversation
 }
 
 /// 选中的行：底色。两端同一个。

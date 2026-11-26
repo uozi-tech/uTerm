@@ -436,8 +436,8 @@ struct ClaudeHistoryBrowser: View {
             // 换了一份对话（含「跳到最新」）就是新的视图。
             .id(ObjectIdentifier(transcript))
         } else {
-            ClaudeHistoryState(icon: "clock", title: String(localized: "选择一个会话"),
-                               message: AgentHistoryText.selectSessionDetail(tools: listedTools))
+            AgentHistoryStateView(icon: .conversation, title: String(localized: "选择一个会话"),
+                                  detail: AgentHistoryText.selectSessionDetail(tools: listedTools))
         }
     }
 
@@ -675,31 +675,9 @@ private struct ClaudeHistoryList: View {
         .accessibilityLabel(Text(AgentHistoryText.newSession))
     }
 
-    @ViewBuilder private var content: some View {
-        switch history.phase {
-        case .loading:
-            ClaudeHistoryProgress(text: String(localized: "正在读取会话列表…"))
-        case .empty:
-            ClaudeHistoryState(icon: "clock", title: String(localized: "没有历史会话"),
-                               message: AgentHistoryText.noHistoryDetail(tools: history.configuredTools))
-        case .failed(let message):
-            ClaudeHistoryState(icon: "warn", title: String(localized: "无法读取会话列表"), message: message,
-                               actionTitle: String(localized: "重试")) {
-                Task { await history.reload() }
-            }
-        case .ready:
-            let files = history.visibleFiles
-            let pinned = history.pinnedFiles
-            // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
-            let hasRuns = !(code?.board.runs.isEmpty ?? true)
-            if files.isEmpty && pinned.isEmpty && !hasRuns && (history.isListing || history.hasMore) {
-                ClaudeHistoryProgress(text: String(localized: "正在读取会话列表…"))
-            } else if files.isEmpty && pinned.isEmpty && (code?.board.runs.isEmpty ?? true) {
-                ClaudeHistoryState(icon: "clock", title: String(localized: "没有命令行会话"),
-                                   message: AgentHistoryText.emptyListDetail(hidden: history.hiddenCount))
-            } else {
-                list(files, pinned: pinned)
-            }
+    private var content: some View {
+        AgentHistoryListContent(history: history, hasRuns: !(code?.board.runs.isEmpty ?? true)) {
+            list(history.visibleFiles, pinned: history.pinnedFiles)
         }
     }
 
@@ -746,7 +724,7 @@ private struct ClaudeHistoryList: View {
                             }
                         }
                     }
-                    footer(files)
+                    AgentHistoryListFooter(history: history, listedCount: files.count)
                 }
                 .padding(8)
             }
@@ -838,28 +816,6 @@ private struct ClaudeHistoryList: View {
             history.collapsedGroups.insert(id)
         }
     }
-
-    @ViewBuilder private func footer(_ files: [AgentHistorySessionFile]) -> some View {
-        if history.hasMore {
-            // 滚到底露出来就再读一批（同 Mac：行数变了它就是一个新视图，格子高、读完一批还露着时也会接着读；
-            // 上一批没读够时 `loadMore` 自己不起作用，不会一露出来就一路读下去）。
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("正在读取…").font(M.sans(12.5)).foregroundStyle(M.text4)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .id(files.count)
-            .onAppear { history.loadMore() }
-        } else if history.hiddenCount > 0 {
-            Text(AgentHistoryText.hiddenNote(history.hiddenCount))
-                .font(M.sans(12.5)).foregroundStyle(M.text4)
-                .padding(.horizontal, 12).padding(.vertical, 10)
-        }
-        // 某种工具的记录读不出来：别的照常列着，底下说一句。
-        ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
-            AgentHistoryWarningNote(text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
-        }
-    }
 }
 
 /// 行的长按菜单：条目见共享的 `AgentHistorySessionMenuItem`，按钮是共享的 `AgentHistoryRowMenuContent`（同 Mac 的右键菜单）。
@@ -941,56 +897,10 @@ private struct ClaudeTranscriptView: View {
         VStack(spacing: 0) {
             // 标题行下面不画横线（同 Mac 的 Code 标签页）。
             header
-            if transcript.opensAtHit, !transcript.reachedEnd {
-                hitBanner
-                Rectangle().fill(M.divider).frame(height: 1)
-            }
-            if let continuation {
-                continuationBanner(continuation)
-                Rectangle().fill(M.divider).frame(height: 1)
-            }
-            AgentTranscriptMessages(transcript: transcript, onOpenSubagent: onOpenSubagent) { loadEarlier in
-                top(loadEarlier)
-            } bottom: {
-                bottom
-            }
+            AgentTranscriptBanners(transcript: transcript, continuation: continuation,
+                                   onJumpToLatest: onJumpToLatest, onOpenPart: onOpenPart)
+            AgentTranscriptMessages(transcript: transcript, onOpenSubagent: onOpenSubagent)
         }
-    }
-
-    /// 「接着往下聊」串起来的另一段：顶上说一句，给按钮翻过去。同 Mac。
-    private func continuationBanner(_ link: AgentHistoryContinuation.Link) -> some View {
-        let target: AgentHistorySessionFile
-        let isPrevious: Bool
-        switch link {
-        case .previous(let file): target = file; isPrevious = true
-        case .next(let file): target = file; isPrevious = false
-        }
-        return HStack(spacing: 8) {
-            Text(AgentHistoryText.continuationNotice(link))
-                .font(M.sans(12.5)).foregroundStyle(M.text2)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            MBtn(title: AgentHistoryText.continuationAction(link), icon: isPrevious ? "upload" : "download",
-                 kind: .secondary, height: 32, action: { onOpenPart(target) })
-                .fixedSize()
-        }
-        .padding(.horizontal, 14).padding(.vertical, 6)
-        .background(M.fillFaint)
-    }
-
-    /// 从命中处打开、后面还没读到末尾：顶上说一句，给「跳到最新」。同 Mac。
-    private var hitBanner: some View {
-        HStack(spacing: 8) {
-            Text(AgentHistoryText.openedAtHit)
-                .font(M.sans(12.5)).foregroundStyle(M.text2)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            MBtn(title: AgentHistoryText.jumpToLatest, icon: "download", kind: .secondary, height: 32,
-                 action: onJumpToLatest)
-                .fixedSize()
-        }
-        .padding(.horizontal, 14).padding(.vertical, 6)
-        .background(M.fillFaint)
     }
 
     /// 放得下就一行（返回 · 标题 · 拷贝 · 继续）；窄的格子（Duo 分屏 330pt、iPhone 竖屏）标题一行、按钮另起一行，
@@ -1033,32 +943,15 @@ private struct ClaudeTranscriptView: View {
     }
 
     private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata))
-                    .font(M.sans(14.5, weight: .semibold)).foregroundStyle(M.text)
-                    .lineLimit(1)
-                if transcript.isUpdating { ClaudeUpdatingBadge() }
-            }
-            AgentTranscriptDetailText(transcript: transcript, metadata: metadata)
-                .font(M.sans(11.5)).foregroundStyle(M.text3)
-                .lineLimit(1).truncationMode(.middle)
-        }
-        .padding(.leading, onBack == nil ? 14 : 0)
+        AgentTranscriptTitleBlock(transcript: transcript, metadata: metadata)
+            .padding(.leading, onBack == nil ? 14 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var actions: some View {
         HStack(spacing: 6) {
             MMenu {
-                if transcript.subagent == nil {
-                    Button { AgentHistoryPasteboard.copy(transcript.file.sessionID) } label: {
-                        Label("拷贝会话 ID", systemImage: "number")
-                    }
-                }
-                Button { AgentHistoryPasteboard.copy(transcript.plainText) } label: {
-                    Label("拷贝已加载的对话", systemImage: "doc.on.doc")
-                }
+                AgentTranscriptCopyItems(transcript: transcript)
             } label: {
                 MIcon(name: "copy", size: 15, color: M.text2)
                     .frame(width: 40, height: M.minTarget)
@@ -1078,46 +971,6 @@ private struct ClaudeTranscriptView: View {
             } else {
                 Spacer().frame(width: 4)
             }
-        }
-    }
-
-    /// 列表最顶上：出错重试、读取中、「加载更早的消息」。
-    @ViewBuilder private func top(_ loadEarlier: @escaping () -> Void) -> some View {
-        if let error = transcript.errorMessage {
-            VStack(spacing: 8) {
-                Text(verbatim: error).font(M.sans(13)).foregroundStyle(M.warning)
-                    .multilineTextAlignment(.center)
-                MBtn(title: String(localized: "重试"), icon: "refresh", kind: .secondary, height: 34) { loadEarlier() }
-                    .fixedSize()
-            }
-            .frame(maxWidth: .infinity)
-        } else if transcript.isLoading {
-            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 8)
-        } else if !transcript.reachedStart {
-            MBtn(title: String(localized: "加载更早的消息"), icon: "upload", kind: .secondary, height: 34) { loadEarlier() }
-                .fixedSize()
-                .frame(maxWidth: .infinity)
-        }
-    }
-
-    /// 从命中处打开的：后面还有，「加载更晚的消息」（滚到底也会读，见 `AgentTranscriptTailFollow`）。
-    @ViewBuilder private var bottom: some View {
-        if !transcript.reachedEnd {
-            VStack(spacing: 8) {
-                if let error = transcript.laterErrorMessage {
-                    Text(verbatim: error).font(M.sans(13)).foregroundStyle(M.warning)
-                        .multilineTextAlignment(.center)
-                }
-                if transcript.isLoadingLater {
-                    ProgressView().padding(.vertical, 8)
-                } else {
-                    MBtn(title: AgentHistoryText.loadLater, icon: "download", kind: .secondary, height: 34) {
-                        Task { await transcript.loadLater() }
-                    }
-                    .fixedSize()
-                }
-            }
-            .frame(maxWidth: .infinity)
         }
     }
 }
@@ -1169,21 +1022,6 @@ struct AgentSubagentEntry: View {
     }
 }
 
-/// 标题旁的「正在更新」：这份对话最近还在变（会话开着）。同 Mac。
-private struct ClaudeUpdatingBadge: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(M.success).frame(width: 6, height: 6)
-            Text(AgentHistoryText.updating)
-                .font(M.sans(11, weight: .medium)).foregroundStyle(M.success)
-        }
-        .padding(.horizontal, 7).padding(.vertical, 2)
-        .background(Capsule().fill(M.success.opacity(0.12)))
-        .fixedSize()
-        .accessibilityElement(children: .combine)
-    }
-}
-
 /// 往上翻着时末尾来了新内容：底部的「有新消息」，点了跳到底。同 Mac。
 struct AgentNewMessagesPill: View {
     let action: () -> Void
@@ -1218,8 +1056,47 @@ struct AgentHistoryStateView: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
-        ClaudeHistoryState(icon: icon == .warning ? "warn" : "search", title: title, message: detail,
-                           actionTitle: actionTitle, action: action)
+        ClaudeHistoryState(icon: name, title: title, message: detail, actionTitle: actionTitle, action: action)
+    }
+
+    private var name: String {
+        switch icon {
+        case .warning: return "warn"
+        case .search: return "search"
+        case .empty, .conversation: return "clock"
+        }
+    }
+}
+
+/// 读取中（整块）。
+struct AgentHistoryProgressView: View {
+    let text: String
+
+    var body: some View { ClaudeHistoryProgress(text: text) }
+}
+
+/// 读取中（列表里的一小块）。
+struct AgentHistorySpinner: View {
+    var body: some View { ProgressView() }
+}
+
+/// 横条、加载控件上的次要按钮。
+struct AgentHistoryActionButton: View {
+    let title: String
+    let icon: AgentHistoryActionIcon
+    let action: () -> Void
+
+    var body: some View {
+        MBtn(title: title, icon: name, kind: .secondary, height: 34, action: action)
+            .fixedSize()
+    }
+
+    private var name: String {
+        switch icon {
+        case .up: return "upload"
+        case .down, .toLatest: return "download"
+        case .retry: return "refresh"
+        }
     }
 }
 

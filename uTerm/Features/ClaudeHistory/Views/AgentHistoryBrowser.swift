@@ -111,8 +111,8 @@ struct AgentHistorySelectPrompt: View {
     let history: AgentHistoryModel
 
     var body: some View {
-        RemoteMacStateView(systemImage: "text.bubble", title: String(localized: "选择一个会话"),
-                           detail: AgentHistoryText.selectSessionDetail(tools: listedTools))
+        AgentHistoryStateView(icon: .conversation, title: String(localized: "选择一个会话"),
+                              detail: AgentHistoryText.selectSessionDetail(tools: listedTools))
     }
 
     private var listedTools: [AgentHistoryTool] {
@@ -385,35 +385,12 @@ struct AgentHistorySessionList: View {
         return items
     }
 
-    @ViewBuilder private var content: some View {
-        switch history.phase {
-        case .loading:
-            RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
-        case .empty:
-            RemoteMacStateView(systemImage: "tray", title: String(localized: "没有历史会话"),
-                               detail: AgentHistoryText.noHistoryDetail(tools: history.configuredTools))
-        case .failed(let message):
-            RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法读取会话列表"),
-                               detail: message) {
-                UDButton(title: String(localized: "重试")) { Task { await history.reload() } }
-            }
-        case .ready:
-            let files = history.visibleFiles
-            let pinned = history.pinnedFiles
-            let runs = running?.rows() ?? []
-            // 还在列目录，或者读过的那几份都不用列、后面还有没读的：接着等，别急着说「没有」。
-            if files.isEmpty && pinned.isEmpty && runs.isEmpty && (history.isListing || history.hasMore) {
-                RemoteMacProgressView(text: String(localized: "正在读取会话列表…"))
-            } else if files.isEmpty && pinned.isEmpty && runs.isEmpty {
-                RemoteMacStateView(systemImage: "tray", title: String(localized: "没有命令行会话"),
-                                   detail: emptyDetail)
-            } else {
-                list(files, pinned: pinned, runs: runs)
-            }
+    private var content: some View {
+        let runs = running?.rows() ?? []
+        return AgentHistoryListContent(history: history, hasRuns: !runs.isEmpty) {
+            list(history.visibleFiles, pinned: history.pinnedFiles, runs: runs)
         }
     }
-
-    private var emptyDetail: String { AgentHistoryText.emptyListDetail(hidden: history.hiddenCount) }
 
     private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile],
                       runs: [AgentHistoryRunRow]) -> some View {
@@ -466,7 +443,7 @@ struct AgentHistorySessionList: View {
                                 }
                             }
                         }
-                        footer(files)
+                        AgentHistoryListFooter(history: history, listedCount: files.count)
                     }
                     .padding(6)
                     // 落点在列表的空白处也认（列表短、往下拖出「置顶」时）。
@@ -566,34 +543,6 @@ struct AgentHistorySessionList: View {
             history.collapsedGroups.remove(id)
         } else {
             history.collapsedGroups.insert(id)
-        }
-    }
-
-    @ViewBuilder private func footer(_ files: [AgentHistorySessionFile]) -> some View {
-        if history.hasMore {
-            // 滚到底露出来就再读一批。行数变了它就是一个新视图：窗口高、读完一批它还露着时也会接着读。
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("正在读取…")
-                    .font(UD.caption)
-                    .foregroundStyle(UD.text4)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .id(files.count)
-            .onAppear { history.loadMore() }
-        } else if history.hiddenCount > 0 {
-            Text(AgentHistoryText.hiddenNote(history.hiddenCount))
-                .font(UD.caption)
-                .foregroundStyle(UD.text4)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-        }
-        ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
-            SettingsInlineNote(tone: .warning,
-                               text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
-                .padding(.horizontal, 4)
-                .padding(.top, 4)
         }
     }
 }
@@ -1058,63 +1007,10 @@ struct AgentTranscriptPane: View {
         VStack(spacing: 0) {
             header
             if showsHeaderDivider { Rectangle().fill(UD.border).frame(height: 1) }
-            if transcript.opensAtHit, !transcript.reachedEnd {
-                hitBanner
-                Rectangle().fill(UD.border).frame(height: 1)
-            }
-            if let continuation {
-                continuationBanner(continuation)
-                Rectangle().fill(UD.border).frame(height: 1)
-            }
-            AgentTranscriptMessages(transcript: transcript, onOpenSubagent: onOpenSubagent) { loadEarlier in
-                top(loadEarlier)
-            } bottom: {
-                bottom
-            }
+            AgentTranscriptBanners(transcript: transcript, continuation: continuation,
+                                   onJumpToLatest: onJumpToLatest, onOpenPart: onOpenPart)
+            AgentTranscriptMessages(transcript: transcript, onOpenSubagent: onOpenSubagent)
         }
-    }
-
-    /// 「接着往下聊」串起来的另一段：顶上说一句，给按钮翻过去。
-    private func continuationBanner(_ link: AgentHistoryContinuation.Link) -> some View {
-        let target: AgentHistorySessionFile
-        switch link {
-        case .previous(let file), .next(let file): target = file
-        }
-        return HStack(spacing: 8) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-            Text(AgentHistoryText.continuationNotice(link))
-                .font(.system(size: 11.5))
-                .foregroundStyle(UD.text2)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            UDButton(title: AgentHistoryText.continuationAction(link), style: .secondary,
-                     systemImage: { if case .previous = link { return "arrow.up" } else { return "arrow.down" } }(),
-                     action: { onOpenPart(target) })
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(UD.fillSoft)
-    }
-
-    /// 从命中处打开、后面还没读到末尾：顶上说一句，给「跳到最新」。
-    private var hitBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "text.magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-            Text(AgentHistoryText.openedAtHit)
-                .font(.system(size: 11.5))
-                .foregroundStyle(UD.text2)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            UDButton(title: AgentHistoryText.jumpToLatest, style: .secondary, systemImage: "arrow.down.to.line",
-                     action: onJumpToLatest)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(UD.fillSoft)
     }
 
     private var header: some View {
@@ -1131,27 +1027,10 @@ struct AgentTranscriptPane: View {
                 .help(AgentHistoryText.backToParent)
                 .accessibilityLabel(Text(AgentHistoryText.backToParent))
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Text(titleLine)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(UD.text)
-                        .lineLimit(1)
-                    if transcript.isUpdating { AgentUpdatingBadge() }
-                }
-                AgentTranscriptDetailText(transcript: transcript, metadata: metadata)
-                    .font(.system(size: 11))
-                    .foregroundStyle(UD.text3)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-            }
+            AgentTranscriptTitleBlock(transcript: transcript, metadata: metadata)
             Spacer(minLength: 8)
             Menu {
-                if transcript.subagent == nil {
-                    Button(String(localized: "拷贝会话 ID")) { AgentHistoryPasteboard.copy(transcript.file.sessionID) }
-                }
-                Button(String(localized: "拷贝已加载的对话")) { AgentHistoryPasteboard.copy(transcript.plainText) }
+                AgentTranscriptCopyItems(transcript: transcript)
             } label: {
                 Image(systemName: "doc.on.doc")
             }
@@ -1172,72 +1051,6 @@ struct AgentTranscriptPane: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
-    }
-
-    private var titleLine: String {
-        transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata)
-    }
-
-    /// 列表最顶上：出错重试、读取中、「加载更早的消息」。
-    @ViewBuilder private func top(_ loadEarlier: @escaping () -> Void) -> some View {
-        if let error = transcript.errorMessage {
-            HStack(spacing: 8) {
-                SettingsInlineNote(tone: .warning, text: error)
-                UDButton(title: String(localized: "重试"), style: .secondary) { loadEarlier() }
-            }
-        } else if transcript.isLoading {
-            HStack {
-                Spacer()
-                UDIndeterminateBar().frame(width: 120)
-                Spacer()
-            }
-            .padding(.vertical, 8)
-        } else if !transcript.reachedStart {
-            HStack {
-                Spacer()
-                UDButton(title: String(localized: "加载更早的消息"), style: .secondary, systemImage: "arrow.up") {
-                    loadEarlier()
-                }
-                Spacer()
-            }
-        }
-    }
-
-    /// 从命中处打开的：后面还有，「加载更晚的消息」（滚到底也会读，见 `AgentTranscriptTailFollow`）。
-    @ViewBuilder private var bottom: some View {
-        if !transcript.reachedEnd {
-            HStack(spacing: 8) {
-                Spacer()
-                if let error = transcript.laterErrorMessage {
-                    SettingsInlineNote(tone: .warning, text: error)
-                }
-                if transcript.isLoadingLater {
-                    UDIndeterminateBar().frame(width: 120).padding(.vertical, 8)
-                } else {
-                    UDButton(title: AgentHistoryText.loadLater, style: .secondary, systemImage: "arrow.down") {
-                        Task { await transcript.loadLater() }
-                    }
-                }
-                Spacer()
-            }
-        }
-    }
-}
-
-/// 标题旁的「正在更新」：这份对话最近还在变（会话开着）。
-private struct AgentUpdatingBadge: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(UD.success).frame(width: 6, height: 6)
-            Text(AgentHistoryText.updating)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(UD.success)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Capsule().fill(UD.success.opacity(0.12)))
-        .fixedSize()
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1328,9 +1141,49 @@ struct AgentHistoryStateView: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
-        RemoteMacStateView(systemImage: icon == .warning ? "exclamationmark.triangle" : "magnifyingglass",
-                           title: title, detail: detail) {
+        RemoteMacStateView(systemImage: symbol, title: title, detail: detail) {
             if let actionTitle, let action { UDButton(title: actionTitle, action: action) }
+        }
+    }
+
+    private var symbol: String {
+        switch icon {
+        case .warning: return "exclamationmark.triangle"
+        case .search: return "magnifyingglass"
+        case .empty: return "tray"
+        case .conversation: return "text.bubble"
+        }
+    }
+}
+
+/// 读取中（整块）。
+struct AgentHistoryProgressView: View {
+    let text: String
+
+    var body: some View { RemoteMacProgressView(text: text) }
+}
+
+/// 读取中（列表里的一小块）。
+struct AgentHistorySpinner: View {
+    var body: some View { UDIndeterminateBar().frame(width: 120) }
+}
+
+/// 横条、加载控件上的次要按钮。
+struct AgentHistoryActionButton: View {
+    let title: String
+    let icon: AgentHistoryActionIcon
+    let action: () -> Void
+
+    var body: some View {
+        UDButton(title: title, style: .secondary, systemImage: symbol, action: action)
+    }
+
+    private var symbol: String? {
+        switch icon {
+        case .up: return "arrow.up"
+        case .down: return "arrow.down"
+        case .toLatest: return "arrow.down.to.line"
+        case .retry: return nil
         }
     }
 }
