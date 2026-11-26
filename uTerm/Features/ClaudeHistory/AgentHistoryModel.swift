@@ -385,7 +385,7 @@ final class AgentHistoryModel {
                     listing.failedProjects.contains(AgentHistoryProjectKey($0.project)) || failedTools.contains($0.tool)
                 }
                 let present = Set(listed.map(\.path))
-                listed = (listed + kept.filter { !present.contains($0.path) }).sorted { $0.modifiedAt > $1.modifiedAt }
+                listed += kept.filter { !present.contains($0.path) }
             }
         }
         guard generation == listGeneration else {
@@ -434,7 +434,7 @@ final class AgentHistoryModel {
         guard generation == listGeneration, !isListing, !refreshed.isEmpty else { return }
         let kept = listedFiles.filter { !refreshed.contains(AgentHistoryProjectKey($0.project)) }
         let shownBefore = visibleFiles.count
-        adopt((kept + fresh).sorted { $0.modifiedAt > $1.modifiedAt }, shownBefore: resolvedCount,
+        adopt(kept + fresh, shownBefore: resolvedCount,
               refreshed: Set(fresh.map(\.path)))
         if shownBefore > 0, visibleFiles.isEmpty {
             let message = "历史会话：重读 \(refreshed.count) 个项目后一行都不显示了（留着 \(kept.count) 份、新列 \(fresh.count) 份，"
@@ -449,8 +449,9 @@ final class AgentHistoryModel {
         // 换了范围就从头显示；同一个范围重列（后台刷新）时，已经显示着的行一行都不收：
         // 数一数原来显示到第几份（都读过信息），新列表里数到同样多份读过的为止都算已经显示。中间新冒出来的（新写出的记录）
         // 先不显示、读到信息再出来；文件变了的照旧显示上次读到的标题，后台重读（`needsRead`）。
-        listedFiles = listed
-        files = listed.filter(passesToolFilter)
+        // 先后只在这里定（数据源、合并、补回来的各给各的顺序）：同一刻的也有固定的先后，重列不换位置。
+        listedFiles = listed.sorted(by: AgentHistorySessionFile.newestFirst)
+        files = listedFiles.filter(passesToolFilter)
         // 列表里的修改时间是刚列的了，之前记的不再需要（正开着的那份照样从对话里取）。
         if let refreshed {
             for path in refreshed { seenActivity[path] = nil }

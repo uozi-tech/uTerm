@@ -482,7 +482,7 @@ extension ClaudeHistoryTab {
         var found: [String: (file: AgentHistorySessionFile, source: any AgentHistorySource)] = [:]
         for tool in Set(waiting.map(\.tool)) {
             guard let source = history.source(for: tool), let projects = try? await source.projects() else { continue }
-            let recent = projects.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }.prefix(4)
+            let recent = projects.sorted(by: AgentHistoryProject.newestFirst).prefix(4)
             for file in await source.allSessions(in: Array(recent)) where file.modifiedAt >= since {
                 let directory: String?
                 if let known = file.project.directory {

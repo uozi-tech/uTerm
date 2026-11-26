@@ -120,7 +120,7 @@ extension AntigravityHistorySource {
                   !file.path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
             return (file, "./" + String(file.path.dropFirst(home.count + 1)))
         }
-        .sorted { $0.file.modifiedAt > $1.file.modifiedAt }
+        .sorted { AgentHistorySessionFile.newestFirst($0.file, $1.file) }
     }
 
     /// 跑一条搜索命令，取标记之间的输出。`exec` 失败时，连接还在（还能列主目录）就是这台主机跑不了命令（只许 SFTP）。

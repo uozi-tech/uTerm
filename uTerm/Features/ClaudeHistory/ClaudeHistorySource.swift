@@ -61,7 +61,7 @@ actor ClaudeHistorySource: AgentHistorySource {
         return entries
             .filter { ($0.isDirectory || $0.isSymlink) && !$0.name.hasPrefix(".") }
             .map { AgentHistoryProject(id: $0.name, path: root + "/" + $0.name, modifiedAt: $0.modifiedAt) }
-            .sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+            .sorted(by: AgentHistoryProject.newestFirst)
     }
 
     func project(containing directory: String, among projects: [AgentHistoryProject]) -> AgentHistoryProject? {
@@ -90,7 +90,7 @@ actor ClaudeHistorySource: AgentHistorySource {
                 sessionID: String(entry.name.dropLast(".jsonl".count)), project: project, path: path,
                 size: size ?? 0, modifiedAt: modified ?? .distantPast))
         }
-        return files.sorted { $0.modifiedAt > $1.modifiedAt }
+        return files.sorted(by: AgentHistorySessionFile.newestFirst)
     }
 
     /// 全部项目的会话合在一起，新的在前。列不了的项目跳过。
@@ -130,7 +130,7 @@ actor ClaudeHistorySource: AgentHistorySource {
         let message = "历史会话：Claude Code 列 \(projects.count) 个项目，\(result.count) 份记录，"
             + "空项目 \(emptyProjects)，失败 \(failed.count)\(firstError.map { "（\($0)）" } ?? "")"
         AppLogger.notice(message, category: AgentHistoryLog.category)
-        return AgentHistorySessionListing(files: result.sorted { $0.modifiedAt > $1.modifiedAt }, failedProjects: failed)
+        return AgentHistorySessionListing(files: result.sorted(by: AgentHistorySessionFile.newestFirst), failedProjects: failed)
     }
 
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata {
@@ -275,7 +275,7 @@ actor ClaudeHistorySource: AgentHistorySource {
             return AgentSubagentFile(agentID: id, path: directory + "/" + entry.name, size: entry.size,
                                      modifiedAt: entry.modifiedAt, hasInfo: names.contains("agent-\(id).meta.json"))
         }
-        .sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+        .sorted(by: AgentSubagentFile.newestFirst)
     }
 
     func info(of subagent: AgentSubagentFile) async -> AgentSubagentInfo? {

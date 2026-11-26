@@ -111,7 +111,7 @@ actor CodexHistorySource: AgentHistorySource {
             return AgentHistorySessionListing(files: [], failedProjects: Set(projects.map(AgentHistoryProjectKey.init)))
         }
         return AgentHistorySessionListing(
-            files: projects.flatMap { snapshot.sessions[$0.id] ?? [] }.sorted { $0.modifiedAt > $1.modifiedAt })
+            files: projects.flatMap { snapshot.sessions[$0.id] ?? [] }.sorted(by: AgentHistorySessionFile.newestFirst))
     }
 
     /// 有就用上一次列的（`projects()` 刚列过），没有才列。
@@ -165,10 +165,10 @@ actor CodexHistorySource: AgentHistorySource {
                 AgentHistorySessionFile(sessionID: entry.header.id, project: project, path: entry.file.path,
                                         size: entry.file.size, modifiedAt: entry.file.modifiedAt)
             }
-            .sorted { $0.modifiedAt > $1.modifiedAt }
+            .sorted(by: AgentHistorySessionFile.newestFirst)
         }
-        projects.sort { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
-        for key in children.keys { children[key]?.sort { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) } }
+        projects.sort(by: AgentHistoryProject.newestFirst)
+for key in children.keys { children[key]?.sort(by: AgentSubagentFile.newestFirst) }
         return Snapshot(projects: projects, sessions: sessions, children: children, childThreadIDs: childThreadIDs)
     }
 
@@ -200,7 +200,7 @@ actor CodexHistorySource: AgentHistorySource {
                 byPlainPath[file.plainPath] = file
             }
         }
-        return byPlainPath.values.sorted { $0.modifiedAt > $1.modifiedAt }
+        return byPlainPath.values.sorted { $0.modifiedAt != $1.modifiedAt ? $0.modifiedAt > $1.modifiedAt : $0.path < $1.path }
     }
 
     private nonisolated static func isDigits(_ name: String) -> Bool {

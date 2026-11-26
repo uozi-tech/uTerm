@@ -89,6 +89,8 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     /// 后来才出现的记录（Code 标签页里新开的会话写出了记录文件）。
     func add(_ session: Session) { sessionList.append(session) }
+    /// 把会话倒过来存：同一时刻的几份会话，列出来的先后跟着变（像真的数据源那样取决于各项目列完的先后）。
+    func reverseStorageOrder() { sessionList.reverse() }
 
     private func makeProject(_ id: String) -> AgentHistoryProject {
         let members = sessionList.filter { $0.projectID == id }

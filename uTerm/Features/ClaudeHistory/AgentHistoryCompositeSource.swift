@@ -126,7 +126,7 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
         failures = Dictionary(errors.map { ($0.0, FriendlyError.describe($0.1)) }, uniquingKeysWith: { first, _ in first })
         // 还有没列完的：先不报错，等它列完再说（它可能有记录）。
         if found.isEmpty, pendingTools.isEmpty, let first = errors.first { throw first.1 }
-        return found.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+        return found.sorted(by: AgentHistoryProject.newestFirst)
     }
 
     private enum CollectEvent: Sendable {
@@ -209,7 +209,7 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
         // 诊断：每种工具列了几个项目、列到几份（侧栏整个空掉时看是哪一种、哪一步）。
         let message = "历史会话：各工具列会话 " + perTool.sorted().joined(separator: "，")
         AppLogger.notice(message, category: AgentHistoryLog.category)
-        return AgentHistorySessionListing(files: lists.files.sorted { $0.modifiedAt > $1.modifiedAt },
+        return AgentHistorySessionListing(files: lists.files.sorted(by: AgentHistorySessionFile.newestFirst),
                                           failedProjects: lists.failedProjects)
     }
 

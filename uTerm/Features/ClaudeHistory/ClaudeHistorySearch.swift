@@ -259,7 +259,7 @@ extension ClaudeHistorySource {
                   !relative.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
             return (file, "./" + relative)
         }
-        .sorted { $0.file.modifiedAt > $1.file.modifiedAt }
+        .sorted { AgentHistorySessionFile.newestFirst($0.file, $1.file) }
         let needle = ClaudeSearchCommand.jsonEscaped(query.text)
         var searched = 0
         var hitCount = 0

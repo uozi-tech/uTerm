@@ -37,6 +37,35 @@ nonisolated struct AgentHistorySessionFile: Hashable, Sendable, Identifiable {
     }
 }
 
+extension AgentHistorySessionFile {
+    /// 列表的先后：修改时间新的在前；同一刻的按工具、路径定。
+    /// 只比修改时间不够：同步、备份恢复、批量清理会把几百份记录改成同一刻（实测 548 份落在同一纳秒），
+    /// 打平的谁先谁后就看这一趟各项目、各工具列完的先后，每次重列都换个样。
+    nonisolated static func newestFirst(_ a: Self, _ b: Self) -> Bool {
+        if a.modifiedAt != b.modifiedAt { return a.modifiedAt > b.modifiedAt }
+        if a.tool != b.tool { return a.tool.rawValue < b.tool.rawValue }
+        return a.path < b.path
+    }
+}
+
+extension AgentHistoryProject {
+    /// 项目的先后：修改时间新的在前（没有的最后）；同一刻的按工具、路径定（理由同 `AgentHistorySessionFile.newestFirst`）。
+    nonisolated static func newestFirst(_ a: Self, _ b: Self) -> Bool {
+        let left = a.modifiedAt ?? .distantPast, right = b.modifiedAt ?? .distantPast
+        if left != right { return left > right }
+        if a.tool != b.tool { return a.tool.rawValue < b.tool.rawValue }
+        return a.path < b.path
+    }
+}
+
+extension AgentSubagentFile {
+    /// 子代理的先后：修改时间新的在前（没有的最后）；同一刻的按路径定（理由同 `AgentHistorySessionFile.newestFirst`）。
+    nonisolated static func newestFirst(_ a: Self, _ b: Self) -> Bool {
+        let left = a.modifiedAt ?? .distantPast, right = b.modifiedAt ?? .distantPast
+        return left != right ? left > right : a.path < b.path
+    }
+}
+
 /// 列表一行要的东西。只读记录的末尾（必要时加开头）一小块得到。
 nonisolated struct AgentHistorySessionMetadata: Equatable, Sendable {
     var title: String?

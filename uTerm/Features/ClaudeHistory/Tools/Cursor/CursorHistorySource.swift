@@ -74,7 +74,7 @@ actor CursorHistorySource: AgentHistorySource {
                 project.directory = workspaces[project.id]
                 return project
             }
-            .sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+            .sorted(by: AgentHistoryProject.newestFirst)
     }
 
     private func isKnownUnresolved(_ project: AgentHistoryProject) -> Bool {
@@ -152,7 +152,7 @@ actor CursorHistorySource: AgentHistorySource {
                 if next < chats.count { launch() }
             }
         }
-        return files.sorted { $0.modifiedAt > $1.modifiedAt }
+        return files.sorted(by: AgentHistorySessionFile.newestFirst)
     }
 
     /// 一个会话目录里的 `store.db` 与 `store.db-wal`：大小与时间都算上 WAL（会话开着时新内容都在 WAL 里）。
@@ -200,7 +200,7 @@ actor CursorHistorySource: AgentHistorySource {
                 if next < projects.count { launch() }
             }
         }
-        return AgentHistorySessionListing(files: result.sorted { $0.modifiedAt > $1.modifiedAt }, failedProjects: failed)
+        return AgentHistorySessionListing(files: result.sorted(by: AgentHistorySessionFile.newestFirst), failedProjects: failed)
     }
 
     private func summary(for file: AgentHistorySessionFile) async throws -> CursorChatStore.Summary? {

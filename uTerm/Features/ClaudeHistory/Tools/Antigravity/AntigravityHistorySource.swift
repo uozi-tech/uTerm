@@ -115,7 +115,7 @@ actor AntigravityHistorySource: AgentHistorySource {
                                                    directory: conversation.info?.workspace, tool: .antigravity)
             }
         }
-        return projects.values.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+        return projects.values.sorted(by: AgentHistoryProject.newestFirst)
     }
 
     /// 列每个数据目录的 `brain/`，问一次 SQLite。目录不存在 = 没用过那个入口；别的错误（没权限、断线）照常报。
@@ -233,7 +233,7 @@ actor AntigravityHistorySource: AgentHistorySource {
                 if next < members.count { launch() }
             }
         }
-        return (result.sorted { $0.modifiedAt > $1.modifiedAt }, failed, firstError)
+        return (result.sorted(by: AgentHistorySessionFile.newestFirst), failed, firstError)
     }
 
     /// 一个会话的记录文件；没有记录（`logs/` 不存在、读不了、里面没有记录文件）为 nil。别的失败（断线）照常抛。
