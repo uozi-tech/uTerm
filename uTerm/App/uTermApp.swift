@@ -172,6 +172,7 @@ struct uTermApp: App {
                 relay: launchRelay
             )
             remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
+            remoteServer.codeTabActions = .live(settings: remoteSettings, registry: terminalRegistry)
             remoteServer.fileAccess = .live(settings: remoteSettings)
             remoteMacs.fileSharing = { [remoteFileSharing] macID in remoteFileSharing.access(for: macID) }
             remoteMacs.onForget = { [remoteFileSharing] macID in remoteFileSharing.removeAll(for: macID) }

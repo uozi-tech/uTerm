@@ -101,6 +101,9 @@ final class RemoteHostServer {
     }
     /// 手机要的「新建本机终端」：开窗口、等会话登记好，回会话 id。测试里换成假的。
     @ObservationIgnored var localShellOpener: RemoteLocalShellOpener = .unavailable
+    /// 设备请 Mac 在它的 Code 标签页里做的事（64 号消息）。和 `localShellOpener` 一样由 app 在启动时接上，
+    /// 远控进程里转给 App，测试里换成假的。
+    @ObservationIgnored var codeTabActions: RemoteCodeTabActor = .unavailable
     /// 远控文件请求（列目录、读写、搜索、跑命令）的落点。和 `localShellOpener` 一样由 app 在启动时接上。
     @ObservationIgnored var fileAccess: RemoteFileAccess = .unavailable
     /// 手机看会话列表、接入之前要等它：Mac 刚重启时本机终端还没接回来。另见 `RemoteHostSessions.waitUntilRestored`。

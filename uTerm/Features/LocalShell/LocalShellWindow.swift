@@ -538,6 +538,16 @@ final class LocalShellWindowRouter {
         entries[windowID]?.window
     }
 
+    /// 本机终端窗口的 model，最近活跃的在前（设备请 Mac 在它的 Code 标签页里开会话时按它找窗口）。
+    var modelsByRecency: [LocalShellWindowModel] {
+        activationOrder.reversed().compactMap { entries[$0]?.model }
+    }
+
+    /// 哪个窗口里有这个 shell（含 Code 标签页里跑着的）。
+    func model(containing paneID: UUID) -> LocalShellWindowModel? {
+        modelsByRecency.first { $0.pane(paneID) != nil }
+    }
+
     /// 所有本机终端窗口里的会话，退出流程用。
     var allPanes: [LocalShellPane] {
         entries.values.flatMap { $0.model?.panes ?? [] }
