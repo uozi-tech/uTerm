@@ -1,8 +1,9 @@
 import SwiftUI
 import UDesignKit
 
-/// iPhone Duo 横握时状态栏那一列（宽约 84pt）里的账号额度：Agent / 分屏开关下面，每种工具一块——图标，下面每个时间窗
-/// 一个圆环（照系统的容量式仪表 `accessoryCircularCapacity`：底环、圆头的进度弧、正中写用了几成），环下写时间窗的名字。
+/// iPhone Duo 横握时状态栏那一列（宽约 84pt）里的账号额度：Agent / 分屏开关下面，每种工具一块——图标，下面一个圆环
+/// （照系统的容量式仪表 `accessoryCircularCapacity`：底环、圆头的进度弧、正中写用了几成），环下写时间窗的名字。
+/// 每种工具只放最接近 100% 的那个时间窗（`AgentAccountLimits.headline`），颜色按程度蓝 / 黄 / 红（`AgentUsageLevel`）。
 /// 一列窄，细条在这里读不出长短，圆环读得出。点一下弹出全部明细（同侧栏底部那一行点开的）。
 /// 数据与侧栏底部同一份（`AgentHistoryModel.accountLimits`）；列表照旧每分钟重读状态栏的数据。
 struct WorkspaceSideAccountLimits: View {
@@ -19,6 +20,7 @@ struct WorkspaceSideAccountLimits: View {
             if let usage = history.transcript?.latestUsage?.usage {
                 VStack(spacing: 4) {
                     WorkspaceQuotaRing(usedPercent: usage.contextFraction.map { $0 * 100 },
+                                       level: usage.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal,
                                        text: usage.contextFraction == nil
                                            ? AgentHistoryText.tokenCount(usage.contextTokens) : nil)
                     Text(AgentHistoryText.usageContext)
@@ -38,9 +40,9 @@ struct WorkspaceSideAccountLimits: View {
                     ForEach(rows, id: \.tool) { row in
                         VStack(spacing: 8) {
                             AgentHistoryToolBadge(tool: row.tool, size: 16)
-                            ForEach(Array(row.windows.prefix(2).enumerated()), id: \.offset) { _, window in
+                            if let window = row.headline {
                                 VStack(spacing: 4) {
-                                    WorkspaceQuotaRing(usedPercent: window.usedPercent)
+                                    WorkspaceQuotaRing(usedPercent: window.usedPercent, level: AgentUsageLevel.of(window))
                                     Text(AgentHistoryText.rateLimitWindow(window))
                                         .font(M.sans(10)).foregroundStyle(M.text3)
                                         .lineLimit(1).minimumScaleFactor(0.7)
@@ -66,10 +68,11 @@ struct WorkspaceSideAccountLimits: View {
     }
 }
 
-/// 一个圆环（时间窗的额度、会话的上下文）：从 12 点顺时针填到用了几成，正中写数字；到 90% 换成警告色。
-/// 不知道占了几成（上下文窗口多大不知道）时只画底环，正中写 `text`。
+/// 一个圆环（时间窗的额度、会话的上下文）：从 12 点顺时针填到用了几成，正中写数字；颜色按程度：正常是强调色，
+/// 快满了黄、满了红（`AgentUsageLevel`）。不知道占了几成（上下文窗口多大不知道）时只画底环，正中写 `text`。
 private struct WorkspaceQuotaRing: View {
     let usedPercent: Double?
+    var level: AgentUsageLevel = .normal
     var text: String? = nil
     @Environment(\.mAccent) private var accent
 
@@ -79,17 +82,17 @@ private struct WorkspaceQuotaRing: View {
     var body: some View {
         let percent = usedPercent ?? 0
         let fraction = min(1, max(0, percent / 100))
-        let warns = percent >= 90
+        let tint = level == .normal ? accent : level.color
         ZStack {
             Circle().stroke(UD.fillSoft, lineWidth: Self.lineWidth)
             if usedPercent != nil {
                 Circle().trim(from: 0, to: fraction)
-                    .stroke(warns ? M.warning : accent, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
+                    .stroke(tint, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
             Text(verbatim: text ?? "\(Int(percent.rounded()))")
                 .font(M.mono(text == nil ? 12 : 9.5, weight: .semibold))
-                .foregroundStyle(warns ? M.warning : M.text)
+                .foregroundStyle(level == .normal ? M.text : level.color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .padding(.horizontal, Self.lineWidth + 1)

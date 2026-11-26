@@ -139,6 +139,7 @@ private struct AgentTranscriptUsageBadge: View {
     var body: some View {
         let style = AgentTranscriptStyle.platform
         Button { showsDetail.toggle() } label: {
+            let level = usage.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal
             HStack(spacing: 4) {
                 if let fraction = usage.contextFraction {
                     AgentUsageRing(fraction: fraction)
@@ -150,7 +151,7 @@ private struct AgentTranscriptUsageBadge: View {
                     .font(style.font(10.5, weight: .medium))
                     .monospacedDigit()
             }
-            .foregroundStyle(UD.text3)
+            .foregroundStyle(level == .normal ? UD.text3 : level.color)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Capsule().fill(UD.fillSoft))
@@ -175,7 +176,8 @@ private struct AgentUsageRing: View {
         ZStack {
             Circle().stroke(UD.border, lineWidth: 1.5)
             Circle().trim(from: 0, to: fraction)
-                .stroke(fraction > 0.85 ? UD.warning : UD.text3, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .stroke(AgentUsageLevel.of(percent: fraction * 100).color,
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 9, height: 9)
@@ -250,6 +252,7 @@ struct AgentRateLimitRow: View {
 
     var body: some View {
         let style = AgentTranscriptStyle.platform
+        let level = AgentUsageLevel.of(window)
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(AgentHistoryText.rateLimitWindow(window))
@@ -258,10 +261,10 @@ struct AgentRateLimitRow: View {
                 Spacer(minLength: 8)
                 Text(AgentHistoryText.rateLimitUsed(window.usedPercent))
                     .font(style.font(11))
-                    .foregroundStyle(window.usedPercent >= 90 ? UD.warning : UD.text)
+                    .foregroundStyle(level == .normal ? UD.text : level.color)
                     .monospacedDigit()
             }
-            AgentRateLimitBar(usedPercent: window.usedPercent)
+            AgentRateLimitBar(usedPercent: window.usedPercent, level: level)
                 .frame(height: 4)
             if window.didReset {
                 Text(AgentHistoryText.rateLimitDidReset)
@@ -410,21 +413,17 @@ private struct AgentAccountLimitsRow: View {
         Button { showsDetail.toggle() } label: {
             HStack(spacing: 8) {
                 AgentHistoryToolBadge(tool: row.tool, size: 14)
-                ForEach(Array(row.windows.prefix(2).enumerated()), id: \.offset) { _, window in
-                    HStack(spacing: 4) {
-                        Text(AgentHistoryText.rateLimitWindow(window))
-                            .lineLimit(1)
-                            .foregroundStyle(UD.text3)
-                        AgentRateLimitBar(usedPercent: window.usedPercent)
-                            .frame(width: 32, height: 4)
-                        Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
-                            .monospacedDigit()
-                            .foregroundStyle(window.usedPercent >= 90 ? UD.warning : UD.text2)
-                    }
-                }
-                if row.windows.count > 2 {
-                    Text(verbatim: "+\(row.windows.count - 2)")
+                // 只显示最接近 100% 的那一个，点开看全部。
+                if let window = row.headline {
+                    let level = AgentUsageLevel.of(window)
+                    Text(AgentHistoryText.rateLimitWindow(window))
+                        .lineLimit(1)
                         .foregroundStyle(UD.text3)
+                    AgentRateLimitBar(usedPercent: window.usedPercent, level: level)
+                        .frame(width: 48, height: 4)
+                    Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
+                        .monospacedDigit()
+                        .foregroundStyle(level == .normal ? UD.text2 : level.color)
                 }
                 Spacer(minLength: 0)
             }
@@ -470,15 +469,16 @@ struct AgentAccountLimitsDetail: View {
     }
 }
 
-/// 额度用了几成的一根细条。
+/// 额度用了几成的一根细条，颜色按程度（`AgentUsageLevel`）。
 struct AgentRateLimitBar: View {
     let usedPercent: Double
+    let level: AgentUsageLevel
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(UD.fillSoft)
-                Capsule().fill(usedPercent >= 90 ? UD.warning : UD.accent)
+                Capsule().fill(level.color)
                     .frame(width: proxy.size.width * min(1, max(0, usedPercent / 100)))
             }
         }
@@ -526,5 +526,16 @@ extension EnvironmentValues {
     var agentHistoryHidesAccountLimits: Bool {
         get { self[AgentHistoryHidesAccountLimitsKey.self] }
         set { self[AgentHistoryHidesAccountLimitsKey.self] = newValue }
+    }
+}
+
+extension AgentUsageLevel {
+    /// 蓝（强调色）、黄、红。
+    var color: Color {
+        switch self {
+        case .normal: return UD.accent
+        case .warning: return UD.warning
+        case .critical: return UD.danger
+        }
     }
 }

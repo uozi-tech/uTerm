@@ -184,6 +184,9 @@ nonisolated struct AgentAccountLimits: Equatable, Sendable {
     var limits: AgentRateLimits
     var windows: [AgentRateLimits.Window]
     var at: Date?
+
+    /// 窄的地方只显示一个：最接近 100% 的那个时间窗（`windows` 已按最紧的在前排好）。
+    var headline: AgentRateLimits.Window? { windows.first }
 }
 
 /// 数据源里记着转接装没装好：拼命令（`resumeCommand` / `newSessionCommand`，nonisolated）时才知道带不带 `--settings`。

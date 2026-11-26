@@ -139,6 +139,39 @@ nonisolated struct AgentRateLimits: Equatable, Sendable {
     }
 }
 
+/// 用量到了什么程度（额度、上下文共用）：蓝（正常）、黄（快满了）、红（满了或差不多满了）。
+///
+/// - 红：用了 90% 以上。
+/// - 黄：用了 70% 以上；或者额度照这个时间窗里到现在的速度，到重置前会用完（用了至少 20%、窗口过了至少一成时才算，
+///   刚开头的一点用量算不出速度）。
+/// - 上下文只看用了几成（没有重置时间）。
+nonisolated enum AgentUsageLevel: Int, Comparable, Sendable {
+    case normal, warning, critical
+
+    static let warningPercent: Double = 70
+    static let criticalPercent: Double = 90
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// 只看用了几成（0–100）。
+    static func of(percent: Double) -> Self {
+        if percent >= criticalPercent { return .critical }
+        if percent >= warningPercent { return .warning }
+        return .normal
+    }
+
+    /// 额度的一个时间窗：用了几成，再看照现在的速度到重置前会不会用完。
+    static func of(_ window: AgentRateLimits.Window, now: Date = Date()) -> Self {
+        let level = of(percent: window.usedPercent)
+        guard level == .normal, !window.didReset, window.usedPercent >= 20,
+              let minutes = window.windowMinutes, minutes > 0, let resets = window.resetsAt else { return level }
+        let total = Double(minutes) * 60
+        let elapsed = 1 - resets.timeIntervalSince(now) / total
+        guard elapsed >= 0.1, elapsed < 1 else { return level }
+        return window.usedPercent / 100 / elapsed >= 1 ? .warning : level
+    }
+}
+
 /// 截断过的长文字：只留前面一段，记下原来多长。
 nonisolated struct AgentClippedText: Equatable, Sendable {
     let text: String

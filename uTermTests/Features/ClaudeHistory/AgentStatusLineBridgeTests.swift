@@ -138,3 +138,45 @@ final class AgentStatusLineBridgeTests: XCTestCase {
         XCTAssertEqual(AgentHistoryText.rateLimitWindow(limits.windows[1]), "gemini-weekly")
     }
 }
+
+/// 用量的程度（蓝 / 黄 / 红）：额度与上下文共用。
+final class AgentUsageLevelTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testPercentThresholds() {
+        XCTAssertEqual(AgentUsageLevel.of(percent: 69.9), .normal)
+        XCTAssertEqual(AgentUsageLevel.of(percent: 70), .warning)
+        XCTAssertEqual(AgentUsageLevel.of(percent: 89.9), .warning)
+        XCTAssertEqual(AgentUsageLevel.of(percent: 90), .critical)
+    }
+
+    /// 每周额度只过了两成就用了一半：照这个速度重置前会用完，提前变黄；过了八成才用一半的不黄。
+    func testWindowOnPaceToRunOutIsWarning() {
+        let week = 7 * 24 * 60
+        let early = AgentRateLimits.Window(usedPercent: 50, windowMinutes: week,
+                                           resetsAt: now.addingTimeInterval(Double(week) * 60 * 0.8))
+        XCTAssertEqual(AgentUsageLevel.of(early, now: now), .warning)
+        let late = AgentRateLimits.Window(usedPercent: 50, windowMinutes: week,
+                                          resetsAt: now.addingTimeInterval(Double(week) * 60 * 0.2))
+        XCTAssertEqual(AgentUsageLevel.of(late, now: now), .normal)
+        // 刚开头（窗口过了不到一成）、用得太少（不到 20%）都算不出速度。
+        let justStarted = AgentRateLimits.Window(usedPercent: 30, windowMinutes: week,
+                                                 resetsAt: now.addingTimeInterval(Double(week) * 60 * 0.95))
+        XCTAssertEqual(AgentUsageLevel.of(justStarted, now: now), .normal)
+        let little = AgentRateLimits.Window(usedPercent: 15, windowMinutes: week,
+                                            resetsAt: now.addingTimeInterval(Double(week) * 60 * 0.9))
+        XCTAssertEqual(AgentUsageLevel.of(little, now: now), .normal)
+        // 用了九成：不管速度，红。
+        XCTAssertEqual(AgentUsageLevel.of(.init(usedPercent: 92, windowMinutes: 300, resetsAt: nil), now: now), .critical)
+    }
+
+    /// 窄的地方只放最接近 100% 的那一个。
+    func testHeadlineIsTheTightestWindow() {
+        let row = AgentAccountLimits(tool: .claude, limits: AgentRateLimits(primary: nil, secondary: nil, plan: nil),
+                                     windows: AgentRateLimits.tightestFirst([
+                                         .init(usedPercent: 18, windowMinutes: 300, resetsAt: nil),
+                                         .init(usedPercent: 87, windowMinutes: 10080, resetsAt: nil),
+                                     ]), at: nil)
+        XCTAssertEqual(row.headline?.usedPercent, 87)
+    }
+}
