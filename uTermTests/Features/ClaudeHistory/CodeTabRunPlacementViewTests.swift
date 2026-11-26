@@ -95,8 +95,8 @@ final class CodeTabRunPlacementViewTests: XCTestCase {
         XCTAssertLessThan(row, blogHeader, "在 infra 那一组里")
         XCTAssertGreaterThan(row, shopHeader, "不在最顶上")
         XCTAssertEqual(labels.filter { $0.contains("infra 的第 1 个会话") }.count, 1, "只出现一次")
-        XCTAssertTrue(labels[row].contains(ProgramStatusRecord(state: .idle, app: "claude-code").statusLabel),
-                      "行上写着它此刻的状态：\(labels[row])")
+        XCTAssertFalse(labels[row].contains(ProgramStatusRecord(state: .idle, app: "claude-code").statusLabel),
+                       "空闲不标（同 Claude Code Desktop，只在等人处理时提醒）：\(labels[row])")
         XCTAssertTrue(labels.contains { $0.hasPrefix("infra，2 ") || $0.contains("infra，2") }, "infra 组仍是两个会话")
     }
 

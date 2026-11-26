@@ -139,7 +139,7 @@ struct CodeRunHeader: View {
 
 /// 跑着、但列表里没有它那份记录的会话那一行（多半是还没写出记录的新会话）：在它那一组的最上面，对不上任何一组时
 /// 在列表最顶上（见 `AgentHistoryRunPlacement`）。
-/// 同会话那一行（共用的 `AgentHistoryTitleRow`）：名字（新会话就是「新会话」），右端程序报的状态圆点；
+/// 同会话那一行（共用的 `AgentHistoryTitleRow`）：名字（新会话就是「新会话」），运行中一明一暗、等人处理时右端黄点；
 /// 连接中、断开、已退出时右端换成那句状态（这时没有终端可回）。目录与工具名放进读屏。点一下回到它的终端。
 struct CodeUnlistedRunRow: View {
     let code: CodeTabRuns
@@ -150,41 +150,17 @@ struct CodeUnlistedRunRow: View {
 
     var body: some View {
         let state = CodeRunText.listDetail(of: run, controller: run.terminal.controller)
-        AgentHistoryTitleRow(title: code.tab.title(of: run), tool: showsTool ? run.tool : nil, isSelected: selected) {
-            if state.isConnected {
-                CodeRunStatusMark(run: run)
-            } else {
+        let status = CodeRunStatus.of(isEnded: !run.isRunning, report: run.terminal.programReport)
+        AgentHistoryTitleRow(title: code.tab.title(of: run), tool: showsTool ? run.tool : nil, isSelected: selected,
+                             indicator: state.isConnected ? AgentHistoryRunIndicator(status) : .none,
+                             detail: showsTool ? "\(run.tool.displayName) · \(state.text)" : state.text) {
+            if !state.isConnected {
                 Text(verbatim: state.text)
                     .font(M.sans(12.5)).foregroundStyle(run.isRunning ? M.text3 : M.warning)
                     .lineLimit(1)
                     .fixedSize()
             }
         }
-        .accessibilityHint(Text(verbatim: showsTool ? "\(run.tool.displayName) · \(state.text)" : state.text))
-    }
-}
-
-/// 列表行上一个跑着的会话的状态（规则见 `CodeRunStatus`，同 Mac 的 `AgentHistoryRunStatusTag`）：程序报的状态用终端标签上
-/// 同一套颜色与文字（`statusLabel`，颜色同标签圆点；空闲是灰的），程序退出了是「已结束」，没报过什么都不画。
-/// 在自己的 `body` 里读状态：变了只重画这一小块。
-struct CodeRunStatusMark: View {
-    let run: CodeRunBoard<TermTab>.Run
-    @Environment(\.mAccent) private var accent
-
-    var body: some View {
-        switch CodeRunStatus.of(isEnded: !run.isRunning, report: run.terminal.programReport) {
-        case .unreported:
-            EmptyView()
-        case .ended:
-            mark(color: M.text4, text: AgentHistoryText.sessionEnded, textColor: M.text3)
-        case .program(let status):
-            let color = WorkspaceTabChip.color(for: status.tone, accent: accent)
-            mark(color: color, text: status.statusLabel, textColor: status.tone == .idle ? M.text3 : color)
-        }
-    }
-
-    private func mark(color: Color, text: String, textColor: Color) -> some View {
-        AgentHistoryRunDot(color: color, label: text)
     }
 }
 

@@ -225,4 +225,17 @@ final class AgentHistoryPinDragLayoutTests: XCTestCase {
         let alpha = try XCTUnwrap(bitmap.colorAt(x: x, y: y)).alphaComponent
         XCTAssertEqual(alpha, 1, accuracy: 0.01, "卡片的底不透明：拖着走时不和别的行的字叠在一起")
     }
+
+    /// 拖起来的卡片和列表里那一行一样宽（用户报的：拖动置顶时 ghost 缩小了）：卡片宽 = 行宽 + 两边各 10 的阴影边。
+    func testDragPreviewKeepsTheRowWidth() async throws {
+        let history = await history()
+        let file = try XCTUnwrap(history.files.first)
+        for width in [CGFloat(320), 410] {
+            let renderer = ImageRenderer(content: AgentHistorySessionRowPreview(history: history, file: file, width: width))
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage)
+            XCTAssertEqual(CGFloat(image.width), width + 20, accuracy: 1, "行宽 \(width) 时卡片不缩小")
+        }
+    }
+
 }

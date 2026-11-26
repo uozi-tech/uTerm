@@ -182,17 +182,20 @@ final class CodeTabRunTimeTests: XCTestCase {
 
     // MARK: 工具
 
-    /// 子树里所有无障碍元素的 label / value（同 `ForwardingListContractTests`）。
+    /// 子树里所有无障碍元素的 label / value（每个元素一条）。
     private static func axStrings(_ root: Any, depth: Int = 0) -> [String] {
         guard depth < 60 else { return [] }
         var out: [String] = []
         let object = root as AnyObject
-        if let label = object.accessibilityLabel?(), !label.isEmpty { out.append(label) }
+        // 一个元素的 label 与 value 并成一条：行上只写名字，时间、大小在 value 里（侧栏一行只有名字，同 Claude Code Desktop）。
+        var parts: [String] = []
+        if let label = object.accessibilityLabel?(), !label.isEmpty { parts.append(label) }
         let valueSelector = NSSelectorFromString("accessibilityValue")
         if object.responds?(to: valueSelector) == true,
            let value = object.perform(valueSelector)?.takeUnretainedValue() as? String, !value.isEmpty {
-            out.append(value)
+            parts.append(value)
         }
+        if !parts.isEmpty { out.append(parts.joined(separator: " ")) }
         if let children = object.accessibilityChildren?() {
             for child in children { out += axStrings(child, depth: depth + 1) }
         }

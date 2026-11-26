@@ -751,9 +751,9 @@ private struct ClaudeHistoryList: View {
         } label: {
             AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                    showsTool: showsTool,
-                                   isSelected: showsItsTerminal || history.selectedFile?.path == file.path) {
-                if let run { CodeRunStatusMark(run: run) }
-            }
+                                   isSelected: showsItsTerminal || history.selectedFile?.path == file.path,
+                                   status: { run.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) }
+                                       ?? .unreported })
         }
         .buttonStyle(MPressStyle())
         .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true,
@@ -1072,21 +1072,6 @@ struct AgentHistoryActionButton: View {
         case .down, .toLatest: return "download"
         case .retry: return "refresh"
         }
-    }
-}
-
-/// 组标题上组里跑着的会话的状态点：同行上状态的圆点颜色（`CodeRunStatusMark`）；都没报过状态是灰的。
-struct AgentHistoryRunMarkDot: View {
-    let mark: CodeRunGroupMark
-    @Environment(\.mAccent) private var accent
-
-    var body: some View {
-        Circle().fill(color).frame(width: 7, height: 7)
-    }
-
-    private var color: Color {
-        if case .program(let record) = mark.status { return WorkspaceTabChip.color(for: record.tone, accent: accent) }
-        return M.text4
     }
 }
 

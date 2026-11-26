@@ -5,8 +5,7 @@ import UDesignKit
 /// 两端各写（Mac 是 `AgentHistorySessionList`，iOS 是 `ClaudeHistoryList`）。
 ///
 /// 两端的差别只在尺寸，放在 `AgentHistoryListStyle`；真正不同的几个小件两端各有一份同名的：
-/// `AgentHistoryStateView`（空状态）、`AgentHistoryWarningNote`（警示一句）、`AgentHistoryRunMarkDot`（组标题上的状态点，
-/// 两端的配色出处不同），以及 `agentHistoryPressStyle` / `agentHistoryScrollChrome` 两个修饰。
+/// `AgentHistoryStateView`（空状态）、`AgentHistoryWarningNote`（警示一句），以及 `agentHistoryPressStyle` / `agentHistoryScrollChrome` 两个修饰。
 
 /// 两端排版上的差别（同 `HostAvatar` 按平台取默认值）：手机上字大、行高、行尾带进入的箭头。
 nonisolated struct AgentHistoryListStyle: Sendable {
@@ -96,35 +95,97 @@ private struct AgentHistoryRowChevron: View {
 
 // MARK: - 会话一行
 
-/// 列表一行的样子（同 Claude Code Desktop 的侧栏）：只有一行名字；组里不止一种工具时前面一个小工具标记，
-/// 右端放状态（跑着的会话的圆点 `AgentHistoryRunDot`，Mac 上悬停时由 × 盖住）。会话行、还没对上记录的跑着的会话
-/// 那一行都用它。
+/// 列表一行的样子（同 Claude Code Desktop 的侧栏）：只有一行名字；组里不止一种工具时前面一个小工具标记。
+/// 跑着的会话照 `AgentHistoryRunIndicator`：运行中名字一明一暗，等人处理时右端一个黄点，出错时一个警示图标
+/// （Mac 上悬停时右端由 × 盖住）。会话行、还没对上记录的跑着的会话那一行都用它。
 struct AgentHistoryTitleRow<Trailing: View>: View {
     let title: String
     var tool: AgentHistoryTool? = nil
     let isSelected: Bool
+    var indicator: AgentHistoryRunIndicator = .none
+    /// 不占行、读屏要念的那些（时间、大小、分支、目录），排在状态后面。
+    var detail: String? = nil
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         let style = AgentHistoryListStyle.platform
         HStack(spacing: 8) {
             if let tool { AgentHistoryToolBadge(tool: tool, size: style.toolBadgeSize) }
-            Text(verbatim: title)
-                .font(.system(size: style.titleSize))
-                .foregroundStyle(UD.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            AgentHistoryRowTitle(title: title, breathing: indicator == .working)
+            AgentHistoryRunMark(indicator: indicator)
             trailing()
             AgentHistoryRowChevron()
         }
         .padding(style.rowPadding)
         .frame(minHeight: style.rowMinHeight)
         .modifier(AgentHistoryRowBackground(isSelected: isSelected))
+        .accessibilityValue(Text(verbatim: [indicator.label, detail].compactMap { $0 }.joined(separator: " · ")))
     }
 }
 
-/// 跑着的会话在列表一行右端的状态圆点：颜色与文字由各端给（两端的配色出处不同），文字放进悬停提示与读屏。
+extension AgentHistoryTitleRow where Trailing == EmptyView {
+    init(title: String, tool: AgentHistoryTool? = nil, isSelected: Bool, indicator: AgentHistoryRunIndicator = .none,
+         detail: String? = nil) {
+        self.init(title: title, tool: tool, isSelected: isSelected, indicator: indicator, detail: detail) { EmptyView() }
+    }
+}
+
+/// 一行的名字。`breathing`（会话在运行）时一明一暗，同 Claude Code Desktop：底下是淡色的字，上面盖一层正常颜色、
+/// 透明度来回变的填充，裁成同样的字形。明暗由 Core Animation 插值（`UDMotionShape`），不用 SwiftUI 的常驻动画
+/// （会让整窗每帧重画、窗口不可见也照跑，见 `CAMotion.swift` 开头）。减弱动态效果时不动，照常显示。
+struct AgentHistoryRowTitle: View {
+    let title: String
+    var breathing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// 一来一回的时长（秒）与最暗时盖着的那层还剩多少。
+    static let breath = UDMotion(opacity: .init(from: 1, to: 0.2), duration: 1.1, autoreverses: true,
+                                 timing: .easeInEaseOut)
+
+    var body: some View {
+        if breathing, !reduceMotion {
+            label.foregroundStyle(UD.text4)
+                .overlay {
+                    UDMotionShape(color: UD.text, content: .fill(cornerRadius: 0, size: nil), motion: Self.breath)
+                        .mask { label }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+        } else {
+            label.foregroundStyle(UD.text)
+        }
+    }
+
+    private var label: some View {
+        Text(verbatim: title)
+            .font(.system(size: AgentHistoryListStyle.platform.titleSize))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 行右端的标记：等人处理一个黄点，出错一个警示图标，别的什么都不画。说明放进悬停提示与读屏。
+struct AgentHistoryRunMark: View {
+    let indicator: AgentHistoryRunIndicator
+
+    var body: some View {
+        switch indicator {
+        case .none, .working:
+            EmptyView()
+        case .needsInput(let record):
+            AgentHistoryRunDot(color: UD.warning, label: record.statusLabel, help: record.tabHelp)
+        case .error(let record):
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: AgentHistoryListStyle.platform.titleSize - 1))
+                .foregroundStyle(UD.text3)
+                .help(Text(verbatim: record.tabHelp))
+                .accessibilityLabel(Text(verbatim: record.statusLabel))
+        }
+    }
+}
+
+/// 黄点（等人处理）：列表一行右端、收起的组标题上。说明放进悬停提示与读屏。
 struct AgentHistoryRunDot: View {
     let color: Color
     let label: String
@@ -142,32 +203,25 @@ struct AgentHistoryRunDot: View {
 }
 
 /// 会话一行：只有名字（`AgentHistoryTitleRow`）。时间、大小、分支、项目不占列表的地方，悬停提示与读屏里有。
-/// `status`：在 Code 标签页里跑着时行右端它此刻的状态（两端的状态对象不同，各自给，画成 `AgentHistoryRunDot`）。
-struct AgentHistorySessionRow<Status: View>: View {
+/// `status`：在 Code 标签页里跑着时它此刻的状态（两端的状态对象不同，各自给）。在这一行的 `body` 里读：
+/// 状态变了只重画这一行。
+struct AgentHistorySessionRow: View {
     let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     let metadata: AgentHistorySessionMetadata?
     /// 组里不止一种工具：名字前面一个工具标记。
     var showsTool = false
     let isSelected: Bool
-    @ViewBuilder var status: () -> Status
+    var status: () -> CodeRunStatus = { .unreported }
 
     var body: some View {
         let activity = history.liveActivity(of: file)
         AgentHistoryTitleRow(title: AgentHistoryText.sessionTitle(file, metadata: metadata),
-                             tool: showsTool ? file.tool : nil, isSelected: isSelected, trailing: status)
+                             tool: showsTool ? file.tool : nil, isSelected: isSelected,
+                             indicator: AgentHistoryRunIndicator(status()),
+                             detail: AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: true,
+                                                                      activity: activity))
             .help(Text(verbatim: AgentHistoryText.sessionRowHelp(file, metadata: metadata, activity: activity)))
-            .accessibilityHint(Text(verbatim: AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: true,
-                                                                             activity: activity)))
-    }
-}
-
-extension AgentHistorySessionRow where Status == EmptyView {
-    init(history: AgentHistoryModel, file: AgentHistorySessionFile, metadata: AgentHistorySessionMetadata?,
-         showsTool: Bool = false, isSelected: Bool) {
-        self.init(history: history, file: file, metadata: metadata, showsTool: showsTool, isSelected: isSelected) {
-            EmptyView()
-        }
     }
 }
 
@@ -200,9 +254,10 @@ struct AgentHistoryGroupHeader: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                if let mark {
-                    AgentHistoryRunMarkDot(mark: mark)
-                        .help(Text(verbatim: AgentHistoryText.groupRunsNote(mark)))
+                // 同一行上的规则：只有组里有人等着处理时才画黄点（`CodeRunGroupMark.waitingRecord`）。
+                if let mark, let waiting = mark.waitingRecord {
+                    AgentHistoryRunDot(color: UD.warning, label: waiting.statusLabel,
+                                       help: AgentHistoryText.groupRunsNote(mark))
                 }
                 Text(verbatim: "\(group.files.count)")
                     .font(.system(size: style.headerSize - 0.5))

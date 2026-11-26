@@ -175,6 +175,8 @@ struct AgentHistorySessionList: View {
     @State private var pendingReveal: AgentHistoryReveal?
     /// 拖动置顶的状态（只在这个列表里认）。
     @State private var pinDrag = AgentHistoryPinDragModel.forList()
+    /// 列表里一行有多宽（拖动置顶时跟着光标的卡片同宽，见 `AgentHistorySessionRowPreview`）。
+    @State private var rowWidth: CGFloat?
     /// 选中的跑着的会话那份记录还没露出来（它那一组收着、还没列到）：列表变了再试，见 `tryRevealRun`。
     @State private var pendingRunReveal: String?
     /// 点了「删除会话…」、等确认的那一份。
@@ -458,9 +460,9 @@ struct AgentHistorySessionList: View {
         let key = AgentHistoryPinKey(file)
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                           showsTool: showsTool,
-                                          isSelected: history.selectedFile?.path == file.path || run?.isSelected == true) {
-            if let status = run?.status { AgentHistoryRunStatusTag(status: status) }
-        }
+                                          isSelected: history.selectedFile?.path == file.path || run?.isSelected == true,
+                                          status: { run?.status.read() ?? .unreported })
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { rowWidth = $0 }
             .onTapGesture {
                 if let run, let running { running.onSelect(run.id) } else { history.select(file) }
             }
@@ -474,7 +476,7 @@ struct AgentHistorySessionList: View {
                     pinDrag.begin(key)
                     return AgentHistoryPinDragPayload.pasteboardItem()
                 }) {
-                    AgentHistorySessionRowPreview(history: history, file: file, showsTool: showsTool)
+                    AgentHistorySessionRowPreview(history: history, file: file, showsTool: showsTool, width: rowWidth)
                 }
                 .modifier(rowMenu(file, pins: pins, run: run))
         } else {
@@ -525,29 +527,6 @@ struct AgentHistorySessionList: View {
 /// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。收起时组里有跑着的会话，会话数前面一个状态点（`CodeRunGroupMark`）。
 // MARK: - 运行中
 
-/// 跑着的会话行上的状态（`CodeRunStatus`）：程序报的状态用终端标签页上同一套圆点颜色与文字（`ProgramStatusRecord.tabDot` /
-/// `statusLabel`；空闲的圆点是灰的），程序退出了是「已结束」，没报过什么都不画。在自己的 `body` 里读状态：变了只重画这一小块。
-struct AgentHistoryRunStatusTag: View {
-    let status: AgentHistoryRunStatus
-
-    var body: some View {
-        switch status.read() {
-        case .unreported:
-            EmptyView()
-        case .ended:
-            tag(dot: UD.text4, text: AgentHistoryText.sessionEnded, textColor: UD.text3, help: AgentHistoryText.sessionEnded)
-        case .program(let record):
-            // 空闲的圆点是最淡的灰，字用次一级的灰才看得清。
-            tag(dot: record.tabDot, text: record.statusLabel, textColor: record.tone == .idle ? UD.text3 : record.tabDot,
-                help: record.tabHelp)
-        }
-    }
-
-    private func tag(dot: Color, text: String, textColor: Color, help: String) -> some View {
-        AgentHistoryRunDot(color: dot, label: text, help: help)
-    }
-}
-
 /// 跑着、但列表里没有它那份记录的会话那一行（多半是还没写出记录的新会话）：在它那一组的最上面，对不上任何一组时
 /// 在列表最顶上（见 `AgentHistoryRunPlacement`）。
 /// 同会话那一行（`AgentHistoryTitleRow`）：名字（新会话就是「新会话」），右端状态圆点；工具名与目录放进悬停提示与读屏。
@@ -558,11 +537,9 @@ private struct AgentHistoryUnlistedRunRow: View {
     let showsTool: Bool
 
     var body: some View {
-        AgentHistoryTitleRow(title: row.title, tool: showsTool ? row.tool : nil, isSelected: row.isSelected) {
-            AgentHistoryRunStatusTag(status: row.status)
-        }
+        AgentHistoryTitleRow(title: row.title, tool: showsTool ? row.tool : nil, isSelected: row.isSelected,
+                             indicator: AgentHistoryRunIndicator(row.status.read()), detail: detail)
         .help(Text(verbatim: row.directory))
-        .accessibilityHint(Text(verbatim: detail))
     }
 
     private var detail: String {
@@ -1173,20 +1150,6 @@ struct AgentHistoryWarningNote: View {
     }
 }
 
-/// 组标题上组里跑着的会话的状态点：同行上状态的圆点颜色（`AgentHistoryRunStatusTag`）；都没报过状态是灰的。
-struct AgentHistoryRunMarkDot: View {
-    let mark: CodeRunGroupMark
-
-    var body: some View {
-        Circle().fill(color).frame(width: 6, height: 6)
-    }
-
-    private var color: Color {
-        if case .program(let record) = mark.status { return record.tabDot }
-        return UD.text4
-    }
-}
-
 extension View {
     /// 右键「拷贝文字」。文字点了才取。
     func agentTranscriptCopyMenu(_ text: @escaping () -> String) -> some View {
@@ -1213,11 +1176,13 @@ struct AgentHistorySessionRowPreview: View {
     let history: AgentHistoryModel
     let file: AgentHistorySessionFile
     var showsTool = false
+    /// 列表里这一行有多宽：卡片同宽，拖起来不缩小。量到之前用 `AgentHistoryPinDragPreview.width`。
+    var width: CGFloat? = nil
 
     var body: some View {
         AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                showsTool: showsTool, isSelected: false)
-            .frame(width: AgentHistoryPinDragPreview.width, alignment: .leading)
+            .frame(width: width ?? AgentHistoryPinDragPreview.width, alignment: .leading)
             .modifier(AgentHistoryPinDragPreview())
     }
 }

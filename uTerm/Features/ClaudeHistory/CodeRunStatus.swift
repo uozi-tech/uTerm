@@ -1,14 +1,11 @@
 import Foundation
 
-/// Code 标签页侧栏里一个跑着的会话此刻的状态（两端共用一条规则；Mac 画成 `AgentHistoryRunStatusTag`，iOS 画成
-/// `CodeRunStatusMark`）：
+/// Code 标签页侧栏里一个跑着的会话此刻的状态，两端共用一条规则（行上怎么标见 `AgentHistoryRunIndicator`）：
 ///
-/// - 程序退出了：「已结束」（优先）。
-/// - 程序经 OSC 7501 报过状态：照报的写，圆点颜色与文字同终端标签（运行中、等待确认、已完成、出错）。
-///   「空闲」也写：做完一轮、停在输入框等人的 Claude Code 报的就是它。终端标签上空闲不画圆点（没什么要告诉用户的），
-///   侧栏这一行不一样——它就是用来看每个会话在干什么的。
-/// - 没报过（刚起来、还没说第一句话的 Claude Code；接回时检查点里没有状态的；不报状态的工具）：不写状态，
-///   只有那一行平常的副标题。不能写成「运行中」：那是程序报来的「正在干活」，没报过的会话多半正停在输入框等人。
+/// - 程序退出了：已结束（优先）。
+/// - 程序经 OSC 7501 报过状态：照报的（运行中、等待确认、已完成、出错、空闲）。
+/// - 没报过（刚起来、还没说第一句话的 Claude Code；接回时检查点里没有状态的；不报状态的工具）：不当成「运行中」，
+///   没报过的会话多半正停在输入框等人。
 nonisolated enum CodeRunStatus: Equatable, Sendable {
     case unreported
     case ended
@@ -51,5 +48,45 @@ nonisolated struct CodeRunGroupMark: Equatable, Sendable {
         guard running > 0 else { return nil }
         self.running = running
         self.status = urgent.map { .program($0) } ?? .unreported
+    }
+}
+
+/// 侧栏一行上跑着的会话怎么标（同 Claude Code Desktop）：只有等人处理（等确认、等回答、要登录）时右端一个黄点；
+/// 运行中是名字一明一暗（`AgentHistoryRowTitle`），不画点；出错是一个警示图标；空闲、已完成、已结束、没报过状态的
+/// 什么都不画——侧栏只在要人动手时提醒，其余时候安静。两端共用这一条规则，界面只画。
+nonisolated enum AgentHistoryRunIndicator: Equatable, Sendable {
+    case none
+    case working
+    case needsInput(ProgramStatusRecord)
+    case error(ProgramStatusRecord)
+
+    init(_ status: CodeRunStatus) {
+        guard case .program(let record) = status else {
+            self = .none
+            return
+        }
+        switch record.state {
+        case .working: self = .working
+        case .blocked: self = .needsInput(record)
+        case .error: self = .error(record)
+        case .idle, .done: self = .none
+        }
+    }
+
+    /// 读屏念的那几个字；不标的为 nil。
+    nonisolated var label: String? {
+        switch self {
+        case .none: nil
+        case .working: String(localized: "运行中")
+        case .needsInput(let record), .error(let record): record.statusLabel
+        }
+    }
+}
+
+extension CodeRunGroupMark {
+    /// 收起的组标题上那个黄点照哪个会话（同一行上的规则：只有等人处理的才画）；没人等为 nil（不画点）。
+    nonisolated var waitingRecord: ProgramStatusRecord? {
+        if case .program(let record) = status, record.state == .blocked { return record }
+        return nil
     }
 }
