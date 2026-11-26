@@ -757,8 +757,15 @@ Ghostty 认链接前会把这个 Shift 再去掉（只剩 ⌘，正好匹配链�
 鼠标不动、只按下 ⌘ 时，Ghostty 的按键回调在接管鼠标时不重查链接，所以 `flagsChanged` 里按最后一次的指针位置再报一次；
 `embedded.zig` 的 `cursorPosCallback` 会丢掉同一位置的重报（防幻影移动），要先挪 1 pt 再回来。
 
+**只在 ⌘ 自己按下 / 松开时重报**（`flagsChanged` 看键码 0x37 / 0x36）。第一版每次修饰键变化都重报：程序开着任意移动上报
+（`?1003h`，Claude Code 的全屏界面）时，那两下挪动是真的报给程序的——指针停在两格交界上、或者程序开了按像素上报（`?1016h`）
+时，按一次 ⌃S 程序收到的是 `CSI <51;x;yM` 两次、`CSI 115;5u`、松开 ⌃ 时 `CSI <35;x;yM` 两次（⇧、⌥ 同理）。
+还留着的一处：松开 ⌘ 的那次重报修饰键为空，同样的条件下程序仍会收到两次移动（在按键之后）。
+
 回归用例：`uTermTests/Features/Terminal/GhosttyLinkHoverTests.swift`
-（`testCommandClickOpensPathWhileProgramCapturesTheMouse`、`testCommandHoverShowsLinkWhileProgramCapturesTheMouse`）。
+（`testCommandClickOpensPathWhileProgramCapturesTheMouse`、`testCommandHoverShowsLinkWhileProgramCapturesTheMouse`）、
+`uTermTests/Features/Terminal/TerminalControlKeyTests.swift`（`testControlChordsWhileProgramTracksMouseMotionOnCellEdge`、
+`…InPixels`、`testModifierAloneReportsNothingWhileProgramTracksMouseMotion`）。
 
 ### 23. iOS：键盘当触控板挪光标（长按空格键 / 长按键盘）
 

@@ -106,6 +106,12 @@
             // mouse. Ghostty only looks for links on a mouse move then
             // (`linkMods`), so report the pointer again with ⌘ held. A report
             // at the same spot is dropped as a phantom move, hence the nudge.
+            // Only when ⌘ itself went down or up (kVK_Command / RightCommand):
+            // with any other modifier the two moves reach a program tracking
+            // pointer motion (`?1003h`, at a cell edge or under `?1016h`) as
+            // mouse reports around the key — Ctrl+S arrived at Claude Code as
+            // `CSI <51;x;yM` twice, the key, then `CSI <35;x;yM` twice.
+            guard event.keyCode == 0x37 || event.keyCode == 0x36 else { return }
             if surface?.isMouseCaptured == true, let point = pointer.lastSurfacePoint {
                 let mods = linkMods(event.modifierFlags)
                 surface?.sendMousePos(x: point.x + 1, y: point.y, mods: mods)

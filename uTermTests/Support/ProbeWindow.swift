@@ -126,6 +126,18 @@ enum ProbeWindow {
         /// 鼠标停在哪块屏。
         var fakedMouseLocation: NSPoint?
 
+        /// 丢掉经窗口分发进来的指针移动（`mouseMoved` / `mouseEntered` / `mouseExited`）。默认关。
+        ///
+        /// 透明摆在屏上的窗口照样收得到用户真鼠标的移动（它是 key window 时，移动事件不管指针在哪都派给它），
+        /// 程序开着任意移动上报时这些会变成发给程序的 `CSI < 35;x;y M`，读「后端收到了什么字节」的用例就被
+        /// 用户此刻有没有在挪鼠标染红。打开后用例要自己直接调视图的 `mouseMoved(with:)` 来摆指针。
+        var dropsUserPointerMotion = false
+
+        override func sendEvent(_ event: NSEvent) {
+            if dropsUserPointerMotion, [.mouseMoved, .mouseEntered, .mouseExited].contains(event.type) { return }
+            super.sendEvent(event)
+        }
+
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
             frameRect
         }
