@@ -68,10 +68,11 @@ final class CodeTabDividerTests: XCTestCase {
             let c = rep.colorAt(x: Int(CGFloat(x) * scale) + 1, y: Int(CGFloat(y) * scale) + 1)!.usingColorSpace(.sRGB)!
             return UInt32(c.redComponent * 255) << 16 | UInt32(c.greenComponent * 255) << 8 | UInt32(c.blueComponent * 255)
         }
-        /// accent 蓝（浅色主题 #168EFF 一类）：蓝远大于红。
+        /// 悬停线的浅 accent（`UD.accentDivider`，accent 50% 叠在白卡上，蓝比红高约 110）：
+        /// 蓝明显大于红。选中行底（accent 12%）只高三十出头，卡面与静息灰线为 0。
         func isAccent(x: Int, y: Int) -> Bool {
             let c = color(x: x, y: y)
-            return Int(c & 0xFF) - Int(c >> 16) > 120
+            return Int(c & 0xFF) - Int(c >> 16) > 60
         }
         /// 这一行里 accent 的列（pt）。
         func accentColumns(y: Int, around x: Int) -> [Int] {

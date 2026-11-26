@@ -64,7 +64,7 @@ struct WorkspaceColumns<Sidebar: View, Center: View, Inspector: View>: View {
 }
 
 /// 列间可拖分隔条（分区方案 v3.2 第 4 条）：卡内 1pt `UD.border` 竖线（两侧同为卡面色），
-/// 线上骑一条 7pt 透明命中区（线两侧各 3pt），悬停 / 拖动时线转 accent。全局坐标拖动调
+/// 线上骑一条 7pt 透明命中区（线两侧各 3pt），悬停 / 拖动时线转浅 accent（`UD.accentDivider`）。全局坐标拖动调
 /// 列宽（`sign` = +1 左 sidebar 往右拖变宽 / −1 右 inspector 往右拖变窄），clamp 到 range。
 ///
 /// `appearance: .gap` 用于两侧靠底色差分开的场合（SFTP 表格 | 检视器抬升块）：占一条 6pt
@@ -131,8 +131,8 @@ struct ColumnResizer: View {
     }
 }
 
-/// 卡内 1pt 分隔线本体（`UDPaneDivider` 加悬停态）：静息 `UD.border`，`hot` 时转 accent
-/// （设计稿 `WsLineDivider`：`${accent}aa`）。只画线、不接收鼠标 —— 命中区由调用方叠。
+/// 卡内 1pt 分隔线本体（`UDPaneDivider` 加悬停态）：静息 `UD.border`，`hot` 时转浅 accent
+/// （`UD.accentDivider`，accent 的 50%；实色太抢眼，2026-11-26）。只画线、不接收鼠标 —— 命中区由调用方叠。
 struct PaneDividerLine: View {
     enum Axis { case vertical, horizontal }
     /// 悬停 / 拖动时线的粗细。
@@ -147,12 +147,12 @@ struct PaneDividerLine: View {
                    height: axis == .horizontal ? 1 : nil)
             .frame(maxWidth: axis == .horizontal ? .infinity : nil,
                    maxHeight: axis == .vertical ? .infinity : nil)
-            // 悬停 / 拖动时加粗到 3pt 并转 accent（1pt 太细、不像能拖，实机反馈）。只画在
+            // 悬停 / 拖动时加粗到 3pt 并转浅 accent（1pt 太细、不像能拖，实机反馈）。只画在
             // overlay 里，布局仍按 1pt 算，两侧的栏不会跟着挤动。
             .overlay {
                 if hot {
                     Rectangle()
-                        .fill(UD.accent)
+                        .fill(UD.accentDivider)
                         .frame(width: axis == .vertical ? Self.hotThickness : nil,
                                height: axis == .horizontal ? Self.hotThickness : nil)
                 }
