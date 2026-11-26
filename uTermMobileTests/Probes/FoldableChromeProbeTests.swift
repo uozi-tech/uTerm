@@ -73,6 +73,23 @@ final class FoldableChromeProbeTests: XCTestCase {
         print("FOLD done distinct=\(seen.count) hingeUpdates=\(probe.hingeUpdates)")
         for (index, line) in seen.enumerated() { print("FOLD #\(index) \(line)") }
     }
+
+    /// 模拟器手动：`TEST_RUNNER_UTERM_FOLD_LANDSCAPE=1` 时把场景转到横屏，打一行读数后停
+    /// `UTERM_FOLD_PROBE_SECONDS`（默认 30）秒，外面用 `simctl io <udid> screenshot --display=3` 截屏，
+    /// 拿状态栏里时间的位置对照侧列宽度与容器边距（侧列按钮该对齐的是前者）。
+    func testLandscapeStatusColumn() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["UTERM_FOLD_LANDSCAPE"] != nil else { throw XCTSkip("按需") }
+        guard #available(iOS 27.1, *) else { throw XCTSkip("iOS 27.1 才有") }
+        let seconds = Double(environment["UTERM_FOLD_PROBE_SECONDS"] ?? "") ?? 30
+        let scene = try XCTUnwrap(MobileProbeWindow.activeScene())
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+        try await Task.sleep(for: .seconds(2))
+        let probe = try FoldProbe.open()
+        defer { probe.close() }
+        print("FOLD landscape \(try await probe.settledReading().line)")
+        try await Task.sleep(for: .seconds(seconds))
+    }
 }
 
 // MARK: - 读数
