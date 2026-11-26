@@ -63,31 +63,44 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
     // MARK: 列表
 
     func projects() async throws -> [AgentHistoryProject] {
-        let results = await withTaskGroup(of: (Int, Result<[AgentHistoryProject], any Error>).self) { group in
-            for (index, source) in sources.enumerated() {
+        // 几种工具同时列，谁先列完谁先回来。每份结果带着它是哪种工具，按工具对号入座，不按回来的先后、也不靠排序还原：
+        // build 1548–1556 实测装着的 Release 版里，Codex 那一格拿到的是 Cursor 列出来的项目（后面两格依次错开），
+        // Claude Code 慢一步时它的项目也被当成 Codex 的，交给 Codex 去列，列出空的、不报错，侧栏整个空掉。
+        let results = await withTaskGroup(of: (AgentHistoryTool, Result<[AgentHistoryProject], any Error>).self) { group in
+            for source in sources {
                 group.addTask {
-                    do { return (index, .success(try await source.projects())) } catch { return (index, .failure(error)) }
+                    do { return (source.tool, .success(try await source.projects())) } catch { return (source.tool, .failure(error)) }
                 }
             }
-            var collected: [(Int, Result<[AgentHistoryProject], any Error>)] = []
-            for await result in group { collected.append(result) }
-            return collected.sorted { $0.0 < $1.0 }.map(\.1)
+            var collected: [AgentHistoryTool: Result<[AgentHistoryProject], any Error>] = [:]
+            for await (tool, result) in group { collected[tool] = result }
+            return collected
         }
         var found: [AgentHistoryProject] = []
         var errors: [(AgentHistoryTool, any Error)] = []
-        for (source, result) in zip(sources, results) {
-            switch result {
-            case .success(let projects):
+        // 诊断：每种工具的数据源各回了几个项目、路径是不是在它自己的目录下（`.claude/`、`.codex/` 这类，只记对错）。
+        var perTool: [String] = []
+        for source in sources {
+            switch results[source.tool] {
+            case .success(let projects)?:
+                let marker = "/." + source.tool.rawValue
+                let own = projects.filter { $0.path.contains(marker) }.count
+                perTool.append("\(source.tool.rawValue) \(projects.count)（自己目录下 \(own)，回来时标的 "
+                               + "\(Set(projects.map(\.tool.rawValue)).sorted().joined(separator: "/"))）")
                 // 数据源该自己填 `tool`；万一漏了，按它是哪一份补上，免得分派到别的工具去。
                 found += projects.map { project in
                     var project = project
                     project.tool = source.tool
                     return project
                 }
-            case .failure(let error):
+            case .failure(let error)?:
                 errors.append((source.tool, error))
+            case nil:
+                errors.append((source.tool, AgentHistoryCompositeError.noSource(source.tool)))
             }
         }
+        let message = "历史会话：各工具列项目 " + perTool.joined(separator: "，")
+        AppLogger.notice(message, category: AgentHistoryLog.category)
         failures = Dictionary(errors.map { ($0.0, FriendlyError.describe($0.1)) }, uniquingKeysWith: { first, _ in first })
         if found.isEmpty, let first = errors.first { throw first.1 }
         return found.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
@@ -115,18 +128,23 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
 
     func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         let byTool = Dictionary(grouping: projects, by: \.tool)
-        let lists = await withTaskGroup(of: AgentHistorySessionListing.self) { group in
+        var perTool: [String] = []
+        let lists = await withTaskGroup(of: (AgentHistoryTool, AgentHistorySessionListing).self) { group in
             for source in sources {
                 guard let mine = byTool[source.tool], !mine.isEmpty else { continue }
-                group.addTask { await source.listAllSessions(in: mine) }
+                group.addTask { (source.tool, await source.listAllSessions(in: mine)) }
             }
             var collected = AgentHistorySessionListing(files: [])
-            for await listing in group {
+            for await (tool, listing) in group {
+                perTool.append("\(tool.rawValue) \(byTool[tool]?.count ?? 0)→\(listing.files.count)/失败\(listing.failedProjects.count)")
                 collected.files += listing.files
                 collected.failedProjects.formUnion(listing.failedProjects)
             }
             return collected
         }
+        // 诊断：每种工具列了几个项目、列到几份（侧栏整个空掉时看是哪一种、哪一步）。
+        let message = "历史会话：各工具列会话 " + perTool.sorted().joined(separator: "，")
+        AppLogger.notice(message, category: AgentHistoryLog.category)
         return AgentHistorySessionListing(files: lists.files.sorted { $0.modifiedAt > $1.modifiedAt },
                                           failedProjects: lists.failedProjects)
     }

@@ -347,8 +347,15 @@ final class AgentHistoryModel {
                 return
             }
         case .all:
+            let asked = projects.count
+            let tags = Dictionary(grouping: projects, by: \.tool).map { "\($0.key.rawValue) \($0.value.count)" }.sorted()
+            let tagMessage = "历史会话：列会话前项目的工具分布 " + tags.joined(separator: "，")
+            AppLogger.notice(tagMessage, category: AgentHistoryLog.category)
             let listing = await source.listAllSessions(in: projects)
             listed = listing.files
+            let message = "历史会话：列全部项目（\(asked) 个）→ \(listing.files.count) 份，失败的项目 \(listing.failedProjects.count)，"
+                + "列不出的工具 \(toolFailures.count)，原来的范围\(previousScope == .all ? "是" : "不是")全部"
+            AppLogger.notice(message, category: AgentHistoryLog.category)
             // 这一趟有项目没列出来（断线、辅助程序重启）：它们上一次列到的会话留着，不能一下子从侧栏上消失。
             // 一种工具这一趟连项目都没列出来（`toolFailures`）也一样：它的会话留着上一次列到的。
             let failedTools = Set(toolFailures.keys)

@@ -57,6 +57,10 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     func setProjectsError(_ error: (any Error)?) { projectsError = error }
 
+    /// 列项目前先等这么久（几种工具列完的先后跟注册的顺序不一样）。
+    private var projectsDelay: Duration?
+    func setProjectsDelay(_ delay: Duration?) { projectsDelay = delay }
+
     /// 列这些项目（记录目录名）时失败（断线、辅助程序重启）：`allSessions` 跳过它们，`listAllSessions` 报出来。
     private var failingProjects: Set<String> = []
     func setFailingProjects(_ ids: Set<String>) { failingProjects = ids }
@@ -87,6 +91,7 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     }
 
     func projects() async throws -> [AgentHistoryProject] {
+        if let projectsDelay { try? await Task.sleep(for: projectsDelay) }
         if let projectsError { throw projectsError }
         var seen: Set<String> = []
         return sessionList.map(\.projectID).filter { seen.insert($0).inserted }.map(makeProject)

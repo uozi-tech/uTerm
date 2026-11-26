@@ -74,6 +74,9 @@ actor ClaudeHistorySource: AgentHistorySource {
 
     func sessions(in project: AgentHistoryProject) async throws -> [AgentHistorySessionFile] {
         let entries = try await provider.list(path: project.path)
+        if entries.isEmpty {
+            AppLogger.debug("历史会话：Claude Code 有一个项目目录列出来是空的", category: AgentHistoryLog.category)
+        }
         var files: [AgentHistorySessionFile] = []
         for entry in entries where !entry.isDirectory && entry.name.hasSuffix(".jsonl") {
             let path = project.path + "/" + entry.name
@@ -99,19 +102,34 @@ actor ClaudeHistorySource: AgentHistorySource {
     func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
         var result: [AgentHistorySessionFile] = []
         var failed: Set<AgentHistoryProjectKey> = []
+        var firstError: String?
+        var emptyProjects = 0
         var next = 0
-        await withTaskGroup(of: (AgentHistoryProject, [AgentHistorySessionFile]?).self) { group in
+        await withTaskGroup(of: (AgentHistoryProject, Result<[AgentHistorySessionFile], any Error>).self) { group in
             func launch() {
                 let project = projects[next]
                 next += 1
-                group.addTask { (project, try? await self.sessions(in: project)) }
+                group.addTask {
+                    do { return (project, .success(try await self.sessions(in: project))) } catch { return (project, .failure(error)) }
+                }
             }
             while next < min(Self.listConcurrency, projects.count) { launch() }
-            while let (project, files) = await group.next() {
-                if let files { result.append(contentsOf: files) } else { failed.insert(AgentHistoryProjectKey(project)) }
+            while let (project, outcome) = await group.next() {
+                switch outcome {
+                case .success(let files):
+                    result.append(contentsOf: files)
+                    if files.isEmpty { emptyProjects += 1 }
+                case .failure(let error):
+                    failed.insert(AgentHistoryProjectKey(project))
+                    if firstError == nil { firstError = AgentHistoryLog.kind(of: error) }
+                }
                 if next < projects.count { launch() }
             }
         }
+        // 诊断（只有条数与错误种类）：侧栏在 Mac 上新开会话后整个空掉时，看是哪一步列出了空。
+        let message = "历史会话：Claude Code 列 \(projects.count) 个项目，\(result.count) 份记录，"
+            + "空项目 \(emptyProjects)，失败 \(failed.count)\(firstError.map { "（\($0)）" } ?? "")"
+        AppLogger.notice(message, category: AgentHistoryLog.category)
         return AgentHistorySessionListing(files: result.sorted { $0.modifiedAt > $1.modifiedAt }, failedProjects: failed)
     }
 
