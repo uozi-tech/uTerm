@@ -127,6 +127,22 @@ final class CodeRunBoard<Terminal: AnyObject> {
         return resolved
     }
 
+    /// 跑着的会话的记录后来接着在另一份里往下聊了（Claude Code 上下文满了另起一份新记录，见 `AgentHistoryContinuation`）：
+    /// 换到最新那一份。`latest` 给出最新那份的路径与会话 ID（没有为 nil）；已经被别的会话占着的不换。返回换了的。
+    @discardableResult
+    func followContinuations(_ latest: (_ path: String) -> (path: String, sessionID: String)?) -> [UUID] {
+        var claimed = Set(runs.compactMap(\.sessionPath))
+        var moved: [UUID] = []
+        for index in runs.indices where !runs[index].isMirrored {
+            guard let path = runs[index].sessionPath, let next = latest(path), !claimed.contains(next.path) else { continue }
+            runs[index].sessionPath = next.path
+            runs[index].sessionID = next.sessionID
+            claimed.insert(next.path)
+            moved.append(runs[index].id)
+        }
+        return moved
+    }
+
     /// 「＋」新会话：总是新起一个（还没有记录可对）。
     @discardableResult
     func startNew(tool: AgentHistoryTool, directory: String, now: Date = Date(), knownPaths: Set<String> = [],

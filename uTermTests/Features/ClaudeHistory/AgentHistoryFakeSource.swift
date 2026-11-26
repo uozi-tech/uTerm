@@ -21,6 +21,8 @@ actor AgentHistoryFakeSource: AgentHistorySource {
         var items: [AgentTranscriptItem] = []
         /// 搜索时报的命中。
         var hits: [AgentHistorySearchHit] = []
+        /// 后来接着在哪一份里往下聊（会话 ID，见 `AgentHistorySessionMetadata.continuedIn`）。
+        var continuedIn: String?
     }
 
     nonisolated let tool: AgentHistoryTool
@@ -149,7 +151,8 @@ actor AgentHistoryFakeSource: AgentHistorySource {
         guard let session = session(at: file.path) else { throw AgentHistoryFakeError.missing }
         return AgentHistorySessionMetadata(title: session.title, isListed: session.isListed,
                                            lastDirectory: session.resumeDirectory, resumeDirectory: session.resumeDirectory,
-                                           gitBranch: session.branch, lastActivity: session.modifiedAt)
+                                           gitBranch: session.branch, lastActivity: session.modifiedAt,
+                                           continuedIn: session.continuedIn)
     }
 
     nonisolated func transcript(for file: AgentHistorySessionFile) -> any AgentTranscriptPaging {

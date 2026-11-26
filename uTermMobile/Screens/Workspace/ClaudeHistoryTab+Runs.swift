@@ -456,8 +456,26 @@ extension ClaudeHistoryTab {
                 guard let self, !Task.isCancelled, self.runs.runningCount > 0 else { break }
                 if self.runs.hasUnmatchedNewSessions { await self.matchNewSessions() }
                 await self.refreshRunRecords()
+                self.followContinuations()
             }
             self?.newSessionPoll = nil
+        }
+    }
+
+    /// 跑着的会话跟到「接着往下聊」的最新那份记录上（同 Mac 的 `CodeTabModel.followContinuations`）：
+    /// 列表上「运行中」那一行、正看着的记录都跟过去。
+    func followContinuations() {
+        guard let history = connection.history else { return }
+        let moved = runs.followContinuations { path in
+            guard let old = history.file(at: path), let next = history.latestPart(of: old) else { return nil }
+            return (next.path, next.sessionID)
+        }
+        for id in moved {
+            guard let run = runs.run(id: id), let next = history.file(at: run.sessionPath) else { continue }
+            if let selected = history.selectedFile, selected.path != next.path,
+               history.latestPart(of: selected)?.path == next.path {
+                history.select(next)
+            }
         }
     }
 

@@ -755,6 +755,7 @@ final class CodeTabModel {
     /// 右边正看着它的继续看它的终端（改由列表选中那份记录）。
     func matchNewSessions() {
         applyRestoredState()
+        followContinuations()
         guard let history, runs.contains(where: \.isUnmatched) else { return }
         let claimed = Set(runs.compactMap(\.path))
         let matches = Self.match(runs.filter(\.isUnmatched), files: history.files, metadata: history.metadata,
@@ -768,6 +769,19 @@ final class CodeTabModel {
                 selectedRunID = nil
                 history.select(file)
             }
+        }
+    }
+
+    /// Claude Code 上下文满了接着往下聊时另起一份新记录（旧的末尾记着接到了哪一份）：跑着的会话跟到最新那一份上，
+    /// 侧栏上「运行中」那一行、右边看着的记录、存进布局的都跟过去。镜像的由那台 Mac 去跟。
+    func followContinuations() {
+        guard let history else { return }
+        for index in runs.indices where !runs[index].isMirrored {
+            guard let path = runs[index].path, let old = history.file(at: path), let next = history.latestPart(of: old),
+                  !runs.contains(where: { $0.path == next.path }) else { continue }
+            runs[index].path = next.path
+            runs[index].key = AgentHistoryPinKey(next)
+            if history.selectedFile?.path == path { history.select(next) }
         }
     }
 

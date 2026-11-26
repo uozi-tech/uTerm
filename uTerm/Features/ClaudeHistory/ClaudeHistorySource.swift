@@ -163,7 +163,8 @@ actor ClaudeHistorySource: AgentHistorySource {
             resumeDirectory: ClaudeProjectPath.resumeDirectory(projectName: file.project.id, candidates: candidates)
                 ?? file.project.directory,
             gitBranch: scan.gitBranch,
-            lastActivity: scan.lastTimestamp)
+            lastActivity: scan.lastTimestamp,
+            continuedIn: scan.continuedIn)
         cache[file.cacheKey] = metadata
         return metadata
     }

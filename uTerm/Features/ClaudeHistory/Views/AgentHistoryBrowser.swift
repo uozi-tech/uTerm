@@ -141,7 +141,9 @@ struct AgentHistoryTranscriptStack: View {
                                         onResume: { onResume(level.file) },
                                         onBack: level.subagent == nil ? nil : { history.closeSubagent() },
                                         onOpenSubagent: { history.openSubagent($0) },
-                                        onJumpToLatest: { history.jumpToLatest() })
+                                        onJumpToLatest: { history.jumpToLatest() },
+                                        continuation: level.subagent == nil ? history.continuationLink(of: level.file) : nil,
+                                        onOpenPart: { history.select($0) })
                         .opacity(isTop ? 1 : 0)
                         .allowsHitTesting(isTop)
                         .accessibilityHidden(!isTop)
@@ -1326,6 +1328,9 @@ struct AgentTranscriptPane: View {
     var onOpenSubagent: (AgentSubagentLink) -> Void = { _ in }
     /// 从搜索命中处打开的：换回从末尾打开。
     var onJumpToLatest: () -> Void = {}
+    /// 这份记录是「接着往下聊」串起来的几份之一：顶上给一条，能翻到之前 / 后来那段（见 `AgentHistoryContinuation`）。
+    var continuation: AgentHistoryContinuation.Link? = nil
+    var onOpenPart: (AgentHistorySessionFile) -> Void = { _ in }
 
     @State private var expanded: Set<String> = []
     @Environment(\.agentHistoryHeaderDivider) private var showsHeaderDivider
@@ -1338,8 +1343,36 @@ struct AgentTranscriptPane: View {
                 hitBanner
                 Rectangle().fill(UD.border).frame(height: 1)
             }
+            if let continuation {
+                continuationBanner(continuation)
+                Rectangle().fill(UD.border).frame(height: 1)
+            }
             messages
         }
+    }
+
+    /// 「接着往下聊」串起来的另一段：顶上说一句，给按钮翻过去。
+    private func continuationBanner(_ link: AgentHistoryContinuation.Link) -> some View {
+        let target: AgentHistorySessionFile
+        switch link {
+        case .previous(let file), .next(let file): target = file
+        }
+        return HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+            Text(AgentHistoryText.continuationNotice(link))
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.text2)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            UDButton(title: AgentHistoryText.continuationAction(link), style: .secondary,
+                     systemImage: { if case .previous = link { return "arrow.up" } else { return "arrow.down" } }(),
+                     action: { onOpenPart(target) })
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(UD.fillSoft)
     }
 
     /// 从命中处打开、后面还没读到末尾：顶上说一句，给「跳到最新」。

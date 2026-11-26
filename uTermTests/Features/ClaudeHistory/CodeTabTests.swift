@@ -748,3 +748,36 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(TerminalWindowContentMode.allCases, [.terminal, .agent], "Code 是标签页，不是一档模式")
     }
 }
+
+// MARK: 接着往下聊
+
+extension CodeTabTests {
+    /// 跑着的会话上下文满了接着来（另起一份新记录）：「运行中」那一行和正看着的记录跟到新的那份上（用户报的：两行同名）。
+    func testRunFollowsTheContinuedRecord() async throws {
+        let (code, history, source) = await makeCode(sessions: [session("old", in: Self.shop, title: "Code 视图侧边栏", ago: 90)])
+        let oldFile = try file(history, "old")
+        let run = try XCTUnwrap(code.resume(oldFile))
+        code.showRecord(of: run.id)
+        XCTAssertEqual(history.selectedFile?.path, oldFile.path)
+
+        await source.update("old") {
+            $0.continuedIn = "new"
+            $0.size += 200
+            $0.modifiedAt = Date().addingTimeInterval(-60)
+        }
+        await source.add(session("new", in: Self.shop, title: "Code 视图侧边栏", ago: 0))
+        await history.reload(showsLoading: false)
+        await settle(history)
+        for _ in 0..<200 where history.metadata[oldFile.path]?.continuedIn == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        code.checkRuns()
+
+        let newFile = try file(history, "new")
+        XCTAssertEqual(code.runs.first?.path, newFile.path, "跑着的会话跟到新的那份上")
+        XCTAssertEqual(code.runs.first?.key, AgentHistoryPinKey(newFile), "存进布局的也是新的那份")
+        XCTAssertEqual(history.selectedFile?.path, newFile.path, "正看着的记录换成新的那份")
+        XCTAssertEqual(history.visibleFiles.map(\.sessionID), ["new"], "侧栏只有一行")
+        XCTAssertEqual(made.count, 1, "不另起终端")
+    }
+}

@@ -425,7 +425,9 @@ struct ClaudeHistoryBrowser: View {
                                          onResume: { onResume(level.file) },
                                          onOpenSubagent: { history.openSubagent($0) },
                                          onJumpToLatest: { history.jumpToLatest() },
-                                         onBackToTerminal: level.subagent == nil ? backToTerminal(for: level.file) : nil)
+                                         onBackToTerminal: level.subagent == nil ? backToTerminal(for: level.file) : nil,
+                                         continuation: level.subagent == nil ? history.continuationLink(of: level.file) : nil,
+                                         onOpenPart: { history.select($0) })
                         .opacity(isTop ? 1 : 0)
                         .allowsHitTesting(isTop)
                         .accessibilityHidden(!isTop)
@@ -1203,6 +1205,9 @@ private struct ClaudeTranscriptView: View {
     var onJumpToLatest: () -> Void = {}
     /// 这份记录正在 Code 标签页里继续着：「继续这个会话」换成「返回终端」。
     var onBackToTerminal: (() -> Void)? = nil
+    /// 这份记录是「接着往下聊」串起来的几份之一：顶上给一条，能翻到之前 / 后来那段（同 Mac）。
+    var continuation: AgentHistoryContinuation.Link? = nil
+    var onOpenPart: (AgentHistorySessionFile) -> Void = { _ in }
 
     @State private var expanded: Set<String> = []
     @State private var pendingAnchor: String?
@@ -1215,8 +1220,33 @@ private struct ClaudeTranscriptView: View {
                 hitBanner
                 Rectangle().fill(M.divider).frame(height: 1)
             }
+            if let continuation {
+                continuationBanner(continuation)
+                Rectangle().fill(M.divider).frame(height: 1)
+            }
             messages
         }
+    }
+
+    /// 「接着往下聊」串起来的另一段：顶上说一句，给按钮翻过去。同 Mac。
+    private func continuationBanner(_ link: AgentHistoryContinuation.Link) -> some View {
+        let target: AgentHistorySessionFile
+        let isPrevious: Bool
+        switch link {
+        case .previous(let file): target = file; isPrevious = true
+        case .next(let file): target = file; isPrevious = false
+        }
+        return HStack(spacing: 8) {
+            Text(AgentHistoryText.continuationNotice(link))
+                .font(M.sans(12.5)).foregroundStyle(M.text2)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            MBtn(title: AgentHistoryText.continuationAction(link), icon: isPrevious ? "upload" : "download",
+                 kind: .secondary, height: 32, action: { onOpenPart(target) })
+                .fixedSize()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .background(M.fillFaint)
     }
 
     /// 从命中处打开、后面还没读到末尾：顶上说一句，给「跳到最新」。同 Mac。

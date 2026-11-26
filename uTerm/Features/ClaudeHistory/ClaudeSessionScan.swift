@@ -42,6 +42,9 @@ nonisolated struct ClaudeSessionScan: Equatable, Sendable {
     var gitBranch: String?
     var version: String?
     var lastTimestamp: Date?
+    /// `continued-in` 那一行记的新记录的会话 ID（上下文满了接着来，见 `AgentHistorySessionMetadata.continuedIn`）。
+    /// 之后又有消息行（旧的会话后来又被继续了）就不算。
+    var continuedIn: String?
 
     /// 标题行最多多大才解析（真实的标题行都只有几百字节）。
     static let maxTitleLineBytes = 64 * 1024
@@ -59,7 +62,10 @@ nonisolated struct ClaudeSessionScan: Equatable, Sendable {
                                           dropsTrailingPartial: dropsTrailingPartial) {
             let head = line.prefix(ClaudeTranscriptParser.headBytes)
             let isMessage = ClaudeTranscriptParser.isMessageCandidate(head: head)
-            if isMessage { scan.hasMessageLine = true }
+            if isMessage {
+                scan.hasMessageLine = true
+                scan.continuedIn = nil
+            }
             guard line.count <= maxTitleLineBytes else { continue }
             if isMessage {
                 // 没有标题行（只跑过 `claude -p`、最后一问是空的）时拿最后一句用户的话当标题。
@@ -74,6 +80,10 @@ nonisolated struct ClaudeSessionScan: Equatable, Sendable {
                         break
                     }
                 }
+                continue
+            }
+            if ClaudeJSONLScan.contains("\"type\":\"continued-in\"", in: head) {
+                scan.continuedIn = field("continuedInSessionId", ofLine: line)
                 continue
             }
             switch titleLine(line, head: head) {
@@ -133,6 +143,8 @@ nonisolated struct ClaudeSessionScan: Equatable, Sendable {
         result.gitBranch = gitBranch ?? other.gitBranch
         result.version = version ?? other.version
         result.lastTimestamp = lastTimestamp ?? other.lastTimestamp
+        // 较新的一块里有消息行：那之后又聊过，较早那块里的 `continued-in` 不算。
+        result.continuedIn = continuedIn ?? (hasMessageLine ? nil : other.continuedIn)
         return result
     }
 

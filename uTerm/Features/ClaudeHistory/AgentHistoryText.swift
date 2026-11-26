@@ -185,6 +185,26 @@ enum AgentHistoryText {
 
     static var jumpToLatest: String { String(localized: "跳到最新") }
 
+    /// 记录顶上那一条：这份记录是「接着往下聊」串起来的几份之一（Claude Code 上下文满了另起一份新记录）。
+    static func continuationNotice(_ link: AgentHistoryContinuation.Link) -> String {
+        switch link {
+        case .previous:
+            String(localized: "这段对话接着之前的记录往下聊（上下文满了另起的一份）",
+                   comment: "历史会话：记录顶上的提示，这一份是上下文满了之后接着往下聊的新记录")
+        case .next:
+            String(localized: "这段对话后来接着在另一份记录里往下聊",
+                   comment: "历史会话：记录顶上的提示，这一份上下文满了，后面的对话在另一份新记录里")
+        }
+    }
+
+    /// 那一条上的按钮。
+    static func continuationAction(_ link: AgentHistoryContinuation.Link) -> String {
+        switch link {
+        case .previous: String(localized: "看之前那段", comment: "历史会话：打开接着聊之前的那份记录")
+        case .next: String(localized: "看后来那段", comment: "历史会话：打开接着往下聊的那份新记录")
+        }
+    }
+
     static var loadLater: String { String(localized: "加载更晚的消息") }
 
     /// 范围里一行都没列出来时的说明。

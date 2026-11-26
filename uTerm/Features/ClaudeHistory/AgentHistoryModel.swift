@@ -122,14 +122,31 @@ final class AgentHistoryModel {
 
     /// 列表里显示的：已经读过的那一段里要列出来的。后台重列后排进这一段、还没读到信息的（新写出来的记录）先不显示，
     /// 读到了再出来（见 `setScope`）。
+    /// 后来接着在另一份记录里往下聊了的不出（见 `AgentHistoryContinuation`）：同一个对话只有一行。
     var visibleFiles: [AgentHistorySessionFile] {
-        files.prefix(resolvedCount).filter { metadata[$0.path]?.isListed ?? false }
+        files.prefix(resolvedCount).filter {
+            (metadata[$0.path]?.isListed ?? false) && !AgentHistoryContinuation.isSuperseded($0, in: files, metadata: metadata)
+        }
     }
 
     /// 列表最上面「置顶」一组的行（按用户排的顺序；已经按「显示」筛过，还没读到信息的、找不到的不在里面）。
+    /// 置顶的那份后来接着在另一份记录里往下聊了：这一行换成最新那一份。
     var pinnedFiles: [AgentHistorySessionFile] {
         guard let pins else { return [] }
+        var seen: Set<String> = []
         return AgentHistoryPinning.resolved(pins.keys, in: files, metadata: metadata)
+            .map { latestPart(of: $0) ?? $0 }
+            .filter { seen.insert($0.path).inserted }
+    }
+
+    /// 这份记录后来接着在哪一份里往下聊（顺着走到最新那一份）；没有为 nil。
+    func latestPart(of file: AgentHistorySessionFile) -> AgentHistorySessionFile? {
+        AgentHistoryContinuation.latest(of: file, in: files, metadata: metadata)
+    }
+
+    /// 记录顶上「看之前的 / 后来的那段」的入口。
+    func continuationLink(of file: AgentHistorySessionFile) -> AgentHistoryContinuation.Link? {
+        AgentHistoryContinuation.link(of: file, in: files, metadata: metadata)
     }
 
     /// 置顶的会话可能排在很后面（很久没动过）：不等列表翻到它，先把它们的信息读出来，「置顶」一组一打开就是齐的。

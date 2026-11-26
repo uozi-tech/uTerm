@@ -77,6 +77,54 @@ nonisolated struct AgentHistorySessionMetadata: Equatable, Sendable {
     var resumeDirectory: String?
     var gitBranch: String?
     var lastActivity: Date?
+    /// 这段对话后来接着在哪一份记录里往下聊（那一份的会话 ID）。Claude Code 上下文满了接着来时不往原来的文件里续写，
+    /// 另起一份新记录，在旧的末尾记一行 `continued-in`。没有为 nil。
+    var continuedIn: String? = nil
+}
+
+/// 「接着往下聊」串起来的几份记录（Claude Code 上下文满了另起一份新记录，标题照抄）：列表里只出最新那一份，
+/// 前面的藏起来、从记录顶上翻回去。两端共用，纯函数。
+nonisolated enum AgentHistoryContinuation {
+    /// 一份记录在这条链上的前后。
+    enum Link: Equatable, Sendable {
+        /// 这一份是接着前面那份往下聊的。
+        case previous(AgentHistorySessionFile)
+        /// 这一份后来接着在别的记录里往下聊（顺着走到最新那一份）。
+        case next(AgentHistorySessionFile)
+    }
+
+    /// 顺着 `continuedIn` 走到最新那一份（同一种工具、在 `files` 里的）；没有接着的、接着的那份不在列表里为 nil。
+    static func latest(of file: AgentHistorySessionFile, in files: [AgentHistorySessionFile],
+                       metadata: [String: AgentHistorySessionMetadata]) -> AgentHistorySessionFile? {
+        var current = file
+        var seen: Set<String> = [file.path]
+        while let id = metadata[current.path]?.continuedIn,
+              let next = files.first(where: { $0.tool == current.tool && $0.sessionID == id }),
+              seen.insert(next.path).inserted {
+            current = next
+        }
+        return current.path == file.path ? nil : current
+    }
+
+    /// 列表里不出这一行：它后来接着在列表里的另一份记录里往下聊了。
+    static func isSuperseded(_ file: AgentHistorySessionFile, in files: [AgentHistorySessionFile],
+                             metadata: [String: AgentHistorySessionMetadata]) -> Bool {
+        guard let id = metadata[file.path]?.continuedIn else { return false }
+        return files.contains { $0.tool == file.tool && $0.sessionID == id && $0.path != file.path }
+    }
+
+    /// 这一份是接着哪一份往下聊的（那一份的信息读到了才知道）。
+    static func previous(of file: AgentHistorySessionFile, in files: [AgentHistorySessionFile],
+                         metadata: [String: AgentHistorySessionMetadata]) -> AgentHistorySessionFile? {
+        files.first { $0.tool == file.tool && $0.path != file.path && metadata[$0.path]?.continuedIn == file.sessionID }
+    }
+
+    /// 记录顶上要给的那个入口：后来接着聊了的给「看后来的」，接着前面聊的给「看之前的」。
+    static func link(of file: AgentHistorySessionFile, in files: [AgentHistorySessionFile],
+                     metadata: [String: AgentHistorySessionMetadata]) -> Link? {
+        if let next = latest(of: file, in: files, metadata: metadata) { return .next(next) }
+        return previous(of: file, in: files, metadata: metadata).map(Link.previous)
+    }
 }
 
 /// 一份对话里派出的一个子代理留下的记录。怎么找到它是数据源的事（Claude：会话目录下的 `subagents/`），
