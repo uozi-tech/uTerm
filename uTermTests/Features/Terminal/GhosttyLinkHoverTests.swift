@@ -89,4 +89,89 @@ final class GhosttyLinkHoverTests: XCTestCase {
         XCTAssertTrue(opened, "⌘ 点路径应当交给 uTerm 打开")
         XCTAssertEqual(requested.first, "/Applications/uTerm.app")
     }
+
+    // MARK: 本机终端
+
+    private actor LocalOpener: LocalPathOpening {
+        nonisolated let outputItems = AsyncStream<TerminalOutputItem> { _ in }
+        nonisolated let exitStream = AsyncStream<Void> { _ in }
+        private(set) var opened: [String] = []
+        func connect() async throws {}
+        func write(_ data: Data) async {}
+        func resize(cols: UInt16, rows: UInt16) async {}
+        func close() async {}
+        func foregroundDirectories() async -> RemoteForegroundDirectories? {
+            RemoteForegroundDirectories(workingDirectory: "/Users/me/demo", home: "/Users/me")
+        }
+        func openLocalPath(_ path: String) async -> Bool {
+            opened.append(path)
+            return true
+        }
+    }
+
+    private func commandClick(col: Int, row: Int) {
+        rig.view.flagsChanged(with: flags(.command))
+        guard let point = rig.windowPoint(col: col, row: row) else { return XCTFail("量不到格子尺寸") }
+        rig.view.mouseMoved(with: RealEvents.mouse(.mouseMoved, window: rig.window, at: point, modifiers: .command))
+        rig.view.mouseDown(with: RealEvents.mouse(.leftMouseDown, window: rig.window, at: point, modifiers: .command))
+        rig.view.mouseUp(with: RealEvents.mouse(.leftMouseUp, window: rig.window, at: point, modifiers: .command))
+        rig.view.flagsChanged(with: flags([]))
+    }
+
+    /// 用户报的：本机终端里 ⌘ 点路径没反应。没有预览区，路径要交给系统打开（`LocalPathOpening`）。
+    func testCommandClickInLocalTerminalOpensWithTheSystem() async {
+        rig.close()
+        rig = await GhosttySurfaceRig(connectsBackend: false)
+        let opener = LocalOpener()
+        await rig.session.connect(using: opener)
+        XCTAssertNil(rig.session.onFilePreviewRequest)
+        await rig.feed("1 绝对路径          /Users/me/demo/index.html\r\n2 相对路径          docs/plan.md\r\n")
+        commandClick(col: 24, row: 0)
+        commandClick(col: 22, row: 1)
+        var opened: [String] = []
+        _ = await rig.waitUntil(3) {
+            opened = await opener.opened
+            return opened.count == 2
+        }
+        XCTAssertEqual(opened, ["/Users/me/demo/index.html", "/Users/me/demo/docs/plan.md"])
+    }
+
+    /// Claude Code 这类全屏程序打开了鼠标上报（`?1000h` / `?1002h` / `?1006h`）：⌘ 点路径照样要打开，不能被当成鼠标事件发给程序。
+    func testCommandClickOpensPathWhileProgramCapturesTheMouse() async {
+        rig.close()
+        rig = await GhosttySurfaceRig(connectsBackend: false)
+        let opener = LocalOpener()
+        await rig.session.connect(using: opener)
+        await rig.feed("\u{1b}[?1000h\u{1b}[?1002h\u{1b}[?1006h1 绝对路径          /Users/me/demo/index.html\r\n")
+        commandClick(col: 24, row: 0)
+        var opened: [String] = []
+        _ = await rig.waitUntil(3) {
+            opened = await opener.opened
+            return !opened.isEmpty
+        }
+        XCTAssertEqual(opened, ["/Users/me/demo/index.html"])
+    }
+
+    /// 鼠标被程序接管时按住 ⌘ 指着路径：一样显示链接；不按 ⌘ 的点击照常发给程序，不当成链接。
+    func testCommandHoverShowsLinkWhileProgramCapturesTheMouse() async {
+        await rig.feed("\u{1b}[?1000h\u{1b}[?1006hInstalled /Applications/uTerm.app now\r\n")
+        move(col: 14, row: 0)
+        rig.view.flagsChanged(with: flags(.command))
+        let shown = await rig.waitUntil(2) { self.rig.view.hoveredLink != nil }
+        XCTAssertTrue(shown, "程序接管鼠标时按住 ⌘ 也要认出链接")
+        XCTAssertEqual(rig.view.hoveredLink, "/Applications/uTerm.app")
+        rig.view.flagsChanged(with: flags([]))
+        let hidden = await rig.waitUntil(2) { self.rig.view.hoveredLink == nil }
+        XCTAssertTrue(hidden, "松开 ⌘ 链接收回")
+
+        var opened: [String] = []
+        rig.session.onFilePreviewRequest = { opened.append($0) }
+        guard let point = rig.windowPoint(col: 14, row: 0) else { return XCTFail("量不到格子尺寸") }
+        rig.view.mouseDown(with: RealEvents.mouse(.leftMouseDown, window: rig.window, at: point))
+        rig.view.mouseUp(with: RealEvents.mouse(.leftMouseUp, window: rig.window, at: point))
+        let reported = await rig.sent(expecting: 1, timeout: 1)
+        XCTAssertTrue(String(decoding: reported, as: UTF8.self).contains("\u{1b}[<0;"), "普通点击照常上报给程序")
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(opened.isEmpty, "不按 ⌘ 不打开链接")
+    }
 }

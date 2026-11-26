@@ -17,6 +17,9 @@
     /// Mouse selection state; behavior lives in +Input.
     struct PointerSelectionState {
         var pendingSelectionMenuPoint: CGPoint?
+        /// uTerm patch: last surface point a pointer event reported (nil once
+        /// the pointer left the view), for re-reporting it when ⌘ changes.
+        var lastSurfacePoint: CGPoint?
     }
 
     extension AppTerminalView {
@@ -99,6 +102,27 @@
 
         override open func flagsChanged(with event: NSEvent) {
             inputHandler?.handleFlagsChanged(with: event)
+            // uTerm patch: pressing ⌘ over a link while a program captures the
+            // mouse. Ghostty only looks for links on a mouse move then
+            // (`linkMods`), so report the pointer again with ⌘ held. A report
+            // at the same spot is dropped as a phantom move, hence the nudge.
+            if surface?.isMouseCaptured == true, let point = pointer.lastSurfacePoint {
+                let mods = linkMods(event.modifierFlags)
+                surface?.sendMousePos(x: point.x + 1, y: point.y, mods: mods)
+                surface?.sendMousePos(x: point.x, y: point.y, mods: mods)
+            }
+        }
+
+        /// uTerm patch: ⌘-click opens a link even while a program (Claude Code,
+        /// vim, tmux) captures the mouse, as in Terminal.app and iTerm2.
+        /// Ghostty only lets links through mouse capture with Shift held, so
+        /// ⌘ without Shift is passed on as ⌘⇧ for left-button and pointer
+        /// events: Ghostty strips the Shift again before matching links and
+        /// keeps the click from the program. Without capture nothing changes.
+        func linkMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+            let mods = TerminalInputModifiers(from: flags).ghosttyMods
+            guard flags.contains(.command), !flags.contains(.shift), surface?.isMouseCaptured == true else { return mods }
+            return ghostty_input_mods_e(mods.rawValue | GHOSTTY_MODS_SHIFT.rawValue)
         }
 
         override open func doCommand(by selector: Selector) {
@@ -149,24 +173,24 @@
             // left between two is brought to one before the click lands.
             core.settleScrollForPointer()
             let (x, y) = mousePoint(from: event)
-            let mods = TerminalInputModifiers(from: event.modifierFlags)
+            let mods = linkMods(event.modifierFlags)
             pointer.pendingSelectionMenuPoint = nil
-            surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
+            surface?.sendMousePos(x: x, y: y, mods: mods)
             surface?.sendMouseButton(
                 state: GHOSTTY_MOUSE_PRESS,
                 button: GHOSTTY_MOUSE_LEFT,
-                mods: mods.ghosttyMods,
+                mods: mods,
             )
         }
 
         override open func mouseUp(with event: NSEvent) {
             let (x, y) = mousePoint(from: event)
-            let mods = TerminalInputModifiers(from: event.modifierFlags)
-            surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
+            let mods = linkMods(event.modifierFlags)
+            surface?.sendMousePos(x: x, y: y, mods: mods)
             surface?.sendMouseButton(
                 state: GHOSTTY_MOUSE_RELEASE,
                 button: GHOSTTY_MOUSE_LEFT,
-                mods: mods.ghosttyMods,
+                mods: mods,
             )
         }
 
@@ -237,8 +261,8 @@
 
         override open func mouseMoved(with event: NSEvent) {
             let (x, y) = mousePoint(from: event)
-            let mods = TerminalInputModifiers(from: event.modifierFlags)
-            surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
+            pointer.lastSurfacePoint = CGPoint(x: x, y: y)
+            surface?.sendMousePos(x: x, y: y, mods: linkMods(event.modifierFlags))
         }
 
         /// ghostty clears link hover only on a negative position; the
@@ -246,6 +270,7 @@
         /// during a drag, where mouseDragged keeps reporting real positions.
         override open func mouseExited(with event: NSEvent) {
             guard NSEvent.pressedMouseButtons == 0 else { return }
+            pointer.lastSurfacePoint = nil
             let mods = TerminalInputModifiers(from: event.modifierFlags)
             surface?.sendMousePos(x: -1, y: -1, mods: mods.ghosttyMods)
         }
