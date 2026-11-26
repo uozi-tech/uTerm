@@ -1455,20 +1455,23 @@ struct AgentTranscriptPane: View {
         transcript.subagent.map(AgentHistoryText.subagentTitle) ?? AgentHistoryText.transcriptTitle(metadata)
     }
 
+    /// 对话一栏最宽多少（同 Claude Code Desktop：宽窗口里居中一栏，不铺满）。
+    private static let columnWidth: CGFloat = 780
+
     private var messages: some View {
         let items = transcript.items
-        let runStarts = AgentTranscriptRuns.starts(items)
+        // 连续的工具调用折成一行；派出了子代理的那次单独一行，入口露在外面。
+        let layout = AgentTranscriptLayout(items: items) { transcript.subagentLink(for: $0) == nil }
+        let firstRowID = layout.rows.first?.id
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     top
-                    ForEach(items) { item in
-                        AgentTranscriptRow(item: item, showsRole: runStarts.contains(item.id), inSubagent: transcript.subagent != nil,
-                                           tool: transcript.file.tool,
-                                           subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
-                                           isHighlighted: item.id == transcript.highlightedItemID,
-                                           expanded: $expanded)
-                            .id(item.id)
+                    ForEach(layout.rows) { row in
+                        rowView(row, showsRole: layout.runStarts.contains(row.id))
+                            // 换了说话的一方：上面多空一点（代替原来的「你」/「Claude」标签）。
+                            .padding(.top, layout.runStarts.contains(row.id) && row.id != firstRowID ? 12 : 0)
+                            .id(row.id)
                     }
                     bottom
                     if items.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
@@ -1482,8 +1485,10 @@ struct AgentTranscriptPane: View {
                     // `scrollTo(_, anchor: .bottom)` 就永远差这一截（见 `TerminalAgentView`）。
                     Color.clear.frame(height: 4).id(Self.bottomID)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 14)
+                .frame(maxWidth: Self.columnWidth)
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .frame(maxWidth: .infinity)
             }
             // 打开时停在最后一条；内容不满一屏时从顶上排起——只写 `.bottom` 的话短对话会贴着底、上面空一大片。
             // 从命中处打开、后面还没读到末尾时，往后加页不把视口拽到底（不然会一页接一页读下去）。
@@ -1493,12 +1498,15 @@ struct AgentTranscriptPane: View {
             .onChange(of: transcript.prependGeneration) { old, _ in
                 // 往前加了一页：留在原来最上面那条，不跳到别处。第一页不用（默认停在底部）。
                 guard old > 0, let anchor = pendingAnchor else { return }
-                proxy.scrollTo(anchor, anchor: .top)
+                // 原来最上面那条可能和新读进来的调用并成了一组：滚到它所在的那一行。
+                proxy.scrollTo(layout.rowID(for: anchor), anchor: .top)
             }
             .onChange(of: transcript.focusGeneration) { _, _ in
-                // 搜索命中的那一条：滚到中间（等这一轮布局完）。
+                // 搜索命中的那一条：在折起来的组里就先展开，再滚到中间（等这一轮布局完）。
                 guard let id = transcript.highlightedItemID else { return }
-                Task { @MainActor in proxy.scrollTo(id, anchor: .center) }
+                if let key = layout.groupKey(containing: id) { expanded.insert(key) }
+                let rowID = layout.rowID(for: id)
+                Task { @MainActor in proxy.scrollTo(rowID, anchor: .center) }
             }
             .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
             .overlay(alignment: .bottom) {
@@ -1521,6 +1529,18 @@ struct AgentTranscriptPane: View {
     private func subagentLink(_ item: AgentTranscriptItem) -> AgentSubagentLink? {
         guard case .toolCall(let call) = item.kind else { return nil }
         return transcript.subagentLink(for: call)
+    }
+
+    @ViewBuilder private func rowView(_ row: AgentTranscriptEntry, showsRole: Bool) -> some View {
+        switch row {
+        case .item(let item):
+            AgentTranscriptRow(item: item, showsRole: showsRole, inSubagent: transcript.subagent != nil,
+                               subagent: subagentLink(item), onOpenSubagent: onOpenSubagent,
+                               isHighlighted: item.id == transcript.highlightedItemID,
+                               expanded: $expanded)
+        case .tools(let id, let items):
+            AgentToolGroupRow(id: id, items: items, highlightedID: transcript.highlightedItemID, expanded: $expanded)
+        }
     }
 
     @ViewBuilder private var top: some View {
@@ -1625,13 +1645,13 @@ enum AgentHistoryPasteboard {
     }
 }
 
+/// 对话里的一条（工具调用折成组的不在这里，见 `AgentToolGroupRow`）。样子同 Claude Code Desktop：
+/// 你说的话靠右一块气泡、回答直接排在栏里、工具调用 / 思考 / 输出都是一行可展开的灰字，不再标「你」「Claude」。
 private struct AgentTranscriptRow: View {
     let item: AgentTranscriptItem
+    /// 换了说话的一方。只在子代理的记录里用：「用户」那一侧标成「任务」（那是派它的主代理交给它的，不是你说的）。
     let showsRole: Bool
-    /// 子代理的记录：「用户」那一侧标成「任务」。
     var inSubagent = false
-    /// 回答的一方叫什么。
-    var tool: AgentHistoryTool = .claude
     /// 这次调用派出的子代理（找得到记录的才有）。
     let subagent: AgentSubagentLink?
     let onOpenSubagent: (AgentSubagentLink) -> Void
@@ -1640,27 +1660,16 @@ private struct AgentTranscriptRow: View {
     @Binding var expanded: Set<String>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if showsRole {
-                Text(AgentHistoryText.roleLabel(item.role, inSubagent: inSubagent, tool: tool))
+        VStack(alignment: item.role == .user ? .trailing : .leading, spacing: 4) {
+            if showsRole, inSubagent, item.role == .user {
+                Text(AgentHistoryText.roleLabel(.user, inSubagent: true))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(UD.text3)
-                    .padding(.top, 6)
             }
             content
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            if isHighlighted {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(UD.accentSoft)
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 1.5).fill(UD.accent).frame(width: 3)
-                    }
-                    .padding(.horizontal, -8)
-                    .padding(.vertical, -5)
-            }
-        }
+        .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
+        .modifier(AgentTranscriptHighlight(isOn: isHighlighted))
         .contextMenu {
             let text = item.plainText
             if !text.isEmpty {
@@ -1672,73 +1681,47 @@ private struct AgentTranscriptRow: View {
     @ViewBuilder private var content: some View {
         switch item.kind {
         case .userText(let text):
-            AgentTranscriptMarkdown(text: text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillSoft))
+            AgentUserBubble {
+                AgentTranscriptMarkdown(text: text)
+                    .textSelection(.enabled)
+            }
         case .assistantText(let text):
             AgentTranscriptMarkdown(text: text)
                 .textSelection(.enabled)
         case .command(let command):
-            Text(command)
-                .font(UD.mono(12, weight: .medium))
-                .foregroundStyle(UD.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
+            AgentUserBubble {
+                Text(command)
+                    .font(UD.mono(12, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .textSelection(.enabled)
+            }
         case .commandOutput(let output):
-            AgentClippedBlock(id: item.id, label: String(localized: "输出"), text: output, isError: false,
-                              expanded: $expanded)
+            AgentDisclosureLine(systemImage: "text.alignleft", title: String(localized: "输出"),
+                                subtitle: firstLine(output.text), isOpen: binding("\(item.id).open")) {
+                AgentDetailCard {
+                    AgentClippedBody(id: item.id, text: output, isError: false, expanded: $expanded)
+                }
+            }
         case .notice(let text):
             Label(text, systemImage: "bell")
                 .font(.system(size: 11.5))
                 .foregroundStyle(UD.text3)
                 .lineLimit(2)
         case .thinking(let text):
-            DisclosureGroup(isExpanded: binding("\(item.id).thinking")) {
+            AgentDisclosureLine(systemImage: "brain", title: String(localized: "思考"),
+                                subtitle: firstLine(text.text), subtitleIsCode: false,
+                                isOpen: binding("\(item.id).thinking")) {
                 Text(text.text + (text.isClipped ? "\n…" : ""))
                     .font(.system(size: 12))
                     .italic()
                     .foregroundStyle(UD.text3)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            } label: {
-                Label(String(localized: "思考"), systemImage: "brain")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(UD.text3)
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) { Rectangle().fill(UD.border).frame(width: 2) }
             }
-        case .toolCall(let call):
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(UD.text3)
-                    Text(call.name)
-                        .font(UD.mono(11.5, weight: .semibold))
-                        .foregroundStyle(UD.text2)
-                    Text(call.summary)
-                        .font(UD.mono(11.5))
-                        .foregroundStyle(UD.text3)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .textSelection(.enabled)
-                }
-                if let subagent {
-                    AgentSubagentEntry(link: subagent) { onOpenSubagent(subagent) }
-                        .padding(.leading, 18)
-                }
-                if let result = call.result {
-                    AgentClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
-                                      isError: result.isError, expanded: $expanded)
-                        .padding(.leading, 18)
-                }
-            }
-        case .toolResult(let result):
-            AgentClippedBlock(id: item.id, label: AgentHistoryText.resultLabel(result), text: result.content,
-                              isError: result.isError, expanded: $expanded)
+        case .toolCall, .toolResult:
+            AgentToolLine(item: item, subagent: subagent, onOpenSubagent: onOpenSubagent, expanded: $expanded)
         case .image:
             Label(String(localized: "图片（不显示）"), systemImage: "photo")
                 .font(.system(size: 11.5))
@@ -1753,8 +1736,13 @@ private struct AgentTranscriptRow: View {
                         .fixedSize()
                     Rectangle().fill(UD.border).frame(height: 1)
                 }
-                AgentClippedBlock(id: item.id, label: String(localized: "压缩摘要"), text: summary, isError: false,
-                                  expanded: $expanded)
+                AgentDisclosureLine(systemImage: "rectangle.compress.vertical", title: String(localized: "压缩摘要"),
+                                    subtitle: firstLine(summary.text), subtitleIsCode: false,
+                                    isOpen: binding("\(item.id).open")) {
+                    AgentDetailCard {
+                        AgentClippedBody(id: item.id, text: summary, isError: false, expanded: $expanded)
+                    }
+                }
             }
             .padding(.vertical, 6)
         case .oversized(let bytes):
@@ -1765,9 +1753,239 @@ private struct AgentTranscriptRow: View {
         }
     }
 
+    private func firstLine(_ text: String) -> String {
+        text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
+    }
+
     private func binding(_ key: String) -> Binding<Bool> {
         Binding(get: { expanded.contains(key) },
                 set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
+
+/// 搜索命中的那一条：底色加左边一道线，画在边界外，不挤动排版。
+private struct AgentTranscriptHighlight: ViewModifier {
+    let isOn: Bool
+
+    func body(content: Content) -> some View {
+        content.background {
+            if isOn {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(UD.accentSoft)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(UD.accent).frame(width: 3)
+                    }
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, -5)
+            }
+        }
+    }
+}
+
+/// 你说的话：靠右、宽度贴着内容的一块（同 Claude Code Desktop）。左边至少空出一截，长消息也看得出是哪一方。
+private struct AgentUserBubble<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        AgentHuggingWidth {
+            content()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(UD.fillSoft))
+        }
+        .padding(.leading, 64)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+/// 可展开的一行灰字：图标、标题、一行摘要、（出错）、展开箭头。工具调用、思考、命令输出都用它。
+private struct AgentDisclosureLine<Detail: View>: View {
+    let systemImage: String
+    let title: String
+    var subtitle: String = ""
+    /// 摘要是命令、路径这类：用等宽字。
+    var subtitleIsCode = true
+    var isError = false
+    var isExpandable = true
+    /// 展开后摘要就在下面：标题行上不再重复（工具组的名字列表下面没有，照留）。
+    var keepsSubtitleWhenOpen = false
+    @Binding var isOpen: Bool
+    @ViewBuilder let detail: () -> Detail
+
+    @State private var hovering = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                guard isExpandable else { return }
+                withAnimation(.easeOut(duration: 0.15)) { isOpen.toggle() }
+            } label: {
+                header
+            }
+            .buttonStyle(.udPlain)
+            .onHover { hovering = $0 }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(isExpandable ? .isButton : [])
+            if isOpen, isExpandable {
+                detail()
+                    .padding(.leading, 21)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 7) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+                .frame(width: 14)
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(UD.text2)
+                .fixedSize()
+            if !subtitle.isEmpty, keepsSubtitleWhenOpen || !isOpen {
+                Text(subtitle)
+                    .font(subtitleIsCode ? UD.mono(11.5) : .system(size: 12))
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            if isError {
+                Text(AgentHistoryText.toolFailed)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(UD.danger)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(UD.danger.opacity(0.12)))
+                    .fixedSize()
+            }
+            if isExpandable {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(UD.text4)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    .opacity(hovering || isOpen ? 1 : 0)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(hovering && isExpandable ? UD.panelHover : .clear))
+        .padding(.horizontal, -6)
+        .contentShape(Rectangle())
+    }
+}
+
+/// 展开后的灰底卡片。
+private struct AgentDetailCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0, content: content)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.fillSoft))
+    }
+}
+
+/// 一次工具调用（或找不到调用的一份结果）：一行，展开是调用的参数和结果。
+private struct AgentToolLine: View {
+    let item: AgentTranscriptItem
+    var subagent: AgentSubagentLink? = nil
+    var onOpenSubagent: (AgentSubagentLink) -> Void = { _ in }
+    @Binding var expanded: Set<String>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            switch item.kind {
+            case .toolCall(let call):
+                AgentDisclosureLine(systemImage: AgentToolSymbol.systemImage(for: call.name), title: call.name,
+                                    subtitle: call.summary, isError: call.result?.isError == true,
+                                    isExpandable: call.result != nil || !call.summary.isEmpty,
+                                    isOpen: binding) {
+                    AgentDetailCard {
+                        if !call.summary.isEmpty {
+                            Text(call.summary)
+                                .font(UD.mono(11.5))
+                                .foregroundStyle(UD.text)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                        }
+                        if let result = call.result {
+                            if !call.summary.isEmpty { Rectangle().fill(UD.border).frame(height: 1) }
+                            resultBody(result)
+                        }
+                    }
+                }
+                if let subagent {
+                    AgentSubagentEntry(link: subagent) { onOpenSubagent(subagent) }
+                        .padding(.leading, 21)
+                }
+            case .toolResult(let result):
+                AgentDisclosureLine(systemImage: "arrow.turn.down.right", title: String(localized: "结果"),
+                                    subtitle: result.content.text.split(separator: "\n").first.map(String.init) ?? "",
+                                    isError: result.isError, isOpen: binding) {
+                    AgentDetailCard { resultBody(result) }
+                }
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func resultBody(_ result: AgentToolResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            AgentClippedBody(id: item.id, text: result.content, isError: result.isError, expanded: $expanded)
+            if result.imageCount > 0 {
+                Label(AgentHistoryText.resultImages(result.imageCount), systemImage: "photo")
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text3)
+            }
+        }
+        .padding(10)
+    }
+
+    private var binding: Binding<Bool> {
+        let key = "\(item.id).open"
+        return Binding(get: { expanded.contains(key) },
+                       set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
+    }
+}
+
+/// 连续几次工具调用：折成一行「N 次工具调用 · Bash、Read」，展开是每一次各一行（同 Claude Code Desktop）。
+private struct AgentToolGroupRow: View {
+    let id: String
+    let items: [AgentTranscriptItem]
+    let highlightedID: String?
+    @Binding var expanded: Set<String>
+
+    var body: some View {
+        let names = AgentToolSymbol.distinctNames(items)
+        AgentDisclosureLine(systemImage: "square.stack.3d.up", title: AgentHistoryText.toolGroupTitle(items.count),
+                            subtitle: names.joined(separator: String(localized: "、", comment: "并列项之间的分隔符")),
+                            subtitleIsCode: false, isError: AgentToolSymbol.hasError(items),
+                            keepsSubtitleWhenOpen: true, isOpen: binding) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(items) { item in
+                    AgentToolLine(item: item, expanded: $expanded)
+                        .modifier(AgentTranscriptHighlight(isOn: item.id == highlightedID))
+                }
+            }
+            .padding(.leading, 10)
+            .overlay(alignment: .leading) { Rectangle().fill(UD.border).frame(width: 1) }
+        }
+        .contextMenu {
+            let text = items.map(\.plainText).filter { !$0.isEmpty }.joined(separator: "\n\n")
+            if !text.isEmpty {
+                Button(String(localized: "拷贝文字")) { AgentHistoryPasteboard.copy(text) }
+            }
+        }
+    }
+
+    private var binding: Binding<Bool> {
+        let key = "\(id).group"
+        return Binding(get: { expanded.contains(key) },
+                       set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
     }
 }
 
@@ -1822,52 +2040,36 @@ private struct AgentSubagentEntry: View {
     }
 }
 
-/// 折叠的长文字（工具结果、命令输出、压缩摘要）：默认收起；展开先给前几行，再点才给全部（仍有上限）。
-private struct AgentClippedBlock: View {
+/// 长文字（工具结果、命令输出、压缩摘要）展开后的内容：先给前几行，再点才给全部（仍有上限）。
+private struct AgentClippedBody: View {
     let id: String
-    let label: String
     let text: AgentClippedText
     let isError: Bool
     @Binding var expanded: Set<String>
 
-    private var openKey: String { "\(id).open" }
     private var fullKey: String { "\(id).full" }
 
     var body: some View {
-        DisclosureGroup(isExpanded: binding(openKey)) {
-            VStack(alignment: .leading, spacing: 6) {
-                let showsAll = expanded.contains(fullKey)
-                let preview = text.preview(lines: AgentTranscriptLimits.previewLines,
-                                           characters: AgentTranscriptLimits.previewCharacters)
-                Text(showsAll ? text.text : preview)
-                    .font(UD.mono(11))
-                    .foregroundStyle(isError ? UD.danger : UD.text2)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
-                if !showsAll, preview.count < text.text.count {
-                    Button(AgentHistoryText.showAll(text.text.count)) { expanded.insert(fullKey) }
-                        .buttonStyle(.link)
-                        .font(.system(size: 11))
-                }
-                if text.isClipped, showsAll || preview.count >= text.text.count {
-                    Text(AgentHistoryText.clippedNote(text))
-                        .font(.system(size: 11))
-                        .foregroundStyle(UD.text4)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            let showsAll = expanded.contains(fullKey)
+            let preview = text.preview(lines: AgentTranscriptLimits.previewLines,
+                                       characters: AgentTranscriptLimits.previewCharacters)
+            Text(showsAll ? text.text : preview)
+                .font(UD.mono(11))
+                .foregroundStyle(isError ? UD.danger : UD.text2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !showsAll, preview.count < text.text.count {
+                Button(AgentHistoryText.showAll(text.text.count)) { expanded.insert(fullKey) }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
             }
-            .padding(.top, 4)
-        } label: {
-            Text(label)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(isError ? UD.danger : UD.text3)
+            if text.isClipped, showsAll || preview.count >= text.text.count {
+                Text(AgentHistoryText.clippedNote(text))
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text4)
+            }
         }
-    }
-
-    private func binding(_ key: String) -> Binding<Bool> {
-        Binding(get: { expanded.contains(key) },
-                set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } })
     }
 }
 

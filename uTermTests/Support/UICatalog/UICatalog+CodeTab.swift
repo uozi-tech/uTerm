@@ -414,11 +414,21 @@ enum UICatalogCodeMode {
         let call = AgentToolCall(toolUseID: "t1", name: "Bash", summary: "go test ./internal/auth/... -run TestLogin",
                                  result: AgentToolResult(toolUseID: "t1", content: AgentClippedText(output, limit: 4000),
                                                          isError: true, imageCount: 0))
+        let read = AgentToolCall(toolUseID: "t0", name: "Read", summary: "internal/auth/handler.go",
+                                 result: AgentToolResult(toolUseID: "t0", content: AgentClippedText("func Login(w http.ResponseWriter, r *http.Request) {\n\tdb, err := sql.Open(\"postgres\", dsn)", limit: 4000),
+                                                         isError: false, imageCount: 0))
+        let grep = AgentToolCall(toolUseID: "t0b", name: "Grep", summary: "MaxOpenConns",
+                                 result: AgentToolResult(toolUseID: "t0b", content: AgentClippedText("internal/db/pool.go:14:\tdb.SetMaxOpenConns(5)", limit: 4000),
+                                                         isError: false, imageCount: 0))
         return [
             AgentTranscriptItem(id: "c-login.u1", kind: .userText("登录接口偶尔返回 500，日志里是 `context deadline exceeded`。帮我找找原因。"),
                                 timestamp: date.addingTimeInterval(-600)),
             AgentTranscriptItem(id: "c-login.a1", kind: .assistantText("先看一下登录的处理函数和连接池的设置。"),
                                 timestamp: date.addingTimeInterval(-590)),
+            AgentTranscriptItem(id: "c-login.th", kind: .thinking(AgentClippedText("超时在高峰期才出现，先看连接是怎么建的，再看池子的上限。", limit: 4000)),
+                                timestamp: date.addingTimeInterval(-588)),
+            AgentTranscriptItem(id: "c-login.t0", kind: .toolCall(read), timestamp: date.addingTimeInterval(-586)),
+            AgentTranscriptItem(id: "c-login.t0b", kind: .toolCall(grep), timestamp: date.addingTimeInterval(-584)),
             AgentTranscriptItem(id: "c-login.t1", kind: .toolCall(call), timestamp: date.addingTimeInterval(-580)),
             AgentTranscriptItem(id: "c-login.a2", kind: .assistantText("""
                 原因找到了：`Login` 每次请求都新建数据库连接，连接池上限只有 **5**，高峰时排队超过 2 秒就超时。

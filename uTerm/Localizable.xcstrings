@@ -7975,6 +7975,35 @@
         }
       }
     },
+    "%lld 次工具调用" : {
+      "comment" : "对话记录：连续几次工具调用折成一行时的标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld tool calls"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツール呼び出し %lld 回"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "도구 호출 %lld회"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 次工具呼叫"
+          }
+        }
+      }
+    },
     "%lld 活跃" : {
       "comment" : "活跃的端口转发规则数",
       "localizations" : {
@@ -25083,6 +25112,7 @@
       }
     },
     "出错" : {
+      "comment" : "对话记录：工具调用的结果出错",
       "localizations" : {
         "en" : {
           "stringUnit" : {

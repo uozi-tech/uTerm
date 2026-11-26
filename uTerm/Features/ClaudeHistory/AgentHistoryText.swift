@@ -522,6 +522,21 @@ enum AgentHistoryText {
         return label
     }
 
+    /// 连续几次工具调用折成的那一行（同 Claude Code Desktop）。
+    static func toolGroupTitle(_ count: Int) -> String {
+        String(localized: "\(count) 次工具调用", comment: "对话记录：连续几次工具调用折成一行时的标题")
+    }
+
+    /// 工具调用那一行上、结果出错时的小标记。
+    static var toolFailed: String {
+        String(localized: "出错", comment: "对话记录：工具调用的结果出错")
+    }
+
+    /// 工具结果里带的图片（不显示）。
+    static func resultImages(_ count: Int) -> String {
+        String(localized: "\(count) 张图片（不显示）")
+    }
+
     static func oversized(_ bytes: Int) -> String {
         String(localized: "这条记录太大（\(Int64(bytes).formatted(.byteCount(style: .file)))），没有显示")
     }
