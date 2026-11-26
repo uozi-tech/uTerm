@@ -511,10 +511,11 @@ struct AgentHistorySessionList: View {
             base
                 .modifier(AgentHistoryPinDragRowState(drag: pinDrag, key: key, pinned: isPinned ? pinned : nil))
                 .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: isPinned ? .pinnedRow(key) : nil))
-                .onDrag {
+                // 不用 `.onDrag`：它没有死区，点一下行时手一抖就起拖、冒出预览，这次点击也被吞掉（同标签页）。
+                .dragSource(item: {
                     pinDrag.begin(key)
-                    return AgentHistoryPinDragPayload.itemProvider()
-                } preview: {
+                    return AgentHistoryPinDragPayload.pasteboardItem()
+                }) {
                     AgentHistorySessionRowPreview(history: history, file: file, showsTool: showsTool)
                 }
                 .modifier(rowMenu(file, pins: pins, run: run))
@@ -860,21 +861,17 @@ extension UTType {
 }
 
 nonisolated enum AgentHistoryPinDragPayload {
-    /// 不带对话内容、标题、路径、会话 ID：一个空的标记。
-    static func itemProvider() -> NSItemProvider {
-        let provider = NSItemProvider()
-        provider.registerDataRepresentation(forTypeIdentifier: UTType.utermAgentHistoryPin.identifier,
-                                            visibility: .ownProcess) { completion in
-            completion(Data(), nil)
-            return nil
-        }
-        return provider
+    /// 不带对话内容、标题、路径、会话 ID：一个空的标记（拖动只在本 App 里移动，见 `.dragSource`）。
+    static func pasteboardItem() -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setData(Data(), forType: NSPasteboard.PasteboardType(UTType.utermAgentHistoryPin.identifier))
+        return item
     }
 }
 
 /// 一个列表的拖动置顶状态：拖的是哪一个、此刻落在哪、各行在列表里的位置。
 ///
-/// `.onDrag` 没有结束回调：拖到别处松手、按 Esc 取消，`dragging` 都还留着。所以只在拖动正悬在这个列表上
+/// 拖动（`.dragSource`）没有结束回调：拖到别处松手、按 Esc 取消，`dragging` 都还留着。所以只在拖动正悬在这个列表上
 /// （`isOver`，由系统的进出回调维护，会自己复位）时才画被拖的行、落点；落下时还要核对这次拖动确实是从这个列表起的
 /// （`active`：最近一次开始拖动的那个列表），别的窗口的列表、上一次没落下的拖动都不算。
 @MainActor
