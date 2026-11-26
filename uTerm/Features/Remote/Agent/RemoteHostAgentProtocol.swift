@@ -272,6 +272,9 @@ nonisolated enum RemoteHostAppRequest: Codable, Sendable {
     case restoreSessions
     /// 对端在设备上排过这台 Mac 的标签：App 的各窗口照这个顺序排（`TerminalSessionRegistry.arrangeTabs`）。
     case arrangeSessions([UUID])
+    /// 设备请 Mac 在它的 Code 标签页里做一件事（64 号消息）：App 办（`RemoteHostServer.codeTabActions`），回复的
+    /// `sessionID` 是做完之后的那个会话，失败时 `error`。不认这个请求的旧 App 解不开，远控进程当 App 不在。
+    case codeTabAction(RemoteCodeTabAction)
 }
 
 nonisolated struct RemoteHostAppReply: Codable, Sendable {

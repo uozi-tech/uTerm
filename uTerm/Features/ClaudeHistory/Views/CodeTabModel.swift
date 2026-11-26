@@ -311,6 +311,46 @@ final class CodeTabModel {
         return run
     }
 
+    /// 接管这台 Mac 的设备点了「继续」（远控 64 号消息，`resume`）：列表里有这份记录就同 `resume(_:)`（已经在这里跑着就
+    /// 回到它）。设备上看得到、Mac 的列表还没列到的（刚写出来、还没重列）照样起：按工具与会话 ID 现算继续的命令，开在设备给的
+    /// `directory`，记下路径与会话 ID，列表列到它之后就是它那一行（同重启后接回的会话）。没有会话 ID、目录，或这台 Mac 上
+    /// 这种工具不在终端里继续时为 nil。
+    @discardableResult
+    func resume(path: String?, tool: AgentHistoryTool, sessionID: String?, directory: String?) -> Run? {
+        guard let history else { return nil }
+        let key = sessionID.map { AgentHistoryPinKey(tool: tool, sessionID: $0) }
+        let listed = history.files.first { $0.path == path }
+            ?? key.flatMap { key in history.files.first { AgentHistoryPinKey($0) == key } }
+        if let listed { return resume(listed) }
+        if let running = runs.first(where: { run in
+            (path != nil && run.path == path) || (key != nil && run.key == key)
+        }) {
+            selectRun(running.id)
+            return runs.first { $0.id == running.id }
+        }
+        guard let key, let directory,
+              let command = history.source(for: tool)?.resumeCommand(sessionID: key.sessionID, directory: directory),
+              let run = start(command, tool: tool, directory: directory, path: path, title: nil, key: key,
+                              resumesRecord: true) else {
+            return nil
+        }
+        restoredSelection = nil
+        history.select(nil)
+        selectedRunID = run.id
+        return run
+    }
+
+    /// 等宿主给这个标签页接好文件通道、头一趟列表列完（`open` 由宿主的视图出现时调；设备在 Mac 上新开的 Code 标签页要等它）。
+    /// 到点了列表还在列也返回（`resume(path:tool:sessionID:directory:)` 认得出还没列到的记录）；到点了还没接上为 nil。
+    func waitForHistory(timeout: Duration, poll: Duration = .milliseconds(50)) async -> AgentHistoryModel? {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline, !isClosed {
+            if let history, history.phase != .loading { return history }
+            try? await Task.sleep(for: poll)
+        }
+        return isClosed ? nil : history
+    }
+
     /// 侧栏顶上的「＋」：不直接起，右边换成起始页（清掉列表的选中；窄的时候盖着的侧栏收回去）。正跑着的会话不受影响。
     func showNewSessionPage() {
         restoredSelection = nil

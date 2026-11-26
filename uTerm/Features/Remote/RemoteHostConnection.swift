@@ -403,6 +403,9 @@ final class RemoteHostConnection {
         case .openLocalShell:
             guard let request = try? RemoteJSON.decode(RemoteOpenLocalShellRequest.self, from: message.payload) else { return }
             openLocalShell(request)
+        case .codeTabAction:
+            guard let action = try? RemoteJSON.decode(RemoteCodeTabAction.self, from: message.payload) else { return }
+            performCodeTabAction(action)
         case .listLocalWorkspaces:
             guard let request = try? RemoteJSON.decode(RemoteLocalWorkspacesRequest.self, from: message.payload) else { return }
             let reply = RemoteLocalWorkspaces(requestID: request.requestID, home: RemoteLocalShellOpener.realHome,
@@ -476,7 +479,7 @@ final class RemoteHostConnection {
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
              .linkAck, .linkFragment, .programStatus, .terminalSnapshot, .fileReply, .vouchResult, .revokeSiblingResult,
-             .desktopWindowList, .desktopGeometry, .desktopAuthPromptResult, .codeTabs:
+             .desktopWindowList, .desktopGeometry, .desktopAuthPromptResult, .codeTabs, .codeTabActionResult:
             break
         }
     }
@@ -620,6 +623,25 @@ final class RemoteHostConnection {
                 reply = RemoteOpenLocalShellResult(requestID: request.requestID, sessionID: nil, error: failure.message)
             }
             self.link.send(RemoteMessage(.localShellOpened, payload: RemoteJSON.encode(reply)))
+        }
+    }
+
+    /// 设备请 Mac 在它的 Code 标签页里做一件事：交给 `codeTabActions`（可能要先开窗口、开 Code 标签页、等列表），
+    /// 把做完的会话 id 或失败原因回过去。等的这几秒里连接照常收发；新会话随后照常出现在 63 / 20 号推送里。
+    private func performCodeTabAction(_ action: RemoteCodeTabAction) {
+        let device = peerName
+        AppLogger.info("远控：\(device) 请求在 Code 标签页里 \(action.action)", category: RemoteLog.category)
+        Task { [weak self] in
+            guard let actor = self?.server.codeTabActions else { return }
+            let result = await actor.perform(action)
+            guard let self, !self.isClosed else { return }
+            if let error = result.error {
+                AppLogger.info("远控：Code 标签页的 \(action.action) 没做成：\(error)", category: RemoteLog.category)
+            }
+            // 回复里的 requestID 以请求为准（落点没带对也不让设备一直等）。
+            let reply = RemoteCodeTabActionResult(requestID: action.requestID, session: result.session,
+                                                  error: result.session == nil ? result.error : nil)
+            self.link.send(RemoteMessage(.codeTabActionResult, payload: RemoteJSON.encode(reply)))
         }
     }
 
