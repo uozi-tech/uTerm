@@ -501,7 +501,7 @@ private struct ClaudeHistoryList: View {
                     .allowsHitTesting(history.search == nil)
                     .accessibilityHidden(history.search != nil)
                 if let search = history.search {
-                    ClaudeHistorySearchResults(history: history, search: search) { file in
+                    AgentHistorySearchResults(history: history, search: search) { file in
                         // 点开的那份正跑着：看它的记录（停在命中那里），终端还在，切回去就是。
                         guard let code, let run = code.board.run(forSession: file.path) else { return }
                         code.board.focus(run.id)
@@ -722,10 +722,10 @@ private struct ClaudeHistoryList: View {
                     ForEach(groups) { group in
                         let collapsed = history.collapsedGroups.contains(group.id)
                         if AgentHistoryListing.showsHeader(group, in: groups) {
-                            ClaudeHistoryGroupHeader(group: group, collapsed: collapsed,
-                                                     runs: collapsed ? placement.runs(in: group).map {
-                                                         CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport)
-                                                     } : []) {
+                            let runs = collapsed ? placement.runs(in: group) : []
+                            AgentHistoryGroupHeader(group: group, collapsed: collapsed, runs: {
+                                runs.map { CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport) }
+                            }) {
                                 toggle(group.id)
                             }
                             .id(group.id)
@@ -793,9 +793,11 @@ private struct ClaudeHistoryList: View {
                 history.select(file)
             }
         } label: {
-            ClaudeHistoryRow(history: history, file: file, metadata: history.metadata[file.path],
-                             showsProject: grouping != .project || group.kind == .pinned, showsTool: showsTool,
-                             run: run, isSelected: showsItsTerminal || history.selectedFile?.path == file.path)
+            AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
+                                   showsProject: grouping != .project || group.kind == .pinned, showsTool: showsTool,
+                                   isSelected: showsItsTerminal || history.selectedFile?.path == file.path) {
+                if let run { CodeRunStatusMark(run: run) }
+            }
         }
         .buttonStyle(MPressStyle())
         .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true,
@@ -850,7 +852,7 @@ private struct ClaudeHistoryList: View {
         }
         // 某种工具的记录读不出来：别的照常列着，底下说一句。
         ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
-            ClaudeHistoryWarningNote(text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
+            AgentHistoryWarningNote(text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
         }
     }
 }
@@ -906,7 +908,7 @@ struct ClaudeHistoryRowMenu: ViewModifier {
             }
         case .copySessionID:
             Button {
-                if let file { UIPasteboard.general.string = file.sessionID }
+                if let file { AgentHistoryPasteboard.copy(file.sessionID) }
             } label: {
                 Label(AgentHistoryText.copySessionID, systemImage: "doc.on.doc")
             }
@@ -924,57 +926,8 @@ struct ClaudeHistoryRowMenu: ViewModifier {
     }
 }
 
-/// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。项目组的标题是目录名（不翻译），完整路径给读屏。
-private struct ClaudeHistoryGroupHeader: View {
-    let group: AgentHistoryGroup
-    let collapsed: Bool
-    /// 组里跑着的会话的状态（收起时才给）：会话数前面画一个状态点（`CodeRunGroupMark`，同 Mac）。
-    var runs: [CodeRunStatus] = []
-    let toggle: () -> Void
-    @Environment(\.mAccent) private var accent
-
-    var body: some View {
-        let mark = CodeRunGroupMark(runs)
-        Button(action: toggle) {
-            HStack(spacing: 7) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(M.text4)
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .frame(width: 14)
-                if case .tool(let tool) = group.kind {
-                    AgentHistoryToolBadge(tool: tool, size: 16)
-                }
-                Text(AgentHistoryText.groupTitle(group))
-                    .font(M.sans(13.5, weight: .semibold)).foregroundStyle(M.text2)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 6)
-                if let mark {
-                    Circle().fill(dot(mark)).frame(width: 7, height: 7)
-                }
-                Text(verbatim: "\(group.files.count)")
-                    .font(M.mono(12)).foregroundStyle(M.text4)
-            }
-            .padding(.horizontal, 10)
-            .frame(minHeight: 40)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(MPressStyle())
-        .padding(.top, 4)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed, runs: mark)))
-        .accessibilityHint(Text(verbatim: AgentHistoryText.groupHelp(group) ?? ""))
-        .accessibilityAddTraits(.isButton)
-    }
-
-    /// 同行上状态的圆点颜色（`CodeRunStatusMark`）；都没报过状态是灰的。
-    private func dot(_ mark: CodeRunGroupMark) -> Color {
-        if case .program(let record) = mark.status { return WorkspaceTabChip.color(for: record.tone, accent: accent) }
-        return M.text4
-    }
-}
-
 /// 列表、搜索结果里的一句警示（某种工具读不出来、搜索出错）。
-private struct ClaudeHistoryWarningNote: View {
+struct AgentHistoryWarningNote: View {
     let text: String
 
     var body: some View {
@@ -987,207 +940,6 @@ private struct ClaudeHistoryWarningNote: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .accessibilityElement(children: .combine)
-    }
-}
-
-// MARK: - 搜索结果
-
-/// 同 Mac：按会话分组（最近的在前），每组下面是命中的摘要行；点一条打开那份对话并停在那里（窄屏进到对话，返回回到结果）。
-private struct ClaudeHistorySearchResults: View {
-    let history: AgentHistoryModel
-    let search: AgentHistoryModel.Search
-    /// 点开了一条命中（那份记录已经选上）。
-    var onOpened: (AgentHistorySessionFile) -> Void = { _ in }
-
-    var body: some View {
-        if search.sessions.isEmpty, !search.isRunning {
-            VStack(spacing: 0) {
-                excludedNote
-                unsearchedNote
-                emptyState
-            }
-        } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    status
-                    excludedNote
-                    unsearchedNote
-                    ForEach(search.sessions) { session in
-                        group(session)
-                    }
-                    footer
-                }
-                .padding(8)
-            }
-            .mKeepsScrollContentInSafeArea()
-        }
-    }
-
-    /// 有的工具的会话没参与搜索（记录的格式没法在主机上搜）：结果上方说一句。全都不能搜时失败页已经说了，不重复。同 Mac。
-    @ViewBuilder private var excludedNote: some View {
-        let excluded = history.searchExcludedTools
-        if !excluded.isEmpty, search.phase != .failed(AgentHistoryText.searchUnsupported(excluded)) {
-            note(AgentHistoryText.searchUnsupported(excluded))
-        }
-    }
-
-    /// 压缩过的记录没搜（主机上没有解压的工具）：也说一句，免得以为搜全了。
-    @ViewBuilder private var unsearchedNote: some View {
-        if search.unsearched > 0 { note(AgentHistoryText.searchSkippedCompressed(search.unsearched)) }
-    }
-
-    @ViewBuilder private var emptyState: some View {
-        switch search.phase {
-        case .failed(let message):
-            ClaudeHistoryState(icon: "warn", title: String(localized: "无法搜索"), message: message,
-                               actionTitle: String(localized: "重试")) { history.submitSearch() }
-        case .stopped:
-            ClaudeHistoryState(icon: "search", title: AgentHistoryText.searchStopped(search),
-                               message: AgentHistoryText.searchNoResultsDetail,
-                               actionTitle: String(localized: "重试")) { history.submitSearch() }
-        default:
-            ClaudeHistoryState(icon: "search", title: AgentHistoryText.searchNoResults(search.query),
-                               message: AgentHistoryText.searchNoResultsDetail)
-        }
-    }
-
-    @ViewBuilder private var status: some View {
-        if search.isRunning {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(AgentHistoryText.searchProgress(search))
-                    .font(M.sans(12.5)).foregroundStyle(M.text3)
-                    .lineLimit(2)
-                Spacer(minLength: 4)
-                Button(AgentHistoryText.stopSearch) { history.stopSearch() }
-                    .font(M.sans(13.5, weight: .medium))
-                    .frame(minHeight: M.minTarget)
-            }
-            .padding(.horizontal, 6)
-        }
-    }
-
-    @ViewBuilder private var footer: some View {
-        if search.truncated {
-            note(AgentHistoryText.searchTruncated(search.hitCount))
-        } else if search.phase == .stopped {
-            note(AgentHistoryText.searchStopped(search))
-        } else if case .failed(let message) = search.phase {
-            ClaudeHistoryWarningNote(text: message)
-        }
-    }
-
-    private func note(_ text: String) -> some View {
-        // text3 而不是 text4：「哪种工具不参与搜索」这类说明要读得清（text4 压在浅色底上太淡）。
-        Text(text).font(M.sans(12.5)).foregroundStyle(M.text3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12).padding(.vertical, 4)
-    }
-
-    /// 结果里不止一种工具：每个会话的第二行最前面写工具名（同列表的行）。
-    private var showsTool: Bool { AgentHistoryListing.mixesTools(search.sessions.map(\.file)) }
-
-    private func group(_ session: AgentHistorySearchSession) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
-                    .font(M.sans(15, weight: .semibold)).foregroundStyle(M.text)
-                    .lineLimit(1)
-                AgentSessionTimeText(history: history, file: session.file) { activity in
-                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all,
-                                                         showsTool: showsTool, activity: activity)
-                }
-                .font(M.sans(12.5)).foregroundStyle(M.text3)
-                .lineLimit(1)
-            }
-            .padding(.horizontal, 12).padding(.bottom, 2)
-            ForEach(session.hits) { hit in
-                Button {
-                    history.openHit(hit, in: session)
-                    onOpened(session.file)
-                } label: {
-                    ClaudeHistorySearchHitRow(hit: hit, tool: session.file.tool, isSelected: isOpen(hit, in: session))
-                }
-                .buttonStyle(MPressStyle())
-            }
-            if session.hasMoreHits {
-                note(AgentHistoryText.sessionMoreHits(session.hits.count))
-            }
-        }
-    }
-
-    private func isOpen(_ hit: AgentHistorySearchHit, in session: AgentHistorySearchSession) -> Bool {
-        history.selectedFile?.path == session.file.path && history.transcript?.highlightedItemID == hit.itemID
-    }
-}
-
-private struct ClaudeHistorySearchHitRow: View {
-    let hit: AgentHistorySearchHit
-    /// 回答的一方叫什么（Codex 的回答不标「Claude」）。
-    let tool: AgentHistoryTool
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(AgentHistoryText.roleLabel(hit.role, tool: tool))
-                    .font(M.sans(11.5, weight: .semibold)).foregroundStyle(M.text4)
-                Text(AgentHistorySnippetText.attributed(hit.snippet, match: M.accent))
-                    .font(M.sans(14)).foregroundStyle(M.text2)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .frame(minHeight: M.minTarget)
-        .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
-            .fill(isSelected ? M.rowSelected : Color.clear))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// 会话一行：标题，第二行（组里不止一种工具时）工具名 · 时间 · 大小 · 分支 ·（不按项目分组时）项目。行前不画工具标记（同 Mac）。
-private struct ClaudeHistoryRow: View {
-    let history: AgentHistoryModel
-    let file: AgentHistorySessionFile
-    let metadata: AgentHistorySessionMetadata?
-    let showsProject: Bool
-    /// 组里不止一种工具：第二行最前面写工具名。
-    var showsTool = false
-    /// 在 Code 标签页里继续着的那个 run：第二行前面是它此刻的状态（`CodeRunStatusMark`）。
-    var run: CodeRunBoard<TermTab>.Run? = nil
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(AgentHistoryText.sessionTitle(file, metadata: metadata))
-                    .font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                HStack(spacing: 6) {
-                    if let run { CodeRunStatusMark(run: run) }
-                    AgentSessionTimeText(history: history, file: file) { activity in
-                        AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
-                                                         showsTool: showsTool, activity: activity)
-                    }
-                    .font(M.sans(12.5)).foregroundStyle(M.text3)
-                    .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            MIcon(name: "chev", size: 12, color: M.text4, weight: .semibold)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
-            .fill(isSelected ? M.rowSelected : Color.clear))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -1324,11 +1076,11 @@ private struct ClaudeTranscriptView: View {
         HStack(spacing: 6) {
             MMenu {
                 if transcript.subagent == nil {
-                    Button { UIPasteboard.general.string = transcript.file.sessionID } label: {
+                    Button { AgentHistoryPasteboard.copy(transcript.file.sessionID) } label: {
                         Label("拷贝会话 ID", systemImage: "number")
                     }
                 }
-                Button { UIPasteboard.general.string = transcript.plainText } label: {
+                Button { AgentHistoryPasteboard.copy(transcript.plainText) } label: {
                     Label("拷贝已加载的对话", systemImage: "doc.on.doc")
                 }
             } label: {
@@ -1479,25 +1231,54 @@ struct AgentNewMessagesPill: View {
     }
 }
 
-// MARK: - 对话正文的平台一层（Mac 在 `AgentHistoryBrowser.swift` 里有同名的一份，见 `AgentTranscriptMessages`）
+// MARK: - 共用视图的平台一层（Mac 在 `AgentHistoryBrowser.swift` 里有同名的一份，见 `AgentTranscriptMessages`、`AgentHistoryListViews`）
+
+/// 空状态。
+struct AgentHistoryStateView: View {
+    let icon: AgentHistoryStateIcon
+    let title: String
+    let detail: String
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        ClaudeHistoryState(icon: icon == .warning ? "warn" : "search", title: title, message: detail,
+                           actionTitle: actionTitle, action: action)
+    }
+}
+
+/// 组标题上组里跑着的会话的状态点：同行上状态的圆点颜色（`CodeRunStatusMark`）；都没报过状态是灰的。
+struct AgentHistoryRunMarkDot: View {
+    let mark: CodeRunGroupMark
+    @Environment(\.mAccent) private var accent
+
+    var body: some View {
+        Circle().fill(color).frame(width: 7, height: 7)
+    }
+
+    private var color: Color {
+        if case .program(let record) = mark.status { return WorkspaceTabChip.color(for: record.tone, accent: accent) }
+        return M.text4
+    }
+}
 
 extension View {
     /// 长按「拷贝文字」（文字选择在手机上不好拖到整段）。文字点了才取。
     func agentTranscriptCopyMenu(_ text: @escaping () -> String) -> some View {
         mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
-            Button { UIPasteboard.general.string = text() } label: {
+            Button { AgentHistoryPasteboard.copy(text()) } label: {
                 Label("拷贝文字", systemImage: "doc.on.doc")
             }
         }
     }
 
     /// 可展开那一行的按钮：按下缩一点、轻震。
-    func agentTranscriptPressStyle() -> some View {
+    func agentHistoryPressStyle() -> some View {
         buttonStyle(MPressStyle())
     }
 
     /// 横屏时侧边安全区里点不到：滚动内容留在安全区内。
-    func agentTranscriptScrollChrome() -> some View {
+    func agentHistoryScrollChrome() -> some View {
         mKeepsScrollContentInSafeArea()
     }
 }

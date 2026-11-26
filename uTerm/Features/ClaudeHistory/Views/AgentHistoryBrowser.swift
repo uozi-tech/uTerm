@@ -442,8 +442,9 @@ struct AgentHistorySessionList: View {
                         ForEach(groups) { group in
                             let collapsed = history.collapsedGroups.contains(group.id)
                             if AgentHistoryListing.showsHeader(group, in: groups) {
+                                let statuses = collapsed ? placement.runs(in: group).map(\.status) : []
                                 AgentHistoryGroupHeader(group: group, collapsed: collapsed,
-                                                        runs: collapsed ? placement.runs(in: group).map(\.status) : []) {
+                                                        runs: { statuses.map { $0.read() } }) {
                                     toggle(group.id)
                                 }
                                 .id(group.id)
@@ -503,8 +504,9 @@ struct AgentHistorySessionList: View {
         let base = AgentHistorySessionRow(history: history, file: file, metadata: history.metadata[file.path],
                                           showsProject: grouping != .project || group.kind == .pinned,
                                           showsTool: showsTool,
-                                          isSelected: history.selectedFile?.path == file.path || run?.isSelected == true,
-                                          runStatus: run?.status)
+                                          isSelected: history.selectedFile?.path == file.path || run?.isSelected == true) {
+            if let status = run?.status { AgentHistoryRunStatusTag(status: status) }
+        }
             .onTapGesture {
                 if let run, let running { running.onSelect(run.id) } else { history.select(file) }
             }
@@ -595,56 +597,6 @@ struct AgentHistorySessionList: View {
 }
 
 /// 组标题：折叠箭头、标题、会话数。点一下折起 / 展开。收起时组里有跑着的会话，会话数前面一个状态点（`CodeRunGroupMark`）。
-private struct AgentHistoryGroupHeader: View {
-    let group: AgentHistoryGroup
-    let collapsed: Bool
-    /// 组里跑着的会话的状态（收起时才给）。在这里读：状态变了只重画组标题。
-    var runs: [AgentHistoryRunStatus] = []
-    let toggle: () -> Void
-
-    var body: some View {
-        let mark = CodeRunGroupMark(runs.map { $0.read() })
-        Button(action: toggle) {
-            HStack(spacing: 5) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(UD.text4)
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .frame(width: 10)
-                Text(AgentHistoryText.groupTitle(group))
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(UD.text2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 4)
-                if let mark {
-                    Circle().fill(Self.dot(mark)).frame(width: 6, height: 6)
-                        .help(Text(verbatim: AgentHistoryText.groupRunsNote(mark)))
-                }
-                Text(verbatim: "\(group.files.count)")
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundStyle(UD.text4)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.udPlain)
-        .padding(.top, 4)
-        .help(AgentHistoryText.groupHelp(group).map { Text(verbatim: $0) } ?? Text(verbatim: ""))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(AgentHistoryText.groupAccessibility(group, collapsed: collapsed, runs: mark)))
-        .accessibilityAddTraits(.isButton)
-    }
-
-    /// 同行上状态的圆点颜色（`AgentHistoryRunStatusTag`）；都没报过状态是灰的。
-    static func dot(_ mark: CodeRunGroupMark) -> Color {
-        if case .program(let record) = mark.status { return record.tabDot }
-        return UD.text4
-    }
-}
-
 // MARK: - 运行中
 
 /// 跑着的会话行上的状态（`CodeRunStatus`）：程序报的状态用终端标签页上同一套圆点颜色与文字（`ProgramStatusRecord.tabDot` /
@@ -812,10 +764,7 @@ private struct AgentHistoryRowMenu: ViewModifier {
         case .pin(let isPinned):
             Button(AgentHistoryText.pinAction(isPinned: isPinned)) { pins?.toggle(file) }
         case .copySessionID:
-            Button(AgentHistoryText.copySessionID) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(file.sessionID, forType: .string)
-            }
+            Button(AgentHistoryText.copySessionID) { AgentHistoryPasteboard.copy(file.sessionID) }
         case .delete:
             Button(AgentHistoryText.deleteSession, role: .destructive) { onDelete(file) }
         case .endSession:
@@ -1110,210 +1059,6 @@ private struct AgentHistoryPinInsertionLine: View {
     }
 }
 
-// MARK: - 搜索结果
-
-/// 列表区的搜索结果：按会话分组（最近的在前），每组下面是命中的摘要行，点一条打开那份对话并停在那里。
-struct AgentHistorySearchResults: View {
-    let history: AgentHistoryModel
-    let search: AgentHistoryModel.Search
-
-    var body: some View {
-        if search.sessions.isEmpty, !search.isRunning {
-            VStack(spacing: 0) {
-                excludedNote
-                unsearchedNote
-                emptyState
-            }
-        } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    status
-                    excludedNote
-                    unsearchedNote
-                    ForEach(search.sessions) { session in
-                        group(session)
-                    }
-                    footer
-                }
-                .padding(6)
-            }
-            .scrollIndicators(.never)
-        }
-    }
-
-    /// 有的工具的会话没参与搜索（记录的格式没法在主机上搜）：结果上方说一句。
-    @ViewBuilder private var excludedNote: some View {
-        let excluded = history.searchExcludedTools
-        if !excluded.isEmpty, search.phase != .failed(AgentHistoryText.searchUnsupported(excluded)) {
-            note(AgentHistoryText.searchUnsupported(excluded))
-        }
-    }
-
-    /// 压缩过的记录没搜（主机上没有解压的工具）：也说一句，免得以为搜全了。
-    @ViewBuilder private var unsearchedNote: some View {
-        if search.unsearched > 0 { note(AgentHistoryText.searchSkippedCompressed(search.unsearched)) }
-    }
-
-    @ViewBuilder private var emptyState: some View {
-        switch search.phase {
-        case .failed(let message):
-            RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法搜索"), detail: message) {
-                UDButton(title: String(localized: "重试")) { history.submitSearch() }
-            }
-        case .stopped:
-            RemoteMacStateView(systemImage: "magnifyingglass", title: AgentHistoryText.searchStopped(search),
-                               detail: AgentHistoryText.searchNoResultsDetail) {
-                UDButton(title: String(localized: "重试")) { history.submitSearch() }
-            }
-        default:
-            RemoteMacStateView(systemImage: "magnifyingglass", title: AgentHistoryText.searchNoResults(search.query),
-                               detail: AgentHistoryText.searchNoResultsDetail)
-        }
-    }
-
-    /// 顶上：正在搜（进度 + 停止）。
-    @ViewBuilder private var status: some View {
-        if search.isRunning {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text(AgentHistoryText.searchProgress(search))
-                    .font(UD.caption)
-                    .foregroundStyle(UD.text3)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Button(AgentHistoryText.stopSearch) { history.stopSearch() }
-                    .buttonStyle(.link)
-                    .font(.system(size: 11.5))
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-        }
-    }
-
-    /// 末尾：到了上限 / 停了 / 出错。
-    @ViewBuilder private var footer: some View {
-        if search.truncated {
-            note(AgentHistoryText.searchTruncated(search.hitCount))
-        } else if search.phase == .stopped {
-            note(AgentHistoryText.searchStopped(search))
-        } else if case .failed(let message) = search.phase {
-            SettingsInlineNote(tone: .warning, text: message)
-                .padding(.horizontal, 4)
-        }
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text)
-            .font(UD.caption)
-            .foregroundStyle(UD.text4)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-    }
-
-    /// 结果里不止一种工具：每个会话的第二行最前面写工具名（同列表的行）。
-    private var showsTool: Bool { AgentHistoryListing.mixesTools(search.sessions.map(\.file)) }
-
-    private func group(_ session: AgentHistorySearchSession) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(AgentHistoryText.sessionTitle(session.file, metadata: session.metadata))
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(UD.text)
-                    .lineLimit(1)
-                AgentSessionTimeText(history: history, file: session.file) { activity in
-                    AgentHistoryText.searchSessionDetail(session, showsProject: history.scope == .all,
-                                                         showsTool: showsTool, activity: activity)
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-                .lineLimit(1)
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 2)
-            .padding(.bottom, 2)
-            ForEach(session.hits) { hit in
-                AgentHistorySearchHitRow(hit: hit, tool: session.file.tool, isSelected: isOpen(hit, in: session))
-                    .onTapGesture { history.openHit(hit, in: session) }
-            }
-            if session.hasMoreHits {
-                note(AgentHistoryText.sessionMoreHits(session.hits.count))
-            }
-        }
-    }
-
-    private func isOpen(_ hit: AgentHistorySearchHit, in session: AgentHistorySearchSession) -> Bool {
-        history.selectedFile?.path == session.file.path && history.transcript?.highlightedItemID == hit.itemID
-    }
-}
-
-/// 一条命中：谁说的 + 前后文，命中的字加粗着色。
-private struct AgentHistorySearchHitRow: View {
-    let hit: AgentHistorySearchHit
-    let tool: AgentHistoryTool
-    let isSelected: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(AgentHistoryText.roleLabel(hit.role, tool: tool))
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(UD.text4)
-            Text(AgentHistorySnippetText.attributed(hit.snippet, match: UD.accent))
-                .font(.system(size: 12))
-                .foregroundStyle(UD.text2)
-                .lineLimit(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? UD.rowSelected : Color.clear))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// 会话一行：标题，第二行（组里不止一种工具时）工具名 · 时间 · 大小 · 分支 ·（不按项目分组时）项目。
-/// 行前不画工具标记：一组里只有一种工具时它是噪音，混着的时候第二行的字说得清。
-private struct AgentHistorySessionRow: View {
-    let history: AgentHistoryModel
-    let file: AgentHistorySessionFile
-    let metadata: AgentHistorySessionMetadata?
-    let showsProject: Bool
-    /// 组里不止一种工具：第二行最前面写工具名。
-    var showsTool = false
-    let isSelected: Bool
-    /// 在 Code 标签页里跑着（`AgentHistoryRunning`）：第二行前面是它此刻的状态。
-    var runStatus: AgentHistoryRunStatus? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(UD.text)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 5) {
-                if let runStatus { AgentHistoryRunStatusTag(status: runStatus) }
-                AgentSessionTimeText(history: history, file: file) { activity in
-                    AgentHistoryText.sessionSubtitle(file, metadata: metadata, showsProject: showsProject,
-                                                     showsTool: showsTool, activity: activity)
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-                .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? UD.rowSelected : Color.clear))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-
-    private var title: String { AgentHistoryText.sessionTitle(file, metadata: metadata) }
-}
-
 // MARK: - 对话
 
 struct AgentTranscriptPane: View {
@@ -1546,14 +1291,6 @@ struct AgentNewMessagesPill: View {
     }
 }
 
-enum AgentHistoryPasteboard {
-    static func copy(_ text: String) {
-        let board = NSPasteboard.general
-        board.clearContents()
-        board.setString(text, forType: .string)
-    }
-}
-
 /// 记录里的一段 Markdown：第一次排版就是解析好的样子。
 ///
 /// 不用 `StreamingMarkdownView`：它在 `onAppear` 里才解析，没出现过的行懒栈都按空文档量高（几乎是 0），
@@ -1605,7 +1342,47 @@ struct AgentSubagentEntry: View {
     }
 }
 
-// MARK: - 对话正文的平台一层（iOS 在 `ClaudeHistoryTab.swift` 里有同名的一份，见 `AgentTranscriptMessages`）
+// MARK: - 共用视图的平台一层（iOS 在 `ClaudeHistoryTab.swift` 里有同名的一份，见 `AgentTranscriptMessages`、`AgentHistoryListViews`）
+
+/// 空状态。
+struct AgentHistoryStateView: View {
+    let icon: AgentHistoryStateIcon
+    let title: String
+    let detail: String
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        RemoteMacStateView(systemImage: icon == .warning ? "exclamationmark.triangle" : "magnifyingglass",
+                           title: title, detail: detail) {
+            if let actionTitle, let action { UDButton(title: actionTitle, action: action) }
+        }
+    }
+}
+
+/// 列表、搜索结果里的一句警示（搜索出错）。
+struct AgentHistoryWarningNote: View {
+    let text: String
+
+    var body: some View {
+        SettingsInlineNote(tone: .warning, text: text)
+            .padding(.horizontal, 4)
+    }
+}
+
+/// 组标题上组里跑着的会话的状态点：同行上状态的圆点颜色（`AgentHistoryRunStatusTag`）；都没报过状态是灰的。
+struct AgentHistoryRunMarkDot: View {
+    let mark: CodeRunGroupMark
+
+    var body: some View {
+        Circle().fill(color).frame(width: 6, height: 6)
+    }
+
+    private var color: Color {
+        if case .program(let record) = mark.status { return record.tabDot }
+        return UD.text4
+    }
+}
 
 extension View {
     /// 右键「拷贝文字」。文字点了才取。
@@ -1615,12 +1392,12 @@ extension View {
         }
     }
 
-    /// 可展开那一行的按钮：不带按下的效果（悬停底色由行自己画）。
-    func agentTranscriptPressStyle() -> some View {
+    /// 行、可展开那一行的按钮：不带按下的效果（悬停、选中的底色由行自己画）。
+    func agentHistoryPressStyle() -> some View {
         buttonStyle(.udPlain)
     }
 
-    func agentTranscriptScrollChrome() -> some View { self }
+    func agentHistoryScrollChrome() -> some View { self }
 }
 
 /// 拖动置顶时跟着光标的那一行：不透明、带阴影的卡片（不然字直接叠在别的行上，两行重影读不清）。

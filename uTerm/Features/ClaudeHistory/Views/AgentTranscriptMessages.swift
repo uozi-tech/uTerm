@@ -7,7 +7,7 @@ import UDesignKit
 /// 标题行、顶上的横条各端自己画（Mac 是 `AgentTranscriptPane`，iOS 是 `ClaudeTranscriptView`）。两端的差别只有
 /// 尺寸与几处交互，放在 `AgentTranscriptStyle`；真正不同的几个小件两端各有一份同名的：
 /// `AgentTranscriptMarkdown`（两端的 Markdown 排版不是同一套）、`AgentSubagentEntry`、`AgentNewMessagesPill`，
-/// 以及 `agentTranscriptCopyMenu` / `agentTranscriptPressStyle` / `agentTranscriptScrollChrome` 三个修饰。
+/// 以及 `agentTranscriptCopyMenu` / `agentHistoryPressStyle` / `agentHistoryScrollChrome` 三个修饰。
 struct AgentTranscriptMessages<Top: View, Bottom: View>: View {
     let transcript: AgentTranscriptModel
     let onOpenSubagent: (AgentSubagentLink) -> Void
@@ -54,7 +54,7 @@ struct AgentTranscriptMessages<Top: View, Bottom: View>: View {
                 .padding(.top, style.topPadding)
                 .frame(maxWidth: .infinity)
             }
-            .agentTranscriptScrollChrome()
+            .agentHistoryScrollChrome()
             // 打开时停在最后一条；内容不满一屏时从顶上排起——只写 `.bottom` 的话短对话会贴着底、上面空一大片。
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .modifier(AgentTranscriptGrowthAnchor(enabled: style.anchorsGrowthToEnd, reachedEnd: transcript.reachedEnd))
@@ -377,7 +377,7 @@ private struct AgentDisclosureLine<Detail: View>: View {
             } label: {
                 header
             }
-            .agentTranscriptPressStyle()
+            .agentHistoryPressStyle()
             .onHover { hovering = $0 }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(isExpandable ? .isButton : [])
