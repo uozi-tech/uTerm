@@ -18,6 +18,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.startupBehavior, "startupBehavior"),
         (DefaultsKey.restoreTerminalSession, "restoreTerminalSession"),
         (DefaultsKey.editorAutoSave, "editorAutoSave"),
+        (DefaultsKey.markdownViewMode, "markdownViewMode"),
         (DefaultsKey.sshConnectTimeout, "sshConnectTimeout"),
         (DefaultsKey.sshHostKeyPolicy, "sshHostKeyPolicy"),
         (DefaultsKey.logLevel, "logLevel"),

@@ -23,6 +23,8 @@ nonisolated enum DefaultsKey {
     static let restoreTerminalSession = "restoreTerminalSession"
     /// 编辑远程文件后自动写回主机（默认开）。
     static let editorAutoSave = "editorAutoSave"
+    /// Markdown 标签看预览还是源码（`MarkdownViewMode` 的 rawValue）。
+    static let markdownViewMode = "markdownViewMode"
     static let sshConnectTimeout = "sshConnectTimeout"
     static let sshHostKeyPolicy = "sshHostKeyPolicy"
     static let logLevel = "logLevel"
