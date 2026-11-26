@@ -469,6 +469,44 @@ extension AgentHistoryRowMenuContent where Extras == EmptyView {
     }
 }
 
+// MARK: - 删除
+
+/// 「删除会话…」的确认框和删不掉时的提示，两端共用。`file` 非 nil 时弹出确认。
+struct AgentHistoryDeletePrompt: ViewModifier {
+    let history: AgentHistoryModel
+    @Binding var file: AgentHistorySessionFile?
+    @State private var failure: String?
+
+    func body(content: Content) -> some View {
+        content
+            .alert(AgentHistoryText.deleteConfirmTitle, isPresented: Binding(get: { file != nil },
+                                                                            set: { if !$0 { file = nil } }),
+                   presenting: file) { target in
+                Button(AgentHistoryText.deleteConfirmButton, role: .destructive) { delete(target) }
+                Button(String(localized: "取消"), role: .cancel) {}
+            } message: { target in
+                Text(AgentHistoryText.deleteConfirmMessage(
+                    title: AgentHistoryText.sessionTitle(target, metadata: history.metadata[target.path])))
+            }
+            .alert(AgentHistoryText.deleteFailedTitle, isPresented: Binding(get: { failure != nil },
+                                                                           set: { if !$0 { failure = nil } })) {
+                Button(String(localized: "好")) {}
+            } message: {
+                Text(verbatim: failure ?? "")
+            }
+    }
+
+    private func delete(_ target: AgentHistorySessionFile) {
+        Task {
+            do {
+                try await history.delete(target)
+            } catch {
+                failure = FriendlyError.describe(error)
+            }
+        }
+    }
+}
+
 // MARK: - 重命名
 
 /// 「重命名…」的输入框和改不了时的提示，两端共用。`file` 非 nil 时弹出，输入框里先放现在的名字。

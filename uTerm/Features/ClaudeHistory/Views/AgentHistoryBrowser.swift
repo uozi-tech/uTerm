@@ -179,8 +179,6 @@ struct AgentHistorySessionList: View {
     @State private var pendingRunReveal: String?
     /// 点了「删除会话…」、等确认的那一份。
     @State private var pendingDelete: AgentHistorySessionFile?
-    /// 删不掉时的原因。
-    @State private var deleteFailure: String?
     /// 点了「重命名…」的那一份（`AgentHistoryRenamePrompt`）。
     @State private var pendingRename: AgentHistorySessionFile?
 
@@ -215,31 +213,8 @@ struct AgentHistorySessionList: View {
         .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
         // 别的窗口改了置顶：新置顶的那几个先读出来。
         .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
-        .alert(AgentHistoryText.deleteConfirmTitle, isPresented: Binding(get: { pendingDelete != nil },
-                                                                        set: { if !$0 { pendingDelete = nil } }),
-               presenting: pendingDelete) { file in
-            Button(AgentHistoryText.deleteConfirmButton, role: .destructive) { delete(file) }
-            Button(String(localized: "取消"), role: .cancel) {}
-        } message: { file in
-            Text(AgentHistoryText.deleteConfirmMessage(title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])))
-        }
-        .alert(AgentHistoryText.deleteFailedTitle, isPresented: Binding(get: { deleteFailure != nil },
-                                                                       set: { if !$0 { deleteFailure = nil } })) {
-            Button(String(localized: "好")) {}
-        } message: {
-            Text(verbatim: deleteFailure ?? "")
-        }
+        .modifier(AgentHistoryDeletePrompt(history: history, file: $pendingDelete))
         .modifier(AgentHistoryRenamePrompt(history: history, file: $pendingRename))
-    }
-
-    private func delete(_ file: AgentHistorySessionFile) {
-        Task {
-            do {
-                try await history.delete(file)
-            } catch {
-                deleteFailure = FriendlyError.describe(error)
-            }
-        }
     }
 
     private var header: some View {
