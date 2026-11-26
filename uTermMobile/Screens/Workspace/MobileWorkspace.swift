@@ -144,6 +144,12 @@ private struct RemoteFollow {
     var closedCodeTabs: Set<UUID> = []
 }
 
+/// 镜像 Mac 的 Code 标签页第一步的结果（见 `follow`）：等第二步加进来的会话，和不开成终端标签页的会话。
+private struct CodeMirrorRound {
+    var pending: [PendingCodeRuns] = []
+    var excluded: Set<UUID> = []
+}
+
 /// 镜像 Mac 的 Code 标签页时第一步做完、等第二步加进来的会话（见 `follow`）。
 private struct PendingCodeRuns {
     let tab: ClaudeHistoryTab
@@ -182,6 +188,10 @@ final class MobileWorkspace {
     @ObservationIgnored private var frontOnOpen: MRemoteSource?
     /// 终端里的程序请求预览一个文件（`TerminalFilePreview`）：工作区屏建预览标签（它有建 SFTP 会话要的容器）。
     @ObservationIgnored var onFilePreviewRequest: ((TermTab, String) -> Void)?
+    /// 按 `ServerProfile.id` 找手机上已保存的主机（经 iCloud 同步，和 Mac 上是同一个 id）：接管的 Mac 上 SSH 主机的
+    /// Code 标签页据此镜像成手机上那台主机的 Code 标签页（`follow`），远控终端长按「历史会话」据此开那台主机的（`showCode`）。
+    /// 工作区屏注入；没注入（测试）时一台都找不到。
+    @ObservationIgnored var savedHost: @MainActor (UUID) -> ServerProfile? = { _ in nil }
 
     /// 左右并排至少要这么宽（每格约 280pt，放得下一屏可用的终端）。
     nonisolated static let sideBySideMinWidth: CGFloat = 560
@@ -273,8 +283,8 @@ final class MobileWorkspace {
     /// 接着 Mac 上这个终端的终端与它所在的标签：远控终端标签页，或者镜像着那台 Mac 的 Code 标签页里的会话。
     func remoteTerminal(_ source: MRemoteSource) -> (tabID: UUID, term: TermTab)? {
         if let tab = existing(remote: source), let term = tab.terminal { return (tab.id, term) }
-        if let code = existingHistory(remoteMac: source.client), let term = code.mirroredTerminal(session: source.sessionID) {
-            return (code.id, term)
+        for code in codeTabs(of: source.client) {
+            if let term = code.mirroredTerminal(session: source.sessionID) { return (code.id, term) }
         }
         return nil
     }
@@ -289,9 +299,20 @@ final class MobileWorkspace {
         }
     }
 
-    /// 镜像着这台 Mac 的 Code 标签页的那个标签页。
+    /// 镜像着这台 Mac 本机那个 Code 标签页的标签页。
     func mirroredCodeTab(of client: RemoteMacClient) -> ClaudeHistoryTab? {
         existingHistory(remoteMac: client).flatMap { $0.mirroredMacTabID != nil ? $0 : nil }
+    }
+
+    /// 接着这台 Mac 的 Code 标签页：读它的记录的那一个（`remoteMac`），加上正镜像着它上面 SSH 主机 Code 标签页的
+    /// 直连主机标签页（`mirrorClient`）。
+    private func codeTabs(of client: RemoteMacClient) -> [ClaudeHistoryTab] {
+        tabs.compactMap(\.history).filter { $0.remoteMac === client || ($0.remoteMac == nil && $0.mirroringClient === client) }
+    }
+
+    /// 其中正镜像着 Mac 上一个 Code 标签页的。
+    private func mirroringCodeTabs(of client: RemoteMacClient) -> [ClaudeHistoryTab] {
+        codeTabs(of: client).filter { $0.mirroredMacTabID != nil }
     }
 
     /// 这台 Mac 的文件标签（一台 Mac 至多一个）。
@@ -302,11 +323,11 @@ final class MobileWorkspace {
         }
     }
 
-    /// 接着这台 Mac 的全部标签：它上面的终端，加上它的文件标签与历史会话标签。
+    /// 接着这台 Mac 的全部标签：它上面的终端，加上它的文件标签与 Code 标签页（镜像着它上面 SSH 主机的也算）。
     func remoteTabIDs(of client: RemoteMacClient) -> Set<UUID> {
         var ids = Set(terminalTabs.filter { $0.remote?.client === client }.map(\.id))
         if let files = existing(remoteFiles: client) { ids.insert(files.id) }
-        if let history = existingHistory(remoteMac: client) { ids.insert(history.id) }
+        ids.formUnion(codeTabs(of: client).map(\.id))
         return ids
     }
 
@@ -334,17 +355,44 @@ final class MobileWorkspace {
         return history
     }
 
-    /// 终端标签长按「历史会话」：切到 / 新开这台主机（远控标签是那台 Mac）的 Code 标签页，开在聚焦格；直连主机定位到
-    /// 终端当前目录那一组（已经开着的再定位一次，可能已经滚走、折起来了）。不能读历史会话的标签（体验主机、老版本的 Mac）返回 nil。
+    /// 终端标签长按「历史会话」：切到 / 新开这台主机的 Code 标签页，开在聚焦格；直连主机定位到终端当前目录那一组（已经开着的
+    /// 再定位一次，可能已经滚走、折起来了）。远控标签在 Mac 本机上的读那台 Mac 的；在 Mac 的 SSH 主机上的开手机上那台主机的
+    /// （经手机自己的 SSH）。不能读历史会话的标签（体验主机、老版本的 Mac、手机上没有的 SSH 主机，见 `offersCode`）返回 nil。
     @discardableResult
     func showCode(for term: TermTab, container: ModelContainer) -> ClaudeHistoryTab? {
-        guard term.offersClaudeHistory else { return nil }
-        if let remote = term.remote { return openHistory(ClaudeHistoryTab(pairedMac: remote.client)) }
+        guard offersCode(for: term) else { return nil }
+        if let remote = term.remote {
+            guard let host = remoteHost(of: term, remote: remote) else {
+                return openHistory(ClaudeHistoryTab(pairedMac: remote.client))
+            }
+            return openHistory(ClaudeHistoryTab(server: host, directory: nil, container: container))
+        }
         let directory = term.claudeHistoryDirectory
         let fresh = ClaudeHistoryTab(server: term.host, directory: directory, container: container)
         let opened = openHistory(fresh)
         if opened !== fresh { opened.reveal(directory: directory) }
         return opened
+    }
+
+    /// 这个终端标签长按出不出「历史会话」：直连主机的照 `TermTab.offersClaudeHistory`；远控终端在 Mac 本机上的要那台 Mac
+    /// 能读文件，在 Mac 的 SSH 主机上的要手机上也有这台主机——读的是那台主机上的记录，不能拿 Mac 本机的充数。
+    func offersCode(for term: TermTab) -> Bool {
+        guard let remote = term.remote, remoteServerID(of: term, remote: remote) != RemoteConstants.localShellServerID else {
+            return term.offersClaudeHistory
+        }
+        return remoteHost(of: term, remote: remote) != nil
+    }
+
+    /// 远控终端在 Mac 上的哪台主机（`RemoteSessionInfo.serverID`；断线时用开标签时记下的）。
+    private func remoteServerID(of term: TermTab, remote: MRemoteSource) -> UUID {
+        remote.sessionInfo?.serverID ?? term.host.id
+    }
+
+    /// 远控终端在 Mac 的 SSH 主机上、手机上也有这台主机：那台主机。在 Mac 本机上、手机上没有的为 nil。
+    private func remoteHost(of term: TermTab, remote: MRemoteSource) -> ServerProfile? {
+        let serverID = remoteServerID(of: term, remote: remote)
+        guard serverID != RemoteConstants.localShellServerID else { return nil }
+        return savedHost(serverID)
     }
 
     /// 接管一台 Mac：每个终端一个标签，开在聚焦格末尾，`focus` 放到前台。之后它新开的终端由 `follow` 接上。
@@ -355,16 +403,18 @@ final class MobileWorkspace {
     func takeOver(_ takeover: MRemoteTakeover) -> RemoteTabChanges {
         let client = takeover.client
         follows.removeAll { $0.client === client }
-        let excluded = client.codeRunSessionIDs
-        let sessionIDs = takeover.sessionIDs.filter { !excluded.contains($0) }
-        follows.append(RemoteFollow(client: client, state: RemoteTakeoverState(takingOver: sessionIDs)))
+        follows.append(RemoteFollow(client: client, state: RemoteTakeoverState(takingOver: [])))
         var changes = RemoteTabChanges()
         let listed = Set(takeover.sessionIDs).union(client.listedSessionIDs ?? [])
-        let pending = beginCodeTabMirror(client, listed: listed, changes: &changes)
+        let mirror = beginCodeTabMirror(client, listed: listed, changes: &changes)
+        let sessionIDs = takeover.sessionIDs.filter { !mirror.excluded.contains($0) }
+        if let index = follows.firstIndex(where: { $0.client === client }) {
+            follows[index].state = RemoteTakeoverState(takingOver: sessionIDs)
+        }
         let opened = openRemoteTabs(client, sessionIDs: sessionIDs, activate: true)
         changes.opened += opened.opened
         changes.removed += opened.removed
-        finishCodeTabMirror(pending, client: client, changes: &changes)
+        finishCodeTabMirror(mirror.pending, client: client, changes: &changes)
         arrangeRemoteTabs(of: client, order: takeover.order)
         if let front = remoteTerminal(MRemoteSource(client: client, sessionID: takeover.focus)) {
             activate(front.tabID)
@@ -378,8 +428,13 @@ final class MobileWorkspace {
     /// 接管中的 Mac。Mac 上的终端全关了也算，之后新开的还要接上；手动断开才结束（`stopFollowing`）。
     var followedClients: [RemoteMacClient] { follows.map(\.client) }
 
+    /// 不再跟着这台 Mac。镜像着它上面 SSH 主机 Code 标签页、又不跟着收掉的直连主机标签页（用户自己开的、里面有在这边起的
+    /// 会话，见 `closesWithMirror`）只停镜像：再没人跟着 Mac 推来的变化，留着镜像就是一张不动的画面。
     func stopFollowing(_ client: RemoteMacClient) {
         follows.removeAll { $0.client === client }
+        for code in mirroringCodeTabs(of: client) where code.remoteMac == nil && !code.closesWithMirror {
+            code.stopMirroring()
+        }
     }
 
     /// 用户手动断开整台 Mac：不再跟进，返回这台 Mac 的全部标签，由工作区屏关掉并清理。
@@ -391,15 +446,15 @@ final class MobileWorkspace {
     /// 用户亲手关掉这台 Mac 的最后一个标签，等于断开全部，不再跟进。Mac 那边关光的不走这里。
     /// `tab` 是刚从工作区摘下的标签。
     func stopFollowingIfLastTab(_ tab: MWorkTab) {
-        let mirroring = tab.history.flatMap { $0.mirroredMacTabID != nil ? $0.remoteMac : nil }
-        guard let client = tab.terminal?.remote?.client ?? mirroring, remoteTabIDs(of: client).isEmpty else { return }
+        guard let client = tab.terminal?.remote?.client ?? tab.history?.mirroringClient,
+              remoteTabIDs(of: client).isEmpty else { return }
         stopFollowing(client)
     }
 
     /// 用户在手机上关掉了镜像 Mac Code 标签页的那个标签页：只断开镜像（Mac 上的会话照旧），重新接管之前不再自动开出来。
     /// Mac 那边关掉、跟着收掉的不走这里。`tab` 是刚从工作区摘下的标签。
     func noteClosedByUser(_ tab: MWorkTab) {
-        guard let code = tab.history, let macTab = code.mirroredMacTabID, let client = code.remoteMac,
+        guard let code = tab.history, let macTab = code.mirroredMacTabID, let client = code.mirroringClient,
               let index = follows.firstIndex(where: { $0.client === client }) else { return }
         follows[index].closedCodeTabs.insert(macTab)
     }
@@ -410,16 +465,16 @@ final class MobileWorkspace {
     /// - `order` 是 Mac 上的标签顺序（老版本 Mac 不发，为 nil），这台 Mac 的标签跟着它排（`arrangeRemoteTabs`）。
     /// - `sessionIDs` 为 nil = 这条连接上还没收到列表（刚连上、断开了），不能当成「终端都没了」，什么也不动。
     /// - Mac 报了它的 Code 标签页（`RemoteMacClient.codeTabs`）：里面跑着的会话不当终端标签页，由这台 Mac 的 Code 标签页
-    ///   镜像（`ClaudeHistoryTab+Mirror`）；Mac 上挪出 Code 标签页的会话之后算新的，开成终端标签页。
+    ///   （SSH 主机的由手机上那台主机的 Code 标签页，见 `mirrorTarget`）镜像（`ClaudeHistoryTab+Mirror`）；Mac 上挪出
+    ///   Code 标签页的会话之后算新的，开成终端标签页。
     ///   先拿掉不再归 Code 标签页的、再开关终端标签页、最后加进新的：同一个会话在同一条连接上不会同时接两次。
     func follow(_ client: RemoteMacClient, sessionIDs: [UUID]?, order: [UUID]? = nil) -> RemoteTabChanges {
         guard let sessionIDs, let index = follows.firstIndex(where: { $0.client === client }) else {
             return RemoteTabChanges()
         }
         var changes = RemoteTabChanges()
-        let pending = beginCodeTabMirror(client, listed: Set(sessionIDs), changes: &changes)
-        let excluded = client.codeRunSessionIDs
-        let update = follows[index].state.update(sessionIDs.filter { !excluded.contains($0) })
+        let mirror = beginCodeTabMirror(client, listed: Set(sessionIDs), changes: &changes)
+        let update = follows[index].state.update(sessionIDs.filter { !mirror.excluded.contains($0) })
         let (gone, fresh) = (update.gone, update.fresh)
 
         for sessionID in gone {
@@ -430,7 +485,7 @@ final class MobileWorkspace {
         let added = openRemoteTabs(client, sessionIDs: fresh, activate: false)
         changes.opened += added.opened
         changes.removed += added.removed
-        finishCodeTabMirror(pending, client: client, changes: &changes)
+        finishCodeTabMirror(mirror.pending, client: client, changes: &changes)
         if let index = follows.firstIndex(where: { $0.client === client }) {
             follows[index].state.noteMacOrder(order.map { withCodeTab($0, of: client) }, layout: remoteLayout(of: client))
         }
@@ -440,64 +495,103 @@ final class MobileWorkspace {
 
     // MARK: - 镜像 Mac 的 Code 标签页
 
-    /// 第一步：Mac 上的 Code 标签页（`RemoteCodeTabInfo`，取 `mirrored()` 那一个）要镜像就确保有这台 Mac 的 Code 标签页
-    /// （有用户自己开的就接上它，没有就在后台开一个）；拿掉不再归它的会话、其余照 Mac 改。Mac 上没有了：镜像开出来的关掉，
-    /// 用户自己开的留着、只停镜像。用户在手机上关过的不再开。还没收到 Mac 的 Code 标签页（老 Mac、刚连上）什么都不动。
+    /// 第一步：Mac 上的每个 Code 标签页（`RemoteCodeTabInfo`，每台主机取 `mirroredPerHost` 那一个）要镜像就确保手机上有它的
+    /// Code 标签页（`mirrorTarget`：本机的是这台 Mac 的，SSH 主机的是手机上那台主机的；有用户自己开的就接上它，没有就在后台开一个），
+    /// 拿掉不再归它的会话、其余照 Mac 改。Mac 上没有了：镜像开出来的关掉，用户自己开的（或者里面有在这边起的会话）留着、只停镜像。
+    /// 用户在手机上关过的不再开。还没收到 Mac 的 Code 标签页（老 Mac、刚连上）什么都不动。
+    ///
+    /// 返回的 `excluded` 是不开成终端标签页的会话：镜像着的、和用户关掉的 Code 标签页里的。手机上镜像不了的（手机上没有那台
+    /// SSH 主机、仅 SFTP、那台主机的 Code 标签页已经在镜像另一台 Mac）不算：它们照旧开成终端标签页。同一个会话在同一条连接上
+    /// 接两次会互相顶掉，所以这份必须和实际镜像的一致。
     private func beginCodeTabMirror(_ client: RemoteMacClient, listed: Set<UUID>,
-                                    changes: inout RemoteTabChanges) -> PendingCodeRuns? {
-        guard let index = follows.firstIndex(where: { $0.client === client }), let tabs = client.codeTabs else { return nil }
-        let existing = existingHistory(remoteMac: client)
-        guard let info = tabs.mirrored(), !follows[index].closedCodeTabs.contains(info.id) else {
-            if let existing, existing.mirroredMacTabID != nil {
-                if existing.opensForMirror, tabs.mirrored() == nil {
-                    close(existing.id)
-                    changes.removed.append(.history(existing))
-                } else {
-                    existing.stopMirroring()
-                }
+                                    changes: inout RemoteTabChanges) -> CodeMirrorRound {
+        var round = CodeMirrorRound()
+        guard let index = follows.firstIndex(where: { $0.client === client }), let infos = client.codeTabs else { return round }
+        let closed = follows[index].closedCodeTabs
+        let perHost = infos.mirroredPerHost
+        var bound: Set<ObjectIdentifier> = []
+        for info in perHost {
+            guard let target = mirrorTarget(for: info, client: client) else { continue }
+            round.excluded.formUnion(info.runs.filter { AgentHistoryTool(rawValue: $0.tool) != nil }.map(\.session))
+            guard !closed.contains(info.id) else { continue }
+            let code: ClaudeHistoryTab
+            let isNew: Bool
+            if let existing = target.existing {
+                code = existing
+                isNew = false
+            } else {
+                code = target.make()
+                code.opensForMirror = true
+                // 开在这台 Mac 的标签所在的那一格（还没有就是聚焦格），不抢前台。
+                let ids = remoteTabIDs(of: client)
+                open(.history(code), in: panes.first { pane in pane.tabIDs.contains(where: ids.contains) }?.id, activate: false)
+                // 直连主机的等第一次露出来再连（`startsWhenShown`）。
+                if !code.startsWhenShown { code.start() }
+                isNew = true
             }
+            if code.mirrorClient !== client { code.attachMirror(client) }
+            code.mirroredMacTabID = info.id
+            bound.insert(ObjectIdentifier(code))
+            let plan = code.mirrorPlan(info, listed: listed)
+            code.removeMirroredRuns(plan.removed)
+            code.applyMirrorUpdates(plan.updated)
+            round.pending.append(PendingCodeRuns(tab: code, info: info, added: plan.added, adoptsSelection: isNew))
+        }
+        for code in mirroringCodeTabs(of: client) where !bound.contains(ObjectIdentifier(code)) {
+            let server = code.mirroredServerID ?? RemoteConstants.localShellServerID
+            if code.closesWithMirror, !perHost.contains(where: { $0.serverID == server }) {
+                close(code.id)
+                changes.removed.append(.history(code))
+            } else {
+                code.stopMirroring()
+            }
+        }
+        return round
+    }
+
+    /// Mac 上这个 Code 标签页在手机上由哪个标签页镜像：已有的（`existing`），没有就开 `make` 出来的那个。本机的是这台 Mac 的
+    /// Code 标签页；SSH 主机的是手机上那台主机的（同一台主机只有一个），记录经手机自己的 SSH 读，接管时不连、第一次露出来才连。
+    /// 镜像不了为 nil：手机上没有这台主机、它仅 SFTP（开不了终端）、它的 Code 标签页已经在镜像另一台 Mac（先接上的那台算）。
+    private func mirrorTarget(for info: RemoteCodeTabInfo,
+                              client: RemoteMacClient) -> (existing: ClaudeHistoryTab?, make: () -> ClaudeHistoryTab)? {
+        guard info.serverID != RemoteConstants.localShellServerID else {
+            return (existingHistory(remoteMac: client), { ClaudeHistoryTab(pairedMac: client) })
+        }
+        guard let host = savedHost(info.serverID), !host.sftpOnly, let container = host.modelContext?.container else {
             return nil
         }
-        let code: ClaudeHistoryTab
-        let isNew: Bool
-        if let existing {
-            code = existing
-            isNew = false
-        } else {
-            code = ClaudeHistoryTab(pairedMac: client)
-            code.opensForMirror = true
-            // 开在这台 Mac 的标签所在的那一格（还没有就是聚焦格），不抢前台。
-            let ids = remoteTabIDs(of: client)
-            open(.history(code), in: panes.first { pane in pane.tabIDs.contains(where: ids.contains) }?.id, activate: false)
-            code.start()
-            isNew = true
-        }
-        code.mirroredMacTabID = info.id
-        let plan = code.mirrorPlan(info, listed: listed)
-        code.removeMirroredRuns(plan.removed)
-        code.applyMirrorUpdates(plan.updated)
-        return PendingCodeRuns(tab: code, info: info, added: plan.added, adoptsSelection: isNew)
+        let existing = existingHistory(host: host.persistentModelID)
+        if let other = existing?.mirroringClient, other !== client { return nil }
+        return (existing, {
+            let code = ClaudeHistoryTab(server: host, directory: info.directory, container: container)
+            code.startsWhenShown = true
+            return code
+        })
     }
 
     /// 第二步：加进 Mac 上新出现的会话（它们的终端交给工作区屏去连）；刚开出来的照 Mac 那边看着的选一次。
-    private func finishCodeTabMirror(_ pending: PendingCodeRuns?, client: RemoteMacClient, changes: inout RemoteTabChanges) {
-        guard let pending else { return }
-        changes.opened += pending.tab.addMirroredRuns(pending.added, client: client)
-        if pending.adoptsSelection { pending.tab.adoptMacSelection(of: pending.info) }
+    private func finishCodeTabMirror(_ pending: [PendingCodeRuns], client: RemoteMacClient,
+                                     changes: inout RemoteTabChanges) {
+        for item in pending {
+            changes.opened += item.tab.addMirroredRuns(item.added, client: client)
+            if item.adoptsSelection { item.tab.adoptMacSelection(of: item.info) }
+        }
     }
 
-    /// Mac 的标签顺序里插进 Code 标签页（按它报的 `slot`），镜像着它的那个标签页跟着排。没镜像、没报位置时原样。
+    /// Mac 的标签顺序里插进 Code 标签页（按它们报的 `slot`），镜像着它们的标签页跟着排。没镜像、没报位置时原样。
     private func withCodeTab(_ order: [UUID], of client: RemoteMacClient) -> [UUID] {
-        guard let info = client.codeTabs?.mirrored(), info.slot != nil,
-              mirroredCodeTab(of: client)?.mirroredMacTabID == info.id else { return order }
-        return order.insertingCodeTabs([(info.id, info.slot)])
+        let mirrored = Set(mirroringCodeTabs(of: client).compactMap(\.mirroredMacTabID))
+        let placed = (client.codeTabs ?? []).mirroredPerHost
+            .filter { mirrored.contains($0.id) && $0.slot != nil }
+            .map { (id: $0.id, slot: $0.slot) }
+        return placed.isEmpty ? order : order.insertingCodeTabs(placed)
     }
 
-    /// 这个标签在 Mac 的标签顺序里是谁：远控终端标签是它接着的会话，镜像着这台 Mac 的 Code 标签页是 Mac 上那个 Code 标签页。
+    /// 这个标签在 Mac 的标签顺序里是谁：远控终端标签是它接着的会话，镜像着这台 Mac 上 Code 标签页的是 Mac 上那个 Code 标签页。
     private func remoteOrderID(of id: UUID, client: RemoteMacClient) -> UUID? {
         guard let tab = tab(id) else { return nil }
         if let remote = tab.terminal?.remote, remote.client === client { return remote.sessionID }
-        if let code = tab.history, code.remoteMac === client { return code.mirroredMacTabID }
+        if let code = tab.history, code.remoteMac === client || code.mirroringClient === client { return code.mirroredMacTabID }
         return nil
     }
 
@@ -527,7 +621,7 @@ final class MobileWorkspace {
         for sessionID in sessionIDs {
             let source = MRemoteSource(client: client, sessionID: sessionID)
             // 已经镜像在这台 Mac 的 Code 标签页里：再开一个就是同一个会话在同一条连接上接两次，两边互相顶掉。
-            if existingHistory(remoteMac: client)?.mirroredTerminal(session: sessionID) != nil { continue }
+            if codeTabs(of: client).contains(where: { $0.mirroredTerminal(session: sessionID) != nil }) { continue }
             if let current = existing(remote: source) {
                 switch current.terminal?.controller.state {
                 case .disconnected, .failed:
@@ -731,14 +825,13 @@ final class MobileWorkspace {
     /// 直到重新接管（`takeOver` 换一份新的跟进状态）或 Mac 的顺序和手机上的对上（`noteMacOrder`）。
     /// 同时请 Mac 照它所在那一格的先后排（支持的 Mac 排完推回新顺序，手机随之重新跟着 Mac）。
     func noteArrangedByHand(_ tabID: UUID) {
-        let mirroring = tab(tabID)?.history.flatMap { $0.mirroredMacTabID != nil ? $0.remoteMac : nil }
-        guard let client = tab(tabID)?.terminal?.remote?.client ?? mirroring,
+        guard let client = tab(tabID)?.terminal?.remote?.client ?? tab(tabID)?.history?.mirroringClient,
               let index = follows.firstIndex(where: { $0.client === client }) else { return }
         follows[index].state.noteArrangedByHand()
         guard let pane = paneIndex(containing: tabID) else { return }
         // 只交会话：Code 标签页不是会话，Mac 排的时候也不认它。
-        let codeTab = mirroredCodeTab(of: client)?.mirroredMacTabID
-        client.arrangeSessionsOnMac(remoteLayout(of: client)[pane].filter { $0 != codeTab })
+        let codeTabs = Set(mirroringCodeTabs(of: client).compactMap(\.mirroredMacTabID))
+        client.arrangeSessionsOnMac(remoteLayout(of: client)[pane].filter { !codeTabs.contains($0) })
     }
 
     /// 这台 Mac 的标签是否被用户亲手排过。

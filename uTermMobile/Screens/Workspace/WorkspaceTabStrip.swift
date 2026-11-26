@@ -40,9 +40,9 @@ final class MTabCloseFlow {
 
     func request(_ tab: MWorkTab, close: @escaping (UUID) -> Void) {
         let id = tab.id
-        // Code 标签页：里面有会话在跑就照终端标签页问一句（确认后里面的会话一起结束）。镜像配对 Mac 的不问：关掉只断开镜像，
-        // Mac 上的会话照旧跑。
-        if let code = tab.history, code.remoteMac == nil, !code.runTerminals.isEmpty {
+        // Code 标签页：里面有在这边起的会话在跑就照终端标签页问一句（确认后它们一起结束）。镜像那台 Mac 的会话不问：
+        // 关掉只断开镜像，Mac 上的会话照旧跑。
+        if let code = tab.history, code.remoteMac == nil, !code.localRunTerminals.isEmpty {
             let tabName = tab.title
             Task {
                 await probe.probe(id, tabName: tabName, activity: { await code.foregroundActivity() }) { prompt in
@@ -314,7 +314,7 @@ struct WorkspaceTabChip: View {
     var onSelect: () -> Void
     var onClose: () -> Void
     var onMove: () -> Void = {}
-    /// 长按菜单「历史会话」（只有能开的终端标签有，见 `TermTab.offersClaudeHistory`）。
+    /// 长按菜单「历史会话」（只有能开的终端标签有，见 `MobileWorkspace.offersCode`）。
     var onOpenHistory: () -> Void = {}
     var onDragStart: () -> Void = {}
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
@@ -326,6 +326,8 @@ struct WorkspaceTabChip: View {
     @Environment(\.mInStatusRow) private var inStatusRow
     /// 可选：探针里单独挂标签时没有注入。
     @Environment(TerminalActivityCenter.self) private var activityCenter: TerminalActivityCenter?
+    /// 可选：探针里单独挂标签时没有注入。远控 SSH 主机的终端要看手机上有没有那台主机（`MobileWorkspace.offersCode`）。
+    @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
     @State private var hovering = false
 
     private var isFront: Bool { activity != .inactive }
@@ -409,7 +411,7 @@ struct WorkspaceTabChip: View {
             } label: {
                 Label("拷贝名称", systemImage: "doc.on.clipboard")
             }
-            if case .terminal(let terminal) = tab, terminal.offersClaudeHistory {
+            if case .terminal(let terminal) = tab, workspace?.offersCode(for: terminal) ?? terminal.offersClaudeHistory {
                 Button(action: onOpenHistory) {
                     Label("历史会话", systemImage: "clock.arrow.circlepath")
                 }
