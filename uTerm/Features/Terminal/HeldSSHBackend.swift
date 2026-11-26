@@ -8,7 +8,7 @@ import SwiftData
 /// 再替它回答主机密钥的问题（信任记录和弹层都在 App 这边）。
 ///
 /// SFTP、端口转发、CLI 都走 App 自己的连接，这里只管终端。贴图同理（见 `deliverImage`）。
-actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueColorConfiguring {
+actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalVideoReceiving, TerminalTrueColorConfiguring {
     /// 连接一台服务器需要的东西。`resolveAuth` 只在真的要新建连接时才调。
     struct Target: Sendable {
         let profile: SSHConnection.ProfileSnapshot
@@ -269,15 +269,26 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
 
     /// 把图片传成远端 `/tmp` 下的文件。连接在 `uterm-ssh` 里，开不了 SFTP，所以这里走 App 自己的共享连接。
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
+        try await withUploadConnection { try await $0.uploadTerminalImage(image) }
+    }
+
+    /// 视频同上，按段从本机文件读着传，返回远端路径。
+    func deliverVideo(_ video: TerminalVideo) async throws -> String {
+        try await withUploadConnection { try await $0.uploadTerminalVideo(video) }
+    }
+
+    private func withUploadConnection<T: Sendable>(
+        _ upload: @Sendable (ConnectedClient) async throws -> T
+    ) async throws -> T {
         guard await core.isConnected else { throw TerminalImageError.notConnected }
         let resolved = try await target.resolveAuth()
         let connected = try await SSHClientFactory.connectShared(
             profile: target.profile, auth: resolved.auth, jumpHostAuth: resolved.jump,
             hostKeyVerifier: target.hostKeyVerifier, hostKeyApprover: target.hostKeyApprover)
         do {
-            let delivery = try await connected.uploadTerminalImage(image)
+            let result = try await upload(connected)
             await connected.close()
-            return delivery
+            return result
         } catch {
             await connected.close()
             throw error
