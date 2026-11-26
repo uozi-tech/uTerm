@@ -177,6 +177,9 @@ final class MobileWorkspace {
     private(set) var splitAxis: Axis?
     /// 每一格的键盘意愿，按格 id 记（见 `keyboardIntent(forPane:)`）。
     @ObservationIgnored private var keyboardIntents: [UUID: MTerminalKeyboardIntent] = [:]
+    /// 开出来时要放到前台的 Mac 会话（手机上请 Mac 把 Code 标签页里的会话「移到新标签页」：Mac 推来新的列表之后它才成了
+    /// 终端标签页，见 `bringToFront(remote:)`）。开出来就清掉。
+    @ObservationIgnored private var frontOnOpen: MRemoteSource?
     /// 终端里的程序请求预览一个文件（`TerminalFilePreview`）：工作区屏建预览标签（它有建 SFTP 会话要的容器）。
     @ObservationIgnored var onFilePreviewRequest: ((TermTab, String) -> Void)?
 
@@ -274,6 +277,16 @@ final class MobileWorkspace {
             return (code.id, term)
         }
         return nil
+    }
+
+    /// 把接着 Mac 上这个会话的终端标签页放到前台；还没开出来（Mac 推来的列表还没到）就等它开出来时放（`openRemoteTabs`）。
+    func bringToFront(remote source: MRemoteSource) {
+        if let tab = existing(remote: source) {
+            frontOnOpen = nil
+            activate(tab.id)
+        } else {
+            frontOnOpen = source
+        }
     }
 
     /// 镜像着这台 Mac 的 Code 标签页的那个标签页。
@@ -527,7 +540,9 @@ final class MobileWorkspace {
                 }
             }
             let term = TermTab(host: client.tabHost(for: sessionID), remote: source)
-            open(.terminal(term), activate: activate)
+            let front = frontOnOpen == source
+            if front { frontOnOpen = nil }
+            open(.terminal(term), activate: activate || front)
             changes.opened.append(term)
         }
         return changes

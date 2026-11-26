@@ -53,6 +53,8 @@ extension ClaudeHistoryTab {
             runTitles[info.session] = info.title
             opened.append(term)
         }
+        // 请 Mac 开的会话（`ClaudeHistoryTab+MacActions`）回复先到、这会儿才出现：选上它。
+        takePendingMacFocus()
         return opened
     }
 
@@ -89,5 +91,6 @@ extension ClaudeHistoryTab {
     func stopMirroring() {
         removeMirroredRuns(runs.runs.filter(\.isMirrored).map(\.id))
         mirroredMacTabID = nil
+        dropPendingMacFocus()
     }
 }

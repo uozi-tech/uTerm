@@ -50966,6 +50966,34 @@
         }
       }
     },
+    "无法移到新标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Move to New Tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいタブに移動できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 탭으로 이동할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法移到新分頁"
+          }
+        }
+      }
+    },
     "无法绑定该地址（地址不属于本机）" : {
       "localizations" : {
         "en" : {
@@ -51663,6 +51691,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法配對"
+          }
+        }
+      }
+    },
+    "无法重新开始这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Start Session Again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションをもう一度開始できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션을 다시 시작할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法重新開始這個工作階段"
           }
         }
       }
