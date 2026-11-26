@@ -53,6 +53,8 @@ struct WorkspaceScreen: View {
             // 只在连接请求刚到、标签还没开出来的一瞬为空（连接中页正盖着），什么也不画。
             if !(workspace.isEmpty && !workspace.isSplit) { panesView }
         }
+        // 状态栏在侧边一列时（Duo 横握）额度放进那一列，Code 标签页的列表底部不再列。
+        .environment(\.agentHistoryHidesAccountLimits, chrome.statusColumn != nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
         // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
@@ -60,12 +62,18 @@ struct WorkspaceScreen: View {
         // Duo 折叠 / 展开横屏：状态栏在侧边一列的顶部（折叠横握在左边），下面空着——Agent / 分屏开关放到那里。
         .overlay(alignment: chrome.statusColumn?.edge == .leading ? .topLeading : .topTrailing) {
             if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
-                WorkspaceSideControls(
-                    // 远控标签、体验主机没有 Agent（同标签条，见 WorkspaceTabStrip）。
-                    agentOn: focusedFrontTerminal.flatMap { $0.offersAgent ? $0.mode == .agent : nil },
-                    isSplit: workspace.isSplit,
-                    onAgent: { toggleAgent(in: workspace.focusedPane) },
-                    onToggleSplit: toggleSplit)
+                VStack(spacing: 14) {
+                    WorkspaceSideControls(
+                        // 远控标签、体验主机没有 Agent（同标签条，见 WorkspaceTabStrip）。
+                        agentOn: focusedFrontTerminal.flatMap { $0.offersAgent ? $0.mode == .agent : nil },
+                        isSplit: workspace.isSplit,
+                        onAgent: { toggleAgent(in: workspace.focusedPane) },
+                        onToggleSplit: toggleSplit)
+                    // 聚焦格前台是 Code 标签页：账号额度放在这一列（列表底部就不再列）。
+                    if let history = focusedFrontHistory {
+                        WorkspaceSideAccountLimits(history: history, width: column.width)
+                    }
+                }
                     .frame(width: column.width)
                     .padding(.top, column.statusBottom)
                     // 与状态栏里的时间对齐（见 statusColumnControlCenter），不是按列宽居中。
@@ -579,6 +587,11 @@ struct WorkspaceScreen: View {
 
     private var focusedFrontTerminal: TermTab? {
         workspace.tab(workspace.focusedPane.activeID)?.terminal
+    }
+
+    /// 聚焦格前台的 Code 标签页（列完了才有）。
+    private var focusedFrontHistory: AgentHistoryModel? {
+        workspace.tab(workspace.focusedPane.activeID)?.history?.connection.history
     }
 
     private func paneView(_ pane: MPane, showsBack: Bool, splitState: Bool?) -> some View {

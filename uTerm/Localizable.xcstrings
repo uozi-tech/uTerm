@@ -37571,6 +37571,35 @@
         }
       }
     },
+    "展开会话列表" : {
+      "comment" : "Code 标签页：把收起的会话列表重新展开",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Session List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション一覧を表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 목록 펼치기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開工作階段列表"
+          }
+        }
+      }
+    },
     "展开传输列表" : {
       "localizations" : {
         "en" : {
@@ -48235,6 +48264,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收起 QR 碼"
+          }
+        }
+      }
+    },
+    "收起会话列表" : {
+      "comment" : "Code 标签页：列表与对话并排时把列表收起来",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Session List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション一覧を隠す"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 목록 접기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收合工作階段列表"
           }
         }
       }

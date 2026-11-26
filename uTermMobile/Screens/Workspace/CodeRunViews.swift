@@ -55,6 +55,8 @@ struct CodeRunHeader: View {
     let code: CodeTabRuns
     let run: CodeRunBoard<TermTab>.Run
     let showsBack: Bool
+    /// 收起了会话列表（并排时）：「返回」换成「展开列表」。
+    @Environment(\.codeExpandList) private var expandList
 
     /// 对上的记录列表里会列出来（有对话可回去看）。
     private var hasRecord: Bool {
@@ -64,7 +66,9 @@ struct CodeRunHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if showsBack {
+            if let expandList {
+                CodeExpandListButton(action: expandList)
+            } else if showsBack {
                 Button { code.tab.backToList() } label: {
                     MIcon(name: "back", size: 17, color: M.text2, weight: .semibold)
                         .frame(width: M.minTarget, height: M.minTarget)
@@ -74,7 +78,7 @@ struct CodeRunHeader: View {
                 .accessibilityLabel(Text("返回会话列表"))
             }
             AgentHistoryToolBadge(tool: run.tool, size: 18)
-                .padding(.leading, showsBack ? 0 : 14)
+                .padding(.leading, showsBack || expandList != nil ? 0 : 14)
             VStack(alignment: .leading, spacing: 2) {
                 Text(code.tab.title(of: run))
                     .font(M.sans(14.5, weight: .semibold)).foregroundStyle(M.text)

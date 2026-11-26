@@ -374,9 +374,10 @@ struct AgentHistoryListContent<List: View>: View {
 /// 各时间窗用了几成、几时重置，套餐，截至几时。露着的时候每分钟重读一次状态栏的数据（跑着的会话一直在写）。
 private struct AgentHistoryAccountLimits: View {
     let history: AgentHistoryModel
+    @Environment(\.agentHistoryHidesAccountLimits) private var hidden
 
     var body: some View {
-        let rows = history.accountLimits()
+        let rows = hidden ? [] : history.accountLimits()
         VStack(spacing: 0) {
             if !rows.isEmpty {
                 Rectangle().fill(UD.border).frame(height: 1)
@@ -436,7 +437,8 @@ private struct AgentAccountLimitsRow: View {
     }
 }
 
-private struct AgentAccountLimitsDetail: View {
+/// 一种工具的额度明细（侧栏底部、iOS 状态栏那一列点开的都是它）。
+struct AgentAccountLimitsDetail: View {
     let row: AgentAccountLimits
 
     var body: some View {
@@ -507,5 +509,18 @@ struct AgentHistoryListFooter: View {
         ForEach(AgentHistoryTool.allCases.filter { history.toolFailures[$0] != nil }) { tool in
             AgentHistoryWarningNote(text: AgentHistoryText.toolFailure(tool, message: history.toolFailures[tool] ?? ""))
         }
+    }
+}
+
+private struct AgentHistoryHidesAccountLimitsKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 侧栏底部不列账号额度：平台把它放到了别处（iPhone Duo 横握时放进状态栏那一列，`WorkspaceSideAccountLimits`）。
+    /// 列表照旧每分钟重读一次状态栏的数据。
+    var agentHistoryHidesAccountLimits: Bool {
+        get { self[AgentHistoryHidesAccountLimitsKey.self] }
+        set { self[AgentHistoryHidesAccountLimitsKey.self] = newValue }
     }
 }

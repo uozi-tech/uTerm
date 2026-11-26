@@ -33,6 +33,8 @@ final class ClaudeHistoryTab: Identifiable {
     /// 还没定位成功的「展开这个目录那一组并滚过去」：列表列出那一组之后由列表清掉。放在标签上而不是视图的 `@State` 里：
     /// Plus / Max 横竖屏切换会换外壳、重建视图，请求不能跟着丢。
     var pendingReveal: AgentHistoryReveal?
+    /// 列表与详情并排时（横屏、iPad、Duo 展开）把列表收起来，详情占满整宽。放在标签上：横竖屏切换换外壳时不丢。
+    var listCollapsed = false
     @ObservationIgnored private var revealGeneration = 0
     /// 「＋」弹出的新会话面板（选目录、选工具）。开着时不为 nil。放在标签上：横竖屏切换换外壳时面板不跟着丢。
     var newSessionDraft: CodeNewSessionDraft?
@@ -239,6 +241,7 @@ struct ClaudeHistorySessionBody: View {
                     // 「＋」不直接开：弹出新会话面板选目录、选工具（见 `CodeNewSessionPanel`）。
                     newSession: tab.canResume ? AgentHistoryNewSession(presenting: { tab.presentNewSession() }) : nil,
                     reveal: Binding(get: { tab.pendingReveal }, set: { tab.pendingReveal = $0 }),
+                    listCollapsed: Binding(get: { tab.listCollapsed }, set: { tab.listCollapsed = $0 }),
                     code: codeRuns) { file in
                     resume(file, in: history)
                 }
@@ -348,6 +351,8 @@ struct ClaudeHistoryBrowser: View {
     var newSession: AgentHistoryNewSession? = nil
     /// 要列表定位到的目录（定位成功后由列表清掉）。
     var reveal: Binding<AgentHistoryReveal?> = .constant(nil)
+    /// 并排时列表收起来了（详情顶上的按钮再展开）。只在看着一份记录或一个跑着的会话时收：什么都没选时收起来就只剩空白。
+    var listCollapsed: Binding<Bool> = .constant(false)
     /// 在 Code 标签页里跑着的会话。
     var code: CodeTabRuns? = nil
     let onResume: (AgentHistorySessionFile) -> Void
@@ -365,32 +370,48 @@ struct ClaudeHistoryBrowser: View {
 
     var body: some View {
         GeometryReader { geo in
-            let wide = geo.size.width >= Self.sideBySideMinWidth
-            let showsList = wide || !detailActive
-            let showsDetail = wide || detailActive
-            let detailX: CGFloat = wide ? Self.listWidth + 1 : 0
-            ZStack(alignment: .topLeading) {
-                ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal, code: code,
-                                  onResume: canResume ? onResume : nil)
-                    .frame(width: wide ? Self.listWidth : geo.size.width, height: geo.size.height)
-                    .offset(x: showsList ? 0 : -100_000)
-                    .allowsHitTesting(showsList)
-                    .accessibilityHidden(!showsList)
-                Rectangle().fill(M.divider)
-                    .frame(width: 1, height: geo.size.height)
-                    .offset(x: wide ? Self.listWidth : -100_000)
-                detail(showsBack: !wide, visible: showsDetail)
-                    .frame(width: max(geo.size.width - detailX, 0), height: geo.size.height)
-                    .offset(x: showsDetail ? detailX : -100_000)
-                    .allowsHitTesting(showsDetail)
-                    .accessibilityHidden(!showsDetail)
-            }
+            layout(size: geo.size)
         }
         // 实时跟随只在看得见时查：标签不在前台、工作区收起、App 进了后台就停（省电），回来马上查一次。
         .onChange(of: isActive && scenePhase != .background, initial: true) { _, visible in
             history.setTranscriptVisible(visible)
         }
         .onDisappear { history.setTranscriptVisible(false) }
+    }
+
+    private func layout(size: CGSize) -> some View {
+        let canSideBySide = size.width >= Self.sideBySideMinWidth
+        // 收起了列表：同窄屏一样只露详情，只是详情顶上的按钮是「展开列表」而不是「返回」（选中的不丢）。
+        let collapsed = canSideBySide && listCollapsed.wrappedValue && detailActive
+        let wide = canSideBySide && !collapsed
+        let showsList = wide || !detailActive
+        let showsDetail = wide || detailActive
+        let detailX: CGFloat = wide ? Self.listWidth + 1 : 0
+        var collapse: (() -> Void)?
+        if wide && detailActive { collapse = { setListCollapsed(true) } }
+        var expand: (@MainActor () -> Void)?
+        if collapsed { expand = { setListCollapsed(false) } }
+        return ZStack(alignment: .topLeading) {
+            ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal, code: code,
+                              onResume: canResume ? onResume : nil, onCollapse: collapse)
+                .frame(width: wide ? Self.listWidth : size.width, height: size.height)
+                .offset(x: showsList ? 0 : -100_000)
+                .allowsHitTesting(showsList)
+                .accessibilityHidden(!showsList)
+            Rectangle().fill(M.divider)
+                .frame(width: 1, height: size.height)
+                .offset(x: wide ? Self.listWidth : -100_000)
+            detail(showsBack: !wide, visible: showsDetail)
+                .environment(\.codeExpandList, expand)
+                .frame(width: max(size.width - detailX, 0), height: size.height)
+                .offset(x: showsDetail ? detailX : -100_000)
+                .allowsHitTesting(showsDetail)
+                .accessibilityHidden(!showsDetail)
+        }
+    }
+
+    private func setListCollapsed(_ value: Bool) {
+        withAnimation(.snappy(duration: 0.22)) { listCollapsed.wrappedValue = value }
     }
 
     /// 详情：记录（或「选择一个会话」）在下面，跑着的会话的终端各自一层盖在上面，只露出看着的那一个。
@@ -475,6 +496,8 @@ private struct ClaudeHistoryList: View {
     var code: CodeTabRuns? = nil
     /// 继续一个会话（长按菜单里那一项）；nil = 这台主机继续不了，不出。
     var onResume: ((AgentHistorySessionFile) -> Void)? = nil
+    /// 并排着、详情露着一份记录或一个会话：顶上出「收起列表」。
+    var onCollapse: (() -> Void)? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
@@ -541,6 +564,16 @@ private struct ClaudeHistoryList: View {
             optionsMenu
             Spacer(minLength: 0)
             if let newSession { newSessionButton(newSession) }
+            if let onCollapse {
+                Button(action: onCollapse) {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 16, weight: .medium)).foregroundStyle(M.text2)
+                        .frame(width: M.minTarget, height: M.minTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MPressStyle())
+                .accessibilityLabel(Text("收起会话列表", comment: "Code 标签页：列表与对话并排时把列表收起来"))
+            }
         }
         .padding(.trailing, 4)
     }
@@ -908,8 +941,13 @@ private struct ClaudeTranscriptView: View {
         }
     }
 
+    @Environment(\.codeExpandList) private var expandList
+
     @ViewBuilder private var backButton: some View {
-        if let onBack {
+        // 收起了列表的主对话：「返回」换成「展开列表」（子代理的记录照旧回上一层）。
+        if transcript.subagent == nil, let expandList {
+            CodeExpandListButton(action: expandList)
+        } else if let onBack {
             Button(action: onBack) {
                 MIcon(name: "back", size: 17, color: M.text2, weight: .semibold)
                     .frame(width: M.minTarget, height: M.minTarget)
@@ -923,7 +961,7 @@ private struct ClaudeTranscriptView: View {
 
     private var titleBlock: some View {
         AgentTranscriptTitleBlock(transcript: transcript, metadata: metadata)
-            .padding(.leading, onBack == nil ? 14 : 0)
+            .padding(.leading, onBack == nil && expandList == nil ? 14 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -1153,4 +1191,32 @@ nonisolated enum CodeRestoredSelection: Equatable, Sendable {
     case run(UUID, showsTranscript: Bool)
     /// 一份只读记录。
     case record(AgentHistoryPinKey)
+}
+
+/// 收起了列表时详情顶上「展开会话列表」（记录与跑着的会话的终端都用它）。
+struct CodeExpandListButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 16, weight: .medium)).foregroundStyle(M.text2)
+                .frame(width: M.minTarget, height: M.minTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityLabel(Text("展开会话列表", comment: "Code 标签页：把收起的会话列表重新展开"))
+    }
+}
+
+private struct CodeExpandListKey: EnvironmentKey {
+    static let defaultValue: (@MainActor () -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    /// Code 标签页并排时列表收起来了：详情顶上的按钮用它重新展开。没收起为 nil。
+    var codeExpandList: (@MainActor () -> Void)? {
+        get { self[CodeExpandListKey.self] }
+        set { self[CodeExpandListKey.self] = newValue }
+    }
 }
