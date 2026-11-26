@@ -60,6 +60,8 @@ final class AppStoreScreenshotTests: XCTestCase {
     }
 
     func testScreens() async throws {
+        // iPad 横握拍：商店图用横屏（分屏、远程桌面都更舒展）。
+        if device == .ipad { try await rotateToLandscape() }
         let (container, hosts) = try fixtures()
         let relay = HostKeyChallengeRelay()
         let suite = "AppStoreScreenshotTests.\(UUID().uuidString)"
@@ -143,11 +145,11 @@ final class AppStoreScreenshotTests: XCTestCase {
             try await present("2-mac-terminal", settle: .seconds(2)) { shell(store, workspace) }
         }
 
-        // 远程桌面：整块屏幕只在 Duo 横握拍（竖屏里 Mac 的横屏画面只剩中间一条）；Duo 与 iPad 再拍窗口模式
+        // 远程桌面：整块屏幕在 Duo 与 iPad 横握拍（竖屏里 Mac 的横屏画面只剩中间一条）；两者再拍窗口模式
         // （iPhone 竖握比 Mac 终端窗口的最小宽度还窄）。
-        // Mac 把窗口调成手机画布的大小：Duo 横握 951×669 点、13 英寸 iPad 竖握 1032×1376 点（同 Mac 画廊里那两张图）。
-        let canvas = device == .duo ? CGSize(width: 951, height: 669) : CGSize(width: 1032, height: 1376)
-        if device == .duo {
+        // Mac 把窗口调成手机画布的大小：Duo 横握 951×669 点、13 英寸 iPad 横握 1376×1032 点（同 Mac 画廊里那几张图）。
+        let canvas = device == .duo ? CGSize(width: 951, height: 669) : CGSize(width: 1376, height: 1032)
+        if device != .iphone {
             let client = RemoteMacClient(macName: "MacBook Pro", endpoint: .hostPort(host: "127.0.0.1", port: 9),
                                          identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
             let session = RemoteDesktopSession(client: client, maxWidth: 3024, maxHeight: 1964)
@@ -165,9 +167,9 @@ final class AppStoreScreenshotTests: XCTestCase {
                                          identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
             let session = RemoteDesktopSession(client: client, maxWidth: Int(canvas.width * 3),
                                                maxHeight: Int(canvas.height * 3))
-            // Duo 的窗口模式画面：简体中文用跑着 Claude Code 的那张，别的语言用命令行输出的那张（录制是中文对话）。
-            let duoWindow = Self.language == "zh-Hans" ? "终端窗口__手机窗口模式" : "终端窗口__手机窗口模式_命令行"
-            let frame = try Self.macFrame(device == .duo ? duoWindow : "终端窗口__iPad_窗口模式", dark: dark)
+            // 窗口模式的画面：简体中文用跑着 Claude Code 的那张，别的语言用命令行输出的那张（录制是中文对话）。
+            let base = device == .duo ? "终端窗口__手机窗口模式" : "终端窗口__iPad_横屏窗口模式"
+            let frame = try Self.macFrame(Self.language == "zh-Hans" ? base : base + "_命令行", dark: dark)
             try await present("4-remote-window", settle: .milliseconds(1_400), before: {
                 session.showGalleryWindow(frame, windowID: 1, title: "prod-web-01", pointSize: canvas)
             }) {
@@ -317,6 +319,19 @@ final class AppStoreScreenshotTests: XCTestCase {
     }
 
     // MARK: - 摆一屏，等外面拍
+
+    /// iPad 要横握拍。App 改不了自己的方向（iPad 的多任务窗口模式下 `requestGeometryUpdate` 报 UISceneErrorDomain 101），
+    /// 模拟器也没有转屏的命令：先在 Xcode 的 DeviceHub 里把「uTerm Shots iPad 13」转成横屏（转一次，开着就一直是横的）。
+    private func rotateToLandscape() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let deadline = Date().addingTimeInterval(3)
+        while !scene.effectiveGeometry.interfaceOrientation.isLandscape, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard scene.effectiveGeometry.interfaceOrientation.isLandscape else {
+            throw XCTSkip("iPad 模拟器是竖着的：在 DeviceHub 里把它转成横屏再拍（App 自己转不了）")
+        }
+    }
 
     /// 整屏挂在宿主 App 的主窗口上（临时换掉它的根控制器，拍完换回），排好后请外面截屏。
     /// `onSignal`：外面拍的途中写 `signal-<名字>` 时调一次（灵动岛：App 已经在后台了，推一次带提醒的更新），

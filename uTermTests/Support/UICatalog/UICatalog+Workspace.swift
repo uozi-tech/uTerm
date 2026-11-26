@@ -43,6 +43,18 @@ extension UICatalog {
                 try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.nginx, UICatalogTerminalScripts.memory],
                                                        split: .vertical, inspector: false, terminalWindow: true))
             },
+            // App Store 截图用的 13 英寸 iPad 横握画布（1376×1032 点）：整窗跑着 Claude Code（简体中文，用 120×41 那份录制），
+            // 别的语言换成左右两格的命令行输出（Claude Code 的录制是中文对话）。
+            UICatalogEntry("终端窗口/iPad 横屏窗口模式", source: "uTerm/Features/Terminal/Views/TerminalWindowView.swift",
+                           symbol: "TerminalWindowView", size: CGSize(width: 1376, height: 1032), live: true) { stage in
+                try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.claudeCode(cols: 120, rows: 41)],
+                                                       inspector: false, terminalWindow: true))
+            },
+            UICatalogEntry("终端窗口/iPad 横屏窗口模式_命令行", source: "uTerm/Features/Terminal/Views/TerminalWindowView.swift",
+                           symbol: "TerminalWindowView", size: CGSize(width: 1376, height: 1032), live: true) { stage in
+                try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.nginx, UICatalogTerminalScripts.memory],
+                                                       split: .horizontal, inspector: false, terminalWindow: true))
+            },
             UICatalogEntry("工作区/文件预览与终端", source: src, symbol: "WorkspaceWindowView", live: true) { stage in
                 try await workspaceRender(stage, .init(scripts: [UICatalogTerminalScripts.nginx], inspector: false,
                                                        openFile: "/etc/nginx/nginx.conf", previewRatio: 0.62))

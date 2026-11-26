@@ -7,7 +7,7 @@
 # iPhone Duo 展开横握的内屏 = 2853×2007（Duo 有两块屏，内屏是 --display=3，DUO_DISPLAY 可改；模拟器要先展开）。
 # 远程桌面的画面取 Mac 画廊的出图（先 `make gallery GALLERY_FILTER=窗口模式`，再放一份「桌面/远程桌面」），
 # 目录由 MAC_SHOTS 指定，默认 build/ui-gallery/latest。LANGUAGE_CODE（默认 zh-Hans）选界面语言；
-# 默认日间，UTERM_APPSTORE_DARK=1 拍夜间。
+# 默认日间，UTERM_APPSTORE_DARK=1 拍夜间。iPad 由测试转成横屏拍（2752×2064）。
 # 截出来的是带透明圆角的原始整屏，商店图由 internal/appstore/compose/ 加标题与底色后再上传。
 # 灵动岛（只在 iphone 拍，`10-live`）：测试摆好终端后，这里把 App 切到后台、停在主屏幕上拍收起的灵动岛，再请测试
 # 推一次带提醒的更新、拍展开的灵动岛。主屏幕上的 App 名字跟着模拟器的系统语言，所以 iphone 会先把模拟器的系统语言
@@ -64,6 +64,12 @@ xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMo
                 for i in 1 2 3 4; do sleep 0.6; shoot "$name-expanded-$i"; done
             else
                 shoot "$name"
+                # iPad 由测试转成横屏拍，模拟器的屏幕按竖着存：转正。
+                if [ "$device" = ipad ]; then
+                    w=$(sips -g pixelWidth "$out/$name.png" | awk '/pixelWidth/{print $2}')
+                    h=$(sips -g pixelHeight "$out/$name.png" | awk '/pixelHeight/{print $2}')
+                    [ "$h" -gt "$w" ] && sips -r "${IPAD_ROTATE:-270}" "$out/$name.png" >/dev/null
+                fi
             fi
             touch "$out/done-$name"
         done
