@@ -9,7 +9,8 @@ private enum HostFilter: String, CaseIterable { case all, recent, group }
 struct HostsScreen: View {
     @Environment(\.modelContext) private var context
     @Environment(MobileStore.self) private var store
-    /// 可选：只为露出「会话 N」入口。单独挂主机页的探针 / 画廊不注入它。
+    /// 可选：删主机时先收掉它的会话。单独挂主机页的探针 / 画廊不注入它。
+    /// **别在 `body` 里读它的属性**：一读，工作区每次增减标签整页（全部主机卡片）都要重算，见 `WorkspaceReturnTracker`。
     @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
     @Environment(\.mAccent) private var accent
     /// 可选：决定有主机时还显不显示体验卡。单独挂主机页的探针 / 画廊不注入它。
@@ -23,6 +24,8 @@ struct HostsScreen: View {
     @State private var editing: ServerProfile?
     @State private var creating = false
     @State private var pendingDelete: ServerProfile?
+    /// 工具栏「标签页 N」的 N（0 = 不显示）。由 `WorkspaceReturnTracker` 在工作区滑完之后才改，见那里。
+    @State private var returnTabs = 0
 
     /// 不超过这么多台时不用懒加载（为什么见 `MCardList.lazy`）。更多时卡片全部常驻太贵，仍走懒加载。
     static let eagerHostLimit = 120
@@ -48,13 +51,13 @@ struct HostsScreen: View {
                        sub: String(localized: "\(hosts.count) 台主机"),
                        maxContentWidth: M.gridContentWidth, pinsHeader: true, actions: {
             // 有会话开着（工作区收起了）时给一个回去的入口。系统工具栏按钮，底由系统画。
-            if let workspace, !workspace.isEmpty {
+            if returnTabs > 0 {
                 Button { store.showWorkspace = true } label: {
-                    Label("标签页 \(workspace.tabs.count)", systemImage: MGlyph.symbol("term"))
+                    Label("标签页 \(returnTabs)", systemImage: MGlyph.symbol("term"))
                         .labelStyle(.titleAndIcon)
                 }
                 .tint(accent)
-                .accessibilityLabel(Text("回到 \(workspace.tabs.count) 个标签页"))
+                .accessibilityLabel(Text("回到 \(returnTabs) 个标签页"))
             }
             MRoundBtn(icon: "search") { store.showPalette = true }
             MRoundBtn(icon: "plus", filled: true) { creating = true }
@@ -110,6 +113,7 @@ struct HostsScreen: View {
             }
             .animation(.mSwap, value: filter)
         }
+        .background { WorkspaceReturnTracker(count: $returnTabs) }
         // 主机详情用自绘底部面板（MBottomPanel），不用 .sheet + 测量 detent（真机上「有时候很高」）。
         .mBottomPanel(item: $inspecting) { host in
             HostSheet(host: host,
@@ -174,6 +178,36 @@ struct HostsScreen: View {
         // 钥匙串 secrets / 端口转发规则 / 跳板机悬空引用一并清理（改前漏了后三者）。
         ServerProfileStore(context: context).delete(host)
         pendingDelete = nil
+    }
+}
+
+/// 主机页工具栏上「标签页 N」该显示几：工作区（标签增减、展开收起）只在这里读，`HostsScreen.body` 不读。
+///
+/// 工具栏一加 / 减按钮，系统就把整个主机页重新排版一遍（主机不多时卡片不懒加载，100 台就是 100 张卡片），
+/// 主线程一次占掉 30–100 ms。改前按钮跟着工作区实时变：关掉最后一个标签、工作区往外滑的头一拍，和打开第一个
+/// 标签、工作区滑进来的头一拍，都正好撞上这一下，滑动掉帧。工作区盖着主机页时按钮反正看不见，所以这里
+/// 盖着的时候不动，等工作区滑走、停稳了再改。
+private struct WorkspaceReturnTracker: View {
+    @Binding var count: Int
+    @Environment(MobileStore.self) private var store
+    /// 可选：单独挂主机页的探针 / 画廊不注入它。
+    @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
+
+    private struct Key: Equatable {
+        var tabs: Int
+        var workspaceVisible: Bool
+    }
+
+    var body: some View {
+        // 正在关的标签（等工作区滑走才摘下）不算：关最后一个时按钮不先冒出来再消失。
+        let key = Key(tabs: workspace?.remainingTabCount ?? 0, workspaceVisible: store.showWorkspace)
+        Color.clear
+            .task(id: key) {
+                guard !key.workspaceVisible, count != key.tabs else { return }
+                try? await Task.sleep(for: WorkspaceLayer.slideSettle)
+                guard !Task.isCancelled else { return }
+                count = key.tabs
+            }
     }
 }
 

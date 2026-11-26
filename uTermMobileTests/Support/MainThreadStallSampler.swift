@@ -24,7 +24,7 @@ nonisolated final class MainThreadStallSampler: @unchecked Sendable {
 
     private let threshold: Double
     private let interval: Double
-    private let maxFrames = 96
+    private let maxFrames = 256
     private let scratch: UnsafeMutablePointer<UInt>
     /// 主线程这一轮 runloop 从什么时候开始忙（0 = 在睡）。主线程写、旁路线程读，对齐的 8 字节，读到撕裂值的后果只是多 / 少抄一次。
     private let busySince: UnsafeMutablePointer<Double>

@@ -201,6 +201,13 @@ struct WorkspaceLayer: View {
             .opacity(visible ? 1 : 0)
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)
-            .animation(.easeInOut(duration: 0.28), value: visible)
+            .animation(.easeInOut(duration: Self.slideSeconds), value: visible)
     }
+
+    /// 展开 / 收起滑动的时长。
+    static let slideSeconds = 0.28
+    /// 多久算滑完、停稳（动画时长再留一点余量）。重活等到这之后：收起时主机页的工具栏按钮、真关标签，
+    /// 展开时终端拿键盘（见 `WorkspaceScreen`）。
+    static let slideSettleSeconds = slideSeconds + 0.06
+    static let slideSettle: Duration = .seconds(slideSettleSeconds)
 }

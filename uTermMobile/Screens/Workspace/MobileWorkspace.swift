@@ -207,6 +207,12 @@ final class MobileWorkspace {
 
     var isEmpty: Bool { tabs.isEmpty }
     var isSplit: Bool { panes.count > 1 }
+
+    /// 已经关了、等工作区滑走才真摘下的标签（见 `WorkspaceScreen.close(_:then:)`）：滑动期间它们照常显示，
+    /// 但已不算数——主机页「标签页 N」按 `remainingTabCount` 数。
+    var closingTabIDs: Set<UUID> = []
+    /// 不算正在关的标签，还剩几个。
+    var remainingTabCount: Int { tabs.count(where: { !closingTabIDs.contains($0.id) }) }
     var terminalTabs: [TermTab] { tabs.compactMap(\.terminal) }
 
     /// 全部活终端连同它所在的格：终端标签页，加上 Code 标签页里跑着的会话（`ClaudeHistoryTab.runs`）。

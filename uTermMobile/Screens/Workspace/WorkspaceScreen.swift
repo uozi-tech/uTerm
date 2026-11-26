@@ -101,25 +101,16 @@ struct WorkspaceScreen: View {
         }
         .onChange(of: workspace.activeTab?.id) { _, _ in syncKeyboard() }
         .onChange(of: workspace.focusedPaneID) { _, _ in syncKeyboard() }
-        // 收起回主机列表（会话不断）时收起键盘，否则键盘会残留在标签页之上；展开时重新聚焦。
-        .onChange(of: store.showWorkspace) { _, _ in syncKeyboard() }
+        // 收起回主机列表（会话不断）时收起键盘，否则键盘会残留在标签页之上；展开时重新聚焦——等工作区滑进来、
+        // 停稳了再聚焦：终端拿第一响应者要起键盘会话，主线程一次占几百 ms（模拟器实测 486 ms、Duo 123 + 111 ms），
+        // 改前正好压在滑进来的头几拍上，键盘也和工作区同时往上推。
+        .onChange(of: store.showWorkspace) { _, visible in visibilityChanged(visible) }
         // 连接中页盖上即收回所有键盘归属；撤下（连接完成）后再弹——建连期刻意不弹。
         .onChange(of: store.connecting?.id) { _, _ in syncKeyboard() }
         .onChange(of: newKind) { _, _ in syncKeyboard() }
         .onChange(of: awaitingConnect) { _, _ in syncKeyboard() }
         // 连接中页取消、断开整台 Mac：关掉并移除这些标签。
-        .onChange(of: store.teardownTabIDs) { _, ids in
-            guard !ids.isEmpty else { return }
-            for id in ids {
-                guard let removed = workspace.close(id) else { continue }
-                removed.shutdown()
-                dispose(removed)
-                workspace.noteClosedByUser(removed)
-                workspace.stopFollowingIfLastTab(removed)
-            }
-            if workspace.isEmpty { store.showWorkspace = false }
-            store.teardownTabIDs = []
-        }
+        .onChange(of: store.teardownTabIDs) { _, ids in tearDown(ids) }
         // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
         // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
         .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
@@ -412,13 +403,49 @@ struct WorkspaceScreen: View {
         closeTab(id)
     }
 
+    /// 连接中页取消、断开整台 Mac（`store.teardownTabIDs`）。
+    private func tearDown(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        close(ids) {
+            for id in ids {
+                guard let removed = workspace.close(id) else { continue }
+                removed.shutdown()
+                dispose(removed)
+                workspace.noteClosedByUser(removed)
+                workspace.stopFollowingIfLastTab(removed)
+            }
+            if workspace.isEmpty { store.showWorkspace = false }
+        }
+        store.teardownTabIDs = []
+    }
+
     private func closeTab(_ id: UUID) {
-        guard let removed = workspace.close(id) else { return }
-        finishClosing(removed)
-        workspace.noteClosedByUser(removed)
-        workspace.stopFollowingIfLastTab(removed)
-        // 关掉最后一个会话就没有可看的了：收回主机列表。
-        if workspace.isEmpty { store.showWorkspace = false }
+        close([id]) {
+            guard let removed = workspace.close(id) else { return }
+            finishClosing(removed)
+            workspace.noteClosedByUser(removed)
+            workspace.stopFollowingIfLastTab(removed)
+            // 关掉最后一个会话就没有可看的了：收回主机列表。
+            if workspace.isEmpty { store.showWorkspace = false }
+        }
+    }
+
+    /// 关这些标签（`body` 摘下、断开、清理）。会把露着的工作区关空时：先收起工作区，等它滑走了再执行 `body`。
+    ///
+    /// 改前当场摘下：标签一没，工作区那一拍要重算各格（Duo 实测 ~27 ms），摘下的视图（终端 surface、Code 列表）
+    /// 又跟着收起的动画淡出、在动画末尾才拆（~63 ms），滑动的头尾各掉几帧，滑走的还是一块空白。现在标签照常显示、
+    /// 跟着整层滑出去，拆的时候已经没有东西在动了。正在建连的标签不等：它的连接中页要当场撤（见 `finishClosing`）。
+    private func close(_ ids: Set<UUID>, then body: @escaping () -> Void) {
+        let emptiesWorkspace = workspace.tabs.allSatisfy { ids.contains($0.id) || workspace.closingTabIDs.contains($0.id) }
+        let connecting = store.connecting?.tabID.map(ids.contains) ?? false
+        guard store.showWorkspace, emptiesWorkspace, !connecting else { return body() }
+        workspace.closingTabIDs.formUnion(ids)
+        store.showWorkspace = false
+        Task {
+            try? await Task.sleep(for: WorkspaceLayer.slideSettle)
+            workspace.closingTabIDs.subtract(ids)
+            body()
+        }
     }
 
     /// 标签已从工作区摘下：断连接，撤掉跟它绑定的连接中页，清理视图侧。
@@ -477,9 +504,16 @@ struct WorkspaceScreen: View {
     /// 也拒绝 UIKit 的自动恢复；键盘正在别的终端标签上时直接换主，不先收起，见 `handKeyboard`），
     /// 再在布局落定后让归属者聚焦——它没连上时 `focusKeyboard`
     /// 什么也不做。没有归属者（文件浏览 / Agent / 连接中）就全局收起，否则击键会落到另一格。
-    private func syncKeyboard() {
+    private func visibilityChanged(_ visible: Bool) {
+        syncKeyboard(focusAfter: visible ? WorkspaceLayer.slideSettleSeconds : nil)
+    }
+
+    private func syncKeyboard() { syncKeyboard(focusAfter: nil) }
+
+    /// `focusAfter`：多久之后再聚焦 / 收起（nil = 等布局落定，约一拍）。
+    private func syncKeyboard(focusAfter: TimeInterval?) {
         workspace.handKeyboard(to: keyboardOwner)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (focusAfter ?? 0.05)) {
             // 连接中页 / 收起态不做全局收起：上面可能叠着要输入的弹层；终端已按归属各自收了。
             guard store.connecting == nil, store.showWorkspace else { return }
             if let owner = keyboardOwner {
