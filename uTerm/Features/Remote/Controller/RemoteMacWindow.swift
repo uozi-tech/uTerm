@@ -27,6 +27,11 @@ struct RemoteMacWindowView: View {
         .background(WorkspaceWindowChrome(serverName: "", background: WS.canvasNSColor))
         .background(WindowTitleBinding(title: title))
         .background(WorkspaceCloseShortcutInstaller { window in
+            // 前台是 Code 标签页、右边显示着它里面的会话：只结束那个会话（`CodeTabModel.closeShortcut`）。
+            if TerminalCloseGuard.endDisplayedSession(of: model?.active?.codeTab, window: window,
+                                                      session: { ($0 as? RemoteTerminalPane)?.session }) {
+                return
+            }
             guard let model, model.panes.count > 1, let active = model.active else {
                 window.performClose(nil)
                 return
@@ -134,6 +139,10 @@ private struct RemoteMacSessionView: View {
             }
         }
         .onChange(of: client.listedSessionIDs) { _, ids in model.follow(ids, order: client.sessions.macTabOrder) }
+        // 那台 Mac 的 Code 标签页变了（会话进出、结束、对上记录、改名）：同一份会话列表也要再对一次。
+        .onChange(of: client.codeTabs) { _, _ in
+            model.follow(client.listedSessionIDs, order: client.sessions.macTabOrder)
+        }
         // 用户拖过标签就马上让那台 Mac 跟着排（`UPaneGroups` 没有拖动排序的回调，只能看布局变没变）。
         .onChange(of: model.layout) { _, _ in model.layoutChanged() }
     }
@@ -209,7 +218,13 @@ private struct RemoteMacTerminalArea: View {
                     splitButtonDirection: .automatic,
                     splitButtonIcon: .system("rectangle.split.2x1"),
                     descriptor: { tab in descriptor(for: tab.payload) },
-                    content: { tab, _ in RemoteTerminalPaneView(pane: tab.payload, background: background) },
+                    content: { tab, _ in
+                        if let code = tab.payload.codeTab {
+                            codeTab(code, background: background)
+                        } else {
+                            RemoteTerminalPaneView(pane: tab.payload, background: background)
+                        }
+                    },
                     emptyGroup: { _ in background },
                     onRequestClose: { tab in model.close(tab.id) },
                     stripAccessory: { _ in
@@ -217,14 +232,13 @@ private struct RemoteMacTerminalArea: View {
                             if model.client.supportsFiles { filesButton }
                             if model.client.supportsDesktop { desktopButton }
                             newShellButton
+                            if model.offersCodeTab { CodeTabButton { model.openCodeTab() } }
                         }
                     },
                     tabMenu: { tab in
-                        // 历史会话经文件通道读那台 Mac 的 `~/.claude`：老版本 Mac 不认文件请求（收到会断开整条连接），不给入口。
                         TerminalTabContextMenu(
                             title: tab.payload.title(in: model.client.sessions),
-                            onOpenClaudeHistory: model.client.supportsFiles
-                                ? { openWindow.openClaudeHistory(pairedMac: macID) } : nil,
+                            onOpenClaudeHistory: historyAction(for: tab.payload),
                             onClose: { model.close(tab.id) })
                     })
                     .uPaneGroupStyle(.card)
@@ -238,7 +252,47 @@ private struct RemoteMacTerminalArea: View {
         }
     }
 
+    /// 终端标签右键「历史会话…」：那台 Mac 的 Code 标签页能镜像就打开这扇窗口里的 Code 标签页，否则打开独立的历史会话窗口。
+    /// 历史会话经文件通道读那台 Mac 的 `~/.claude`：老版本 Mac 不认文件请求（收到会断开整条连接），不给入口。
+    private func historyAction(for pane: RemoteTerminalPane) -> (() -> Void)? {
+        guard pane.codeTab == nil else { return nil }
+        if model.offersCodeTab { return { model.openCodeTab() } }
+        guard model.client.supportsFiles else { return nil }
+        return { openWindow.openClaudeHistory(pairedMac: macID) }
+    }
+
+    /// Code 标签页：读那台 Mac 上的记录（经远控链路的文件通道），右边的终端接着它上面那个会话。
+    private func codeTab(_ code: CodeTabModel, background: SwiftUI.Color) -> some View {
+        CodeTabView(
+            code: code,
+            makeConnection: { model.makeCodeConnection(for: code) },
+            terminal: { terminal, _ in
+                guard let pane = terminal as? RemoteTerminalPane else { return AnyView(EmptyView()) }
+                return AnyView(RemoteTerminalPaneView(pane: pane, background: background))
+            },
+            onMoveToTab: model.supportsCodeTabActions ? { runID in model.moveCodeRunToTab(runID) } : nil,
+            onEndRun: { runID in
+                TerminalCloseGuard.requestEndSession(runID, in: code) { ($0 as? RemoteTerminalPane)?.session }
+            })
+        .alert(code.remote?.failure?.title ?? "",
+               isPresented: Binding(get: { code.remote?.failure != nil }, set: { if !$0 { code.remote?.failure = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(code.remote?.failure?.message ?? "")
+        }
+    }
+
     private func descriptor(for pane: RemoteTerminalPane) -> UPaneTabDescriptor {
+        if let code = pane.codeTab {
+            let running = code.runningCount
+            // 同本机终端窗口的 Code 标签：不放图标，绿点一直在。
+            return UPaneTabDescriptor(
+                title: TerminalArea.codeTabBaseTitle,
+                leadingDot: UD.success,
+                help: running > 0
+                    ? String(localized: "\(running) 个会话正在运行", comment: "Code 标签页收起的侧栏上：在跑的会话个数")
+                    : TerminalArea.codeTabBaseTitle)
+        }
         let session = pane.session
         // 镜像不自己解析程序状态（那台 Mac 答查询、推状态），读连接上记着的。
         let status = model.client.programStatus(for: pane.id)

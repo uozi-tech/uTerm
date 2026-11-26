@@ -252,8 +252,11 @@ struct CodeTabEndedBanner: View {
                         .foregroundStyle(UD.text3)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                UDButton(title: AgentHistoryText.restartSession, systemImage: "arrow.clockwise") {
-                    code.restart(runID)
+                // 镜像另一台 Mac 的会话，那台 Mac 太旧、不能在它的 Code 标签页里重新开始：不给这个按钮。
+                if code.canRestart(runID) {
+                    UDButton(title: AgentHistoryText.restartSession, systemImage: "arrow.clockwise") {
+                        code.restart(runID)
+                    }
                 }
                 UDButton(title: AgentHistoryText.closeEndedSession, style: .secondary) {
                     code.dismissEnded(runID)
