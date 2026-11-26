@@ -15,7 +15,7 @@ struct AgentHistoryRunning {
     var actions: AgentHistoryRunActions? = nil
 }
 
-/// 跑着的会话那一行的操作，同终端顶上「⋯」菜单里的那几样。
+/// 跑着的会话那一行的操作（右键菜单与悬停的 ×）。
 struct AgentHistoryRunActions {
     /// 「结束会话」（右键菜单与悬停的 ×）。前台还有程序在跑时先问，由宿主管。
     let end: (UUID) -> Void
@@ -40,6 +40,8 @@ struct AgentHistoryRunRow: Identifiable {
     let status: AgentHistoryRunStatus
     /// 右边正看着它的记录（右键菜单里是「返回终端」，否则「查看记录」）。
     var showsRecord = false
+    /// 能切到看它的记录（`CodeTabModel.canShowRecord`）：右键菜单里出不出「查看记录」。
+    var canShowRecord = false
 }
 
 /// 一个跑着的会话此刻的状态（规则见 `CodeRunStatus`）。`read` 在显示它的那一小块视图里调：状态变了只重画那一行，
@@ -699,19 +701,15 @@ struct AgentHistoryRunRowActions: ViewModifier {
     }
 
     @ViewBuilder private func menu(_ actions: AgentHistoryRunActions) -> some View {
-        if row.path != nil {
+        if row.canShowRecord {
             if row.showsRecord {
-                Button(String(localized: "返回终端")) { actions.showTerminal(row.id) }
+                Button(AgentHistoryText.backToTerminal) { actions.showTerminal(row.id) }
             } else {
-                Button(String(localized: "查看记录", comment: "Code 标签页：看这个正在跑的会话的对话记录")) {
-                    actions.showRecord(row.id)
-                }
+                Button(AgentHistoryText.viewRecord) { actions.showRecord(row.id) }
             }
         }
         if let move = actions.moveToTab {
-            Button(String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")) {
-                move(row.id)
-            }
+            Button(AgentHistoryText.moveToTab) { move(row.id) }
         }
         if let file, let pins {
             Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(AgentHistoryPinKey(file)))) { pins.toggle(file) }
@@ -1296,7 +1294,7 @@ struct AgentTranscriptPane: View {
             .help(String(localized: "拷贝"))
             // 子代理的记录只读：不能单独继续。
             if transcript.subagent == nil, isRunning {
-                UDButton(title: String(localized: "返回终端"), systemImage: "terminal", action: onResume)
+                UDButton(title: AgentHistoryText.backToTerminal, systemImage: "terminal", action: onResume)
                     .help(String(localized: "这个会话正在这个标签页里运行，回到它的终端",
                                  comment: "Code 标签页：看记录时回到正在跑的那个终端"))
             } else if transcript.subagent == nil {

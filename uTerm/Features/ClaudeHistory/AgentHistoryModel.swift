@@ -174,7 +174,7 @@ final class AgentHistoryModel {
         guard tools != shownTools else { return }
         shownTools = tools
         applyToolFilter()
-        if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) { select(nil) }
+        if let selectedFile, file(at: selectedFile.path) == nil { select(nil) }
         if let query = search?.query, !isListing, phase == .ready { startSearch(query) }
     }
 
@@ -458,9 +458,7 @@ final class AgentHistoryModel {
         pump()
         fill()
         storeInCache()
-        if let selectedFile, !files.contains(where: { $0.path == selectedFile.path }) {
-            select(nil)
-        }
+        if let selectedFile, file(at: selectedFile.path) == nil { select(nil) }
     }
 
     /// 后面还有没读的记录（列表底下画「正在读取」），或者后台重列后排进已显示那一段的新记录还没读到。
@@ -518,7 +516,7 @@ final class AgentHistoryModel {
     private func finished(_ file: AgentHistorySessionFile, _ result: AgentHistorySessionMetadata?) {
         inFlight.remove(file.path)
         // 读的时候文件又变了（中途刷新过）：这份信息是旧的，丢掉重读。
-        if let current = files.first(where: { $0.path == file.path }), current.cacheKey != file.cacheKey {
+        if let current = self.file(at: file.path), current.cacheKey != file.cacheKey {
             enqueue(current)
             pump()
             fill()
@@ -544,6 +542,19 @@ final class AgentHistoryModel {
         pump()
         fill()
         if resolvedCount != before || (queued.isEmpty && inFlight.isEmpty) { storeInCache() }
+    }
+
+    /// 列表（`files`）里这一份记录；没列到（还没重列、被「显示」筛掉）或 `path` 为 nil 时为 nil。
+    /// 选中的会话必须在 `files` 里：重列、改「显示」时不在里面的选中会被取消（`setShownTools`、`adopt`）。
+    func file(at path: String?) -> AgentHistorySessionFile? {
+        guard let path else { return nil }
+        return files.first { $0.path == path }
+    }
+
+    /// 列表里对上这个键（工具 + 会话 ID）的记录；同一个键有好几份时取第一份（列表新的在前）。
+    func file(for key: AgentHistoryPinKey?) -> AgentHistorySessionFile? {
+        guard let key else { return nil }
+        return files.first { AgentHistoryPinKey($0) == key }
     }
 
     func select(_ file: AgentHistorySessionFile?) {

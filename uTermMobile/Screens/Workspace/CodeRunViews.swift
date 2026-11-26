@@ -93,22 +93,22 @@ struct CodeRunHeader: View {
     @ViewBuilder private var trailing: some View {
         if run.isRunning {
             MMenu {
-                // 详情露着终端时才有这条标题行，所以这里是「查看记录」；看记录时回终端的按钮在记录的标题行上。
-                if run.sessionPath != nil {
-                    Button { code.tab.setShowsTerminal(run.id, !run.showsTerminal) } label: {
-                        Label(run.showsTerminal ? String(localized: "查看记录") : String(localized: "返回终端"),
-                              systemImage: run.showsTerminal ? "clock" : "terminal")
+                // 详情露着终端时才有这条标题行，所以这里只有「查看记录」；看记录时回终端的按钮在记录的标题行上。
+                // 记录列表里还没列到的没有这一项（切不过去）。
+                if code.tab.canShowRecord(run) {
+                    Button { code.tab.setShowsTerminal(run.id, false) } label: {
+                        Label(AgentHistoryText.viewRecord, systemImage: "clock")
                     }
                 }
                 // 镜像那台 Mac 的会话请 Mac 挪（Mac 要认得 `codeTabAction`，见 `ClaudeHistoryTab+MacActions`）。
                 if let move = code.onMoveToTab, code.canMoveToTab(run) {
                     Button { move(run.id) } label: {
-                        Label("移到新标签页", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label(AgentHistoryText.moveToTab, systemImage: "rectangle.portrait.and.arrow.right")
                     }
                     .disabled(code.tab.macActionInFlight)
                 }
                 Button(role: .destructive) { code.tab.endRun(run.id) } label: {
-                    Label("结束会话", systemImage: "xmark.circle")
+                    Label(AgentHistoryText.endSession, systemImage: "xmark.circle")
                 }
             } label: {
                 MIcon(name: "ellipsis", size: 16, color: M.text2, weight: .semibold)

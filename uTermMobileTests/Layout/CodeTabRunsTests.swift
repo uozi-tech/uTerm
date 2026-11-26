@@ -324,6 +324,24 @@ final class CodeTabRunsTests: XCTestCase {
         tab.close()
     }
 
+    /// 对上了记录、列表还没列到它（还没重列、被「显示」筛掉）：「更多」里不出「查看记录」，切也切不过去，详情留在终端，
+    /// 记录那边的选中不动。回归：原来点了「查看记录」终端藏起来，露出的是别的记录（或空白）。
+    func testRunWhoseRecordIsNotListedCannotShowIt() async throws {
+        let (container, host) = try container()
+        let (tab, model, _) = try await codeTab(host: host)
+        let file = try resume(tab, model, tool: .codex, container: container)
+        let run = try XCTUnwrap(tab.runs.focused)
+        XCTAssertTrue(tab.canShowRecord(run), "列表里有它的记录")
+
+        tab.runs.updateRecord(run.id, path: "/nope/unlisted.jsonl", sessionID: "unlisted")
+        let moved = try XCTUnwrap(tab.runs.run(id: run.id))
+        XCTAssertFalse(tab.canShowRecord(moved))
+        tab.setShowsTerminal(run.id, false)
+        XCTAssertEqual(tab.runs.run(id: run.id)?.showsTerminal, true, "切不过去：留在终端")
+        XCTAssertEqual(model.selectedFile?.path, file.path, "记录那边的选中不动")
+        tab.close()
+    }
+
     /// 程序退出（shell 跟着结束）：跑得够久的回到只读记录，记录重新从末尾读；很快就退出的留着终端，标成已退出。
     func testProgramExitReturnsToTheFreshRecord() async throws {
         let (container, host) = try container()

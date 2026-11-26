@@ -174,4 +174,22 @@ final class GhosttyLinkHoverTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(200))
         XCTAssertTrue(opened.isEmpty, "不按 ⌘ 不打开链接")
     }
+
+    /// 程序接管鼠标时 ⌘ 点一次只打开一次，点击也不报给程序（否则 Claude Code 自己也会再开一次）。
+    func testCommandClickWhileCapturedOpensOnceAndReportsNothing() async {
+        await rig.feed("\u{1b}[?1000h\u{1b}[?1002h\u{1b}[?1006hInstalled /Applications/uTerm.app now\r\n")
+        var opened: [String] = []
+        rig.session.onFilePreviewRequest = { opened.append($0) }
+        let before = await rig.sent(expecting: 0, timeout: 0.1).count
+        guard let point = rig.windowPoint(col: 14, row: 0) else { return XCTFail("量不到格子尺寸") }
+        rig.view.flagsChanged(with: flags(.command))
+        rig.view.mouseMoved(with: RealEvents.mouse(.mouseMoved, window: rig.window, at: point, modifiers: .command))
+        rig.view.mouseDown(with: RealEvents.mouse(.leftMouseDown, window: rig.window, at: point, modifiers: .command))
+        rig.view.mouseUp(with: RealEvents.mouse(.leftMouseUp, window: rig.window, at: point, modifiers: .command))
+        rig.view.flagsChanged(with: flags([]))
+        try? await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(opened, ["/Applications/uTerm.app"], "只打开一次")
+        let after = await rig.sent(expecting: before + 1, timeout: 0.3)
+        XCTAssertEqual(String(decoding: after.dropFirst(before), as: UTF8.self), "", "⌘ 点不报给程序")
+    }
 }

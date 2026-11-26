@@ -209,6 +209,29 @@ final class TerminalFilePreviewTests: XCTestCase {
         await session.close()
     }
 
+    /// 本机终端窗口接了 `onFilePreviewRequest`：Markdown 开在旁边，别的照旧交给系统。
+    func testLocalTerminalOpensMarkdownBesideAndOtherFilesWithTheSystem() async {
+        let backend = LocalOpeningBackend(.init(workingDirectory: "/Users/me/repo", home: "/Users/me"))
+        let session = TerminalSession()
+        await session.connect(using: backend)
+        var beside: [String] = []
+        session.onFilePreviewRequest = { beside.append($0) }
+
+        XCTAssertTrue(session.openTerminalLink("docs/plan.md:12", kind: .unknown))
+        XCTAssertTrue(session.openTerminalLink("/Users/me/repo/index.html", kind: .unknown))
+        XCTAssertTrue(session.openTerminalLink("~/notes.txt", kind: .unknown))
+
+        var opened: [String] = []
+        for _ in 0..<200 {
+            opened = await backend.opened
+            if opened.count == 2, beside.count == 1 { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(beside, ["/Users/me/repo/docs/plan.md"])
+        XCTAssertEqual(Set(opened), ["/Users/me/repo/index.html", "/Users/me/notes.txt"])
+        await session.close()
+    }
+
     func testLocalPathPolicyNeverRunsThingsItOnlyReveals() {
         XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/index.html", isDirectory: false, isExecutable: false), .open)
         XCTAssertEqual(LocalPathOpenPolicy.action(path: "/Users/me/plan.md", isDirectory: false, isExecutable: false), .open)

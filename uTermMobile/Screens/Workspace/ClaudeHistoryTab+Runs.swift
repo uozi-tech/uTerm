@@ -129,7 +129,7 @@ extension ClaudeHistoryTab {
         restoredSelection = nil
         runs.focus(id)
         runs.setShowsTerminal(id, true)
-        if let path = run.sessionPath, let file = history.files.first(where: { $0.path == path }) {
+        if let file = history.file(at: run.sessionPath) {
             history.select(file)
         } else {
             history.select(nil)
@@ -143,15 +143,21 @@ extension ClaudeHistoryTab {
         connection.history?.select(nil)
     }
 
-    /// 「终端 / 记录」切换。
+    /// 「终端 / 记录」切换。看不了记录的（`canShowRecord`）不切到记录：选不中记录，切过去详情露出的是别的。
+    /// `CodeRunBoard.setShowsTerminal` 只拦没对上记录的，列表列没列到它只有这一层知道。
     func setShowsTerminal(_ id: UUID, _ shows: Bool) {
+        let file = shows ? nil : connection.history?.file(at: runs.run(id: id)?.sessionPath)
+        guard shows || file != nil else { return }
         restoredSelection = nil
         runs.focus(id)
         runs.setShowsTerminal(id, shows)
-        guard !shows, let path = runs.run(id: id)?.sessionPath, let history = connection.history,
-              history.selectedFile?.path != path,
-              let file = history.files.first(where: { $0.path == path }) else { return }
-        history.select(file)
+        if let file { connection.history?.select(file) }
+    }
+
+    /// 这个跑着的会话现在能不能切到看记录（「更多」里出不出「查看记录」）：对上了记录、列表里列到了它。
+    /// 规则同 Mac 的 `CodeTabModel.canShowRecord`（都按 `AgentHistoryModel.file(at:)`）。
+    func canShowRecord(_ run: CodeRunBoard<TermTab>.Run) -> Bool {
+        connection.history?.file(at: run.sessionPath) != nil
     }
 
     // MARK: 程序退出
@@ -200,7 +206,7 @@ extension ClaudeHistoryTab {
         guard let history = connection.history, let run = runs.run(id: id), !run.isRunning,
               let path = run.sessionPath else { return }
         var listed = history.metadata[path]?.isListed == true
-        if !listed, let file = history.files.first(where: { $0.path == path }) ?? found(path) {
+        if !listed, let file = history.file(at: path) ?? found(path) {
             listed = (try? await history.source.metadata(for: file))?.isListed ?? false
         }
         guard listed, runs.run(id: id) != nil else { return }
@@ -215,7 +221,7 @@ extension ClaudeHistoryTab {
     func restartRun(_ id: UUID) {
         guard let old = runs.run(id: id), !old.isRunning, !old.isMirrored, let history = connection.history,
               let container = runContainer, let relay = runRelay else { return }
-        let file = old.sessionPath.flatMap { path in history.files.first { $0.path == path } }
+        let file = history.file(at: old.sessionPath)
         let resumes = file.map { history.metadata[$0.path]?.isListed ?? true } ?? false
         let command: String
         let directory: String
@@ -288,7 +294,7 @@ extension ClaudeHistoryTab {
         Task {
             // 安静地重列（同 Mac 的 Code 标签页）：列表照旧显示着、列完再换；一时列不出来（断线）也不换成失败页。
             await history.reload(showsLoading: false)
-            guard let reopen, let file = history.files.first(where: { $0.path == reopen }) else { return }
+            guard let file = history.file(at: reopen) else { return }
             history.select(nil)
             history.select(file)
         }
@@ -390,15 +396,14 @@ extension ClaudeHistoryTab {
     /// 列表还没读出来时什么都不做（`start` 读完之后再来）。
     func applyRestoredState() {
         guard let history = connection.history, history.phase == .ready || history.phase == .empty else { return }
-        var byKey: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
-        for file in history.files where byKey[AgentHistoryPinKey(file)] == nil { byKey[AgentHistoryPinKey(file)] = file }
+        let byKey = AgentHistoryPinKey.firstFiles(in: history.files)
         runs.resolveRestored { tool, sessionID in byKey[AgentHistoryPinKey(tool: tool, sessionID: sessionID)]?.path }
         guard let wanted = restoredSelection else { return }
         restoredSelection = nil
         switch wanted {
         case .run(let id, let showsTranscript):
             guard let run = runs.run(id: id) else { return }
-            if let path = run.sessionPath, let file = history.files.first(where: { $0.path == path }) {
+            if let file = history.file(at: run.sessionPath) {
                 history.select(file)
                 runs.setShowsTerminal(id, !showsTranscript)
             } else {

@@ -100,12 +100,13 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(made.count, 1)
     }
 
-    /// 终端顶上「⋯」菜单的「查看记录」，与记录标题行上换成的「返回终端」（它走「继续这个会话」同一个动作）。
+    /// 「查看记录」（侧栏那一行的右键菜单），与记录标题行上换成的「返回终端」（它走「继续这个会话」同一个动作）。
     func testViewRecordAndBackToTerminal() async throws {
         let (code, history, _) = await makeCode(sessions: [session("a", in: Self.shop, title: "t", ago: 60)])
         let a = try file(history, "a")
         let run = try XCTUnwrap(code.resume(a))
-        code.setShowsTranscript(true, for: run.id)
+        XCTAssertTrue(code.canShowRecord(run))
+        code.showRecord(of: run.id)
         XCTAssertEqual(code.detail, .transcript, "「查看记录」")
         XCTAssertEqual(code.run(for: a.path)?.id, run.id, "还在跑：记录标题行上是「返回终端」")
         XCTAssertNil(code.displayedTerminal)
@@ -114,16 +115,31 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(code.detail, .terminal(run.id))
         XCTAssertEqual(made.count, 1)
 
-        code.setShowsTranscript(true, for: run.id)
-        code.setShowsTranscript(false, for: run.id)
-        XCTAssertEqual(code.detail, .terminal(run.id), "菜单里的「返回终端」")
+        code.showRecord(of: run.id)
+        code.selectRun(run.id)
+        XCTAssertEqual(code.detail, .terminal(run.id), "右键菜单里的「返回终端」")
     }
 
     func testNewSessionHasNoRecordToView() async throws {
         let (code, _, _) = await makeCode(sessions: [])
         let run = try XCTUnwrap(code.startNewSession(tool: .claude, command: "claude", directory: Self.shop))
-        code.setShowsTranscript(true, for: run.id)
+        XCTAssertFalse(code.canShowRecord(run))
+        code.showRecord(of: run.id)
         XCTAssertEqual(code.detail, .terminal(run.id), "没对上记录的新会话没有记录可看")
+    }
+
+    /// 对上了记录、列表还没列到它（设备上「继续」的、刚写出来还没重列）：「查看记录」不出，切也切不过去，右边留在终端。
+    /// 回归：原来终端顶上「⋯」里有「查看记录」，点了没反应。
+    func testRunWhoseRecordIsNotListedCannotShowIt() async throws {
+        let (code, history, _) = await makeCode(sessions: [])
+        let path = "/home/u/.claude/projects/-srv-shop/fresh.jsonl"
+        let run = try XCTUnwrap(code.resume(path: path, tool: .claude, sessionID: "fresh", directory: Self.shop))
+        XCTAssertEqual(run.path, path)
+        XCTAssertNil(history.file(at: path), "列表里还没有它")
+        XCTAssertFalse(code.canShowRecord(run))
+        code.showRecord(of: run.id)
+        XCTAssertEqual(code.detail, .terminal(run.id), "切不过去：留在它的终端")
+        XCTAssertNil(history.selectedFile)
     }
 
     func testRunEndsWhenTheProgramExitsAndTheRecordComesBack() async throws {
@@ -312,7 +328,7 @@ final class CodeTabTests: XCTestCase {
         XCTAssertEqual(code.detail, .terminal(run.id))
         XCTAssertEqual(code.closeShortcut, .endSession(run.id), "右边是它的终端")
 
-        code.setShowsTranscript(true, for: run.id)
+        code.showRecord(of: run.id)
         XCTAssertEqual(code.detail, .transcript)
         XCTAssertEqual(code.closeShortcut, .endSession(run.id), "还在跑时看它的记录也算")
 

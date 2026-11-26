@@ -351,6 +351,21 @@ enum AgentHistoryText {
         String(localized: "关闭", comment: "Code 标签页：会话结束后，关掉留着的终端")
     }
 
+    /// 看一个在 Code 标签页里跑着的会话的对话记录（Mac：侧栏那一行的右键菜单；iOS：终端标题行的「更多」）。
+    static var viewRecord: String {
+        String(localized: "查看记录", comment: "Code 标签页：看这个正在跑的会话的对话记录")
+    }
+
+    /// 看着一个跑着的会话的记录时回到它的终端（右键菜单项、记录标题行上的按钮）。
+    static var backToTerminal: String {
+        String(localized: "返回终端")
+    }
+
+    /// 把 Code 标签页里跑着的会话的终端开成普通的终端标签页。
+    static var moveToTab: String {
+        String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
+    }
+
     /// 结束一个在 Code 标签页里跑着的会话（Mac：终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×；iOS 同名菜单项）。
     static var endSession: String {
         String(localized: "结束会话")

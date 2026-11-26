@@ -18,6 +18,13 @@ nonisolated struct AgentHistoryPinKey: Hashable, Sendable {
         self.init(tool: file.tool, sessionID: file.sessionID)
     }
 
+    /// 每个键对上的第一份记录（`files` 新的在前，同一个键有好几份时取最新那份）。
+    static func firstFiles(in files: [AgentHistorySessionFile]) -> [AgentHistoryPinKey: AgentHistorySessionFile] {
+        var first: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
+        for file in files where first[AgentHistoryPinKey(file)] == nil { first[AgentHistoryPinKey(file)] = file }
+        return first
+    }
+
     /// 存储里的写法：`工具原始值:会话 ID`（如 `claude:0b7e…`）。
     var stored: String { "\(tool.rawValue):\(sessionID)" }
 
@@ -99,11 +106,7 @@ nonisolated enum AgentHistoryPinning {
     static func resolved(_ keys: [AgentHistoryPinKey], in files: [AgentHistorySessionFile],
                          metadata: [String: AgentHistorySessionMetadata]) -> [AgentHistorySessionFile] {
         guard !keys.isEmpty else { return [] }
-        var first: [AgentHistoryPinKey: AgentHistorySessionFile] = [:]
-        for file in files {
-            let key = AgentHistoryPinKey(file)
-            if first[key] == nil { first[key] = file }
-        }
+        let first = AgentHistoryPinKey.firstFiles(in: files)
         return keys.compactMap { key in
             guard let file = first[key], let info = metadata[file.path], info.isListed else { return nil }
             return file
