@@ -35,7 +35,7 @@ final class TabReorderAnimationProbeTests: XCTestCase {
             VStack(spacing: 0) {
                 WorkspaceTabStrip(tabs: workspace.tabs(in: pane), activeID: pane.activeID,
                                   onSelect: { _ in }, onClose: { _ in }, onNew: { _ in }, onBack: {}, onAgent: {},
-                                  showsTrailingControls: false,
+                                  showsAgentButton: false,
                                   paneID: pane.id, drag: drag, frames: frames)
                 Spacer(minLength: 0)
             }

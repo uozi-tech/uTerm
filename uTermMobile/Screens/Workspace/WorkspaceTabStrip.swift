@@ -116,9 +116,9 @@ struct WorkspaceTabStrip: View {
     var onAgent: () -> Void
     var onToggleSplit: () -> Void = {}
     var onMoveToOtherPane: (UUID) -> Void = { _ in }
-    /// Agent / 分屏两个开关是否放在条尾。状态栏在侧边一列时（Duo），它们改放到那一列状态栏
-    /// 下面（WorkspaceSideControls），条上只留返回与标签。
-    var showsTrailingControls: Bool = true
+    /// Agent 开关是否放在条尾。状态栏在侧边一列时（Duo），它改放到那一列状态栏下面（WorkspaceSideControls）。
+    /// 分屏开关始终在条尾（用户要的：放回标签条上）。
+    var showsAgentButton: Bool = true
     /// 这一格的 id：标签条与标签的位置按它记进 `frames`。
     var paneID: UUID? = nil
     /// 正在进行的标签拖动（被拖的标签在原位留成空位）。
@@ -176,8 +176,8 @@ struct WorkspaceTabStrip: View {
             }
 
             // 远控标签（经 Mac 接入的终端、Mac 本机 shell）没有 Agent：Agent 要直连那台主机执行命令。
-            if showsTrailingControls, let frontTerminal, frontTerminal.offersAgent { agentButton }
-            if showsTrailingControls, let split = splitState {
+            if showsAgentButton, let frontTerminal, frontTerminal.offersAgent { agentButton }
+            if let split = splitState {
                 // 开关语义：分屏中用实心图标表示「开着」，再点一下取消。
                 stripButton(systemImage: split ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
                             color: M.text2, label: split ? "取消分屏" : "分屏", action: onToggleSplit)
@@ -287,20 +287,16 @@ struct WorkspaceAgentButton: View {
     }
 }
 
-/// Duo 状态栏在侧边一列时（折叠横握在左边，其余在右边），Agent / 分屏两个开关竖排在那一列状态栏
-/// 下面（Apple 对 Duo 的建议：按钮放侧边），而不是挤在标签条尾、让那一列空着。作用于聚焦格。
+/// Duo 状态栏在侧边一列时（折叠横握在左边，其余在右边），Agent 开关放在那一列状态栏下面（Apple 对 Duo 的建议：
+/// 按钮放侧边），而不是挤在标签条尾、让那一列空着。作用于聚焦格。分屏开关在标签条上（用户要的）。
 struct WorkspaceSideControls: View {
     /// 聚焦格的前台标签是终端时才有 Agent 开关。
     var agentOn: Bool?
-    var isSplit: Bool
     var onAgent: () -> Void
-    var onToggleSplit: () -> Void
 
     var body: some View {
         VStack(spacing: 6) {
             if let agentOn { WorkspaceAgentButton(agentOn: agentOn, action: onAgent) }
-            WorkspaceRoundButton(systemImage: isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
-                                 color: M.text2, label: isSplit ? "取消分屏" : "分屏", action: onToggleSplit)
         }
         .padding(.top, 8)
     }

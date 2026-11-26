@@ -59,16 +59,14 @@ struct WorkspaceScreen: View {
         // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
         // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
         .ignoresSafeArea(.container, edges: chrome.statusRowHeight != nil ? .top : [])
-        // Duo 折叠 / 展开横屏：状态栏在侧边一列的顶部（折叠横握在左边），下面空着——Agent / 分屏开关放到那里。
+        // Duo 折叠 / 展开横屏：状态栏在侧边一列的顶部（折叠横握在左边），下面空着——Agent 开关放到那里（分屏开关在标签条上）。
         .overlay(alignment: chrome.statusColumn?.edge == .leading ? .topLeading : .topTrailing) {
             if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
                 VStack(spacing: 14) {
                     WorkspaceSideControls(
                         // 远控标签、体验主机没有 Agent（同标签条，见 WorkspaceTabStrip）。
                         agentOn: focusedFrontTerminal.flatMap { $0.offersAgent ? $0.mode == .agent : nil },
-                        isSplit: workspace.isSplit,
-                        onAgent: { toggleAgent(in: workspace.focusedPane) },
-                        onToggleSplit: toggleSplit)
+                        onAgent: { toggleAgent(in: workspace.focusedPane) })
                     // 聚焦格前台是 Code 标签页：账号额度放在这一列（列表底部就不再列）。
                     if let history = focusedFrontHistory {
                         WorkspaceSideAccountLimits(history: history, width: column.width)
@@ -614,7 +612,7 @@ struct WorkspaceScreen: View {
                 onAgent: { toggleAgent(in: pane) },
                 onToggleSplit: toggleSplit,
                 onMoveToOtherPane: { workspace.moveToOtherPane($0) },
-                showsTrailingControls: chrome.statusColumn == nil,
+                showsAgentButton: chrome.statusColumn == nil,
                 paneID: pane.id,
                 drag: tabDrag,
                 frames: stripFrames,

@@ -210,7 +210,7 @@ final class SplitLayoutProbeTests: XCTestCase {
         try await assertScrollRowStaysInSafeArea(side: .right, root: VStack(spacing: 0) {
             WorkspaceTabStrip(tabs: work.tabs, activeID: work.focusedPane.activeID,
                               onSelect: { _ in }, onClose: { _ in }, onNew: { _ in }, onBack: {}, onAgent: {},
-                              showsTrailingControls: false)
+                              showsAgentButton: false)
             Color.clear
         }.environment(\.mAccent, M.accent))
     }
