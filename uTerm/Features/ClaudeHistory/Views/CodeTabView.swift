@@ -197,25 +197,31 @@ private struct CodeTabBrowser: View {
     /// 看记录时回终端的按钮在记录的标题行上。
     @ViewBuilder private func runMenu(_ run: CodeTabModel.Run) -> some View {
         if onMoveToTab != nil || onEndRun != nil {
-            Menu {
-                if let onMoveToTab {
-                    Button(AgentHistoryText.moveToTab) { onMoveToTab(run.id) }
-                }
-                if let onEndRun {
-                    if onMoveToTab != nil { Divider() }
-                    Button(AgentHistoryText.endSession, role: .destructive) { onEndRun(run.id) }
-                }
-            } label: {
+            // uAppKit 的浮层菜单（`UDDropdown` + `UDMenu`），不用系统菜单。
+            UDDropdown(anchor: .trailing) { _ in
                 Image(systemName: "ellipsis")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+                    .iconButtonHover(cornerRadius: 6)
+            } content: {
+                UDMenu(width: 168, maxHeight: nil, items: runMenuItems(run))
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 26, height: 26)
-            .contentShape(Rectangle())
-            .iconButtonHover(cornerRadius: 6)
+            .fixedSize()
             .help(String(localized: "更多"))
             .accessibilityLabel(Text("更多"))
         }
+    }
+
+    private func runMenuItems(_ run: CodeTabModel.Run) -> [UDMenuItem] {
+        var items: [UDMenuItem] = []
+        if let onMoveToTab {
+            items.append(UDMenuItem(label: AgentHistoryText.moveToTab) { onMoveToTab(run.id) })
+        }
+        if let onEndRun {
+            if !items.isEmpty { items.append(.divider()) }
+            items.append(UDMenuItem(label: AgentHistoryText.endSession, danger: true) { onEndRun(run.id) })
+        }
+        return items
     }
 }
 

@@ -299,52 +299,53 @@ struct AgentHistorySessionList: View {
     }
 
     /// 分组方式、只看哪几种工具、恢复默认。排序这一轮只有「最近更新」一种，不出。
+    /// 分组方式、只看哪几种工具、恢复默认、刷新、收起侧栏。用 uAppKit 的浮层菜单（`UDDropdown` + `UDMenu`），不用系统菜单。
+    /// `UDMenu` 只有顶上一个标题：「分组方式」写在那里，「显示」那一段用分隔线隔开。
     private var optionsMenu: some View {
-        Menu {
-            Picker(selection: Binding(get: { grouping }, set: { groupingRaw = $0.rawValue })) {
-                ForEach(groupingChoices) { choice in
-                    Text(AgentHistoryText.groupingName(choice)).tag(choice)
-                }
-            } label: {
-                Text("分组方式", comment: "历史会话列表菜单：按什么分组")
-            }
-            .pickerStyle(.inline)
-            if history.isMultiTool {
-                Section(String(localized: "显示", comment: "历史会话列表菜单：只看哪几种编码工具")) {
-                    let effective = history.effectiveTools
-                    ForEach(history.availableTools) { tool in
-                        Toggle(tool.displayName, isOn: Binding(
-                            get: { effective.contains(tool) },
-                            set: { _ in
-                                let next = AgentHistoryListing.toggling(tool, shown: history.shownTools,
-                                                                        available: history.availableTools)
-                                shownToolsRaw = AgentHistoryListPreferences.encodeTools(next)
-                            }))
-                        .disabled(effective == [tool])
-                    }
-                }
-            }
-            Divider()
-            // 只管分组方式与「显示」，不清置顶。
-            Button(String(localized: "恢复默认")) {
-                groupingRaw = AgentHistoryGrouping.default.rawValue
-                shownToolsRaw = ""
-            }
-            Divider()
-            Button(String(localized: "刷新")) { Task { await history.reload() } }
-            if let onCollapse {
-                Button(String(localized: "收起侧栏", comment: "Code 标签页：收起左边的会话列表"), action: onCollapse)
-            }
-        } label: {
+        UDDropdown(anchor: .trailing) { _ in
             Image(systemName: "line.3.horizontal.decrease")
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+                .iconButtonHover(cornerRadius: 6)
+        } content: {
+            UDMenu(width: 200, head: String(localized: "分组方式", comment: "历史会话列表菜单：按什么分组"),
+                   maxHeight: nil, items: optionsMenuItems)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .frame(width: 26, height: 26)
-        .contentShape(Rectangle())
-        .iconButtonHover(cornerRadius: 6)
+        .fixedSize()
         .help(String(localized: "分组与显示"))
         .accessibilityLabel(Text("分组与显示"))
+    }
+
+    private var optionsMenuItems: [UDMenuItem] {
+        var items = groupingChoices.map { choice in
+            UDMenuItem(label: AgentHistoryText.groupingName(choice), active: choice == grouping) {
+                groupingRaw = choice.rawValue
+            }
+        }
+        if history.isMultiTool {
+            items.append(.divider())
+            let effective = history.effectiveTools
+            for tool in history.availableTools {
+                // 只剩这一种勾着时点了不变（`toggling` 不许一种都不勾）。
+                items.append(UDMenuItem(label: tool.displayName, active: effective.contains(tool)) {
+                    let next = AgentHistoryListing.toggling(tool, shown: history.shownTools, available: history.availableTools)
+                    shownToolsRaw = AgentHistoryListPreferences.encodeTools(next)
+                })
+            }
+        }
+        items.append(.divider())
+        // 只管分组方式与「显示」，不清置顶。
+        items.append(UDMenuItem(label: String(localized: "恢复默认")) {
+            groupingRaw = AgentHistoryGrouping.default.rawValue
+            shownToolsRaw = ""
+        })
+        items.append(.divider())
+        items.append(UDMenuItem(label: String(localized: "刷新")) { Task { await history.reload() } })
+        if let onCollapse {
+            items.append(UDMenuItem(label: String(localized: "收起侧栏", comment: "Code 标签页：收起左边的会话列表"),
+                                    action: onCollapse))
+        }
+        return items
     }
 
     @ViewBuilder private var content: some View {
