@@ -4,7 +4,8 @@ import XCTest
 @testable import uTerm
 
 /// 假主机：一组内存里的文件，目录由文件路径推出来。读之前可以插一手（`setBeforeRead`）模拟「读的时候被写」。
-/// 任何写操作都记下来并失败：读取器绝不能往主机上写东西。
+/// 任何写操作都记下来并失败：读取器绝不能往主机上写东西。删除例外：`setAllowsRemoval(true)` 之后
+/// `removeFile` / `removeDirectory` 照做（用户在列表里点了「删除会话」），删过的记在 `removed`。
 actor SQLiteTestHost: SFTPProviding {
     private var files: [String: (data: Data, mtime: Date)] = [:]
     private(set) var reads: [(path: String, offset: UInt64, length: Int)] = []
@@ -13,6 +14,10 @@ actor SQLiteTestHost: SFTPProviding {
     private var beforeRead: (@Sendable (SQLiteTestHost, String) async -> Void)?
     /// 一时连不上的路径（前缀）：列目录、取属性、读都报错，像辅助程序断了一下。
     private var unreachable: [String] = []
+    private var allowsRemoval = false
+    /// 删掉的文件与目录（按先后）。
+    private(set) var removed: [String] = []
+    func setAllowsRemoval(_ allowed: Bool) { allowsRemoval = allowed }
     let home: String
 
     init(home: String = "/home/user") { self.home = home }
@@ -109,8 +114,21 @@ actor SQLiteTestHost: SFTPProviding {
     }
     func exec(_ command: String) async throws -> String { try refuse("exec") }
     func rename(_ path: String, to newPath: String) async throws { try refuse("rename \(path)") }
-    func removeFile(_ path: String) async throws { try refuse("remove \(path)") }
-    func removeDirectory(_ path: String) async throws { try refuse("rmdir \(path)") }
+    func removeFile(_ path: String) async throws {
+        guard allowsRemoval else { try refuse("remove \(path)") }
+        guard files[path] != nil else { throw missing(path) }
+        files[path] = nil
+        removed.append(path)
+    }
+
+    /// 目录由文件路径推出来：里面还有文件就报错（同 rmdir），空的（文件都删了）就算删掉了。
+    func removeDirectory(_ path: String) async throws {
+        guard allowsRemoval else { try refuse("rmdir \(path)") }
+        if children(of: path) != nil {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTEMPTY), userInfo: [NSLocalizedDescriptionKey: "not empty: \(path)"])
+        }
+        removed.append(path)
+    }
     func createDirectory(_ path: String) async throws { try refuse("mkdir \(path)") }
     func createFile(_ path: String) async throws { try refuse("create \(path)") }
     func setPermissions(path: String, mode: UInt32) async throws { try refuse("chmod \(path)") }

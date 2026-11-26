@@ -544,6 +544,44 @@ final class AgentHistoryModel {
         if resolvedCount != before || (queued.isEmpty && inFlight.isEmpty) { storeInCache() }
     }
 
+    // MARK: - 删除
+
+    /// 这一份能不能删（它那种工具的数据源能删）。
+    func canDelete(_ file: AgentHistorySessionFile) -> Bool {
+        source(for: file.tool)?.supportsDelete ?? false
+    }
+
+    /// 删掉一个会话在主机上的记录（用户确认过），删掉了就从列表、置顶、搜索结果里拿掉；正开着的关掉。
+    /// 删不掉照常抛，列表不动。
+    func delete(_ file: AgentHistorySessionFile) async throws {
+        guard let part = source(for: file.tool), part.supportsDelete else { throw AgentHistoryDeleteError.unsupported }
+        try await part.delete(file)
+        forget(file)
+    }
+
+    /// 一份记录已经从主机上删掉了：内存里关于它的都拿掉，不等下一次重列。
+    private func forget(_ file: AgentHistorySessionFile) {
+        let path = file.path
+        if selectedFile?.path == path { select(nil) }
+        listedFiles.removeAll { $0.path == path }
+        if let index = files.firstIndex(where: { $0.path == path }) {
+            files.remove(at: index)
+            if index < resolvedCount { resolvedCount -= 1 }
+        }
+        metadata[path] = nil
+        metadataKeys[path] = nil
+        seenActivity[path] = nil
+        queued.removeAll { $0.path == path }
+        failed.remove(path)
+        search?.sessions.removeAll { $0.file.path == path }
+        // 同一个会话（工具 + ID）别处还有一份记录（回退过的 Codex 线程）就还留着置顶。
+        let key = AgentHistoryPinKey(file)
+        if let pins, pins.isPinned(key), self.file(for: key) == nil { pins.unpin(key) }
+        advanceResolved()
+        fill()
+        storeInCache()
+    }
+
     /// 列表（`files`）里这一份记录；没列到（还没重列、被「显示」筛掉）或 `path` 为 nil 时为 nil。
     /// 选中的会话必须在 `files` 里：重列、改「显示」时不在里面的选中会被取消（`setShownTools`、`adopt`）。
     func file(at path: String?) -> AgentHistorySessionFile? {

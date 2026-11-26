@@ -1603,6 +1603,35 @@
         }
       }
     },
+    "「%@」的记录会从这台主机上删除，删了不能恢复。" : {
+      "comment" : "历史会话：删除前确认的说明。参数是会话标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The record of “%@” will be deleted from this host. This can’t be undone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」の記録はこのホストから削除されます。元に戻すことはできません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "'%@'의 기록이 이 호스트에서 삭제됩니다. 삭제하면 복구할 수 없습니다."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」的紀錄會從這台主機上刪除，刪除後無法復原。"
+          }
+        }
+      }
+    },
     "「%@」的连接在建立过程中被释放（%@），请重试。" : {
       "localizations" : {
         "en" : {
@@ -25815,6 +25844,35 @@
         }
       }
     },
+    "删除会话…" : {
+      "comment" : "历史会话列表的菜单：删除这个会话的记录，点了先确认",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Session…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションを削除…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 삭제…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除工作階段…"
+          }
+        }
+      }
+    },
     "删除分组" : {
       "localizations" : {
         "en" : {
@@ -26063,6 +26121,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "刪除此金鑰"
+          }
+        }
+      }
+    },
+    "删除这个会话？" : {
+      "comment" : "历史会话：删除前确认的标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete This Session?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションを削除しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션을 삭제할까요?"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要刪除這個工作階段嗎？"
           }
         }
       }
@@ -45653,6 +45740,7 @@
       }
     },
     "拷贝会话 ID" : {
+      "comment" : "历史会话列表的菜单：把会话 ID 拷贝到剪贴板",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -61093,6 +61181,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法監視 %@"
+          }
+        }
+      }
+    },
+    "没能删除这个会话" : {
+      "comment" : "历史会话：删除失败的提示标题",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Delete This Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションを削除できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션을 삭제하지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法刪除這個工作階段"
           }
         }
       }
@@ -78412,6 +78529,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這次未測試%@（在「檢測設定」中開啟）。"
+          }
+        }
+      }
+    },
+    "这种工具的会话不能在 uTerm 里删除" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessions from this tool can’t be deleted in uTerm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このツールのセッションは uTerm では削除できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 도구의 세션은 uTerm에서 삭제할 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這種工具的工作階段無法在 uTerm 中刪除"
           }
         }
       }

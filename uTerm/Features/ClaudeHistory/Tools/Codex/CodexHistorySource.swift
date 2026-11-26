@@ -470,6 +470,21 @@ actor CodexHistorySource: AgentHistorySource {
     nonisolated func newSessionCommand(directory: String) -> String? {
         CodexResumeCommand.newSession(directory: directory)
     }
+
+    // MARK: - 删除
+
+    nonisolated var supportsDelete: Bool { true }
+
+    /// 删一个会话：那一份记录（`rollout-….jsonl` 或压缩过的 `.jsonl.zst`）。`session_index.jsonl` 里它的名字留着：
+    /// 那是 Codex 自己的索引，不改；没有记录的名字谁也不读。派出去的子代理各有自己的记录，不跟着删。
+    func delete(_ file: AgentHistorySessionFile) async throws {
+        try await provider.removeFile(file.path)
+        cache[file.cacheKey] = nil
+        if var snapshot {
+            snapshot.sessions[file.project.id]?.removeAll { $0.path == file.path }
+            self.snapshot = snapshot
+        }
+    }
 }
 
 /// 列表读记录时的并发与读多少。测试换成小的。

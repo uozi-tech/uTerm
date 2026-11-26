@@ -90,7 +90,7 @@ nonisolated enum AgentTranscriptTarget: Hashable, Sendable {
 /// 某一种编码工具（`AgentHistoryTool`）的历史记录在一台主机上怎么找、怎么读。每种工具一份实现
 /// （Claude Code 是 `ClaudeHistorySource`），界面与模型（`AgentHistoryModel`）只认这个协议。
 ///
-/// 只读：实现不能往主机上写任何东西（包括临时文件）。读到的对话内容只放内存。
+/// 只读：实现不能往主机上写任何东西（包括临时文件），唯一的例外是用户在列表里点了「删除」（`delete`）。读到的对话内容只放内存。
 ///
 /// 记录不是「一个会话一个按行写的文件」的工具（SQLite、压缩过的文件）照样套这几个类型：
 /// `AgentHistorySessionFile.path` 是那份记录的文件，`AgentTranscriptAnchor.lineOffset` 是数据源自己定的位置
@@ -134,6 +134,12 @@ protocol AgentHistorySource: Actor {
     nonisolated func resumeCommand(sessionID: String, directory: String) -> String?
     /// 在这个目录里新开一个会话要敲的命令；目录不合法、或者这种工具不是在终端里用的为 nil。
     nonisolated func newSessionCommand(directory: String) -> String?
+    /// 能不能删掉一个会话的记录。一个会话就是一个（或一组）只属于它的文件的工具能；好几个会话存在同一个数据库里的
+    /// （Cursor、Antigravity）不能：删文件会连别的会话一起删掉。
+    nonisolated var supportsDelete: Bool { get }
+    /// 删掉这个会话在主机上的记录（用户在列表里点了「删除」、确认过）。删不掉照常抛；主记录删了、附带的文件
+    /// （子代理的记录等）没删干净不算失败。
+    func delete(_ file: AgentHistorySessionFile) async throws
 }
 
 extension AgentHistorySource {
@@ -143,6 +149,19 @@ extension AgentHistorySource {
 
     nonisolated var supportsSearch: Bool { true }
     nonisolated func newSessionCommand(directory: String) -> String? { nil }
+    nonisolated var supportsDelete: Bool { false }
+    func delete(_ file: AgentHistorySessionFile) async throws { throw AgentHistoryDeleteError.unsupported }
+}
+
+nonisolated enum AgentHistoryDeleteError: LocalizedError {
+    /// 这种工具的会话不能单独删（见 `AgentHistorySource.supportsDelete`）。
+    case unsupported
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupported: return String(localized: "这种工具的会话不能在 uTerm 里删除")
+        }
+    }
 }
 
 /// 「全部项目」列一趟的结果：会话（新的在前）与列不出来的项目。

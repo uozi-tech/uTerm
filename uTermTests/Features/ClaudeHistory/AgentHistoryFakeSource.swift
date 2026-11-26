@@ -31,6 +31,11 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     /// 继续 / 新开时 `cd` 之后跑的命令；nil = 工具名（`claude resume a` 这种，只是字符串）。起真 shell 的用例换成一条
     /// 不需要装任何编码工具的命令。
     nonisolated let command: String?
+    nonisolated let supportsDelete: Bool
+    /// 删掉的会话（按先后）。
+    private(set) var deleted: [String] = []
+    private var deleteError: (any Error)?
+    func setDeleteError(_ error: (any Error)?) { deleteError = error }
 
     private var sessionList: [Session]
     private var projectsError: (any Error)?
@@ -41,8 +46,9 @@ actor AgentHistoryFakeSource: AgentHistorySource {
 
     init(tool: AgentHistoryTool, sessions: [Session], supportsSearch: Bool = true, resumable: Bool = true,
          startsSessions: Bool = true, projectsError: (any Error)? = nil, searchError: (any Error)? = nil,
-         command: String? = nil) {
+         command: String? = nil, supportsDelete: Bool = true) {
         self.command = command
+        self.supportsDelete = supportsDelete
         self.tool = tool
         sessionList = sessions
         self.supportsSearch = supportsSearch
@@ -149,6 +155,13 @@ actor AgentHistoryFakeSource: AgentHistorySource {
     }
 
     func items(at path: String) -> [AgentTranscriptItem] { session(at: path)?.items ?? [] }
+
+    func delete(_ file: AgentHistorySessionFile) async throws {
+        guard supportsDelete else { throw AgentHistoryDeleteError.unsupported }
+        if let deleteError { throw deleteError }
+        sessionList.removeAll { sessionPath($0) == file.path }
+        deleted.append(file.sessionID)
+    }
 
     func search(_ query: AgentHistorySearchQuery, in files: [AgentHistorySessionFile], limits: AgentHistorySearchLimits,
                 // 测试 target 没开 Approachable Concurrency，协议里的类型（App 里默认 nonsending）要写明。

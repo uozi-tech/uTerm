@@ -144,7 +144,8 @@ private struct CodeTabBrowser: View {
                     },
                     moveToTab: onMoveToTab)
             }),
-            onCollapse: onCollapse)
+            onCollapse: onCollapse,
+            onResume: { code.resume($0) })
     }
 
     // MARK: 右边

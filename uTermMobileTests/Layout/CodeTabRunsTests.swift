@@ -241,13 +241,16 @@ final class CodeTabRunsTests: XCTestCase {
     }
 
     func testLongPressMenuEndsRunningSessions() {
-        // 长按菜单：在跑的多一项「结束会话」（同 Mac 行上的右键菜单）；已结束的、没在跑的没有。
-        typealias Menu = ClaudeHistoryRowMenu
-        XCTAssertEqual(Menu.items(canPin: true, isPinned: false, isRunning: true), [.pin(isPinned: false), .endSession])
-        XCTAssertEqual(Menu.items(canPin: true, isPinned: true, isRunning: false), [.pin(isPinned: true)])
-        XCTAssertEqual(Menu.items(canPin: false, isPinned: false, isRunning: true), [.endSession],
-                       "顶上没记录的新会话不能置顶，但能结束")
-        XCTAssertEqual(Menu.items(canPin: false, isPinned: false, isRunning: false), [], "什么都没有就不出菜单")
+        // 长按菜单（同 Mac 行上的右键菜单）：在跑的只有「置顶」「结束会话」，不能删；没在跑的有继续、置顶、拷贝 ID、删除。
+        typealias Item = ClaudeHistoryRowMenu.Item
+        XCTAssertEqual(Item.items(hasRecord: true, canResume: true, canPin: true, isPinned: false, isRunning: true,
+                                  canDelete: true), [.pin(isPinned: false), .endSession])
+        XCTAssertEqual(Item.items(hasRecord: true, canResume: true, canPin: true, isPinned: true, isRunning: false,
+                                  canDelete: true), [.resume, .pin(isPinned: true), .copySessionID, .delete])
+        XCTAssertEqual(Item.items(hasRecord: false, canResume: true, canPin: false, isPinned: false, isRunning: true,
+                                  canDelete: true), [.endSession], "顶上没记录的新会话不能置顶，但能结束")
+        XCTAssertEqual(Item.items(hasRecord: false, canResume: false, canPin: false, isPinned: false, isRunning: false,
+                                  canDelete: false), [], "什么都没有就不出菜单")
     }
 
     // MARK: - 接到真终端

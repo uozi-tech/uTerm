@@ -366,6 +366,42 @@ enum AgentHistoryText {
         String(localized: "移到新标签页", comment: "Code 标签页：把这个会话的终端开成普通的终端标签页")
     }
 
+    /// 行的菜单：继续这个会话（同对话顶上的按钮）。
+    static var resumeSession: String {
+        String(localized: "继续这个会话")
+    }
+
+    /// 行的菜单：拷贝会话 ID（在终端里自己 `claude --resume <ID>` 用）。
+    static var copySessionID: String {
+        String(localized: "拷贝会话 ID", comment: "历史会话列表的菜单：把会话 ID 拷贝到剪贴板")
+    }
+
+    /// 行的菜单：删除会话（点了先确认）。
+    static var deleteSession: String {
+        String(localized: "删除会话…", comment: "历史会话列表的菜单：删除这个会话的记录，点了先确认")
+    }
+
+    /// 删除前确认的标题。
+    static var deleteConfirmTitle: String {
+        String(localized: "删除这个会话？", comment: "历史会话：删除前确认的标题")
+    }
+
+    /// 删除前确认的说明：删的是主机上的记录，收不回来。
+    static func deleteConfirmMessage(title: String) -> String {
+        String(localized: "「\(title)」的记录会从这台主机上删除，删了不能恢复。",
+               comment: "历史会话：删除前确认的说明。参数是会话标题")
+    }
+
+    /// 确认框里的「删除」按钮。
+    static var deleteConfirmButton: String {
+        String(localized: "删除", comment: "历史会话：确认删除的按钮")
+    }
+
+    /// 删不掉时的提示标题。
+    static var deleteFailedTitle: String {
+        String(localized: "没能删除这个会话", comment: "历史会话：删除失败的提示标题")
+    }
+
     /// 结束一个在 Code 标签页里跑着的会话（Mac：终端顶上「⋯」、侧栏那一行的右键菜单与悬停的 ×；iOS 同名菜单项）。
     static var endSession: String {
         String(localized: "结束会话")

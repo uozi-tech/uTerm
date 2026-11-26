@@ -310,6 +310,27 @@ actor ClaudeHistorySource: AgentHistorySource {
     nonisolated func newSessionCommand(directory: String) -> String? {
         ClaudeResumeCommand.makeNew(directory: directory)
     }
+
+    // MARK: - 删除
+
+    nonisolated var supportsDelete: Bool { true }
+
+    /// 删一个会话：`<会话 ID>.jsonl`，再删它旁边同名的目录（子代理的记录、大的工具输出，`claude` 只在派过子代理、
+    /// 输出很长时才建）。主记录先删：删掉它会话就从列表上没了；旁边的目录删不干净（断线）只是留下没人看的文件。
+    func delete(_ file: AgentHistorySessionFile) async throws {
+        guard let directory = Self.companionDirectory(of: file.path) else { throw AgentHistoryDeleteError.unsupported }
+        try await provider.removeFile(file.path)
+        cache[file.cacheKey] = nil
+        names[file.path] = nil
+        guard (try? await provider.list(path: directory)) != nil else { return }
+        try? await RemoteFileOperations.removeTree(at: directory, provider: provider)
+    }
+
+    /// 一份记录旁边属于它的目录：`…/<会话 ID>.jsonl` → `…/<会话 ID>`。不是 `.jsonl` 为 nil。
+    nonisolated static func companionDirectory(of path: String) -> String? {
+        guard path.hasSuffix(".jsonl"), path.count > ".jsonl".count else { return nil }
+        return String(path.dropLast(".jsonl".count))
+    }
 }
 
 /// 从文件末尾往前一页一页读对话。文件在看的时候可能还在长（会话正开着）：往前翻只翻第一次打开时那么长，

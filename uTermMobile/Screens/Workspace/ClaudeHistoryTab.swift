@@ -370,7 +370,8 @@ struct ClaudeHistoryBrowser: View {
             let showsDetail = wide || detailActive
             let detailX: CGFloat = wide ? Self.listWidth + 1 : 0
             ZStack(alignment: .topLeading) {
-                ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal, code: code)
+                ClaudeHistoryList(history: history, newSession: newSession, reveal: reveal, code: code,
+                                  onResume: canResume ? onResume : nil)
                     .frame(width: wide ? Self.listWidth : geo.size.width, height: geo.size.height)
                     .offset(x: showsList ? 0 : -100_000)
                     .allowsHitTesting(showsList)
@@ -470,11 +471,17 @@ private struct ClaudeHistoryList: View {
     /// 行上标它此刻的状态，点一下回到它的终端；列表里没有行的（还没对上记录的新会话）放在列表最顶上。
     /// 规则同 Mac（`AgentHistoryRunPlacement`）。
     var code: CodeTabRuns? = nil
+    /// 继续一个会话（长按菜单里那一项）；nil = 这台主机继续不了，不出。
+    var onResume: ((AgentHistorySessionFile) -> Void)? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
     /// 看着的那个跑着的会话那份记录还没露出来（它那一组收着、还没列到）：列表变了再试，见 `tryRevealRun`。
     @State private var pendingRunReveal: String?
+    /// 点了「删除会话…」、等确认的那一份。
+    @State private var pendingDelete: AgentHistorySessionFile?
+    /// 删不掉时的原因。
+    @State private var deleteFailure: String?
 
     private var grouping: AgentHistoryGrouping {
         AgentHistoryListPreferences.effectiveGrouping(groupingRaw, isMultiTool: history.isMultiTool)
@@ -505,6 +512,30 @@ private struct ClaudeHistoryList: View {
         .onAppear { history.setShownTools(AgentHistoryListPreferences.decodeTools(shownToolsRaw)) }
         .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
         .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
+        .alert(AgentHistoryText.deleteConfirmTitle, isPresented: Binding(get: { pendingDelete != nil },
+                                                                        set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { file in
+            Button(AgentHistoryText.deleteConfirmButton, role: .destructive) { delete(file) }
+            Button(String(localized: "取消"), role: .cancel) {}
+        } message: { file in
+            Text(AgentHistoryText.deleteConfirmMessage(title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])))
+        }
+        .alert(AgentHistoryText.deleteFailedTitle, isPresented: Binding(get: { deleteFailure != nil },
+                                                                       set: { if !$0 { deleteFailure = nil } })) {
+            Button(String(localized: "好")) {}
+        } message: {
+            Text(verbatim: deleteFailure ?? "")
+        }
+    }
+
+    private func delete(_ file: AgentHistorySessionFile) {
+        Task {
+            do {
+                try await history.delete(file)
+            } catch {
+                deleteFailure = FriendlyError.describe(error)
+            }
+        }
     }
 
     private var searchBar: some View {
@@ -765,7 +796,9 @@ private struct ClaudeHistoryList: View {
                              run: run, isSelected: showsItsTerminal || history.selectedFile?.path == file.path)
         }
         .buttonStyle(MPressStyle())
-        .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true) {
+        .modifier(ClaudeHistoryRowMenu(pins: history.pins, file: file, isRunning: run?.isRunning == true,
+                                       canDelete: history.canDelete(file), onResume: onResume,
+                                       onDelete: { pendingDelete = $0 }) {
             if let code, let run { code.tab.endRun(run.id) }
         })
     }
@@ -820,13 +853,10 @@ private struct ClaudeHistoryList: View {
     }
 }
 
-/// 行的长按菜单：有记录的「置顶」/「取消置顶」，在 Code 标签页里跑着的「结束会话」（同 Mac 行上的右键菜单与 ×）。
-/// 两样都没有（不能置顶、也不在跑）时没有菜单。
+/// 行的长按菜单（项目与顺序见共享的 `AgentHistorySessionMenuItem`，同 Mac 的右键菜单）：有记录的「继续这个会话」
+/// 「置顶」/「取消置顶」「拷贝会话 ID」「删除会话…」，在 Code 标签页里跑着的「置顶」「结束会话」。一项都没有时没有菜单。
 struct ClaudeHistoryRowMenu: ViewModifier {
-    enum Item: Hashable {
-        case pin(isPinned: Bool)
-        case endSession
-    }
+    typealias Item = AgentHistorySessionMenuItem
 
     /// nil = 这个列表不能置顶（没有主机标识）。
     let pins: AgentHistoryPins?
@@ -834,37 +864,59 @@ struct ClaudeHistoryRowMenu: ViewModifier {
     let file: AgentHistorySessionFile?
     /// 在 Code 标签页里跑着（已结束的那一行上有「回到记录」「关闭」，不再出「结束会话」）。
     let isRunning: Bool
+    /// 能不能删这一份（它那种工具的数据源能删）。
+    var canDelete = false
+    /// 继续这个会话；nil = 不出这一项。
+    var onResume: ((AgentHistorySessionFile) -> Void)? = nil
+    /// 点了「删除会话…」：交给列表去确认。
+    var onDelete: (AgentHistorySessionFile) -> Void = { _ in }
     let onEnd: () -> Void
-
-    static func items(canPin: Bool, isPinned: Bool, isRunning: Bool) -> [Item] {
-        var items: [Item] = []
-        if canPin { items.append(.pin(isPinned: isPinned)) }
-        if isRunning { items.append(.endSession) }
-        return items
-    }
 
     func body(content: Content) -> some View {
         let pinned = file.map { pins?.isPinned($0) ?? false } ?? false
-        let items = Self.items(canPin: pins != nil && file != nil, isPinned: pinned, isRunning: isRunning)
+        let items = Item.items(hasRecord: file != nil, canResume: onResume != nil, canPin: pins != nil && file != nil,
+                               isPinned: pinned, isRunning: isRunning, canDelete: canDelete)
         if items.isEmpty {
             content
         } else {
             content.mContextMenu(preview: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)) {
                 ForEach(items, id: \.self) { item in
-                    switch item {
-                    case .pin(let isPinned):
-                        Button {
-                            if let pins, let file { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } }
-                        } label: {
-                            Label(AgentHistoryText.pinAction(isPinned: isPinned), systemImage: isPinned ? "pin.slash" : "pin")
-                        }
-                    case .endSession:
-                        if items.count > 1 { Divider() }
-                        Button(role: .destructive, action: onEnd) {
-                            Label(AgentHistoryText.endSession, systemImage: "xmark.circle")
-                        }
-                    }
+                    if item.isDestructive, items.count > 1 { Divider() }
+                    button(item)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder private func button(_ item: Item) -> some View {
+        switch item {
+        case .resume:
+            Button {
+                if let file { onResume?(file) }
+            } label: {
+                Label(AgentHistoryText.resumeSession, systemImage: "play")
+            }
+        case .pin(let isPinned):
+            Button {
+                if let pins, let file { withAnimation(.easeOut(duration: 0.2)) { pins.toggle(file) } }
+            } label: {
+                Label(AgentHistoryText.pinAction(isPinned: isPinned), systemImage: isPinned ? "pin.slash" : "pin")
+            }
+        case .copySessionID:
+            Button {
+                if let file { UIPasteboard.general.string = file.sessionID }
+            } label: {
+                Label(AgentHistoryText.copySessionID, systemImage: "doc.on.doc")
+            }
+        case .delete:
+            Button(role: .destructive) {
+                if let file { onDelete(file) }
+            } label: {
+                Label(AgentHistoryText.deleteSession, systemImage: "trash")
+            }
+        case .endSession:
+            Button(role: .destructive, action: onEnd) {
+                Label(AgentHistoryText.endSession, systemImage: "xmark.circle")
             }
         }
     }

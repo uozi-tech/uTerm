@@ -60,6 +60,14 @@ actor AgentHistoryCompositeSource: AgentHistorySource {
         source(for: tool)?.supportsSearch ?? false
     }
 
+    /// 有一种能删就算能删；具体一个会话能不能删看它那种工具的数据源。
+    nonisolated var supportsDelete: Bool { sources.contains { $0.supportsDelete } }
+
+    func delete(_ file: AgentHistorySessionFile) async throws {
+        guard let source = source(for: file.tool), source.supportsDelete else { throw AgentHistoryDeleteError.unsupported }
+        try await source.delete(file)
+    }
+
     // MARK: 列表
 
     func projects() async throws -> [AgentHistoryProject] {

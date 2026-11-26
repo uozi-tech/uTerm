@@ -84,7 +84,7 @@ struct AgentHistoryBrowser: View {
             let upper = max(Self.sidebarRange.lowerBound,
                             min(Self.sidebarRange.upperBound, Double(proxy.size.width) - Self.minimumDetailWidth))
             HStack(spacing: 0) {
-                AgentHistorySessionList(history: history, newSession: newSession, reveal: reveal)
+                AgentHistorySessionList(history: history, newSession: newSession, reveal: reveal, onResume: onResume)
                     .frame(width: min(max(sidebarWidth.wrappedValue, Self.sidebarRange.lowerBound), upper))
                 ColumnResizer(width: sidebarWidth, range: Self.sidebarRange.lowerBound...upper, sign: 1)
                 detail
@@ -164,6 +164,8 @@ struct AgentHistorySessionList: View {
     var running: AgentHistoryRunning? = nil
     /// 收起侧栏（Code 标签页，放在菜单里）；nil = 菜单里不出这一项。
     var onCollapse: (() -> Void)? = nil
+    /// 继续一个会话（行的右键菜单里那一项）；nil = 菜单里不出。
+    var onResume: ((AgentHistorySessionFile) -> Void)? = nil
 
     @AppStorage(DefaultsKey.agentHistoryGrouping) private var groupingRaw = AgentHistoryGrouping.default.rawValue
     @AppStorage(DefaultsKey.agentHistoryShownTools) private var shownToolsRaw = ""
@@ -173,6 +175,10 @@ struct AgentHistorySessionList: View {
     @State private var pinDrag = AgentHistoryPinDragModel.forList()
     /// 选中的跑着的会话那份记录还没露出来（它那一组收着、还没列到）：列表变了再试，见 `tryRevealRun`。
     @State private var pendingRunReveal: String?
+    /// 点了「删除会话…」、等确认的那一份。
+    @State private var pendingDelete: AgentHistorySessionFile?
+    /// 删不掉时的原因。
+    @State private var deleteFailure: String?
 
     /// 只有一种工具时没有「工具」这种分组：存的是它就按默认的来。
     private var grouping: AgentHistoryGrouping {
@@ -203,6 +209,30 @@ struct AgentHistorySessionList: View {
         .onChange(of: shownToolsRaw) { _, raw in history.setShownTools(AgentHistoryListPreferences.decodeTools(raw)) }
         // 别的窗口改了置顶：新置顶的那几个先读出来。
         .onChange(of: history.pins?.keys) { _, _ in history.readPinnedMetadata() }
+        .alert(AgentHistoryText.deleteConfirmTitle, isPresented: Binding(get: { pendingDelete != nil },
+                                                                        set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { file in
+            Button(AgentHistoryText.deleteConfirmButton, role: .destructive) { delete(file) }
+            Button(String(localized: "取消"), role: .cancel) {}
+        } message: { file in
+            Text(AgentHistoryText.deleteConfirmMessage(title: AgentHistoryText.sessionTitle(file, metadata: history.metadata[file.path])))
+        }
+        .alert(AgentHistoryText.deleteFailedTitle, isPresented: Binding(get: { deleteFailure != nil },
+                                                                       set: { if !$0 { deleteFailure = nil } })) {
+            Button(String(localized: "好")) {}
+        } message: {
+            Text(verbatim: deleteFailure ?? "")
+        }
+    }
+
+    private func delete(_ file: AgentHistorySessionFile) {
+        Task {
+            do {
+                try await history.delete(file)
+            } catch {
+                deleteFailure = FriendlyError.describe(error)
+            }
+        }
     }
 
     private var header: some View {
@@ -390,8 +420,6 @@ struct AgentHistorySessionList: View {
         // 选中的新会话放在哪一组（它那一组收着就打开）。
         let selectedLeadingGroup = placement.groupID(ofLeading: \.isSelected)
         let pins = history.pins
-        // 拖动中、还没有置顶的会话：分组最上面盖一条落点。盖在上面、不占位置：出现消失都不推动列表，拖着的落点不跟着跳。
-        let showsDropStrip = pins != nil && pinned.isEmpty && pinDrag.isOver
         return GeometryReader { viewport in
             ScrollViewReader { proxy in
                 ScrollView {
@@ -401,13 +429,10 @@ struct AgentHistorySessionList: View {
                         }
                         if pins != nil, pinned.isEmpty {
                             // 落点的锚：零高度，一直在（拖动开始时不插进新的一行）。落点画在它下面、盖住接下来的那一截。
+                            // 拖动中、还没有置顶的会话：分组最上面盖一条落点。盖在上面、不占位置：出现消失都不推动列表，
+                            // 拖着的落点不跟着跳。拖动的状态只在这条里读（见 `AgentHistoryPinDropStripSlot`）。
                             Color.clear.frame(height: 0)
-                                .overlay(alignment: .top) {
-                                    if showsDropStrip {
-                                        AgentHistoryPinDropStrip(isTargeted: pinDrag.target == .pin(index: 0))
-                                            .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: .strip))
-                                    }
-                                }
+                                .overlay(alignment: .top) { AgentHistoryPinDropStripSlot(drag: pinDrag) }
                                 .zIndex(1)
                         }
                         ForEach(groups) { group in
@@ -482,13 +507,7 @@ struct AgentHistorySessionList: View {
         if let pins {
             let isPinned = group.kind == .pinned
             base
-                .opacity(pinDrag.isOver && pinDrag.dragging == key ? 0.4 : 1)
-                .overlay(alignment: .top) {
-                    if isPinned, pinDrag.indicator(before: key, pinned: pinned) { AgentHistoryPinInsertionLine().offset(y: -2) }
-                }
-                .overlay(alignment: .bottom) {
-                    if isPinned, pinDrag.indicatorAfter(key, pinned: pinned) { AgentHistoryPinInsertionLine().offset(y: 2) }
-                }
+                .modifier(AgentHistoryPinDragRowState(drag: pinDrag, key: key, pinned: isPinned ? pinned : nil))
                 .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: isPinned ? .pinnedRow(key) : nil))
                 .onDrag {
                     pinDrag.begin(key)
@@ -496,14 +515,18 @@ struct AgentHistorySessionList: View {
                 } preview: {
                     AgentHistorySessionRowPreview(history: history, file: file, showsTool: showsTool)
                 }
-                .modifier(AgentHistoryRowMenu(file: file, pins: pins, run: run, actions: running?.actions))
+                .modifier(rowMenu(file, pins: pins, run: run))
         } else {
-            base.modifier(AgentHistoryRowMenu(file: file, pins: nil, run: run, actions: running?.actions))
+            base.modifier(rowMenu(file, pins: nil, run: run))
         }
     }
 
-    /// 选中的跑着的会话那一行在一个收着的组里：打开那一组、滚到它那一行（不收着就不动，免得点一下列表就跳）。
-    /// 那份记录还没列到的，等列表变了再试。
+    private func rowMenu(_ file: AgentHistorySessionFile, pins: AgentHistoryPins?, run: AgentHistoryRunRow?) -> AgentHistoryRowMenu {
+        AgentHistoryRowMenu(file: file, pins: pins, run: run, actions: running?.actions,
+                            drag: pins == nil ? nil : pinDrag, history: history, onResume: onResume,
+                            onDelete: { pendingDelete = $0 })
+    }
+
     /// 跑着、列表里没有它记录行的会话那一行（列表最顶上，或者它那一组的最上面）。
     private func unlistedRunRow(_ row: AgentHistoryRunRow, showsTool: Bool, pins: AgentHistoryPins?) -> some View {
         AgentHistoryUnlistedRunRow(row: row, showsTool: showsTool)
@@ -696,6 +719,9 @@ struct AgentHistoryRunRowActions: ViewModifier {
     let file: AgentHistorySessionFile?
     let pins: AgentHistoryPins?
     let actions: AgentHistoryRunActions?
+    /// 这一行能拖动置顶时那个列表的拖动状态：拖起来的时候不出 ×（这一行淡下去了，× 和它后面不透明的垫底不淡，
+    /// 看着是一块方底）。
+    var drag: AgentHistoryPinDragModel? = nil
 
     /// 界面画廊与测试用：建出来的行一开始就当作鼠标悬在上面（悬停拍不到）。App 里始终为 false。
     static var catalogHovered = false
@@ -706,7 +732,7 @@ struct AgentHistoryRunRowActions: ViewModifier {
         if let actions {
             content
                 .overlay(alignment: .trailing) {
-                    if hovered {
+                    if hovered, !isLifted {
                         AgentHistoryRunEndButton(isSelected: row.isSelected) { actions.end(row.id) }
                     }
                 }
@@ -715,6 +741,11 @@ struct AgentHistoryRunRowActions: ViewModifier {
         } else {
             content
         }
+    }
+
+    private var isLifted: Bool {
+        guard let drag, let file else { return false }
+        return drag.isLifted(AgentHistoryPinKey(file))
     }
 
     @ViewBuilder private func menu(_ actions: AgentHistoryRunActions) -> some View {
@@ -736,23 +767,54 @@ struct AgentHistoryRunRowActions: ViewModifier {
     }
 }
 
-/// 列表里一行记录的右键菜单：在跑的（`run`）是跑着的会话那几样操作（含「置顶」，悬停出 ×），否则只有「置顶」/「取消置顶」。
-/// 不能置顶（`pins` 为 nil）又不在跑的没有菜单。
+/// 列表里一行记录的右键菜单：在跑的（`run`）是跑着的会话那几样操作（含「置顶」，悬停出 ×），否则是
+/// `AgentHistorySessionMenuItem` 那几项（继续、置顶、拷贝会话 ID、删除）。
 private struct AgentHistoryRowMenu: ViewModifier {
     let file: AgentHistorySessionFile
     let pins: AgentHistoryPins?
     let run: AgentHistoryRunRow?
     let actions: AgentHistoryRunActions?
+    /// 能拖动置顶时这个列表的拖动状态：这一行被拖起来时不出 ×。
+    var drag: AgentHistoryPinDragModel? = nil
+
+    let history: AgentHistoryModel
+    /// 继续这个会话；nil = 菜单里不出这一项。
+    var onResume: ((AgentHistorySessionFile) -> Void)? = nil
+    /// 点了「删除会话…」：交给列表去确认。
+    var onDelete: (AgentHistorySessionFile) -> Void = { _ in }
 
     func body(content: Content) -> some View {
         if let run, actions != nil {
-            content.modifier(AgentHistoryRunRowActions(row: run, file: file, pins: pins, actions: actions))
-        } else if let pins {
-            content.contextMenu {
-                Button(AgentHistoryText.pinAction(isPinned: pins.isPinned(AgentHistoryPinKey(file)))) { pins.toggle(file) }
-            }
+            content.modifier(AgentHistoryRunRowActions(row: run, file: file, pins: pins, actions: actions, drag: drag))
         } else {
-            content
+            let items = AgentHistorySessionMenuItem.items(
+                hasRecord: true, canResume: onResume != nil && history.resumeCommand(for: file) != nil,
+                canPin: pins != nil, isPinned: pins?.isPinned(file) ?? false, isRunning: false,
+                canDelete: history.canDelete(file))
+            content.contextMenu {
+                ForEach(items, id: \.self) { item in
+                    if item.isDestructive, items.count > 1 { Divider() }
+                    button(item)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func button(_ item: AgentHistorySessionMenuItem) -> some View {
+        switch item {
+        case .resume:
+            Button(AgentHistoryText.resumeSession) { onResume?(file) }
+        case .pin(let isPinned):
+            Button(AgentHistoryText.pinAction(isPinned: isPinned)) { pins?.toggle(file) }
+        case .copySessionID:
+            Button(AgentHistoryText.copySessionID) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(file.sessionID, forType: .string)
+            }
+        case .delete:
+            Button(AgentHistoryText.deleteSession, role: .destructive) { onDelete(file) }
+        case .endSession:
+            EmptyView()
         }
     }
 }
@@ -850,6 +912,9 @@ final class AgentHistoryPinDragModel {
         target = nil
         Self.active = self
     }
+
+    /// 这一行正被拖着、悬在这个列表上：画成淡的一行。
+    func isLifted(_ key: AgentHistoryPinKey) -> Bool { isOver && dragging == key }
 
     /// 这次拖动是这个列表起的。
     var ownsCurrentDrag: Bool { Self.active === self && dragging != nil }
@@ -980,6 +1045,37 @@ private struct AgentHistoryPinDropTarget: ViewModifier {
     }
 }
 
+/// 落点那一条的位置：拖动悬在列表上时才出来。拖动的状态只在这里和 `AgentHistoryPinDragRowState` 里读——
+/// 落点每变一次只重画这几处，不连带整个列表（列表那一层要按上千份记录分组，拖动时每一下都重算就掉帧）。
+private struct AgentHistoryPinDropStripSlot: View {
+    let drag: AgentHistoryPinDragModel
+
+    var body: some View {
+        if drag.isOver {
+            AgentHistoryPinDropStrip(isTargeted: drag.target == .pin(index: 0))
+                .modifier(AgentHistoryPinFrameProbe(drag: drag, slot: .strip))
+        }
+    }
+}
+
+/// 一行在拖动置顶时的样子：被拖起来的淡下去；在「置顶」里的（`pinned` 不为 nil）落点在它上下沿时画插入线。
+private struct AgentHistoryPinDragRowState: ViewModifier {
+    let drag: AgentHistoryPinDragModel
+    let key: AgentHistoryPinKey
+    let pinned: [AgentHistorySessionFile]?
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(drag.isLifted(key) ? 0.4 : 1)
+            .overlay(alignment: .top) {
+                if let pinned, drag.indicator(before: key, pinned: pinned) { AgentHistoryPinInsertionLine().offset(y: -2) }
+            }
+            .overlay(alignment: .bottom) {
+                if let pinned, drag.indicatorAfter(key, pinned: pinned) { AgentHistoryPinInsertionLine().offset(y: 2) }
+            }
+    }
+}
+
 /// 还没有置顶的会话、正拖着一个会话时列表顶上那一条：「拖到这里置顶」，拖到上面时高亮。
 private struct AgentHistoryPinDropStrip: View {
     let isTargeted: Bool
@@ -998,8 +1094,6 @@ private struct AgentHistoryPinDropStrip: View {
         .background(RoundedRectangle(cornerRadius: 6).fill(isTargeted ? UD.accentSoft : UD.fillSoft))
         // 盖在列表上（不占位置）：底下垫一层不透明的，免得透出下面那一行的字。
         .background(RoundedRectangle(cornerRadius: 6).fill(UD.card))
-        .overlay(RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(isTargeted ? UD.accent : UD.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         .padding(.bottom, 2)
         .accessibilityElement(children: .combine)
     }
