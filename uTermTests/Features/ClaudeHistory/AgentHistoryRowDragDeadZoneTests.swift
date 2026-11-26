@@ -63,7 +63,8 @@ final class AgentHistoryRowDragDeadZoneTests: XCTestCase {
         let found = probes(in: host)
         XCTAssertEqual(found.count, 4, "每一行一个带死区的拖拽源")
         for probe in found {
-            XCTAssertGreaterThanOrEqual(probe.deadZone, DragSourceProbeView.defaultDeadZone)
+            // 用户报的：5pt 还是一动就出预览。侧栏的行要拖过 12pt 才起。
+            XCTAssertGreaterThanOrEqual(probe.deadZone, 12, "死区够大：点一下时手抖不起拖")
             XCTAssertTrue(probe.isObserving)
         }
     }

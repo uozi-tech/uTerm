@@ -474,7 +474,8 @@ struct AgentHistorySessionList: View {
                 .modifier(AgentHistoryPinFrameProbe(drag: pinDrag, slot: isPinned ? .pinnedRow(key) : nil))
                 // 不用 `.onDrag`：它没有死区，点一下行时手一抖就起拖、冒出预览，这次点击也被吞掉（同标签页）。
                 // 正在改名的那一行不起拖（在输入框里拖着选字）。
-                .dragSource(canBegin: { renaming.editing?.path != file.path }, item: {
+                .dragSource(deadZone: AgentHistoryPinDragModel.deadZone,
+                            canBegin: { renaming.editing?.path != file.path }, item: {
                     pinDrag.begin(key)
                     return AgentHistoryPinDragPayload.pasteboardItem()
                 }) {
@@ -741,6 +742,9 @@ nonisolated enum AgentHistoryPinDragPayload {
 @MainActor
 @Observable
 final class AgentHistoryPinDragModel {
+    /// 按下后拖过多远才起拖动（pt）。uAppKit 默认的 5pt 在侧栏里点一下行、手稍微一动就冒出预览（用户报的），放大到 12。
+    static let deadZone: CGFloat = 12
+
     nonisolated static let space = "agentHistoryPinList"
     /// 最近一次开始拖动的那个列表。
     private static weak var active: AgentHistoryPinDragModel?
