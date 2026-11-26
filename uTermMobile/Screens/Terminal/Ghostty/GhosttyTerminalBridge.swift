@@ -69,6 +69,10 @@ final class GhosttyTerminalBridge {
     private var switchBackCover: GhosttySwitchBackCover?
     /// 容器提交新尺寸时为它装的那个盖子（`coverBeforeMoving`）；视图没挪的话当场撤掉。
     private weak var resizeCover: GhosttySwitchBackCover?
+    /// 键盘升降提交新尺寸时屏上是全屏程序（备用屏）：它收到 SIGWINCH 会按新尺寸整屏重画，重画回来之前引擎只能把旧画面
+    /// 机械地裁 / 补，盖子要等重画落地再撤（`programRedrawPending`）。`reports`：提交时报过几次网格；`bytes`：新网格报出去
+    /// （远端收到 SIGWINCH）那一刻泵已经喂了多少后端字节，nil = 新网格还没报。
+    private var awaitingProgramRedraw: (reports: Int, bytes: UInt64?)?
     /// 容器还有没落地的布局（等停稳、尺寸 / 字号没跟上）。容器接上，盖子撤之前问。
     var geometryPending: () -> Bool = { false }
     /// surface 放掉时的行高调整与当时的视图尺寸、字号、倍率，重建后尺寸没变就直接补上，不先按自然行高画一帧。
@@ -352,6 +356,17 @@ final class GhosttyTerminalBridge {
         guard isOnScreen, view.surface != nil, !view.uTermIsSurfaceReleased, switchBackCover == nil else { return }
         installSwitchBackCoverIfNeeded()
         resizeCover = switchBackCover
+        // 备用屏上是收到 SIGWINCH 就整屏重画的程序（Claude Code、Codex、vim）：备用屏没有回滚，引擎变高只在底下补空行、
+        // 变矮从上面裁，输入框先跳一下、隔一个网络往返程序的重画才到。盖子等到重画落地（实机：弹出键盘闪一下）。
+        awaitingProgramRedraw = switchBackCover != nil && shadow.isOnAlternateScreen ? (resizeReports, nil) : nil
+    }
+
+    /// 提交新尺寸后还在等全屏程序的重画：新网格还没报出去，或报出去之后还没收到程序的输出，或程序开着同步输出（DEC 2026）
+    /// 还没画完。网格没变（尺寸变化不到一行）时程序不会重画，由盖子的超时兜底。
+    var programRedrawPending: Bool {
+        guard let awaiting = awaitingProgramRedraw else { return false }
+        guard let bytes = awaiting.bytes else { return true }
+        return outputPump.streamBytesFed == bytes || shadow.isModeSet(2026)
     }
 
     /// 视图挪了 `dy`：盖着的旧帧留在屏上原处（见 `GhosttySwitchBackCover.keepOnScreen`）。没挪就不用盖：
@@ -382,7 +397,10 @@ final class GhosttyTerminalBridge {
     }
 
     func coverRemoved(_ cover: GhosttySwitchBackCover) {
-        if switchBackCover === cover { switchBackCover = nil }
+        if switchBackCover === cover {
+            switchBackCover = nil
+            awaitingProgramRedraw = nil
+        }
     }
 
     private func releaseSurface() {
@@ -436,6 +454,9 @@ final class GhosttyTerminalBridge {
     private func gridChanged(cols: Int, rows: Int) {
         resizeReports += 1
         grid = (cols, rows)
+        if let awaiting = awaitingProgramRedraw, awaiting.bytes == nil, resizeReports > awaiting.reports {
+            awaitingProgramRedraw?.bytes = outputPump.streamBytesFed
+        }
         input.reportSize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
         // 远控标签停着画面等网格对齐的话，surface 这一报可能就对上了（读的是 IO 线程报过的网格）；surface 刚建好的话看闸能不能开。
         link.gridReported(cols: cols, rows: rows)

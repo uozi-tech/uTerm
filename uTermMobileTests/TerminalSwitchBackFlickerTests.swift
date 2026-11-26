@@ -355,6 +355,80 @@ final class TerminalSwitchBackFlickerTests: MTerminalContainerTestCase {
         }
     }
 
+    // MARK: 键盘升降，屏上是收到 SIGWINCH 就整屏重画的程序（Claude Code / Codex）
+
+    /// 实机反馈：Claude Code 里弹出 / 收起键盘，终端闪一下。Claude Code（2.1.x）跑在备用屏上，收到 SIGWINCH 在同步输出
+    ///（DEC 2026）里擦屏、按新尺寸整屏重画（本机 pty 抓的字节：`?2026h ?25l 2J H … ?2026l`），自己的重画是原子的。
+    /// 闪的是提交新尺寸到重画回来之间的那一个网络往返：引擎只能把旧画面机械地裁 / 补（备用屏变高时在底下补空行，输入框先跳上去），
+    /// 盖子却已经撤了。用户眼里只该有「旧画面 → 程序按新尺寸画好的画面」两种。
+    func testKeyboardRiseUnderFullScreenProgramShowsNoIntermediateFrame() async throws {
+        try await runFullScreenProgramKeyboard(rise: true)
+    }
+
+    func testKeyboardDropUnderFullScreenProgramShowsNoIntermediateFrame() async throws {
+        try await runFullScreenProgramKeyboard(rise: false)
+    }
+
+    /// 仿 Claude Code 全屏版的排布：标题在顶上，输入框和状态行贴底。
+    private static func fullScreenFrame(cols: Int, rows: Int) -> Data {
+        var s = "\u{1b}[?2026h\u{1b}[?25l\u{1b}[2J\u{1b}[H"
+        s += "\u{1b}[1;2HClaude Code v2.1.332"
+        for row in 3..<max(3, rows - 4) { s += "\u{1b}[\(row);2Hmessage line \(row) of conversation abcdefghij" }
+        s += "\u{1b}[\(rows - 3);1H" + String(repeating: "─", count: cols)
+        s += "\u{1b}[\(rows - 2);1H> type here"
+        s += "\u{1b}[\(rows - 1);1H" + String(repeating: "─", count: cols)
+        s += "\u{1b}[\(rows);3H⏵⏵ auto mode on (\(cols)x\(rows))"
+        s += "\u{1b}[\(rows - 2);13H\u{1b}[?25h\u{1b}[?2026l"
+        return Data(s.utf8)
+    }
+
+    private func runFullScreenProgramKeyboard(rise: Bool) async throws {
+        let (bridge, container) = try await hostedInWindow(fontSize: 10.63)
+        let tall = CGSize(width: 400, height: 620), short = CGSize(width: 400, height: 380)
+        lay(container, rise ? tall : short)
+        await settleAll(bridge)
+        guard let start = bridge.grid else { return XCTFail("没有网格") }
+        bridge.feed(Data("\u{1b}[?1049h".utf8) + Self.fullScreenFrame(cols: start.cols, rows: start.rows))
+        await settleAll(bridge)
+
+        // 远端的程序：每收到一次新网格（SIGWINCH），隔一个网络往返按新尺寸整屏重画。
+        let roundTrip: Duration = .milliseconds(150)
+        var answered = bridge.resizeReports
+        let program = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(5))
+                guard bridge.resizeReports != answered, let grid = bridge.grid else { continue }
+                answered = bridge.resizeReports
+                try? await Task.sleep(for: roundTrip)
+                bridge.feed(Self.fullScreenFrame(cols: grid.cols, rows: grid.rows))
+            }
+        }
+        defer { program.cancel() }
+
+        let recorder = Recorder()
+        recorder.read = sampler(bridge)
+        recorder.begin()
+        let from = rise ? tall : short, to = rise ? short : tall
+        for step in 1...20 {
+            let t = CGFloat(step) / 20
+            lay(container, CGSize(width: 400, height: (from.height + (to.height - from.height) * t).rounded()))
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        try await Task.sleep(for: .milliseconds(1200))
+        recorder.end()
+        let samples = recorder.log.map(\.sample)
+        for (ms, sample) in recorder.log { print("FULLSCREEN[rise=\(rise)] +\(Int(ms))ms \(sample)") }
+        guard let first = samples.first, let final = samples.last else { return XCTFail("没有采样") }
+        XCTAssertNotEqual(first.hash, final.hash, "用例前提：程序按新尺寸重画过")
+        XCTAssertEqual(samples.filter { $0.inkRows == 0 }.count, 0, "出现空白帧")
+        // 用户看到的画面依次是哪几张（连续相同的合并）：只允许旧画面 → 最终画面。
+        var pictures: [UInt64] = []
+        for s in samples where pictures.last != s.hash { pictures.append(s.hash) }
+        let middle = samples.filter { $0.hash != first.hash && $0.hash != final.hash }
+        XCTAssertEqual(pictures, [first.hash, final.hash],
+                       "旧画面和程序重画好的画面之间上屏了别的画面（闪一下）：\(middle.count) 个采样，首个 \(middle.first.map(String.init(describing:)) ?? "-")")
+    }
+
     /// 新容器接走视图、尺寸还没停稳（hold）的那段时间里，视图留在按行填满的下移位置，不先跳到 0 再回来。
     func testHoldKeepsRowFillOffset() async throws {
         let (bridge, container) = try await hostedInWindow()

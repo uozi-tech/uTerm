@@ -18,7 +18,10 @@ import UIKit
 /// - 盖子必须在容器提交新尺寸之前装上（`GhosttyTerminalBridge.prepareSwitchBack`），否则量到的是提交后的 frame，旧帧被裁 / 挪位。
 /// - 盖子里是旧帧的拷贝：没放掉 surface 时旧层还是活的，它的 IOSurface 随时被引擎的下一帧原地改写，直接引用的话盖子会跟着变。
 ///
-/// 撤不掉的情况（后台、远端迟迟不对齐）由超时兜底。
+/// - 提交新尺寸时屏上是全屏程序（备用屏）的话，还要等它按新尺寸的重画落地（`GhosttyTerminalBridge.programRedrawPending`）：
+///   在那之前引擎画的是把旧画面裁 / 补出来的一张，撤了就是旧画面 → 裁过的画面 → 程序的重画，闪一下。
+///
+/// 撤不掉的情况（后台、远端迟迟不对齐、程序不重画）由超时兜底。
 ///
 /// 也用在容器提交新尺寸、视图要挪位置的时候（键盘升降：等停稳期间视图按旧尺寸挪着放，提交时挪回来）：引擎层上那张还没换掉的
 /// 旧帧会跟着视图一起挪、按顶边对齐露出来，就是按键条上方闪一下旧内容。这时盖子留在屏上原处（`keepOnScreen`）。
@@ -105,7 +108,7 @@ final class GhosttySwitchBackCover {
                                 rowFillOffset: bridge.link.rowFillOffset)
         let settled = view.surface != nil && !view.uTermIsSurfaceReleased && bridge.isSurfaceReady
             && pump.isFeedingSurface && !pump.surfaceNeedsCatchUp
-            && !bridge.geometryPending() && !bridge.link.rowFillRefitPending
+            && !bridge.geometryPending() && !bridge.link.rowFillRefitPending && !bridge.programRedrawPending
         if !settled || geometry != lastGeometry { quietSince = now }
         lastGeometry = geometry
         if now - quietSince >= Self.quietTime { remove() }
