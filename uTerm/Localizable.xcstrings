@@ -64517,6 +64517,64 @@
         }
       }
     },
+    "看之前那段" : {
+      "comment" : "历史会话：打开接着聊之前的那份记录",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Earlier Part"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前の部分を表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 부분 보기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看先前那段"
+          }
+        }
+      }
+    },
+    "看后来那段" : {
+      "comment" : "历史会话：打开接着往下聊的那份新记录",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Later Part"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "後の部分を表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이후 부분 보기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看後來那段"
+          }
+        }
+      }
+    },
     "看着时保持在最前" : {
       "localizations" : {
         "en" : {
@@ -78585,6 +78643,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這次未測試%@（在「檢測設定」中開啟）。"
+          }
+        }
+      }
+    },
+    "这段对话后来接着在另一份记录里往下聊" : {
+      "comment" : "历史会话：记录顶上的提示，这一份上下文满了，后面的对话在另一份新记录里",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation continues in another record"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話は別の記録で続いています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 대화는 다른 기록에서 이어집니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這段對話後來在另一份紀錄裡繼續聊"
+          }
+        }
+      }
+    },
+    "这段对话接着之前的记录往下聊（上下文满了另起的一份）" : {
+      "comment" : "历史会话：记录顶上的提示，这一份是上下文满了之后接着往下聊的新记录",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation continues from an earlier record (started anew when the context filled up)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話は以前の記録の続きです（コンテキストがいっぱいになり新しく作成）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 대화는 이전 기록에서 이어집니다(컨텍스트가 가득 차서 새로 만든 기록)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這段對話接續先前的紀錄繼續聊（上下文滿了另起的一份）"
           }
         }
       }
