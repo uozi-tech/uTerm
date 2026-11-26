@@ -434,8 +434,16 @@
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer,
         ) -> Bool {
-            gestureRecognizer === pointer.hoverRecognizer
-                || otherGestureRecognizer === pointer.hoverRecognizer
+            if gestureRecognizer === pointer.hoverRecognizer || otherGestureRecognizer === pointer.hoverRecognizer {
+                return true
+            }
+            #if !targetEnvironment(macCatalyst)
+                // uTerm 补丁 #25：抬手就生效的单击与单击、双击、三击同时认。
+                if isTouchTapRecognizer(gestureRecognizer), isTouchTapRecognizer(otherGestureRecognizer) {
+                    return true
+                }
+            #endif
+            return false
         }
     }
 

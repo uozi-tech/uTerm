@@ -303,7 +303,8 @@
             if let overlay = touchSelection.overlay, touch.view?.isDescendant(of: overlay) == true {
                 return false
             }
-            if usesInlineTextSelection, gestureRecognizer === touchSelection.tapRecognizers.first {
+            if usesInlineTextSelection, gestureRecognizer === touchSelection.quickTap {
+                touchSelection.tapCountAtTouchDown = touch.tapCount
                 touchSelection.tapBeganWithMenu = isTouchMenuVisible
                 #if targetEnvironment(macCatalyst)
                     touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil

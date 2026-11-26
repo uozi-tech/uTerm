@@ -21,6 +21,13 @@
         var menuVisible = false
         var menuResponder: UIView?
         var tapRecognizers: [UITapGestureRecognizer] = []
+        /// uTerm 补丁 #25：抬手就生效的单击，见 `setupTouchSelectionGestures`。
+        var quickTap: UITapGestureRecognizer?
+        /// 这一下按下时系统给的连点序号（`UITouch.tapCount`），大于 1 = 连点的后几下，归双击 / 三击。
+        var tapCountAtTouchDown = 1
+        /// 单击要收键盘，等确认不是双击再收。
+        var keyboardTogglePending = false
+        var lastTap: TouchTapRecord?
         var tapBeganWithMenu = false
         var tapStopsMomentum = false
         var longPress: UILongPressGestureRecognizer?
@@ -51,6 +58,13 @@
         var autoscrolledOffset: Int?
     }
 
+    /// 上一下轻点点在的绝对格号。
+    struct TouchTapRecord {
+        var cell: Int
+        var columns: Int
+        var time: CFTimeInterval
+    }
+
     extension UITerminalView {
         var touchViewportOffset: Int {
             Int(core.bridge.scrollbar?.offset ?? 0)
@@ -71,6 +85,7 @@
             selectAll: Bool,
             selectLine: Bool = false,
             fromLongPress: Bool = false,
+            cell knownCell: Int? = nil,
         ) {
             guard usesInlineTextSelection, window != nil, let surface, let grid = touchSelectionGrid() else { return }
             stopMomentumScrolling(settle: .none)
@@ -79,7 +94,8 @@
             // the scrollbar report that says so arrives a frame later.
             let viewportOffset = surface.smoothScrollPosition().flatMap { $0.isAvailable ? $0.row : nil }
                 ?? touchViewportOffset
-            let cell = grid.cell(at: point, viewportOffset: viewportOffset)
+            // `knownCell`：连点的第一下记下的格（uTerm 补丁 #25），网格在两下之间可能已经变了行数。
+            let cell = knownCell ?? grid.cell(at: point, viewportOffset: viewportOffset)
             let total = max(grid.rows, Int(core.bridge.scrollbar?.total ?? UInt64(grid.rows)))
             let range: ClosedRange<Int>
             if selectAll {

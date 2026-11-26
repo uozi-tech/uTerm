@@ -794,6 +794,25 @@ Ghostty 认链接前去掉 Shift、点击不报给程序。宿主没给（nil）
 
 回归用例：`uTermMobileTests/GhosttyTapLinkTests.swift`、`uTermMobileTests/GhosttyOpenLinkMenuTests.swift`。
 
+### 25. iOS：轻点抬手就生效（不等双击判定）
+
+文件：`Platform/UIKit/UITerminalView+TouchGestures.swift`（`quickTap` / `handleQuickTap` / `performQuickTap`、
+`handleSelectionTap` 的单击只剩收键盘）、`Platform/UIKit/UITerminalView+TouchSelection.swift`（`TouchSelectionState` 的
+`quickTap` / `tapCountAtTouchDown` / `keyboardTogglePending` / `lastTap`，`beginTouchSelection(cell:)`）、
+`Platform/UIKit/UITerminalView+Interaction.swift`（`shouldReceive` 改记在 `quickTap` 上，另记 `UITouch.tapCount`）、
+`Platform/UIKit/UITerminalView+Pointer.swift`（四个轻点识别器同时认）、`Platform/UIKit/UITerminalView+UTermHost.swift`
+（测试读触摸选区的 `uTermTouchSelectionText`）。
+
+上游的单击要等双击判定失败、双击又要等三击，每一下轻点（弹键盘、点击报给接管鼠标的程序、开链接、收选区）都要等完系统的
+双击间隔，用户报的「点终端反应慢」（模拟器上抬手到弹键盘 648 ms、到接管鼠标的程序收到点击 864 ms，改后都在 120 ms 内）。
+这里另挂一个不等任何人的单击，抬手就做；它和单击、双击、三击同时认，连点的后几下（系统给的 `UITouch.tapCount` > 1）不做，
+归双击 / 三击。双击 / 三击照上游（双击仍等三击：试过不等，双击选出词就弹编辑菜单，第三下被菜单吃掉，三击选不了行）。
+行为上的变化：双击的第一下是一次真的单击（键盘收着时会弹出来，接管鼠标的程序收到一次点击），所以第一下记下手指底下的
+绝对格号，双击按它选词，不怕弹键盘改了行数；收键盘仍等双击判定完（还是原来那个单击识别器），双击选词不先把键盘收走
+（uTerm 的 `toggleSoftwareKeyboard` 本来只弹不收）。选区带着编辑菜单时，菜单外的第一下是系统收菜单的，到不了终端，同上游。
+
+回归用例：`uTermMobileTests/GhosttyTapLatencyTests.swift`（合成触摸，走 UIKit 自己的手势）。
+
 ## manifest 改动（相对上游的 `Package.swift`）
 
 1. `libghostty` 这个 binaryTarget 从 `url:` + `checksum:` 改成 `path: "BinaryTarget/GhosttyKit.xcframework"`（同上游的 `Package.local.swift`）。

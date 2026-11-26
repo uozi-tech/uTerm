@@ -94,7 +94,9 @@
         /// Single tap clears selection or a menu, otherwise opens an http or https link,
         /// or clicks and toggles the keyboard.
         /// Double tap selects a word, triple tap selects a row.
-        /// Selection gestures and menus leave keyboard visibility unchanged.
+        /// Selection gestures and menus leave keyboard visibility unchanged, except
+        /// that the first tap of a double or triple tap acts as a single tap at once
+        /// (uTerm patch #25): with the keyboard down it raises the keyboard.
         /// Long press selects a word, or opens the menu over blank cells;
         /// one finger extends a selection and two fingers scroll locally.
         /// Set false to opt out: no touch selection at all, a tap opens a link or clicks and toggles the keyboard.

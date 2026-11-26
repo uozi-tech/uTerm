@@ -41,6 +41,9 @@
             /// 一次手指轻点（同轻点手势，测试用）。返回 true = 点到了链接并打开 / 带着 ⌘，不弹键盘。
             func uTermSendTap(at point: CGPoint) -> Bool { sendTapClick(at: point) }
 
+            /// 触摸选区（双击 / 三击 / 长按选出来的、本包自己画高亮的那块）里的文字；没有选区时 nil。测试用。
+            var uTermTouchSelectionText: String? { touchSelection.range == nil ? nil : touchSelection.text }
+
             /// surface 被宿主放掉了没有。
             var uTermIsSurfaceReleased: Bool { uTermSurfaceReleased }
 

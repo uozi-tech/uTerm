@@ -25,7 +25,8 @@ final class SyntheticFinger {
 
     // MARK: 手势
 
-    func down(at point: CGPoint) throws {
+    /// `tapCount`：这是连点里的第几下（双击的第二下传 2），同真触摸的 `UITouch.tapCount`。
+    func down(at point: CGPoint, tapCount: Int = 1) throws {
         let touch = UITouch()
         let hit = window.hitTest(point, with: nil) ?? window
         touch.perform(NSSelectorFromString("setWindow:"), with: window)
@@ -34,7 +35,7 @@ final class SyntheticFinger {
         if touch.responds(to: NSSelectorFromString("setGestureView:")) {
             touch.perform(NSSelectorFromString("setGestureView:"), with: hit)
         }
-        Self.call(touch, "setTapCount:", as: SetInt.self) { $0(touch, $1, 1) }
+        Self.call(touch, "setTapCount:", as: SetInt.self) { $0(touch, $1, tapCount) }
         if touch.responds(to: NSSelectorFromString("_setIsFirstTouchForView:")) {
             Self.call(touch, "_setIsFirstTouchForView:", as: SetBool.self) { $0(touch, $1, true) }
         }
