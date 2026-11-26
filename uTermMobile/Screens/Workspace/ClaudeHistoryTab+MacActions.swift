@@ -15,8 +15,22 @@ extension ClaudeHistoryTab {
     /// 最多等这么久：接管时它已经归 Code 标签页，就不会先被开成一个终端标签页。
     nonisolated static var macTakeoverWait: Duration { .seconds(5) }
 
-    /// 这台 Mac 的「继续」「＋」「重新开始」「移到新标签页」在它的 Code 标签页里做。
-    var runsOnMacCodeTab: Bool { remoteMac != nil && macSupportsCodeTabActions() }
+    /// 「继续」「＋」「重新开始」「移到新标签页」请那台 Mac 在它的 Code 标签页里做。配对的 Mac 的标签页：Mac 认得
+    /// `codeTabAction` 就是。直连主机的标签页：正镜像着那台 Mac 上这台主机的 Code 标签页、Mac 还认得 `code-tab-hosts`
+    /// （之前的 Mac 不读 `server`，会当成它本机的做）；否则「继续」「＋」照旧经这边自己的 SSH 在这里起。
+    var runsOnMacCodeTab: Bool {
+        if remoteMac != nil { return macSupportsCodeTabActions() }
+        return mirrorClient != nil && mirroredMacTabID != nil && macSupportsCodeTabActions() && macSupportsCodeTabHosts()
+    }
+
+    /// 请 Mac 做事时带的主机（`RemoteCodeTabAction.server`）：配对的 Mac 是它本机（nil），直连主机是这台主机。
+    var mirroredServerID: UUID? { remoteMac == nil ? host.id : nil }
+
+    /// 正镜像着的那台 Mac（没在镜像为 nil）。
+    var mirroringClient: RemoteMacClient? {
+        guard mirroredMacTabID != nil else { return nil }
+        return remoteMac ?? mirrorClient
+    }
 
     /// 这份记录正在那台 Mac 的 Code 标签页里跑着（镜像过来的）：回到它的终端，返回 true。不是就什么都不做。
     @discardableResult
@@ -32,7 +46,8 @@ extension ClaudeHistoryTab {
                      workspace: MobileWorkspace? = nil, store: MobileStore? = nil) async throws {
         if focusRunningMirror(for: file) { return }
         let action = RemoteCodeTabAction(action: .resume, tab: mirroredMacTabID, path: file.path,
-                                         tool: file.tool.rawValue, sessionID: file.sessionID, directory: directory)
+                                         tool: file.tool.rawValue, sessionID: file.sessionID, directory: directory,
+                                         server: mirroredServerID)
         guard let session = try await performOnMac(action) else { return }
         follow(session, workspace: workspace, store: store)
     }
@@ -40,7 +55,8 @@ extension ClaudeHistoryTab {
     /// 「＋新会话」：请 Mac 在它的 Code 标签页里新开一个。
     func startOnMac(tool: AgentHistoryTool, directory: String,
                     workspace: MobileWorkspace? = nil, store: MobileStore? = nil) async throws {
-        let action = RemoteCodeTabAction(action: .start, tab: mirroredMacTabID, tool: tool.rawValue, directory: directory)
+        let action = RemoteCodeTabAction(action: .start, tab: mirroredMacTabID, tool: tool.rawValue, directory: directory,
+                                         server: mirroredServerID)
         guard let session = try await performOnMac(action) else { return }
         follow(session, workspace: workspace, store: store)
     }
@@ -48,7 +64,7 @@ extension ClaudeHistoryTab {
     /// 已结束的镜像会话「重新开始」：Mac 在原来的位置起一个新的（同一种工具、同一个目录），这边选上它。
     func restartOnMac(_ id: UUID) async throws {
         guard let run = runs.run(id: id), run.isMirrored, !run.isRunning else { return }
-        let action = RemoteCodeTabAction(action: .restart, tab: mirroredMacTabID, session: id)
+        let action = RemoteCodeTabAction(action: .restart, tab: mirroredMacTabID, session: id, server: mirroredServerID)
         guard let session = try await performOnMac(action) else { return }
         focusWhenMirrored(session)
     }
@@ -56,8 +72,8 @@ extension ClaudeHistoryTab {
     /// 跑着的镜像会话「移到新标签页」：Mac 把它挪成它那边的普通终端标签页，Mac 推来新的 Code 标签页之后这边拿掉镜像、
     /// 由跟进开成远控终端标签页（`MobileWorkspace.follow`），开出来时放到前台。
     func moveMirroredRunToTab(_ id: UUID, in workspace: MobileWorkspace) async throws {
-        guard let run = runs.run(id: id), run.isMirrored, run.isRunning, let client = remoteMac else { return }
-        let action = RemoteCodeTabAction(action: .moveToTab, tab: mirroredMacTabID, session: id)
+        guard let run = runs.run(id: id), run.isMirrored, run.isRunning, let client = mirrorClient else { return }
+        let action = RemoteCodeTabAction(action: .moveToTab, tab: mirroredMacTabID, session: id, server: mirroredServerID)
         guard let session = try await performOnMac(action) else { return }
         workspace.bringToFront(remote: MRemoteSource(client: client, sessionID: session))
     }
@@ -73,15 +89,17 @@ extension ClaudeHistoryTab {
     /// 「继续」「＋」做完：选上那个会话。手机还没接管这台 Mac 时接管它（同老 Mac 那条路：开会话总是带着整台接管），
     /// 那个会话就在这个 Code 标签页里接上、放到前台（`MobileWorkspace.takeOver` 接上用户开着的这个标签页）。
     private func follow(_ session: UUID, workspace: MobileWorkspace?, store: MobileStore?) {
-        guard let client = remoteMac, let workspace, let store,
+        guard let client = mirrorClient, let workspace, let store,
               !workspace.followedClients.contains(where: { $0 === client }) else {
             focusWhenMirrored(session)
             return
         }
         focusWhenMirrored(session)
+        let servers: Set<UUID> = [mirroredServerID ?? RemoteConstants.localShellServerID]
         Task { [weak client, weak store] in
             let deadline = ContinuousClock.now + Self.macTakeoverWait
-            while let client, !client.codeRunSessionIDs.contains(session), ContinuousClock.now < deadline {
+            while let client, !client.codeRunSessionIDs(serverIDs: servers).contains(session),
+                  ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard let client, let store else { return }

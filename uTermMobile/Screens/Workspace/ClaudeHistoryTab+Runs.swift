@@ -302,9 +302,12 @@ extension ClaudeHistoryTab {
         _ = runs.removeAll()
     }
 
-    /// 关标签页前问：里面还有没有程序在跑。有一个在跑就按它问。
+    /// 在这边起的会话的终端（镜像过来的不算：关掉标签页只断开它们，Mac 上照旧跑）。
+    var localRunTerminals: [TermTab] { runs.runs.filter { !$0.isMirrored }.map(\.terminal) }
+
+    /// 关标签页前问：里面在这边起的会话还有没有程序在跑。有一个在跑就按它问。
     func foregroundActivity() async -> TerminalActivity {
-        for term in runTerminals {
+        for term in localRunTerminals {
             let activity = await term.controller.foregroundActivity()
             if activity != .idle { return activity }
         }
@@ -316,7 +319,9 @@ extension ClaudeHistoryTab {
     /// 记进归档的样子（`MobileTerminalTabArchive.codeTabs`）：哪台主机、「＋」的目录、要接回的会话（`included`：
     /// 还没断开、能接回的那些，键是 run 的 id）、详情看的是哪一个。配对的 Mac、主机已经删了的不记（nil）。
     func archiveRecord(including included: [CodeRunBoard<TermTab>.Run]) -> CodeTabRecord? {
-        guard remoteMac == nil, !host.isDeleted, host.modelContext != nil else { return nil }
+        // 接管时为了镜像才开出来、没有在这边起的会话：不记（重新接管时再开出来）。
+        guard remoteMac == nil, !host.isDeleted, host.modelContext != nil,
+              !(opensForMirror && included.isEmpty) else { return nil }
         var record = CodeTabRecord(id: id, host: host.id, directory: directory)
         record.runs = included.map { run in
             CodeRunRecord(session: run.terminal.controller.hostSessionID, tool: run.tool, sessionID: run.sessionID,

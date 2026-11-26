@@ -73,6 +73,13 @@ struct WorkspaceScreen: View {
         .task(id: workspace.followedClients.map(ObjectIdentifier.init)) { await keepFollowedMacsConnected() }
         .onAppear {
             workspace.onFilePreviewRequest = { term, path in showPreview(path, beside: term) }
+            // 接管的 Mac 上 SSH 主机的 Code 标签页、远控终端的「历史会话」按 id 找手机上的那台主机（先于下面的接管请求）。
+            let container = context.container
+            workspace.savedHost = { id in
+                var descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == id })
+                descriptor.fetchLimit = 1
+                return (try? container.mainContext.fetch(descriptor))?.first.flatMap { DemoHostProfile.isDemo($0) ? nil : $0 }
+            }
             consume(store.openTarget)
             consume(store.remoteTakeover)
             consume(store.remoteFiles)
@@ -299,7 +306,7 @@ struct WorkspaceScreen: View {
     // MARK: - Code 标签页
 
     /// 终端标签长按「历史会话」：切到 / 新开这台主机的 Code 标签页（按项目分组，定位到终端当前目录那一组），
-    /// 远控标签读那台 Mac 的。已经开着就带到前台、再定位一次。
+    /// 远控标签读那台 Mac 的（在 Mac 的 SSH 主机上的读手机上那台主机的）。已经开着就带到前台、再定位一次。
     private func openHistory(for tabID: UUID) {
         guard let term = workspace.tab(tabID)?.terminal else { return }
         workspace.focus(pane: workspace.panes[workspace.paneIndex(containing: tabID) ?? 0].id)

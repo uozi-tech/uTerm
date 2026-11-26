@@ -6,6 +6,9 @@ import Foundation
 /// 会话的增减、对上的记录、标题、结束都照 Mac 报的（规则见 `RemoteCodeRunMirror`）；本机不去认记录、不看程序退出
 /// （命令不是这边打的，没有 `; exit`）。「结束会话」请 Mac 结束它（`endRun`），关掉这个标签页只断开镜像。
 /// 哪个 Code 标签页开出来、开在哪、什么时候关由工作区管（`MobileWorkspace.follow`）。
+///
+/// Mac 上 SSH 主机的 Code 标签页由手机上那台主机的 Code 标签页镜像（手机上有这台主机、不是仅 SFTP 时）：记录经手机自己的
+/// SSH 读（主机上的路径和 Mac 读到的一样），镜像过来的会话和这边直连起的会话放在同一个列表里（`isMirrored` 区分）。
 extension ClaudeHistoryTab {
     /// 镜像着的会话此刻的样子（交给 `RemoteCodeRunMirror.plan` 比对）。
     var mirroredRunStates: [RemoteCodeRunMirror.Mirrored] {
@@ -87,10 +90,19 @@ extension ClaudeHistoryTab {
         }
     }
 
-    /// 不再镜像（Mac 上那个 Code 标签页没了，而这个标签页是用户自己开的、留着）：镜像着的会话全部断开拿掉。
+    /// 不再镜像（Mac 上那个 Code 标签页没了，而这个标签页是用户自己开的、或者里面有在这边起的会话，留着）：镜像着的会话
+    /// 全部断开拿掉，这边起的照旧。直连主机的标签页从此和那台 Mac 无关。
     func stopMirroring() {
         removeMirroredRuns(runs.runs.filter(\.isMirrored).map(\.id))
         mirroredMacTabID = nil
+        if remoteMac == nil { mirrorClient = nil }
         dropPendingMacFocus()
     }
+
+    /// 里面有在这边起的会话（直连主机上「继续」「＋」起的，不是镜像过来的）。
+    var hasLocalRuns: Bool { runs.runs.contains { !$0.isMirrored } }
+
+    /// Mac 上那个 Code 标签页没了、或者不再跟着那台 Mac 时，这个标签页跟着关：接管时为了镜像才开出来、里面也没有在这边起的
+    /// 会话。否则只停镜像（`stopMirroring`）。
+    var closesWithMirror: Bool { opensForMirror && !hasLocalRuns }
 }

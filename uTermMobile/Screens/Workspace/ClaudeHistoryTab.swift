@@ -11,6 +11,8 @@ import UIKit
 /// 直连的主机上「继续这个会话」「＋新会话」就在这个标签页里起一个活终端（`runs`，见 `ClaudeHistoryTab+Runs`）；
 /// 配对的 Mac 认得 `codeTabAction` 时请它在它自己的 Code 标签页里开，再经镜像出现在这里（`ClaudeHistoryTab+MacActions`）；
 /// 老 Mac 照旧经接管开终端标签页（接管会把那台 Mac 的终端都镜像成标签页，放进这里会重复）。
+/// 直连主机的 Code 标签页还可以镜像接管着的那台 Mac 上这台主机的 Code 标签页（`mirrorClient`）：镜像过来的会话和这边起的
+/// 放在一起，Mac 认得 `code-tab-hosts` 时「继续」「＋」请 Mac 做，否则照旧在这边起。
 ///
 /// 列表与记录只在内存里：不落盘、不进 iCloud。直连主机的 Code 标签页连同里面跑着的会话记进归档
 /// （`MobileTerminalTabArchive`，只记是哪台主机、哪些会话、看着哪一个），App 被系统结束后照原样开回来、会话接回它里面
@@ -62,6 +64,11 @@ final class ClaudeHistoryTab: Identifiable {
     var mirroredMacTabID: UUID?
     /// 是接管时为了镜像才开出来的：Mac 上那个 Code 标签页没了就跟着关。用户自己开的（「＋」、终端标签长按）不关。
     var opensForMirror = false
+    /// 镜像着哪台 Mac 的 Code 标签页（`ClaudeHistoryTab+Mirror`）。配对的 Mac 的标签页就是 `remoteMac`；直连主机的标签页
+    /// 镜像那台 Mac 上这台主机的 Code 标签页时是那台 Mac（记录照旧经这边自己的 SSH 读，见 `remoteMac`），不镜像时为 nil。
+    @ObservationIgnored weak var mirrorClient: RemoteMacClient?
+    /// 接管时在后台开出来、还没露出来过：等第一次露出来再连（`startIfDeferred`），接管时不去连一台用户不一定看的主机。
+    @ObservationIgnored var startsWhenShown = false
     /// 镜像着的会话上点了「结束会话」：请那台 Mac 结束它（`RemoteMacClient.closeSessionOnMac`，消息 8）。测试换成记下来的。
     @ObservationIgnored var endOnMac: @MainActor (UUID) -> Void = { _ in }
     /// 请那台 Mac 在它的 Code 标签页里做一件事（`RemoteMacClient.performCodeTabAction`，消息 64），返回做完之后的会话 id。
@@ -71,6 +78,8 @@ final class ClaudeHistoryTab: Identifiable {
     }
     /// 那台 Mac 认不认得 `codeTabAction`（`RemoteMacClient.supportsCodeTabActions`，握手时定）。测试换成固定的。
     @ObservationIgnored var macSupportsCodeTabActions: @MainActor () -> Bool = { false }
+    /// 那台 Mac 能不能在 SSH 主机的 Code 标签页里做事（`RemoteMacClient.supportsCodeTabHosts`）。测试换成固定的。
+    @ObservationIgnored var macSupportsCodeTabHosts: @MainActor () -> Bool = { false }
     /// 有一个请 Mac 做的事还没回复：这时再点不再发（`ClaudeHistoryTab+MacActions`）。
     var macActionInFlight = false
     /// 请 Mac 做完了、回复里的那个会话还没出现在这里（Mac 推来的 Code 标签页晚于回复到）：出现时选上它。
@@ -103,12 +112,20 @@ final class ClaudeHistoryTab: Identifiable {
                                                      pinHost: { client.macDeviceID.map(AgentHistoryPinHost.pairedMac) },
                                                      connect: AgentHistoryAccess.pairedMac(client)),
                   remoteMac: client)
+        attachMirror(client)
+    }
+
+    /// 镜像起这台 Mac 的 Code 标签页：「结束会话」、请 Mac 做的事都发给它。配对的 Mac 开标签页时就接上；直连主机的标签页
+    /// 由工作区在第一次接上那台 Mac 上这台主机的 Code 标签页时接上（`MobileWorkspace.follow`）。
+    func attachMirror(_ client: RemoteMacClient) {
+        mirrorClient = client
         endOnMac = { [weak client] session in client?.closeSessionOnMac(session) }
         macCodeTabAction = { [weak client] action in
             guard let client else { throw RemoteProtocolError.closed }
             return try await client.performCodeTabAction(action)
         }
         macSupportsCodeTabActions = { [weak client] in client?.supportsCodeTabActions ?? false }
+        macSupportsCodeTabHosts = { [weak client] in client?.supportsCodeTabHosts ?? false }
     }
 
     /// 能不能「继续这个会话」「＋新会话」：要在那台主机上开终端。仅 SFTP 的主机开不了；配对的 Mac 要认得「新建本机终端」。
@@ -164,7 +181,15 @@ final class ClaudeHistoryTab: Identifiable {
         }
     }
 
+    /// 接管时在后台开出来的（`startsWhenShown`）第一次露出来：这时才连。
+    func startIfDeferred() {
+        guard startsWhenShown else { return }
+        startsWhenShown = false
+        start()
+    }
+
     func start() {
+        startsWhenShown = false
         Task {
             await connection.open()
             applyRestoredState()
@@ -221,6 +246,8 @@ struct ClaudeHistorySessionBody: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
+        // 接管时在后台开出来的直连主机标签页：第一次露出来才连那台主机。
+        .onChange(of: isActive, initial: true) { _, active in if active { tab.startIfDeferred() } }
         .mBottomPanel(item: Binding(get: { tab.newSessionDraft }, set: { tab.newSessionDraft = $0 })) { draft in
             if let history = tab.connection.history {
                 CodeNewSessionPanel(draft: draft, history: history, connection: tab.connection, hostName: tab.hostName) {
