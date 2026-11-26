@@ -38,6 +38,9 @@
                 set { core.keepsSurfaceFocused = newValue }
             }
 
+            /// 一次手指轻点（同轻点手势，测试用）。返回 true = 点到了链接并打开 / 带着 ⌘，不弹键盘。
+            func uTermSendTap(at point: CGPoint) -> Bool { sendTapClick(at: point) }
+
             /// surface 被宿主放掉了没有。
             var uTermIsSurfaceReleased: Bool { uTermSurfaceReleased }
 

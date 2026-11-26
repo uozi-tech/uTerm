@@ -17,7 +17,13 @@ final class MGhosttyTerminalView: UITerminalView {
     /// 剪贴板里只有图片 / 视频时的粘贴交给宿主（传到远端再把路径粘进来）。
     var onPasteMedia: (() -> Void)?
     /// 选中的文字是路径或网址时，编辑菜单第一项「打开」交给宿主（`TerminalLinkDetector`）。nil = 不加这一项。
-    var onOpenLink: ((String) -> Void)?
+    var onOpenLink: ((String) -> Void)? {
+        // 宿主接了「打开」，手指直接点链接也打开（网址、路径、OSC 8），开不开同编辑菜单的「打开」：远控镜像里的路径不开，
+        // 点击照常交给终端。没接时（探针）照上游：只开没被程序接管鼠标时的网址。
+        didSet {
+            uTermTapOpensLink = onOpenLink == nil ? nil : { [weak self] link in self?.canOpenLink?(link) ?? true }
+        }
+    }
     /// 这个链接点了会不会有反应（远控镜像里的路径不会）；没有反应就不加「打开」。
     var canOpenLink: ((String) -> Bool)?
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，见 `MTerminalContainerView`。

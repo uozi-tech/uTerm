@@ -37,6 +37,9 @@
         var uTermSurfaceReleased = false
         /// uTerm 本地补丁：键盘当触控板（长按空格）这一次走到哪儿了，nil = 没在用（见 +FloatingCursor）。
         var floatingCursor: TerminalFloatingCursorTracker?
+        /// uTerm 本地补丁：手指轻点到一个链接（引擎认出的网址 / 路径，或 OSC 8 链接）时，宿主说开就直接打开（见 +TouchLink）。
+        /// nil = 上游行为：只开没被程序接管鼠标时的 http(s) 网址。
+        public var uTermTapOpensLink: ((String) -> Bool)?
 
         lazy var selectionContextMenuInteraction = UIContextMenuInteraction(delegate: self)
         lazy var inputHandler = TerminalTextInputHandler(view: self)

@@ -229,14 +229,13 @@
                 mods.formUnion(stickyModifiers.consumeForNextKey())
                 pointer.lastSelectionRect = nil
                 pointer.selectionStartPoint = nil
-                if !surface.isMouseCaptured {
-                    if mods.contains(.super_) {
-                        sendCommandClick(at: point, mods: mods, on: surface)
-                        return true
-                    }
-                    if mods.isDisjoint(with: [.shift, .ctrl, .alt]), openWebLink(at: point, on: surface) {
-                        return true
-                    }
+                if !surface.isMouseCaptured, mods.contains(.super_) {
+                    sendCommandClick(at: point, mods: mods, on: surface)
+                    return true
+                }
+                // uTerm 补丁：点到链接直接打开（宿主决定开不开，程序接管着鼠标时也认），见 +TouchLink。
+                if mods.isDisjoint(with: [.shift, .ctrl, .alt]), openTappedLink(at: point, on: surface) {
+                    return true
                 }
                 sendPointerPosition(at: tapClickPoint(for: point, on: surface))
                 surface.sendMouseButton(

@@ -773,6 +773,20 @@ Ghostty 认链接前会把这个 Shift 再去掉（只剩 ⌘，正好匹配链�
 
 回归用例：`uTermMobileTests/GhosttyFloatingCursorTests.swift`。
 
+### 24. iOS：手指直接点链接就打开（路径也算，程序接管鼠标时也认）
+
+文件：`Platform/UIKit/UITerminalView.swift`（`uTermTapOpensLink`）、`Platform/UIKit/UITerminalView+TouchLink.swift`
+（`linkMods`、`openTappedLink`，`touchLinkExists` / `sendCommandClick` 改用 `linkMods`）、
+`Platform/UIKit/UITerminalView+Interaction.swift`（`sendTapClick`）、`Platform/UIKit/UITerminalView+UTermHost.swift`（`uTermSendTap`）。
+
+上游的轻点只开没被程序接管鼠标时的 http(s) 网址，路径要长按选中再点菜单；Claude Code 这类接管了鼠标的程序里，
+连菜单里的「Open Link」都不出（`touchLinkExists` 直接返回 false）。这里：宿主给 `uTermTapOpensLink`（链接 → 开不开），
+轻点到引擎认出的链接、宿主说开，就当 ⌘ 点打开，不再交给终端、不弹键盘；接管鼠标时修饰键照补丁 22 报成 ⌘⇧，
+Ghostty 认链接前去掉 Shift、点击不报给程序。宿主没给（nil）时同上游。uTerm 在 `MGhosttyTerminalView.onOpenLink`
+接上时给它，开不开同编辑菜单的「打开」（`canOpenLink`：远控镜像里的路径不开，那一下照常是普通点击）。
+
+回归用例：`uTermMobileTests/GhosttyTapLinkTests.swift`、`uTermMobileTests/GhosttyOpenLinkMenuTests.swift`。
+
 ## manifest 改动（相对上游的 `Package.swift`）
 
 1. `libghostty` 这个 binaryTarget 从 `url:` + `checksum:` 改成 `path: "BinaryTarget/GhosttyKit.xcframework"`（同上游的 `Package.local.swift`）。
