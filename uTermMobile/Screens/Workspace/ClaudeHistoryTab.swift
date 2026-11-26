@@ -923,7 +923,7 @@ private struct ClaudeTranscriptView: View {
         }
     }
 
-    /// 放得下就一行（返回 · 标题 · 拷贝 · 继续）；窄的格子（Duo 分屏 330pt、iPhone 竖屏）标题一行、按钮另起一行，
+    /// 放得下就一行（返回 · 标题 · 拷贝 · 继续）；窄的格子（Duo 分屏 330pt）标题一行、按钮另起一行，
     /// 不然标题只剩两三个字。
     private var header: some View {
         ViewThatFits(in: .horizontal) {
@@ -932,8 +932,9 @@ private struct ClaudeTranscriptView: View {
                 titleBlock
                 actions
             }
-            // 子代理的记录只有拷贝一个按钮，窄的格子里也放得下一行。
-            .frame(minWidth: transcript.subagent == nil ? 460 : 0, minHeight: 52)
+            // 子代理的记录只有拷贝一个按钮，窄的格子里也放得下一行。主对话的按钮短（「继续」/「返回终端」），
+            // iPhone 竖屏（402–440pt）放得下一行；Duo 分屏的窄格子（330pt）标题会只剩几个字，仍分两行。
+            .frame(minWidth: transcript.subagent == nil ? 380 : 0, minHeight: 52)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     backButton
@@ -989,9 +990,12 @@ private struct ClaudeTranscriptView: View {
                     .fixedSize()
                     .padding(.trailing, 10)
             } else if transcript.subagent == nil {
-                MBtn(title: String(localized: "继续这个会话"), icon: "run", kind: .tinted, height: 34,
-                     disabled: !canResume, action: onResume)
+                // 按钮上只写「继续」，和标题收在一行（iPhone 竖屏也放得下）；读屏仍读全称。
+                MBtn(title: String(localized: "code.resume.short", defaultValue: "继续",
+                                   comment: "Code 标签页对话顶上的按钮：继续这个会话（短，和标题放在同一行）"),
+                     icon: "run", kind: .tinted, height: 34, disabled: !canResume, action: onResume)
                     .fixedSize()
+                    .accessibilityLabel(Text(AgentHistoryText.resumeSession))
                     .padding(.trailing, 10)
             } else {
                 Spacer().frame(width: 4)
