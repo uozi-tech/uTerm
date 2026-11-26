@@ -68,3 +68,64 @@ extension Array where Element == RemoteCodeTabInfo {
         first { $0.serverID == serverID }
     }
 }
+
+/// 64 号消息的负载：设备请 Mac 在它的 Code 标签页里做一件事（设备 → Mac，通道 0）。Mac 回 65 号
+/// （`RemoteCodeTabActionResult`），做完照常推新的 Code 标签页（63）与会话列表（20），设备按回复里的会话 id 在 63 里认出
+/// 新起的那个会话。只发给 `features` 带 `code-tab-actions` 的 Mac（老 Mac 收到未知消息会断开整条连接）。
+///
+/// 动作存原始值（`Action.rawValue`），线格式只加不改：新加的动作 Mac 不认时回错误，不会解码失败断开；新字段一律可选。
+nonisolated struct RemoteCodeTabAction: Codable, Equatable, Sendable {
+    nonisolated enum Action: String, Codable, Sendable {
+        /// 继续一份记录（`path` / `tool` / `sessionID`；`directory` 是设备算的继续目录，Mac 对不上记录时用它）。
+        /// 这份记录已经在 Code 标签页里跑着就回到它。
+        case resume
+        /// 新开一个会话（`tool` / `directory`）。
+        case start
+        /// 已结束的会话「重新开始」（`session`）：同一种工具、同一个目录，放回原来的位置，回复里是新会话。
+        case restart
+        /// 「移到新标签页」（`session`）：开成 Code 标签页所在组里的普通终端标签页，回复里是同一个会话。
+        case moveToTab
+    }
+
+    /// 回复里原样带回。
+    var requestID: UUID
+    /// `Action.rawValue`。
+    var action: String
+    /// 设备镜像着的那个 Mac Code 标签页（`RemoteCodeTabInfo.id`）；nil = 设备还没有镜像（Mac 上还没有 Code 标签页），
+    /// `resume` / `start` 时 Mac 先开一个。
+    var tab: UUID?
+    /// `restart` / `moveToTab`：哪个会话（`RemoteCodeTabInfo.Run.session`）。
+    var session: UUID?
+    /// `resume`：那份记录在 Mac 上的路径（`AgentHistorySessionFile.path`）。
+    var path: String?
+    /// `resume` / `start`：`AgentHistoryTool.rawValue`。
+    var tool: String?
+    /// `resume`：记录的会话 ID。
+    var sessionID: String?
+    /// `resume`：继续的目录；`start`：新开在哪个目录。
+    var directory: String?
+
+    init(requestID: UUID = UUID(), action: Action, tab: UUID? = nil, session: UUID? = nil, path: String? = nil,
+         tool: String? = nil, sessionID: String? = nil, directory: String? = nil) {
+        self.requestID = requestID
+        self.action = action.rawValue
+        self.tab = tab
+        self.session = session
+        self.path = path
+        self.tool = tool
+        self.sessionID = sessionID
+        self.directory = directory
+    }
+
+    /// 认不出的动作（更新的设备发来的）为 nil。
+    var knownAction: Action? { Action(rawValue: action) }
+}
+
+/// 65 号消息的负载（Mac → 设备，通道 0）。
+nonisolated struct RemoteCodeTabActionResult: Codable, Equatable, Sendable {
+    var requestID: UUID
+    /// 做完之后的那个会话（`resume` / `start` / `restart` 是新起的或回到的，`moveToTab` 是挪出去的）；失败时 nil。
+    var session: UUID?
+    /// 失败原因（给人看的），成功时 nil。
+    var error: String?
+}

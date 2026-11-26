@@ -50,7 +50,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.desktopWindowFront, RemoteFeature.desktopWindowRefit,
                                           RemoteFeature.desktopWindowInput, RemoteFeature.desktopAuthPrompt,
                                           RemoteFeature.arrangeSessions, RemoteFeature.terminalReplay,
-                                          RemoteFeature.codeTabs]
+                                          RemoteFeature.codeTabs, RemoteFeature.codeTabActions]
     /// 文件服务的请求与应答都走这个通道。终端和桌面的通道号从 1 往上数，碰不到它；单独一个通道是为了让
     /// 链路排队（`RemoteLinkFlow`）把文件数据和按键、终端输出轮着发，传大文件时打字不卡。
     static let fileChannel: UInt32 = 0xFFFF_F11E
@@ -177,6 +177,9 @@ nonisolated enum RemoteFeature {
     /// 不再各开一个终端标签页。两端都要声明：Mac 只给声明了的设备发（老设备收到会当未知消息断开整条连接）；
     /// 老 Mac 不发，设备照旧把每个会话开成终端标签页。
     static let codeTabs = "code-tabs"
+    /// 设备请 Mac 在它的 Code 标签页里继续、新开、重新开始一个会话，或把会话移到新标签页：Mac 认得 `codeTabAction`。
+    /// 老 Mac 收到会断开整条连接，所以设备只对声明了的 Mac 发；老 Mac 照旧是开一个本机终端标签页跑命令。
+    static let codeTabActions = "code-tab-actions"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -357,6 +360,11 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 同一轮推送里先于会话列表（`sessions`）发：设备收到列表时已经知道哪些会话归 Code 标签页，不会先给它们各开一个
         /// 终端标签页。只发给 `features` 带 `code-tabs` 的设备。
         case codeTabs = 63
+        /// 设备 → Mac：在 Mac 的 Code 标签页里做一件事（通道 0）。负载 = `RemoteCodeTabAction`（JSON）。Mac 回
+        /// `codeTabActionResult`，做完照常推 `codeTabs` 与 `sessions`。只发给 `features` 带 `code-tab-actions` 的 Mac。
+        case codeTabAction = 64
+        /// Mac → 设备：`codeTabAction` 做完了（或没做成）。负载 = `RemoteCodeTabActionResult`（JSON）。
+        case codeTabActionResult = 65
     }
 
     var kind: Kind
