@@ -33431,6 +33431,34 @@
         }
       }
     },
+    "在这台 Mac 上新建终端 · 按住打开 Code 标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open a new terminal on this Mac · Hold to open the Code tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac で新しいターミナルを開く · 長押しで Code タブを開く"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Mac에서 새 터미널 열기 · 길게 눌러 Code 탭 열기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在這台 Mac 上新增終端機 · 按住以開啟 Code 分頁"
+          }
+        }
+      }
+    },
     "在这台主机上新开一个终端标签页，在里面继续这个会话" : {
       "localizations" : {
         "en" : {
@@ -50042,6 +50070,7 @@
       }
     },
     "新建终端标签页（⌘T）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -50065,6 +50094,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增終端機分頁（⌘T）"
+          }
+        }
+      }
+    },
+    "新建终端标签页（⌘T）· 按住打开 Code 标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Terminal Tab (⌘T) · Hold to open the Code tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新規ターミナルタブ（⌘T）· 長押しで Code タブを開く"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 터미널 탭(⌘T) · 길게 눌러 Code 탭 열기"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增終端機分頁（⌘T）· 按住以開啟 Code 分頁"
           }
         }
       }

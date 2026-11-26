@@ -69,12 +69,8 @@ struct TerminalArea: View {
                 // 会话的释放走模型的 `onTabRemoved`。
                 workspace.requestCloseTerminalTab(tab.id)
             },
-            stripAccessory: { groupID in
-                HStack(spacing: 2) {
-                    newTabButton(groupID)
-                    codeTabButton(groupID)
-                }
-            },
+            // 「打开 Code 标签页」在「＋」的菜单里（按住），标签条上不另放按钮。
+            stripAccessory: { groupID in newTabButton(groupID) },
             tabMenu: { tab in
                 TerminalTabContextMenu(
                     title: Self.copyableTitle(for: tab, profiles: profilesByID),
@@ -229,18 +225,22 @@ struct TerminalArea: View {
             .help("新建终端标签页（⌘T）· 按住选择其他主机")
             .accessibilityLabel(Text("新建终端标签页"))
         } else {
-            Button {
-                workspace.openServer(profileID: server.id, title: server.name, in: groupID)
+            // 点一下照旧开同一台；按住出「打开 Code 标签页」。
+            Menu {
+                Button { openCodeTab(in: groupID) } label: {
+                    Label(CodeTabButton.title, systemImage: CodeTabButton.icon)
+                }
             } label: {
-                // 图标色不在这里设——交给 iconButtonHover 随 hover 切换。
-                // 26×26：与卡片风格标签条上的分屏按钮同尺寸。
                 Image(systemName: "plus")
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
+            } primaryAction: {
+                workspace.openServer(profileID: server.id, title: server.name, in: groupID)
             }
-            .buttonStyle(.udPlain)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
             .iconButtonHover(cornerRadius: 6)
-            .help("新建终端标签页（⌘T）")
+            .help("新建终端标签页（⌘T）· 按住打开 Code 标签页")
             .accessibilityLabel(Text("新建终端标签页"))
         }
     }
@@ -260,11 +260,6 @@ struct TerminalArea: View {
         let names = Dictionary(profiles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let fallback = server.name
         workspace.openCodeTab(in: groupID, fallbackServerID: server.id) { id in names[id] ?? fallback }
-    }
-
-    /// 标签条上「＋」旁边的「打开 Code 标签页」。
-    private func codeTabButton(_ groupID: UUID) -> some View {
-        CodeTabButton { openCodeTab(in: groupID) }
     }
 
     /// 「＋」菜单里能开终端的主机：去掉「仅 SFTP」，置顶在前，其余按名称。
@@ -350,24 +345,9 @@ struct TerminalTabContextMenu: View {
     }
 }
 
-/// 标签条上「＋」旁边的「打开 Code 标签页」按钮，SSH 终端区与本机终端窗口共用。每台主机只有一个 Code 标签页：
+/// 「打开 Code 标签页」这一项的标题与图标：「＋」菜单、标签右键菜单、命令面板共用。每台主机只有一个 Code 标签页：
 /// 还没有就新开，已经开着就切过去，所以叫「打开」不叫「新建」。
-struct CodeTabButton: View {
+enum CodeTabButton {
     static let icon = "chevron.left.forwardslash.chevron.right"
     static var title: String { String(localized: "打开 Code 标签页") }
-
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: Self.icon)
-                .font(.system(size: 11.5, weight: .medium))
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.udPlain)
-        .iconButtonHover(cornerRadius: 6)
-        .help(Self.title)
-        .accessibilityLabel(Text(Self.title))
-    }
 }

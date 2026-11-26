@@ -231,8 +231,8 @@ private struct RemoteMacTerminalArea: View {
                         HStack(spacing: 2) {
                             if model.client.supportsFiles { filesButton }
                             if model.client.supportsDesktop { desktopButton }
+                            // 「打开 Code 标签页」在「＋」的菜单里（按住），标签条上不另放按钮。
                             newShellButton
-                            if model.offersCodeTab { CodeTabButton { model.openCodeTab() } }
                         }
                     },
                     tabMenu: { tab in
@@ -371,19 +371,41 @@ private struct RemoteMacTerminalArea: View {
         .accessibilityLabel(Text("查看屏幕"))
     }
 
-    private var newShellButton: some View {
-        Button { openNewShell() } label: {
-            Image(systemName: "plus")
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
+    /// 「＋」：点一下新建终端；那台 Mac 的 Code 标签页能镜像时按住出「打开 Code 标签页」。
+    @ViewBuilder private var newShellButton: some View {
+        if model.offersCodeTab {
+            Menu {
+                Button { model.openCodeTab() } label: {
+                    Label(CodeTabButton.title, systemImage: CodeTabButton.icon)
+                }
+            } label: {
+                Image(systemName: "plus")
+            } primaryAction: {
+                if canOpenShell { openNewShell() }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .iconButtonHover(cornerRadius: 6)
+            .macWorkspaceDialog(stripChoices) { open(in: $0) }
+            .help(model.client.supportsLocalShell ? String(localized: "在这台 Mac 上新建终端 · 按住打开 Code 标签页")
+                                                  : String(localized: "那台 Mac 上的 uTerm 版本太旧，不能新建终端"))
+            .accessibilityLabel(Text("新建终端"))
+        } else {
+            Button { openNewShell() } label: {
+                Image(systemName: "plus")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.udPlain)
+            .iconButtonHover(cornerRadius: 6)
+            .disabled(!canOpenShell)
+            .macWorkspaceDialog(stripChoices) { open(in: $0) }
+            .help(model.client.supportsLocalShell ? String(localized: "在这台 Mac 上新建终端")
+                                                  : String(localized: "那台 Mac 上的 uTerm 版本太旧，不能新建终端"))
+            .accessibilityLabel(Text("新建终端"))
         }
-        .buttonStyle(.udPlain)
-        .iconButtonHover(cornerRadius: 6)
-        .disabled(!canOpenShell)
-        .macWorkspaceDialog(stripChoices) { open(in: $0) }
-        .help(model.client.supportsLocalShell ? String(localized: "在这台 Mac 上新建终端")
-                                              : String(localized: "那台 Mac 上的 uTerm 版本太旧，不能新建终端"))
-        .accessibilityLabel(Text("新建终端"))
     }
 }
 
