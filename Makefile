@@ -50,9 +50,15 @@ VERSION ?= $(shell scripts/bump-version.sh print)
 MOBILE_VERSION_XCCONFIG := Config/VersionMobile.xcconfig
 MOBILE_VERSION ?= $(shell scripts/bump-version.sh --mobile print)
 # Build id; matches the "Set Build Number" Run Script (git commit count).
-# build 号 = git 提交数 + Config/BuildNumberOffset（与 pbxproj 里两份 Set Build Number Run Script 同一算法；
+# build 号 = git 提交数 + Config/BuildNumberOffset（与 pbxproj 里四份 Set Build Number Run Script 同一算法；
 # 偏移量的来历见 CLAUDE.md「Build Versioning」，只能调大不能调小）。
-BUILD_NUMBER ?= $(shell echo $$(( $$(git rev-list --count HEAD) + $$(cat Config/BuildNumberOffset 2>/dev/null || echo 0) )))
+# 一次 make 只算一次（`:=`；原来的 `?=` 是递归展开，每用一次就重跑一遍 git），再经 UTERM_BUILD_NUMBER 交给
+# 每一条 xcodebuild：各 target 的 Set Build Number 在构建中各自的时刻跑，构建途中有人提交时，App 和包里的远控进程
+# 会拿到不同的号，远控进程见号不同就当自己是旧进程、退出不服务（2026-11-26：远控 1571 / App 1572）。
+ifeq ($(origin BUILD_NUMBER),undefined)
+BUILD_NUMBER := $(shell echo $$(( $$(git rev-list --count HEAD) + $$(cat Config/BuildNumberOffset 2>/dev/null || echo 0) )))
+endif
+BUILD_NUMBER_ARG = UTERM_BUILD_NUMBER=$(BUILD_NUMBER)
 .DEFAULT_GOAL := help
 
 .PHONY: help gallery gallery-diff test-fast test-relay-e2e test-weak-network relay-dist test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
@@ -176,7 +182,7 @@ build: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		$(SIGNING_ARGS) \
 		build
 
@@ -186,7 +192,7 @@ test: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		test
 
 # 并行全量，失败用例再串行复核一遍，见 scripts/test-parallel.sh。
@@ -194,7 +200,7 @@ test-fast: engine holder
 	scripts/test-parallel.sh "$(SCHEME)" "$(DESTINATION)" "$(TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
 
@@ -205,7 +211,7 @@ test-relay-e2e: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
 
@@ -215,7 +221,7 @@ test-weak-network: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
 
@@ -243,7 +249,7 @@ test-mobile-fast: engine holder
 	scripts/test-parallel.sh "$(MOBILE_SCHEME)" "$(MOBILE_DESTINATION)" "$(MOBILE_TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		$(MOBILE_PACKAGE_ARGS)
 
@@ -256,7 +262,7 @@ test-mobile: engine holder
 		-scheme "$(MOBILE_SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(MOBILE_DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		$(MOBILE_PACKAGE_ARGS) \
 		test
 
@@ -281,14 +287,14 @@ sync-strings-build: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		$(PACKAGE_ARGS)
 	xcodebuild build -quiet \
 		-project "$(PROJECT)" \
 		-scheme "$(MOBILE_SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "generic/platform=iOS Simulator" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		$(MOBILE_PACKAGE_ARGS) \
 		ARCHS=arm64
 
@@ -322,14 +328,14 @@ check-skills: check-cli engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO
 	xcodebuild test-without-building \
 		-project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		-only-testing:uTermTests/SkillDefinitionTests \
 		-only-testing:uTermTests/SkillInstallerTests
@@ -350,7 +356,7 @@ gallery: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS) \
 		-quiet
@@ -360,7 +366,7 @@ gallery: engine holder
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
-		-derivedDataPath "$(DERIVED_DATA)" \
+		-derivedDataPath "$(DERIVED_DATA)" $(BUILD_NUMBER_ARG) \
 		-enableCodeCoverage NO \
 		-resultBundlePath "$(GALLERY_RESULT)" \
 		-only-testing:uTermTests/UICatalogSnapshotTests \
