@@ -213,8 +213,8 @@
 				Features/ClaudeHistory/Views/AgentHistoryBrowser.swift,
 				Features/ClaudeHistory/Views/AgentHistoryLocalFiles.swift,
 				Features/ClaudeHistory/Views/ClaudeHistoryWindow.swift,
-				"Features/ClaudeHistory/Views/CodeTabModel+Mirror.swift",
 				Features/ClaudeHistory/Views/CodeTabModel.swift,
+				"Features/ClaudeHistory/Views/CodeTabModel+Mirror.swift",
 				Features/ClaudeHistory/Views/CodeTabNewSessionPage.swift,
 				Features/ClaudeHistory/Views/CodeTabView.swift,
 				Features/CommandPalette/CommandPaletteHost.swift,
@@ -324,8 +324,8 @@
 				Features/Remote/Controller/RemoteMacFilesWindow.swift,
 				Features/Remote/Controller/RemoteMacsPane.swift,
 				Features/Remote/Controller/RemoteMacWindow.swift,
-				"Features/Remote/Controller/RemoteMacWindowModel+Code.swift",
 				Features/Remote/Controller/RemoteMacWindowModel.swift,
+				"Features/Remote/Controller/RemoteMacWindowModel+Code.swift",
 				Features/Remote/Controller/RemoteSharedFoldersSection.swift,
 				Features/Remote/Desktop/RemoteAudioStreamer.swift,
 				Features/Remote/Desktop/RemoteAuthPrompt.swift,
@@ -344,8 +344,8 @@
 				Features/Remote/Desktop/RemoteWindowInput.swift,
 				Features/Remote/Desktop/ScreenCaptureAudioSource.swift,
 				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
-				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteCodeTabActor.swift,
+				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteDeviceGroupPrompt.swift,
 				Features/Remote/RemoteFileAccess.swift,
@@ -2507,7 +2507,7 @@
 		};
 		5A53544400000000000000A0 /* XCLocalSwiftPackageReference "vendor/uterm-zstd" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/uterm-zstd;
+			relativePath = "vendor/uterm-zstd";
 		};
 		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
