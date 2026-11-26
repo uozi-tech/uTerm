@@ -11016,6 +11016,34 @@
         }
       }
     },
+    "Mac 上没有开着这台主机的窗口。先在 Mac 上打开这台主机的终端，再试一次" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No window for this host is open on the Mac. Open a terminal for this host on the Mac, then try again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac でこのホストのウインドウが開いていません。Mac でこのホストのターミナルを開いてから、もう一度お試しください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac에 이 호스트의 윈도우가 열려 있지 않습니다. Mac에서 이 호스트의 터미널을 연 다음 다시 시도하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上沒有開著這台主機的視窗。請先在 Mac 上打開這台主機的終端機，再試一次"
+          }
+        }
+      }
+    },
     "Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开「设置 › 远程控制 › 允许传输声音」" : {
       "localizations" : {
         "en" : {

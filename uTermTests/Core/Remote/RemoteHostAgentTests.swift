@@ -208,6 +208,16 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertEqual(id, made)
         XCTAssertEqual(received.actions, [start], "请求原样到了 App")
 
+        // SSH 主机的（带 `server`）：主机原样经远控进程到 App。
+        XCTAssertTrue(client.supportsCodeTabHosts, "远控进程也声明了这项能力")
+        let host = UUID()
+        let sshStart = RemoteCodeTabAction(action: .start, tool: AgentHistoryTool.claude.rawValue, directory: "/srv/shop",
+                                           server: host)
+        let sshID = try await client.performCodeTabAction(sshStart)
+        XCTAssertEqual(sshID, made)
+        XCTAssertEqual(received.actions.last, sshStart)
+        XCTAssertEqual(received.actions.last?.server, host)
+
         do {
             _ = try await client.performCodeTabAction(RemoteCodeTabAction(action: .moveToTab, session: UUID()))
             XCTFail("应当失败")
@@ -223,7 +233,7 @@ final class RemoteHostAgentTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, RemoteHostAttachError.appUnavailable.message)
         }
         XCTAssertEqual(client.state, .connected, "App 不在时手机的远控连接不断")
-        XCTAssertEqual(received.actions.count, 2, "App 不在时没有转过去")
+        XCTAssertEqual(received.actions.count, 3, "App 不在时没有转过去")
         client.disconnect()
     }
 
@@ -621,8 +631,17 @@ final class RemoteHostAgentTests: XCTestCase {
                                     startedAt: Date(timeIntervalSince1970: 1_800_000_000), sessionID: nil, path: nil,
                                     title: "新会话", endedAt: nil)],
             selectedRun: rig.sessionID, selectedRecord: nil))
-        let windowID = UUID()
-        rig.registry.setCodeTabs(forWindow: windowID) { [.init(info: codeTab.info, precedingSessions: [])] }
+        // SSH 主机窗口里的（第三期起 Mac 也报）：主机与名字原样到手机，老的认法（本机的那个）不受影响。
+        let host = UUID(), sshRun = UUID()
+        let sshTab = RemoteCodeTabInfo(
+            id: UUID(), serverID: host, serverName: "prod-web", directory: "/srv/shop", slot: nil,
+            runs: [.init(session: sshRun, tool: AgentHistoryTool.claude.rawValue, directory: "/srv/shop",
+                         startedAt: Date(timeIntervalSince1970: 1_800_000_000), sessionID: nil, path: nil,
+                         title: "新会话", endedAt: nil)],
+            selectedRun: sshRun, selectedRecord: nil)
+        rig.registry.setCodeTabs(forWindow: UUID()) {
+            [.init(info: codeTab.info, precedingSessions: []), .init(info: sshTab, precedingSessions: [])]
+        }
         rig.startApp()
         let listening = await waitUntil { rig.agentServer?.port != nil }
         XCTAssertTrue(listening)
@@ -641,6 +660,11 @@ final class RemoteHostAgentTests: XCTestCase {
         XCTAssertTrue(arrived, "Code 标签页经 App → 远控进程 → 手机：\(String(describing: client.codeTabs))")
         XCTAssertEqual(client.codeTabs?.first?.slot, 0)
         XCTAssertEqual(client.codeRunSessionIDs, [rig.sessionID])
+        let ssh = client.codeTabs?.first { $0.serverID == host }
+        XCTAssertEqual(ssh?.serverName, "prod-web")
+        XCTAssertEqual(ssh?.runs.map(\.session), [sshRun])
+        XCTAssertEqual(client.codeTabs?.mirrored()?.serverID, RemoteConstants.localShellServerID)
+        XCTAssertEqual(client.codeRunSessionIDs(serverIDs: [host]), [sshRun])
 
         // App 走了：手机上的那份不动（远控进程留着最后一份，没有新的可发）。
         rig.bridge?.simulateAppTermination()

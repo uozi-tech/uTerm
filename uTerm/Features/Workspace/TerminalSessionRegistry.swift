@@ -134,6 +134,15 @@ final class TerminalSessionRegistry {
     /// 窗口登记、撤掉时远控重推。
     private var codeTabReaders: [UUID: @MainActor () -> [CodeTabPublication]] = [:]
 
+    /// SSH 主机的工作区 / 终端窗口（`WorkspaceModel`），按登记的先后：设备请 Mac 在某台 SSH 主机的 Code 标签页里做事时
+    /// 在这些窗口里找（`codeTabWorkspaces()`，`WorkspaceCodeTabActions`）。弱引用，窗口关了自己掉。
+    @ObservationIgnored private var codeTabWorkspaceSlots: [(windowID: UUID, workspace: WeakWorkspaceBox)] = []
+
+    private final class WeakWorkspaceBox {
+        weak var value: WorkspaceModel?
+        init(_ value: WorkspaceModel) { self.value = value }
+    }
+
     /// 窗口报的一个 Code 标签页：`info` 的 `slot` 由注册表按全部窗口的先后算（`codeTabs()`），窗口只给出它前面的那些
     /// shell 标签（会话 id，按窗口里的先后）。
     struct CodeTabPublication {
@@ -241,6 +250,26 @@ final class TerminalSessionRegistry {
         return result
     }
 
+    /// 窗口登记（或用 nil 撤掉）它的 `WorkspaceModel`，设备在 SSH 主机的 Code 标签页里做事时在这里找。再次登记只换对象，
+    /// 不改这个窗口排在第几。
+    func setCodeTabWorkspace(forWindow windowID: UUID, _ workspace: WorkspaceModel?) {
+        let index = codeTabWorkspaceSlots.firstIndex { $0.windowID == windowID }
+        switch (workspace, index) {
+        case let (workspace?, index?): codeTabWorkspaceSlots[index].workspace = WeakWorkspaceBox(workspace)
+        case let (workspace?, nil): codeTabWorkspaceSlots.append((windowID, WeakWorkspaceBox(workspace)))
+        case let (nil, index?): codeTabWorkspaceSlots.remove(at: index)
+        case (nil, nil): break
+        }
+    }
+
+    /// 登记着的 SSH 主机窗口：key 窗口在前，其余按登记的先后。
+    func codeTabWorkspaces() -> [WorkspaceModel] {
+        codeTabWorkspaceSlots.removeAll { $0.workspace.value == nil }
+        let ordered = codeTabWorkspaceSlots.filter { windows[$0.windowID]?.isKey == true }
+            + codeTabWorkspaceSlots.filter { windows[$0.windowID]?.isKey != true }
+        return ordered.compactMap(\.workspace.value)
+    }
+
     /// 窗口登记（或用 nil 撤掉）「照给的先后排标签」的入口。
     func setArranger(forWindow windowID: UUID, _ arranger: (@MainActor ([UUID]) -> Void)?) {
         arrangers[windowID] = arranger
@@ -331,6 +360,7 @@ final class TerminalSessionRegistry {
         codeTabReaders.removeValue(forKey: windowID)
         setTabOrder(forWindow: windowID, nil)
         setCodeTabFocuser(forWindow: windowID, nil)
+        setCodeTabWorkspace(forWindow: windowID, nil)
     }
 
     /// 某条会话此刻是不是「key window 的前台终端标签」。**读取时现算**，
