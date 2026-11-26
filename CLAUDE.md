@@ -146,7 +146,7 @@ swift-asn1 / BigInt / swift-log / swift-collections 的 DequeModule——链进 
   终端换引擎之后：输出泵、影子终端、镜像快照、程序状态是两端同一份。还分开的是
   **surface 什么时候吃字节**——Mac 的 surface 建好后不销毁，切走标签也照吃；iOS 只在 App 在前台且 surface 报出了和视图一致的
   网格时吃，隐藏 60 秒放掉 surface、露出来重建再回放（`SurfaceGridGate`）；Mac 对应的是 `surfaceGrid` + `holdsGridReports`。
-  另外：holder 检查点只有 Mac 有；字体配置两端各写（Mac 带 `font-style = Medium` 和 `font-thicken`，iOS 不带）；
+  另外：holder 检查点只有 Mac 有；字体配置两端各写（Mac 带 `font-style = Medium`，iOS 不带；两端都不开 `font-thicken`）；
   OSC 7501 查询的应答 Mac 发 `ProgramStatusTracker.queryReply`、iOS 发 vt 拟好的那串；引擎 wakeup 要不要同步重画按平台定死
   （iOS 同步、Mac 不同步）。
 

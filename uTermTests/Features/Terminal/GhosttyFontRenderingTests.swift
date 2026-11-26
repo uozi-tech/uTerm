@@ -7,9 +7,9 @@ import XCTest
 /// 终端字体画出来的样子（Mac）：中文的字重、全角标点的位置、英文的粗细。
 ///
 /// 起因是试用 Ghostty 版时的三个毛病：中文偏细、全角标点贴在格子左边（字距怪）、同一份配置重启后中文时粗时细。
-/// 根子在字体回退：不显式写 PingFang SC 时，汉字走 Ghostty 的自动回退，落到哪一款、什么字重不稳定；另外 Ghostty 默认
-/// 不做 macOS 的字体平滑加粗，笔画比 CoreGraphics 画的细。定下的配置见 `GhosttyTerminalConfig.base` / `fontFamilies()`：
-/// 系统等宽 → Menlo → PingFang SC，`font-style = Medium`，`font-thicken = true`、强度 0。
+/// 根子在字体回退：不显式写 PingFang SC 时，汉字走 Ghostty 的自动回退，落到哪一款、什么字重不稳定。定下的配置见
+/// `GhosttyTerminalConfig.base` / `fontFamilies()`：系统等宽 → Menlo → PingFang SC，`font-style = Medium`，
+/// `font-thicken = false`（开过一阵平滑加粗，中文密字糊成一团，2026-11-26 关掉）。
 ///
 /// 引擎没有「这个字用了哪款字体」的读法，所以这里读真的 surface **画出来的像素**（IOSurface）：一行字占的那一条里，
 /// 每个像素偏离底色多少，折算成「墨量」——这一行有字的格子里，平均每个像素被前景色盖住的比例（0–1）。字越粗墨量越大。
@@ -196,24 +196,22 @@ final class GhosttyFontRenderingTests: XCTestCase {
 
     // MARK: 期望值
     //
-    // 2026-11-10 实测（12 pt、2x 屏、格子 15×28 px、浅色配色；同一进程里新建 controller 多次、另外分三个进程各跑一遍，
-    // 读数逐像素相同）：
+    // 2026-11-26 实测（12 pt、2x 屏、格子 15×28 px、浅色配色；两次运行读数相同）：
     //
     //   配置                                         中文      英文      粗体     「 落在右半边
-    //   正式配置（系统等宽 → Menlo → PingFang SC）   28.37%   19.47%   22.52%   100%
+    //   正式配置（系统等宽 → Menlo → PingFang SC）   24.59%   16.87%   20.18%   100%
     //   去掉 Menlo（系统等宽 → PingFang SC）         与正式配置逐像素相同
-    //   不写 PingFang SC（汉字走自动回退）           30.14%   19.47%   22.52%   0%（贴左）
-    //   正式配置去掉 font-thicken                    24.59%   16.87%   20.18%   100%
-    //   正式配置把 font-style 换成 Regular           22.84%   17.28%   22.52%   100%
+    //   不写 PingFang SC（汉字走自动回退）           25.92%   16.87%   20.18%   0%（贴左）
+    //   正式配置把 font-style 换成 Regular           19.04%   14.67%   20.18%   100%
+    //   （旧）正式配置加 font-thicken（强度 0）      28.37%   19.47%   22.52%   100%   ← 2026-11-10 的正式配置，中文糊
     //
     // 自动回退那一行是这几次运行里落到的那一款（比苹方 Medium 还重、标点贴左）；试用时见过它落到细的一款，
-    // 中文墨量掉到正式配置的六成左右（约 17%）。
+    // 中文墨量掉到正式配置的六到七成。
 
-    /// 中文行墨量的下限。正式配置 28.37%；关掉加粗是 24.59%、字重退成 Regular 是 22.84%、回退到细体约 17%。
-    /// 取正式配置与「关掉加粗」的中点，两头各留约 1.9 个百分点。
-    private static let chineseInkFloor = 0.265
-    /// 英文行墨量的下限。正式配置 19.47%；关掉加粗是 16.87%、字重退成 Regular 是 17.28%。取 19.47 与 17.28 的中点。
-    private static let latinInkFloor = 0.184
+    /// 中文行墨量的下限。正式配置 24.59%；字重退成 Regular 是 19.04%、回退到细体更低。取两者中点，两头各留约 2.8 个百分点。
+    private static let chineseInkFloor = 0.218
+    /// 英文行墨量的下限。正式配置 16.87%；字重退成 Regular 是 14.67%。取两者中点。
+    private static let latinInkFloor = 0.158
     /// 两次渲染之间允许的差：墨量差不到 0.2 个百分点、同一条里平均每个像素差不到 1%。实测是 0；
     /// 换一款字体 / 字重时这一条的像素差在 3.8%–6.3%。
     private static let sameInk = 0.002, samePixels = 0.01
@@ -233,7 +231,7 @@ final class GhosttyFontRenderingTests: XCTestCase {
         XCTAssertEqual(first.cellHeight, second.cellHeight)
     }
 
-    /// 「中文偏细」的回归：中文行的墨量不低于下限（汉字落到细体、字重没取到 Medium、加粗没开，都会掉到下限以下）。
+    /// 「中文偏细」的回归：中文行的墨量不低于下限（汉字落到细体、字重没取到 Medium，都会掉到下限以下）。
     func test_chinese_is_not_thin() async throws {
         let frame = try await render(production)
         let ink = frame.ink(row: Self.chineseRow, columns: Self.chineseColumns)
@@ -250,8 +248,8 @@ final class GhosttyFontRenderingTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.rightShare(row: Self.quoteRow, column: 4), 0.1, "」 应在左半边")
     }
 
-    /// 英文的粗细：`font-thicken` 开着、字重是 Medium 时英文行的墨量不低于下限（Ghostty 默认不加粗，笔画细一截）。
-    func test_latin_is_thickened_to_the_previous_weight() async throws {
+    /// 英文的粗细：字重取到 Medium 时英文行的墨量不低于下限（退成 Regular 会掉到下限以下）。
+    func test_latin_keeps_medium_weight() async throws {
         let frame = try await render(production)
         let ink = frame.ink(row: Self.latinRow, columns: Self.latinColumns)
         XCTAssertGreaterThanOrEqual(ink, Self.latinInkFloor, describe(frame))
@@ -290,4 +288,5 @@ final class GhosttyFontRenderingTests: XCTestCase {
         let em = TerminalSettings.fontSize * 2
         XCTAssertLessThan(Double(frame.cellWidth), 0.75 * em, "格子宽应是等宽字体的宽度。\(describe(frame))")
     }
+
 }

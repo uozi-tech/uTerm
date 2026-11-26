@@ -64,8 +64,7 @@ final class TerminalThemeTests: XCTestCase {
         XCTAssertEqual(config["font-family"], families, "回退链按顺序写进配置")
         XCTAssertEqual((config["font-size"] ?? []).compactMap { Double($0) }, [TerminalSettings.fontSize])
         XCTAssertEqual(config["font-style"], ["Medium"])
-        XCTAssertEqual(config["font-thicken"], ["true"])
-        XCTAssertEqual(config["font-thicken-strength"], ["0"])
+        XCTAssertEqual(config["font-thicken"], ["false"], "不做平滑加粗：Medium 的中文密字会糊成一团")
         XCTAssertNil(config["adjust-cell-height"], "行高不动")
     }
 

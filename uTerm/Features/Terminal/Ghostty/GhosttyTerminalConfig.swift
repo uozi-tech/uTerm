@@ -28,14 +28,11 @@ enum GhosttyTerminalConfig {
             // 字重靠 font-style 选（族里叫 Medium 的那一款）。试过不管用的两种写法：`font-variation = wght=484` 无效；
             // 族名写成 `.AppleSystemUIFontMonospaced-Medium` 会找不到字体。
             b.withCustom("font-style", "Medium")
-            // Ghostty 默认不做 macOS 的字体平滑加粗，笔画比 CoreGraphics 画的细一截。打开 font-thicken、强度给 0
-            // （最轻的一档），英文回到迁移前的粗细。同一段文字并排渲染量的墨量（白底、同一块区域里的深色像素）：
-            //   换引擎之前（CoreGraphics 画）英文 1044；Ghostty 不加粗时英文 902；
-            //   回退链里显式写上 PingFang SC 之后中文稳定在 1098；
-            //   再加 thicken（强度 0）：中文 1268 / 英文 1042 / 粗体 1151。
-            // 回归用例 `GhosttyFontRenderingTests` 读画出来的像素核这几样。
-            b.withFontThicken(true)
-            b.withFontThickenStrength(0)
+            // 不做 macOS 的字体平滑加粗（font-thicken）。开着它（强度 0）英文和换引擎前的墨量一样，但 Medium 的中文密字
+            // （漏、留）笔画间隙被填满、整片发糊（2026-11-26 user 反映「字有点糊」，量的是同一段文字：中文墨量 27.9% → 关掉
+            // 24.3%，英文 15.8% → 13.7%）。Ghostty 画出的像素和 CoreText 同字重、同平滑设置画的几乎逐项相同，
+            // 摆放也落在整物理像素上，糊只来自这一层加粗。回归用例 `GhosttyFontRenderingTests` 读像素核着。
+            b.withFontThicken(false)
             b.withCustom("window-padding-balance", "false")
             // 光标、留白、着色规则、剪贴板、回滚上限、按键绑定：两端共用（`TerminalGhosttyConfig.applyCommon`）。
             // 回滚的行数用设置里的，字节上限按行数放宽，和影子终端同一个函数算（`TerminalScrollbackLimits`）。
