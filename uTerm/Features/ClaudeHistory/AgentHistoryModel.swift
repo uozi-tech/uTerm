@@ -1031,6 +1031,10 @@ final class AgentTranscriptModel {
     private(set) var errorMessage: String?
     /// 每次往前加了一页就 +1，界面据此把滚动位置留在原来那条上。
     private(set) var prependGeneration = 0
+    /// 打开时读进来的那一页的第一条：从它往后（这一页，加上之后接在末尾的）是「末尾这一段」，界面把这一段整段排、不进懒栈，
+    /// 打开时才停得到最后一条（`AgentTranscriptMessages`）。往前加页时这一条可能没了（落单的工具结果挂到了更早那页的
+    /// 调用上），换成这一段里还在的第一条。
+    private(set) var tailStartID: String?
     /// 派子代理的调用（按 `toolUseID`）→ 它的记录。对不上的没有。
     private(set) var subagentLinks: [String: AgentSubagentLink] = [:]
     /// 每次在末尾接上了新条目就 +1，界面据此决定跟着滚到底，还是提示「有新消息」。
@@ -1142,7 +1146,14 @@ final class AgentTranscriptModel {
             seenIDs.formUnion(page.items.map(\.id))
             let isFirstPage = items.isEmpty
             if isFirstPage { noteActivity(page.items, arrivedNow: false) }
+            let tailIDs = tailStartID.flatMap { start in items.firstIndex { $0.id == start } }.map { items[$0...].map(\.id) } ?? []
             items = AgentTranscriptAssembler.attachResults(page.items + items)
+            if isFirstPage {
+                tailStartID = items.first?.id
+            } else {
+                let remaining = Set(items.map(\.id))
+                tailStartID = tailIDs.first { remaining.contains($0) }
+            }
             reachedStart = page.reachedStart
             prependGeneration += 1
             // 从命中处打开的第一页回来了：滚到那一条。
@@ -1292,6 +1303,7 @@ final class AgentTranscriptModel {
     private func reloadFromEnd() async {
         contentEpoch += 1
         items = []
+        tailStartID = nil
         reachedStart = false
         // 文件换掉了：命中处的位置不再作数，从末尾重读。
         reachedEnd = true

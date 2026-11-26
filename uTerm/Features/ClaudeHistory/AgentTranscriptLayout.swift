@@ -120,6 +120,14 @@ nonisolated struct AgentTranscriptLayout: Sendable {
         rows.first { $0.entry.contains(itemID) }?.id ?? itemID
     }
 
+    /// 末尾整段排（不进懒栈）的那一段从第几行起，见 `AgentTranscriptMessages`。`itemID` 是打开时读进来的那一页的第一条
+    /// （`AgentTranscriptModel.tailStartID`），从它所在的那一行起；nil、找不到就是全部。这一段最多 `limit` 行：
+    /// 实时跟随接了很久之后，前面的行退回懒栈。
+    func eagerTailStart(from itemID: String?, limit: Int = AgentTranscriptLimits.eagerTailRows) -> Int {
+        let start = itemID.flatMap { id in rows.firstIndex { $0.entry.contains(id) } } ?? 0
+        return max(start, rows.count - max(0, limit))
+    }
+
     /// 要露出这条消息：它在折起来的组里就把那一组展开。返回要滚到的那一行。
     func reveal(_ itemID: String, expanding expanded: inout Set<String>) -> String {
         guard let row = rows.first(where: { $0.entry.contains(itemID) }) else { return itemID }

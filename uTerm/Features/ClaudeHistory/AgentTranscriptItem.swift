@@ -211,6 +211,9 @@ nonisolated enum AgentTranscriptLimits {
     /// 一页至少攒够多少条，或者读满多少字节就停。
     static let pageItems = 40
     static let pageBytes = 2 * 1024 * 1024
+    /// 对话末尾整段排（不进懒栈）的最多多少行，见 `AgentTranscriptLayout.eagerTailStart`。打开一份对话要付这么多行的
+    /// 排版（全是长 Markdown 时一行几毫秒）；也不能太少：这一段得比视口高（一行最矮二十几点），打开时视口里才没有懒栈的行。
+    static let eagerTailRows = 160
 }
 
 /// 把工具结果挂到它的调用下面。结果在下一条 `user` 行里，分页时两者可能落在不同的页，

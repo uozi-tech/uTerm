@@ -19,18 +19,46 @@ struct AgentTranscriptMessages: View {
     private static var bottomID: String { "agent-transcript-bottom" }
 
     var body: some View {
+        // 第一页回来之前不挂滚动视图，只露读取中 / 出错重试那一行。挂上时内容已经在了，`.initialOffset` 一次就停在最后一条；
+        // 先挂空的再等第一页进来，内容是在已经挂着的滚动视图里长出来的，它留在顶上不动。
+        if transcript.items.isEmpty, !transcript.reachedStart {
+            VStack(spacing: 0) {
+                AgentTranscriptLoadEarlier(transcript: transcript, loadEarlier: loadEarlier)
+                    .frame(maxWidth: 780)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, style.columnPadding)
+            .padding(.top, style.topPadding)
+            .frame(maxWidth: .infinity)
+        } else {
+            messages
+        }
+    }
+
+    private var messages: some View {
         let items = transcript.items
         // 连续的工具调用折成一行；派出了子代理的那次单独一行，入口露在外面。
         let layout = AgentTranscriptLayout(items: items) { transcript.subagentLink(for: $0) == nil }
+        // 末尾这一段（打开时读进来的那一页，加上之后接在末尾的）从这一行起，整段排。
+        let tailStart = layout.eagerTailStart(from: transcript.tailStartID)
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                // 末尾这一段每一行都排出来、量过，不进懒栈：懒栈里没建出来的行高度是按已建的行估的，行高不齐时
+                //（工具调用折成一行二十几点，一条长回答上千点）估出来的文档高度和真的能差几屏。整份对话都在懒栈里的时候，
+                // 打开时滚动视图停到的是「估出来的底」，最后一两条还在视口下面，或者滚过了头、下面空一大片，之后也不再纠正
+                //（要等用户动一下滚轮）。打开时只读了末尾那一页，全在这一段里，文档的底是准的（`ClaudeTranscriptOpenAtEndTests`）。
+                VStack(alignment: .leading, spacing: 8) {
                     AgentTranscriptLoadEarlier(transcript: transcript, loadEarlier: loadEarlier)
-                    ForEach(layout.rows) { row in
-                        rowView(row.entry, showsTaskLabel: row.startsRun && transcript.subagent != nil)
-                            // 换了说话的一方：上面多空一点（代替原来的「你」/「Claude」标签）。
-                            .padding(.top, row.hasGapAbove ? 12 : 0)
-                            .id(row.id)
+                    // 往前加的页：懒栈，没出现过的行不建。
+                    if tailStart > 0 {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(layout.rows[..<tailStart]) { row in
+                                rowView(row)
+                            }
+                        }
+                    }
+                    ForEach(layout.rows[tailStart...]) { row in
+                        rowView(row)
                     }
                     AgentTranscriptLoadLater(transcript: transcript)
                     if layout.rows.isEmpty, transcript.reachedStart, transcript.errorMessage == nil {
@@ -61,10 +89,11 @@ struct AgentTranscriptMessages: View {
                 proxy.scrollTo(layout.rowID(for: anchor), anchor: .top)
             }
             .onChange(of: transcript.focusGeneration) { _, _ in
-                // 搜索命中的那一条：在折起来的组里就先展开，再滚到中间（等这一轮布局完）。
-                guard let id = transcript.highlightedItemID else { return }
-                let rowID = layout.reveal(id, expanding: &expanded)
-                Task { @MainActor in proxy.scrollTo(rowID, anchor: .center) }
+                focusHighlight(layout, proxy: proxy)
+            }
+            .onAppear {
+                // 从命中处打开的：第一页和滚动视图一起出来，上面的 `onChange` 赶不上，挂上时滚过去。
+                if transcript.opensAtHit { focusHighlight(layout, proxy: proxy) }
             }
             .modifier(AgentTranscriptTailFollow(transcript: transcript, proxy: proxy, bottomID: Self.bottomID))
             .overlay(alignment: .bottom) {
@@ -78,6 +107,13 @@ struct AgentTranscriptMessages: View {
                 }
             }
         }
+    }
+
+    private func rowView(_ row: AgentTranscriptLayout.Row) -> some View {
+        rowView(row.entry, showsTaskLabel: row.startsRun && transcript.subagent != nil)
+            // 换了说话的一方：上面多空一点（代替原来的「你」/「Claude」标签）。
+            .padding(.top, row.hasGapAbove ? 12 : 0)
+            .id(row.id)
     }
 
     @ViewBuilder private func rowView(_ entry: AgentTranscriptEntry, showsTaskLabel: Bool) -> some View {
@@ -94,6 +130,13 @@ struct AgentTranscriptMessages: View {
     private func subagentLink(_ item: AgentTranscriptItem) -> AgentSubagentLink? {
         guard case .toolCall(let call) = item.kind else { return nil }
         return transcript.subagentLink(for: call)
+    }
+
+    /// 搜索命中的那一条：在折起来的组里就先展开，再滚到中间（等这一轮布局完）。
+    private func focusHighlight(_ layout: AgentTranscriptLayout, proxy: ScrollViewProxy) {
+        guard let id = transcript.highlightedItemID else { return }
+        let rowID = layout.reveal(id, expanding: &expanded)
+        Task { @MainActor in proxy.scrollTo(rowID, anchor: .center) }
     }
 
     private func loadEarlier() {

@@ -53,6 +53,26 @@ final class AgentTranscriptLayoutTests: XCTestCase {
     }
 
     /// 工具调用算回答那一方：「回答 → 一组调用 → 回答」是同一方，中间不多空；第一行上面不空。
+    /// 末尾整段排的那一段：从打开时那一页的第一条所在的行起；那一条并进了更早的组里就从那一组起。
+    func testEagerTailStartsAtTheRowHoldingTheFirstOpenedItem() {
+        let layout = AgentTranscriptLayout(items: [user("u0"), answer("a0"), call("t1"), call("t2"), answer("a1"), user("u1")])
+        XCTAssertEqual(layout.rows.map(\.id), ["u0", "a0", "t1", "a1", "u1"])
+        XCTAssertEqual(layout.eagerTailStart(from: "a1"), 3)
+        XCTAssertEqual(layout.eagerTailStart(from: "t2"), 2, "那一条在折起来的组里：从那一组起")
+        XCTAssertEqual(layout.eagerTailStart(from: nil), 0, "还没有第一页：全部")
+        XCTAssertEqual(layout.eagerTailStart(from: "不认识"), 0)
+        XCTAssertEqual(layout.eagerTailStart(from: "u1"), 4)
+    }
+
+    /// 实时跟随接了很久：末尾那一段只留最后若干行，前面的退回懒栈。
+    func testEagerTailIsCapped() {
+        let items = (0..<10).flatMap { [user("u\($0)"), answer("a\($0)")] }
+        let layout = AgentTranscriptLayout(items: items)
+        XCTAssertEqual(layout.eagerTailStart(from: "u0", limit: 6), 14)
+        XCTAssertEqual(layout.eagerTailStart(from: "a8", limit: 6), 17, "不到上限：照第一条算")
+        XCTAssertEqual(layout.eagerTailStart(from: nil, limit: 100), 0)
+    }
+
     func testRunStartsTreatToolGroupsAsAssistant() {
         let layout = AgentTranscriptLayout(items: [user("u1"), answer("a1"), call("t1"), call("t2"), answer("a2"), user("u2")])
         XCTAssertEqual(layout.rows.filter(\.startsRun).map(\.id), ["u1", "a1", "u2"])
