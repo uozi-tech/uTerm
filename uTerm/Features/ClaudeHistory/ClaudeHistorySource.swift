@@ -29,6 +29,17 @@ actor ClaudeHistorySource: AgentHistorySource {
     /// 子代理的信息文件读过就不再读（按路径；它在子代理派出时写好，之后基本不变）。
     private var infoCache: [String: AgentSubagentInfo] = [:]
 
+    // MARK: 读索引（`readsIndex`）
+
+    /// 每个项目目录上一次列出来的记录，连同列它时目录的修改时间（新建、删除记录会改它；往记录后面追加不改）。
+    private var projectListings: [String: (modifiedAt: Date?, files: [AgentHistorySessionFile])] = [:]
+    /// `~/.claude/history.jsonl` 读到哪了。
+    private var historyLog = ClaudeHistoryLog()
+    /// 每份记录读到哪了（按路径）：变长了只读新长出来的那一段。
+    private var transcripts: [String: ClaudeTranscriptState] = [:]
+    /// 最近这么久里改过的项目目录、记录，每次重列都重新列（正在写的会话；同一秒里又新建的，修改时间看不出来）。
+    static let recentWindow: TimeInterval = 30 * 60
+
     /// `home`：主目录。不给就问 `provider`（`realPath(".")`：SFTP 与远控文件服务都把它解析成登录用户的主目录）；
     /// 测试给一个临时目录。
     /// 搜索时一批交多少份（测试换成小的，好看出分批）。
@@ -77,6 +88,12 @@ actor ClaudeHistorySource: AgentHistorySource {
     }
 
     func sessions(in project: AgentHistoryProject) async throws -> [AgentHistorySessionFile] {
+        let files = try await listSessions(in: project)
+        if readsIndex { projectListings[project.id] = (project.modifiedAt, files) }
+        return files
+    }
+
+    private func listSessions(in project: AgentHistoryProject) async throws -> [AgentHistorySessionFile] {
         let entries = try await provider.list(path: project.path)
         if entries.isEmpty {
             AppLogger.debug("历史会话：Claude Code 有一个项目目录列出来是空的", category: AgentHistoryLog.category)
@@ -103,8 +120,62 @@ actor ClaudeHistorySource: AgentHistorySource {
     }
 
     /// 同上，另报出列不了的项目。
+    ///
+    /// 读索引时没变的项目目录不再列：目录的修改时间和上次列的时候一样、最近半小时没动过、`history.jsonl` 里这期间
+    /// 也没有它的会话的新提问，就用上次列到的。`history.jsonl` 读不了（没有基线）的这一趟全部重列。
     func listAllSessions(in projects: [AgentHistoryProject]) async -> AgentHistorySessionListing {
-        var result: [AgentHistorySessionFile] = []
+        guard readsIndex else { return await listSessions(in: projects, kept: []) }
+        let touches = await readHistoryLog()
+        let present = Set(projects.map(\.id))
+        for id in projectListings.keys where !present.contains(id) { projectListings[id] = nil }
+        guard let touches else { return await listSessions(in: projects, kept: []) }
+        let newest = projects.compactMap(\.modifiedAt).max() ?? .distantPast
+        let recent = newest.addingTimeInterval(-Self.recentWindow)
+        var kept: [AgentHistorySessionFile] = []
+        var stale: [AgentHistoryProject] = []
+        for project in projects {
+            if let cached = projectListings[project.id], let modified = project.modifiedAt, cached.modifiedAt == modified,
+               modified < recent, !touches.projects.contains(project.id),
+               !cached.files.contains(where: { $0.modifiedAt >= recent || touches.sessionIDs.contains($0.sessionID) }) {
+                kept += cached.files
+            } else {
+                stale.append(project)
+            }
+        }
+        return await listSessions(in: stale, kept: kept)
+    }
+
+    /// 读 `history.jsonl` 新长出来的那一段。没有基线（第一次、文件换了、读不了）返回 nil。
+    private func readHistoryLog() async -> ClaudeHistoryLog.Touches? {
+        guard let home = try? await homeDirectory() else { return nil }
+        let path = ClaudeProjectPath.historyLog(home: home)
+        guard let stat = try? await provider.stat(path) else {
+            historyLog.reset()
+            return nil
+        }
+        let size = UInt64(max(0, stat.size))
+        switch historyLog.plan(size: size) {
+        case .unchanged:
+            return ClaudeHistoryLog.Touches()
+        case .rebase(let offset, let length):
+            if let data = try? await provider.readRange(path, offset: offset, length: length), data.count == length {
+                historyLog.rebase(data, from: offset)
+            } else {
+                historyLog.reset()
+            }
+            return nil
+        case .read(let offset, let length):
+            guard let data = try? await provider.readRange(path, offset: offset, length: length), data.count == length else {
+                historyLog.reset()
+                return nil
+            }
+            return historyLog.consume(data, from: offset)
+        }
+    }
+
+    /// 列这些项目，加上 `kept`（没变、用上次列的）。
+    private func listSessions(in projects: [AgentHistoryProject], kept: [AgentHistorySessionFile]) async -> AgentHistorySessionListing {
+        var result: [AgentHistorySessionFile] = kept
         var failed: Set<AgentHistoryProjectKey> = []
         var firstError: String?
         var emptyProjects = 0
@@ -131,7 +202,7 @@ actor ClaudeHistorySource: AgentHistorySource {
             }
         }
         // 诊断（只有条数与错误种类）：侧栏在 Mac 上新开会话后整个空掉时，看是哪一步列出了空。
-        let message = "历史会话：Claude Code 列 \(projects.count) 个项目，\(result.count) 份记录，"
+        let message = "历史会话：Claude Code 列 \(projects.count) 个项目（另有 \(kept.count) 份没变的用上次的），\(result.count) 份记录，"
             + "空项目 \(emptyProjects)，失败 \(failed.count)\(firstError.map { "（\($0)）" } ?? "")"
         AppLogger.notice(message, category: AgentHistoryLog.category)
         return AgentHistorySessionListing(files: result.sorted(by: AgentHistorySessionFile.newestFirst), failedProjects: failed)
@@ -139,6 +210,10 @@ actor ClaudeHistorySource: AgentHistorySource {
 
     func metadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata {
         if let cached = cache[file.cacheKey] { return cached }
+        if readsIndex, let metadata = try await grownMetadata(for: file) {
+            cache[file.cacheKey] = metadata
+            return metadata
+        }
         let parts = try await Self.scanParts(file: file, provider: provider)
         var scan = parts.tail
         // 记下的只在文件只长不缩时可用（同一路径换成了别的文件就作废）。
@@ -155,12 +230,35 @@ actor ClaudeHistorySource: AgentHistorySource {
         if let known { scan.fillNames(from: known) }
         if scan.directories.isEmpty, let directory = known?.lastDirectory { scan.directories = [directory] }
         if let head = parts.head { scan = scan.merged(withEarlier: head) }
+        if readsIndex { transcripts[file.path] = ClaudeTranscriptState(size: file.size, position: parts.position, scan: scan.bounded()) }
+        let metadata = makeMetadata(for: file, scan: scan)
+        cache[file.cacheKey] = metadata
+        return metadata
+    }
+
+    /// 读过、后来变长了的：只读新长出来的那一段并进来（`ClaudeTranscriptState`）。不能这样读的（没读过、变短了、
+    /// 长了太多、文件换过了）返回 nil，整份重读。
+    private func grownMetadata(for file: AgentHistorySessionFile) async throws -> AgentHistorySessionMetadata? {
+        guard let state = transcripts[file.path], let range = state.growth(to: file.size) else { return nil }
+        let data = try await provider.readRange(file.path, offset: range.offset, length: range.length)
+        guard data.count == range.length, let grown = state.appending(data, from: range.offset, size: file.size) else {
+            // 对不上：同一个路径换成了别的文件，记下的标题行与目录也是那份旧文件的，一起作废。
+            transcripts[file.path] = nil
+            names[file.path] = nil
+            return nil
+        }
+        transcripts[file.path] = grown
+        return makeMetadata(for: file, scan: grown.scan)
+    }
+
+    /// 读到的会话信息 → 列表一行（顺带记下标题行与目录，见 `names`）。
+    private func makeMetadata(for file: AgentHistorySessionFile, scan: ClaudeSessionScan) -> AgentHistorySessionMetadata {
         names[file.path] = ClaudeSessionNames(size: file.size, customTitle: scan.customTitle, aiTitle: scan.aiTitle,
                                               lastPrompt: scan.lastPrompt, lastDirectory: scan.directories.last)
         let candidates = Array(scan.directories.reversed())
         // 整份都读过了却没有一句对话（只敲过 `/exit` 之类）的不列：点开也什么都没有。
         let isEmpty = file.size <= UInt64(Self.tailBytes) && !scan.hasConversation
-        let metadata = AgentHistorySessionMetadata(
+        return AgentHistorySessionMetadata(
             title: scan.title,
             isListed: scan.origin.isListed && !isEmpty,
             lastDirectory: candidates.first,
@@ -169,8 +267,6 @@ actor ClaudeHistorySource: AgentHistorySource {
             gitBranch: scan.gitBranch,
             lastActivity: scan.lastTimestamp,
             continuedIn: scan.continuedIn)
-        cache[file.cacheKey] = metadata
-        return metadata
     }
 
     /// 读末尾一块；来源没定下来再从开头往后读几块。
@@ -182,15 +278,18 @@ actor ClaudeHistorySource: AgentHistorySource {
 
     /// `scan` 拆开交：末尾那一块读到的、（来源没定下来时）开头几块读到的，以及末尾那一块之前的部分到哪为止
     ///（末尾那一块第一行是半截时是那一行的结尾，往前找标题行从这里起；整份都在末尾那一块里为 nil）。
+    /// `position`：末尾那一块里最后一个整行的末尾（下次只读这之后长出来的）；那一块里一个换行都没有为 nil。
     static func scanParts(file: AgentHistorySessionFile, provider: any SFTPProviding) async throws
-        -> (tail: ClaudeSessionScan, head: ClaudeSessionScan?, searchEnd: UInt64?) {
+        -> (tail: ClaudeSessionScan, head: ClaudeSessionScan?, searchEnd: UInt64?, position: ClaudeReadPosition?) {
         let size = file.size
         let tailLength = Int(min(size, UInt64(tailBytes)))
         let tailOffset = size - UInt64(tailLength)
         let tail = try await provider.readRange(file.path, offset: tailOffset, length: tailLength)
         let scan = ClaudeSessionScan.scan(tail, dropsLeadingPartial: tailOffset > 0, dropsTrailingPartial: false)
         let searchEnd: UInt64? = tailOffset > 0 ? tail.firstIndex(of: 0x0A).map { tailOffset + UInt64($0 - tail.startIndex) } ?? size : nil
-        guard !scan.isOriginDecided, tailOffset > 0 else { return (scan, nil, searchEnd) }
+        // 读回来的比列目录时短（读的时候被截了）：不知道整行到哪，下次整份重读。
+        let position = tail.count == tailLength ? ClaudeReadPosition(lastLineEndIn: tail, from: tailOffset) : nil
+        guard !scan.isOriginDecided, tailOffset > 0 else { return (scan, nil, searchEnd, position) }
 
         var offset: UInt64 = 0
         var head = ClaudeSessionScan()
@@ -204,7 +303,7 @@ actor ClaudeHistorySource: AgentHistorySource {
             if part.isOriginDecided { break }
         }
         // 开头读到的 entrypoint 比末尾更早；末尾什么都没有，用开头的。
-        return (scan, head, searchEnd)
+        return (scan, head, searchEnd, position)
     }
 
     /// 从 `end` 往前倒着读，找 `[floor, end)` 里最近的标题行：找到 Claude Code 起的名字（用户改的或 AI 起的）就停，
@@ -357,6 +456,8 @@ actor ClaudeHistorySource: AgentHistorySource {
         try await provider.removeFile(file.path)
         cache[file.cacheKey] = nil
         names[file.path] = nil
+        transcripts[file.path] = nil
+        projectListings[file.project.id]?.files.removeAll { $0.path == file.path }
         guard (try? await provider.list(path: directory)) != nil else { return }
         try? await RemoteFileOperations.removeTree(at: directory, provider: provider)
     }

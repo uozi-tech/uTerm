@@ -90,6 +90,48 @@ final class AgentHistoryIndexLocalLiveTests: XCTestCase {
         }
     }
 
+    /// 记录变长了只读新长出来的那一段（`ClaudeTranscriptState`）：拿真实记录假装它先短一截（只读前面那一截），
+    /// 再按真实大小读一次（增量），和原来的读法整份读的逐条比。
+    func testClaudeGrowthMatchesFullRead() async throws {
+        let counter = AgentHistoryCountingProvider(base: base)
+        let fresh = ClaudeHistorySource(provider: counter, readsIndex: false)
+        let projects = try await fresh.projects()
+        let files = await fresh.allSessions(in: projects).filter { $0.size > 256 * 1024 }.prefix(150)
+        var differing: [String: Int] = [:]
+        var compared = 0
+        var incrementalBytes = 0, fullBytes = 0
+        for file in files {
+            let expected = try await fresh.metadata(for: file)
+            guard expected.isListed else { continue }
+            let growing = ClaudeHistorySource(provider: counter, readsIndex: true)
+            let cut = min(UInt64(48 * 1024), file.size / 8)
+            let shorter = AgentHistorySessionFile(sessionID: file.sessionID, project: file.project, path: file.path,
+                                                  size: file.size - cut, modifiedAt: file.modifiedAt.addingTimeInterval(-60))
+            _ = try await growing.metadata(for: shorter)
+            await counter.reset()
+            let grown = try await growing.metadata(for: file)
+            incrementalBytes += await counter.bytesRead
+            await counter.reset()
+            _ = try await ClaudeHistorySource(provider: counter, readsIndex: false).metadata(for: file)
+            fullBytes += await counter.bytesRead
+            compared += 1
+            if grown.title != expected.title { differing["title", default: 0] += 1 }
+            if grown.isListed != expected.isListed { differing["isListed", default: 0] += 1 }
+            if grown.lastDirectory != expected.lastDirectory { differing["lastDirectory", default: 0] += 1 }
+            if grown.resumeDirectory != expected.resumeDirectory { differing["resumeDirectory", default: 0] += 1 }
+            if grown.gitBranch != expected.gitBranch { differing["gitBranch", default: 0] += 1 }
+            if grown.lastActivity != expected.lastActivity { differing["lastActivity", default: 0] += 1 }
+            if grown.continuedIn != expected.continuedIn { differing["continuedIn", default: 0] += 1 }
+        }
+        print("""
+            [history-index-live] claude growth: compared=\(compared) differing=\(differing.sorted { $0.key < $1.key }) \
+            readKB incremental=\(incrementalBytes / 1024) full=\(fullBytes / 1024)
+            """)
+        XCTAssertGreaterThan(compared, 0)
+        XCTAssertEqual(differing["title"] ?? 0, 0, "增量读出来的标题和整份读的不一样")
+        XCTAssertEqual(differing["isListed"] ?? 0, 0)
+    }
+
     func testCodexIndexMatchesFullScan() async throws {
         try await compareTool(.codex) { provider, indexed in
             CodexHistorySource(provider: provider, readsIndex: indexed)

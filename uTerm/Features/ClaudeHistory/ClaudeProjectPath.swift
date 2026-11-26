@@ -20,6 +20,11 @@ nonisolated enum ClaudeProjectPath {
         return trimmed + "/" + projectsRelativePath
     }
 
+    /// 每次提问追加一行的记录（`ClaudeHistoryLog`）。
+    static func historyLog(home: String) -> String {
+        (home.hasSuffix("/") ? home : home + "/") + ".claude/history.jsonl"
+    }
+
     /// 工作目录 → 项目目录名。
     static func encode(_ path: String) -> String {
         var out = ""
