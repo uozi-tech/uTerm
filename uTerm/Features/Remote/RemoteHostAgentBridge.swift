@@ -475,6 +475,10 @@ final class RemoteHostAgentBridge: NSObject, RemoteHostAgentLink {
         case .arrangeSessions(let order):
             await sessions.requestArrange(order: order)
             return RemoteHostAppReply()
+        case .codeTabAction(let action):
+            let result = await server.codeTabActions.perform(action)
+            if let session = result.session { return RemoteHostAppReply(sessionID: session) }
+            return RemoteHostAppReply(error: result.error ?? String(localized: "Mac 上的 Code 标签页没能完成这个操作"))
         }
     }
 }

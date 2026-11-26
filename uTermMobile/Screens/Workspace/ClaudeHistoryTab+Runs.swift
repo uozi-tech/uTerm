@@ -12,7 +12,8 @@ import SwiftData
 /// 不用去猜前台是不是还是那个程序。会话留在主机上的（保持进程）断网只是重连，不会被当成退出；
 /// 没有保持进程的主机断网，shell 和程序本来也跟着没了，当成退出是对的。
 extension ClaudeHistoryTab {
-    /// 这台主机能不能在标签页里跑：直连的主机可以；配对的 Mac 照旧开终端标签页（见类型注释）。
+    /// 这台主机能不能在标签页里跑：直连的主机可以；配对的 Mac 由 Mac 起（在它的 Code 标签页里，见 `ClaudeHistoryTab+MacActions`）
+    /// 或者开终端标签页（见类型注释）。
     var runsInPlace: Bool { remoteMac == nil && canResume }
 
     /// 正在跑的终端（工作区算键盘、实时活动、归档、关前确认时要看）。
@@ -256,7 +257,7 @@ extension ClaudeHistoryTab {
     /// 命令后面的 `; exit` 还在：程序退出后那个标签页显示「已断开」。
     @discardableResult
     func moveRunToTab(_ id: UUID, in workspace: MobileWorkspace) -> TermTab? {
-        // 镜像那台 Mac 的会话归 Mac 的 Code 标签页管，这边挪不走（P1）。
+        // 镜像那台 Mac 的会话归 Mac 的 Code 标签页管，这边挪不走：请 Mac 挪（`moveMirroredRunToTab`）。
         guard let run = runs.run(id: id), !run.isMirrored, runCovers[id] == nil else { return nil }
         let term = run.terminal
         let pane = workspace.paneIndex(containing: self.id).map { workspace.panes[$0].id }

@@ -4,7 +4,8 @@ import XCTest
 
 /// 接管 Mac 时把 Mac 的 Code 标签页镜像成手机上的 Code 标签页（63 号消息）：里面跑着的会话放进它，不再各开终端标签页；
 /// 会话进出、结束、对上的记录跟着 Mac；接管时点的是它就切过去选中；关手机上的只断开、不再自动开；「结束会话」请 Mac 结束；
-/// Mac 上挪出来的会话成了普通终端标签页；老 Mac 照旧散标签。
+/// Mac 上挪出来的会话成了普通终端标签页；老 Mac 照旧散标签。手机上的「继续」「＋」「重新开始」「移到新标签页」请 Mac 在它的
+/// Code 标签页里做（消息 64，假的发送方记下请求、按用例回复）。
 /// 不连真 Mac：Mac 发来的列表与 Code 标签页直接交给 `RemoteMacClient`（`receiveSessions` / `receiveCodeTabs`）。
 @MainActor
 final class CodeTabMirrorTests: XCTestCase {
@@ -251,6 +252,294 @@ final class CodeTabMirrorTests: XCTestCase {
         // 重新接管：又开出来。
         _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [shell, a, b], focus: shell))
         XCTAssertEqual(try self.code(ws, client).runs.runs.map(\.id), [a, b])
+    }
+
+    // MARK: - 请 Mac 在它的 Code 标签页里做（消息 64 / 65）
+
+    /// 记下发给 Mac 的请求，按给的办法回复（测试不连真 Mac）。
+    private final class MacActions {
+        var sent: [RemoteCodeTabAction] = []
+        var reply: @MainActor (RemoteCodeTabAction) async throws -> UUID = { _ in UUID() }
+    }
+
+    /// 让这个 Code 标签页认为那台 Mac 认得 `codeTabAction`，请求交给 `actions`。
+    @discardableResult
+    private func macActions(_ code: ClaudeHistoryTab) -> MacActions {
+        let actions = MacActions()
+        code.macSupportsCodeTabActions = { true }
+        code.macCodeTabAction = { action in
+            actions.sent.append(action)
+            return try await actions.reply(action)
+        }
+        return actions
+    }
+
+    private func record(_ sessionID: String, tool: AgentHistoryTool = .claude) -> AgentHistorySessionFile {
+        let project = AgentHistoryProject(id: "-Users-me-app", path: "/Users/me/.claude/projects/-Users-me-app",
+                                          modifiedAt: nil, directory: "/Users/me/app", tool: tool)
+        return AgentHistorySessionFile(sessionID: sessionID, project: project,
+                                       path: "/Users/me/.claude/projects/-Users-me-app/\(sessionID).jsonl", size: 1,
+                                       modifiedAt: Date(timeIntervalSince1970: 1_800_000_000))
+    }
+
+    /// 接管一台 Mac：它的 Code 标签页里有 `runs`（各自会话），外加一个 shell。
+    private func takenOver(runs runInfos: [RemoteCodeTabInfo.Run], macTab: UUID = UUID())
+        throws -> (MobileWorkspace, RemoteMacClient, ClaudeHistoryTab, UUID) {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let shell = UUID()
+        let sessions = [shell] + runInfos.map(\.session)
+        mac(client, sessions: sessions, codeTabs: [codeTab(macTab, runs: runInfos)])
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: sessions, focus: shell))
+        return (ws, client, try code(ws, client), shell)
+    }
+
+    /// 「继续这个会话」：请 Mac 在它的 Code 标签页里继续（带上记录、工具、会话 ID、继续目录与镜像着的那个 Code 标签页），
+    /// 回复先到、Mac 推来的 Code 标签页后到：出现时选上它、看它的终端。
+    func testResumeAsksTheMacAndFocusesTheRunWhenItArrivesAfterTheReply() async throws {
+        let macTab = UUID()
+        let a = UUID()
+        let (ws, client, code, shell) = try takenOver(runs: [run(a)], macTab: macTab)
+        let actions = macActions(code)
+        let fresh = UUID()
+        actions.reply = { _ in fresh }
+        XCTAssertTrue(code.runsOnMacCodeTab)
+
+        let file = record("s-older", tool: .codex)
+        try await code.resumeOnMac(file, directory: "/Users/me/app")
+        let sent = try XCTUnwrap(actions.sent.first)
+        XCTAssertEqual(actions.sent.count, 1)
+        XCTAssertEqual(sent.knownAction, .resume)
+        XCTAssertEqual(sent.tab, macTab)
+        XCTAssertEqual(sent.path, file.path)
+        XCTAssertEqual(sent.tool, AgentHistoryTool.codex.rawValue)
+        XCTAssertEqual(sent.sessionID, "s-older")
+        XCTAssertEqual(sent.directory, "/Users/me/app")
+        XCTAssertNil(sent.session)
+        XCTAssertEqual(code.pendingMacFocus, fresh, "还没出现：记着")
+        XCTAssertNotEqual(code.runs.focusedID, fresh)
+        XCTAssertFalse(code.macActionInFlight)
+
+        mac(client, sessions: [shell, a, fresh],
+            codeTabs: [codeTab(macTab, runs: [run(a), run(fresh, tool: AgentHistoryTool.codex.rawValue,
+                                                       path: file.path, sessionID: "s-older")])])
+        let changes = follow(ws, client)
+        XCTAssertEqual(changes.opened.compactMap { $0.remote?.sessionID }, [fresh], "在 Code 标签页里接上它")
+        XCTAssertEqual(loose(ws), [shell], "不在 Mac 上另开终端标签页")
+        XCTAssertEqual(code.runs.focusedID, fresh)
+        XCTAssertEqual(code.runs.focused?.showsTerminal, true)
+        XCTAssertNil(code.pendingMacFocus)
+    }
+
+    /// Mac 推来的 Code 标签页比回复先到：回复一到就选上它。
+    func testResumeFocusesTheRunWhenItArrivedBeforeTheReply() async throws {
+        let macTab = UUID()
+        let a = UUID()
+        let (ws, client, code, shell) = try takenOver(runs: [run(a)], macTab: macTab)
+        let actions = macActions(code)
+        let fresh = UUID()
+        actions.reply = { [unowned self] _ in
+            self.mac(client, sessions: [shell, a, fresh], codeTabs: [codeTab(macTab, runs: [run(a), run(fresh)])])
+            _ = self.follow(ws, client)
+            return fresh
+        }
+        try await code.resumeOnMac(record("s-1"), directory: "/Users/me/app")
+        XCTAssertEqual(actions.sent.count, 1)
+        XCTAssertEqual(code.runs.focusedID, fresh)
+        XCTAssertEqual(code.runs.focused?.showsTerminal, true)
+        XCTAssertNil(code.pendingMacFocus)
+    }
+
+    /// 这份记录已经在 Mac 的 Code 标签页里跑着：只回到它，不发。
+    func testResumingARunningMirroredRecordOnlyFocusesIt() async throws {
+        let a = UUID()
+        let file = record("s-a")
+        let (_, _, code, _) = try takenOver(runs: [run(a, path: file.path, sessionID: "s-a")])
+        let actions = macActions(code)
+        try await code.resumeOnMac(file, directory: "/Users/me/app")
+        XCTAssertTrue(actions.sent.isEmpty)
+        XCTAssertEqual(code.runs.focusedID, a)
+    }
+
+    /// 「＋新会话」：请 Mac 在它的 Code 标签页里新开（工具、目录），出现后选上。
+    func testStartAsksTheMacForANewSession() async throws {
+        let macTab = UUID()
+        let a = UUID()
+        let (ws, client, code, shell) = try takenOver(runs: [run(a)], macTab: macTab)
+        let actions = macActions(code)
+        let fresh = UUID()
+        actions.reply = { _ in fresh }
+        try await code.startOnMac(tool: .cursor, directory: "/Users/me/other")
+        let sent = try XCTUnwrap(actions.sent.first)
+        XCTAssertEqual(sent.knownAction, .start)
+        XCTAssertEqual(sent.tab, macTab)
+        XCTAssertEqual(sent.tool, AgentHistoryTool.cursor.rawValue)
+        XCTAssertEqual(sent.directory, "/Users/me/other")
+        XCTAssertNil(sent.path)
+
+        mac(client, sessions: [shell, a, fresh],
+            codeTabs: [codeTab(macTab, runs: [run(a), run(fresh, tool: AgentHistoryTool.cursor.rawValue)])])
+        _ = follow(ws, client)
+        XCTAssertEqual(code.runs.focusedID, fresh)
+    }
+
+    /// 已结束的镜像会话出「重新开始」：请 Mac 重新开始（会话 id），Mac 换上的新会话出现后选上它。
+    func testRestartingAnEndedMirroredRunAsksTheMac() async throws {
+        let macTab = UUID()
+        let a = UUID()
+        let ended = Date(timeIntervalSince1970: 1_800_000_600)
+        let (ws, client, code, shell) = try takenOver(runs: [run(a, ended: ended)], macTab: macTab)
+        let actions = macActions(code)
+        let fresh = UUID()
+        actions.reply = { _ in fresh }
+        let runs = CodeTabRuns(tab: code)
+        let endedRun = try XCTUnwrap(code.runs.run(id: a))
+        XCTAssertFalse(endedRun.isRunning)
+        XCTAssertTrue(runs.canRestart(endedRun), "镜像的也出「重新开始」")
+
+        try await code.restartOnMac(a)
+        let sent = try XCTUnwrap(actions.sent.first)
+        XCTAssertEqual(sent.knownAction, .restart)
+        XCTAssertEqual(sent.session, a)
+        XCTAssertEqual(sent.tab, macTab)
+
+        mac(client, sessions: [shell, fresh], codeTabs: [codeTab(macTab, runs: [run(fresh)])])
+        _ = follow(ws, client)
+        XCTAssertNil(code.runs.run(id: a))
+        XCTAssertEqual(code.runs.focusedID, fresh)
+        XCTAssertEqual(code.runs.focused?.isRunning, true)
+
+        // 跑着的不发。
+        try await code.restartOnMac(fresh)
+        XCTAssertEqual(actions.sent.count, 1)
+    }
+
+    /// 跑着的镜像会话「移到新标签页」：请 Mac 挪；Mac 推来新的 Code 标签页之后它成了普通终端标签页、到前台。
+    func testMovingAMirroredRunToATabEndsUpAsAFrontTerminalTab() async throws {
+        let macTab = UUID()
+        let (a, b) = (UUID(), UUID())
+        let (ws, client, code, shell) = try takenOver(runs: [run(a), run(b)], macTab: macTab)
+        let actions = macActions(code)
+        actions.reply = { $0.session ?? UUID() }
+        let runs = CodeTabRuns(tab: code, onMoveToTab: { _ in })
+        XCTAssertTrue(runs.canMoveToTab(try XCTUnwrap(code.runs.run(id: b))))
+        XCTAssertFalse(CodeTabRuns(tab: code).canMoveToTab(try XCTUnwrap(code.runs.run(id: b))), "没有工作区可放：不出")
+        ws.activate(code.id)
+
+        try await code.moveMirroredRunToTab(b, in: ws)
+        let sent = try XCTUnwrap(actions.sent.first)
+        XCTAssertEqual(sent.knownAction, .moveToTab)
+        XCTAssertEqual(sent.session, b)
+        XCTAssertEqual(sent.tab, macTab)
+        XCTAssertNotNil(code.runs.run(id: b), "等 Mac 推来新的再拿掉")
+
+        let bTerm = try XCTUnwrap(code.mirroredTerminal(session: b))
+        mac(client, sessions: [shell, a, b], codeTabs: [codeTab(macTab, runs: [run(a)])])
+        let moved = follow(ws, client)
+        XCTAssertNil(code.runs.run(id: b))
+        XCTAssertEqual(bTerm.controller.state, .disconnected)
+        XCTAssertEqual(moved.opened.compactMap { $0.remote?.sessionID }, [b])
+        XCTAssertEqual(Set(loose(ws)), [shell, b])
+        XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, b, "挪出来的到前台")
+    }
+
+    /// Mac 做不成：抛出 Mac 给的原因（界面据此提示），什么都不选；`CodeTabRuns.perform` 交给 `onFailure`。
+    func testFailureIsSurfacedAndNothingIsFocused() async throws {
+        let a = UUID()
+        let ended = Date(timeIntervalSince1970: 1_800_000_600)
+        let (_, _, code, _) = try takenOver(runs: [run(a, ended: ended)])
+        let actions = macActions(code)
+        actions.reply = { _ in throw RemoteAttachError.rejected("那个目录不存在") }
+        let before = code.runs.focusedID
+
+        do {
+            try await code.resumeOnMac(record("s-x"), directory: "/nowhere")
+            XCTFail("应当抛出")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "那个目录不存在")
+        }
+        XCTAssertNil(code.pendingMacFocus)
+        XCTAssertEqual(code.runs.focusedID, before)
+        XCTAssertFalse(code.macActionInFlight)
+
+        let reported = expectation(description: "提示")
+        let runs = CodeTabRuns(tab: code, onFailure: { failure in
+            XCTAssertEqual(failure.message, "那个目录不存在")
+            XCTAssertFalse(failure.title.isEmpty)
+            reported.fulfill()
+        })
+        runs.restart(a)
+        await fulfillment(of: [reported], timeout: 5)
+        XCTAssertEqual(actions.sent.map(\.knownAction), [.resume, .restart])
+        XCTAssertNotNil(code.runs.run(id: a), "已结束的那个留着")
+    }
+
+    /// 在途的请求没回复之前再点：不再发。
+    func testRepeatedTapsWhileInFlightSendOnce() async throws {
+        let (_, _, code, _) = try takenOver(runs: [run(UUID())])
+        let actions = macActions(code)
+        final class Gate { var release: CheckedContinuation<UUID, Error>? }
+        let gate = Gate()
+        actions.reply = { _ in try await withCheckedThrowingContinuation { gate.release = $0 } }
+        let first = Task { try await code.startOnMac(tool: .claude, directory: "/Users/me/app") }
+        let waiting = await MobileFakeTerminal.waitUntil { gate.release != nil }
+        XCTAssertTrue(waiting)
+        XCTAssertTrue(code.macActionInFlight)
+        try await code.startOnMac(tool: .claude, directory: "/Users/me/app")
+        try await code.resumeOnMac(record("s-2"), directory: "/Users/me/app")
+        XCTAssertEqual(actions.sent.count, 1)
+        gate.release?.resume(returning: UUID())
+        try await first.value
+        XCTAssertFalse(code.macActionInFlight)
+    }
+
+    /// Mac 上还没有 Code 标签页（用户自己开着这台 Mac 的）：请求不带标签页；Mac 开出来的那个接上这个标签页，选上新会话。
+    func testStartWithoutAMacCodeTabBindsTheArrivingOneToThisTab() async throws {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let mine = ws.openHistory(ClaudeHistoryTab(pairedMac: client))
+        let shell = UUID()
+        mac(client, sessions: [shell], codeTabs: [])
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [shell], focus: shell))
+        XCTAssertNil(mine.mirroredMacTabID)
+        let actions = macActions(mine)
+        let fresh = UUID()
+        actions.reply = { _ in fresh }
+
+        try await mine.startOnMac(tool: .claude, directory: "/Users/me/app")
+        XCTAssertNil(try XCTUnwrap(actions.sent.first).tab, "Mac 上还没有：由 Mac 开一个")
+
+        let macTab = UUID()
+        mac(client, sessions: [shell, fresh], codeTabs: [codeTab(macTab, runs: [run(fresh)])])
+        _ = follow(ws, client)
+        XCTAssertTrue(try code(ws, client) === mine, "不另开一个 Code 标签页")
+        XCTAssertEqual(ws.tabs.compactMap(\.history).count, 1)
+        XCTAssertEqual(mine.mirroredMacTabID, macTab)
+        XCTAssertEqual(mine.runs.focusedID, fresh)
+        XCTAssertEqual(loose(ws), [shell])
+    }
+
+    /// 老 Mac（不认得 `codeTabAction`）：不发，照旧开终端标签页（`runInNewTerminal`）；镜像的会话不出「重新开始」「移到新标签页」。
+    func testOldMacWithoutCodeTabActionsKeepsTheTerminalTabPath() async throws {
+        let a = UUID()
+        let ended = Date(timeIntervalSince1970: 1_800_000_600)
+        let (ws, client, code, _) = try takenOver(runs: [run(a, ended: ended)])
+        XCTAssertFalse(client.supportsCodeTabActions)
+        XCTAssertFalse(code.runsOnMacCodeTab)
+        var sent: [RemoteCodeTabAction] = []
+        code.macCodeTabAction = { sent.append($0); return UUID() }
+
+        try await code.resumeOnMac(record("s-1"), directory: "/Users/me/app")
+        try await code.startOnMac(tool: .claude, directory: "/Users/me/app")
+        try await code.restartOnMac(a)
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertNil(code.pendingMacFocus)
+        let endedRun = try XCTUnwrap(code.runs.run(id: a))
+        let runs = CodeTabRuns(tab: code, onMoveToTab: { _ in })
+        XCTAssertFalse(runs.canRestart(endedRun))
+        XCTAssertFalse(runs.canMoveToTab(endedRun))
+        try await code.moveMirroredRunToTab(a, in: ws)
+        XCTAssertTrue(sent.isEmpty)
     }
 
     // MARK: - 老 Mac

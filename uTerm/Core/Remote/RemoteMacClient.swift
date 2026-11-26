@@ -180,6 +180,34 @@ final class RemoteMacClient: Identifiable {
         return Set(tab.runs.filter { AgentHistoryTool(rawValue: $0.tool) != nil }.map(\.session))
     }
 
+    /// Mac 能在它的 Code 标签页里继续、新开、重新开始会话，能把会话移到新标签页（`codeTabAction`）。
+    var supportsCodeTabActions: Bool { macFeatures.contains(RemoteFeature.codeTabActions) }
+
+    /// 请 Mac 在它的 Code 标签页里做一件事（`RemoteCodeTabAction`），返回做完之后的那个会话 id（见
+    /// `RemoteCodeTabActionResult.session`）。Mac 做不成抛 `RemoteAttachError.rejected`（带给人看的原因），连不上抛
+    /// 连接失败，老 Mac 不认抛 `.rejected`。这个会话随后出现在 Mac 推来的 Code 标签页（63）里，不一定比回复先到。
+    func performCodeTabAction(_ action: RemoteCodeTabAction) async throws -> UUID {
+        await connect()
+        guard state == .connected, let link else { throw connectionFailure }
+        guard supportsCodeTabActions else {
+            throw RemoteAttachError.rejected(String(localized: "这台 Mac 上的 uTerm 版本太旧，不能在它的 Code 标签页里开会话。把 Mac 上的 uTerm 更新到最新版后再试"))
+        }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
+            codeTabActionWaiters[action.requestID] = continuation
+            link.send(RemoteMessage(.codeTabAction, payload: RemoteJSON.encode(action)))
+        }
+    }
+
+    /// 收到 Mac 对 `codeTabAction` 的回复（测试直接调）。不是在等的那一次就丢掉。
+    func receiveCodeTabActionResult(_ result: RemoteCodeTabActionResult) {
+        guard let waiter = codeTabActionWaiters.removeValue(forKey: result.requestID) else { return }
+        if let session = result.session {
+            waiter.resume(returning: session)
+        } else {
+            waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? String(localized: "Mac 上的 Code 标签页没能完成这个操作")))
+        }
+    }
+
     /// 收到 Mac 的 Code 标签页。一样的不写（标题变化时每秒都可能来一次，不让跟随逻辑白跑）。
     func receiveCodeTabs(_ update: RemoteCodeTabsUpdate) {
         if codeTabs != update.tabs { codeTabs = update.tabs }
@@ -248,6 +276,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var attachWaiters: [UUID: (token: UUID, continuation: CheckedContinuation<UInt32, Error>)] = [:]
     @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
+    @ObservationIgnored private var codeTabActionWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
     @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var vouchWaiters: [UUID: CheckedContinuation<RemoteVouchResult, Error>] = [:]
@@ -710,6 +739,8 @@ final class RemoteMacClient: Identifiable {
         desktopWaiters.removeAll()
         for (_, waiter) in localShellWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         localShellWaiters.removeAll()
+        for (_, waiter) in codeTabActionWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        codeTabActionWaiters.removeAll()
         for (_, waiter) in workspaceWaiters { waiter.resume(returning: nil) }
         workspaceWaiters.removeAll()
         for (_, waiter) in imageWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
@@ -829,6 +860,9 @@ final class RemoteMacClient: Identifiable {
             if let update = try? RemoteJSON.decode(RemoteCodeTabsUpdate.self, from: message.payload) {
                 receiveCodeTabs(update)
             }
+        case .codeTabActionResult:
+            guard let result = try? RemoteJSON.decode(RemoteCodeTabActionResult.self, from: message.payload) else { return }
+            receiveCodeTabActionResult(result)
         case .terminalImageResult:
             guard let result = try? RemoteJSON.decode(RemoteTerminalImageResult.self, from: message.payload),
                   let waiter = imageWaiters.removeValue(forKey: result.requestID) else { return }

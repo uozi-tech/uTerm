@@ -296,6 +296,14 @@ final class RemoteHostAgentService: NSObject, NSXPCListenerDelegate {
             if let id = reply.sessionID { return .success(id) }
             return .failure(.init(message: reply.error ?? String(localized: "本机终端没开成")))
         })
+        server.codeTabActions = RemoteCodeTabActor { [weak self] action in
+            guard let self else { return .failure(action, String(localized: "远控进程正在退出")) }
+            guard let reply = await self.sessions.request(.codeTabAction(action)) else {
+                return .failure(action, RemoteHostAttachError.appUnavailable.message)
+            }
+            if let id = reply.sessionID { return .success(action, session: id) }
+            return .failure(action, reply.error ?? String(localized: "Mac 上的 Code 标签页没能完成这个操作"))
+        }
         server.fileAccess = environment.makeFileAccess(settings)
         server.onStateChange = { [weak self] in self?.scheduleStatePush() }
         self.server = server

@@ -11128,6 +11128,174 @@
         }
       }
     },
+    "Mac 上没能在这个目录里新开会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac couldn’t start a new session in this folder"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac でこのフォルダに新しいセッションを開始できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac에서 이 폴더에 새 세션을 시작하지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上沒能在這個資料夾裡開新的工作階段"
+          }
+        }
+      }
+    },
+    "Mac 上没能把这个会话移到新标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac couldn’t move this session to a new tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac でこのセッションを新しいタブに移動できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac에서 이 세션을 새 탭으로 옮기지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上沒能把這個工作階段移到新分頁"
+          }
+        }
+      }
+    },
+    "Mac 上没能继续这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac couldn’t resume this session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac でこのセッションを再開できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac에서 이 세션을 이어서 하지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上沒能繼續這個工作階段"
+          }
+        }
+      }
+    },
+    "Mac 上没能重新开始这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac couldn’t start this session again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac でこのセッションをもう一度開始できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac에서 이 세션을 다시 시작하지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上沒能重新開始這個工作階段"
+          }
+        }
+      }
+    },
+    "Mac 上的 Code 标签页没能完成这个操作" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Code tab on the Mac couldn’t complete this action"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac の Code タブでこの操作を完了できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 Code 탭에서 이 작업을 완료하지 못했습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 Code 分頁沒能完成這個操作"
+          }
+        }
+      }
+    },
+    "Mac 上的 Code 标签页还没准备好，稍后再试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Code tab on the Mac isn’t ready yet. Try again later"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac の Code タブはまだ準備ができていません。しばらくしてからやり直してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 Code 탭이 아직 준비되지 않았습니다. 잠시 후 다시 시도하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 Code 分頁還沒準備好，請稍後再試"
+          }
+        }
+      }
+    },
     "Mac 上的 SSH 终端还不能贴文件，只能贴图片" : {
       "localizations" : {
         "en" : {
@@ -11208,6 +11376,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mac 上的 SSH 終端機還不能貼上影片和檔案，只能貼上圖片"
+          }
+        }
+      }
+    },
+    "Mac 上的 uTerm 不支持这种编码工具" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm on the Mac doesn’t support this coding tool"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac の uTerm はこのコーディングツールに対応していません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 uTerm은 이 코딩 도구를 지원하지 않습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 uTerm 不支援這種編碼工具"
+          }
+        }
+      }
+    },
+    "Mac 上的 uTerm 不认识这个操作。把 Mac 上的 uTerm 更新到最新版后再试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm on the Mac doesn’t recognize this action. Update uTerm on the Mac to the latest version and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac の uTerm はこの操作を認識できません。Mac の uTerm を最新バージョンにアップデートしてからもう一度お試しください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac의 uTerm이 이 작업을 인식하지 못합니다. Mac의 uTerm을 최신 버전으로 업데이트한 후 다시 시도하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 上的 uTerm 不認得這個操作。將 Mac 上的 uTerm 更新到最新版後再試"
           }
         }
       }
@@ -50742,6 +50966,34 @@
         }
       }
     },
+    "无法移到新标签页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Move to New Tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいタブに移動できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 탭으로 이동할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法移到新分頁"
+          }
+        }
+      }
+    },
     "无法绑定该地址（地址不属于本机）" : {
       "localizations" : {
         "en" : {
@@ -51439,6 +51691,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法配對"
+          }
+        }
+      }
+    },
+    "无法重新开始这个会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Start Session Again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションをもう一度開始できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션을 다시 시작할 수 없음"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法重新開始這個工作階段"
           }
         }
       }
@@ -70032,6 +70312,34 @@
         }
       }
     },
+    "要先选一个目录才能新开会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a folder before starting a new session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッションを開始する前にフォルダを選択してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 세션을 시작하려면 먼저 폴더를 선택하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要先選一個資料夾才能開新的工作階段"
+          }
+        }
+      }
+    },
     "要发的帧太大" : {
       "localizations" : {
         "en" : {
@@ -75770,6 +76078,34 @@
         }
       }
     },
+    "这个会话已经不在 Mac 的 Code 标签页里了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session is no longer in the Mac’s Code tab"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションはもう Mac の Code タブにありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션은 더 이상 Mac의 Code 탭에 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個工作階段已經不在 Mac 的 Code 分頁裡了"
+          }
+        }
+      }
+    },
     "这个会话正在这个标签页里运行，回到它的终端" : {
       "comment" : "Code 标签页：看记录时回到正在跑的那个终端",
       "localizations" : {
@@ -75824,6 +76160,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這個工作階段沒有留下對話記錄。"
+          }
+        }
+      }
+    },
+    "这个会话还在运行，结束之后才能重新开始" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session is still running. It can be started again after it ends"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションはまだ実行中です。終了してからもう一度開始できます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 세션은 아직 실행 중입니다. 종료된 후에 다시 시작할 수 있습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個工作階段還在執行，結束之後才能重新開始"
           }
         }
       }
@@ -76678,6 +77042,34 @@
         }
       }
     },
+    "这台 Mac 上的 uTerm 版本太旧，不能在它的 Code 标签页里开会话。把 Mac 上的 uTerm 更新到最新版后再试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "uTerm on this Mac is too old to open sessions in its Code tab. Update uTerm on the Mac to the latest version and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このMacのuTermはバージョンが古いため、Code タブでセッションを開けません。MacのuTermを最新バージョンにアップデートしてからもう一度お試しください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Mac의 uTerm 버전이 너무 오래되어 Code 탭에서 세션을 열 수 없습니다. Mac의 uTerm을 최신 버전으로 업데이트한 후 다시 시도하십시오"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台 Mac 上的 uTerm 版本太舊，無法在它的 Code 分頁裡開工作階段。將 Mac 上的 uTerm 更新到最新版後再試"
+          }
+        }
+      }
+    },
     "这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。把 Mac 上的 uTerm 更新到最新版后再试" : {
       "localizations" : {
         "en" : {
@@ -76870,6 +77262,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這台 Mac 不支援遠端存取檔案"
+          }
+        }
+      }
+    },
+    "这台 Mac 不能在 Code 标签页里替设备开会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac can’t open sessions in its Code tab for other devices"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac はほかのデバイスのために Code タブでセッションを開くことができません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Mac은 다른 기기를 위해 Code 탭에서 세션을 열 수 없습니다"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台 Mac 無法在 Code 分頁裡替裝置開工作階段"
           }
         }
       }

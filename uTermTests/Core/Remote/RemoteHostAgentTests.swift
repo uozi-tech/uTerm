@@ -176,6 +176,57 @@ final class RemoteHostAgentTests: XCTestCase {
         client.disconnect()
     }
 
+    /// 设备请 Mac 在它的 Code 标签页里做一件事（64 号消息）：远控进程经 XPC 转给 App 办（App 的 `codeTabActions`），
+    /// 回复带回 App 那边的会话 id 或原因；App 走了回「正在重启」，手机的连接不断。
+    func test_code_tab_action_is_done_by_the_app_through_the_agent() async throws {
+        let rig = await Rig(grace: .seconds(30))
+        defer { rig.tearDown() }
+        let made = UUID()
+        let received = AgentCodeTabActions()
+        rig.appServer.codeTabActions = RemoteCodeTabActor { action in
+            received.actions.append(action)
+            return action.knownAction == .start ? .success(action, session: made)
+                : .failure(action, "这个会话已经不在 Mac 的 Code 标签页里了")
+        }
+        rig.startApp()
+        let listening = await waitUntil { rig.agentServer?.port != nil }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(rig.agentServer?.port)
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !rig.appServer.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        rig.appServer.approvePairing(try XCTUnwrap(rig.appServer.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(client.state, .connected)
+        XCTAssertTrue(client.supportsCodeTabActions)
+
+        let start = RemoteCodeTabAction(action: .start, tool: AgentHistoryTool.claude.rawValue, directory: "/tmp")
+        let id = try await client.performCodeTabAction(start)
+        XCTAssertEqual(id, made)
+        XCTAssertEqual(received.actions, [start], "请求原样到了 App")
+
+        do {
+            _ = try await client.performCodeTabAction(RemoteCodeTabAction(action: .moveToTab, session: UUID()))
+            XCTFail("应当失败")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "这个会话已经不在 Mac 的 Code 标签页里了")
+        }
+
+        rig.bridge?.simulateAppTermination()
+        do {
+            _ = try await client.performCodeTabAction(start)
+            XCTFail("应当失败")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, RemoteHostAttachError.appUnavailable.message)
+        }
+        XCTAssertEqual(client.state, .connected, "App 不在时手机的远控连接不断")
+        XCTAssertEqual(received.actions.count, 2, "App 不在时没有转过去")
+        client.disconnect()
+    }
+
     /// 设备上亲手排过 Mac 的标签：请求经远控进程转给 App，App 的窗口照着排（`TerminalSessionRegistry.arrangeTabs`）。
     func test_device_arrangement_reaches_the_app_windows_through_the_agent() async throws {
         let rig = await Rig(grace: .seconds(30))
@@ -700,4 +751,10 @@ private final class HangingAgent: NSObject, RemoteHostAgentXPC, @unchecked Senda
 private final class AgentPermissionBox {
     var current = RemoteHostAgentPermissions(screenCapture: true, postEvents: false)
     var requests = 0
+}
+
+/// App 的落点收到的请求（测试里读）。
+@MainActor
+private final class AgentCodeTabActions {
+    var actions: [RemoteCodeTabAction] = []
 }
