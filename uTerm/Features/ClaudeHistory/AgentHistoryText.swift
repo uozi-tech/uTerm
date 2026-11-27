@@ -607,6 +607,11 @@ enum AgentHistoryText {
         return parts.joined(separator: " · ")
     }
 
+    /// 窄处（侧栏底部那一行、Duo 那一列）的名字：只管某个模型的只写模型名（「Fable」），悬停再写全。
+    static func rateLimitShortName(_ window: AgentRateLimits.Window) -> String {
+        window.scope ?? rateLimitWindow(window)
+    }
+
     /// 过了重置时间、之后没再用过的时间窗。
     static var rateLimitDidReset: String {
         String(localized: "已重置", comment: "账号额度：最后一次记录之后已经过了重置时间，按用了 0 算")

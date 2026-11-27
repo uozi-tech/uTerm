@@ -425,9 +425,14 @@ actor ClaudeHistorySource: AgentHistorySource {
         statusLine.installed(at: path)
     }
 
+    /// 账号额度以 Claude Code 自己缓存的 `/usage` 为底（`ClaudeUsageCache`，时间窗全、有 Fable 这类只管某个模型的），
+    /// 状态栏转接存下的更新时同一个时间窗用它的；上下文窗口只有状态栏有。
     func statusLineSnapshot() async -> AgentStatusLineSnapshot? {
         guard let home = try? await homeDirectory() else { return nil }
-        return await AgentStatusLineBridge.readSnapshot(.claude, provider: provider, home: home)
+        let statusLine = await AgentStatusLineBridge.readSnapshot(.claude, provider: provider, home: home)
+        let cache = await ClaudeUsageCache.read(provider: provider, home: home)
+        guard statusLine != nil || cache != nil else { return nil }
+        return (statusLine ?? AgentStatusLineSnapshot()).merging(usageCache: cache)
     }
 
     // MARK: - 主机上正在运行的会话

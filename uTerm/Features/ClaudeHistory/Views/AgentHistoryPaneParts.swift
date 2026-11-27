@@ -379,7 +379,7 @@ struct AgentHistoryListContent<List: View>: View {
     }
 }
 
-/// 侧栏最底下一行：每种工具的账号额度（最紧的两个时间窗，`AgentAccountLimits.compact`，如 5 小时与每周），最后是正在看的
+/// 侧栏最底下一行：每种工具的账号额度（最紧的三个时间窗，`AgentAccountLimits.compact`，如 5 小时、每周、Fable），最后是正在看的
 /// 会话的上下文。每一项是小圆环（颜色按程度蓝 / 黄 / 红）+ 名字 + 用了几成，字不上色；用了多少 / 窗口多大、几时重置
 /// 放在悬停和点开里，不常驻。只有一种工具有额度时不放工具图标。放不下时去掉名字。露着时每分钟重读一次状态栏的数据。
 private struct AgentHistoryAccountLimits: View {
@@ -395,16 +395,12 @@ private struct AgentHistoryAccountLimits: View {
         // 没东西在下面时它和列表是同一块底（同 Apple 的做法、也同「填充即边界」）。
         VStack(spacing: 0) {
             if !rows.isEmpty || context != nil {
+                // 一行放得下就一行；放不下额度一行、上下文一行（都带名字）；再放不下才去掉名字。
                 ViewThatFits(in: .horizontal) {
                     items(rows, context: context, labeled: true)
+                    stacked(rows, context: context, labeled: true)
                     items(rows, context: context, labeled: false)
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(rows, id: \.tool) { row in
-                            HStack(spacing: 12) { group(row, showsTool: rows.count > 1, labeled: false) }
-                        }
-                        if let context { AgentContextUsageItem(usage: context, labeled: false) }
-                    }
-                    .fixedSize()
+                    stacked(rows, context: context, labeled: false)
                 }
                 .font(.system(size: style.noteSize))
                 .padding(style.accountLimitsPadding)
@@ -424,6 +420,17 @@ private struct AgentHistoryAccountLimits: View {
         HStack(spacing: 12) {
             ForEach(rows, id: \.tool) { row in
                 group(row, showsTool: rows.count > 1, labeled: labeled)
+            }
+            if let context { AgentContextUsageItem(usage: context, labeled: labeled) }
+        }
+        .fixedSize()
+    }
+
+    /// 每种工具一行、上下文一行。
+    private func stacked(_ rows: [AgentAccountLimits], context: AgentTurnUsage?, labeled: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(rows, id: \.tool) { row in
+                HStack(spacing: 12) { group(row, showsTool: rows.count > 1, labeled: labeled) }
             }
             if let context { AgentContextUsageItem(usage: context, labeled: labeled) }
         }
@@ -453,7 +460,7 @@ private struct AgentAccountLimitsGroup: View {
                 }
                 ForEach(Array(row.compact.enumerated()), id: \.offset) { _, window in
                     AgentUsageItem(fraction: window.usedPercent / 100, level: AgentUsageLevel.of(window),
-                                   label: labeled ? AgentHistoryText.rateLimitWindow(window) : nil,
+                                   label: labeled ? AgentHistoryText.rateLimitShortName(window) : nil,
                                    value: "\(Int(window.usedPercent.rounded()))%")
                         .help(AgentHistoryText.rateLimitHelp(window, tool: row.tool))
                 }

@@ -189,6 +189,11 @@ nonisolated struct AgentStatusLineSnapshot: Equatable, Sendable {
                 let resets = (entry["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
                 windows.append(claudeWindow(key: key, used: used, resetsAt: resets))
             }
+            // Claude Code 过了重置时间就不再给那个时间窗（文档：drops a window once its resets_at passes），下一次用到
+            // 之前一直没有：每周的还在、5 小时的没了，就是 5 小时的重置过、还没再用，按用了 0 算。
+            if limits["seven_day"] != nil, limits["five_hour"] == nil {
+                windows.append(AgentRateLimits.Window(usedPercent: 0, windowMinutes: 300, resetsAt: nil, didReset: true))
+            }
         }
         if let quota = object["quota"] as? [String: Any] {
             for key in quota.keys.sorted() {
@@ -230,11 +235,14 @@ nonisolated struct AgentAccountLimits: Equatable, Sendable {
     /// 窄的地方只显示一个：最接近 100% 的那个时间窗（`windows` 已按最紧的在前排好）。
     var headline: AgentRateLimits.Window? { windows.first }
 
-    /// 侧栏底部那一行放的：最紧的两个（Claude 的 5 小时与每周），按时间窗从短到长排（5 小时在前，读着顺）。
+    /// 侧栏底部那一行放的：最紧的三个（Claude 的 5 小时、每周、只管 Fable 的每周），按时间窗从短到长排（5 小时在前），
+    /// 同样长的管全部模型的在前、只管某个模型的在后。
     var compact: [AgentRateLimits.Window] {
-        windows.prefix(2).enumerated().sorted { a, b in
+        windows.prefix(3).enumerated().sorted { a, b in
             let left = a.element.windowMinutes ?? .max, right = b.element.windowMinutes ?? .max
-            return left != right ? left < right : a.offset < b.offset
+            if left != right { return left < right }
+            let leftScoped = a.element.scope != nil, rightScoped = b.element.scope != nil
+            return leftScoped != rightScoped ? !leftScoped : a.offset < b.offset
         }.map(\.element)
     }
 }

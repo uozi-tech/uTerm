@@ -156,6 +156,7 @@ final class AgentStatusLineBridgeTests: XCTestCase {
 }
 
 /// 用量的程度（蓝 / 黄 / 红）：额度与上下文共用。
+@MainActor
 final class AgentUsageLevelTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -194,19 +195,72 @@ final class AgentUsageLevelTests: XCTestCase {
                                          .init(usedPercent: 87, windowMinutes: 10080, resetsAt: nil),
                                      ]), at: nil)
         XCTAssertEqual(row.headline?.usedPercent, 87)
-        // 侧栏底部那一行放最紧的两个，5 小时在前。
+        // 侧栏底部那一行 5 小时在前。
         XCTAssertEqual(row.compact.map(\.windowMinutes), [300, 10080])
     }
 
-    /// 三个以上时间窗（Antigravity 的 bucket、带模型的每周额度）：只放最紧的两个。
-    func testCompactKeepsTheTwoTightest() {
-        let windows = AgentRateLimits.tightestFirst([
-            .init(usedPercent: 10, windowMinutes: 300, resetsAt: nil),
-            .init(usedPercent: 60, windowMinutes: 10080, resetsAt: nil),
-            .init(usedPercent: 95, windowMinutes: 10080, resetsAt: nil, scope: "Fable"),
+    /// Claude 的 5 小时、每周、只管 Fable 的每周都放上（5 小时在前、管全部的每周在 Fable 前）；更多时只放最紧的三个。
+    func testCompactKeepsTheThreeTightestInReadingOrder() {
+        let claude = AgentRateLimits.tightestFirst([
+            .init(usedPercent: 3, windowMinutes: 300, resetsAt: nil),
+            .init(usedPercent: 93, windowMinutes: 10080, resetsAt: nil),
+            .init(usedPercent: 24, windowMinutes: 10080, resetsAt: nil, scope: "Fable"),
         ])
         let row = AgentAccountLimits(tool: .claude, limits: AgentRateLimits(primary: nil, secondary: nil, plan: nil),
-                                     windows: windows, at: nil)
-        XCTAssertEqual(row.compact.map(\.usedPercent), [95, 60])
+                                     windows: claude, at: nil)
+        XCTAssertEqual(row.compact.map(\.usedPercent), [3, 93, 24])
+        XCTAssertEqual(row.compact.map(AgentHistoryText.rateLimitShortName), ["5 小时", "每周", "Fable"])
+        let many = AgentAccountLimits(tool: .antigravity, limits: AgentRateLimits(primary: nil, secondary: nil, plan: nil),
+                                      windows: AgentRateLimits.tightestFirst([
+                                          .init(usedPercent: 10, windowMinutes: nil, resetsAt: nil, label: "a"),
+                                          .init(usedPercent: 60, windowMinutes: nil, resetsAt: nil, label: "b"),
+                                          .init(usedPercent: 95, windowMinutes: nil, resetsAt: nil, label: "c"),
+                                          .init(usedPercent: 40, windowMinutes: nil, resetsAt: nil, label: "d"),
+                                      ]), at: nil)
+        XCTAssertEqual(many.compact.map(\.label), ["c", "b", "d"])
+    }
+}
+
+/// Claude Code 自己缓存的 `/usage`（`~/.claude.json` 的 `cachedUsageUtilization`）：5 小时、每周、只管 Fable 的每周；
+/// 和状态栏合在一起时按时间新旧取。
+@MainActor
+final class ClaudeUsageCacheTests: XCTestCase {
+    private let json = #"{"numStartups":3,"cachedUsageUtilization":{"fetchedAtMs":1795739758050,"utilization":{"five_hour":{"utilization":3,"resets_at":"2026-11-27T05:10:00.083166+00:00"},"seven_day":{"utilization":93,"resets_at":"2026-11-27T14:00:00.083186+00:00"},"limits":[{"kind":"session","group":"session","percent":3,"severity":"normal","resets_at":"2026-11-27T05:10:00.083166+00:00","scope":null},{"kind":"weekly_all","group":"weekly","percent":93,"severity":"critical","resets_at":"2026-11-27T14:00:00.083186+00:00","scope":null},{"kind":"weekly_scoped","group":"weekly","percent":24,"resets_at":"2026-11-27T14:00:00.083330+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}}}"#
+
+    func testParsesSessionWeeklyAndModelScopedLimits() throws {
+        let (limits, at) = try XCTUnwrap(ClaudeUsageCache.parse(Data(json.utf8)))
+        XCTAssertEqual(at, Date(timeIntervalSince1970: 1_795_739_758.05))
+        XCTAssertEqual(limits.windows.map(\.usedPercent), [3, 93, 24])
+        XCTAssertEqual(limits.windows.map(\.windowMinutes), [300, 10080, 10080])
+        XCTAssertEqual(limits.windows.map(\.scope), [nil, nil, "Fable"])
+        XCTAssertEqual(limits.windows.map(AgentHistoryText.rateLimitWindow), ["5 小时", "每周", "每周 · Fable"])
+        XCTAssertEqual(limits.windows[0].resetsAt, ClaudeTimestamp.parse("2026-11-27T05:10:00.083166+00:00"))
+    }
+
+    /// 没有缓存的（没登录订阅账号、老版本）为 nil。
+    func testWithoutCache() {
+        XCTAssertNil(ClaudeUsageCache.parse(Data(#"{"numStartups":3}"#.utf8)))
+    }
+
+    /// 缓存更新：全用缓存的（有 Fable）。状态栏更新：同一个时间窗换成状态栏的，缓存里多的（Fable）照留。
+    func testMergeWithStatusLine() throws {
+        let cache = try XCTUnwrap(ClaudeUsageCache.parse(Data(json.utf8)))
+        let cacheAt = try XCTUnwrap(cache.at)
+        var status = AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
+            primary: .init(usedPercent: 10, windowMinutes: 300, resetsAt: nil),
+            secondary: .init(usedPercent: 95, windowMinutes: 10080, resetsAt: nil), plan: nil),
+            at: cacheAt.addingTimeInterval(-60))
+        XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [3, 93, 24])
+        status.at = cacheAt.addingTimeInterval(60)
+        XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [10, 95, 24])
+    }
+
+    /// 状态栏过了重置时间就不给 5 小时的了：每周的还在时按 5 小时重置过、用了 0 算。
+    func testStatusLineDroppedFiveHourCountsAsReset() throws {
+        let json = #"{"rate_limits":{"seven_day":{"used_percentage":91,"resets_at":1795788000}}}"#
+        let windows = try XCTUnwrap(AgentStatusLineSnapshot.parse(Data(json.utf8), at: nil)?.rateLimits?.windows)
+        let five = try XCTUnwrap(windows.first { $0.windowMinutes == 300 })
+        XCTAssertEqual(five.usedPercent, 0)
+        XCTAssertTrue(five.didReset)
     }
 }
