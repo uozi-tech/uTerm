@@ -83,17 +83,16 @@ final class AgentStatusLineBridgeTests: XCTestCase {
         ])
     }
 
-    /// 有哪几个列哪几个：只管某个模型的每周额度（`seven_day_fable`）认；认不出前缀的照原样当名字。没给 5 小时的：Claude Code
-    /// 过了重置时间就不给那个时间窗，每周的还在时按 5 小时重置过、用了 0 算（排在最后）。
+    /// 有哪几个列哪几个：只管某个模型的每周额度（`seven_day_fable`）认；认不出前缀的照原样当名字。没给 5 小时的就没有
+    /// 5 小时（不补一个 0：没给不等于重置了，实测是那个会话的数据旧了）。
     func testClaudeSnapshotWithModelLimitsAndNoFiveHour() throws {
         let json = #"{"rate_limits":{"seven_day":{"used_percentage":30,"resets_at":1795600000},"seven_day_fable":{"used_percentage":92,"resets_at":1795600000},"monthly_extra":{"used_percentage":5}}}"#
         let windows = try XCTUnwrap(AgentStatusLineSnapshot.parse(Data(json.utf8), at: nil)?.rateLimits?.windows)
-        XCTAssertEqual(windows.map(\.windowMinutes), [nil, 10080, 10080, 300])
-        XCTAssertEqual(windows.map(\.scope), [nil, nil, "Fable", nil])
-        XCTAssertEqual(windows.map(AgentHistoryText.rateLimitWindow), ["monthly_extra", "每周", "每周 · Fable", "5 小时"])
-        XCTAssertEqual(windows.map(\.didReset), [false, false, false, true])
+        XCTAssertEqual(windows.map(\.windowMinutes), [nil, 10080, 10080])
+        XCTAssertEqual(windows.map(\.scope), [nil, nil, "Fable"])
+        XCTAssertEqual(windows.map(AgentHistoryText.rateLimitWindow), ["monthly_extra", "每周", "每周 · Fable"])
         // 最紧的在前。
-        XCTAssertEqual(AgentRateLimits.tightestFirst(windows).map(\.usedPercent), [92, 30, 5, 0])
+        XCTAssertEqual(AgentRateLimits.tightestFirst(windows).map(\.usedPercent), [92, 30, 5])
     }
 
     /// 侧栏底部：每种工具取最后一次记下的；过了重置时间的按用了 0 算、标「已重置」，不藏起来；最紧的在前。
@@ -254,7 +253,7 @@ final class ClaudeUsageCacheTests: XCTestCase {
         XCTAssertNil(ClaudeUsageCache.parse(Data(#"{"numStartups":3}"#.utf8)))
     }
 
-    /// 缓存更新：全用缓存的（有 Fable）。状态栏更新：同一个时间窗换成状态栏的，缓存里多的（Fable）照留。
+    /// 有缓存就只用缓存的，状态栏文件更新也不用（它的额度是那个会话最后一次 API 回应带的，可能早就旧了）。
     func testMergeWithStatusLine() throws {
         let cache = try XCTUnwrap(ClaudeUsageCache.parse(Data(json.utf8)))
         let cacheAt = try XCTUnwrap(cache.at)
@@ -264,15 +263,46 @@ final class ClaudeUsageCacheTests: XCTestCase {
             at: cacheAt.addingTimeInterval(-60))
         XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [3, 93, 24])
         status.at = cacheAt.addingTimeInterval(60)
-        XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [10, 95, 24])
+        XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [3, 93, 24])
+        XCTAssertEqual(status.merging(usageCache: cache).at, cacheAt)
+        // 没有缓存：用状态栏的。
+        XCTAssertEqual(status.merging(usageCache: nil).rateLimits?.windows.map(\.usedPercent), [10, 95])
     }
 
-    /// 状态栏过了重置时间就不给 5 小时的了：每周的还在时按 5 小时重置过、用了 0 算。
-    func testStatusLineDroppedFiveHourCountsAsReset() throws {
+    /// 状态栏没给 5 小时的：不补一个「0% 已重置」（实测那时 5 小时其实用了 6%），没有就不显示。
+    func testStatusLineWithoutFiveHourDoesNotInventOne() throws {
         let json = #"{"rate_limits":{"seven_day":{"used_percentage":91,"resets_at":1795788000}}}"#
         let windows = try XCTUnwrap(AgentStatusLineSnapshot.parse(Data(json.utf8), at: nil)?.rateLimits?.windows)
-        let five = try XCTUnwrap(windows.first { $0.windowMinutes == 300 })
-        XCTAssertEqual(five.usedPercent, 0)
-        XCTAssertTrue(five.didReset)
+        XCTAssertEqual(windows.map(\.windowMinutes), [10080])
+    }
+}
+
+/// 正露着一个跑着的会话、它的记录没开着（iOS 镜像 Mac 正跑着的会话）：上下文照样有，单独读它记录的末尾。
+@MainActor
+final class AgentContextUsageFocusTests: XCTestCase {
+    func testFocusedSessionWithoutOpenRecordStillHasContext() async throws {
+        let usage = AgentTurnUsage(model: "claude-opus-5-5", contextTokens: 841_000, outputTokens: 10)
+        let claude = AgentHistoryFakeSource(tool: .claude, sessions: [
+            .init(id: "s-run", projectID: "-p", resumeDirectory: "/p", title: "跑着的", modifiedAt: Date(),
+                  items: [AgentTranscriptItem(id: "a.0", kind: .assistantText("好")),
+                          AgentTranscriptItem(id: "a.1", kind: .usage(usage))]),
+        ])
+        await claude.setStatusLine(AgentStatusLineSnapshot(modelWindows: ["claude-opus-5-5": 1_000_000]))
+        let model = AgentHistoryModel(source: claude, preferredDirectory: nil)
+        await model.start()
+        await model.prepareStatusLines()
+        let file = try XCTUnwrap(model.files.first)
+        XCTAssertNil(model.transcript)
+        XCTAssertNil(model.currentContextUsage)
+
+        model.contextSessionPath = file.path
+        await model.refreshContextUsage()
+        XCTAssertNil(model.transcript, "不替它打开记录")
+        XCTAssertEqual(model.currentContextUsage?.contextTokens, 841_000)
+        XCTAssertEqual(model.currentContextUsage?.contextWindow, 1_000_000, "窗口按状态栏记下的模型窗口补上")
+
+        // 不看了：没有上下文。
+        model.contextSessionPath = nil
+        XCTAssertNil(model.currentContextUsage)
     }
 }

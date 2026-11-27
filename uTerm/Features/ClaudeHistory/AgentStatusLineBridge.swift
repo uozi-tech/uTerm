@@ -189,11 +189,6 @@ nonisolated struct AgentStatusLineSnapshot: Equatable, Sendable {
                 let resets = (entry["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
                 windows.append(claudeWindow(key: key, used: used, resetsAt: resets))
             }
-            // Claude Code 过了重置时间就不再给那个时间窗（文档：drops a window once its resets_at passes），下一次用到
-            // 之前一直没有：每周的还在、5 小时的没了，就是 5 小时的重置过、还没再用，按用了 0 算。
-            if limits["seven_day"] != nil, limits["five_hour"] == nil {
-                windows.append(AgentRateLimits.Window(usedPercent: 0, windowMinutes: 300, resetsAt: nil, didReset: true))
-            }
         }
         if let quota = object["quota"] as? [String: Any] {
             for key in quota.keys.sorted() {

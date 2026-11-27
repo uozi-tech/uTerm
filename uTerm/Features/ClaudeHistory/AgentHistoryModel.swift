@@ -231,6 +231,46 @@ final class AgentHistoryModel {
         applyStatusLineWindow()
     }
 
+    // MARK: - 正在看的会话的上下文
+
+    /// 平台告诉它此刻看的是哪个会话（iOS 的 Code 标签页里正露着一个跑着的会话的终端）。它的记录不一定开着：镜像 Mac 上
+    /// 正跑着的会话就不选它的记录（实机：Duo 那一列只有额度、没有上下文）。nil = 看的就是开着的那份记录（或者什么都没看）。
+    var contextSessionPath: String? {
+        didSet {
+            guard contextSessionPath != oldValue else { return }
+            contextUsage = nil
+            Task { await refreshContextUsage() }
+        }
+    }
+    /// `contextSessionPath` 那个会话最后一次的用量（记录没开着时自己读末尾一页得到）。
+    private var contextUsage: (path: String, usage: AgentTurnUsage)?
+
+    /// 侧栏底部、Duo 那一列显示的上下文：看着的会话的记录开着就用它的，否则用单独读到的。
+    var currentContextUsage: AgentTurnUsage? {
+        if let transcript, contextSessionPath == nil || transcript.file.path == contextSessionPath {
+            return transcript.latestUsage?.usage
+        }
+        guard let contextUsage, contextUsage.path == contextSessionPath else { return nil }
+        return contextUsage.usage
+    }
+
+    /// 读 `contextSessionPath` 那个会话记录末尾的一页，取最后一次用量（窗口按状态栏记下的补上）。它的记录开着时不用读。
+    /// 侧栏底部露着时隔一会儿调一次（会话在跑，一直在长）。
+    func refreshContextUsage() async {
+        guard let path = contextSessionPath, transcript?.file.path != path, let file = file(at: path) else { return }
+        guard let page = try? await source.transcript(for: file).loadPrevious(), contextSessionPath == path else { return }
+        for item in page.items.reversed() {
+            guard case .usage(var usage) = item.kind else { continue }
+            if usage.contextWindow == nil {
+                let snapshot = statusLines[file.tool]
+                usage.contextWindow = (snapshot?.sessionID == file.sessionID.lowercased() ? snapshot?.contextWindow : nil)
+                    ?? usage.model.flatMap { snapshot?.modelWindows[AgentStatusLineBridge.modelKey($0)] }
+            }
+            if contextUsage?.path != path || contextUsage?.usage != usage { contextUsage = (path, usage) }
+            return
+        }
+    }
+
     /// 状态栏知道窗口多大（Claude 的）而记录里不写：正在看的就是那个会话时，标题旁的上下文按它算百分比。
     private func applyStatusLineWindow() {
         guard let transcript else { return }

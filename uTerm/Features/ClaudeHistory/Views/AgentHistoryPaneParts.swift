@@ -390,7 +390,7 @@ private struct AgentHistoryAccountLimits: View {
     var body: some View {
         let rows = hidden ? [] : history.accountLimits()
         // 标题旁那个标记滚不到、或者右边露着终端时也看得到上下文。
-        let context = hidden ? nil : history.transcript?.latestUsage?.usage
+        let context = hidden ? nil : history.currentContextUsage
         let style = AgentHistoryListStyle.platform
         // 上面不画分割线：贴在列表底部的条（`agentHistoryBottomBar`），列表从它下面滚过时系统做滚动边缘效果，
         // 没东西在下面时它和列表是同一块底（同 Apple 的做法、也同「填充即边界」）。
@@ -421,6 +421,7 @@ private struct AgentHistoryAccountLimits: View {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { return }
                 await history.refreshStatusLines()
+                await history.refreshContextUsage()
             }
         }
     }

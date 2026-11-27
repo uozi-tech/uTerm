@@ -377,6 +377,10 @@ struct ClaudeHistoryBrowser: View {
             history.setTranscriptVisible(visible)
         }
         .onDisappear { history.setTranscriptVisible(false) }
+        // 正露着一个跑着的会话的终端：侧栏底部、Duo 那一列的上下文跟着它（它的记录不一定开着，镜像 Mac 的就不开）。
+        .onChange(of: code?.board.focused?.sessionPath, initial: true) { _, path in
+            history.contextSessionPath = path
+        }
     }
 
     private func layout(size: CGSize) -> some View {

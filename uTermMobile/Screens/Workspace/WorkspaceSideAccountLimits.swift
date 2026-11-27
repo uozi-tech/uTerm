@@ -17,7 +17,7 @@ struct WorkspaceSideAccountLimits: View {
         VStack(spacing: 16) {
             // 先放正在看的会话的上下文（知道窗口多大画占了几成，不知道只写 token 数），额度排在后面：Duo 合上横握时
             // 这一列只有约 466pt 高，几种工具的额度一多，排在最后的会被挤出屏幕（上下文比额度常看）。
-            if let usage = history.transcript?.latestUsage?.usage {
+            if let usage = history.currentContextUsage {
                 VStack(spacing: 4) {
                     WorkspaceQuotaRing(usedPercent: usage.contextFraction.map { $0 * 100 },
                                        level: usage.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal,
@@ -66,12 +66,8 @@ struct WorkspaceSideAccountLimits: View {
             .buttonStyle(MPressStyle())
             .accessibilityLabel(Text(rows.map { AgentHistoryText.accountLimitsTitle($0.tool) }.joined(separator: ", ")))
             .popover(isPresented: $showsDetail) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(rows, id: \.tool) { row in
-                        AgentAccountLimitsDetail(row: row)
-                    }
-                }
-                .presentationCompactAdaptation(.popover)
+                WorkspaceAccountLimitsPopover(rows: rows)
+                    .presentationCompactAdaptation(.popover)
             }
     }
 }
@@ -107,5 +103,25 @@ private struct WorkspaceQuotaRing: View {
         }
         .padding(Self.lineWidth / 2)
         .frame(width: Self.size, height: Self.size)
+    }
+}
+
+/// 点额度弹出的明细。按内容的高度要（`idealHeight`），放不下时（Duo 横握、键盘弹起，屏幕顶和键盘之间只剩一点）系统把
+/// 弹出框收矮，内容在里面滚，不再被顶边切掉、被键盘盖住（实机反馈）。
+private struct WorkspaceAccountLimitsPopover: View {
+    let rows: [AgentAccountLimits]
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(rows, id: \.tool) { row in
+                    AgentAccountLimitsDetail(row: row)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(idealHeight: contentHeight)
     }
 }

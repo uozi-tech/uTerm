@@ -1,9 +1,9 @@
 import Foundation
 
 /// Claude Code 自己缓存的 `/usage` 结果：`~/.claude.json` 的 `cachedUsageUtilization`（Claude Code 启动、开 `/usage`、
-/// 用着的时候会去取，带取到的时间 `fetchedAtMs`）。比状态栏给的全：状态栏只有 `five_hour` / `seven_day`（过了重置时间
-/// 就不给了），这里还有只管某个模型的每周额度（`weekly_scoped`，如 Fable）。账号额度优先读它，状态栏比它新时同一个
-/// 时间窗用状态栏的（`AgentStatusLineSnapshot.merging`）。
+/// 用着的时候会去取，带取到的时间 `fetchedAtMs`）。是整个账号的、时间窗全（还有只管某个模型的每周额度 `weekly_scoped`，
+/// 如 Fable）。有它就只用它（`AgentStatusLineSnapshot.merging`）：状态栏里的额度是那一个会话最后一次 API 回应带的，
+/// 文件的修改时间新不代表额度新（实测状态栏 10:18 写的还是「每周 91%、没有 5 小时」，同时 10:15 取的 /usage 是 94%、6%）。
 ///
 /// 只读这一个字段，文件里别的东西不看、不记。
 nonisolated enum ClaudeUsageCache {
@@ -56,24 +56,12 @@ nonisolated enum ClaudeUsageCache {
 }
 
 nonisolated extension AgentStatusLineSnapshot {
-    /// 账号额度合在一起：以 Claude Code 缓存的 `/usage`（时间窗全）为底，状态栏比它新的那几个时间窗换成状态栏的。
+    /// 账号额度：有 Claude Code 缓存的 `/usage` 就只用它（时间也用它取到的时间）；没有才用状态栏的。上下文窗口照旧是状态栏的。
     func merging(usageCache: (limits: AgentRateLimits, at: Date?)?) -> AgentStatusLineSnapshot {
         guard let usageCache else { return self }
         var merged = self
-        let statusNewer = (at ?? .distantPast) > (usageCache.at ?? .distantPast)
-        var windows = usageCache.limits.windows
-        if statusNewer, let own = rateLimits?.windows {
-            for window in own {
-                if let index = windows.firstIndex(where: { $0.windowMinutes == window.windowMinutes && $0.scope == window.scope
-                    && $0.label == window.label }) {
-                    windows[index] = window
-                } else {
-                    windows.append(window)
-                }
-            }
-        }
-        merged.rateLimits = AgentRateLimits(primary: nil, secondary: nil, plan: rateLimits?.plan, extra: windows)
-        merged.at = max(at ?? .distantPast, usageCache.at ?? .distantPast)
+        merged.rateLimits = usageCache.limits
+        merged.at = usageCache.at
         return merged
     }
 }
