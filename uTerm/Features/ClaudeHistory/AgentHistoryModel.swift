@@ -386,7 +386,24 @@ final class AgentHistoryModel {
         return best
     }
 
+    /// 内存里有这份列表的缓存就当场换上（同步，在交给界面之前调：第一帧就是上次的完整列表，不先出「正在读取」）。
+    /// 换上了之后 `start()` 只在后台重列。
+    @discardableResult
+    func applyCachedListing() -> Bool {
+        guard phase == .loading, projects.isEmpty, let cacheKey,
+              let cached = AgentHistoryListCache.shared.entry(cacheKey) else { return false }
+        apply(cached)
+        startsFromCache = true
+        return true
+    }
+    @ObservationIgnored private var startsFromCache = false
+
     func start() async {
+        if startsFromCache {
+            startsFromCache = false
+            await reload(showsLoading: false)
+            return
+        }
         guard phase == .loading, projects.isEmpty else { return }
         // 内存里没有就读盘上的（App 重开之后第一次打开）。
         if let cacheKey, let cached = await AgentHistoryListCache.shared.persistedEntry(cacheKey),

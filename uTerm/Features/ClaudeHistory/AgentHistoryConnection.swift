@@ -172,6 +172,10 @@ final class AgentHistoryConnection {
         isOpening = true
         defer { isOpening = false }
         phase = .connecting
+        // 连接要一会儿：同时把盘上的列表缓存读进内存（知道是哪台主机时），连上时同步换上（`applyCachedListing`），
+        // 第一帧就是上次完整的列表。
+        let listKey = cacheKey ?? pinHost().map { Self.cacheKey(host: $0, tools: tools, home: home) }
+        if let listKey { Task { _ = await AgentHistoryListCache.shared.persistedEntry(listKey) } }
         let hostKeys = ClaudeHistoryHostKeyGate()
         do {
             let provider = try await connect(hostKeys)
@@ -193,6 +197,11 @@ final class AgentHistoryConnection {
                                             allowsSearch: allowsCommands(), followsCurrentProject: followsCurrentProject,
                                             cacheKey: cacheKey ?? host.map { Self.cacheKey(host: $0, tools: tools, home: home) })
             history.pins = host.map { AgentHistoryPins(host: $0, defaults: pinDefaults) }
+            // 配对的 Mac 连上才知道是哪台（`pinHost`），上面预读不了：这里等盘上的读完（读过就在内存里，不等）再换上。
+            if let key = history.cacheKey { _ = await AgentHistoryListCache.shared.persistedEntry(key) }
+            // 这期间关掉了：通道已经由 `close()` 放掉。
+            guard !isClosed else { return }
+            history.applyCachedListing()
             phase = .ready(history)
             await history.start()
         } catch {

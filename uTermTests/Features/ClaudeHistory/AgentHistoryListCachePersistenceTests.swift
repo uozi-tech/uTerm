@@ -94,3 +94,60 @@ final class AgentHistoryListCachePersistenceTests: XCTestCase {
         XCTAssertNil(restored)
     }
 }
+
+/// 打开侧栏的第一帧就是上次完整的列表（实机：先出一部分，扫描时一行行冒出来）。
+@MainActor
+final class AgentHistoryListFirstFrameTests: XCTestCase {
+    private func source() -> AgentHistoryFakeSource {
+        AgentHistoryFakeSource(tool: .claude, sessions: (0..<12).map { index in
+            .init(id: "s\(index)", projectID: "-p\(index % 3)", resumeDirectory: "/p", title: "会话 \(index)",
+                  modifiedAt: Date(timeIntervalSince1970: 1_000 + Double(index) * 60))
+        })
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        for _ in 0..<200 where !condition() { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    func testReopenShowsTheWholeLastListBeforeAnyRelisting() async throws {
+        let key = "first-frame-\(UUID().uuidString)"
+        let first = AgentHistoryModel(source: source(), preferredDirectory: nil, cacheKey: key)
+        await first.start()
+        await waitUntil { first.visibleFiles.count == 12 }
+        let shown = first.visibleFiles.map(\.path)
+        XCTAssertEqual(shown.count, 12)
+
+        // 再开一次：交给界面之前同步换上缓存，这时还一次都没列过，行已经是全部 12 行、同样的顺序。
+        let second = AgentHistoryModel(source: source(), preferredDirectory: nil, cacheKey: key)
+        XCTAssertTrue(second.applyCachedListing())
+        XCTAssertEqual(second.phase, .ready)
+        XCTAssertEqual(second.visibleFiles.map(\.path), shown)
+
+        // 后台重列（数据没变）：一行不多、一行不少、顺序不变。
+        await second.start()
+        await waitUntil { second.visibleFiles.map(\.path) == shown }
+        XCTAssertEqual(second.visibleFiles.map(\.path), shown)
+    }
+
+    /// 写盘攒一秒：退到后台时当场写，下次 App 重开读到的是完整的那份，不是一秒前那份。
+    func testBackgroundFlushWritesTheLatestListing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("list-flush-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = AgentHistoryListCache(directory: directory)
+        let project = AgentHistoryProject(id: "-p", path: "/p", modifiedAt: nil, directory: "/p", tool: .claude)
+        func entry(_ rows: Int) -> AgentHistoryListCache.Entry {
+            let files = (0..<rows).map {
+                AgentHistorySessionFile(sessionID: "s\($0)", project: project, path: "/p/s\($0).jsonl", size: 1,
+                                        modifiedAt: Date(timeIntervalSince1970: Double($0)))
+            }
+            return .init(projects: [project], availableTools: [.claude], listedFiles: files, metadata: [:],
+                         metadataKeys: [:], shownRows: rows)
+        }
+        cache.store("k", entry(3))
+        await cache.flush()
+        cache.store("k", entry(9))
+        cache.flushNow()
+        let restored = await AgentHistoryListCache(directory: directory).persistedEntry("k")
+        XCTAssertEqual(restored?.listedFiles.count, 9)
+    }
+}

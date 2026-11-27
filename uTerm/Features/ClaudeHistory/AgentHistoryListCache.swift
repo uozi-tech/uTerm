@@ -1,5 +1,10 @@
 import CryptoKit
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// 历史会话列表的缓存：同一台主机、同一组工具的列表再开一次（新开一个 Code 标签页、关了又开、开独立的历史窗口、
 /// App 重开之后第一次打开）时，先把上一次列到的显示出来（`AgentHistoryModel.start`），后台再重列。
@@ -45,6 +50,19 @@ final class AgentHistoryListCache {
 
     init(directory: URL?) {
         self.directory = directory
+        guard directory != nil else { return }
+        // 写盘是攒一秒才写：iOS 上一秒之内切出去，App 挂起、那一次就一直没写，盘上留着更早的一份（行少），下次打开先出
+        // 一部分、再一行行冒出来（实机反馈）。退到后台、退出时当场写。
+        #if canImport(UIKit)
+        let names = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
+        #elseif canImport(AppKit)
+        let names = [NSApplication.willTerminateNotification, NSApplication.didResignActiveNotification]
+        #endif
+        for name in names {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushNow() }
+            }
+        }
     }
 
     func entry(_ key: String) -> Entry? {
@@ -72,8 +90,21 @@ final class AgentHistoryListCache {
         guard writeTask == nil else { return }
         writeTask = Task { [weak self] in
             try? await Task.sleep(for: Self.writeDelay)
+            guard !Task.isCancelled else { return }
             await self?.flush()
         }
+    }
+
+    /// 当场把攒着的写下去（退到后台、退出时）：在这条线程上编码写盘，不等。
+    func flushNow() {
+        writeTask?.cancel()
+        writeTask = nil
+        let writes = pendingWrites
+        pendingWrites = [:]
+        guard let directory, !writes.isEmpty else { return }
+        let urls = writes.keys.reduce(into: [String: URL]()) { $0[$1] = fileURL($1) }
+        let keep = Set(order.compactMap(fileURL).map(\.lastPathComponent))
+        Self.write(writes, to: urls, directory: directory, keeping: keep)
     }
 
     /// 把攒着的写下去（测试也直接调）。
