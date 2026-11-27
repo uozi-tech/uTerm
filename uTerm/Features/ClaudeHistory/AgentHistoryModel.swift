@@ -193,6 +193,12 @@ final class AgentHistoryModel {
                 latest[tool] = (limits, metadata.rateLimitsAt)
             }
         }
+        // 正在看的会话最后一轮带的额度（Codex 每轮都写）：列表的元数据要等重列才更新，它跟着记录（开着的 2 秒跟一次、
+        // 没开的隔 10 秒读一次末尾），比元数据新就用它。
+        if let focused = focusedTurnUsage, let limits = focused.usage.rateLimits, !limits.windows.isEmpty,
+           latest[focused.tool] == nil || (focused.at ?? .distantPast) > (latest[focused.tool]?.at ?? .distantPast) {
+            latest[focused.tool] = (limits, focused.at)
+        }
         for (tool, snapshot) in statusLines {
             guard let limits = snapshot.rateLimits else { continue }
             latest[tool] = (limits, snapshot.at)
@@ -248,8 +254,19 @@ final class AgentHistoryModel {
             Task { await refreshContextUsage() }
         }
     }
-    /// `contextSessionPath` 那个会话最后一次的用量（记录没开着时自己读末尾一页得到）。
-    private var contextUsage: (path: String, usage: AgentTurnUsage)?
+    /// `contextSessionPath` 那个会话最后一次的用量和它的时间（记录没开着时自己读末尾一页得到）。
+    private var contextUsage: (path: String, usage: AgentTurnUsage, at: Date?)?
+
+    /// 正在看的会话（开着的记录，或 `contextSessionPath`）最后一轮的用量、它是哪种工具的、什么时候的。
+    private var focusedTurnUsage: (tool: AgentHistoryTool, usage: AgentTurnUsage, at: Date?)? {
+        if let transcript, contextSessionPath == nil || transcript.file.path == contextSessionPath {
+            return transcript.latestUsage.map { (transcript.file.tool, $0.usage, $0.at) }
+        }
+        guard let contextUsage, contextUsage.path == contextSessionPath, let file = file(at: contextUsage.path) else {
+            return nil
+        }
+        return (file.tool, contextUsage.usage, contextUsage.at)
+    }
 
     /// 侧栏底部、Duo 那一列显示的上下文：看着的会话的记录开着就用它的，否则用单独读到的。
     var currentContextUsage: AgentTurnUsage? {
@@ -284,7 +301,7 @@ final class AgentHistoryModel {
                 usage.contextWindow = (snapshot?.sessionID == file.sessionID.lowercased() ? snapshot?.contextWindow : nil)
                     ?? usage.model.flatMap { snapshot?.modelWindows[AgentStatusLineBridge.modelKey($0)] }
             }
-            if contextUsage?.path != path || contextUsage?.usage != usage { contextUsage = (path, usage) }
+            if contextUsage?.path != path || contextUsage?.usage != usage { contextUsage = (path, usage, item.timestamp) }
             return
         }
     }

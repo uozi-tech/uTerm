@@ -2,8 +2,9 @@ import Foundation
 
 /// Claude Code 自己缓存的 `/usage` 结果：`~/.claude.json` 的 `cachedUsageUtilization`（Claude Code 启动、开 `/usage`、
 /// 用着的时候会去取，带取到的时间 `fetchedAtMs`）。是整个账号的、时间窗全（还有只管某个模型的每周额度 `weekly_scoped`，
-/// 如 Fable）。有它就只用它（`AgentStatusLineSnapshot.merging`）：状态栏里的额度是那一个会话最后一次 API 回应带的，
-/// 文件的修改时间新不代表额度新（实测状态栏 10:18 写的还是「每周 91%、没有 5 小时」，同时 10:15 取的 /usage 是 94%、6%）。
+/// 如 Fable）。和状态栏的按时间窗合起来（`AgentStatusLineSnapshot.merging`）：Claude Code 只在启动、开 `/usage` 之类的
+/// 时候才去取它，跑着的会话每次 API 回应都会在状态栏里带上新的额度；可状态栏也会旧（文件修改时间新不代表额度新：实测状态栏
+/// 10:18 写的是「每周 91%、没有 5 小时」，同时 10:15 取的 /usage 是 94%、6%）。所以不比文件的时间，比额度本身。
 ///
 /// 只读这一个字段，文件里别的东西不看、不记。
 nonisolated enum ClaudeUsageCache {
@@ -56,12 +57,36 @@ nonisolated enum ClaudeUsageCache {
 }
 
 nonisolated extension AgentStatusLineSnapshot {
-    /// 账号额度：有 Claude Code 缓存的 `/usage` 就只用它（时间也用它取到的时间）；没有才用状态栏的。上下文窗口照旧是状态栏的。
+    /// 账号额度：以 Claude Code 缓存的 `/usage` 为底（时间窗全），状态栏里有的同一个时间窗（窗长、只管的模型都一样）取
+    /// 更新的那份（`AgentRateLimits.Window.fresher`）；状态栏没给的时间窗用缓存的，不补 0。上下文窗口照旧是状态栏的。
     func merging(usageCache: (limits: AgentRateLimits, at: Date?)?) -> AgentStatusLineSnapshot {
         guard let usageCache else { return self }
+        var windows = usageCache.limits.windows
+        for window in rateLimits?.windows ?? [] {
+            if let index = windows.firstIndex(where: { $0.isSameWindow(as: window) }) {
+                windows[index] = .fresher(windows[index], window)
+            } else {
+                windows.append(window)
+            }
+        }
         var merged = self
-        merged.rateLimits = usageCache.limits
-        merged.at = usageCache.at
+        merged.rateLimits = AgentRateLimits(primary: nil, secondary: nil, plan: rateLimits?.plan, extra: windows)
+        merged.at = max(at ?? .distantPast, usageCache.at ?? .distantPast)
         return merged
+    }
+}
+
+nonisolated extension AgentRateLimits.Window {
+    /// 同一个时间窗：窗长、名字、只管的模型都一样。
+    func isSameWindow(as other: Self) -> Bool {
+        windowMinutes == other.windowMinutes && label == other.label && scope == other.scope
+    }
+
+    /// 两份读数取更新的：重置时间差一分钟以上的是两个周期，取后一个周期的；同一个周期里用量只增不减，取用得多的。
+    static func fresher(_ a: Self, _ b: Self) -> Self {
+        if let left = a.resetsAt, let right = b.resetsAt, abs(left.timeIntervalSince(right)) > 60 {
+            return left > right ? a : b
+        }
+        return b.usedPercent > a.usedPercent ? b : a
     }
 }

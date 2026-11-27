@@ -688,11 +688,12 @@ private extension View {
     }
 }
 
-/// 隔多久重读一次额度与上下文：缺着上下文（读失败、会话刚开还没有回应）时 5 秒，否则 30 秒。原来只在列表底部那一行露着时
+/// 隔多久重读一次额度与上下文：缺着上下文（读失败、会话刚开还没有回应）时 5 秒，否则 10 秒（跑着的会话每轮都在变；
+/// 每次读的是状态栏那个小文件和会话记录末尾一页，`~/.claude.json` 隔一分钟才重读，见 `ClaudeHistorySource`）。原来只在列表底部那一行露着时
 /// 每 60 秒读一次，Duo 侧边那一列不读、读失败也不补，实机「获取不到、卡住，换个会话才出来」。
 nonisolated enum AgentUsageRefresh {
     static let retryDelay: Duration = .seconds(5)
-    static let refreshDelay: Duration = .seconds(30)
+    static let refreshDelay: Duration = .seconds(10)
 
     static func delay(contextMissing: Bool) -> Duration {
         contextMissing ? retryDelay : refreshDelay

@@ -253,20 +253,37 @@ final class ClaudeUsageCacheTests: XCTestCase {
         XCTAssertNil(ClaudeUsageCache.parse(Data(#"{"numStartups":3}"#.utf8)))
     }
 
-    /// 有缓存就只用缓存的，状态栏文件更新也不用（它的额度是那个会话最后一次 API 回应带的，可能早就旧了）。
+    /// 按时间窗取更新的：同一个周期里取用得多的（用量只增不减），不比文件时间。状态栏没给的时间窗（Fable）用缓存的。
     func testMergeWithStatusLine() throws {
         let cache = try XCTUnwrap(ClaudeUsageCache.parse(Data(json.utf8)))
         let cacheAt = try XCTUnwrap(cache.at)
+        // 状态栏更新：5 小时 10、每周 95（这一轮刚用过）。
         var status = AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
-            primary: .init(usedPercent: 10, windowMinutes: 300, resetsAt: nil),
-            secondary: .init(usedPercent: 95, windowMinutes: 10080, resetsAt: nil), plan: nil),
+            primary: .init(usedPercent: 10, windowMinutes: 300, resetsAt: cache.limits.windows[0].resetsAt),
+            secondary: .init(usedPercent: 95, windowMinutes: 10080, resetsAt: cache.limits.windows[1].resetsAt), plan: nil),
             at: cacheAt.addingTimeInterval(-60))
+        XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [10, 95, 24])
+        // 实机那次：状态栏是那个会话之前的回应带的（每周 91、没有 5 小时），文件却比缓存新：取缓存的 3 / 93。
+        status = AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
+            primary: nil,
+            secondary: .init(usedPercent: 91, windowMinutes: 10080, resetsAt: cache.limits.windows[1].resetsAt), plan: nil),
+            at: cacheAt.addingTimeInterval(180))
         XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [3, 93, 24])
-        status.at = cacheAt.addingTimeInterval(60)
-        XCTAssertEqual(status.merging(usageCache: cache).rateLimits?.windows.map(\.usedPercent), [3, 93, 24])
-        XCTAssertEqual(status.merging(usageCache: cache).at, cacheAt)
         // 没有缓存：用状态栏的。
-        XCTAssertEqual(status.merging(usageCache: nil).rateLimits?.windows.map(\.usedPercent), [10, 95])
+        XCTAssertEqual(status.merging(usageCache: nil).rateLimits?.windows.map(\.usedPercent), [91])
+    }
+
+    /// 两份读数分属两个周期：取后一个周期的（重置过之后用得少也是新的）。
+    func testFresherPrefersTheLaterPeriod() {
+        let old = AgentRateLimits.Window(usedPercent: 80, windowMinutes: 300, resetsAt: Date(timeIntervalSince1970: 1_000_000))
+        let new = AgentRateLimits.Window(usedPercent: 2, windowMinutes: 300,
+                                         resetsAt: Date(timeIntervalSince1970: 1_000_000 + 5 * 3600))
+        XCTAssertEqual(AgentRateLimits.Window.fresher(old, new).usedPercent, 2)
+        XCTAssertEqual(AgentRateLimits.Window.fresher(new, old).usedPercent, 2)
+        // 同一个周期（重置时间差不到一分钟，一个带小数秒一个取整）：取用得多的。
+        let same = AgentRateLimits.Window(usedPercent: 85, windowMinutes: 300,
+                                          resetsAt: Date(timeIntervalSince1970: 1_000_000.08))
+        XCTAssertEqual(AgentRateLimits.Window.fresher(old, same).usedPercent, 85)
     }
 
     /// 状态栏没给 5 小时的：不补一个「0% 已重置」（实测那时 5 小时其实用了 6%），没有就不显示。
@@ -329,7 +346,27 @@ final class AgentContextUsageFocusTests: XCTestCase {
         await model.refreshUsage()
         XCTAssertEqual(model.currentContextUsage?.contextTokens, 12_000)
         XCTAssertFalse(model.contextUsageMissing)
-        XCTAssertEqual(AgentUsageRefresh.delay(contextMissing: model.contextUsageMissing), .seconds(30))
+        XCTAssertEqual(AgentUsageRefresh.delay(contextMissing: model.contextUsageMissing), .seconds(10))
+    }
+
+    /// Codex 的额度原来只从列表的元数据来（要等重列）：正在看的会话最后一轮带的额度更新时用它，读到就有。
+    func testFocusedCodexSessionsLatestTurnLimitsShowWithoutRelisting() async throws {
+        let limits = AgentRateLimits(primary: .init(usedPercent: 37, windowMinutes: 300, resetsAt: nil),
+                                     secondary: .init(usedPercent: 12, windowMinutes: 10080, resetsAt: nil), plan: nil)
+        let codex = AgentHistoryFakeSource(tool: .codex, sessions: [
+            .init(id: "c-run", projectID: "p", projectDirectory: "/p", resumeDirectory: "/p", title: "跑着的", modifiedAt: Date(),
+                  items: [AgentTranscriptItem(id: "a.0", kind: .usage(
+                      AgentTurnUsage(model: "gpt-5.5", contextTokens: 40_000, outputTokens: 3, contextWindow: 400_000,
+                                     rateLimits: limits)), timestamp: Date())]),
+        ])
+        let model = AgentHistoryModel(source: codex, preferredDirectory: nil)
+        await model.start()
+        XCTAssertTrue(model.accountLimits().isEmpty)
+        model.contextSessionPath = try XCTUnwrap(model.files.first).path
+        await model.refreshUsage()
+        let row = try XCTUnwrap(model.accountLimits().first)
+        XCTAssertEqual(row.tool, .codex)
+        XCTAssertEqual(row.windows.map(\.usedPercent), [37, 12])
     }
 
     /// 状态栏 / `/usage` 这一次读不到（断线、读到半截）：留着上次的额度，不清空。

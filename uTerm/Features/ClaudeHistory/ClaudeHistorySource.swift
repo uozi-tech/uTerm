@@ -426,14 +426,25 @@ actor ClaudeHistorySource: AgentHistorySource {
     }
 
     /// 账号额度以 Claude Code 自己缓存的 `/usage` 为底（`ClaudeUsageCache`，时间窗全、有 Fable 这类只管某个模型的），
-    /// 状态栏转接存下的更新时同一个时间窗用它的；上下文窗口只有状态栏有。
+    /// 和状态栏转接存下的按时间窗取更新的（`merging`）；上下文窗口只有状态栏有。
+    /// 状态栏的文件很小、每次都读；`~/.claude.json` 有几百 KB、Claude Code 自己也不常更新它，隔 `usageCacheMaxAge` 才重读。
     func statusLineSnapshot() async -> AgentStatusLineSnapshot? {
         guard let home = try? await homeDirectory() else { return nil }
         let statusLine = await AgentStatusLineBridge.readSnapshot(.claude, provider: provider, home: home)
-        let cache = await ClaudeUsageCache.read(provider: provider, home: home)
+        let cache: (limits: AgentRateLimits, at: Date?)?
+        if let usageCacheRead, Date().timeIntervalSince(usageCacheRead.at) < Self.usageCacheMaxAge {
+            cache = usageCacheRead.value
+        } else {
+            cache = await ClaudeUsageCache.read(provider: provider, home: home)
+            // 读不到（断线）不记，下一次接着读。
+            if cache != nil { usageCacheRead = (cache, Date()) }
+        }
         guard statusLine != nil || cache != nil else { return nil }
         return (statusLine ?? AgentStatusLineSnapshot()).merging(usageCache: cache)
     }
+
+    static let usageCacheMaxAge: TimeInterval = 60
+    private var usageCacheRead: (value: (limits: AgentRateLimits, at: Date?)?, at: Date)?
 
     // MARK: - 主机上正在运行的会话
 
