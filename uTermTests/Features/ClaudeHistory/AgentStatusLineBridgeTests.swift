@@ -237,6 +237,16 @@ final class ClaudeUsageCacheTests: XCTestCase {
         XCTAssertEqual(limits.windows[0].resetsAt, ClaudeTimestamp.parse("2026-11-27T05:10:00.083166+00:00"))
     }
 
+    /// Mac 侧栏底部那一行悬停看全部：额度按 5 小时、每周、Fable 的顺序，最后是上下文。
+    func testSummaryListsEverything() throws {
+        let (limits, _) = try XCTUnwrap(ClaudeUsageCache.parse(Data(json.utf8)))
+        let row = AgentAccountLimits(tool: .claude, limits: limits, windows: AgentRateLimits.tightestFirst(limits.windows),
+                                     at: nil)
+        let context = AgentTurnUsage(model: nil, contextTokens: 850_000, outputTokens: 0, contextWindow: 1_000_000)
+        XCTAssertEqual(AgentHistoryText.accountLimitsSummary([row], context: context),
+                       "5 小时 3% · 每周 93% · Fable 24% · 上下文 85%")
+    }
+
     /// 没有缓存的（没登录订阅账号、老版本）为 nil。
     func testWithoutCache() {
         XCTAssertNil(ClaudeUsageCache.parse(Data(#"{"numStartups":3}"#.utf8)))

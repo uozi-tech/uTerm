@@ -607,6 +607,22 @@ enum AgentHistoryText {
         return parts.joined(separator: " · ")
     }
 
+    /// Mac 侧栏底部那一行的悬停文字：全部额度与上下文，「5 小时 3% · 每周 93% · Fable 24% · 上下文 85%」；
+    /// 几种工具都有额度时每种前面带工具名。
+    static func accountLimitsSummary(_ rows: [AgentAccountLimits], context: AgentTurnUsage?) -> String {
+        var parts: [String] = []
+        for row in rows {
+            let windows = row.compact.map { "\(rateLimitShortName($0)) \(Int($0.usedPercent.rounded()))%" }
+            guard !windows.isEmpty else { continue }
+            parts.append((rows.count > 1 ? row.tool.displayName + " " : "") + windows.joined(separator: " · "))
+        }
+        if let context {
+            let value = context.contextFraction.map { "\(Int(($0 * 100).rounded()))%" } ?? tokenCount(context.contextTokens)
+            parts.append("\(usageContext) \(value)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// 窄处（侧栏底部那一行、Duo 那一列）的名字：只管某个模型的只写模型名（「Fable」），悬停再写全。
     static func rateLimitShortName(_ window: AgentRateLimits.Window) -> String {
         window.scope ?? rateLimitWindow(window)

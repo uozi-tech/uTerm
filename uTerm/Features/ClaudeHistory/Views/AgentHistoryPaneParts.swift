@@ -385,6 +385,7 @@ struct AgentHistoryListContent<List: View>: View {
 private struct AgentHistoryAccountLimits: View {
     let history: AgentHistoryModel
     @Environment(\.agentHistoryHidesAccountLimits) private var hidden
+    @State private var showsDetail = false
 
     var body: some View {
         let rows = hidden ? [] : history.accountLimits()
@@ -395,6 +396,13 @@ private struct AgentHistoryAccountLimits: View {
         // 没东西在下面时它和列表是同一块底（同 Apple 的做法、也同「填充即边界」）。
         VStack(spacing: 0) {
             if !rows.isEmpty || context != nil {
+                #if os(macOS)
+                // Mac：只一行——额度里最紧的那一个（带名字）+ 上下文；悬停这一行看全部，点开看明细。
+                macLine(rows, context: context)
+                    .font(.system(size: style.noteSize))
+                    .padding(style.accountLimitsPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                #else
                 // 一行放得下就一行；放不下额度一行、上下文一行（都带名字）；再放不下才去掉名字。
                 ViewThatFits(in: .horizontal) {
                     items(rows, context: context, labeled: true)
@@ -405,6 +413,7 @@ private struct AgentHistoryAccountLimits: View {
                 .font(.system(size: style.noteSize))
                 .padding(style.accountLimitsPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                #endif
             }
         }
         .task {
@@ -415,6 +424,54 @@ private struct AgentHistoryAccountLimits: View {
             }
         }
     }
+
+    #if os(macOS)
+    private func macLine(_ rows: [AgentAccountLimits], context: AgentTurnUsage?) -> some View {
+        // 几种工具里用得最多的那个时间窗。
+        let tightest = rows.compactMap { row in row.headline.map { (row: row, window: $0) } }
+            .max { $0.window.usedPercent < $1.window.usedPercent }
+        return Button { showsDetail.toggle() } label: {
+            ViewThatFits(in: .horizontal) {
+                macItems(tightest, showsTool: rows.count > 1, context: context, labeled: true)
+                macItems(tightest, showsTool: rows.count > 1, context: context, labeled: false)
+            }
+            .contentShape(Rectangle())
+        }
+        .agentHistoryPressStyle()
+        .help(AgentHistoryText.accountLimitsSummary(rows, context: context))
+        .popover(isPresented: $showsDetail) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(rows, id: \.tool) { row in
+                    AgentAccountLimitsDetail(row: row)
+                }
+            }
+        }
+        .disabled(rows.isEmpty)
+    }
+
+    private func macItems(_ tightest: (row: AgentAccountLimits, window: AgentRateLimits.Window)?, showsTool: Bool,
+                          context: AgentTurnUsage?, labeled: Bool) -> some View {
+        let style = AgentHistoryListStyle.platform
+        return HStack(spacing: 12) {
+            if let tightest {
+                HStack(spacing: 5) {
+                    if showsTool { AgentHistoryToolBadge(tool: tightest.row.tool, size: style.toolBadgeSize - 2) }
+                    AgentUsageItem(fraction: tightest.window.usedPercent / 100, level: AgentUsageLevel.of(tightest.window),
+                                   label: labeled ? AgentHistoryText.rateLimitShortName(tightest.window) : nil,
+                                   value: "\(Int(tightest.window.usedPercent.rounded()))%")
+                }
+            }
+            if let context {
+                AgentUsageItem(fraction: context.contextFraction,
+                               level: context.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal,
+                               label: labeled ? AgentHistoryText.usageContext : nil,
+                               value: context.contextFraction.map { "\(Int(($0 * 100).rounded()))%" }
+                                   ?? AgentHistoryText.tokenCount(context.contextTokens))
+            }
+        }
+        .fixedSize()
+    }
+    #endif
 
     private func items(_ rows: [AgentAccountLimits], context: AgentTurnUsage?, labeled: Bool) -> some View {
         HStack(spacing: 12) {
@@ -618,13 +675,13 @@ extension AgentUsageLevel {
 }
 
 private extension View {
-    /// 贴在会话列表底部的条（账号额度、上下文）：macOS 26 / iOS 26 起用 `safeAreaBar`，列表滚到它下面时系统做柔和的
-    /// 滚动边缘效果，不画常驻的分割线；iOS 26 以前没有边缘效果，退回 `safeAreaInset`（同样不画线，底色同列表）。
+    /// 贴在会话列表底部的条（账号额度、上下文），不画常驻的分割线。Mac 上铺一层不透明的底（同列表的卡片色）、列表在它
+    /// 上面截止：Mac 的柔和边缘效果几乎是透明的，后面会话的标题会从这一行后面透出来（实机反馈）。iOS 26 起用
+    /// `safeAreaBar`，列表滚到它下面时系统做柔和的滚动边缘效果；iOS 26 以前退回 `safeAreaInset`（同样不画线）。
     @ViewBuilder
     func agentHistoryBottomBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
         #if os(macOS)
-        safeAreaBar(edge: .bottom, spacing: 0, content: bar)
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
+        safeAreaInset(edge: .bottom, spacing: 0) { bar().background(UD.card) }
         #else
         if #available(iOS 26.0, *) {
             safeAreaBar(edge: .bottom, spacing: 0, content: bar)
