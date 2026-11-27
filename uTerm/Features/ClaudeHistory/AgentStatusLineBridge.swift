@@ -229,6 +229,14 @@ nonisolated struct AgentAccountLimits: Equatable, Sendable {
 
     /// 窄的地方只显示一个：最接近 100% 的那个时间窗（`windows` 已按最紧的在前排好）。
     var headline: AgentRateLimits.Window? { windows.first }
+
+    /// 侧栏底部那一行放的：最紧的两个（Claude 的 5 小时与每周），按时间窗从短到长排（5 小时在前，读着顺）。
+    var compact: [AgentRateLimits.Window] {
+        windows.prefix(2).enumerated().sorted { a, b in
+            let left = a.element.windowMinutes ?? .max, right = b.element.windowMinutes ?? .max
+            return left != right ? left < right : a.offset < b.offset
+        }.map(\.element)
+    }
 }
 
 /// 数据源里记着转接装没装好：拼命令（`resumeCommand` / `newSessionCommand`，nonisolated）时才知道带不带 `--settings`。

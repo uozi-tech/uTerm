@@ -3,7 +3,7 @@ import UDesignKit
 
 /// iPhone Duo 横握时状态栏那一列（宽约 84pt）里的账号额度：Agent / 分屏开关下面，每种工具一块——图标，下面一个圆环
 /// （照系统的容量式仪表 `accessoryCircularCapacity`：底环、圆头的进度弧、正中写用了几成），环下写时间窗的名字。
-/// 每种工具只放最接近 100% 的那个时间窗（`AgentAccountLimits.headline`），颜色按程度蓝 / 黄 / 红（`AgentUsageLevel`）。
+/// 每种工具放最紧的两个时间窗（`AgentAccountLimits.compact`，如 5 小时与每周），颜色按程度蓝 / 黄 / 红（`AgentUsageLevel`）。
 /// 一列窄，细条在这里读不出长短，圆环读得出。点一下弹出全部明细（同侧栏底部那一行点开的）。
 /// 数据与侧栏底部同一份（`AgentHistoryModel.accountLimits`）；列表照旧每分钟重读状态栏的数据。
 struct WorkspaceSideAccountLimits: View {
@@ -47,7 +47,7 @@ struct WorkspaceSideAccountLimits: View {
                     ForEach(rows, id: \.tool) { row in
                         VStack(spacing: 8) {
                             AgentHistoryToolBadge(tool: row.tool, size: 16)
-                            if let window = row.headline {
+                            ForEach(Array(row.compact.enumerated()), id: \.offset) { _, window in
                                 VStack(spacing: 4) {
                                     WorkspaceQuotaRing(usedPercent: window.usedPercent, level: AgentUsageLevel.of(window))
                                     Text(AgentHistoryText.rateLimitWindow(window))

@@ -596,6 +596,17 @@ enum AgentHistoryText {
         return String(localized: "\(base) · \(scope)", comment: "额度时间窗的名字加上它只管的模型名，如「每周 · Fable」")
     }
 
+    /// 侧栏底部一项的悬停文字：「Claude Code · 每周 · 已用 91% · 11月30日 13:00 重置」。
+    static func rateLimitHelp(_ window: AgentRateLimits.Window, tool: AgentHistoryTool) -> String {
+        var parts = [tool.displayName, rateLimitWindow(window), rateLimitUsed(window.usedPercent)]
+        if window.didReset {
+            parts.append(rateLimitDidReset)
+        } else if let resets = window.resetsAt {
+            parts.append(rateLimitResets(resets))
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// 过了重置时间、之后没再用过的时间窗。
     static var rateLimitDidReset: String {
         String(localized: "已重置", comment: "账号额度：最后一次记录之后已经过了重置时间，按用了 0 算")

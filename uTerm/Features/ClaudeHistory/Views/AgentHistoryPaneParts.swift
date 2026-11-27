@@ -379,10 +379,9 @@ struct AgentHistoryListContent<List: View>: View {
     }
 }
 
-/// 侧栏最底下一行：每种工具的账号额度（只放最接近 100% 的那个时间窗，`AgentAccountLimits.headline`），最后是正在看的
-/// 会话的上下文（占了几成，再写用了多少 / 窗口多大）。每一项是一个小圆环（颜色按程度蓝 / 黄 / 红）、数字、名字；
-/// 字不上色，只有圆环带颜色，不抢列表的眼。一行放不下时上下文另起一行，再放不下去掉名字（悬停照样看得到）。
-/// 点额度那一项弹出全部明细。露着的时候每分钟重读一次状态栏的数据。
+/// 侧栏最底下一行：每种工具的账号额度（最紧的两个时间窗，`AgentAccountLimits.compact`，如 5 小时与每周），最后是正在看的
+/// 会话的上下文。每一项是小圆环（颜色按程度蓝 / 黄 / 红）+ 名字 + 用了几成，字不上色；用了多少 / 窗口多大、几时重置
+/// 放在悬停和点开里，不常驻。只有一种工具有额度时不放工具图标。放不下时去掉名字。露着时每分钟重读一次状态栏的数据。
 private struct AgentHistoryAccountLimits: View {
     let history: AgentHistoryModel
     @Environment(\.agentHistoryHidesAccountLimits) private var hidden
@@ -397,13 +396,15 @@ private struct AgentHistoryAccountLimits: View {
         VStack(spacing: 0) {
             if !rows.isEmpty || context != nil {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 14) {
-                        limits(rows, labeled: true)
-                        contextItem(context, labeled: true)
+                    items(rows, context: context, labeled: true)
+                    items(rows, context: context, labeled: false)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(rows, id: \.tool) { row in
+                            HStack(spacing: 12) { group(row, showsTool: rows.count > 1, labeled: false) }
+                        }
+                        if let context { AgentContextUsageItem(usage: context, labeled: false) }
                     }
                     .fixedSize()
-                    stacked(rows, context: context, labeled: true)
-                    stacked(rows, context: context, labeled: false)
                 }
                 .font(.system(size: style.noteSize))
                 .padding(style.accountLimitsPadding)
@@ -419,63 +420,47 @@ private struct AgentHistoryAccountLimits: View {
         }
     }
 
-    private func limits(_ rows: [AgentAccountLimits], labeled: Bool) -> some View {
-        ForEach(rows, id: \.tool) { row in
-            if let window = row.headline {
-                AgentAccountLimitsItem(row: row, window: window, labeled: labeled)
+    private func items(_ rows: [AgentAccountLimits], context: AgentTurnUsage?, labeled: Bool) -> some View {
+        HStack(spacing: 12) {
+            ForEach(rows, id: \.tool) { row in
+                group(row, showsTool: rows.count > 1, labeled: labeled)
             }
-        }
-    }
-
-    @ViewBuilder private func contextItem(_ context: AgentTurnUsage?, labeled: Bool) -> some View {
-        if let context { AgentContextUsageItem(usage: context, labeled: labeled) }
-    }
-
-    /// 额度一行、上下文一行。上下文那一行让出工具图标的宽度，两行的圆环对齐。
-    private func stacked(_ rows: [AgentAccountLimits], context: AgentTurnUsage?, labeled: Bool) -> some View {
-        let style = AgentHistoryListStyle.platform
-        return VStack(alignment: .leading, spacing: 8) {
-            if !rows.isEmpty {
-                HStack(spacing: 14) { limits(rows, labeled: labeled) }
-            }
-            contextItem(context, labeled: labeled)
-                .padding(.leading, rows.isEmpty ? 0 : AgentAccountLimitsItem.badgeSize(style) + AgentAccountLimitsItem.spacing)
+            if let context { AgentContextUsageItem(usage: context, labeled: labeled) }
         }
         .fixedSize()
     }
+
+    /// 一种工具的那几项：几种工具都有额度时前面放工具图标分开它们。点开是这种工具的全部额度。
+    private func group(_ row: AgentAccountLimits, showsTool: Bool, labeled: Bool) -> some View {
+        AgentAccountLimitsGroup(row: row, showsTool: showsTool, labeled: labeled)
+    }
 }
 
-/// 侧栏底部一项：工具的小图标、圆环、用了几成、时间窗名字。点开是这种工具的全部额度。
-private struct AgentAccountLimitsItem: View {
+private struct AgentAccountLimitsGroup: View {
     let row: AgentAccountLimits
-    let window: AgentRateLimits.Window
+    let showsTool: Bool
     let labeled: Bool
 
     @State private var showsDetail = false
 
-    static let spacing: CGFloat = 5
-    static func badgeSize(_ style: AgentHistoryListStyle) -> CGFloat { style.toolBadgeSize - 2 }
-
     var body: some View {
         let style = AgentHistoryListStyle.platform
         Button { showsDetail.toggle() } label: {
-            HStack(spacing: Self.spacing) {
-                AgentHistoryToolBadge(tool: row.tool, size: Self.badgeSize(style))
-                AgentUsageRing(fraction: window.usedPercent / 100, level: AgentUsageLevel.of(window),
-                               size: style.noteSize + 2, lineWidth: 2)
-                Text(verbatim: "\(Int(window.usedPercent.rounded()))%")
-                    .monospacedDigit()
-                    .foregroundStyle(UD.text2)
-                if labeled {
-                    Text(AgentHistoryText.rateLimitWindow(window))
-                        .lineLimit(1)
-                        .foregroundStyle(UD.text3)
+            HStack(spacing: 12) {
+                if showsTool {
+                    AgentHistoryToolBadge(tool: row.tool, size: style.toolBadgeSize - 2)
+                        .padding(.trailing, -6)
+                }
+                ForEach(Array(row.compact.enumerated()), id: \.offset) { _, window in
+                    AgentUsageItem(fraction: window.usedPercent / 100, level: AgentUsageLevel.of(window),
+                                   label: labeled ? AgentHistoryText.rateLimitWindow(window) : nil,
+                                   value: "\(Int(window.usedPercent.rounded()))%")
+                        .help(AgentHistoryText.rateLimitHelp(window, tool: row.tool))
                 }
             }
             .contentShape(Rectangle())
         }
         .agentHistoryPressStyle()
-        .help(AgentHistoryText.accountLimitsTitle(row.tool) + " · " + AgentHistoryText.rateLimitWindow(window))
         .popover(isPresented: $showsDetail) {
             AgentAccountLimitsDetail(row: row)
                 .presentationCompactAdaptation(.popover)
@@ -483,38 +468,44 @@ private struct AgentAccountLimitsItem: View {
     }
 }
 
-/// 侧栏底部最后一项：正在看的会话的上下文。知道窗口多大画圆环写百分比，不知道只写 token 数。
+/// 侧栏底部最后一项：正在看的会话的上下文。知道窗口多大画圆环写百分比，不知道只写用了多少。
 private struct AgentContextUsageItem: View {
     let usage: AgentTurnUsage
     let labeled: Bool
 
     var body: some View {
+        AgentUsageItem(fraction: usage.contextFraction,
+                       level: usage.contextFraction.map { AgentUsageLevel.of(percent: $0 * 100) } ?? .normal,
+                       label: labeled ? AgentHistoryText.usageContext : nil,
+                       value: usage.contextFraction.map { "\(Int(($0 * 100).rounded()))%" }
+                           ?? AgentHistoryText.tokenCount(usage.contextTokens))
+            .help(AgentHistoryText.usageContext + " · " + AgentHistoryText.usageContextValue(usage))
+    }
+}
+
+/// 一项：小圆环、名字、数字。圆环按程度上色，字不上色。
+private struct AgentUsageItem: View {
+    let fraction: Double?
+    let level: AgentUsageLevel
+    let label: String?
+    let value: String
+
+    var body: some View {
         let style = AgentHistoryListStyle.platform
         HStack(spacing: 5) {
-            if let fraction = usage.contextFraction {
-                AgentUsageRing(fraction: fraction, size: style.noteSize + 2, lineWidth: 2)
-                Text(verbatim: "\(Int((fraction * 100).rounded()))%")
-                    .monospacedDigit()
-                    .foregroundStyle(UD.text2)
-            } else {
-                Text(verbatim: AgentHistoryText.tokenCount(usage.contextTokens))
-                    .monospacedDigit()
-                    .foregroundStyle(UD.text2)
+            if let fraction {
+                AgentUsageRing(fraction: fraction, level: level, size: style.noteSize + 2, lineWidth: 2)
             }
-            if labeled {
-                Text(AgentHistoryText.usageContext)
+            if let label {
+                Text(label)
                     .lineLimit(1)
                     .foregroundStyle(UD.text3)
             }
-            // 用了多少 / 窗口多大（不知道窗口时前面已经写了用了多少）。
-            if let window = usage.contextWindow {
-                Text(verbatim: AgentHistoryText.tokenCount(usage.contextTokens) + " / " + AgentHistoryText.tokenCount(window))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .foregroundStyle(UD.text3)
-            }
+            Text(verbatim: value)
+                .monospacedDigit()
+                .lineLimit(1)
+                .foregroundStyle(UD.text2)
         }
-        .help(AgentHistoryText.usageContext + " · " + AgentHistoryText.usageContextValue(usage))
         .accessibilityElement(children: .combine)
     }
 }

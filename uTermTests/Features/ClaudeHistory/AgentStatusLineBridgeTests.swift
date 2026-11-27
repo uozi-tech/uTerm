@@ -194,5 +194,19 @@ final class AgentUsageLevelTests: XCTestCase {
                                          .init(usedPercent: 87, windowMinutes: 10080, resetsAt: nil),
                                      ]), at: nil)
         XCTAssertEqual(row.headline?.usedPercent, 87)
+        // 侧栏底部那一行放最紧的两个，5 小时在前。
+        XCTAssertEqual(row.compact.map(\.windowMinutes), [300, 10080])
+    }
+
+    /// 三个以上时间窗（Antigravity 的 bucket、带模型的每周额度）：只放最紧的两个。
+    func testCompactKeepsTheTwoTightest() {
+        let windows = AgentRateLimits.tightestFirst([
+            .init(usedPercent: 10, windowMinutes: 300, resetsAt: nil),
+            .init(usedPercent: 60, windowMinutes: 10080, resetsAt: nil),
+            .init(usedPercent: 95, windowMinutes: 10080, resetsAt: nil, scope: "Fable"),
+        ])
+        let row = AgentAccountLimits(tool: .claude, limits: AgentRateLimits(primary: nil, secondary: nil, plan: nil),
+                                     windows: windows, at: nil)
+        XCTAssertEqual(row.compact.map(\.usedPercent), [95, 60])
     }
 }
