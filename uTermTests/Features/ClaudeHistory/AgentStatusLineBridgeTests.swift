@@ -83,15 +83,17 @@ final class AgentStatusLineBridgeTests: XCTestCase {
         ])
     }
 
-    /// 有哪几个列哪几个：没有 5 小时的账号、只管某个模型的每周额度（`seven_day_fable`）都认；认不出前缀的照原样当名字。
+    /// 有哪几个列哪几个：只管某个模型的每周额度（`seven_day_fable`）认；认不出前缀的照原样当名字。没给 5 小时的：Claude Code
+    /// 过了重置时间就不给那个时间窗，每周的还在时按 5 小时重置过、用了 0 算（排在最后）。
     func testClaudeSnapshotWithModelLimitsAndNoFiveHour() throws {
         let json = #"{"rate_limits":{"seven_day":{"used_percentage":30,"resets_at":1795600000},"seven_day_fable":{"used_percentage":92,"resets_at":1795600000},"monthly_extra":{"used_percentage":5}}}"#
         let windows = try XCTUnwrap(AgentStatusLineSnapshot.parse(Data(json.utf8), at: nil)?.rateLimits?.windows)
-        XCTAssertEqual(windows.map(\.windowMinutes), [nil, 10080, 10080])
-        XCTAssertEqual(windows.map(\.scope), [nil, nil, "Fable"])
-        XCTAssertEqual(windows.map(AgentHistoryText.rateLimitWindow), ["monthly_extra", "每周", "每周 · Fable"])
+        XCTAssertEqual(windows.map(\.windowMinutes), [nil, 10080, 10080, 300])
+        XCTAssertEqual(windows.map(\.scope), [nil, nil, "Fable", nil])
+        XCTAssertEqual(windows.map(AgentHistoryText.rateLimitWindow), ["monthly_extra", "每周", "每周 · Fable", "5 小时"])
+        XCTAssertEqual(windows.map(\.didReset), [false, false, false, true])
         // 最紧的在前。
-        XCTAssertEqual(AgentRateLimits.tightestFirst(windows).map(\.usedPercent), [92, 30, 5])
+        XCTAssertEqual(AgentRateLimits.tightestFirst(windows).map(\.usedPercent), [92, 30, 5, 0])
     }
 
     /// 侧栏底部：每种工具取最后一次记下的；过了重置时间的按用了 0 算、标「已重置」，不藏起来；最紧的在前。
