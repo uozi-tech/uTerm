@@ -273,6 +273,29 @@ final class ClaudeUsageCacheTests: XCTestCase {
         XCTAssertEqual(status.merging(usageCache: nil).rateLimits?.windows.map(\.usedPercent), [91])
     }
 
+    /// 「截至」写显示出来的读数里最早的那个时间（实机：状态栏文件 19:07 写的是旧的「每周 91」，显示的 96% 是 15:44 的
+    /// /usage，弹出框却该写 15:44 而不是 19:07）。
+    func testAsOfIsTheOldestReadingShown() throws {
+        let cache = try XCTUnwrap(ClaudeUsageCache.parse(Data(json.utf8)))
+        let cacheAt = try XCTUnwrap(cache.at)
+        let weeklyResets = cache.limits.windows[1].resetsAt
+        // 状态栏晚 3 小时写，但每周的数比缓存旧（91 < 93）：每周、Fable、5 小时都用缓存的，截至 = 缓存的时间。
+        var status = AgentStatusLineSnapshot(rateLimits: AgentRateLimits(
+            primary: nil, secondary: .init(usedPercent: 91, windowMinutes: 10080, resetsAt: weeklyResets), plan: nil),
+            at: cacheAt.addingTimeInterval(3 * 3600))
+        var merged = status.merging(usageCache: cache)
+        XCTAssertEqual(merged.rateLimits?.windows.map(\.usedPercent), [3, 93, 24])
+        XCTAssertEqual(merged.at, cacheAt)
+        // 状态栏的每周更新（95 > 93）：每周那一格带状态栏的时间，Fable 还是缓存的，截至取最早的（缓存的）。
+        status.rateLimits = AgentRateLimits(
+            primary: nil, secondary: .init(usedPercent: 95, windowMinutes: 10080, resetsAt: weeklyResets), plan: nil)
+        merged = status.merging(usageCache: cache)
+        let weekly = try XCTUnwrap(merged.rateLimits?.windows.first { $0.windowMinutes == 10080 && $0.scope == nil })
+        XCTAssertEqual(weekly.usedPercent, 95)
+        XCTAssertEqual(weekly.observedAt, status.at)
+        XCTAssertEqual(merged.at, cacheAt)
+    }
+
     /// 两份读数分属两个周期：取后一个周期的（重置过之后用得少也是新的）。
     func testFresherPrefersTheLaterPeriod() {
         let old = AgentRateLimits.Window(usedPercent: 80, windowMinutes: 300, resetsAt: Date(timeIntervalSince1970: 1_000_000))

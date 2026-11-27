@@ -118,6 +118,8 @@ nonisolated struct AgentRateLimits: Equatable, Sendable, Codable {
         var scope: String? = nil
         /// 记下之后已经过了重置时间：之后再没用过（这是最后一次记录），按用了 0 算（`AgentHistoryModel.accountLimits`）。
         var didReset = false
+        /// 这一份读数是什么时候的（两份来源合起来时各带各的，见 `AgentStatusLineSnapshot.merging`）。nil = 跟着整份的时间。
+        var observedAt: Date? = nil
     }
 
     var primary: Window?

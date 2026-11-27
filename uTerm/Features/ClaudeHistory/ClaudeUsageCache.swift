@@ -59,10 +59,14 @@ nonisolated enum ClaudeUsageCache {
 nonisolated extension AgentStatusLineSnapshot {
     /// 账号额度：以 Claude Code 缓存的 `/usage` 为底（时间窗全），状态栏里有的同一个时间窗（窗长、只管的模型都一样）取
     /// 更新的那份（`AgentRateLimits.Window.fresher`）；状态栏没给的时间窗用缓存的，不补 0。上下文窗口照旧是状态栏的。
+    ///
+    /// 每个时间窗带着它那份读数的时间（`observedAt`），整份的时间（侧栏点开的「截至」）取显示出来的里面最早的：
+    /// 数字取了缓存那份、时间却写状态栏那份，就把几个小时前的数说成刚读的（实机：状态栏 19:07 写的还是旧的「每周 91」，
+    /// 显示的 96% 是 15:44 的 /usage）。
     func merging(usageCache: (limits: AgentRateLimits, at: Date?)?) -> AgentStatusLineSnapshot {
         guard let usageCache else { return self }
-        var windows = usageCache.limits.windows
-        for window in rateLimits?.windows ?? [] {
+        var windows = usageCache.limits.windows.map { $0.observed(at: usageCache.at) }
+        for window in (rateLimits?.windows ?? []).map({ $0.observed(at: at) }) {
             if let index = windows.firstIndex(where: { $0.isSameWindow(as: window) }) {
                 windows[index] = .fresher(windows[index], window)
             } else {
@@ -71,12 +75,19 @@ nonisolated extension AgentStatusLineSnapshot {
         }
         var merged = self
         merged.rateLimits = AgentRateLimits(primary: nil, secondary: nil, plan: rateLimits?.plan, extra: windows)
-        merged.at = max(at ?? .distantPast, usageCache.at ?? .distantPast)
+        merged.at = windows.compactMap(\.observedAt).min() ?? max(at ?? .distantPast, usageCache.at ?? .distantPast)
         return merged
     }
 }
 
 nonisolated extension AgentRateLimits.Window {
+    /// 带上读数的时间（已经带着的不改）。
+    func observed(at time: Date?) -> Self {
+        var window = self
+        if window.observedAt == nil { window.observedAt = time }
+        return window
+    }
+
     /// 同一个时间窗：窗长、名字、只管的模型都一样。
     func isSameWindow(as other: Self) -> Bool {
         windowMinutes == other.windowMinutes && label == other.label && scope == other.scope
