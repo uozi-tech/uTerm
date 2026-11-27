@@ -416,14 +416,8 @@ private struct AgentHistoryAccountLimits: View {
                 #endif
             }
         }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                guard !Task.isCancelled else { return }
-                await history.refreshStatusLines()
-                await history.refreshContextUsage()
-            }
-        }
+        // 被 iOS 侧边那一列接走时（`hidden`）由那一列重读，这里不再读一份。
+        .agentUsageRefresh(history, active: !hidden)
     }
 
     #if os(macOS)
@@ -692,4 +686,34 @@ private extension View {
         }
         #endif
     }
+}
+
+/// 隔多久重读一次额度与上下文：缺着上下文（读失败、会话刚开还没有回应）时 5 秒，否则 30 秒。原来只在列表底部那一行露着时
+/// 每 60 秒读一次，Duo 侧边那一列不读、读失败也不补，实机「获取不到、卡住，换个会话才出来」。
+nonisolated enum AgentUsageRefresh {
+    static let retryDelay: Duration = .seconds(5)
+    static let refreshDelay: Duration = .seconds(30)
+
+    static func delay(contextMissing: Bool) -> Duration {
+        contextMissing ? retryDelay : refreshDelay
+    }
+}
+
+extension View {
+    /// 露着额度 / 上下文的视图挂上它：露着时按 `AgentUsageRefresh.delay` 重读。`active` 为 false 时不读（同一份数据另有视图在读）。
+    func agentUsageRefresh(_ history: AgentHistoryModel, active: Bool = true) -> some View {
+        task(id: AgentUsageRefreshID(history: ObjectIdentifier(history), active: active)) {
+            guard active else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: AgentUsageRefresh.delay(contextMissing: history.contextUsageMissing))
+                guard !Task.isCancelled else { return }
+                await history.refreshUsage()
+            }
+        }
+    }
+}
+
+private struct AgentUsageRefreshID: Equatable {
+    let history: ObjectIdentifier
+    let active: Bool
 }

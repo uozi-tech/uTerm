@@ -40,6 +40,8 @@ struct WorkspaceSideAccountLimits: View {
             }
             if !rows.isEmpty { limits(rows) }
         }
+        // 这一列接走了列表底部那一行（那一行不再读），这里隔一会儿重读，缺着上下文时很快再读。
+        .agentUsageRefresh(history)
     }
 
     private func limits(_ rows: [AgentAccountLimits]) -> some View {

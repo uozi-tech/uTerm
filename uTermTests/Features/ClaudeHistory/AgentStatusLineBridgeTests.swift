@@ -305,4 +305,48 @@ final class AgentContextUsageFocusTests: XCTestCase {
         model.contextSessionPath = nil
         XCTAssertNil(model.currentContextUsage)
     }
+
+    /// 实机「有时获取不到、卡在那里，换个会话才出来」：会话刚开、记录里还没有用量时读了一次，之后要接着读（缺着时 5 秒一次），
+    /// 写出用量之后的那次读到；不靠换会话。
+    func testMissingContextIsRetriedUntilTheSessionWritesUsage() async throws {
+        let claude = AgentHistoryFakeSource(tool: .claude, sessions: [
+            .init(id: "s-new", projectID: "-p", resumeDirectory: "/p", title: "刚开的", modifiedAt: Date(),
+                  items: [AgentTranscriptItem(id: "a.0", kind: .userText("你好"))]),
+        ])
+        let model = AgentHistoryModel(source: claude, preferredDirectory: nil)
+        await model.start()
+        let file = try XCTUnwrap(model.files.first)
+        model.contextSessionPath = file.path
+        await model.refreshUsage()
+        XCTAssertNil(model.currentContextUsage)
+        XCTAssertTrue(model.contextUsageMissing)
+        XCTAssertEqual(AgentUsageRefresh.delay(contextMissing: model.contextUsageMissing), .seconds(5))
+
+        await claude.update("s-new") {
+            $0.items.append(AgentTranscriptItem(id: "a.1", kind: .usage(
+                AgentTurnUsage(model: "claude-opus-5-5", contextTokens: 12_000, outputTokens: 5))))
+        }
+        await model.refreshUsage()
+        XCTAssertEqual(model.currentContextUsage?.contextTokens, 12_000)
+        XCTAssertFalse(model.contextUsageMissing)
+        XCTAssertEqual(AgentUsageRefresh.delay(contextMissing: model.contextUsageMissing), .seconds(30))
+    }
+
+    /// 状态栏 / `/usage` 这一次读不到（断线、读到半截）：留着上次的额度，不清空。
+    func testFailedStatusLineReadKeepsThePreviousLimits() async throws {
+        let claude = AgentHistoryFakeSource(tool: .claude, sessions: [
+            .init(id: "s", projectID: "-p", resumeDirectory: "/p", title: "t", modifiedAt: Date()),
+        ])
+        let limits = AgentRateLimits(primary: .init(usedPercent: 40, windowMinutes: 300, resetsAt: nil),
+                                     secondary: nil, plan: nil)
+        await claude.setStatusLine(AgentStatusLineSnapshot(rateLimits: limits, at: Date()))
+        let model = AgentHistoryModel(source: claude, preferredDirectory: nil)
+        await model.start()
+        await model.refreshStatusLines()
+        XCTAssertEqual(model.accountLimits().first?.windows.first?.usedPercent, 40)
+
+        await claude.setStatusLine(nil)
+        await model.refreshStatusLines()
+        XCTAssertEqual(model.accountLimits().first?.windows.first?.usedPercent, 40)
+    }
 }

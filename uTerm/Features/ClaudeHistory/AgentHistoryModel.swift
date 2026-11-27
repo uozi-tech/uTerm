@@ -222,11 +222,16 @@ final class AgentHistoryModel {
         await refreshStatusLines()
     }
 
-    /// 重读状态栏的数据（侧栏底部露着时隔一会儿调一次：跑着的会话一直在写）。
+    /// 重读状态栏的数据（侧栏底部露着时隔一会儿调一次：跑着的会话一直在写）。这一次读不到的（断线、读到半截）留着上次的，
+    /// 不清掉：清掉了额度就空在那儿、直到下一次读成（实机反馈「有时获取不到、卡住」）。
     func refreshStatusLines() async {
         var found: [AgentHistoryTool: AgentStatusLineSnapshot] = [:]
         for part in parts {
-            if let snapshot = await part.statusLineSnapshot() { found[part.tool] = snapshot }
+            if let snapshot = await part.statusLineSnapshot() {
+                found[part.tool] = snapshot
+            } else if let previous = statusLines[part.tool] {
+                found[part.tool] = previous
+            }
         }
         if found != statusLines { statusLines = found }
         applyStatusLineWindow()
@@ -255,8 +260,20 @@ final class AgentHistoryModel {
         return contextUsage.usage
     }
 
+    /// 额度和上下文一起重读（露着它们的视图隔一会儿调一次，见 `agentUsageRefresh`）。
+    func refreshUsage() async {
+        await refreshStatusLines()
+        await refreshContextUsage()
+    }
+
+    /// 正看着一个会话、它的记录没开着、上下文还没读到（读失败了、会话刚开还没有回应、列表还没列到它）：要尽快再读。
+    var contextUsageMissing: Bool {
+        guard let path = contextSessionPath, transcript?.file.path != path else { return false }
+        return currentContextUsage == nil
+    }
+
     /// 读 `contextSessionPath` 那个会话记录末尾的一页，取最后一次用量（窗口按状态栏记下的补上）。它的记录开着时不用读。
-    /// 侧栏底部露着时隔一会儿调一次（会话在跑，一直在长）。
+    /// 读不到不重试，由露着它的视图按 `AgentUsageRefresh.delay` 隔一会儿再调（会话在跑，一直在长）。
     func refreshContextUsage() async {
         guard let path = contextSessionPath, transcript?.file.path != path, let file = file(at: path) else { return }
         guard let page = try? await source.transcript(for: file).loadPrevious(), contextSessionPath == path else { return }
