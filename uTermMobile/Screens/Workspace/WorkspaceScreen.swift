@@ -111,9 +111,9 @@ struct WorkspaceScreen: View {
         }
         .onChange(of: workspace.activeTab?.id) { _, _ in syncKeyboard() }
         .onChange(of: workspace.focusedPaneID) { _, _ in syncKeyboard() }
-        // 收起回主机列表（会话不断）时收起键盘，否则键盘会残留在标签页之上；展开时重新聚焦——等工作区滑进来、
-        // 停稳了再聚焦：终端拿第一响应者要起键盘会话，主线程一次占几百 ms（模拟器实测 486 ms、Duo 123 + 111 ms），
-        // 改前正好压在滑进来的头几拍上，键盘也和工作区同时往上推。
+        // 收起回主机列表（会话不断）时收起键盘，否则键盘会残留在标签页之上。回来时不自动弹（各格记成收着，
+        // 见 `collapseKeyboardsOnLeave`）；新开的终端照旧弹，也等工作区滑进来、停稳了再聚焦：终端拿第一响应者
+        // 要起键盘会话，主线程一次占几十到几百 ms，压在滑进来的头几拍上就掉帧。
         .onChange(of: store.showWorkspace) { _, visible in visibilityChanged(visible) }
         // 连接中页盖上即收回所有键盘归属；撤下（连接完成）后再弹——建连期刻意不弹。
         .onChange(of: store.connecting?.id) { _, _ in syncKeyboard() }
@@ -520,6 +520,7 @@ struct WorkspaceScreen: View {
         // 头一帧上（vphone 120 Hz 实测：12 次里 11 次开头掉一帧 23–41 ms）。滑出期间键盘还在，停稳后再落下。
         DispatchQueue.main.asyncAfter(deadline: .now() + WorkspaceLayer.slideSettleSeconds) {
             guard !store.showWorkspace else { return }
+            workspace.collapseKeyboardsOnLeave()
             syncKeyboard()
         }
     }

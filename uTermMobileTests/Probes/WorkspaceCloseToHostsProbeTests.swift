@@ -59,35 +59,35 @@ final class WorkspaceCloseToHostsProbeTests: XCTestCase {
         assertSmooth(reading, label: "关 Code")
     }
 
-    /// 收起之后点「标签页 N」回去：工作区带着原来的终端滑回来。
+    /// 收起之后点「标签页 N」回去：工作区带着原来的终端滑回来，键盘不自动弹（拿键盘加终端变矮重排压在滑进来之后
+    /// 那一拍上，实机觉得卡；用户点终端再要）。
     func testExpandingBackToTerminalSlidesInWithoutDroppingFrames() async throws {
         defer { MobileProbeWindow.closeAll() }
         let rig = try await mount(.terminal)
         // 和 App 里一样：之前在这个终端里打过字（键盘会话起过一次）。第一次起键盘的冷启动（测试进程里两百多 ms）不算在这里。
         let view = try XCTUnwrap(rig.controller?.terminal.view)
+        // 夹具开局就是展开的，没走过一次展开：收起再展开一次，键盘归属才落到这个终端上。
         rig.store.showWorkspace = false
         try await Task.sleep(for: .milliseconds(600))
         rig.store.showWorkspace = true
+        try await Task.sleep(for: .milliseconds(600))
+        rig.controller?.showKeyboard()
         let warmed = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) { view.isFirstResponder }
-        XCTAssertTrue(warmed, "展开后终端要拿到键盘")
+        XCTAssertTrue(warmed, "用户要了键盘，终端要拿到")
         try await Task.sleep(for: .milliseconds(800))
         rig.store.showWorkspace = false
         try await Task.sleep(for: .milliseconds(800))
         XCTAssertFalse(view.isFirstResponder, "收起时要收键盘")
-        // 滑动快结束时看一眼：键盘不能在滑动中要（改前在滑动头几拍就要，起键盘会话一次占掉几百 ms）。
-        var focusedDuringSlide: Bool?
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(WorkspaceLayer.slideSeconds - 0.04))
-            focusedDuringSlide = view.isFirstResponder
-        }
         let reading = try await measure("expand-terminal") { rig.store.showWorkspace = true }
-        XCTAssertEqual(focusedDuringSlide, false, "滑动中终端不该拿键盘")
-        // 键盘推迟到滑完才要，但要给到终端。
-        let focused = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) { view.isFirstResponder }
-        XCTAssertTrue(focused, "滑回来之后终端要拿到键盘")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(view.isFirstResponder, "回到工作区不自动弹键盘")
         // 滑进来的头一两拍还有终端自己的「换回盖子」（拷上一帧防闪，`GhosttySwitchBackCover`）与补画：
-        // Duo 31 ms，模拟器 30–55 ms。这里只拦起键盘那一类的大卡顿（改前 Duo 123 + 111 ms、模拟器 486 ms）。
+        // Duo 31 ms，模拟器 30–55 ms。这里只拦大卡顿（改前起键盘那一下 Duo 123 + 111 ms、模拟器 486 ms）。
         assertSmooth(reading, label: "回终端", budgetFrames: 6)
+        // 点一下要回来照常给。
+        rig.controller?.showKeyboard()
+        let focused = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) { view.isFirstResponder }
+        XCTAssertTrue(focused, "回来后用户要键盘照常给")
     }
 
     func testExpandingBackToCodeSlidesInWithoutDroppingFrames() async throws {

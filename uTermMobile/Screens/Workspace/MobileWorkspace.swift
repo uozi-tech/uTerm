@@ -657,6 +657,13 @@ final class MobileWorkspace {
         return intent
     }
 
+    /// 收起工作区回主机列表：各格都记成「键盘收着」。回到工作区时不再自动弹键盘——终端拿键盘（~30 ms）和
+    /// 跟着变矮重排（~35 ms）都压在滑进来之后那一拍上，是「滑完卡一下」的大头（vphone 120 Hz 量的）。
+    /// 点一下终端或键盘条上的键盘键再弹；新开到前台的终端照旧弹（`open`）。
+    func collapseKeyboardsOnLeave() {
+        for pane in panes { keyboardIntent(forPane: pane.id).collapsed = true }
+    }
+
     /// 把键盘交给 `owner`（nil = 谁都不该拿），返回键盘是不是已经在它手上。
     ///
     /// 键盘正在别的终端标签上时，先让新归属者接手、再收回其他标签的归属：第一响应者直接换主，键盘不经过

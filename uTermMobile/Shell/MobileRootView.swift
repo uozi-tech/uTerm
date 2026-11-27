@@ -178,40 +178,138 @@ struct MobileTabShell: View {
 /// 收起时整层平移到屏幕右侧之外、不可点、读屏跳过；展开时从右侧推入（与下钻同向）。
 struct WorkspaceLayer: View {
     @Environment(MobileStore.self) private var store
-    @Environment(\.mChrome) private var chrome
 
     var body: some View {
         let visible = store.showWorkspace
-        let screen = chrome.screen
-        let leadingInset = chrome.safeAreaInsets.leading
-        WorkspaceScreen()
-            .background(M.surface.ignoresSafeArea())
-            // 收起时整层（连同伸进安全区的底色）移到屏幕右缘之外。按根视图量到的整屏矩形算，
-            // 不按 visualEffect 里的安全区算：iPhone Duo 横屏 / 折叠时状态栏那一列在右侧安全区，
-            // 而这里拿到的安全区不含它，只移 `宽 + 安全区` 会让工作区最左那一截（返回钮、
-            // 第一个标签）留在那一列里（实机：有标签时返回主机列表，右侧多出半条标签条）。
-            .visualEffect { content, proxy in
-                guard !visible else { return content.offset(x: 0) }
-                let insets = proxy.safeAreaInsets
-                let byInsets = proxy.size.width + insets.leading + insets.trailing
-                let byScreen = screen.width > 0
-                    ? screen.maxX - proxy.frame(in: .global).minX + leadingInset
-                    : 0
-                return content.offset(x: max(byInsets, byScreen))
-            }
-            // 兜底：收起后整层透明。滑出与淡出同步，看上去仍是推出；任何没跟着平移走的部分
-            // （例如宿主 UIKit 视图）也不会留在屏上。
-            // （2026-11-27 试过不渐变、滑完再一下子透明：vphone 上量不出差别，Duo 实机反而觉得更卡，已退回。）
-            .opacity(visible ? 1 : 0)
+        WorkspaceSlideHost(visible: visible)
+            // 整屏：工作区在自己的宿主里按窗口算安全区与键盘，外层不再替它让一次（否则键盘让两遍）。
+            .ignoresSafeArea()
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)
-            .animation(.easeInOut(duration: Self.slideSeconds), value: visible)
     }
 
     /// 展开 / 收起滑动的时长。
     static let slideSeconds = 0.28
-    /// 多久算滑完、停稳（动画时长再留一点余量）。重活等到这之后：收起时主机页的工具栏按钮、真关标签，
-    /// 展开时终端拿键盘（见 `WorkspaceScreen`）。
+    /// 多久算滑完、停稳（动画时长再留一点余量）。重活等到这之后：收起时主机页的工具栏按钮、真关标签、
+    /// 收键盘，展开时新开的终端拿键盘（见 `WorkspaceScreen`）。
     static let slideSettleSeconds = slideSeconds + 0.06
     static let slideSettle: Duration = .seconds(slideSettleSeconds)
+}
+
+/// 工作区放进自己的 `UIHostingController`，滑动交给 Core Animation：动画在系统的渲染进程里插值，
+/// 主线程这时候忙（终端上下屏、盖旧帧、键盘交接、SwiftUI 重算）也不掉帧——和系统导航推入同一种做法。
+///
+/// 改前是 SwiftUI 的 `.offset` + `.opacity` 动画，每一帧都由主线程算一遍再提交，主线程一卡就掉帧
+/// （vphone 120 Hz：滑进来 10 次掉 35–38 帧，其中 15–17 帧在滑的过程中）。
+///
+/// 外层的环境整份交给里面（`\.self`）：工作区下面用到的环境对象很多（主机目录、订阅、工作区、模型上下文……），
+/// 逐个转交容易漏，漏一个就是运行时崩溃。
+private struct WorkspaceSlideHost: UIViewControllerRepresentable {
+    let visible: Bool
+
+    func makeUIViewController(context: Context) -> WorkspaceSlideController {
+        WorkspaceSlideController(rootView: content(context.environment), visible: visible)
+    }
+
+    func updateUIViewController(_ controller: WorkspaceSlideController, context: Context) {
+        controller.hosting.rootView = content(context.environment)
+        controller.setVisible(visible)
+    }
+
+    private func content(_ environment: EnvironmentValues) -> AnyView {
+        AnyView(
+            WorkspaceScreen()
+                .background(M.surface.ignoresSafeArea())
+                .environment(\.self, environment)
+        )
+    }
+}
+
+/// 宿主里的工作区只在呈现层上平移：模型层的位置始终贴着屏幕（收起 = 透明），安全区、键盘避让、
+/// 尺寸都不随滑动变，SwiftUI 里面也就不会因为滑动重新布局。
+final class WorkspaceSlideController: UIViewController {
+    let hosting: UIHostingController<AnyView>
+    private(set) var visible: Bool
+
+    init(rootView: AnyView, visible: Bool) {
+        hosting = UIHostingController(rootView: rootView)
+        self.visible = visible
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        hosting.view.backgroundColor = .clear
+        addChild(hosting)
+        hosting.view.frame = view.bounds
+        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(hosting.view)
+        hosting.didMove(toParent: self)
+        applyResting()
+    }
+
+    func setVisible(_ visible: Bool) {
+        guard visible != self.visible else { return }
+        self.visible = visible
+        guard isViewLoaded else { return }
+        guard view.window != nil, UIView.areAnimationsEnabled else { return applyResting() }
+        slide(in: visible)
+    }
+
+    private static let slideKey = "uterm.workspace.slide"
+    private static let fadeKey = "uterm.workspace.fade"
+
+    /// 没有动画时直接落到终点。
+    private func applyResting() {
+        let layer = hosting.view.layer
+        layer.removeAnimation(forKey: Self.slideKey)
+        layer.removeAnimation(forKey: Self.fadeKey)
+        hosting.view.alpha = visible ? 1 : 0
+    }
+
+    /// 收起时移到屏幕右缘之外：按窗口算，不按安全区算。iPhone Duo 横屏 / 折叠时状态栏那一列在右侧安全区，
+    /// 只移「宽 + 安全区」会让工作区最左那一截（返回钮、第一个标签）留在那一列里。
+    private var offscreenX: CGFloat {
+        let width = hosting.view.bounds.width
+        guard let window = view.window else { return width }
+        let minX = hosting.view.convert(CGPoint.zero, to: window).x
+        return max(width, window.bounds.maxX - minX)
+    }
+
+    /// 从当前呈现位置滑到终点。半路反向时接着当前的位置和透明度走，按剩下的路程折算时长。
+    private func slide(in visible: Bool) {
+        let layer = hosting.view.layer
+        let distance = offscreenX
+        // 停着的时候呈现层的平移也是 0（收起 = 原地透明），要从屏外进来；正在滑就从它此刻的位置接着走。
+        let inFlight = layer.animation(forKey: Self.slideKey) != nil ? layer.presentation() : nil
+        let currentX = (inFlight?.value(forKeyPath: "transform.translation.x") as? CGFloat)
+            ?? (visible ? distance : 0)
+        let currentAlpha = inFlight.map { CGFloat($0.opacity) } ?? (visible ? 0 : 1)
+        let targetX: CGFloat = visible ? 0 : distance
+        let remaining = distance > 0 ? min(1, abs(targetX - currentX) / distance) : 1
+        let duration = WorkspaceLayer.slideSeconds * max(remaining, 0.2)
+        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
+
+        // 模型层：平移始终为 0（不动布局），透明度直接是终点；动画只改呈现层。
+        layer.removeAnimation(forKey: Self.slideKey)
+        layer.removeAnimation(forKey: Self.fadeKey)
+        hosting.view.alpha = visible ? 1 : 0
+
+        let slide = CABasicAnimation(keyPath: "transform.translation.x")
+        slide.fromValue = currentX
+        slide.toValue = targetX
+        slide.duration = duration
+        slide.timingFunction = timing
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = currentAlpha
+        fade.toValue = visible ? 1 : 0
+        fade.duration = duration
+        fade.timingFunction = timing
+        layer.add(slide, forKey: Self.slideKey)
+        layer.add(fade, forKey: Self.fadeKey)
+    }
 }

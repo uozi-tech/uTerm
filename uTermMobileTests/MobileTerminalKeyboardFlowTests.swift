@@ -271,6 +271,37 @@ final class MobileTerminalKeyboardFlowTests: XCTestCase {
         (tabs + [fresh]).forEach { $0.controller.close() }
     }
 
+    /// 收起工作区回主机列表、再回来：不自动弹键盘（拿键盘加终端变矮重排压在滑进来之后那一拍上，实机觉得卡），
+    /// 切标签也不弹；点终端要回来照常；回来之后新开的终端照旧弹。
+    func testReturningToTheWorkspaceLeavesTheKeyboardDown() async throws {
+        let (ws, tabs) = try await workspace(tabs: 2)
+        let (first, second) = (tabs[0], tabs[1])
+        ws.activate(first.id)
+        sync(ws)
+        XCTAssertTrue(first.controller.terminal.view.isFirstResponder)
+
+        // 收起：WorkspaceScreen 滑走后先记成收着，再按「没人该拿」收回。
+        ws.collapseKeyboardsOnLeave()
+        _ = ws.handKeyboard(to: nil)
+        _ = first.controller.terminal.view.resignFirstResponder()
+
+        sync(ws)
+        XCTAssertFalse(first.controller.terminal.view.isFirstResponder, "回到工作区不自动弹键盘")
+        ws.activate(second.id)
+        sync(ws)
+        XCTAssertFalse(second.controller.terminal.view.isFirstResponder, "回来后切标签也不弹")
+
+        second.controller.showKeyboard()
+        XCTAssertTrue(second.controller.terminal.view.isFirstResponder, "用户要键盘照常给")
+
+        second.controller.collapseKeyboard()
+        let fresh = try await connectedTab()
+        ws.open(.terminal(fresh))
+        sync(ws)
+        XCTAssertTrue(fresh.controller.terminal.view.isFirstResponder, "新开的终端照旧弹")
+        (tabs + [fresh]).forEach { $0.controller.close() }
+    }
+
     // MARK: - 面板与键盘
 
     private func mountBar(panel: TerminalKeyBar.Panel?) async throws -> UIHostingController<TerminalKeyBar> {
