@@ -5,7 +5,7 @@ import UDesignKit
 /// （照系统的容量式仪表 `accessoryCircularCapacity`：底环、圆头的进度弧、正中写用了几成），环下写时间窗的名字。
 /// 每种工具放最紧的三个时间窗（`AgentAccountLimits.compact`，如 5 小时、每周、Fable），颜色按程度蓝 / 黄 / 红（`AgentUsageLevel`）。
 /// 一列窄，细条在这里读不出长短，圆环读得出。点一下弹出全部明细（同侧栏底部那一行点开的）。
-/// 数据与侧栏底部同一份（`AgentHistoryModel.accountLimits`）；列表照旧每分钟重读状态栏的数据。
+/// 上下文在最上面（见 body）。数据与侧栏底部同一份（`AgentHistoryModel.accountLimits`）；列表照旧每分钟重读状态栏的数据。
 struct WorkspaceSideAccountLimits: View {
     let history: AgentHistoryModel
     let width: CGFloat
@@ -15,8 +15,8 @@ struct WorkspaceSideAccountLimits: View {
     var body: some View {
         let rows = history.accountLimits()
         VStack(spacing: 16) {
-            if !rows.isEmpty { limits(rows) }
-            // 最后是正在看的会话的上下文：知道窗口多大画占了几成，不知道只写 token 数。
+            // 先放正在看的会话的上下文（知道窗口多大画占了几成，不知道只写 token 数），额度排在后面：Duo 合上横握时
+            // 这一列只有约 466pt 高，几种工具的额度一多，排在最后的会被挤出屏幕（上下文比额度常看）。
             if let usage = history.transcript?.latestUsage?.usage {
                 VStack(spacing: 4) {
                     WorkspaceQuotaRing(usedPercent: usage.contextFraction.map { $0 * 100 },
@@ -38,6 +38,7 @@ struct WorkspaceSideAccountLimits: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(Text(AgentHistoryText.usageBadge(usage)))
             }
+            if !rows.isEmpty { limits(rows) }
         }
     }
 
