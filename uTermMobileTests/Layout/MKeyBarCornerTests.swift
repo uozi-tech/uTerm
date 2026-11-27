@@ -51,6 +51,30 @@ final class MKeyBarCornerTests: XCTestCase {
                        "离底边比要留的还近：整个挪出圆角那一段")
     }
 
+    /// 藏着的标签页把整格挪到屏外：不按它算圆角，否则边距越算越大，整排键盘条把工作区撑破
+    /// （TF 1657 实机：Duo 横握打开配对 Mac 的 Code 标签页，行在 x ≈ −99 699，左边距算成 99 710，下一轮 198 991；
+    /// Code 标签页只剩顶上 55pt，键盘条压进右侧状态栏那一列）。
+    func testRowOutsideTheWindowKeepsTheBasePadding() {
+        let corners = MWindowCorners(size: CGSize(width: 951, height: 669), bottomLeft: 55, bottomRight: 55)
+        for row in [CGRect(x: -99_699, y: 587, width: 566, height: 48),
+                    CGRect(x: -198_962.5, y: 611, width: 199_093, height: 48),
+                    CGRect(x: 960, y: 611, width: 400, height: 48)] {
+            XCTAssertEqual(MKeyBarCornerClearance.padding(base: 10, row: row, corners: corners, edge: .left), 10, "\(row)")
+            XCTAssertEqual(MKeyBarCornerClearance.padding(base: 10, row: row, corners: corners, edge: .right), 10, "\(row)")
+        }
+    }
+
+    /// 无论坐标怎么来，让出的最多一个圆角半径。
+    func testPaddingNeverExceedsTheCornerRadius() {
+        let corners = MWindowCorners(size: CGSize(width: 951, height: 669), bottomLeft: 55, bottomRight: 55)
+        for x in stride(from: 0.0, through: 900, by: 50) {
+            let row = CGRect(x: x, y: 669 - 15 - 38 - 5, width: 951 - x, height: 48)
+            for edge in [MKeyBarCornerClearance.HorizontalEdgeSide.left, .right] {
+                XCTAssertLessThanOrEqual(MKeyBarCornerClearance.padding(base: 10, row: row, corners: corners, edge: edge), 65)
+            }
+        }
+    }
+
     func testPaddingCountsFromTheRowEdge() {
         let corners = MWindowCorners(size: CGSize(width: 951, height: 669), bottomLeft: 55, bottomRight: 55)
         // 行从屏幕左边起、右边让出 84 的侧列；键帽底离屏幕底 15。

@@ -499,12 +499,18 @@ enum MKeyBarCornerClearance {
     /// 一端的键离行边沿要多远。`row` 与 `corners.size` 在同一个坐标系（窗口）。
     static func padding(base: CGFloat, row: CGRect, corners: MWindowCorners, edge: HorizontalEdgeSide) -> CGFloat {
         guard row.width > 0, corners.size.width > 0 else { return base }
+        // 只管露在窗口里的那一行。藏着的标签页、收起的工作区把整格挪到屏外（实机：x ≈ −99 700），按它离窗口边算出
+        // 的边距大得离谱；边距又让这一行更宽、更往外，下一轮再大一倍（−199 000），整排键盘条撑破工作区的布局。
+        let slack: CGFloat = 1
+        guard row.minX >= -slack, row.maxX <= corners.size.width + slack,
+              row.minY >= -slack, row.maxY <= corners.size.height + slack else { return base }
         let radius = edge == .left ? corners.bottomLeft : corners.bottomRight
         let capBottom = row.midY + capHeight / 2
         let gap = corners.size.height - capBottom
         let fromSide = sideInset(cornerRadius: radius, capBottomGap: gap, capRadius: capRadius, margin: base)
         let rowEdge = edge == .left ? row.minX : corners.size.width - row.maxX
-        return max(base, (fromSide - rowEdge).rounded(.up))
+        // 再兜一层：让圆角最多让出一个圆角半径，算出更大的一定是坐标不对。
+        return min(max(base, (fromSide - rowEdge).rounded(.up)), base + radius)
     }
 
     /// 键帽离侧边至少多远（只算圆角，不含平时的边距）。
