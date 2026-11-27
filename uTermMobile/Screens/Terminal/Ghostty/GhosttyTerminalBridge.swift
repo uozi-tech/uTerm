@@ -269,6 +269,14 @@ final class GhosttyTerminalBridge {
     /// 这片终端在不在屏上。不在屏上：停画；隔 `hiddenReleaseDelay` 还没回来就放掉 surface。回到屏上：重建（如果放掉了）、
     /// 从影子回放、接着画。从没露出过的标签第一次露出才建 surface（M7）。
     func setOnScreen(_ onScreen: Bool) {
+        #if DEBUG || UTERM_BENCH
+        BenchTimings.measure(onScreen ? "setOnScreen.true" : "setOnScreen.false") { applyOnScreen(onScreen) }
+        #else
+        applyOnScreen(onScreen)
+        #endif
+    }
+
+    private func applyOnScreen(_ onScreen: Bool) {
         guard onScreen != isOnScreen else {
             // 外壳切换时新容器接走同一个视图：以它的状态为准再对一次。
             view.setSurfaceVisible(onScreen)

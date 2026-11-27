@@ -78,7 +78,11 @@ final class GhosttySwitchBackCover {
         cover.translatesAutoresizingMaskIntoConstraints = true
         cover.autoresizingMask = []
         cover.layer.name = Self.layerName
+        #if DEBUG || UTERM_BENCH
+        image.contents = BenchTimings.measure("cover.copy") { Self.copy(of: stale.contents) }
+        #else
         image.contents = Self.copy(of: stale.contents)
+        #endif
         image.contentsGravity = stale.contentsGravity
         image.contentsScale = stale.contentsScale
         image.contentsRect = stale.contentsRect

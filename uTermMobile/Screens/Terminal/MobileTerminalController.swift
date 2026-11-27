@@ -339,7 +339,11 @@ final class MobileTerminalController {
     /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。未连上、或用户收起了键盘时不弹。
     func focusKeyboard() {
         guard canTakeKeyboard, !keyboardIntent.collapsed else { return }
+        #if DEBUG || UTERM_BENCH
+        _ = BenchTimings.measure("becomeFirstResponder") { terminal.view.becomeFirstResponder() }
+        #else
         _ = terminal.view.becomeFirstResponder()
+        #endif
     }
 
     /// 用户点了「收起键盘」。

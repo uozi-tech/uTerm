@@ -528,7 +528,11 @@ struct WorkspaceScreen: View {
 
     /// `focusAfter`：多久之后再聚焦 / 收起（nil = 等布局落定，约一拍）。
     private func syncKeyboard(focusAfter: TimeInterval?) {
+        #if DEBUG || UTERM_BENCH
+        BenchTimings.measure("handKeyboard") { _ = workspace.handKeyboard(to: keyboardOwner) }
+        #else
         workspace.handKeyboard(to: keyboardOwner)
+        #endif
         DispatchQueue.main.asyncAfter(deadline: .now() + (focusAfter ?? 0.05)) {
             // 连接中页 / 收起态不做全局收起：上面可能叠着要输入的弹层；终端已按归属各自收了。
             guard store.connecting == nil, store.showWorkspace else { return }

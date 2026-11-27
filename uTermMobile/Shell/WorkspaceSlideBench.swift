@@ -29,6 +29,7 @@ enum WorkspaceSlideBench {
         let settle = WorkspaceLayer.slideSettleSeconds
         var lines = ["build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") ?? "?") fps \(Int(fps)) rounds \(rounds)"]
         var totals = ["in": Tally(), "out": Tally()]
+        BenchTimings.reset()
 
         func measure(_ name: String, round: Int, _ change: () -> Void) async {
             let recorder = FrameGapRecorder()
@@ -59,12 +60,36 @@ enum WorkspaceSlideBench {
             await measure("out", round: round) { store.showWorkspace = false }
             try? await Task.sleep(for: .seconds(1.5))
         }
+        lines += BenchTimings.report
         lines.append("TOTAL in  " + (totals["in"] ?? Tally()).line)
         lines.append("TOTAL out " + (totals["out"] ?? Tally()).line)
         let text = lines.joined(separator: "\n") + "\n"
         print(text)
         if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? text.write(to: docs.appendingPathComponent("slide-bench.txt"), atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+/// 测量期间各步骤在主线程上花了多久（只在调试 / 测量构建里记）。
+@MainActor
+enum BenchTimings {
+    private static var samples: [String: [Double]] = [:]
+
+    @discardableResult
+    static func measure<T>(_ name: String, _ body: () -> T) -> T {
+        let start = CACurrentMediaTime()
+        defer { samples[name, default: []].append((CACurrentMediaTime() - start) * 1000) }
+        return body()
+    }
+
+    static func reset() { samples = [:] }
+
+    static var report: [String] {
+        samples.keys.sorted().map { name in
+            let values = samples[name] ?? []
+            let avg = values.reduce(0, +) / Double(max(values.count, 1))
+            return String(format: "time %@ n %d avg_ms %.1f max_ms %.1f", name, values.count, avg, values.max() ?? 0)
         }
     }
 }
