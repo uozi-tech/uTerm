@@ -695,19 +695,19 @@ final class AppStoreScreenshotTests: XCTestCase {
 
     /// zsh + powerlevel10k 的提示符，照维护者自己的 `~/.p10k.zsh`（向导选项 compatible / classic / light / blurred tails /
     /// 1 line / compact / concise；左边 dir、vcs）用真的 p10k 跑出来的字节写：深灰底、两头 ░▒▓ 渐隐、目录首尾两级加粗、
-    /// `|` 之后是分支。右边的 ✔ 不画：写好的输出改尺寸时不会像真 zsh 那样重画右提示符，窄屏上会折行。
+    /// `|` 之后是分支。目录与分支的颜色在浅色终端里会被调色板压暗，改用真彩（#7ab8f5 / 加粗 #a5d8ff / 分支 #7ee06b）。右边的 ✔ 不画：写好的输出改尺寸时不会像真 zsh 那样重画右提示符，窄屏上会折行。
     nonisolated static func p10k(dir: String, branch: String?) -> String {
         let e = "\u{1B}["
         // "/srv/www/shop" → 根下的 srv、www、shop；"~/code/shop" → ~、code、shop。首尾两级是锚点（加粗、亮蓝）。
         let parts = dir.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         let names = parts.first == "" ? Array(parts.dropFirst()) : parts
-        var line = "\(e)0m\(e)38;5;238m░▒▓\(e)48;5;238m\(e)38;5;31m " + (parts.first == "" ? "/" : "")
+        var line = "\(e)0m\(e)38;5;238m░▒▓\(e)48;5;238m\(e)38;2;122;184;245m " + (parts.first == "" ? "/" : "")
         for (index, name) in names.enumerated() {
-            if index > 0 { line += "\(e)38;5;31m/" }
-            line += index == 0 || index == names.count - 1 ? "\(e)1m\(e)38;5;39m\(name)\(e)22m" : "\(e)38;5;31m\(name)"
+            if index > 0 { line += "\(e)38;2;122;184;245m/" }
+            line += index == 0 || index == names.count - 1 ? "\(e)1m\(e)38;2;165;216;255m\(name)\(e)22m" : "\(e)38;2;122;184;245m\(name)"
         }
-        line += "\(e)38;5;31m "
-        if let branch { line += "\(e)38;5;246m|\(e)38;5;76m \(branch) " }
+        line += "\(e)38;2;122;184;245m "
+        if let branch { line += "\(e)38;5;246m|\(e)38;2;126;224;107m \(branch) " }
         return line + "\(e)0m\(e)38;5;238m▓▒░\(e)0m "
     }
 
