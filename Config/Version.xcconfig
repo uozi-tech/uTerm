@@ -1,7 +1,7 @@
 // 唯一真值源：uTerm 的用户可见版本号 (main.feat.patch)。
 // 由 scripts/bump-version.sh / make bump-* / make set-version 维护。
 // project 级 baseConfigurationReference 引用本文件，所有 target 继承。
-MARKETING_VERSION = 2.5.0
+MARKETING_VERSION = 2.5.1
 
 // bundle id 前缀：9 个 target 的 bundle id、iCloud 容器、钥匙串访问组、远控进程的 launchd 任务名都由它派生。
 // 用自己的团队签名时在 Local.xcconfig 里改成自己的（App ID 全苹果唯一，com.uozi.uTerm 只有我们的团队能用）。
