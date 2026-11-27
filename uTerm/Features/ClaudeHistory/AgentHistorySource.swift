@@ -1,7 +1,7 @@
 import Foundation
 
 /// 一个项目：Agent 在某个工作目录下的全部会话。
-nonisolated struct AgentHistoryProject: Hashable, Sendable, Identifiable {
+nonisolated struct AgentHistoryProject: Hashable, Sendable, Identifiable, Codable {
     /// 记录目录的名字（Claude：工作目录换出来的 `-Users-a-proj`）。
     let id: String
     /// 记录目录的绝对路径。
@@ -14,7 +14,7 @@ nonisolated struct AgentHistoryProject: Hashable, Sendable, Identifiable {
 }
 
 /// 一个会话的记录文件。
-nonisolated struct AgentHistorySessionFile: Hashable, Sendable, Identifiable {
+nonisolated struct AgentHistorySessionFile: Hashable, Sendable, Identifiable, Codable {
     /// 会话 ID（文件名去掉扩展名）。
     let sessionID: String
     let project: AgentHistoryProject
@@ -30,7 +30,7 @@ nonisolated struct AgentHistorySessionFile: Hashable, Sendable, Identifiable {
     /// 内存缓存的键：路径、大小、修改时间都没变才算同一份。
     var cacheKey: CacheKey { CacheKey(path: path, size: size, modifiedAt: modifiedAt) }
 
-    nonisolated struct CacheKey: Hashable, Sendable {
+    nonisolated struct CacheKey: Hashable, Sendable, Codable {
         let path: String
         let size: UInt64
         let modifiedAt: Date
@@ -67,7 +67,7 @@ extension AgentSubagentFile {
 }
 
 /// 列表一行要的东西。只读记录的末尾（必要时加开头）一小块得到。
-nonisolated struct AgentHistorySessionMetadata: Equatable, Sendable {
+nonisolated struct AgentHistorySessionMetadata: Equatable, Sendable, Codable {
     var title: String?
     /// 要不要列出来（Claude：只列命令行起的）。
     var isListed: Bool

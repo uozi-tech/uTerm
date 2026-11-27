@@ -388,7 +388,9 @@ final class AgentHistoryModel {
 
     func start() async {
         guard phase == .loading, projects.isEmpty else { return }
-        if let cacheKey, let cached = AgentHistoryListCache.shared.entry(cacheKey) {
+        // 内存里没有就读盘上的（App 重开之后第一次打开）。
+        if let cacheKey, let cached = await AgentHistoryListCache.shared.persistedEntry(cacheKey),
+           phase == .loading, projects.isEmpty {
             // 上一次列到的先显示出来（行、标题都是上次读的），再在后台重列：重列不会让已经显示的行消失（`setScope`）。
             apply(cached)
             await reload(showsLoading: false)

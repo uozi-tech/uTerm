@@ -106,8 +106,8 @@ nonisolated struct AgentTurnUsage: Equatable, Sendable {
 
 /// 账号额度：几个时间窗（Codex 的 primary / secondary；Claude 的 5 小时与每周；Antigravity 的各个 bucket），
 /// 各自用了几成、什么时候重置。
-nonisolated struct AgentRateLimits: Equatable, Sendable {
-    nonisolated struct Window: Equatable, Sendable {
+nonisolated struct AgentRateLimits: Equatable, Sendable, Codable {
+    nonisolated struct Window: Equatable, Sendable, Codable {
         /// 0–100。
         var usedPercent: Double
         var windowMinutes: Int?
