@@ -442,7 +442,7 @@ final class RemoteKeyInputView: UIView, UITextInput {
         guard var current = floating else { return }
         switch current.mode {
         case .caret:
-            let codes = current.trackpad.arrows(to: point)
+            let codes = current.trackpad.arrows(to: point, time: CACurrentMediaTime())
             // 键盘条上膛的修饰键作用于整次拖动：⇧ 是边拖边选，⌥ 是按词走，⌘ 是到行首行尾。松手时才熄灭。
             let modifiers = keys?.modifiers ?? []
             for code in codes { tap(code, modifiers: modifiers) }
