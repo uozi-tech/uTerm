@@ -291,6 +291,13 @@
         ) {
             super.traitCollectionDidChange(previousTraitCollection)
             updateDisplayScale()
+            // uTerm 本地补丁：屏幕倍率换了（iPhone Duo 合上 / 打开：外屏 nativeScale 3、内屏约 2.807），而视图尺寸在这之后
+            // 不再变的话，`layoutSubviews` 不会再来，引擎就一直按旧倍率出帧：图层已经换成新倍率，旧倍率的帧被画得比视图高，
+            // 最下面几行（Claude Code 的输入框）落到视图外。倍率和引擎最后一次拿到的不一样就当场同步一次（同 `didMoveToWindow`）。
+            if core.surface != nil, let synced = core.syncedScale, synced != Double(resolvedDisplayScale()) {
+                TerminalDebugLog.log(.metrics, "display scale changed \(synced) -> \(resolvedDisplayScale()), resync")
+                core.synchronizeMetrics()
+            }
             if traitCollection.hasDifferentColorAppearance(
                 comparedTo: previousTraitCollection,
             ) {

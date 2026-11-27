@@ -813,6 +813,15 @@ Ghostty 认链接前去掉 Shift、点击不报给程序。宿主没给（nil）
 
 回归用例：`uTermMobileTests/GhosttyTapLatencyTests.swift`（合成触摸，走 UIKit 自己的手势）。
 
+### 26. iOS：屏幕倍率换了就让引擎当场按新倍率排（Duo 合上 / 打开之后最下面几行可能落到视图外）
+
+文件：`Platform/UIKit/UITerminalView+Lifecycle.swift`（`traitCollectionDidChange`）。
+
+iPhone Duo 外屏 `nativeScale` 3、内屏约 2.807。`traitCollectionDidChange` 原来只把图层的 `contentsScale` 换成新倍率，不让引擎
+重新算像素尺寸；视图尺寸在倍率变了之后要是不再变，`layoutSubviews` 不会再来，引擎一直按旧倍率出帧、图层按新倍率显示，帧比视图高约 7%，
+最下面几行被裁掉。现在倍率和引擎最后一次拿到的（`syncedScale`）不一样就当场 `synchronizeMetrics()`（倍率变了它不等节流窗口）。
+起因是用户报「外屏切到内屏后 Claude Code 的输入框被挡」，这是推断出的一条路，没在真机上复现确认过；测试里换不了屏幕倍率，要在 Duo 上开合验。
+
 ## manifest 改动（相对上游的 `Package.swift`）
 
 1. `libghostty` 这个 binaryTarget 从 `url:` + `checksum:` 改成 `path: "BinaryTarget/GhosttyKit.xcframework"`（同上游的 `Package.local.swift`）。
