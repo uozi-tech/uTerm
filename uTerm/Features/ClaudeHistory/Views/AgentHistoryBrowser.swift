@@ -372,16 +372,17 @@ struct AgentHistorySessionList: View {
 
     private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile],
                       runs: [AgentHistoryRunRow]) -> some View {
-        let listed = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
-                                                date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
+        // 按最后活跃时间排（在干活的自然在上面，跑完了停在原处），再分组。
+        let ordered = AgentHistoryListing.orderedByActivity(files, activity: history.lastActivity(of:))
+        let listed = AgentHistoryListing.groups(ordered, by: grouping, metadata: history.metadata, pinned: pinned,
+                                                date: history.lastActivity(of:))
         // 跑着的会话不另起一块：有记录的在那一行上（置顶或它那一组）；还没有记录行的（刚开的新会话）在它那一组的最上面，
-        // 哪一组都对不上的才在列表最顶上。跑着的排在组的最前面、它那一组排在前面。
+        // 哪一组都对不上的才在列表最顶上，它那一组排在前面。
         let placement = AgentHistoryRunPlacement(runs: runs, path: \.path, directory: \.directory, tool: \.tool,
                                                  groups: listed)
-        // 主机上在跑的会话（在别处开的也算）：同样排前面、行右端标状态；和本设备跑着的两路合起来（`CodeRunStatus.merging`）。
+        // 主机上在跑的会话（在别处开的也算）：行右端标状态，和本设备跑着的两路合起来（`CodeRunStatus.merging`）。
         let host = history.hostRunStatuses
-        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: { $0.status.read() },
-                                                          host: { host[$0] })
+        let groups = AgentHistoryListing.liftingNewRuns(listed, placement: placement, status: { $0.status.read() })
         let selectedRunPath = runs.first(where: \.isSelected)?.path
         // 选中的新会话放在哪一组（它那一组收着就打开）。
         let selectedLeadingGroup = placement.groupID(ofLeading: \.isSelected)

@@ -91,7 +91,8 @@ final class AgentHistoryModel {
     @ObservationIgnored private var pendingTools: Set<AgentHistoryTool> = []
     @ObservationIgnored private var followsPendingTools = false
     @ObservationIgnored private var listGeneration = 0
-    /// 看过的会话里读到的最新时间（按路径）：切到别的会话之后，列表那一行还用它。重新列一次就清掉。
+    /// 看过的会话里读到的最新时间、主机上看到它在干活的最后那一刻（按路径）：切到别的会话之后、跑完了之后，
+    /// 列表那一行还用它（侧栏按它排，`lastActivity(of:)`）。重新列一次就清掉（列出来的修改时间已经是新的）。
     private var seenActivity: [String: Date] = [:]
     /// 打开着的对话多久看一次文件末尾（测试换成不真睡的）。
     @ObservationIgnored let followTiming: AgentTranscriptFollowTiming
@@ -790,6 +791,11 @@ final class AgentHistoryModel {
         return latest
     }
 
+    /// 侧栏排序用的最后活跃时间（`AgentHistoryListing.orderedByActivity`）：记录的修改时间与 `liveActivity` 取新的。
+    func lastActivity(of file: AgentHistorySessionFile) -> Date {
+        liveActivity(of: file) ?? file.modifiedAt
+    }
+
     /// 要换掉正开着的对话了：记下在它里面读到的最新时间。
     private func rememberActivity() {
         guard let transcript, let seen = transcript.lastActivity else { return }
@@ -999,19 +1005,30 @@ final class AgentHistoryModel {
     @ObservationIgnored var liveTiming = AgentHistoryLiveTiming.standard
     @ObservationIgnored private var livePolling: Task<Void, Never>?
 
-    /// 记录路径 → 主机上那个会话此刻的状态。列表与本设备 Code 标签页里的状态合起来用（`CodeRunStatus.merging`、
-    /// `AgentHistoryListing.prioritizingRuns`）。
+    /// 记录路径 → 主机上那个会话此刻的状态。列表与本设备 Code 标签页里的状态合起来用（`CodeRunStatus.merging`），
+    /// 在干活的还记下最后活跃时间（`noteWorkingSessions`）。
     var hostRunStatuses: [String: CodeRunStatus] {
         AgentHistoryLiveRuns.statuses(liveSessions, files: files, metadata: metadata)
     }
 
     /// 读一次。读到了返回 true（没变就不动 `liveSessions`，列表不重画）；读不到留着上一次的，返回 false。
+    /// `now`：这一趟读到的时刻（测试给定）。
     @discardableResult
-    func refreshLiveSessions() async -> Bool {
+    func refreshLiveSessions(now: Date = Date()) async -> Bool {
         guard let found = try? await source.liveSessions() else { return false }
         let ordered = AgentLiveSession.ordered(found)
         if ordered != liveSessions { liveSessions = ordered }
+        noteWorkingSessions(at: now)
         return true
+    }
+
+    /// 主机上正在干活的会话：最后活跃时间记成这一刻。记录的修改时间要等下一次重列才新，不记的话在跑的会话排不上去；
+    /// 跑完了（停在输入框、等人、退出）不再更新，行停在最后一次看到它干活的位置，不往下跳。
+    private func noteWorkingSessions(at now: Date) {
+        for (path, status) in hostRunStatuses {
+            guard case .program(let record) = status, record.state == .working else { continue }
+            if seenActivity[path].map({ $0 < now }) ?? true { seenActivity[path] = now }
+        }
     }
 
     /// 平台告诉它列表现在露没露着：Mac 是侧栏摆着（收成窄轨、切走了标签页、App 进了后台都不算），iOS 是标签在前台、

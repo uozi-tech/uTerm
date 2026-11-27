@@ -4,8 +4,8 @@ import Foundation
 /// 界面只画。
 ///
 /// 不另起一块「正在运行」：列表里有它那份记录的，就在那份记录平常的位置——置顶了在「置顶」，否则在它那一组——
-/// 行上标它此刻的状态（`AgentHistoryRunIndicator`）。跑着的会话排在组的最前面、它那一组排在前面
-/// （`AgentHistoryListing.prioritizingRuns`）；状态变了不挪。
+/// 行上标它此刻的状态（`AgentHistoryRunIndicator`）。先后按最后活跃时间（`AgentHistoryListing.orderedByActivity`），
+/// 不按在不在跑另排：在干活的自然在上面，跑完了停在原处。
 /// 列表里没有它那份记录的（还没对上记录的新会话；对上了但还没列出来、被「显示」筛掉、还没翻到；结束了也没有记录的）：
 /// 知道它该在哪一组的（按它的目录、工具，见 `AgentHistoryListing.groupID(forRunIn:tool:in:)`）放在那一组的最上面，
 /// 对上记录之后就是组里它那一行；哪一组都对不上的（在一个列表里还没有的目录里开的）放在列表最顶上。一个都不丢，也不重复。
@@ -62,37 +62,27 @@ nonisolated struct AgentHistoryRunPlacement<Run> {
 }
 
 nonisolated extension AgentHistoryListing {
-    /// 运行中的会话始终排在前面（用户要的）：每一组里有它记录行的那几个挪到组的最前面，有跑着的会话的组（含只放着
-    /// 还没对上记录的新会话的）排在没有的前面，其余照原来的先后。跑着的会话之间按 `CodeRunStatus.listRank`：
-    /// 等人处理 > 正在干活 / 出错 > 停在输入框（空闲、没报过）；同一档照原来的先后。组按组里最靠前的那一档排。
-    /// 已结束、留着画面的不往前挪。「置顶」一组照旧在最上面，组里是用户自己排的顺序，不挪。组的 ID 不变，
-    /// `placement` 照样能用。`status` 在列表的 body 里读：状态变了列表重排。
-    ///
-    /// `host`：记录路径 → 主机上那个会话此刻的状态（`AgentHistoryLiveRuns`；在别处开的、另一台设备开的也在里面）。
-    /// 一行算不算在跑、排哪一档，本设备的与主机上的两路取更要紧的（`CodeRunStatus.listRank(local:host:)`）：
-    /// 同一台主机上，手机和电脑读到的是同一张表，排出来一样。
-    static func prioritizingRuns<Run>(_ groups: [AgentHistoryGroup], placement: AgentHistoryRunPlacement<Run>,
-                                      status: (Run) -> CodeRunStatus,
-                                      host: (String) -> CodeRunStatus? = { _ in nil }) -> [AgentHistoryGroup] {
-        func rank(_ path: String) -> Int {
-            CodeRunStatus.listRank(local: placement.inList[path].map(status), host: host(path))
+    /// 侧栏的先后（用户要的）：一律按最后活跃时间，新的在前。`activity`：这一行最后活跃的时间（记录的修改时间、
+    /// 看过的对话里读到的、主机上看到它在干活的那一刻，取最新的，见 `AgentHistoryModel.lastActivity(of:)`）。
+    /// 不按「在不在跑」另排：在干活的会话刚活跃过，自然在上面；跑完了时间停在最后那一刻，行也停在原处，不往下跳。
+    /// 同一刻的照原来的先后（`AgentHistorySessionFile.newestFirst` 定的，重列不换位置）。先排好再分组
+    ///（`groups`）：组里的先后、按项目分组时组的先后都跟着它。
+    static func orderedByActivity(_ files: [AgentHistorySessionFile],
+                                  activity: (AgentHistorySessionFile) -> Date) -> [AgentHistorySessionFile] {
+        let times = files.map(activity)
+        return files.indices.sorted { times[$0] != times[$1] ? times[$0] > times[$1] : $0 < $1 }.map { files[$0] }
+    }
+
+    /// 还没对上记录行、也没结束的新会话（刚开的，比列表里哪份记录都新）在哪一组，那一组排在前面；其余的组、组里的行
+    /// 都不动（先后由 `orderedByActivity` 定）。「置顶」一组照旧在最上面。组的 ID 不变，`placement` 照样能用。
+    static func liftingNewRuns<Run>(_ groups: [AgentHistoryGroup], placement: AgentHistoryRunPlacement<Run>,
+                                    status: (Run) -> CodeRunStatus) -> [AgentHistoryGroup] {
+        func hasNewRun(_ group: AgentHistoryGroup) -> Bool {
+            placement.leading(in: group).contains { status($0) != .ended }
         }
-        var ranked: [(rank: Int, index: Int, group: AgentHistoryGroup)] = []
-        var pinned: [AgentHistoryGroup] = []
-        for (index, var group) in groups.enumerated() {
-            if group.kind == .pinned {
-                pinned.append(group)
-                continue
-            }
-            let ranks = Dictionary(group.files.map { ($0.path, rank($0.path)) }, uniquingKeysWith: max)
-            // 稳定排序：同一档照原来的先后。
-            group.files = group.files.enumerated()
-                .sorted { (ranks[$0.element.path]!, -$0.offset) > (ranks[$1.element.path]!, -$1.offset) }
-                .map(\.element)
-            let leading = placement.leading(in: group).map { status($0).listRank }
-            ranked.append(((leading + ranks.values).max() ?? 0, index, group))
-        }
-        return pinned + ranked.sorted { ($0.rank, -$0.index) > ($1.rank, -$1.index) }.map(\.group)
+        let pinned = groups.filter { $0.kind == .pinned }
+        let rest = groups.filter { $0.kind != .pinned }
+        return pinned + rest.filter(hasNewRun) + rest.filter { !hasNewRun($0) }
     }
 
     /// 这份记录在哪一组（置顶了是「置顶」）。不在任何一组里为 nil。

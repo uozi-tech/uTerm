@@ -696,18 +696,19 @@ private struct ClaudeHistoryList: View {
     }
 
     private func list(_ files: [AgentHistorySessionFile], pinned: [AgentHistorySessionFile]) -> some View {
-        let listed = AgentHistoryListing.groups(files, by: grouping, metadata: history.metadata, pinned: pinned,
-                                                date: { history.liveActivity(of: $0) ?? $0.modifiedAt })
+        // 按最后活跃时间排（在干活的自然在上面，跑完了停在原处），再分组（同 Mac）。
+        let ordered = AgentHistoryListing.orderedByActivity(files, activity: history.lastActivity(of:))
+        let listed = AgentHistoryListing.groups(ordered, by: grouping, metadata: history.metadata, pinned: pinned,
+                                                date: history.lastActivity(of:))
         // 跑着的会话（含已结束、留着画面的）不另起一块：有记录的在那一行上（置顶或它那一组）；还没有记录行的（刚开的
-        // 新会话）在它那一组的最上面，哪一组都对不上的才在最顶上（同 Mac）。
+        // 新会话）在它那一组的最上面，哪一组都对不上的才在最顶上，它那一组排在前面（同 Mac）。
         let placement = AgentHistoryRunPlacement(runs: code?.board.runs ?? [], path: \.sessionPath, directory: \.directory,
                                                  tool: \.tool, groups: listed)
-        // 跑着的排在组的最前面、它那一组排在前面（同 Mac）。
-        // 主机上在跑的会话（在别处开的也算）同样排前面、行右端标状态，两路合起来（同 Mac）。
+        // 主机上在跑的会话（在别处开的也算）行右端标状态，两路合起来（同 Mac）。
         let host = history.hostRunStatuses
-        let groups = AgentHistoryListing.prioritizingRuns(listed, placement: placement, status: {
+        let groups = AgentHistoryListing.liftingNewRuns(listed, placement: placement, status: {
             CodeRunStatus.of(isEnded: !$0.isRunning, report: $0.terminal.programReport)
-        }, host: { host[$0] })
+        })
         let focusedRunPath = code?.board.focused?.sessionPath
         // 看着的新会话放在哪一组（它那一组收着就打开）。
         let focusedID = code?.board.focusedID

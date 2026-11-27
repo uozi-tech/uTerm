@@ -88,7 +88,7 @@ nonisolated extension CodeRunStatus {
         return host.urgency > local.urgency ? host : local
     }
 
-    /// 排序用的档（`AgentHistoryListing.prioritizingRuns`）：两路都没有为 0（不往前挪），否则同合起来的那个。
+    /// 两路合起来的档（`listRank`）：两路都没有为 0，否则同合起来的那个。
     static func listRank(local: CodeRunStatus?, host: CodeRunStatus?) -> Int {
         max(local?.listRank ?? 0, host?.listRank ?? 0)
     }

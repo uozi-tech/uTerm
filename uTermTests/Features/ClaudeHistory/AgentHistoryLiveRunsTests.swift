@@ -99,40 +99,6 @@ final class AgentHistoryLiveRunsTests: XCTestCase {
         AgentHistoryGroup(id: id, kind: .project(directory: "/srv/\(id)", name: id), files: files)
     }
 
-    private func order(_ groups: [AgentHistoryGroup], runs: [Run], host: [String: CodeRunStatus]) -> [[String]] {
-        let placement = AgentHistoryRunPlacement(runs: runs, path: \.path, directory: { _ in "/srv/none" },
-                                                 tool: { _ in .claude }, groups: groups)
-        return AgentHistoryListing.prioritizingRuns(groups, placement: placement, status: \.status, host: { host[$0] })
-            .map { [$0.id] + $0.files.map(\.sessionID) }
-    }
-
-    func testSessionsRunningElsewhereComeFirst() {
-        let shop = group("shop", [file("s1", "shop"), file("s2", "shop")])
-        let infra = group("infra", [file("i1", "infra"), file("i2", "infra")])
-        let host = [file("i2", "infra").path: Self.working]
-        XCTAssertEqual(order([shop, infra], runs: [], host: host), [["infra", "i2", "i1"], ["shop", "s1", "s2"]],
-                       "在别处开的会话：它那一组、它那一行排前面")
-    }
-
-    /// 同一台主机：手机和电脑读到的是同一张活会话表，各自的 Code 标签页里开着不同的会话（状态是 Claude Code 还没报、
-    /// 或者报的和主机上一样），排出来一样。
-    func testBothDevicesOrderTheSameGivenTheSameHostTable() {
-        let files = (1...5).map { file("u\($0)", "uterm") }
-        let groups = [group("blog", [file("b1", "blog"), file("b2", "blog")]), group("uterm", files)]
-        let host = [files[1].path: Self.idle, files[3].path: Self.working, files[4].path: Self.waiting,
-                    file("b2", "blog").path: Self.idle]
-        // 电脑：Code 标签页里开着 u2（还没报状态）、u4（报了在干活）；手机：开着 u5（报了等确认）和一个已结束的 b1。
-        let mac = order(groups, runs: [Run(path: files[1].path, status: .unreported), Run(path: files[3].path, status: Self.working)],
-                        host: host)
-        let phone = order(groups, runs: [Run(path: files[4].path, status: Self.waiting),
-                                         Run(path: file("b1", "blog").path, status: .ended)], host: host)
-        let neither = order(groups, runs: [], host: host)
-        XCTAssertEqual(mac, neither)
-        XCTAssertEqual(phone, neither)
-        XCTAssertEqual(neither, [["uterm", "u5", "u4", "u2", "u1", "u3"], ["blog", "b2", "b1"]],
-                       "等人处理 > 运行中 > 停在输入框；没在跑的照原来的先后")
-    }
-
     func testCollapsedGroupMarkCountsSessionsRunningElsewhere() {
         let shop = group("shop", [file("s1", "shop"), file("s2", "shop"), file("s3", "shop")])
         let runs = [Run(path: file("s1", "shop").path, status: .unreported), Run(path: nil, status: Self.idle)]
@@ -158,6 +124,45 @@ final class AgentHistoryLiveRunsTests: XCTestCase {
         await history.start()
         for _ in 0..<200 where history.hasMore || history.isListing { try? await Task.sleep(for: .milliseconds(5)) }
         return history
+    }
+
+    /// 侧栏的先后：按模型给的最后活跃时间排好的会话 ID。
+    private func order(_ history: AgentHistoryModel) -> [String] {
+        AgentHistoryListing.orderedByActivity(history.visibleFiles, activity: history.lastActivity(of:)).map(\.sessionID)
+    }
+
+    /// 用户报的：一个运行中的会话跑完就直接掉到下面去了。要的是始终按最后活跃时间：在别处（或本设备）跑着、正在干活的
+    /// 会话刚活跃过，排上去；跑完了停在原处，不跳。两台设备读的是同一张主机表，排出来一样。
+    func testWorkingSessionRisesAndStaysAfterItFinishes() async throws {
+        let source = AgentHistoryFakeSource(tool: .claude, sessions: [session("a", ago: 60), session("b", ago: 120),
+                                                                        session("c", ago: 180)])
+        let history = await start(source)
+        XCTAssertEqual(order(history), ["a", "b", "c"], "都没在跑：按记录的修改时间")
+
+        await source.setLiveSessions([source.liveSession("c", .working), source.liveSession("b", .idle)])
+        let started = Date()
+        await history.refreshLiveSessions(now: started)
+        XCTAssertEqual(order(history), ["c", "a", "b"], "c 在干活：最后活跃就是这一刻，排最上面；停在输入框的 b 不挪")
+
+        await source.setLiveSessions([source.liveSession("c", .idle), source.liveSession("b", .idle)])
+        await history.refreshLiveSessions(now: started.addingTimeInterval(30))
+        XCTAssertEqual(order(history), ["c", "a", "b"], "c 跑完了：停在最后一次看到它干活的位置，不掉下去")
+
+        await source.setLiveSessions([])
+        await history.refreshLiveSessions(now: started.addingTimeInterval(60))
+        XCTAssertEqual(order(history), ["c", "a", "b"], "进程退出了也不动")
+
+        await source.setLiveSessions([source.liveSession("b", .working)])
+        await history.refreshLiveSessions(now: started.addingTimeInterval(90))
+        XCTAssertEqual(order(history), ["b", "c", "a"], "b 又干起活来：它最新")
+    }
+
+    func testWaitingOrIdleSessionsDoNotJumpAhead() async throws {
+        let source = AgentHistoryFakeSource(tool: .claude, sessions: [session("a", ago: 60), session("b", ago: 120)])
+        let history = await start(source)
+        await source.setLiveSessions([source.liveSession("b", .waiting)])
+        await history.refreshLiveSessions(now: Date())
+        XCTAssertEqual(order(history), ["a", "b"], "等人处理、停在输入框都不是新的活动，照最后活跃时间")
     }
 
     func testModelKeepsTheLastTableWhenAReadFails() async throws {
