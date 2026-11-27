@@ -1,5 +1,15 @@
 import SwiftUI
 
+/// 顶栏上的实时读数。每秒变的读数只在这个视图里读，只有它自己跟着重算：
+/// 放在顶栏里读的话，同一条上的「更多」菜单每秒被重建，打开着时一闪一闪。
+struct RemoteDesktopLiveStats: View {
+    let session: RemoteDesktopSession
+
+    var body: some View {
+        RemoteDesktopStatsStrip(items: session.statItems)
+    }
+}
+
 /// 远程桌面顶栏的读数：一项一格，小标题在上、数值在下，数值按 `RemoteDesktopStat.Level` 变色。
 /// 排什么、什么时候变色在共享的 `RemoteDesktopStat.items`，这里只画。
 struct RemoteDesktopStatsStrip: View {

@@ -405,7 +405,9 @@ struct RemoteDesktopScreen: View {
     private func topBar(width barWidth: CGFloat) -> some View {
         // 读数只在画面在传时有；宽屏放进这一行的空当，窄屏另起一行（按宽度定，不按内容定：
         // 读数每秒都在变宽变窄，按内容定会在两种排法之间来回跳，画面高度跟着抖）。
-        let stats = showStats && session?.state == .streaming ? session?.statItems : nil
+        // 这里只看开没开、不读读数本身：读数每秒一变，顶栏读了它就整条每秒重算，「更多」菜单的内容跟着重建，
+        // 打开着的系统菜单每秒淡出淡入一次，像呼吸灯（2026-11-27 Duo）。读数在 `RemoteDesktopLiveStats` 里自己读。
+        let statsSession = showStats && session?.state == .streaming ? session : nil
         let inline = barWidth >= Self.inlineStatsMinWidth
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -427,8 +429,8 @@ struct RemoteDesktopScreen: View {
                 .onTapGesture { showStats.toggle() }
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint(showStats ? "隐藏延迟与帧率" : "显示延迟与帧率")
-                if inline, let stats {
-                    statsStrip(stats).padding(.leading, 16)
+                if inline, let statsSession {
+                    statsStrip(statsSession).padding(.leading, 16)
                 }
                 Spacer(minLength: 8)
                 if let session, session.supportsAudio, session.state == .streaming {
@@ -454,8 +456,8 @@ struct RemoteDesktopScreen: View {
                         .accessibilityLabel("收起工具栏")
                 }
             }
-            if !inline, let stats {
-                statsStrip(stats)
+            if !inline, let statsSession {
+                statsStrip(statsSession)
             }
         }
         // 上、左、右都是离屏幕边缘的绝对距离（整列已铺满屏幕），按安全区与屏幕圆角取大，
@@ -469,8 +471,8 @@ struct RemoteDesktopScreen: View {
     /// 顶栏够这么宽（已扣掉两侧让出的距离）时读数放进名字和按钮之间，不另起一行。
     static let inlineStatsMinWidth: CGFloat = 760
 
-    private func statsStrip(_ items: [RemoteDesktopStat]) -> some View {
-        RemoteDesktopStatsStrip(items: items)
+    private func statsStrip(_ session: RemoteDesktopSession) -> some View {
+        RemoteDesktopLiveStats(session: session)
             .contentShape(Rectangle())
             .onTapGesture { showStats.toggle() }
     }
