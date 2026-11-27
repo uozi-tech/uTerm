@@ -68,6 +68,28 @@ final class MChromeDuoReadingsTests: XCTestCase {
         XCTAssertEqual(outside.statusColumnControlCenter, 42, "竖栏区域的中线不在这一列里就不认")
     }
 
+    /// Duo 外屏反过来横握：右边的安全区让的是前置摄像头，没有状态栏。实机那一列整列空白（额度没画）。
+    /// 照样当侧列用，上面没有状态栏要让；按钮在列宽正中。正着横握（状态栏在左边那一列）不变。
+    func testFoldedReverseLandscapeStillHasASideColumn() throws {
+        let reverse = chrome(screen: CGSize(width: 678, height: 466), trailing: 84,
+                             occlusion: [region(612, 400, 37, 37)], verticalBar: nil)
+        XCTAssertNil(reverse.statusColumn)
+        let column = try XCTUnwrap(reverse.sideColumn)
+        XCTAssertEqual(column.edge, .trailing)
+        XCTAssertEqual(column.width, 84)
+        XCTAssertEqual(column.statusBottom, 0)
+        XCTAssertNil(reverse.statusColumnControlCenter)
+
+        let forward = try XCTUnwrap(foldedLandscape.sideColumn)
+        XCTAssertEqual(forward.edge, .leading)
+        XCTAssertEqual(forward.statusBottom, 82)
+
+        // 普通 iPhone 横屏（两边都有安全区）、竖屏（顶边有）都没有侧列。
+        XCTAssertNil(chrome(screen: CGSize(width: 874, height: 402), leading: 62, bottom: 21, trailing: 62,
+                            occlusion: [], verticalBar: nil).sideColumn)
+        XCTAssertNil(chrome(screen: CGSize(width: 402, height: 874), top: 62, occlusion: [], verticalBar: nil).sideColumn)
+    }
+
     func testNoSideColumnMeansNoControlCenter() {
         // 普通 iPhone 竖屏：顶部有安全区，没有侧列。
         let phone = chrome(screen: CGSize(width: 402, height: 874), top: 62,

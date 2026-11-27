@@ -48,20 +48,26 @@ struct WorkspaceScreen: View {
         return column.edge == .leading ? -column.width + inward : column.width - inward
     }
 
+    /// 把已经挪到和状态栏时间对齐的东西挪回这一列的正中（`sideControlsOffset` 的反方向那一截）。
+    private func sideColumnCentering(_ column: (edge: HorizontalEdge, width: CGFloat, statusBottom: CGFloat)) -> CGFloat {
+        let inward = (chrome.statusColumnControlCenter ?? column.width / 2) - column.width / 2
+        return column.edge == .leading ? -inward : inward
+    }
+
     var body: some View {
         ZStack {
             // 只在连接请求刚到、标签还没开出来的一瞬为空（连接中页正盖着），什么也不画。
             if !(workspace.isEmpty && !workspace.isSplit) { panesView }
         }
         // 状态栏在侧边一列时（Duo 横握）额度放进那一列，Code 标签页的列表底部不再列。
-        .environment(\.agentHistoryHidesAccountLimits, chrome.statusColumn != nil)
+        .environment(\.agentHistoryHidesAccountLimits, chrome.sideColumn != nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
         // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
         .ignoresSafeArea(.container, edges: chrome.statusRowHeight != nil ? .top : [])
         // Duo 折叠 / 展开横屏：状态栏在侧边一列的顶部（折叠横握在左边），下面空着——Agent 开关放到那里（分屏开关在标签条上）。
-        .overlay(alignment: chrome.statusColumn?.edge == .leading ? .topLeading : .topTrailing) {
-            if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
+        .overlay(alignment: chrome.sideColumn?.edge == .leading ? .topLeading : .topTrailing) {
+            if let column = chrome.sideColumn, !(workspace.isEmpty && !workspace.isSplit) {
                 VStack(spacing: 14) {
                     WorkspaceSideControls(
                         // 远控标签、体验主机没有 Agent（同标签条，见 WorkspaceTabStrip）。
@@ -69,11 +75,15 @@ struct WorkspaceScreen: View {
                         onAgent: { toggleAgent(in: workspace.focusedPane) })
                     // 聚焦格前台是 Code 标签页：账号额度放在这一列（列表底部就不再列）。
                     if let history = focusedFrontHistory {
+                        // 整块挪到和状态栏里的时间对齐（下面的 offset），额度这一块再挪回来、在这一列的宽度里居中：
+                        // 那一列在左边时（反过来横握）时间贴着屏幕边，跟着它圆环就贴边了（实机反馈）。
                         WorkspaceSideAccountLimits(history: history, width: column.width)
+                            .offset(x: sideColumnCentering(column))
                     }
                 }
                     .frame(width: column.width)
-                    .padding(.top, column.statusBottom)
+                    // 上面没有状态栏要让时（反过来横握）和标签条的按钮对齐。
+                    .padding(.top, column.statusBottom > 0 ? column.statusBottom : 12)
                     // 与状态栏里的时间对齐（见 statusColumnControlCenter），不是按列宽居中。
                     .offset(x: sideControlsOffset(column))
             }
@@ -646,7 +656,7 @@ struct WorkspaceScreen: View {
                 onAgent: { toggleAgent(in: pane) },
                 onToggleSplit: toggleSplit,
                 onMoveToOtherPane: { workspace.moveToOtherPane($0) },
-                showsAgentButton: chrome.statusColumn == nil,
+                showsAgentButton: chrome.sideColumn == nil,
                 paneID: pane.id,
                 drag: tabDrag,
                 frames: stripFrames,

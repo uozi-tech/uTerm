@@ -110,6 +110,17 @@ nonisolated extension MChromeGeometry {
         return (edge, width, bar.maxY - root.minY)
     }
 
+    /// 能放自己东西的侧边一列：状态栏那一列（`statusColumn`），或者顶边没有安全区、只有一侧有安全区而那里没有状态栏
+    /// （Duo 外屏反过来横握：状态栏不在那一侧，那一侧的安全区让的是前置摄像头，实机那一列整列空白）。后一种上面没有
+    /// 状态栏要让，`statusBottom` 为 0。太窄（< 44pt）的不算。
+    var sideColumn: (edge: HorizontalEdge, width: CGFloat, statusBottom: CGFloat)? {
+        if let statusColumn { return statusColumn }
+        guard safeAreaInsets.top == 0, (safeAreaInsets.leading > 0) != (safeAreaInsets.trailing > 0) else { return nil }
+        let edge: HorizontalEdge = safeAreaInsets.leading > 0 ? .leading : .trailing
+        let width = inset(edge)
+        return width >= 44 ? (edge, width, 0) : nil
+    }
+
     /// 放在侧列里的按钮的横向中心，离状态栏那一侧屏幕边多远。
     ///
     /// 系统状态栏里的时间、信号不在安全区那一列的正中，而在系统给侧边竖栏划的区域的中线上，往屏幕里偏约 6pt
