@@ -584,7 +584,7 @@ final class RemoteDesktopCanvasView: UIView {
         let (x, y) = (Float(pointer.x), Float(pointer.y))
         session.send(.button(button, down: true, clickCount: count, x: x, y: y, modifiers: modifiers))
         session.send(.button(button, down: false, clickCount: count, x: x, y: y, modifiers: modifiers))
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.5)
+        MHaptics.press(intensity: 0.5)
     }
 
     /// 这一下和上一下点的是不是同一个地方。触控板模式下指针没动才算（差不到画面的 1%）；
@@ -607,7 +607,7 @@ final class RemoteDesktopCanvasView: UIView {
         dragEdgeArmed = false
         session.send(.button(.left, down: true, clickCount: 1, x: Float(pointer.x), y: Float(pointer.y),
                              modifiers: keys.modifiers))
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        MHaptics.emphasis()
     }
 
     private func endDrag() {
@@ -700,7 +700,7 @@ final class RemoteDesktopCanvasView: UIView {
         let (code, modifiers) = direction.shortcut
         send(.key(code: code, down: true, modifiers: modifiers))
         send(.key(code: code, down: false, modifiers: modifiers))
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.5)
+        MHaptics.press(intensity: 0.5)
     }
 
     private func flushPointer() {

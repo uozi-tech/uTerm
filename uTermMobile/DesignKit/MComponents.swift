@@ -115,15 +115,15 @@ struct MRoundBtn: View {
     }
 }
 
-/// 轻按反馈：明显的缩放 + 压暗 + 触感反馈（点按可感知）。
+/// 轻按反馈：明显的缩放 + 压暗 + 触感反馈（点按可感知；触感走共用的 `MHaptics`，不和按压动画挤同一拍）。
 struct MPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.72 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
-            .sensoryFeedback(trigger: configuration.isPressed) { _, pressed in
-                pressed ? .impact(weight: .light, intensity: 0.7) : nil
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { MHaptics.press(intensity: 0.7) }
             }
     }
 }
@@ -456,8 +456,8 @@ struct MRowStyle: ButtonStyle {
             // 按压态中性灰（对齐 macOS panelHover）；强调色淡底只留给「选中」。
             .background(configuration.isPressed ? M.pressed : .clear)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            .sensoryFeedback(trigger: configuration.isPressed) { _, pressed in
-                pressed ? .impact(weight: .light, intensity: 0.5) : nil
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { MHaptics.press(intensity: 0.5) }
             }
     }
 }

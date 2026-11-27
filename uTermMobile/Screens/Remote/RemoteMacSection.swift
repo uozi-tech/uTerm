@@ -52,7 +52,16 @@ struct RemoteMacSection: View {
             }
         }
         // 可见期间按间隔问中继谁在线；切到别的标签页、进终端就不再问（省电，见 `keepLiveStatusFresh`）。
-        .task { await directory.keepLiveStatusFresh() }
+        // 工作区盖着主机页时主机页并没有消失（收不到 onDisappear），要按 `showWorkspace` 停；工作区滑走后等它停稳
+        // 再问：开问那一下要在主线程读钥匙串（信任列表），别和滑出动画撞在同一帧。
+        .task(id: store?.showWorkspace ?? false) {
+            if store?.showWorkspace == true { return }
+            if store != nil {
+                try? await Task.sleep(for: WorkspaceLayer.slideSettle)
+                guard !Task.isCancelled else { return }
+            }
+            await directory.keepLiveStatusFresh()
+        }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
             openPendingIfOnline(directory)

@@ -208,6 +208,7 @@ final class RemoteMacDirectory {
     /// App 回到前台：重读配对、接着问中继，各条连接看看还通不通。
     func returnedToForeground() {
         isInForeground = true
+        cachedRelayConfig = nil
         refreshAccountDevices()
         refreshPaired()
         // 只在有界面显示在线状态时才接着问中继；没人看时等界面出现（或抽屉读 `pairedMacs`）再问。
@@ -347,8 +348,10 @@ final class RemoteMacDirectory {
             client.onPaired = { [weak self] in self?.rebuild() }
             client.fileSharing = fileSharing?(mac.id)
             clients[mac.id] = client
+            // 已有的客户端由 `rebuild` 在局域网 / 中继情况变化时更新路线；这里每次都更新会在视图求值
+            // （面板的 sheet 内容）里反复读钥匙串。
+            updateRoutes(client, for: mac)
         }
-        updateRoutes(client, for: mac)
         if let deviceID = mac.deviceID, let token = pendingTokens.removeValue(forKey: deviceID) {
             client.pairingToken = token
         }
@@ -409,6 +412,7 @@ final class RemoteMacDirectory {
             return true
         }
         guard (try? relayStore.save(config)) != nil else { return false }
+        cachedRelayConfig = (config, .now)
         startRelayPolling()
         return true
     }
@@ -416,8 +420,21 @@ final class RemoteMacDirectory {
     /// 没有钥匙串可写时（测试）用的配置。
     @ObservationIgnored private var relayConfigOverride: RemoteRelayConfig?
 
+    /// 默认中继配置的内存副本：读它是 iCloud 钥匙串的 `SecItemCopyMatching`，在主线程上，
+    /// 打开 Mac 面板、收起面板时一帧里要读好几次，和弹出 / 收起动画撞在一起掉帧。
+    /// 本机导入时作废；别的设备经 iCloud 钥匙串同步来的，回到前台时、或最多 `relayConfigCacheLifetime` 后重读。
+    @ObservationIgnored private var cachedRelayConfig: (config: RemoteRelayConfig?, readAt: ContinuousClock.Instant)?
+    nonisolated static let relayConfigCacheLifetime: Duration = .seconds(30)
+
     private func defaultRelayConfig() -> RemoteRelayConfig? {
-        relayConfigOverride ?? relayStore?.load()
+        if let relayConfigOverride { return relayConfigOverride }
+        guard let relayStore else { return nil }
+        if let cached = cachedRelayConfig, ContinuousClock.now - cached.readAt < Self.relayConfigCacheLifetime {
+            return cached.config
+        }
+        let config = relayStore.load()
+        cachedRelayConfig = (config, .now)
+        return config
     }
 
     /// 要问的中继：默认那台，加上各台 Mac 单独记的。同一个成员身份只问一次（单独记的优先，它更新）；

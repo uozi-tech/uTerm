@@ -234,7 +234,7 @@ private struct QRCodeCamera: UIViewControllerRepresentable {
                   text != lastRejected else { return }
             if onCode?(text) == true {
                 finished = true
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                MHaptics.notify(.success)
             } else {
                 lastRejected = text
             }

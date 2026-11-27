@@ -222,7 +222,7 @@ struct FilesSessionBody: View {
                                     else { actionEntry = EntryTarget(entry: entry, directory: controller.path) }
                                 }
                                 .onLongPressGesture(minimumDuration: 0.45) {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    MHaptics.emphasis()
                                     actionEntry = EntryTarget(entry: entry, directory: controller.path)
                                 }
                         }
