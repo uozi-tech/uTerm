@@ -12,6 +12,8 @@ struct RemoteMacSection: View {
     /// 在扫码页的「附近的其他 Mac」里挑的那台：扫码页收起之后打开它的配对页。
     @State private var pendingNearby: RemoteMacDirectory.Mac?
     @State private var diagnosing: RemoteMacDirectory.Mac?
+    /// 工作区盖上过：它滑走之后晚一点再接着问中继（见 `group` 里的 `.task(id:)`）。
+    @State private var returningFromWorkspace = false
     @Environment(\.mAccent) private var accent
 
     var body: some View {
@@ -52,13 +54,17 @@ struct RemoteMacSection: View {
             }
         }
         // 可见期间按间隔问中继谁在线；切到别的标签页、进终端就不再问（省电，见 `keepLiveStatusFresh`）。
-        // 工作区盖着主机页时主机页并没有消失（收不到 onDisappear），要按 `showWorkspace` 停；工作区滑走后等它停稳
-        // 再问：开问那一下要在主线程读钥匙串（信任列表），别和滑出动画撞在同一帧。
+        // 工作区盖着主机页时主机页并没有消失（收不到 onDisappear），要按 `showWorkspace` 停；从工作区回来时等滑出
+        // 停稳、键盘也落下之后再问：开问那一下要在主线程读钥匙串（信任列表），别和滑出、收键盘撞在同一帧。
         .task(id: store?.showWorkspace ?? false) {
-            if store?.showWorkspace == true { return }
-            if store != nil {
-                try? await Task.sleep(for: WorkspaceLayer.slideSettle)
+            if store?.showWorkspace == true {
+                returningFromWorkspace = true
+                return
+            }
+            if returningFromWorkspace {
+                try? await Task.sleep(for: WorkspaceLayer.slideSettle + .seconds(1))
                 guard !Task.isCancelled else { return }
+                returningFromWorkspace = false
             }
             await directory.keepLiveStatusFresh()
         }

@@ -199,15 +199,13 @@ struct WorkspaceLayer: View {
                     : 0
                 return content.offset(x: max(byInsets, byScreen))
             }
-            .animation(.easeInOut(duration: Self.slideSeconds), value: visible)
-            // 兜底：收起后整层透明，任何没跟着平移走的部分（例如宿主 UIKit 视图）也不会留在屏上。
-            // 不和平移一起渐变：整层（含 Metal 终端）不透明度在 0 与 1 之间时，每一帧都要离屏合成，
-            // 滑出时掉帧。收起时等滑完再一下子透明，展开时立刻不透明。
-            // 这里的 `.animation` 只管 opacity：里层那个 `.animation` 已经接管了平移。
+            // 兜底：收起后整层透明。滑出与淡出同步，看上去仍是推出；任何没跟着平移走的部分
+            // （例如宿主 UIKit 视图）也不会留在屏上。
+            // （2026-11-27 试过不渐变、滑完再一下子透明：vphone 上量不出差别，Duo 实机反而觉得更卡，已退回。）
             .opacity(visible ? 1 : 0)
-            .animation(visible ? nil : .linear(duration: 0.01).delay(Self.slideSeconds), value: visible)
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)
+            .animation(.easeInOut(duration: Self.slideSeconds), value: visible)
     }
 
     /// 展开 / 收起滑动的时长。
