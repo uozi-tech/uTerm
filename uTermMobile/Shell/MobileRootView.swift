@@ -59,6 +59,9 @@ struct MobileRootView: View {
                 .keyboardShortcut("k", modifiers: .command)
                 .opacity(0).frame(width: 0, height: 0)
         }
+        #if DEBUG || UTERM_BENCH
+        .task { await WorkspaceSlideBench.runIfRequested(store: store) }
+        #endif
         // 命令面板 ⌘K：在所有标签之上以全屏覆盖呈现。
         .fullScreenCover(isPresented: $store.showPalette) {
             CommandPaletteView()

@@ -515,7 +515,13 @@ struct WorkspaceScreen: View {
     /// 再在布局落定后让归属者聚焦——它没连上时 `focusKeyboard`
     /// 什么也不做。没有归属者（文件浏览 / Agent / 连接中）就全局收起，否则击键会落到另一格。
     private func visibilityChanged(_ visible: Bool) {
-        syncKeyboard(focusAfter: visible ? WorkspaceLayer.slideSettleSeconds : nil)
+        guard !visible else { return syncKeyboard(focusAfter: WorkspaceLayer.slideSettleSeconds) }
+        // 收起：先滑、滑完再收键盘。当场收的话，终端交出键盘、键盘一走终端跟着变高重排重画，都压在滑出的
+        // 头一帧上（vphone 120 Hz 实测：12 次里 11 次开头掉一帧 23–41 ms）。滑出期间键盘还在，停稳后再落下。
+        DispatchQueue.main.asyncAfter(deadline: .now() + WorkspaceLayer.slideSettleSeconds) {
+            guard !store.showWorkspace else { return }
+            syncKeyboard()
+        }
     }
 
     private func syncKeyboard() { syncKeyboard(focusAfter: nil) }
