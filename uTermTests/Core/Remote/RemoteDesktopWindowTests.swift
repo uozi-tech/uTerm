@@ -264,6 +264,83 @@ final class RemoteDesktopWindowTests: XCTestCase {
         XCTAssertTrue(mac.restoredWindows.isEmpty, "窗口没动过，不用还原")
     }
 
+    func test_window_left_at_the_last_size_is_fitted_even_if_the_first_try_after_unlock_fails() async throws {
+        // 2026-11-27 真机：窗口还是上一次连接调成的大小（手机键盘弹着时的 1426×514），锁屏时接管要 1426×1003；
+        // 解锁后头一次调大小没生效（只挪了 1 点），以前就此按 514 高放行，手机上下两大条黑边。应当接着试，调好再放。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.minimumWindowSize = CGSize(width: 100, height: 100)
+        let leftover = CGRect(x: 0, y: 30, width: 400, height: 150)
+        mac.windows = [(id: 42, app: "Claude", title: "Claude", bounds: leftover)]
+        mac.screenLocked = true
+        mac.screen.locked = true
+        mac.fitRefusedWhileLocked = true
+        mac.fitRefusalsAfterUnlock = 2
+        let session = RemoteDesktopSession(client: client, maxWidth: 800, maxHeight: 600)
+        defer { session.stop() }
+        var seenHeights: Set<Double> = []
+        let watcher = Task { @MainActor in
+            while !Task.isCancelled {
+                if let height = session.info?.displayHeight { seenHeights.insert(height) }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+        }
+        defer { watcher.cancel() }
+
+        await session.switchWindow(to: 42, fit: CGSize(width: 400, height: 300))
+        XCTAssertEqual(session.info?.displayHeight, 300)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(session.stats.totalFrames, 0)
+
+        mac.screenLocked = false
+        mac.screen.locked = false
+        let fitted = await waitUntil(6) { mac.windows[0].bounds.size == CGSize(width: 400, height: 300) }
+        XCTAssertTrue(fitted, "解锁后头两次调不动，之后应调成要的大小：\(mac.windows[0].bounds)")
+        let shown = await waitUntil(6) { session.stats.totalFrames > 0 }
+        XCTAssertTrue(shown, "调好之后应开始发画面")
+        XCTAssertEqual(session.info?.displayHeight, 300)
+        XCTAssertFalse(seenHeights.contains(150), "手机一次都不该按上一次留下的大小排版：\(seenHeights)")
+        XCTAssertEqual(mac.fitRefusalsAfterUnlock, 0)
+    }
+
+    func test_refit_refused_while_locked_is_applied_after_unlock() async throws {
+        // 看着的时候 Mac 锁了屏，手机弹出键盘：调不动，画面照旧走；解锁后应把窗口调成键盘弹着时要的大小，
+        // 不能一直留着之前的大小（2026-11-27 真机：下次连上来窗口还是上一次的大小）。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.minimumWindowSize = CGSize(width: 100, height: 100)
+        mac.windows = [(id: 42, app: "Claude", title: "Claude", bounds: CGRect(x: 0, y: 30, width: 800, height: 500))]
+        mac.fitRefusedWhileLocked = true
+        let session = RemoteDesktopSession(client: client, maxWidth: 800, maxHeight: 600)
+        defer { session.stop() }
+        await session.switchWindow(to: 42, fit: CGSize(width: 400, height: 300))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 400, height: 300))
+        let source = try XCTUnwrap(mac.latestSource)
+        let ticker = Task { @MainActor in
+            while !Task.isCancelled {
+                source.emit()
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        defer { ticker.cancel() }
+        let shown = await waitUntil { session.stats.totalFrames > 0 }
+        XCTAssertTrue(shown)
+
+        mac.screenLocked = true
+        mac.screen.locked = true
+        await session.refitWindow(to: CGSize(width: 400, height: 160))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 400, height: 300), "锁着屏，调不动")
+        XCTAssertEqual(session.state, .streaming)
+
+        mac.screenLocked = false
+        mac.screen.locked = false
+        let fitted = await waitUntil(6) { mac.windows[0].bounds.size == CGSize(width: 400, height: 160) }
+        XCTAssertTrue(fitted, "解锁后应按键盘弹着时要的大小调：\(mac.windows[0].bounds)")
+        let corrected = await waitUntil { session.info?.displayHeight == 160 }
+        XCTAssertTrue(corrected, "排版应换成调好的大小：\(String(describing: session.info))")
+    }
+
     func test_unlocked_mac_never_holds_the_picture() async throws {
         // 没锁屏时调不动（App 不让改）：照旧马上放画面，不等。
         let (server, mac, client) = try await makeRig()
@@ -290,6 +367,16 @@ final class RemoteDesktopWindowTests: XCTestCase {
                        "改动过（App 的最小尺寸比要的大）：已经尽力了")
         XCTAssertFalse(RemoteWindowFitWait.mustWait(fit: fit, window: CGSize(width: 1426, height: 1004), resized: false, locked: true),
                        "本来就是这个大小（差 1 点以内）")
+        XCTAssertTrue(RemoteWindowFitWait.mustWait(fit: fit, window: CGSize(width: 1425, height: 515), resized: false, locked: false,
+                                                   unlockedFor: .milliseconds(0)),
+                      "2026-11-27 真机：刚解锁那一下调不动，接着试")
+        XCTAssertTrue(RemoteWindowFitWait.mustWait(fit: fit, window: CGSize(width: 1425, height: 515), resized: false, locked: false,
+                                                   unlockedFor: RemoteWindowFitWait.unlockGrace - .milliseconds(1)))
+        XCTAssertFalse(RemoteWindowFitWait.mustWait(fit: fit, window: CGSize(width: 1425, height: 515), resized: false, locked: false,
+                                                    unlockedFor: RemoteWindowFitWait.unlockGrace),
+                       "解锁后试够了还调不成：App 不让改，放行")
+        XCTAssertFalse(RemoteWindowFitWait.mustWait(fit: fit, window: CGSize(width: 1426, height: 1003), resized: false, locked: false,
+                                                    unlockedFor: .zero), "调好了")
         let window = RemoteDesktopDisplay(id: 2, bounds: CGRect(x: 0, y: 30, width: 2304, height: 1204),
                                           pixelWidth: 4608, pixelHeight: 2408, windowID: 42)
         let announced = RemoteWindowFitWait.announced(fit: CGSize(width: 1425.6, height: 1003.2), window: window)
@@ -590,6 +677,72 @@ final class RemoteDesktopWindowTests: XCTestCase {
         XCTAssertTrue(restored, "连接断开后窗口应还原")
     }
 
+    func test_window_fitted_before_a_locked_drop_is_restored_after_unlock() async throws {
+        // 2026-11-27 真机：看着的时候 Mac 锁了屏、手机那头断了，辅助功能改不动，窗口没放回去，一直是手机的大小。
+        // 应当：解锁后放回原来的位置和大小。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.minimumWindowSize = CGSize(width: 100, height: 100)
+        let original = CGRect(x: 0, y: 30, width: 800, height: 500)
+        mac.windows = [(id: 42, app: "Claude", title: "Claude", bounds: original)]
+        mac.fitRefusedWhileLocked = true
+        let session = RemoteDesktopSession(client: client, maxWidth: 800, maxHeight: 600)
+        await session.switchWindow(to: 42, fit: CGSize(width: 400, height: 300))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 400, height: 300))
+
+        mac.screenLocked = true
+        mac.screen.locked = true
+        // 手机不看了、连接也断了（光断连接的话会话会自己重连、接着看同一个窗口）。
+        session.stop()
+        client.disconnect()
+        let tried = await waitUntil { !mac.refusedRestores.isEmpty }
+        XCTAssertTrue(tried, "断开后应试着还原")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 400, height: 300), "锁着屏，还原不了")
+
+        mac.screenLocked = false
+        mac.screen.locked = false
+        let restored = await waitUntil(6) { mac.windows[0].bounds == original }
+        XCTAssertTrue(restored, "解锁后应把窗口放回原处：\(mac.windows[0].bounds)")
+    }
+
+    func test_reconnecting_while_locked_keeps_the_true_original_frame() async throws {
+        // 锁着屏断开、还没解锁又连上来看同一个窗口：结束时要放回最初的位置和大小，不是上一次留下的手机大小；
+        // 解锁时也不能先被放回原处、把正在看的画面改走。
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        mac.minimumWindowSize = CGSize(width: 100, height: 100)
+        let original = CGRect(x: 0, y: 30, width: 800, height: 500)
+        mac.windows = [(id: 42, app: "Claude", title: "Claude", bounds: original)]
+        mac.fitRefusedWhileLocked = true
+        let first = RemoteDesktopSession(client: client, maxWidth: 800, maxHeight: 600)
+        await first.switchWindow(to: 42, fit: CGSize(width: 400, height: 300))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 400, height: 300))
+        mac.screenLocked = true
+        mac.screen.locked = true
+        client.disconnect()
+        let tried = await waitUntil { !mac.refusedRestores.isEmpty }
+        XCTAssertTrue(tried)
+
+        await client.connect()
+        XCTAssertEqual(client.state, .connected)
+        let second = RemoteDesktopSession(client: client, maxWidth: 800, maxHeight: 600)
+        defer { second.stop() }
+        await second.switchWindow(to: 42, fit: CGSize(width: 400, height: 160))
+        XCTAssertEqual(second.state, .streaming)
+
+        mac.screenLocked = false
+        mac.screen.locked = false
+        let fitted = await waitUntil(6) { mac.windows[0].bounds.size == CGSize(width: 400, height: 160) }
+        XCTAssertTrue(fitted, "解锁后按这次要的大小调：\(mac.windows[0].bounds)")
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(mac.windows[0].bounds.size, CGSize(width: 400, height: 160), "正在看着，不该被放回原处")
+
+        second.stop()
+        let back = await waitUntil { mac.windows[0].bounds == original }
+        XCTAssertTrue(back, "不看了应放回最初的位置和大小：\(mac.windows[0].bounds)")
+    }
+
     func test_view_only_does_not_resize_the_window() async throws {
         let (server, mac, client) = try await makeRig()
         defer { server.stop() }
@@ -797,6 +950,19 @@ final class RemoteDesktopWindowTests: XCTestCase {
         ])
         XCTAssertEqual(listed.map(\.id), [1, 5], "只留普通层级、看得见、不太小的，顺序不变")
         XCTAssertEqual(listed[0], RemoteDesktopWindowSummary(id: 1, app: "Xcode", title: "uTerm", width: 800, height: 600))
+    }
+
+    func test_resize_tries_again_when_the_window_moved_but_missed_the_target() {
+        // 2026-11-27 真机：平铺「填满」的窗口要 1426×1003，第一次设完得到 2160×1128、挪到 (72, 69)。
+        let target = CGRect(x: 0, y: 30, width: 1426, height: 1003)
+        XCTAssertTrue(RemoteDesktopWindows.shouldRetry(before: CGRect(x: 0, y: 30, width: 2304, height: 1204),
+                                                       after: CGRect(x: 72, y: 69, width: 2160, height: 1128), target: target))
+        XCTAssertFalse(RemoteDesktopWindows.shouldRetry(before: CGRect(x: 0, y: 30, width: 2304, height: 1204),
+                                                        after: CGRect(x: 0, y: 30, width: 1426, height: 1004), target: target),
+                       "到了（差 1 点以内）")
+        XCTAssertFalse(RemoteDesktopWindows.shouldRetry(before: CGRect(x: 0, y: 30, width: 1500, height: 1100),
+                                                        after: CGRect(x: 0, y: 30, width: 1500, height: 1100), target: target),
+                       "没动（App 的最小尺寸）：再设也一样")
     }
 
     func test_window_frame_matching_tolerates_one_point() {

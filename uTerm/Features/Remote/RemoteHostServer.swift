@@ -1,3 +1,4 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
 @preconcurrency import Network
@@ -244,6 +245,8 @@ final class RemoteHostServer {
         listener = nil
         port = nil
         for connection in connections.values { connection.close() }
+        windowRestoreRetry?.cancel()
+        windowRestoreRetry = nil
         for id in Array(pairingWaiters.keys) { resolvePairing(id, approved: false) }
         cancelPairingInvitation()
         relayLink?.stop()
@@ -1037,6 +1040,63 @@ final class RemoteHostServer {
                                       canControl: canControl)
         desktopEnvironment.displaysInUse(true)
         updateActivity()
+    }
+
+    // MARK: - 锁屏时没放回去的窗口
+
+    /// 为窗口模式调过大小、结束时没能放回去的窗口（锁着屏，辅助功能改不动）和它该回去的位置。
+    /// 记在服务端：连接断了也要等到解锁后放回去。
+    private var pendingWindowRestores: [UInt32: CGRect] = [:]
+    private var windowRestoreRetry: Task<Void, Never>?
+
+    /// 窗口没能放回 `frame`：解锁后再放。同一个窗口已经排着时留着先排的那个（那才是它最初的位置）。
+    func restoreWindowLater(_ id: UInt32, frame: CGRect) {
+        if pendingWindowRestores[id] == nil { pendingWindowRestores[id] = frame }
+        AppLogger.notice("远程桌面：窗口没能放回 \(Int(frame.width))×\(Int(frame.height)) 点（Mac 锁着屏？），解锁后再放",
+                         category: RemoteLog.category)
+        guard windowRestoreRetry == nil else { return }
+        windowRestoreRetry = Task { [weak self] in
+            await self?.retryWindowRestores()
+            self?.windowRestoreRetry = nil
+        }
+    }
+
+    /// 又有设备要看这个窗口、还要调它的大小：不再替它放回去，交给那条流（结束时放回这个位置）。
+    func takePendingWindowRestore(_ id: UInt32) -> CGRect? {
+        pendingWindowRestores.removeValue(forKey: id)
+    }
+
+    /// 和开流时等着调大小（`RemoteHostConnection.awaitWindowFit`）同一个节奏：锁着时隔一阵试一次，
+    /// 解锁后每次都试，试够 `RemoteWindowFitWait.unlockGrace` 还放不回去就算了（App 不让改）。
+    private func retryWindowRestores() async {
+        let clock = ContinuousClock()
+        var lastTry = clock.now
+        var unlockedAt: ContinuousClock.Instant?
+        while !Task.isCancelled, !pendingWindowRestores.isEmpty {
+            try? await Task.sleep(for: RemoteHostConnection.windowFitPollInterval)
+            guard !Task.isCancelled else { return }
+            let environment = desktopEnvironment
+            if environment.isScreenLocked() {
+                unlockedAt = nil
+                guard clock.now - lastTry >= RemoteHostConnection.windowFitLockedRetry else { continue }
+            } else if unlockedAt == nil {
+                unlockedAt = clock.now
+            }
+            lastTry = clock.now
+            for id in Array(pendingWindowRestores.keys) {
+                // 等着的时候可能被新开的流接走了。
+                guard let frame = pendingWindowRestores[id] else { continue }
+                guard await environment.restoreWindow(id, frame) else { continue }
+                guard pendingWindowRestores[id] == frame else { continue }
+                pendingWindowRestores[id] = nil
+                AppLogger.notice("远程桌面：窗口放回了 \(Int(frame.width))×\(Int(frame.height)) 点", category: RemoteLog.category)
+            }
+            if let unlockedAt, clock.now - unlockedAt >= RemoteWindowFitWait.unlockGrace, !pendingWindowRestores.isEmpty {
+                AppLogger.notice("远程桌面：解锁后还是放不回 \(self.pendingWindowRestores.count) 个窗口，不再试",
+                                 category: RemoteLog.category)
+                pendingWindowRestores.removeAll()
+            }
+        }
     }
 
     func releaseDesktop(connection: RemoteHostConnection, channel: UInt32) {

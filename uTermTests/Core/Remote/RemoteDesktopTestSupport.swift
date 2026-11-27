@@ -742,10 +742,14 @@ final class FakeDesktopMac {
     var fitDelay: Duration = .zero
     /// Mac 停在锁屏界面（窗口模式判断要不要等着调大小用；手机那头的锁屏遮罩看 `screen.locked`）。
     var screenLocked = false
-    /// 锁屏时辅助功能改不动别的 App 的窗口（2026-11-25 真机）：锁着时调大小一律不生效。
+    /// 锁屏时辅助功能改不动别的 App 的窗口（2026-11-25 真机）：锁着时调大小、还原一律不生效。
     var fitRefusedWhileLocked = false
+    /// 被拒掉的还原（锁着屏时，按顺序）。
+    private(set) var refusedRestores: [(id: UInt32, frame: CGRect)] = []
     /// App 不让改窗口大小（锁不锁屏都改不动）。
     var fitRefused = false
+    /// 解锁后头几次调大小还是不生效（2026-11-27 真机：解锁后第一次只挪了 1 点）。每拒一次减一。
+    var fitRefusalsAfterUnlock = 0
     /// 被拒掉的调大小（按顺序）。
     private(set) var refusedFits: [(id: UInt32, size: CGSize)] = []
     /// 开流前整理过几次显示器（无显示器换 2 倍模式那一步）。
@@ -819,6 +823,11 @@ final class FakeDesktopMac {
                     self.refusedFits.append((id, size))
                     return nil
                 }
+                if self.fitRefusalsAfterUnlock > 0 {
+                    self.fitRefusalsAfterUnlock -= 1
+                    self.refusedFits.append((id, size))
+                    return nil
+                }
                 self.fittedWindows.append((id, size))
                 let original = self.windows[index].bounds
                 let fitted = CGSize(width: max(size.width, self.minimumWindowSize.width),
@@ -829,9 +838,15 @@ final class FakeDesktopMac {
             },
             restoreWindow: { [weak self] id, frame in
                 if let delay = self?.restoreDelay, delay > .zero { try? await Task.sleep(for: delay) }
-                guard let self else { return }
+                guard let self else { return true }
+                guard let index = self.windows.firstIndex(where: { $0.id == id }) else { return true }
+                if self.fitRefusedWhileLocked && self.screenLocked {
+                    self.refusedRestores.append((id, frame))
+                    return false
+                }
                 self.restoredWindows.append((id, frame))
-                if let index = self.windows.firstIndex(where: { $0.id == id }) { self.windows[index].bounds = frame }
+                self.windows[index].bounds = frame
+                return true
             },
             makeSource: { [weak self] display, width, height, _ in
                 self?.openedDisplays.append(display.id)

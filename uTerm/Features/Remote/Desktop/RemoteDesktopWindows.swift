@@ -211,8 +211,7 @@ nonisolated enum RemoteDesktopWindows {
         guard size.width >= minimumFit.width, size.height >= minimumFit.height, let entry = entry(id: id) else { return nil }
         let target = CGRect(origin: entry.bounds.origin, size: CGSize(width: size.width.rounded(), height: size.height.rounded()))
         guard !matches(entry.bounds, target) else { return nil }
-        guard setFrame(target, of: entry, moves: false) else { return nil }
-        settle(id: id, target: target)
+        guard apply(target, to: entry, moves: false) else { return nil }
         guard let after = self.entry(id: id), !matches(after.bounds, entry.bounds) else { return nil }
         return entry.bounds
     }
@@ -221,15 +220,48 @@ nonisolated enum RemoteDesktopWindows {
     /// 同步等辅助功能接口，别在主线程上调。
     static func place(id: UInt32, frame: CGRect) -> Bool {
         guard let entry = entry(id: id) else { return false }
-        guard setFrame(frame, of: entry, moves: true) else { return false }
-        settle(id: id, target: frame)
+        return apply(frame, to: entry, moves: true)
+    }
+
+    /// 设一次位置 / 大小、等它停下；动了却没到 `target` 就照着现在的位置再设一次（见 `shouldRetry`）。
+    private static func apply(_ target: CGRect, to entry: Entry, moves: Bool) -> Bool {
+        var current = entry
+        var moves = moves
+        for attempt in 0..<maximumAttempts {
+            guard setFrame(target, of: current, moves: moves) else { return attempt > 0 }
+            settle(id: entry.id, target: target)
+            guard let after = self.entry(id: entry.id),
+                  shouldRetry(before: current.bounds, after: after.bounds, target: target) else { return true }
+            AppLogger.info("远程桌面：窗口改到了 \(Int(after.bounds.width))×\(Int(after.bounds.height))，"
+                           + "在 (\(Int(after.bounds.minX)), \(Int(after.bounds.minY)))，不是要的 \(Int(target.width))×\(Int(target.height))，再设一次",
+                           category: RemoteLog.category)
+            current = after
+            // 系统把窗口挪开了：第二次连位置一起设回去。
+            moves = true
+        }
         return true
     }
 
-    /// 把窗口放回 `frame`（流结束时还原）。窗口没了就算了。
-    static func restore(id: UInt32, frame: CGRect) {
-        guard let entry = entry(id: id), !matches(entry.bounds, frame) else { return }
-        _ = setFrame(frame, of: entry, moves: true)
+    /// 一个窗口最多设几次。
+    static let maximumAttempts = 3
+
+    /// 纯规则：设了一次之后要不要再设。窗口动了、却没到要的位置和大小时再设。
+    ///
+    /// 2026-11-27 真机（macOS 27.2，窗口铺满屏幕、是系统平铺的「填满」）：要 1426×1003，第一次设完得到
+    /// 2160×1128、还挪到了 (72, 69)——系统先把它从平铺里拿出来，放回平铺前那个居中的大小，要的尺寸没管。
+    /// 照着新位置再设一次才调得成。没动（App 不让改、已经是它的最小尺寸）不再设：再设也一样。
+    static func shouldRetry(before: CGRect, after: CGRect, target: CGRect) -> Bool {
+        !matches(after, target) && !matches(after, before)
+    }
+
+    /// 把窗口放回 `frame`（流结束时还原）。放回去了、窗口没了都返回 true；改不动（锁屏时辅助功能改不了
+    /// 别的 App 的窗口）返回 false。同步等辅助功能接口，别在主线程上调。
+    @discardableResult
+    static func restore(id: UInt32, frame: CGRect) -> Bool {
+        guard let entry = entry(id: id) else { return true }
+        guard !matches(entry.bounds, frame) else { return true }
+        guard apply(frame, to: entry, moves: true) else { return false }
+        return self.entry(id: id).map { matches($0.bounds, frame) } ?? true
     }
 
     private static func setFrame(_ frame: CGRect, of entry: Entry, moves: Bool) -> Bool {
@@ -349,12 +381,27 @@ nonisolated struct RemoteDesktopFrameGeometry: Equatable, Sendable {
 /// 要 1426×1003 点，日志「窗口要调成 1426×1003 点，实际 2304×1204」，调大小那一步连同提窗口只花了 37 ms——
 /// 辅助功能接口当场就失败了（改成功的话要等窗口停稳，至少七十多毫秒）。同一时刻 Claude 那边先查了一次辅助功能授权、
 /// 接着报了一条 AppKit 错误；锁屏期间这类错误每几秒一条，解锁（14:43:39）之后一条都没有了。
+///
+/// 2026-11-27 真机（同一台）：解锁后头一次调大小常常还是不成——16:15 那次窗口留着上一次连接调成的
+/// 1426×514（手机键盘弹着时的大小），解锁后第一次只被挪了 1 点（1425×515），以前就此放弃、按实际大小放行，
+/// 手机上下两大条黑边。所以解锁后再接着试 `unlockGrace` 这么久，都不成才放行。
 nonisolated enum RemoteWindowFitWait {
-    /// 要等：Mac 锁着屏、这次没改动窗口、窗口也不是要的大小。改动过（App 有最小尺寸，只调到了最小）、
-    /// 本来就是这个大小、没锁屏（App 不让改，等也没用）都不等。
-    static func mustWait(fit: CGSize, window: CGSize, resized: Bool, locked: Bool) -> Bool {
-        guard locked, !resized else { return false }
-        return abs(window.width - fit.width.rounded()) > 1 || abs(window.height - fit.height.rounded()) > 1
+    /// 解锁后还接着试多久（每 `RemoteHostConnection.windowFitPollInterval` 一次）。
+    static let unlockGrace: Duration = .seconds(3)
+
+    /// 要等：窗口不是要的大小、这次也没改动它，而 Mac 锁着屏，或者解锁还不到 `unlockGrace`
+    /// （`unlockedFor` = 等着的这段里解锁多久了；nil = 这段里没锁过屏）。
+    /// 改动过（App 有最小尺寸，只调到了最小）、本来就是这个大小、一直没锁屏（App 不让改，等也没用）都不等。
+    static func mustWait(fit: CGSize, window: CGSize, resized: Bool, locked: Bool, unlockedFor: Duration? = nil) -> Bool {
+        guard !resized, !fits(fit: fit, window: window) else { return false }
+        if locked { return true }
+        guard let unlockedFor else { return false }
+        return unlockedFor < unlockGrace
+    }
+
+    /// 窗口已经是要的大小（差 1 点以内）。
+    static func fits(fit: CGSize, window: CGSize) -> Bool {
+        abs(window.width - fit.width.rounded()) <= 1 && abs(window.height - fit.height.rounded()) <= 1
     }
 
     /// 等着调大小时先报给主控端的那块范围：位置不动，大小是要调成的，像素按窗口所在屏幕的倍数算。

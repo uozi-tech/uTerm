@@ -37,8 +37,8 @@ struct RemoteDesktopEnvironment {
     var windowAppIsFront: @MainActor (_ id: UInt32) -> Bool = { _ in true }
     /// 把窗口调成这么大（点，要「辅助功能」授权）。返回改之前的位置，没改返回 nil。
     var fitWindow: @MainActor (_ id: UInt32, _ size: CGSize) async -> CGRect? = { _, _ in nil }
-    /// 把调过大小的窗口放回原来的位置和大小。
-    var restoreWindow: @MainActor (_ id: UInt32, _ frame: CGRect) async -> Void = { _, _ in }
+    /// 把调过大小的窗口放回原来的位置和大小。放回去了（或窗口没了）返回 true，改不动返回 false。
+    var restoreWindow: @MainActor (_ id: UInt32, _ frame: CGRect) async -> Bool = { _, _ in true }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
         -> any RemoteDesktopFrameSource
     /// `independent`：只看一个窗口时主控端要了「独立键鼠」——输入直接投给窗口所在的进程，不动 Mac 上的指针。
@@ -101,8 +101,9 @@ struct RemoteDesktopEnvironment {
             // 屏幕放得下就原地调；放不下先挪到虚拟屏上（`RemoteWindowStage`）。还原时放回原处，虚拟屏随后拆掉。
             fitWindow: { id, size in await RemoteWindowStage.fit(id: id, size: size) },
             restoreWindow: { id, frame in
-                await Task.detached { RemoteDesktopWindows.restore(id: id, frame: frame) }.value
+                let done = await Task.detached { RemoteDesktopWindows.restore(id: id, frame: frame) }.value
                 RemoteWindowStage.restored(id: id)
+                return done
             },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
