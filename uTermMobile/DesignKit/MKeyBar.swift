@@ -27,6 +27,18 @@ struct MKeyBar<Panel: Hashable, Leading: View, Row: View, Trailing: View, PanelC
     /// 两个相等才说明下面只有 Home 条，见 `MKeyBarBottomInset`。
     @State private var bottomSafeArea: CGFloat = 0
     @State private var windowBottomSafeArea: CGFloat = 0
+    /// 常驻那一行在窗口里的位置与窗口的圆角，两端的键按它让开圆角（见 `MKeyBarCornerClearance`）。
+    @State private var rowFrame: CGRect = .zero
+    @State private var windowCorners = MWindowCorners()
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    /// 两端固定键离这一行左右边沿的距离：平时 10pt，贴着屏幕下面两个圆角时再往里让。
+    private var rowPadding: (leading: CGFloat, trailing: CGFloat) {
+        let base: CGFloat = 10
+        let left = MKeyBarCornerClearance.padding(base: base, row: rowFrame, corners: windowCorners, edge: .left)
+        let right = MKeyBarCornerClearance.padding(base: base, row: rowFrame, corners: windowCorners, edge: .right)
+        return layoutDirection == .leftToRight ? (left, right) : (right, left)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,13 +63,17 @@ struct MKeyBar<Panel: Hashable, Leading: View, Row: View, Trailing: View, PanelC
             }
             HStack(spacing: 6) {
                 // 两头各固定一个键，中间整排一起滚。分屏后一格很窄，固定的键不能再多。
-                leading().padding(.leading, 10)
+                leading().padding(.leading, rowPadding.leading)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) { row() }
                 }
                 .mKeepsScrollContentInSafeArea()
-                trailing().padding(.trailing, 10)
+                trailing().padding(.trailing, rowPadding.trailing)
             }
+            // 这一行往下伸进了 Home 条那一截，两端的键正落在屏幕下面两个圆角里（实机：Duo 内外屏、横竖握都有一截
+            // 画到圆角外面）。左右让多少按行的位置与窗口圆角算；改的是行内的边距，行自己的位置不变，不会来回牵动。
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { rowFrame = $0 }
+            .background { MWindowCornerProbe { windowCorners = $0 } }
         }
         // 与正文同一个工作面，只用顶边 hairline 分区（「线或底色差，二选一」）。
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
@@ -463,6 +479,106 @@ private struct MWindowBottomInsetProbe: UIViewRepresentable {
 /// 全面屏的底部安全区是 34pt（横握 21pt），整段空着太浪费（实机反馈：Duo 上键盘条下面空出一大条）。
 /// Home 条本身只占最下面约 13pt；最后一行的命中区（键帽上下各多 5pt）下面再留 10pt，
 /// 看得见的键帽就停在 15pt 处，不压 Home 条。安全区本来就比这小（或者键盘弹着、不贴底边）时照原样。
+/// 窗口的大小与下面两个角的圆角半径（iPhone 上就是屏幕的圆角）。读不到（iOS 26 以下）时半径为 0，不让。
+nonisolated struct MWindowCorners: Equatable, Sendable {
+    var size: CGSize = .zero
+    var bottomLeft: CGFloat = 0
+    var bottomRight: CGFloat = 0
+}
+
+/// 键盘条两端的键让开窗口下面的圆角。
+///
+/// 键帽是圆角矩形（半径 `MRadius.sm`），屏幕角是半径 R 的圆弧。要求键帽的那个角离圆弧至少 `base`——
+/// 和它离屏幕底边、离直边留的一样多。键帽离底边 g：外角那段圆的圆心在 (s + r, H − g − r)，屏幕圆弧的圆心在
+/// (R, H − R)，两圆心距离不超过 R − r − base 即可，由此解出离侧边至少 s。键帽高过圆弧（g + r ≥ R）时不用让。
+enum MKeyBarCornerClearance {
+    /// 键帽可见那块的高度与圆角：行里的键在行高中竖直居中。
+    static let capHeight = MKeyCapMetrics.height
+    static let capRadius = MRadius.sm
+
+    /// 一端的键离行边沿要多远。`row` 与 `corners.size` 在同一个坐标系（窗口）。
+    static func padding(base: CGFloat, row: CGRect, corners: MWindowCorners, edge: HorizontalEdgeSide) -> CGFloat {
+        guard row.width > 0, corners.size.width > 0 else { return base }
+        let radius = edge == .left ? corners.bottomLeft : corners.bottomRight
+        let capBottom = row.midY + capHeight / 2
+        let gap = corners.size.height - capBottom
+        let fromSide = sideInset(cornerRadius: radius, capBottomGap: gap, capRadius: capRadius, margin: base)
+        let rowEdge = edge == .left ? row.minX : corners.size.width - row.maxX
+        return max(base, (fromSide - rowEdge).rounded(.up))
+    }
+
+    /// 键帽离侧边至少多远（只算圆角，不含平时的边距）。
+    static func sideInset(cornerRadius R: CGFloat, capBottomGap g: CGFloat, capRadius r: CGFloat,
+                          margin m: CGFloat) -> CGFloat {
+        let dy = R - g - r
+        guard R > 0, dy > 0 else { return 0 }
+        let allowed = R - r - m
+        // 底边留得比 margin 还少：整个键挪出圆角那一段。
+        guard allowed > dy else { return R - r }
+        return R - r - (allowed * allowed - dy * dy).squareRoot()
+    }
+
+    enum HorizontalEdgeSide { case left, right }
+}
+
+/// 读窗口大小和下面两个角的圆角半径。iOS 26 起用 `containerConcentric`：一个铺满窗口的视图与容器同心，
+/// 它的圆角就是窗口（iPhone 上即屏幕）的圆角。
+private struct MWindowCornerProbe: UIViewRepresentable {
+    let onChange: (MWindowCorners) -> Void
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.isUserInteractionEnabled = false
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(_ view: ProbeView, context: Context) {
+        view.onChange = onChange
+    }
+
+    final class ProbeView: UIView {
+        var onChange: ((MWindowCorners) -> Void)?
+        private var reported: MWindowCorners?
+        /// 铺满窗口、与容器同心的那个视图（看不见，只用来读圆角）。
+        private let concentric = UIView()
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            report()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            report()
+        }
+
+        override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+            super.traitCollectionDidChange(previous)
+            report()
+        }
+
+        private func report() {
+            guard let window else { return }
+            var corners = MWindowCorners(size: window.bounds.size)
+            if #available(iOS 26.0, *) {
+                if concentric.superview !== self {
+                    concentric.isUserInteractionEnabled = false
+                    concentric.cornerConfiguration = .corners(radius: .containerConcentric())
+                    addSubview(concentric)
+                }
+                concentric.frame = convert(window.bounds, from: window)
+                corners.bottomLeft = concentric.effectiveRadius(corner: .bottomLeft)
+                corners.bottomRight = concentric.effectiveRadius(corner: .bottomRight)
+            }
+            guard corners != reported else { return }
+            reported = corners
+            // 布局途中不改 SwiftUI 的状态，下一轮再交出去。
+            DispatchQueue.main.async { [weak self] in self?.onChange?(corners) }
+        }
+    }
+}
+
 nonisolated enum MKeyBarBottomInset {
     static let kept: CGFloat = 10
 
